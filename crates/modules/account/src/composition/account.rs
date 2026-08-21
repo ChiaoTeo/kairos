@@ -294,7 +294,7 @@ pub fn compose_binance_async_account_application(
                 ))
             },
             "isolated-margin" => {
-                let provider_symbol =
+                let isolated_margin_symbol =
                     options.isolated_margin_symbol.as_deref().ok_or_else(|| {
                         "Binance isolated-margin Account requires values.isolated_margin_symbol"
                             .to_string()
@@ -305,7 +305,9 @@ pub fn compose_binance_async_account_application(
                         .expect("validated Account segment key"),
                     parameters: binance_user_config(
                         options,
-                        format!("account.binance.isolated-margin.{provider_symbol}.{segment_key}"),
+                        format!(
+                            "account.binance.isolated-margin.{isolated_margin_symbol}.{segment_key}"
+                        ),
                         rest_endpoint.clone(),
                         "wss://stream.binance.com:9443/ws",
                         segment_key.clone(),
@@ -986,7 +988,7 @@ mod secret_tests {
     }
 
     #[test]
-    fn binance_isolated_margin_requires_and_uses_account_owned_provider_symbol() {
+    fn binance_isolated_margin_requires_and_uses_configured_symbol() {
         let missing = compose_binance_async_account_application(
             &options(),
             &[binding("isolated_margin")],

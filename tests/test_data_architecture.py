@@ -738,7 +738,7 @@ def test_option_market_preparation_builds_deterministic_atomic_requirements(
         {
             "kind": "option-contract",
             "underlying": "SPY",
-            "provider_symbol": "O:SPY250221P00580000",
+            "external_symbol": "O:SPY250221P00580000",
             "instrument_id": "instrument:option:SPY:20250221:580:P",
             "network_id": "opra",
         },
@@ -749,7 +749,7 @@ def test_option_market_preparation_builds_deterministic_atomic_requirements(
         {
             "kind": "option-contract",
             "underlying": "SPY",
-            "provider_symbol": "O:SPY250117P00570000",
+            "external_symbol": "O:SPY250117P00570000",
             "instrument_id": "instrument:option:SPY:20250117:570:P",
             "network_id": "opra",
         },
@@ -779,6 +779,17 @@ def test_option_market_preparation_builds_deterministic_atomic_requirements(
         item.parameters["credential_id"] == "massive-readonly" for item in requirements
     )
     assert len({item.subject for item in requirements}) == 2
+    legacy = OptionMarketDataTarget.from_reference_event(
+        {
+            "kind": "option-contract",
+            "underlying": "SPY",
+            "provider_symbol": "O:SPY250117C00570000",
+            "instrument_id": "instrument:option:SPY:20250117:570:C",
+        },
+        start_time_unix_nanos=10,
+        end_time_unix_nanos=15,
+    )
+    assert legacy.external_symbol == "O:SPY250117C00570000"
 
 
 def test_replay_checkpoint_is_bound_to_read_plan(tmp_path: Path) -> None:
@@ -1241,7 +1252,7 @@ def test_reviewed_massive_reference_plan_publishes_point_in_time_snapshot(
                     "as_of": "2024-12-19",
                     "instrument_id": "instrument:option:SPY:20241220:590:P",
                     "network_id": "opra",
-                    "provider_symbol": "O:SPY241220P00590000",
+                    "external_symbol": "O:SPY241220P00590000",
                     "underlying_instrument_id": "instrument:equity:US:SPY:common",
                     "underlying": "SPY",
                     "expiry_unix_nanos": 1_734_652_800_000_000_000,

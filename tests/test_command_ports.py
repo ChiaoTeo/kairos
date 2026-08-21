@@ -40,6 +40,8 @@ class RecordingClient:
     def call(self, method, params=None):
         self.calls.append((method, params))
         body = params[0] if params else {}
+        if "command_id" not in body:
+            return {"sources": []}
         return {"status": "accepted", "command_id": body["command_id"]}
 
 
@@ -72,6 +74,7 @@ def test_market_port_adapts_typed_subscription_to_owner_command() -> None:
     assert body["strategy_id"] == "sma"
     assert body["instance_id"] == "instance-1"
     assert body["payload"]["selectors"] == ["quote", "bar:1m"]
+    assert body["payload"]["source_ids"] == []
 
 
 def test_market_port_releases_every_subscription_for_strategy_instance() -> None:
@@ -107,6 +110,18 @@ def test_market_port_preserves_asset_type_route_key() -> None:
         request_id="request-equity",
     )
     assert client.calls[0][1][0]["payload"]["asset_type"] == "equity"
+
+
+def test_market_port_queries_available_data_sources() -> None:
+    client = RecordingClient()
+    port = MarketCommandClient(client)
+
+    port.data_sources({"market_id": "market:sip:equity:US:AAPL"})
+
+    assert client.calls[0] == (
+        "market_data_sources",
+        [{"market_id": "market:sip:equity:US:AAPL"}],
+    )
 
 
 def test_market_port_forwards_chain_subscription_parameters() -> None:

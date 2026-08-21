@@ -190,7 +190,7 @@ fn reference_aeron_is_polled_by_conflux_without_a_watcher_task() {
     let composition = source("src/composition/reference/projection.rs");
     assert!(composition.contains("ReferenceProjectionSnapshot"));
     assert!(composition.contains("ReconcileMarketUniverse"));
-    assert!(assembly.contains("read_reference_snapshot"));
+    assert!(assembly.contains("reference_market_snapshot"));
     assert!(actor.contains(".market_snapshot()"));
 }
 

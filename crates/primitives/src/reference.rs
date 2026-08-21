@@ -40,6 +40,10 @@ legacy_default!(MarketId, "market:unresolved");
 legacy_default!(Symbol, "symbol:unresolved");
 legacy_default!(AssetId, "asset:unresolved");
 
+fn exchange_key(exchange: &Exchange) -> &str {
+    exchange.as_str().trim_start_matches("exchange:")
+}
+
 impl InstrumentId {
     /// Canonical spot identity: the instrument is the base asset, not a quote pair.
     pub fn spot(base_asset: impl AsRef<str>) -> Result<Self, DomainTypeError> {
@@ -51,6 +55,20 @@ impl InstrumentId {
 }
 
 impl ListingId {
+    /// Canonical venue listing identity. Quote/currency context belongs to a market.
+    pub fn venue(
+        exchange: &Exchange,
+        kind: InstrumentKind,
+        listing_key: impl AsRef<str>,
+    ) -> Result<Self, DomainTypeError> {
+        Self::new(format!(
+            "listing:{}:{}:{}",
+            exchange_key(exchange),
+            kind.as_str(),
+            listing_key.as_ref().to_ascii_uppercase()
+        ))
+    }
+
     /// Canonical spot listing identity, including its exchange and quote context.
     pub fn spot(
         exchange: &Exchange,
@@ -67,16 +85,26 @@ impl ListingId {
 }
 
 impl MarketId {
-    /// Canonical spot market identity retains the provider symbol.
-    pub fn spot(
+    /// Canonical venue market identity for an observable/tradable entry point.
+    pub fn venue(
         exchange: &Exchange,
-        provider_symbol: impl AsRef<str>,
+        kind: InstrumentKind,
+        market_key: impl AsRef<str>,
     ) -> Result<Self, DomainTypeError> {
         Self::new(format!(
-            "market:{}:spot:{}",
-            exchange.as_str().trim_start_matches("exchange:"),
-            provider_symbol.as_ref().to_ascii_uppercase()
+            "market:{}:{}:{}",
+            exchange_key(exchange),
+            kind.as_str(),
+            market_key.as_ref().to_ascii_uppercase()
         ))
+    }
+
+    /// Canonical spot market identity retains the venue symbol.
+    pub fn spot(
+        exchange: &Exchange,
+        venue_symbol: impl AsRef<str>,
+    ) -> Result<Self, DomainTypeError> {
+        Self::venue(exchange, InstrumentKind::Spot, venue_symbol)
     }
 }
 

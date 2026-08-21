@@ -22,8 +22,26 @@ impl ConfluxActor for ReferenceApplication {
     type LocalEvent = Infallible;
 
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
+        tracing::info!(
+            event = "reference_runtime_stage_started",
+            component = "reference",
+            stage = "activate_sources",
+            "reference runtime stage started"
+        );
         self.activate_sources(&mut context.connections()).await?;
+        tracing::info!(
+            event = "reference_runtime_stage_completed",
+            component = "reference",
+            stage = "activate_sources",
+            "reference runtime stage completed"
+        );
         if self.initial_refresh() {
+            tracing::info!(
+                event = "reference_runtime_stage_started",
+                component = "reference",
+                stage = "initial_refresh",
+                "reference runtime stage started"
+            );
             if let Err(error) = self
                 .refresh_with_connections(&mut context.connections())
                 .await
@@ -34,10 +52,43 @@ impl ConfluxActor for ReferenceApplication {
                     error = %error,
                     "Reference starts from its durable catalog while provider synchronization retries"
                 );
+                tracing::warn!(
+                    event = "reference_runtime_stage_degraded",
+                    component = "reference",
+                    stage = "initial_refresh",
+                    error = %error,
+                    "reference runtime stage degraded"
+                );
+            } else {
+                tracing::info!(
+                    event = "reference_runtime_stage_completed",
+                    component = "reference",
+                    stage = "initial_refresh",
+                    "reference runtime stage completed"
+                );
             }
         }
+        tracing::info!(
+            event = "reference_runtime_stage_started",
+            component = "reference",
+            stage = "publish_pending",
+            "reference runtime stage started"
+        );
         let _ = self.publish_pending(context).await;
+        tracing::info!(
+            event = "reference_runtime_stage_completed",
+            component = "reference",
+            stage = "publish_pending",
+            "reference runtime stage completed"
+        );
         context.spawn_timer("refresh", self.refresh_interval());
+        tracing::info!(
+            event = "reference_runtime_stage_completed",
+            component = "reference",
+            stage = "serve",
+            refresh_interval_ms = self.refresh_interval().as_millis() as u64,
+            "reference runtime is serving"
+        );
         Ok(())
     }
 

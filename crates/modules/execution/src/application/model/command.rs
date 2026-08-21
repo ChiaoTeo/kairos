@@ -105,8 +105,8 @@ pub struct ExecutionFillReport {
     pub reported_provider_id: Option<String>,
     #[serde(default)]
     pub provider_product: Option<kairos_primitives::integration::ProviderProductCode>,
-    #[serde(default)]
-    pub provider_symbol: Option<kairos_primitives::integration::ProviderSymbol>,
+    #[serde(default, alias = "provider_symbol")]
+    pub order_entry_symbol: Option<kairos_primitives::execution::OrderEntrySymbol>,
     #[serde(default)]
     pub remote_order_id: Option<RemoteOrderId>,
 }

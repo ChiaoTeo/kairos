@@ -765,7 +765,7 @@ fn append_massive_instrument(
         primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:fiat:{quote}"
         ))?),
-        underlying_instrument_id: underlying_id,
+        underlying_instrument_id: underlying_id.clone(),
         expiry_unix_nanos: matches!(
             value.kind,
             ExternalInstrumentKind::Future | ExternalInstrumentKind::Option
@@ -778,13 +778,16 @@ fn append_massive_instrument(
         ..Instrument::default()
     });
     if let Some(exchange_id) = exchange_id {
-        let listing_id = if family == "equity" {
-            format!("listing:{exchange_id}:equity:{source_symbol}:{quote}")
-        } else {
-            format!("listing:{exchange_id}:option:{symbol}")
-        };
-        let listing_id = kairos_primitives::reference::ListingId::new(listing_id)?;
         let exchange = kairos_primitives::reference::Exchange::new(exchange_id.clone())?;
+        let listing_id = kairos_primitives::reference::ListingId::venue(
+            &exchange,
+            canonical_instrument_kind(value.kind)?,
+            if family == "equity" {
+                source_symbol.as_str()
+            } else {
+                symbol.as_str()
+            },
+        )?;
         catalog.listings.push(Listing {
             listing_id: listing_id.clone(),
             instrument_id: instrument_id.clone(),
@@ -797,9 +800,11 @@ fn append_massive_instrument(
         });
         if family == "equity" {
             catalog.markets.push(Market {
-                market_id: kairos_primitives::reference::MarketId::new(format!(
-                    "market:{exchange_id}:equity:{source_symbol}"
-                ))?,
+                market_id: kairos_primitives::reference::MarketId::venue(
+                    &exchange,
+                    InstrumentKind::Equity,
+                    format!("{source_symbol}:{quote}"),
+                )?,
                 instrument_id,
                 listing_id: Some(listing_id),
                 exchange_id: exchange,
@@ -834,6 +839,47 @@ fn append_massive_instrument(
                 )?,
                 effective_from_unix_nanos: 0.into(),
                 effective_to_unix_nanos: None,
+                ..Market::default()
+            });
+        } else if family == "options" {
+            catalog.markets.push(Market {
+                market_id: kairos_primitives::reference::MarketId::venue(
+                    &exchange,
+                    InstrumentKind::Option,
+                    source_symbol.clone(),
+                )?,
+                instrument_id,
+                listing_id: Some(listing_id),
+                exchange_id: exchange,
+                instrument_kind: InstrumentKind::Option,
+                underlying_instrument_id: underlying_id,
+                venue_symbol: Some(kairos_primitives::reference::Symbol::new(source_symbol)?),
+                base_asset_id: None,
+                quote_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
+                    "asset:fiat:{quote}"
+                ))?),
+                status,
+                price_tick: super::optional_decimal(value.price_tick, "Massive price tick")?,
+                quantity_tick: super::optional_decimal(
+                    value.quantity_tick,
+                    "Massive quantity tick",
+                )?,
+                price_precision: value.price_precision.unwrap_or_default() as i32,
+                quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
+                minimum_quantity: super::optional_decimal(
+                    value.minimum_quantity,
+                    "Massive minimum quantity",
+                )?,
+                minimum_notional: super::optional_decimal(
+                    value.minimum_notional,
+                    "Massive minimum notional",
+                )?,
+                contract_size: super::optional_decimal(
+                    value.contract_value,
+                    "Massive contract size",
+                )?,
+                effective_from_unix_nanos: 0.into(),
+                effective_to_unix_nanos: value.expiry_unix_nanos,
                 ..Market::default()
             });
         }

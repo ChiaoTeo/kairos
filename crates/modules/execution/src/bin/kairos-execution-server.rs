@@ -229,7 +229,7 @@ struct ExecutionRouteConfig {
 #[serde(deny_unknown_fields)]
 struct ExecutionInstrumentRouteConfig {
     instrument_id: String,
-    provider_symbol: String,
+    order_entry_symbol: String,
     #[serde(default)]
     destination_market_id: Option<String>,
 }
@@ -349,7 +349,7 @@ impl Args {
                 .map(
                     |value| kairos_execution::composition::ExecutionInstrumentRoute {
                         instrument_id: value.instrument_id,
-                        provider_symbol: value.provider_symbol,
+                        order_entry_symbol: value.order_entry_symbol,
                         destination_market_id: value.destination_market_id,
                     },
                 )

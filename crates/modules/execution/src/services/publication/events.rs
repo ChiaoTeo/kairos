@@ -264,8 +264,8 @@ fn encode_fill_event(
         .provider_product
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
-    let provider_symbol = fill
-        .provider_symbol
+    let order_entry_symbol = fill
+        .order_entry_symbol
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
     let fee_asset_id = fill
@@ -290,7 +290,7 @@ fn encode_fill_event(
             remote_order_id,
             reported_provider_id,
             provider_product,
-            provider_symbol,
+            provider_symbol: order_entry_symbol,
             side: match fill.side {
                 OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,
                 OrderSide::Sell => kairos_protocol::generated::kairos::common::v_2::Side::SELL,

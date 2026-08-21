@@ -1,9 +1,10 @@
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::decimal::{Money, Price, Quantity, Rate, Ratio, SignedQuantity};
 use kairos_primitives::execution::{
-    ExecutionRouteId, FillId, IntentId, LegId, OrderId, OrderOptionCode, OrderSide, OrderType,
+    ExecutionRouteId, FillId, IntentId, LegId, OrderEntrySymbol, OrderId, OrderOptionCode,
+    OrderSide, OrderType,
 };
-use kairos_primitives::integration::{ParticipantId, ProviderProductCode, ProviderSymbol};
+use kairos_primitives::integration::{ParticipantId, ProviderProductCode};
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
 use kairos_primitives::risk::DecisionId;
 use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId, WorkspaceId};
@@ -81,7 +82,8 @@ pub struct ExecutionRouteCandidateResponse {
     pub market_id: Option<MarketId>,
     pub participant_id: ParticipantId,
     pub provider_product: ProviderProductCode,
-    pub provider_symbol: ProviderSymbol,
+    #[serde(alias = "provider_symbol")]
+    pub order_entry_symbol: OrderEntrySymbol,
     pub supported_order_types: Vec<OrderType>,
     pub supported_options: Vec<OrderOptionCode>,
     pub ready: bool,

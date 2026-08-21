@@ -65,16 +65,16 @@ impl MarketActor {
         let mut market_universe = BTreeMap::new();
         for market in &update.markets {
             market.validate()?;
-            let market_id = market.market_id().ok_or_else(|| {
-                "canonical market universe cannot contain a consolidated route".to_string()
-            })?;
+            let Some(market_id) = market.market_id() else {
+                return Err("canonical market universe cannot contain a consolidated route".into());
+            };
+            let member_id = market.member_id();
             if market_universe
-                .insert(market_id.to_string(), market.clone())
+                .insert(member_id.clone(), market.clone())
                 .is_some()
             {
                 return Err(format!(
-                    "market universe contains duplicate market {}",
-                    market_id
+                    "market universe contains duplicate member {member_id} for market {market_id}",
                 ));
             }
         }

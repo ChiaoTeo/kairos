@@ -256,7 +256,9 @@ def _v2_selected_route(value: Any) -> dict[str, object]:
         "participant_id": _required_text(value.ParticipantId(), "participant_id"),
         "destination_market_id": _text(value.DestinationMarketId()),
         "provider_product": _required_text(value.ProviderProduct(), "provider_product"),
-        "provider_symbol": _required_text(value.ProviderSymbol(), "provider_symbol"),
+        "order_entry_symbol": _required_text(
+            value.ProviderSymbol(), "order_entry_symbol"
+        ),
         "selected_at_unix_nanos": int(value.SelectedAtUnixNanos()),
     }
 
@@ -308,7 +310,7 @@ def _v2_fill(value: Any) -> dict[str, object]:
         "remote_order_id": _text(value.RemoteOrderId()),
         "reported_provider_id": _text(value.ReportedProviderId()),
         "provider_product": _text(value.ProviderProduct()),
-        "provider_symbol": _text(value.ProviderSymbol()),
+        "order_entry_symbol": _text(value.ProviderSymbol()),
         "quantity": _decimal(value.Quantity()),
         "price": _decimal(value.Price()),
     }

@@ -183,10 +183,10 @@ impl ExecutionApplication {
                                 .selected_route
                                 .as_ref()
                                 .map(|route| route.provider_product.clone()),
-                            provider_symbol: local
+                            order_entry_symbol: local
                                 .selected_route
                                 .as_ref()
-                                .map(|route| route.provider_symbol.clone()),
+                                .map(|route| route.order_entry_symbol.clone()),
                             remote_order_id: Some(
                                 RemoteOrderId::new(remote_order.order_id.to_string())
                                     .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
@@ -360,10 +360,10 @@ impl ExecutionApplication {
                     .selected_route
                     .as_ref()
                     .map(|route| route.provider_product.clone()),
-                provider_symbol: local
+                order_entry_symbol: local
                     .selected_route
                     .as_ref()
-                    .map(|route| route.provider_symbol.clone()),
+                    .map(|route| route.order_entry_symbol.clone()),
                 remote_order_id: Some(
                     RemoteOrderId::new(event.order_id.to_string())
                         .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
@@ -468,10 +468,10 @@ impl ExecutionApplication {
                     .selected_route
                     .as_ref()
                     .map(|route| route.provider_product.clone()),
-                provider_symbol: local
+                order_entry_symbol: local
                     .selected_route
                     .as_ref()
-                    .map(|route| route.provider_symbol.clone()),
+                    .map(|route| route.order_entry_symbol.clone()),
                 remote_order_id: Some(unknown.remote_order_id.clone()),
             });
         }

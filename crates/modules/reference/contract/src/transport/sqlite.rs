@@ -22,7 +22,7 @@ use crate::{ContractError, ContractResult, ReferenceMarket};
 pub const REFERENCE_SQLITE_SCHEMA_VERSION: u32 = 4;
 const MAX_PAGE_SIZE: usize = 10_000;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
 pub struct ReferenceWatermark {
     pub generation: Generation,
     pub event_sequence: Sequence,
@@ -38,6 +38,22 @@ pub struct ReferenceCatalogStats {
     pub markets: u64,
     pub active_markets: u64,
     pub lifecycle_events: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct ReferenceIntegrityStats {
+    pub missing_equity_markets: u64,
+    pub legacy_exchange_market_ids: u64,
+    pub legacy_exchange_listing_ids: u64,
+    pub option_listings: u64,
+    pub option_markets: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct ReferenceCatalogStatus {
+    pub watermark: ReferenceWatermark,
+    pub counts: ReferenceCatalogStats,
+    pub integrity: ReferenceIntegrityStats,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,38 +189,15 @@ impl ReferenceSqliteReader {
 
     pub fn stats(&self) -> ContractResult<ReferenceCatalogStats> {
         let connection = self.connection()?;
-        let values: (i64, i64, i64, i64, i64, i64, i64) = connection
-            .query_row(
-                "SELECT \
-                 (SELECT COUNT(*) FROM reference_entities_current), \
-                 (SELECT COUNT(*) FROM reference_assets_current), \
-                 (SELECT COUNT(*) FROM reference_instruments_current), \
-                 (SELECT COUNT(*) FROM reference_listings_current), \
-                 (SELECT COUNT(*) FROM reference_markets_current), \
-                 (SELECT COUNT(*) FROM reference_markets_current WHERE status = 'active'), \
-                 (SELECT COUNT(*) FROM reference_lifecycle)",
-                [],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                    ))
-                },
-            )
-            .map_err(transport)?;
-        Ok(ReferenceCatalogStats {
-            entities: non_negative(values.0, "entities")?,
-            assets: non_negative(values.1, "assets")?,
-            instruments: non_negative(values.2, "instruments")?,
-            listings: non_negative(values.3, "listings")?,
-            markets: non_negative(values.4, "markets")?,
-            active_markets: non_negative(values.5, "active_markets")?,
-            lifecycle_events: non_negative(values.6, "lifecycle_events")?,
+        read_stats(&connection)
+    }
+
+    pub fn status(&self) -> ContractResult<ReferenceCatalogStatus> {
+        let connection = self.connection()?;
+        Ok(ReferenceCatalogStatus {
+            watermark: read_watermark(&connection)?,
+            counts: read_stats(&connection)?,
+            integrity: read_integrity_stats(&connection)?,
         })
     }
 
@@ -486,6 +479,104 @@ fn read_watermark(connection: &Connection) -> ContractResult<ReferenceWatermark>
     })
 }
 
+fn read_stats(connection: &Connection) -> ContractResult<ReferenceCatalogStats> {
+    let values: (i64, i64, i64, i64, i64, i64, i64) = connection
+        .query_row(
+            "SELECT \
+             (SELECT COUNT(*) FROM reference_entities_current), \
+             (SELECT COUNT(*) FROM reference_assets_current), \
+             (SELECT COUNT(*) FROM reference_instruments_current), \
+             (SELECT COUNT(*) FROM reference_listings_current), \
+             (SELECT COUNT(*) FROM reference_markets_current), \
+             (SELECT COUNT(*) FROM reference_markets_current WHERE status = 'active'), \
+             (SELECT COUNT(*) FROM reference_lifecycle)",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .map_err(transport)?;
+    Ok(ReferenceCatalogStats {
+        entities: non_negative(values.0, "entities")?,
+        assets: non_negative(values.1, "assets")?,
+        instruments: non_negative(values.2, "instruments")?,
+        listings: non_negative(values.3, "listings")?,
+        markets: non_negative(values.4, "markets")?,
+        active_markets: non_negative(values.5, "active_markets")?,
+        lifecycle_events: non_negative(values.6, "lifecycle_events")?,
+    })
+}
+
+fn read_integrity_stats(connection: &Connection) -> ContractResult<ReferenceIntegrityStats> {
+    let missing_equity_markets = connection
+        .query_row(
+            "SELECT COUNT(*) \
+             FROM reference_listings_current AS listing \
+             WHERE listing.status IN ('active', 'trading') \
+               AND listing.listing_id LIKE '%:equity:%' \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM reference_markets_current AS market \
+                 WHERE market.listing_id = listing.listing_id \
+               )",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(transport)?;
+    let legacy_exchange_market_ids = connection
+        .query_row(
+            "SELECT COUNT(*) FROM reference_markets_current \
+             WHERE market_id LIKE 'market:exchange:%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(transport)?;
+    let legacy_exchange_listing_ids = connection
+        .query_row(
+            "SELECT COUNT(*) FROM reference_listings_current \
+             WHERE listing_id LIKE 'listing:exchange:%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(transport)?;
+    let option_listings = connection
+        .query_row(
+            "SELECT COUNT(*) FROM reference_listings_current \
+             WHERE listing_id LIKE '%:option:%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(transport)?;
+    let option_markets = connection
+        .query_row(
+            "SELECT COUNT(*) FROM reference_markets_current \
+             WHERE instrument_kind = 'option'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(transport)?;
+    Ok(ReferenceIntegrityStats {
+        missing_equity_markets: non_negative(missing_equity_markets, "missing_equity_markets")?,
+        legacy_exchange_market_ids: non_negative(
+            legacy_exchange_market_ids,
+            "legacy_exchange_market_ids",
+        )?,
+        legacy_exchange_listing_ids: non_negative(
+            legacy_exchange_listing_ids,
+            "legacy_exchange_listing_ids",
+        )?,
+        option_listings: non_negative(option_listings, "option_listings")?,
+        option_markets: non_negative(option_markets, "option_markets")?,
+    })
+}
+
 fn read_markets(
     connection: &Connection,
     query: &SqliteMarketQuery,
@@ -716,6 +807,112 @@ mod tests {
         );
         assert_eq!(scoped.markets.len(), 1);
         assert_eq!(scoped.instruments.len(), 1);
+    }
+
+    #[test]
+    fn status_reports_current_projection_integrity() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE reference_meta(\
+                    id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL,\
+                    generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL,\
+                    committed_at_unix_nanos INTEGER NOT NULL);\
+                 INSERT INTO reference_meta VALUES(1, 4, 7, 11, 13);\
+                 CREATE TABLE reference_entities_current(entity_id TEXT PRIMARY KEY, payload TEXT);\
+                 CREATE TABLE reference_assets_current(asset_id TEXT PRIMARY KEY, payload TEXT);\
+                 CREATE TABLE reference_instruments_current(instrument_id TEXT PRIMARY KEY, payload TEXT);\
+                 CREATE TABLE reference_listings_current(\
+                    listing_id TEXT PRIMARY KEY, instrument_id TEXT NOT NULL,\
+                    exchange_id TEXT NOT NULL, exchange_symbol TEXT NOT NULL,\
+                    status TEXT NOT NULL, effective_to_unix_nanos INTEGER, payload TEXT NOT NULL);\
+                 CREATE TABLE reference_markets_current(\
+                    market_id TEXT PRIMARY KEY, instrument_id TEXT NOT NULL, listing_id TEXT,\
+                    exchange_id TEXT NOT NULL, instrument_kind TEXT NOT NULL, asset_type TEXT,\
+                    underlying_instrument_id TEXT, venue_symbol TEXT, status TEXT NOT NULL,\
+                    effective_to_unix_nanos INTEGER, payload TEXT NOT NULL);\
+                 CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO reference_listings_current VALUES(?,?,?,?,?,?,?)",
+                rusqlite::params![
+                    "listing:exchange:nasdaq:equity:AAPL:USD",
+                    "instrument:equity:US:AAPL:common",
+                    "exchange:nasdaq",
+                    "AAPL",
+                    "active",
+                    Option::<i64>::None,
+                    "{}"
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO reference_listings_current VALUES(?,?,?,?,?,?,?)",
+                rusqlite::params![
+                    "listing:cboe-bzx-options:option:SPY-20270115-500-C",
+                    "instrument:option:SPY:20270115:500:C",
+                    "exchange:cboe-bzx-options",
+                    "O:SPY260821C00500000",
+                    "active",
+                    Option::<i64>::None,
+                    "{}"
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                rusqlite::params![
+                    "market:exchange:nasdaq:equity:AAPL",
+                    "instrument:equity:US:AAPL:common",
+                    "listing:exchange:nasdaq:equity:AAPL:USD",
+                    "exchange:nasdaq",
+                    "equity",
+                    "equity",
+                    Option::<String>::None,
+                    "AAPL",
+                    "active",
+                    Option::<i64>::None,
+                    "{}"
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                rusqlite::params![
+                    "market:cboe-bzx-options:option:O:SPY260821C00500000",
+                    "instrument:option:SPY:20270115:500:C",
+                    "listing:cboe-bzx-options:option:SPY-20270115-500-C",
+                    "exchange:cboe-bzx-options",
+                    "option",
+                    Option::<String>::None,
+                    "instrument:equity:US:SPY:common",
+                    "O:SPY260821C00500000",
+                    "active",
+                    Option::<i64>::None,
+                    "{}"
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        let reader = ReferenceSqliteReader::open(&path).unwrap();
+        let status = reader.status().unwrap();
+
+        assert_eq!(status.watermark.generation, 7.into());
+        assert_eq!(status.counts.listings, 2);
+        assert_eq!(status.counts.markets, 2);
+        assert_eq!(status.integrity.missing_equity_markets, 0);
+        assert_eq!(status.integrity.legacy_exchange_market_ids, 1);
+        assert_eq!(status.integrity.legacy_exchange_listing_ids, 1);
+        assert_eq!(status.integrity.option_listings, 1);
+        assert_eq!(status.integrity.option_markets, 1);
     }
 
     #[test]

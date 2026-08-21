@@ -36,18 +36,37 @@ impl MarketActor {
         market: ResolvedMarket,
         selectors: Vec<ObservationSelector>,
     ) -> Result<(), String> {
+        self.subscribe_static_many_with_selectors(id, owner_id, vec![market], selectors)
+    }
+
+    pub fn subscribe_static_many_with_selectors(
+        &mut self,
+        id: SubscriptionId,
+        owner_id: impl Into<String>,
+        markets: Vec<ResolvedMarket>,
+        selectors: Vec<ObservationSelector>,
+    ) -> Result<(), String> {
         if self.static_subscriptions.contains_key(&id) || self.dynamic_intents.contains_key(&id) {
             return Err(format!("subscription id already exists: {id}"));
         }
-        market.validate()?;
-        validate_observation_selectors(market.instrument_kind, &selectors)?;
+        if markets.is_empty() {
+            return Err("static subscription requires at least one market".into());
+        }
+        for market in &markets {
+            market.validate()?;
+            validate_observation_selectors(market.instrument_kind, &selectors)?;
+        }
         let owner_id = owner_id.into();
         if owner_id.trim().is_empty() {
             return Err("subscription owner is required".into());
         }
         let mut members = BTreeMap::new();
-        let market_id = market.member_id();
-        members.insert(market_id.clone(), market);
+        for market in markets {
+            let market_id = market.member_id();
+            if members.insert(market_id.clone(), market).is_some() {
+                return Err(format!("duplicate subscription member: {market_id}"));
+            }
+        }
         self.static_subscriptions.insert(
             id.clone(),
             SubscriptionState {
@@ -56,10 +75,11 @@ impl MarketActor {
                 mode: SubscriptionMode::Static,
                 query: None,
                 selectors,
-                members,
-                member_requirements: [(market_id, SubscriptionMemberRequirement::Required)]
-                    .into_iter()
+                member_requirements: members
+                    .keys()
+                    .map(|market_id| (market_id.clone(), SubscriptionMemberRequirement::Required))
                     .collect(),
+                members,
                 member_status: BTreeMap::new(),
                 status: Default::default(),
             },

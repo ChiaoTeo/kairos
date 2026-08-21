@@ -20,7 +20,7 @@ impl ExecutionActor {
                 && existing.execution_market_id == request.execution_market_id
                 && existing.reported_provider_id == request.reported_provider_id
                 && existing.provider_product == request.provider_product
-                && existing.provider_symbol == request.provider_symbol
+                && existing.order_entry_symbol == request.order_entry_symbol
                 && request
                     .remote_order_id
                     .as_ref()
@@ -75,7 +75,7 @@ impl ExecutionActor {
             execution_market_id: request.execution_market_id.clone(),
             reported_provider_id: request.reported_provider_id.clone(),
             provider_product: request.provider_product.clone(),
-            provider_symbol: request.provider_symbol.clone(),
+            order_entry_symbol: request.order_entry_symbol.clone(),
             remote_order_id: request
                 .remote_order_id
                 .clone()

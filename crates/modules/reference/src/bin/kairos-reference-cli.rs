@@ -35,6 +35,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .parse()
             .expect("workspace output format validated when opened")
     });
+    if args.defer_publication && matches!(args.command, Command::Publish) {
+        return Err("--defer-publication cannot be used with publish".into());
+    }
     if !args.command.requires_publication() {
         let value = execute_read(&database, args.command)?;
         println!("{}", render(&value, output));
@@ -48,10 +51,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         reference_changes_stream: args.reference_changes_stream,
     };
 
-    let mut composition = build_application(&config, args.command.requires_publication()).await?;
+    let publish_now = args.command.requires_publication() && !args.defer_publication;
+    let mut composition = build_application(&config, publish_now).await?;
     composition.activate_sources().await?;
     let (application, system) = composition.split_mut();
-    let value = execute(application, system, args.command).await?;
+    let value = execute(application, system, args.command, publish_now).await?;
     println!("{}", render(&value, output));
     Ok(())
 }
@@ -62,14 +66,14 @@ fn execute_read(
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let reader = ReferenceSqliteReader::open(database)?;
     if matches!(command, Command::Status | Command::Snapshot) {
-        let watermark = reader.watermark()?;
-        let counts = reader.stats()?;
+        let status = reader.status()?;
         return Ok(json!({
             "status": "ready",
-            "generation": watermark.generation,
-            "event_sequence": watermark.event_sequence,
-            "committed_at_unix_nanos": watermark.committed_at_unix_nanos,
-            "counts": counts,
+            "generation": status.watermark.generation,
+            "event_sequence": status.watermark.event_sequence,
+            "committed_at_unix_nanos": status.watermark.committed_at_unix_nanos,
+            "counts": status.counts,
+            "integrity": status.integrity,
             "note": "diagnostic query read from the Reference-owned catalog",
         }));
     }
@@ -181,8 +185,8 @@ fn execute_read(
         },
         Command::Show { identifier } => find_record(&snapshot, &identifier)?
             .ok_or_else(|| format!("unknown reference identifier: {identifier}"))?,
-        Command::Refresh
-        | Command::Sync
+        Command::Refresh(_)
+        | Command::Sync(_)
         | Command::Publish
         | Command::Instruments { .. }
         | Command::Listings { .. } => {
@@ -326,18 +330,27 @@ async fn execute(
     application: &mut ComposedReferenceApplication,
     system: &mut kairos_conflux::ConfluxSystem,
     command: Command,
+    publish_now: bool,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let value = match command {
         Command::Status | Command::Snapshot => unreachable!("read command routed to SQLite"),
-        Command::Refresh | Command::Sync => {
-            let result = application
-                .refresh_with_connections(&mut system.connections())
-                .await?;
-            publish_pending(application, system).await?;
+        Command::Refresh(args) | Command::Sync(args) => {
+            let result = if let Some(source_id) = args.source.as_deref() {
+                application
+                    .refresh_source_with_connections(source_id, &mut system.connections())
+                    .await?
+            } else {
+                application
+                    .refresh_with_connections(&mut system.connections())
+                    .await?
+            };
+            maybe_publish_pending(application, system, publish_now).await?;
             json!({
                 "generation": result.generation,
                 "event_sequence": result.event_sequence,
                 "events": result.change_count,
+                "source": args.source,
+                "publication_deferred": !publish_now,
             })
         },
         Command::Publish => {
@@ -348,7 +361,7 @@ async fn execute(
             let publishes = matches!(&command, AssetCommand::Add(_));
             let value = assets(application, command).await?;
             if publishes {
-                publish_pending(application, system).await?;
+                maybe_publish_pending(application, system, publish_now).await?;
             }
             value
         },
@@ -373,7 +386,7 @@ async fn execute(
                         primary_currency_asset_id: None,
                     })
                     .await?;
-                publish_pending(application, system).await?;
+                maybe_publish_pending(application, system, publish_now).await?;
                 json!({"generation": generation})
             },
         },
@@ -390,7 +403,7 @@ async fn execute(
                         effective_to_unix_nanos: args.effective_to_unix_nanos.map(UnixNanos::from),
                     })
                     .await?;
-                publish_pending(application, system).await?;
+                maybe_publish_pending(application, system, publish_now).await?;
                 json!({"generation": generation})
             },
         },
@@ -402,7 +415,7 @@ async fn execute(
                 let result = application
                     .refresh_with_connections(&mut system.connections())
                     .await?;
-                publish_pending(application, system).await?;
+                maybe_publish_pending(application, system, publish_now).await?;
                 let ticker = sync.ticker.to_ascii_lowercase();
                 let events = result
                     .events
@@ -479,6 +492,17 @@ async fn publish_pending(
     Ok(())
 }
 
+async fn maybe_publish_pending(
+    application: &mut ComposedReferenceApplication,
+    system: &mut kairos_conflux::ConfluxSystem,
+    publish_now: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if publish_now {
+        publish_pending(application, system).await?;
+    }
+    Ok(())
+}
+
 async fn assets(
     application: &mut ComposedReferenceApplication,
     command: AssetCommand,
@@ -541,8 +565,8 @@ impl Command {
         }
         matches!(
             self,
-            Self::Refresh
-                | Self::Sync
+            Self::Refresh(_)
+                | Self::Sync(_)
                 | Self::Publish
                 | Self::Assets {
                     command: AssetCommand::Add(_)
@@ -582,6 +606,12 @@ struct Cli {
     reference_changes_stream: i32,
     #[arg(long, global = true)]
     aeron_dir: Option<String>,
+    #[arg(
+        long,
+        global = true,
+        help = "Commit SQLite changes and leave Reference publications in the outbox instead of connecting to Aeron"
+    )]
+    defer_publication: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -590,8 +620,8 @@ struct Cli {
 enum Command {
     Status,
     Snapshot,
-    Refresh,
-    Sync,
+    Refresh(RefreshArgs),
+    Sync(RefreshArgs),
     Publish,
     Assets {
         #[command(subcommand)]
@@ -619,6 +649,12 @@ enum Command {
     Show {
         identifier: String,
     },
+}
+
+#[derive(Debug, Args)]
+struct RefreshArgs {
+    #[arg(long, help = "Advance only one configured Reference source")]
+    source: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -817,5 +853,48 @@ impl QueryArgs {
             "event" => ReferenceKind::Event,
             _ => ReferenceKind::All,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Command};
+
+    #[test]
+    fn refresh_accepts_source_and_deferred_publication() {
+        let cli = Cli::parse_from([
+            "kairos-reference-cli",
+            "--workspace",
+            ".kairos",
+            "--defer-publication",
+            "refresh",
+            "--source",
+            "massive-options",
+        ]);
+
+        assert!(cli.defer_publication);
+        let Command::Refresh(args) = cli.command else {
+            panic!("expected refresh command");
+        };
+        assert_eq!(args.source.as_deref(), Some("massive-options"));
+    }
+
+    #[test]
+    fn sync_accepts_source() {
+        let cli = Cli::parse_from([
+            "kairos-reference-cli",
+            "--workspace",
+            ".kairos",
+            "sync",
+            "--source",
+            "massive-equity",
+        ]);
+
+        let Command::Sync(args) = cli.command else {
+            panic!("expected sync command");
+        };
+        assert_eq!(args.source.as_deref(), Some("massive-equity"));
     }
 }

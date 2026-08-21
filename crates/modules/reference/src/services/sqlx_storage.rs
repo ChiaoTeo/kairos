@@ -1,7 +1,9 @@
 //! SQLx-backed Reference persistence running on the caller's Tokio runtime.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, Sqlite, SqlitePool};
@@ -14,7 +16,9 @@ use crate::domain::{
 };
 
 const LIFECYCLE_LIMIT: i64 = 4096;
-pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 5;
+pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 6;
+
+static SQLITE_OPERATION_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Clone, Copy, Default)]
 #[cfg_attr(test, allow(dead_code))]
@@ -22,6 +26,26 @@ pub(crate) struct CatalogState {
     pub generation: kairos_primitives::time::Generation,
     pub event_sequence: kairos_primitives::time::Sequence,
     pub market_count: usize,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct StartupAuditReport {
+    pub missing_current_equity_markets: Vec<MissingEquityMarket>,
+    pub missing_provider_equity_markets: Vec<MissingProviderEquityMarket>,
+    pub reset_providers: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MissingEquityMarket {
+    pub listing_id: String,
+    pub expected_market_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MissingProviderEquityMarket {
+    pub provider: String,
+    pub listing_id: String,
+    pub expected_market_id: String,
 }
 
 pub struct SqlxCatalogStore {
@@ -35,6 +59,10 @@ pub(crate) struct SqlxProviderSyncStore {
 
 fn persistence(error: impl std::fmt::Display) -> ReferenceError {
     ReferenceError::Persistence(error.to_string())
+}
+
+fn sqlite_operation_lock() -> &'static tokio::sync::Mutex<()> {
+    SQLITE_OPERATION_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn decode<T: serde::de::DeserializeOwned>(payload: String) -> ReferenceResult<T> {
@@ -160,10 +188,163 @@ async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     Ok(pool)
 }
 
+async fn missing_current_equity_markets(
+    pool: &SqlitePool,
+) -> sqlx::Result<Vec<MissingEquityMarket>> {
+    let rows = sqlx::query(
+        "SELECT payload FROM reference_listings_current \
+         WHERE status IN ('active', 'trading') \
+         ORDER BY listing_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let existing_markets = current_market_ids(pool).await?;
+    let mut missing = Vec::new();
+    for row in rows {
+        let payload = row.try_get::<String, _>("payload")?;
+        let listing =
+            decode::<Listing>(payload).map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        let Some(expected_market_id) = expected_equity_market_id(&listing) else {
+            continue;
+        };
+        if !existing_markets.contains(&expected_market_id) {
+            missing.push(MissingEquityMarket {
+                listing_id: listing.listing_id.to_string(),
+                expected_market_id,
+            });
+        }
+    }
+    Ok(missing)
+}
+
+async fn missing_provider_equity_markets(
+    pool: &SqlitePool,
+) -> sqlx::Result<Vec<MissingProviderEquityMarket>> {
+    let rows = sqlx::query(
+        "SELECT provider, record_kind, record_id, payload \
+         FROM reference_provider_records \
+         WHERE record_kind IN ('listing', 'market') \
+         ORDER BY provider, record_kind, record_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut listings = BTreeMap::<String, Vec<Listing>>::new();
+    let mut market_ids = BTreeMap::<String, BTreeSet<String>>::new();
+    for row in rows {
+        let provider = row.try_get::<String, _>("provider")?;
+        let kind = row.try_get::<String, _>("record_kind")?;
+        match kind.as_str() {
+            "listing" => {
+                let listing = decode::<Listing>(row.try_get("payload")?)
+                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                listings.entry(provider).or_default().push(listing);
+            },
+            "market" => {
+                market_ids
+                    .entry(provider)
+                    .or_default()
+                    .insert(row.try_get("record_id")?);
+            },
+            _ => {},
+        }
+    }
+
+    let mut missing = Vec::new();
+    for (provider, listings) in listings {
+        let provider_market_ids = market_ids.get(&provider);
+        for listing in listings {
+            if !is_active_reference_status(&listing.status) {
+                continue;
+            }
+            let Some(expected_market_id) = expected_equity_market_id(&listing) else {
+                continue;
+            };
+            if provider_market_ids.is_some_and(|ids| ids.contains(&expected_market_id)) {
+                continue;
+            }
+            missing.push(MissingProviderEquityMarket {
+                provider: provider.clone(),
+                listing_id: listing.listing_id.to_string(),
+                expected_market_id,
+            });
+        }
+    }
+    Ok(missing)
+}
+
+async fn current_market_ids(pool: &SqlitePool) -> sqlx::Result<BTreeSet<String>> {
+    sqlx::query_scalar::<_, String>("SELECT market_id FROM reference_markets_current")
+        .fetch_all(pool)
+        .await
+        .map(|values| values.into_iter().collect())
+}
+
+fn expected_equity_market_id(listing: &Listing) -> Option<String> {
+    let listing_id = listing.listing_id.to_string();
+    if !listing_id.contains(":equity:") {
+        return None;
+    }
+    let symbol = listing.exchange_symbol.to_string();
+    let market_id = kairos_primitives::reference::MarketId::venue(
+        &listing.exchange_id,
+        kairos_primitives::reference::InstrumentKind::Equity,
+        format!("{symbol}:USD"),
+    )
+    .expect("active equity listing has a valid expected market identity");
+    Some(market_id.to_string())
+}
+
+fn is_active_reference_status(status: &kairos_primitives::reference::ReferenceStatus) -> bool {
+    matches!(status.to_string().as_str(), "active" | "trading")
+}
+
 impl SqlxCatalogStore {
     pub(crate) async fn open(path: impl AsRef<Path>) -> ReferenceResult<Self> {
         let pool = open_pool(path.as_ref()).await.map_err(persistence)?;
         Ok(Self { pool })
+    }
+
+    pub(crate) async fn audit_and_prepare_startup_repair(
+        &mut self,
+    ) -> ReferenceResult<StartupAuditReport> {
+        let mut report = self.startup_audit().await?;
+        if report.missing_provider_equity_markets.is_empty() {
+            return Ok(report);
+        }
+
+        let providers = report
+            .missing_provider_equity_markets
+            .iter()
+            .map(|value| value.provider.clone())
+            .collect::<BTreeSet<_>>();
+        for provider in &providers {
+            self.reset_provider_scan(provider).await?;
+        }
+        report.reset_providers = providers.into_iter().collect();
+        Ok(report)
+    }
+
+    pub(crate) async fn startup_audit(&mut self) -> ReferenceResult<StartupAuditReport> {
+        self.run(|pool| async move {
+            let missing_current_equity_markets = missing_current_equity_markets(&pool).await?;
+            let missing_provider_equity_markets = missing_provider_equity_markets(&pool).await?;
+            Ok(StartupAuditReport {
+                missing_current_equity_markets,
+                missing_provider_equity_markets,
+                reset_providers: Vec::new(),
+            })
+        })
+        .await
+    }
+
+    async fn reset_provider_scan(&mut self, provider: &str) -> ReferenceResult<()> {
+        let provider = provider.to_owned();
+        self.run(|pool| async move {
+            let mut tx = pool.begin().await?;
+            reset_provider_scan_tx(&mut tx, &provider).await?;
+            tx.commit().await
+        })
+        .await
     }
 }
 
@@ -540,6 +721,88 @@ mod tests {
         let (cursor, accumulated) = store.load_state("massive-options").await.unwrap().unwrap();
         assert!(cursor.is_none());
         assert!(accumulated.is_none());
+    }
+
+    #[tokio::test]
+    async fn startup_audit_resets_provider_scan_when_equity_listing_has_no_market() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let provider_catalog = ProviderCatalog {
+            listings: vec![Listing {
+                listing_id: ListingId::new("listing:nasdaq:equity:AAPL").unwrap(),
+                instrument_id: InstrumentId::new("instrument:equity:US:AAPL:common").unwrap(),
+                exchange_id: Exchange::new("exchange:nasdaq").unwrap(),
+                exchange_symbol: Symbol::new("AAPL").unwrap(),
+                status: "active".into(),
+                effective_from_unix_nanos: 0.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let staged_catalog = ProviderCatalog {
+            markets: vec![Market {
+                market_id: MarketId::new("market:staged").unwrap(),
+                status: "active".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        SqlxProviderSyncStore::open_legacy(&path)
+            .await
+            .unwrap()
+            .save_last_good("massive-equity", &provider_catalog)
+            .await
+            .unwrap();
+        let mut provider_store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        provider_store
+            .append_staged_page("massive-equity", Some("cursor-1"), &staged_catalog)
+            .await
+            .unwrap();
+        provider_store
+            .promote_staged("massive-equity")
+            .await
+            .unwrap();
+
+        let mut catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
+        let report = catalog_store
+            .audit_and_prepare_startup_repair()
+            .await
+            .unwrap();
+
+        assert_eq!(report.reset_providers, vec!["massive-equity"]);
+        assert_eq!(report.missing_provider_equity_markets.len(), 1);
+        assert_eq!(
+            report.missing_provider_equity_markets[0].expected_market_id,
+            "market:nasdaq:equity:AAPL:USD"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM reference_provider_staging WHERE provider='massive-equity'",
+            )
+            .fetch_one(&catalog_store.pool)
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM reference_provider_pending_promotion WHERE provider='massive-equity'",
+            )
+            .fetch_one(&catalog_store.pool)
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT cursor FROM reference_provider_sync WHERE provider='massive-equity'",
+            )
+            .fetch_one(&catalog_store.pool)
+            .await
+            .unwrap()
+            .as_deref(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -970,6 +1233,7 @@ impl SqlxCatalogStore {
         F: FnOnce(SqlitePool) -> Fut,
         Fut: Future<Output = sqlx::Result<T>>,
     {
+        let _guard = sqlite_operation_lock().lock().await;
         operation(self.pool.clone()).await.map_err(persistence)
     }
 }
@@ -980,6 +1244,7 @@ impl SqlxProviderSyncStore {
         F: FnOnce(SqlitePool) -> Fut,
         Fut: Future<Output = sqlx::Result<T>>,
     {
+        let _guard = sqlite_operation_lock().lock().await;
         operation(self.pool.clone()).await.map_err(persistence)
     }
 }
@@ -1651,6 +1916,31 @@ async fn commit_pending_provider_promotions(
     .execute(&mut **tx)
     .await?;
     sqlx::query("DELETE FROM reference_provider_pending_promotion")
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn reset_provider_scan_tx(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    provider: &str,
+) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM reference_provider_staging WHERE provider = ?")
+        .bind(provider)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM reference_provider_pending_promotion WHERE provider = ?")
+        .bind(provider)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("INSERT INTO reference_provider_sync(provider,cursor,updated_at_unix_nanos) VALUES (?,NULL,?) ON CONFLICT(provider) DO UPDATE SET cursor=NULL,updated_at_unix_nanos=excluded.updated_at_unix_nanos")
+        .bind(provider)
+        .bind(unix_nanos().get() as i64)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("INSERT INTO reference_provider_projection_version(provider,version) VALUES (?,?) ON CONFLICT(provider) DO UPDATE SET version=excluded.version")
+        .bind(provider)
+        .bind(PROVIDER_PROJECTION_VERSION)
         .execute(&mut **tx)
         .await?;
     Ok(())

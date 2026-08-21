@@ -660,13 +660,15 @@ def _validate_reference_contracts(
         if event.get("kind") != "option-contract":
             invalid += 1
         instrument_id = str(event.get("instrument_id") or "")
-        provider_symbol = str(event.get("provider_symbol") or "")
+        external_symbol = str(
+            event.get("external_symbol") or event.get("provider_symbol") or ""
+        )
         duplicates += int(
-            instrument_id in seen_instruments or provider_symbol in seen_symbols
+            instrument_id in seen_instruments or external_symbol in seen_symbols
         )
         seen_instruments.add(instrument_id)
-        seen_symbols.add(provider_symbol)
-        if not instrument_id or not provider_symbol:
+        seen_symbols.add(external_symbol)
+        if not instrument_id or not external_symbol:
             invalid += 1
         if str(event.get("underlying") or "").upper() != expected_underlying:
             invalid += 1

@@ -3,8 +3,10 @@ use kairos_execution_contract::{
     ExecutionRouteCandidateResponse, ExecutionViewKey, ExecutionViewKind, execution_view_path,
 };
 use kairos_primitives::account::{AccountId, SegmentKey};
-use kairos_primitives::execution::{ExecutionRouteId, OrderOptionCode, OrderType};
-use kairos_primitives::integration::{ParticipantId, ProviderProductCode, ProviderSymbol};
+use kairos_primitives::execution::{
+    ExecutionRouteId, OrderEntrySymbol, OrderOptionCode, OrderType,
+};
+use kairos_primitives::integration::{ParticipantId, ProviderProductCode};
 use kairos_primitives::reference::{InstrumentId, MarketId};
 
 #[test]
@@ -83,7 +85,7 @@ fn unknown_execution_event_identifier_is_rejected() {
 }
 
 #[test]
-fn route_contract_uses_typed_values_without_changing_json_shape() {
+fn route_contract_uses_order_entry_symbol_in_json_shape() {
     let route = ExecutionRouteCandidateResponse {
         route_id: ExecutionRouteId::new("route:okx:swap").unwrap(),
         account_id: Some(AccountId::new("main").unwrap()),
@@ -92,7 +94,7 @@ fn route_contract_uses_typed_values_without_changing_json_shape() {
         market_id: Some(MarketId::new("market:okx:swap:BTC-USDT-SWAP").unwrap()),
         participant_id: ParticipantId::new("okx").unwrap(),
         provider_product: ProviderProductCode::new("swap").unwrap(),
-        provider_symbol: ProviderSymbol::new("BTC-USDT-SWAP").unwrap(),
+        order_entry_symbol: OrderEntrySymbol::new("BTC-USDT-SWAP").unwrap(),
         supported_order_types: vec![OrderType::Market, OrderType::Limit],
         supported_options: vec![OrderOptionCode::new("reduce_only").unwrap()],
         ready: true,
@@ -100,12 +102,34 @@ fn route_contract_uses_typed_values_without_changing_json_shape() {
 
     let json = serde_json::to_value(&route).unwrap();
     assert_eq!(json["route_id"], "route:okx:swap");
+    assert_eq!(json["order_entry_symbol"], "BTC-USDT-SWAP");
     assert_eq!(json["supported_order_types"][0], "market");
     assert_eq!(json["supported_options"][0], "reduce_only");
     assert_eq!(
         serde_json::from_value::<ExecutionRouteCandidateResponse>(json).unwrap(),
         route
     );
+}
+
+#[test]
+fn route_contract_accepts_legacy_provider_symbol_json() {
+    let raw = serde_json::json!({
+        "route_id": "route:okx:swap",
+        "account_id": "main",
+        "segment_key": "swap",
+        "instrument_id": "instrument:btc-perp",
+        "market_id": "market:okx:swap:BTC-USDT-SWAP",
+        "participant_id": "okx",
+        "provider_product": "swap",
+        "provider_symbol": "BTC-USDT-SWAP",
+        "supported_order_types": ["market"],
+        "supported_options": ["reduce_only"],
+        "ready": true
+    });
+
+    let route = serde_json::from_value::<ExecutionRouteCandidateResponse>(raw).unwrap();
+
+    assert_eq!(route.order_entry_symbol.as_str(), "BTC-USDT-SWAP");
 }
 
 #[test]
@@ -118,7 +142,7 @@ fn route_contract_rejects_invalid_semantic_identity() {
         "market_id": null,
         "participant_id": "okx",
         "provider_product": "swap",
-        "provider_symbol": "BTC-USDT-SWAP",
+        "order_entry_symbol": "BTC-USDT-SWAP",
         "supported_order_types": ["market"],
         "supported_options": [],
         "ready": true

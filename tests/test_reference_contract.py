@@ -187,6 +187,13 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
     client = ReferenceClient(database_path=_reference_database(tmp_path))
     assert client.catalog()["generation"] == 3
     assert client.catalog()["catalog"]["market_count"] == 1
+    assert client.catalog()["integrity"] == {
+        "missing_equity_markets": 0,
+        "legacy_exchange_market_ids": 0,
+        "legacy_exchange_listing_ids": 0,
+        "option_listings": 0,
+        "option_markets": 0,
+    }
     assert (
         client.resolve_market(symbol="BTCUSDT")["instrument_id"]
         == "instrument:spot:BTC"
@@ -215,6 +222,77 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
         )
         == 1
     )
+
+
+def test_reference_sqlite_client_reports_symbol_identity_integrity(tmp_path) -> None:
+    path = _reference_database(tmp_path)
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "INSERT INTO reference_listings_current VALUES(?,?,?,?,?,?)",
+        (
+            "listing:exchange:nasdaq:equity:AAPL",
+            "instrument:equity:US:AAPL:common",
+            "exchange:nasdaq",
+            "AAPL",
+            "active",
+            "{}",
+        ),
+    )
+    connection.execute(
+        "INSERT INTO reference_listings_current VALUES(?,?,?,?,?,?)",
+        (
+            "listing:cboe-bzx-options:option:SPY-20270115-500-C",
+            "instrument:option:SPY:20270115:500:C",
+            "exchange:cboe-bzx-options",
+            "O:SPY260821C00500000",
+            "active",
+            "{}",
+        ),
+    )
+    connection.execute(
+        "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "market:exchange:nasdaq:equity:AAPL",
+            "instrument:equity:US:AAPL:common",
+            None,
+            "exchange:nasdaq",
+            "equity",
+            "equity",
+            None,
+            "AAPL",
+            "active",
+            None,
+            "{}",
+        ),
+    )
+    connection.execute(
+        "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "market:cboe-bzx-options:option:O:SPY260821C00500000",
+            "instrument:option:SPY:20270115:500:C",
+            "listing:cboe-bzx-options:option:SPY-20270115-500-C",
+            "exchange:cboe-bzx-options",
+            "option",
+            None,
+            "instrument:equity:US:SPY:common",
+            "O:SPY260821C00500000",
+            "active",
+            None,
+            "{}",
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    integrity = ReferenceClient(database_path=path).catalog()["integrity"]
+
+    assert integrity == {
+        "missing_equity_markets": 1,
+        "legacy_exchange_market_ids": 1,
+        "legacy_exchange_listing_ids": 1,
+        "option_listings": 1,
+        "option_markets": 1,
+    }
 
 
 def test_reference_application_reads_concrete_sqlite_client(tmp_path) -> None:

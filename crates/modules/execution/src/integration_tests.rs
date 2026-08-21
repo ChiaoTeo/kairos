@@ -50,7 +50,7 @@ fn fill_report(
         execution_market_id: None,
         reported_provider_id: None,
         provider_product: None,
-        provider_symbol: None,
+        order_entry_symbol: None,
         remote_order_id: None,
     }
 }
@@ -252,7 +252,7 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
             participant_id: "simulated".into(),
             provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
                 .unwrap(),
-            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTCUSDT")
+            order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
                 .unwrap(),
             supported_order_types: vec![
                 crate::application::OrderType::Market,
@@ -294,7 +294,7 @@ fn configure_test_access(application: &mut ExecutionApplication) {
             participant_id: "simulated".into(),
             provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
                 .unwrap(),
-            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTCUSDT")
+            order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
                 .unwrap(),
             supported_order_types: vec![
                 crate::application::OrderType::Market,
@@ -337,7 +337,7 @@ fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() 
             participant_id: "simulated".into(),
             provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
                 .unwrap(),
-            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTCUSDT")
+            order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
                 .unwrap(),
             supported_order_types: vec![OrderType::Market, OrderType::Limit],
             supported_options: Vec::new(),
@@ -387,7 +387,7 @@ fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state
             participant_id: "simulated".into(),
             provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
                 .unwrap(),
-            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTCUSDT")
+            order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
                 .unwrap(),
             supported_order_types: vec![OrderType::Market],
             supported_options: Vec::new(),
@@ -449,7 +449,7 @@ fn selected_route_snapshot_is_persisted_with_the_order() {
     assert_eq!(selected.route_id, "execution-route:test");
     assert_eq!(selected.participant_id, "simulated");
     assert_eq!(selected.provider_product, "spot");
-    assert_eq!(selected.provider_symbol, "BTCUSDT");
+    assert_eq!(selected.order_entry_symbol, "BTCUSDT");
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].selected_route, selected);
 
@@ -2435,7 +2435,7 @@ fn reported_execution_market_does_not_overwrite_the_selected_destination() {
             participant_id: "broker".into(),
             provider_product: kairos_primitives::integration::ProviderProductCode::new("smart")
                 .unwrap(),
-            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTC").unwrap(),
+            order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTC").unwrap(),
             supported_order_types: vec![OrderType::Market],
             supported_options: Vec::new(),
             ready: true,

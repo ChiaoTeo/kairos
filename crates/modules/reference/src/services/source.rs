@@ -170,34 +170,22 @@ impl ReferenceSource for ConfiguredProviderSource {
     ) -> ReferenceResult<ProviderUpdate> {
         match self {
             Self::BinanceSpot(source) => {
-                source
-                    .fetch_catalog_step_with_connections(connections)
-                    .await
+                single_step(source.fetch_catalog_with_connections(connections).await?)
             },
             Self::BinanceDerivatives(source) => {
-                source
-                    .fetch_catalog_step_with_connections(connections)
-                    .await
+                single_step(source.fetch_catalog_with_connections(connections).await?)
             },
             Self::BinanceOptions(source) => {
-                source
-                    .fetch_catalog_step_with_connections(connections)
-                    .await
+                single_step(source.fetch_catalog_with_connections(connections).await?)
             },
             Self::BinanceEquity(source) => {
-                source
-                    .fetch_catalog_step_with_connections(connections)
-                    .await
+                single_step(source.fetch_catalog_with_connections(connections).await?)
             },
             Self::Okx(source) => {
-                source
-                    .fetch_catalog_step_with_connections(connections)
-                    .await
+                single_step(source.fetch_catalog_with_connections(connections).await?)
             },
             Self::Hyperliquid(source) => {
-                source
-                    .fetch_catalog_step_with_connections(connections)
-                    .await
+                single_step(source.fetch_catalog_with_connections(connections).await?)
             },
             Self::MassiveEquity(source) => {
                 source
@@ -233,6 +221,15 @@ impl ReferenceSource for ConfiguredProviderSource {
             _ => Vec::new(),
         }
     }
+}
+
+fn single_step(catalog: ProviderCatalog) -> ReferenceResult<ProviderUpdate> {
+    Ok(ProviderUpdate {
+        catalog,
+        complete: true,
+        page_count: 1,
+        facts_persisted: false,
+    })
 }
 
 #[cfg(not(test))]

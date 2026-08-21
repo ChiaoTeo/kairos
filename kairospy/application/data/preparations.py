@@ -11,14 +11,14 @@ from .models import DataRequirement
 @dataclass(frozen=True, slots=True)
 class OptionMarketDataTarget:
     underlying: str
-    provider_symbol: str
+    external_symbol: str
     instrument_id: str
     network_id: str | None
     start_time_unix_nanos: int
     end_time_unix_nanos: int
 
     def __post_init__(self) -> None:
-        for name in ("underlying", "provider_symbol", "instrument_id"):
+        for name in ("underlying", "external_symbol", "instrument_id"):
             value = str(getattr(self, name)).strip()
             if not value:
                 raise ValueError(f"option Market data target {name} is required")
@@ -41,9 +41,10 @@ class OptionMarketDataTarget:
     ) -> "OptionMarketDataTarget":
         if event.get("kind") != "option-contract":
             raise ValueError("option Market target requires an option-contract fact")
+        external_symbol = event.get("external_symbol") or event.get("provider_symbol")
         return cls(
             underlying=str(event.get("underlying") or ""),
-            provider_symbol=str(event.get("provider_symbol") or ""),
+            external_symbol=str(external_symbol or ""),
             instrument_id=str(event.get("instrument_id") or ""),
             network_id=(
                 None if event.get("network_id") is None else str(event["network_id"])
@@ -78,7 +79,7 @@ class OptionMarketPreparationApplication:
             tuple(targets),
             key=lambda item: (
                 item.underlying,
-                item.provider_symbol,
+                item.external_symbol,
                 item.start_time_unix_nanos,
                 item.end_time_unix_nanos,
                 item.instrument_id,
@@ -93,7 +94,7 @@ class OptionMarketPreparationApplication:
             for kind in normalized_kinds:
                 identity = (
                     kind,
-                    target.provider_symbol,
+                    target.external_symbol,
                     target.start_time_unix_nanos,
                     target.end_time_unix_nanos,
                 )
@@ -101,7 +102,7 @@ class OptionMarketPreparationApplication:
                     continue
                 seen.add(identity)
                 parameters = {
-                    "symbol": target.provider_symbol,
+                    "symbol": target.external_symbol,
                     "instrument_id": target.instrument_id,
                     "credential_id": credential_id,
                 }
@@ -115,7 +116,7 @@ class OptionMarketPreparationApplication:
                         kind=kind,
                         subject=(
                             f"{target.underlying.upper()}-options/"
-                            f"{target.provider_symbol}"
+                            f"{target.external_symbol}"
                         ),
                         start_time_unix_nanos=target.start_time_unix_nanos,
                         end_time_unix_nanos=target.end_time_unix_nanos,

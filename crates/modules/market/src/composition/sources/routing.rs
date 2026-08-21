@@ -53,7 +53,7 @@ pub(crate) fn binding_supports_canonical_market(
     exchange_id: &str,
     kind: kairos_primitives::reference::InstrumentKind,
 ) -> bool {
-    use kairos_primitives::reference::InstrumentKind::{Future, Option, Perpetual, Spot};
+    use kairos_primitives::reference::InstrumentKind::{Equity, Future, Option, Perpetual, Spot};
     match binding {
         MarketSourceBinding::BinanceSpot { .. } => {
             exchange_id.eq_ignore_ascii_case("exchange:binance") && kind == Spot
@@ -89,9 +89,12 @@ pub(crate) fn binding_supports_canonical_market(
                     config::HyperliquidMarketType::Perpetual => kind == Perpetual,
                 }
         },
-        // Both are broker/data-provider surfaces rather than canonical venues.
-        MarketSourceBinding::BinanceEquity { .. }
-        | MarketSourceBinding::Massive { .. }
-        | MarketSourceBinding::Ibkr { .. } => false,
+        MarketSourceBinding::BinanceEquity { .. } | MarketSourceBinding::Ibkr { .. } => {
+            kind == Equity
+        },
+        MarketSourceBinding::Massive { product, .. } => match product {
+            config::MassiveMarketProduct::Equity => kind == Equity,
+            config::MassiveMarketProduct::Options => kind == Option,
+        },
     }
 }

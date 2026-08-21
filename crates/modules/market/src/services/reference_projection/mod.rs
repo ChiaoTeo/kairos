@@ -54,14 +54,13 @@ impl ReferenceUniverseProjection {
                         market.market_id, market.instrument_id
                     )
                 })?;
-            let Some(provider_symbol) = market.venue_symbol.as_deref() else {
-                continue;
-            };
             let mut candidates = self
                 .sources
                 .iter()
                 .filter(|source| {
-                    source.exchange_id.eq_ignore_ascii_case(&market.exchange_id)
+                    (source.exchange_id.eq_ignore_ascii_case(&market.exchange_id)
+                        || source.exchange_id.starts_with("data_provider:")
+                        || source.exchange_id.starts_with("broker:"))
                         && source.instrument_kinds.contains(&market.instrument_kind)
                 })
                 .map(|source| {
@@ -78,44 +77,46 @@ impl ReferenceUniverseProjection {
             {
                 candidates.push((None, "binance", "spot"));
             }
-            let [(source_id, provider_id, provider_product)] = candidates.as_slice() else {
-                if candidates.is_empty() {
-                    continue;
-                }
-                return Err(format!(
-                    "canonical market {} has ambiguous Market source bindings: {}",
-                    market.market_id,
-                    candidates
-                        .iter()
-                        .filter_map(|(source_id, _, _)| *source_id)
-                        .collect::<Vec<_>>()
-                        .join(",")
-                ));
-            };
-            let route = MarketDataRoute::new(
-                format!(
-                    "market-route:{}:{}",
-                    source_id.unwrap_or(provider_id),
-                    market.market_id
-                ),
-                *provider_id,
-                *provider_product,
-                provider_symbol,
-            )?
-            .with_observation_capabilities(observation_capabilities(provider_id, provider_product));
-            let mut descriptor = ResolvedMarket::from_reference(
-                market.market_id.clone(),
-                market.instrument_id.clone(),
-                instrument.instrument_type,
-                market.exchange_id.clone(),
-                route,
-            )?;
-            descriptor.asset_type = market.asset_type;
-            descriptor.underlying_instrument_id = market.underlying_instrument_id.clone();
-            if let Some(source_id) = source_id {
-                descriptor = descriptor.with_source(*source_id)?;
+            if candidates.is_empty() {
+                continue;
             }
-            markets.push(descriptor);
+            for (source_id, provider_id, provider_product) in candidates {
+                let Some(subscription_symbol) =
+                    subscription_symbol_for(provider_id, provider_product, market)?
+                else {
+                    continue;
+                };
+                let route = MarketDataRoute::new(
+                    format!(
+                        "market-route:{}:{}",
+                        source_id.unwrap_or(provider_id),
+                        market.market_id
+                    ),
+                    provider_id,
+                    provider_product,
+                    subscription_symbol,
+                )?
+                .with_observation_capabilities(observation_capabilities(
+                    provider_id,
+                    provider_product,
+                ));
+                let mut descriptor = ResolvedMarket::from_reference(
+                    market.market_id.clone(),
+                    market.instrument_id.clone(),
+                    instrument.instrument_type,
+                    market.exchange_id.clone(),
+                    route,
+                )?;
+                descriptor.asset_type = market.asset_type;
+                descriptor.underlying_instrument_id = market.underlying_instrument_id.clone();
+                descriptor.expiry_unix_nanos = instrument.expiry_unix_nanos;
+                descriptor.strike = instrument.strike;
+                descriptor.option_right = instrument.option_right.clone();
+                if let Some(source_id) = source_id {
+                    descriptor = descriptor.with_source(source_id)?;
+                }
+                markets.push(descriptor);
+            }
         }
         Ok(ReconcileMarketUniverse {
             generation: snapshot.generation.into(),
@@ -141,4 +142,12 @@ pub(crate) fn observation_capabilities(
         "massive" => vec![Quote, Trade],
         _ => Vec::new(),
     }
+}
+
+fn subscription_symbol_for(
+    _provider_id: &str,
+    _provider_product: &str,
+    market: &kairos_reference_contract::Market,
+) -> Result<Option<String>, String> {
+    Ok(market.venue_symbol.as_ref().map(ToString::to_string))
 }

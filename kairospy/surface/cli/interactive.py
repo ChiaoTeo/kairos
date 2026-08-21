@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 import shlex
 
@@ -18,12 +19,19 @@ from kairospy.surface.console.models import ObserveSnapshot, recommended_action
 ExecuteCommand = Callable[[Sequence[str]], int]
 
 
+class ShellControl(Enum):
+    HANDLED = "handled"
+
+
 @dataclass(frozen=True, slots=True)
 class GuidedCommand:
     argv: tuple[str, ...]
     summary: str
     dangerous: bool = False
     needs_workspace: bool = True
+
+
+ShellAction = GuidedCommand | ShellControl | None
 
 
 @dataclass(slots=True)
@@ -94,7 +102,10 @@ def _run_shell(
         if line == "help":
             _print_shell_help(context)
             continue
-        if line in {"summary", "status"} and not context.shell_path:
+        if line == "summary":
+            _print_context(context)
+            continue
+        if line == "status" and not context.shell_path:
             _print_context(context)
             continue
         if line == "refresh":
@@ -110,6 +121,8 @@ def _run_shell(
                 context.selected_service = None
             continue
         command = _shell_command(context, line)
+        if command is ShellControl.HANDLED:
+            continue
         if command is None:
             typer.echo("无法识别这个命令。输入 help 查看当前上下文可用动作。")
             continue
@@ -139,6 +152,25 @@ def _print_shell_menu(context: InteractiveContext) -> None:
             )
         )
         return
+    if path == ("launch",):
+        typer.echo(
+            "\n".join(
+                (
+                    "策略运行：",
+                    "  1. 选择 launch",
+                    "  2. 启动",
+                    "  3. 查看状态",
+                    "  4. 查看日志",
+                    "  5. 跟随状态和输出",
+                    "  6. 等待回测报告",
+                    "  7. 停止",
+                    "  8. 校验配置",
+                    "  9. 编辑配置",
+                    "  10. 查看最近报告",
+                )
+            )
+        )
+        return
     if path == ("system",):
         typer.echo(
             "\n".join(
@@ -149,6 +181,52 @@ def _print_shell_menu(context: InteractiveContext) -> None:
                     "  3. 查看所有系统服务",
                     "  4. 运行 system doctor",
                     "  5. 修复 stale 运行资源",
+                )
+            )
+        )
+        return
+    if path == ("reference",):
+        typer.echo(
+            "\n".join(
+                (
+                    "Reference 查询：",
+                    "  1. 当前系统有哪些 market",
+                    "  2. 某个 asset/symbol 相关的 market",
+                    "  3. 有哪些 listing",
+                    "  4. 某个 market 的信息",
+                    "  5. 按 symbol 检索",
+                    "  6. 期权链",
+                )
+            )
+        )
+        return
+    if path == ("query",):
+        typer.echo(
+            "\n".join(
+                (
+                    "账户 / 行情 / 订单：",
+                    "  1. 账户列表",
+                    "  2. 账户余额",
+                    "  3. 账户持仓",
+                    "  4. 行情快照",
+                    "  5. 订单状态",
+                    "  6. 通知配置校验",
+                    "  7. Provider 集成帮助",
+                )
+            )
+        )
+        return
+    if path == ("data",):
+        typer.echo(
+            "\n".join(
+                (
+                    "数据与研究：",
+                    "  1. 列出 datasets",
+                    "  2. 审阅 data requirements",
+                    "  3. 执行 data requirements",
+                    "  4. 列出 dataset set aliases",
+                    "  5. 锁定 research plan",
+                    "  6. 发布 research gate",
                 )
             )
         )
@@ -177,11 +255,28 @@ def _print_shell_help(context: InteractiveContext) -> None:
                 (
                     "可用命令：",
                     "  system              进入系统服务",
+                    "  launch              进入策略运行",
+                    "  reference           进入 Reference 查询",
+                    "  query               进入账户 / 行情 / 订单",
+                    "  data                进入数据与研究",
                     "  system reference    进入 /system/reference",
                     "  system market       进入 /system/market",
                     "  summary             显示当前概览",
                     "  refresh             刷新状态",
                     "  exit                退出",
+                )
+            )
+        )
+        return
+    if path == ("launch",):
+        typer.echo(
+            "\n".join(
+                (
+                    "可用命令：",
+                    "  select              选择 launch",
+                    "  start/status/logs/attach/wait/stop/validate/edit/report",
+                    "  back                返回上一级",
+                    "  home                回到根上下文",
                 )
             )
         )
@@ -201,6 +296,30 @@ def _print_shell_help(context: InteractiveContext) -> None:
                 )
             )
         )
+        return
+    if path == ("reference",):
+        typer.echo(
+            "\n".join(
+                (
+                    "可用命令：",
+                    "  markets             查看当前可用 market",
+                    "  asset               查看某个 asset/symbol 相关 market",
+                    "  listings            查看 listing",
+                    "  market              查看某个 market 信息",
+                    "  search              按 symbol 检索",
+                    "  option-chain        查询期权链",
+                    "  back/home/exit",
+                )
+            )
+        )
+        return
+    if path == ("query",):
+        typer.echo(
+            "可用命令：accounts/balances/positions/snapshot/order/notifications/integration"
+        )
+        return
+    if path == ("data",):
+        typer.echo("可用命令：list/plan/execute/sets/lock/gate")
         return
     if path in {("system", "reference"), ("system", "market")}:
         service = path[-1]
@@ -228,7 +347,7 @@ def _refresh_context(context: InteractiveContext) -> None:
     context.snapshot = _snapshot(context.owner) if context.owner is not None else None
 
 
-def _shell_command(context: InteractiveContext, line: str) -> GuidedCommand | None:
+def _shell_command(context: InteractiveContext, line: str) -> ShellAction:
     try:
         parts = tuple(shlex.split(line))
     except ValueError as error:
@@ -239,8 +358,16 @@ def _shell_command(context: InteractiveContext, line: str) -> GuidedCommand | No
     path = context.shell_path
     if not path:
         return _root_shell_command(context, parts)
+    if path == ("launch",):
+        return _launch_shell_command(context, parts)
     if path == ("system",):
         return _system_shell_command(context, parts)
+    if path == ("reference",):
+        return _reference_shell_command(context, parts)
+    if path == ("query",):
+        return _query_shell_command(context, parts)
+    if path == ("data",):
+        return _data_shell_command(parts)
     if path in {("system", "reference"), ("system", "market")}:
         return _system_service_shell_command(context, parts)
     return None
@@ -248,20 +375,34 @@ def _shell_command(context: InteractiveContext, line: str) -> GuidedCommand | No
 
 def _root_shell_command(
     context: InteractiveContext, parts: tuple[str, ...]
-) -> GuidedCommand | None:
+) -> ShellAction:
     if parts in {("1",), ("system",)}:
         context.shell_path = ("system",)
-        return None
+        return ShellControl.HANDLED
+    if parts in {("2",), ("launch",)}:
+        context.shell_path = ("launch",)
+        return ShellControl.HANDLED
+    if parts in {("3",), ("reference",)}:
+        context.shell_path = ("reference",)
+        return ShellControl.HANDLED
+    if parts in {("4",), ("query",), ("account",), ("market-data",)}:
+        context.shell_path = ("query",)
+        return ShellControl.HANDLED
+    if parts in {("5",), ("data",), ("research",)}:
+        context.shell_path = ("data",)
+        return ShellControl.HANDLED
     if parts in {("system", "reference"), ("reference",)}:
         context.shell_path = ("system", "reference")
         context.selected_service = "reference"
-        return None
+        return ShellControl.HANDLED
     if parts in {("system", "market"), ("market",)}:
         context.shell_path = ("system", "market")
         context.selected_service = "market"
-        return None
+        return ShellControl.HANDLED
     if parts in {("8",), ("quickstart",), ("map",)}:
-        return GuidedCommand(("quickstart",), "查看 CLI 场景地图", needs_workspace=False)
+        return GuidedCommand(
+            ("quickstart",), "查看 CLI 场景地图", needs_workspace=False
+        )
     if parts in {("6",), ("doctor",)}:
         return GuidedCommand(("project", "doctor"), "检查项目 readiness")
     if parts in {("7",), ("observe",)}:
@@ -269,17 +410,60 @@ def _root_shell_command(
     return None
 
 
+def _launch_shell_command(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> ShellAction:
+    if parts in {("1",), ("select",)}:
+        context.selected_launch = _prompt_launch_id(
+            context.owner, context.snapshot, context.selected_launch
+        )
+        return ShellControl.HANDLED
+    mapping = {
+        "2": ("start", "启动策略运行", True),
+        "start": ("start", "启动策略运行", True),
+        "3": ("status", "查看策略和依赖状态", False),
+        "status": ("status", "查看策略和依赖状态", False),
+        "4": ("logs", "查看策略日志", False),
+        "logs": ("logs", "查看策略日志", False),
+        "5": ("attach", "跟随状态和最近输出", False),
+        "attach": ("attach", "跟随状态和最近输出", False),
+        "6": ("wait", "等待回测完成并读取报告", False),
+        "wait": ("wait", "等待回测完成并读取报告", False),
+        "7": ("stop", "停止策略并释放运行资源", True),
+        "stop": ("stop", "停止策略并释放运行资源", True),
+        "8": ("diagnose validate", "校验 launch 配置", False),
+        "validate": ("diagnose validate", "校验 launch 配置", False),
+        "9": ("edit", "交互式编辑 launch 配置", True),
+        "edit": ("edit", "交互式编辑 launch 配置", True),
+        "10": ("report", "读取最近完成的报告", False),
+        "report": ("report", "读取最近完成的报告", False),
+    }
+    selected = mapping.get(parts[0]) if len(parts) == 1 else None
+    if selected is None:
+        return None
+    action, summary, dangerous = selected
+    launch_id = context.selected_launch or _prompt_launch_id(
+        context.owner, context.snapshot, context.selected_launch
+    )
+    context.selected_launch = launch_id
+    return GuidedCommand(
+        ("launch", *tuple(action.split()), launch_id),
+        summary,
+        dangerous=dangerous,
+    )
+
+
 def _system_shell_command(
     context: InteractiveContext, parts: tuple[str, ...]
-) -> GuidedCommand | None:
+) -> ShellAction:
     if parts in {("1",), ("reference",)}:
         context.shell_path = ("system", "reference")
         context.selected_service = "reference"
-        return None
+        return ShellControl.HANDLED
     if parts in {("2",), ("market",)}:
         context.shell_path = ("system", "market")
         context.selected_service = "market"
-        return None
+        return ShellControl.HANDLED
     if parts in {("3",), ("list",), ("ls",), ("status",)}:
         return GuidedCommand(
             ("system", "list", "--format", "table"), "列出 workspace 系统服务状态"
@@ -355,6 +539,200 @@ def _system_service_shell_command(
         return None
     argv, summary, dangerous = selected
     return GuidedCommand(argv, summary, dangerous=dangerous)
+
+
+def _reference_shell_command(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> GuidedCommand | None:
+    key = parts[0]
+    if len(parts) != 1:
+        return None
+    if key in {"1", "markets"}:
+        limit = typer.prompt("最多显示多少个 market", default="50").strip()
+        return GuidedCommand(
+            (
+                "reference",
+                "markets",
+                "--active-only",
+                "--limit",
+                limit,
+                "--format",
+                "table",
+            ),
+            "查看当前可用 market",
+        )
+    if key in {"2", "asset"}:
+        asset_code = typer.prompt(
+            "asset code / symbol", default=context.reference_asset_code or "AAPL"
+        ).strip()
+        context.reference_asset_code = asset_code
+        return GuidedCommand(
+            (
+                "reference",
+                "markets",
+                "--asset-code",
+                asset_code,
+                "--active-only",
+                "--format",
+                "table",
+            ),
+            f"查看 {asset_code} 相关的 market",
+        )
+    if key in {"3", "listings"}:
+        symbol = typer.prompt("symbol（可留空）", default="").strip()
+        argv = ("reference", "listings", "--active-only", "--format", "table")
+        if symbol:
+            argv = (*argv, "--symbol", symbol)
+        return GuidedCommand(argv, "查看 listing")
+    if key in {"4", "market"}:
+        market_id = typer.prompt(
+            "market id", default="market:binance:spot:BTCUSDT"
+        ).strip()
+        return GuidedCommand(
+            ("reference", "markets", "--market-id", market_id, "--format", "text"),
+            "查看指定 market 信息",
+        )
+    if key in {"5", "search"}:
+        symbol = typer.prompt("symbol", default="BTCUSDT").strip()
+        target = _prompt_menu(
+            "你想在哪类对象里检索？",
+            (
+                ("1", "instrument"),
+                ("2", "market"),
+                ("3", "listing"),
+            ),
+        )
+        if target == "1":
+            return GuidedCommand(
+                ("reference", "instruments", "--symbol", symbol, "--format", "table"),
+                "按 symbol 检索 instrument",
+            )
+        if target == "2":
+            return GuidedCommand(
+                ("reference", "markets", "--symbol", symbol, "--format", "table"),
+                "按 symbol 检索 market",
+            )
+        return GuidedCommand(
+            ("reference", "listings", "--symbol", symbol, "--format", "table"),
+            "按 symbol 检索 listing",
+        )
+    if key in {"6", "option-chain"}:
+        underlying = typer.prompt(
+            "underlying instrument id",
+            default="instrument:equity:US:AAPL:common",
+        ).strip()
+        return GuidedCommand(
+            (
+                "reference",
+                "option-chain",
+                "--underlying-instrument-id",
+                underlying,
+                "--format",
+                "table",
+            ),
+            "查询期权链",
+        )
+    return None
+
+
+def _query_shell_command(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> GuidedCommand | None:
+    key = parts[0]
+    if len(parts) != 1:
+        return None
+    if key in {"1", "accounts"}:
+        return GuidedCommand(("account", "list", "--output", "table"), "查看已配置账户")
+    if key in {"2", "balances", "3", "positions"}:
+        account = typer.prompt("账户 id", default="demo-paper").strip()
+        command = "balances" if key in {"2", "balances"} else "positions"
+        return GuidedCommand(
+            ("account", "--account-id", account, command, "--output", "table"),
+            "查看账户事实",
+        )
+    if key in {"4", "snapshot"}:
+        kind = _prompt_component(
+            "快照类型", default="quote", choices=("quote", "bar", "greeks")
+        )
+        market_id = typer.prompt(
+            "market id", default="market:binance:spot:BTCUSDT"
+        ).strip()
+        source_id = typer.prompt("source id", default="binance-spot").strip()
+        return GuidedCommand(
+            (
+                "market",
+                "snapshot",
+                kind,
+                "--market-id",
+                market_id,
+                "--source-id",
+                source_id,
+                "--format",
+                "table",
+            ),
+            "读取运行中 Market 快照",
+        )
+    if key in {"5", "order"}:
+        order_id = typer.prompt("order id", default="").strip()
+        if not order_id:
+            raise typer.BadParameter("order id 不能为空")
+        return GuidedCommand(
+            ("order", "status", "--order-id", order_id, "--output", "text"),
+            "查看订单状态",
+        )
+    if key in {"6", "notifications"}:
+        return GuidedCommand(
+            ("notifications", "validate", "--format", "text"), "校验通知目的地"
+        )
+    if key in {"7", "integration"}:
+        return GuidedCommand(
+            ("integration", "--help"),
+            "查看 Provider 集成入口；真实调用通常需要凭据",
+            needs_workspace=False,
+        )
+    return None
+
+
+def _data_shell_command(parts: tuple[str, ...]) -> GuidedCommand | None:
+    key = parts[0]
+    if len(parts) != 1:
+        return None
+    if key in {"1", "list"}:
+        return GuidedCommand(("data", "list"), "列出项目 datasets")
+    if key in {"2", "plan"}:
+        path = typer.prompt(
+            "requirements.json 路径", default="requirements.json"
+        ).strip()
+        return GuidedCommand(("data", "plan", path), "审阅数据需求，不下载")
+    if key in {"3", "execute"}:
+        path = typer.prompt(
+            "requirements.json 路径", default="requirements.json"
+        ).strip()
+        plan_hash = typer.prompt("expected plan hash", default="").strip()
+        argv = ("data", "execute", path)
+        if plan_hash:
+            argv = (*argv, "--expected-plan-hash", plan_hash)
+        return GuidedCommand(argv, "执行已经审阅的数据计划", dangerous=True)
+    if key in {"4", "sets"}:
+        return GuidedCommand(("data", "set", "list"), "列出 Dataset Set aliases")
+    if key in {"5", "lock"}:
+        path = typer.prompt(
+            "research-plan.json 路径", default="research-plan.json"
+        ).strip()
+        return GuidedCommand(("research", "plan", "lock", path), "锁定研究计划")
+    if key in {"6", "gate"}:
+        plan = typer.prompt(
+            "research-plan.json 路径", default="research-plan.json"
+        ).strip()
+        evidence = typer.prompt(
+            "research-evidence.json 路径", default="research-evidence.json"
+        ).strip()
+        return GuidedCommand(
+            ("research", "gate", "publish", plan, evidence),
+            "发布研究 gate 证据",
+            dangerous=True,
+        )
+    return None
 
 
 def _execute_guided_command(
@@ -657,9 +1035,7 @@ def _convenience_workflow(context: InteractiveContext) -> GuidedCommand:
         ),
     )
     if choice == "1":
-        return GuidedCommand(
-            ("account", "list", "--output", "table"), "查看已配置账户"
-        )
+        return GuidedCommand(("account", "list", "--output", "table"), "查看已配置账户")
     if choice in {"2", "3"}:
         account = typer.prompt("账户 id", default="demo-paper").strip()
         command = "balances" if choice == "2" else "positions"
@@ -668,7 +1044,9 @@ def _convenience_workflow(context: InteractiveContext) -> GuidedCommand:
             "查看账户事实",
         )
     if choice == "4":
-        kind = _prompt_component("快照类型", default="quote", choices=("quote", "bar", "greeks"))
+        kind = _prompt_component(
+            "快照类型", default="quote", choices=("quote", "bar", "greeks")
+        )
         market_id = typer.prompt(
             "market id", default="market:binance:spot:BTCUSDT"
         ).strip()
@@ -820,7 +1198,9 @@ def _data_research_workflow() -> GuidedCommand:
     if choice == "1":
         return GuidedCommand(("data", "list"), "列出项目 datasets")
     if choice in {"2", "3"}:
-        path = typer.prompt("requirements.json 路径", default="requirements.json").strip()
+        path = typer.prompt(
+            "requirements.json 路径", default="requirements.json"
+        ).strip()
         if choice == "2":
             return GuidedCommand(("data", "plan", path), "审阅数据需求，不下载")
         plan_hash = typer.prompt("expected plan hash", default="").strip()
@@ -831,7 +1211,9 @@ def _data_research_workflow() -> GuidedCommand:
     if choice == "4":
         return GuidedCommand(("data", "set", "list"), "列出 Dataset Set aliases")
     if choice == "5":
-        path = typer.prompt("research-plan.json 路径", default="research-plan.json").strip()
+        path = typer.prompt(
+            "research-plan.json 路径", default="research-plan.json"
+        ).strip()
         return GuidedCommand(("research", "plan", "lock", path), "锁定研究计划")
     plan = typer.prompt("research-plan.json 路径", default="research-plan.json").strip()
     evidence = typer.prompt(
@@ -846,7 +1228,9 @@ def _data_research_workflow() -> GuidedCommand:
 
 def _diagnose_workflow(owner, snapshot: ObserveSnapshot | None) -> GuidedCommand:
     if owner is None:
-        return GuidedCommand(("project", "init"), "创建或初始化 Kairos 项目", True, False)
+        return GuidedCommand(
+            ("project", "init"), "创建或初始化 Kairos 项目", True, False
+        )
     if snapshot is None or snapshot.error:
         return GuidedCommand(("project", "doctor"), "检查项目 readiness")
     if not _launch_ids(owner, snapshot):

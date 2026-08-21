@@ -57,7 +57,7 @@ pub struct MarketDataAvailability {
     pub source_id: SourceId,
     pub provider_id: String,
     pub provider_product: String,
-    pub provider_symbol: String,
+    pub subscription_symbol: String,
     pub observation_capabilities: Vec<ObservationKind>,
     pub supported_by_adapter: bool,
     pub configured_in_workspace: bool,

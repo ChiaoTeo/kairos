@@ -44,9 +44,25 @@ pub struct ReferenceComposition {
 
 impl ReferenceComposition {
     pub async fn activate_sources(&mut self) -> ReferenceResult<()> {
-        self.application
+        tracing::info!(
+            event = "reference_runtime_stage_started",
+            component = "reference",
+            stage = "activate_sources",
+            "reference runtime stage started"
+        );
+        let result = self
+            .application
             .activate_sources(&mut self.system.connections())
-            .await
+            .await;
+        if result.is_ok() {
+            tracing::info!(
+                event = "reference_runtime_stage_completed",
+                component = "reference",
+                stage = "activate_sources",
+                "reference runtime stage completed"
+            );
+        }
+        result
     }
 
     pub fn into_conflux(self) -> (ReferenceApplication, kairos_conflux::ConfluxSystem) {
@@ -73,12 +89,8 @@ pub fn default_endpoint(provider: &str) -> &'static str {
         "binance-spot" | "binance-spot-rest" => "https://api.binance.com",
         "binance-equity" | "binance-equity-rest" => "https://api.binance.com",
         "binance-options" | "binance-options-rest" => "https://eapi.binance.com",
-        "binance-usdm-futures" | "binance-usdm-futures-rest" => {
-            "https://fapi.binance.com/fapi/v1/exchangeInfo"
-        },
-        "binance-coinm-futures" | "binance-coinm-futures-rest" => {
-            "https://dapi.binance.com/dapi/v1/exchangeInfo"
-        },
+        "binance-usdm-futures" | "binance-usdm-futures-rest" => "https://fapi.binance.com",
+        "binance-coinm-futures" | "binance-coinm-futures-rest" => "https://dapi.binance.com",
         "okx-spot" | "okx-margin" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options"
         | "okx-spot-rest" | "okx-margin-rest" | "okx-swap-rest" | "okx-futures-rest"
         | "okx-options-rest" => "https://www.okx.com",
@@ -439,18 +451,114 @@ pub async fn build_application(
     config: &ReferenceCompositionConfig,
     publish: bool,
 ) -> ReferenceResult<ReferenceComposition> {
+    tracing::info!(
+        event = "reference_startup_stage_started",
+        component = "reference",
+        stage = "validate_configuration",
+        "reference startup stage started"
+    );
     if config.reference_changes_stream != kairos_conflux::output_stream_ids::REFERENCE_CHANGES {
         return Err(crate::domain::ReferenceError::Invalid(format!(
             "reference changes stream must be the registered stream {}",
             kairos_conflux::output_stream_ids::REFERENCE_CHANGES
         )));
     }
+    tracing::info!(
+        event = "reference_startup_stage_completed",
+        component = "reference",
+        stage = "validate_configuration",
+        "reference startup stage completed"
+    );
+
+    tracing::info!(
+        event = "reference_startup_stage_started",
+        component = "reference",
+        stage = "open_database",
+        database = %config.database.display(),
+        "reference startup stage started"
+    );
+    let mut store = SqlxCatalogStore::open(&config.database).await?;
+    tracing::info!(
+        event = "reference_startup_stage_completed",
+        component = "reference",
+        stage = "open_database",
+        "reference startup stage completed"
+    );
+
+    tracing::info!(
+        event = "reference_startup_stage_started",
+        component = "reference",
+        stage = "integrity_audit",
+        "reference startup stage started"
+    );
+    let startup_audit = store.audit_and_prepare_startup_repair().await?;
+    if !startup_audit.missing_current_equity_markets.is_empty()
+        || !startup_audit.missing_provider_equity_markets.is_empty()
+    {
+        tracing::warn!(
+            event = "reference_startup_integrity_repair",
+            component = "reference",
+            missing_current_equity_market_count =
+                startup_audit.missing_current_equity_markets.len(),
+            missing_provider_equity_market_count =
+                startup_audit.missing_provider_equity_markets.len(),
+            reset_providers = ?startup_audit.reset_providers,
+            "reference startup integrity audit found missing equity markets"
+        );
+    }
+    tracing::info!(
+        event = "reference_startup_stage_completed",
+        component = "reference",
+        stage = "integrity_audit",
+        missing_current_equity_market_count = startup_audit.missing_current_equity_markets.len(),
+        missing_provider_equity_market_count = startup_audit.missing_provider_equity_markets.len(),
+        reset_provider_count = startup_audit.reset_providers.len(),
+        reset_providers = ?startup_audit.reset_providers,
+        "reference startup stage completed"
+    );
+
+    tracing::info!(
+        event = "reference_startup_stage_started",
+        component = "reference",
+        stage = "build_source_plan",
+        "reference startup stage started"
+    );
     let source_plan = build_source_plan(config).await?;
+    tracing::info!(
+        event = "reference_startup_stage_completed",
+        component = "reference",
+        stage = "build_source_plan",
+        "reference startup stage completed"
+    );
+
+    tracing::info!(
+        event = "reference_startup_stage_started",
+        component = "reference",
+        stage = "install_connections",
+        "reference startup stage started"
+    );
     let mut system = kairos_conflux::ConfluxSystem::new();
     source_plan.install(&mut system.connections())?;
-    let store = SqlxCatalogStore::open(&config.database).await?;
+    tracing::info!(
+        event = "reference_startup_stage_completed",
+        component = "reference",
+        stage = "install_connections",
+        "reference startup stage completed"
+    );
     if publish {
+        tracing::info!(
+            event = "reference_startup_stage_started",
+            component = "reference",
+            stage = "declare_publication",
+            "reference startup stage started"
+        );
         declare_reference_changes_output(config, &mut system)?;
+        tracing::info!(
+            event = "reference_startup_stage_completed",
+            component = "reference",
+            stage = "declare_publication",
+            "reference startup stage completed"
+        );
     }
     Ok(ReferenceComposition {
         application: ReferenceApplication::new("reference-actor", source_plan, store).await?,

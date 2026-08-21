@@ -8,7 +8,7 @@ use kairos_conflux::{
     ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, ParticipantKind,
     ParticipantRef,
 };
-use kairos_primitives::integration::ParticipantSymbol as ProviderSymbol;
+use kairos_primitives::integration::ParticipantSymbol as ExternalSymbol;
 use kairos_primitives::reference::{
     AssetClass, Currency, InstrumentId, InstrumentKind, MarketId, Symbol,
 };
@@ -21,6 +21,7 @@ use super::{
 };
 use crate::domain::{Asset, Entity, Instrument, Market, ProviderCatalog, ReferenceResult};
 use crate::services::actor::ReferenceActor;
+use crate::services::source::ConfiguredProviderSource;
 use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
 
 fn typed_market_id(value: &str) -> MarketId {
@@ -188,6 +189,40 @@ async fn normalized_composite_persists_facts_without_returning_a_full_catalog() 
 }
 
 #[tokio::test]
+async fn configured_public_sources_step_refresh_uses_managed_connections() {
+    let key = || kairos_conflux::ConnectionKey::new("missing-reference-test").unwrap();
+    let mut sources = vec![
+        ConfiguredProviderSource::BinanceSpot(BinanceSpotSource::from_key(key())),
+        ConfiguredProviderSource::BinanceDerivatives(
+            super::BinanceDerivativesSource::from_usdm_key(key()),
+        ),
+        ConfiguredProviderSource::BinanceOptions(super::BinanceOptionsSource::from_key(key())),
+        ConfiguredProviderSource::Okx(OkxSource::from_key("okx-spot", OkxProduct::Spot, key())),
+        ConfiguredProviderSource::Hyperliquid(HyperliquidSource::from_key(
+            HyperliquidProduct::Spot,
+            key(),
+        )),
+    ];
+    let mut system = kairos_conflux::ConfluxSystem::new();
+
+    for source in &mut sources {
+        let source_id = source.source_id().to_owned();
+        let result = source
+            .fetch_catalog_step_with_connections(&mut system.connections())
+            .await;
+        let error = match result {
+            Ok(_) => panic!("{source_id} unexpectedly fetched from a missing test connection"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(
+            !error.contains("requires Conflux-managed connections"),
+            "{source_id} step refresh fell back to the non-connection default: {error}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn actor_commits_normalized_composite_facts_without_catalog_materialization() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("reference.sqlite");
@@ -348,7 +383,7 @@ fn okx_provider_facts_receive_canonical_identity_only_in_reference() {
         participant: ParticipantRef::new(ParticipantKind::Exchange, "okx").unwrap(),
         instruments: vec![
             ExternalInstrument {
-                source_symbol: ProviderSymbol::new("BTC-USDT").unwrap(),
+                source_symbol: ExternalSymbol::new("BTC-USDT").unwrap(),
                 source_venue: None,
                 kind: ExternalInstrumentKind::Spot,
                 base_currency: Some(Currency::new("BTC").unwrap()),
@@ -368,13 +403,13 @@ fn okx_provider_facts_receive_canonical_identity_only_in_reference() {
                 quantity_precision: Some(5),
             },
             ExternalInstrument {
-                source_symbol: ProviderSymbol::new("BTC-USDT-SWAP").unwrap(),
+                source_symbol: ExternalSymbol::new("BTC-USDT-SWAP").unwrap(),
                 source_venue: None,
                 kind: ExternalInstrumentKind::Perpetual,
                 base_currency: None,
                 quote_currency: None,
                 settlement_currency: Some(Currency::new("USDT").unwrap()),
-                underlying: Some(ProviderSymbol::new("BTC-USDT").unwrap()),
+                underlying: Some(ExternalSymbol::new("BTC-USDT").unwrap()),
                 expiry_unix_nanos: None,
                 strike: None,
                 option_right: None,
@@ -422,7 +457,7 @@ fn spot_listing_expiry_does_not_split_or_mutate_the_canonical_instrument() {
     let first_expiry = kairos_primitives::time::UnixNanos::new(1_786_694_400_000_000_000);
     let second_expiry = kairos_primitives::time::UnixNanos::new(1_786_953_600_000_000_000);
     let spot = |symbol: &str, quote: &str, expiry| ExternalInstrument {
-        source_symbol: ProviderSymbol::new(symbol).unwrap(),
+        source_symbol: ExternalSymbol::new(symbol).unwrap(),
         source_venue: None,
         kind: ExternalInstrumentKind::Spot,
         base_currency: Some(Currency::new("DUCK").unwrap()),
@@ -474,7 +509,7 @@ fn binance_provider_facts_receive_canonical_identity_only_in_reference() {
         participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
         instruments: vec![
             ExternalInstrument {
-                source_symbol: ProviderSymbol::new("BTCUSDT").unwrap(),
+                source_symbol: ExternalSymbol::new("BTCUSDT").unwrap(),
                 source_venue: None,
                 kind: ExternalInstrumentKind::Spot,
                 base_currency: Some(Currency::new("BTC").unwrap()),
@@ -494,13 +529,13 @@ fn binance_provider_facts_receive_canonical_identity_only_in_reference() {
                 quantity_precision: Some(6),
             },
             ExternalInstrument {
-                source_symbol: ProviderSymbol::new("BTC-260821-50000-C").unwrap(),
+                source_symbol: ExternalSymbol::new("BTC-260821-50000-C").unwrap(),
                 source_venue: None,
                 kind: ExternalInstrumentKind::Option,
                 base_currency: Some(Currency::new("BTC").unwrap()),
                 quote_currency: Some(Currency::new("USDT").unwrap()),
                 settlement_currency: Some(Currency::new("USDT").unwrap()),
-                underlying: Some(ProviderSymbol::new("BTCUSDT").unwrap()),
+                underlying: Some(ExternalSymbol::new("BTCUSDT").unwrap()),
                 expiry_unix_nanos: Some(kairos_primitives::time::UnixNanos::new(
                     1_780_000_000_000_000_000,
                 )),
@@ -554,13 +589,13 @@ fn binance_derivative_facts_keep_product_selection_but_not_canonical_identity() 
         ExternalInstrumentCatalog {
             participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
             instruments: vec![ExternalInstrument {
-                source_symbol: ProviderSymbol::new("BTCUSDT_260626").unwrap(),
+                source_symbol: ExternalSymbol::new("BTCUSDT_260626").unwrap(),
                 source_venue: None,
                 kind: ExternalInstrumentKind::Future,
                 base_currency: Some(Currency::new("BTC").unwrap()),
                 quote_currency: Some(Currency::new("USDT").unwrap()),
                 settlement_currency: Some(Currency::new("USDT").unwrap()),
-                underlying: Some(ProviderSymbol::new("BTCUSDT").unwrap()),
+                underlying: Some(ExternalSymbol::new("BTCUSDT").unwrap()),
                 expiry_unix_nanos: Some(expiry),
                 strike: None,
                 option_right: None,
@@ -594,13 +629,13 @@ fn binance_equity_perpetual_has_no_expiry_and_links_canonical_equity() {
         ExternalInstrumentCatalog {
             participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
             instruments: vec![ExternalInstrument {
-                source_symbol: ProviderSymbol::new("AAPLUSDT").unwrap(),
+                source_symbol: ExternalSymbol::new("AAPLUSDT").unwrap(),
                 source_venue: None,
                 kind: ExternalInstrumentKind::EquityPerpetual,
                 base_currency: Some(Currency::new("AAPL").unwrap()),
                 quote_currency: Some(Currency::new("USDT").unwrap()),
                 settlement_currency: Some(Currency::new("USDT").unwrap()),
-                underlying: Some(ProviderSymbol::new("AAPL").unwrap()),
+                underlying: Some(ExternalSymbol::new("AAPL").unwrap()),
                 expiry_unix_nanos: None,
                 strike: None,
                 option_right: None,
@@ -646,7 +681,7 @@ fn binance_equity_broker_catalog_does_not_invent_exchange_listing_or_market() {
     let catalog = binance_equity_provider_catalog(ExternalInstrumentCatalog {
         participant: ParticipantRef::new(ParticipantKind::Broker, "binance").unwrap(),
         instruments: vec![ExternalInstrument {
-            source_symbol: ProviderSymbol::new("AAPL").unwrap(),
+            source_symbol: ExternalSymbol::new("AAPL").unwrap(),
             source_venue: None,
             kind: ExternalInstrumentKind::Equity,
             base_currency: None,
@@ -682,13 +717,13 @@ fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
     let catalog = massive_provider_catalog(ExternalInstrumentCatalog {
         participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive").unwrap(),
         instruments: vec![ExternalInstrument {
-            source_symbol: ProviderSymbol::new("O:SPY260821C00500000").unwrap(),
+            source_symbol: ExternalSymbol::new("O:SPY260821C00500000").unwrap(),
             source_venue: Some("BATO".into()),
             kind: ExternalInstrumentKind::Option,
             base_currency: None,
             quote_currency: Some(Currency::new("USD").unwrap()),
             settlement_currency: None,
-            underlying: Some(ProviderSymbol::new("SPY").unwrap()),
+            underlying: Some(ExternalSymbol::new("SPY").unwrap()),
             expiry_unix_nanos: Some(expiry),
             strike: Some("500".into()),
             option_right: Some("call".into()),
@@ -717,16 +752,23 @@ fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
             && value.underlying_instrument_id.as_deref() == Some("instrument:equity:US:SPY:common")
     }));
     assert!(catalog.listings.iter().any(|value| {
-        value.listing_id == "listing:exchange:cboe-bzx-options:option:SPY-20270115-500-C"
+        value.listing_id == "listing:cboe-bzx-options:option:SPY-20270115-500-C"
             && value.exchange_id == "exchange:cboe-bzx-options"
     }));
-    assert!(catalog.markets.is_empty());
+    assert!(catalog.markets.iter().any(|value| {
+        value.market_id == "market:cboe-bzx-options:option:O:SPY260821C00500000"
+            && value.listing_id.as_deref()
+                == Some("listing:cboe-bzx-options:option:SPY-20270115-500-C")
+            && value.instrument_kind == InstrumentKind::Option
+            && value.venue_symbol.as_deref() == Some("O:SPY260821C00500000")
+            && value.quote_asset_id.as_deref() == Some("asset:fiat:USD")
+    }));
 }
 
 #[test]
 fn massive_same_ticker_on_distinct_primary_venues_has_distinct_listings() {
     let equity = |venue: &str| ExternalInstrument {
-        source_symbol: ProviderSymbol::new("BCPC").unwrap(),
+        source_symbol: ExternalSymbol::new("BCPC").unwrap(),
         source_venue: Some(venue.into()),
         kind: ExternalInstrumentKind::Equity,
         base_currency: None,
@@ -759,16 +801,22 @@ fn massive_same_ticker_on_distinct_primary_venues_has_distinct_listings() {
         .map(|listing| listing.listing_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(ids.len(), 2);
-    assert!(ids.contains("listing:exchange:nasdaq:equity:BCPC:USD"));
-    assert!(ids.contains("listing:exchange:nyse:equity:BCPC:USD"));
+    assert!(ids.contains("listing:nasdaq:equity:BCPC"));
+    assert!(ids.contains("listing:nyse:equity:BCPC"));
+    assert!(ids.iter().all(|id| !id.starts_with("listing:exchange:")));
     let market_ids = catalog
         .markets
         .iter()
         .map(|market| market.market_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(market_ids.len(), 2);
-    assert!(market_ids.contains("market:exchange:nasdaq:equity:BCPC"));
-    assert!(market_ids.contains("market:exchange:nyse:equity:BCPC"));
+    assert!(market_ids.contains("market:nasdaq:equity:BCPC:USD"));
+    assert!(market_ids.contains("market:nyse:equity:BCPC:USD"));
+    assert!(
+        market_ids
+            .iter()
+            .all(|id| !id.starts_with("market:exchange:"))
+    );
     assert!(catalog.markets.iter().all(|market| {
         market.instrument_kind == InstrumentKind::Equity
             && market.listing_id.is_some()
@@ -782,7 +830,7 @@ fn hyperliquid_provider_facts_receive_canonical_identity_only_in_reference() {
         ExternalInstrumentCatalog {
             participant: ParticipantRef::new(ParticipantKind::Exchange, "hyperliquid").unwrap(),
             instruments: vec![ExternalInstrument {
-                source_symbol: ProviderSymbol::new("BTC").unwrap(),
+                source_symbol: ExternalSymbol::new("BTC").unwrap(),
                 source_venue: None,
                 kind: ExternalInstrumentKind::Perpetual,
                 base_currency: Some(Currency::new("BTC").unwrap()),
@@ -825,7 +873,7 @@ fn hyperliquid_spot_and_perpetual_have_distinct_provider_products() {
         ExternalInstrumentCatalog {
             participant: ParticipantRef::new(ParticipantKind::Exchange, "hyperliquid").unwrap(),
             instruments: vec![ExternalInstrument {
-                source_symbol: ProviderSymbol::new("PURR/USDC").unwrap(),
+                source_symbol: ExternalSymbol::new("PURR/USDC").unwrap(),
                 source_venue: None,
                 kind: ExternalInstrumentKind::Spot,
                 base_currency: Some(Currency::new("PURR").unwrap()),

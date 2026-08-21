@@ -52,6 +52,34 @@ class ReferenceReadSession:
             "generation": self.generation,
             "event_sequence": self.event_sequence,
             "catalog": counts,
+            "integrity": self._integrity(),
+        }
+
+    def _integrity(self) -> dict[str, int]:
+        values = self._connection.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM reference_listings_current AS listing "
+            " WHERE listing.status IN ('active', 'trading') "
+            "   AND listing.listing_id LIKE '%:equity:%' "
+            "   AND NOT EXISTS ("
+            "     SELECT 1 FROM reference_markets_current AS market "
+            "     WHERE market.listing_id = listing.listing_id"
+            "   )), "
+            "(SELECT COUNT(*) FROM reference_markets_current "
+            " WHERE market_id LIKE 'market:exchange:%'), "
+            "(SELECT COUNT(*) FROM reference_listings_current "
+            " WHERE listing_id LIKE 'listing:exchange:%'), "
+            "(SELECT COUNT(*) FROM reference_listings_current "
+            " WHERE listing_id LIKE '%:option:%'), "
+            "(SELECT COUNT(*) FROM reference_markets_current "
+            " WHERE instrument_kind = 'option')"
+        ).fetchone()
+        return {
+            "missing_equity_markets": int(values[0]),
+            "legacy_exchange_market_ids": int(values[1]),
+            "legacy_exchange_listing_ids": int(values[2]),
+            "option_listings": int(values[3]),
+            "option_markets": int(values[4]),
         }
 
     def events(

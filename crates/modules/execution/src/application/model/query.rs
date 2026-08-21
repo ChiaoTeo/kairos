@@ -39,7 +39,7 @@ pub struct ExecutionRouteCandidate {
     pub market_id: Option<MarketId>,
     pub participant_id: String,
     pub provider_product: kairos_primitives::integration::ProviderProductCode,
-    pub provider_symbol: kairos_primitives::integration::ProviderSymbol,
+    pub order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol,
     /// Order forms that the configured adapter currently advertises.
     pub supported_order_types: Vec<OrderType>,
     /// Optional order-entry fields accepted by this concrete route.

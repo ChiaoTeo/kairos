@@ -34,6 +34,8 @@ pub struct MarketSubscribePayload {
     pub selectors: Vec<String>,
     #[serde(default)]
     pub source_id: Option<SourceId>,
+    #[serde(default)]
+    pub source_ids: Vec<SourceId>,
     pub exchange: Option<Exchange>,
     pub market_type: Option<InstrumentKind>,
     #[serde(default)]
@@ -64,8 +66,14 @@ pub struct MarketControlError {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataSourcesQuery {
+    #[serde(default)]
+    pub target: Option<String>,
     pub market_id: Option<MarketId>,
     pub instrument_id: Option<InstrumentId>,
+    #[serde(default)]
+    pub underlying_market_id: Option<MarketId>,
+    #[serde(default)]
+    pub underlying_instrument_id: Option<InstrumentId>,
     pub exchange: Option<Exchange>,
     pub market_type: Option<InstrumentKind>,
     pub asset_type: Option<AssetClass>,
@@ -210,6 +218,7 @@ mod tests {
                 subject: "BTCUSDT".into(),
                 selectors: vec!["trades".into()],
                 source_id: Some(kairos_primitives::market::SourceId::new("binance-spot").unwrap()),
+                source_ids: Vec::new(),
                 exchange: Some(kairos_primitives::reference::Exchange::new("binance").unwrap()),
                 market_type: Some(kairos_primitives::reference::InstrumentKind::Spot),
                 asset_type: None,

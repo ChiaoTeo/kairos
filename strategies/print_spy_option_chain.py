@@ -3,8 +3,20 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 
-from kairospy.application.reference import Instrument
-from kairospy.strategy import QuoteEvent, Strategy, StrategyContext
+from kairospy.strategy import (
+    ExpiryRange,
+    MarketData,
+    MarketId,
+    OptionFilter,
+    OptionRight,
+    Options,
+    Participant,
+    ParticipantSet,
+    QuoteEvent,
+    Strategy,
+    StrategyContext,
+    StrikeRange,
+)
 
 
 class PrintSpyOptionChain(Strategy):
@@ -17,46 +29,32 @@ class PrintSpyOptionChain(Strategy):
         underlying: str = "SPY",
         max_days_to_expiry: int = 7,
         strike_offset_percent: str = "0.02",
-        max_expiries: int = 3,
         max_contracts: int = 40,
-        massive_equity_source_id: str = "massive-equity",
-        massive_options_source_id: str = "massive-options",
     ) -> None:
         self.underlying = str(underlying).upper()
         self.max_days_to_expiry = max(0, int(max_days_to_expiry))
         self.strike_offset_percent = Decimal(str(strike_offset_percent))
         if self.strike_offset_percent <= 0:
             raise ValueError("strike_offset_percent must be positive")
-        self.max_expiries = max(1, int(max_expiries))
         self.max_contracts = max(2, int(max_contracts))
-        self.massive_equity_source_id = massive_equity_source_id
-        self.massive_options_source_id = massive_options_source_id
         self._underlying_scope_key = ""
-        self._underlying_instrument_id = ""
+        self._underlying_market_id: MarketId | None = None
         self._option_subscription_attempted = False
-        self._option_details: dict[str, tuple[str, str, str]] = {}
 
     def on_start(self, context: StrategyContext) -> None:
-        underlying_instruments = context.reference.find_instruments(
+        markets = context.reference.find_markets(
             symbol=self.underlying,
-            instrument_type="equity",
+            instrument_kind="equity",
         )
-        underlying_instrument = next(iter(underlying_instruments), None)
-        if underlying_instrument is None:
-            raise RuntimeError(
-                f"no active equity instrument found for {self.underlying}"
-            )
-        self._underlying_instrument_id = str(underlying_instrument.id)
-        self._underlying_scope_key = (
-            f"consolidated:{self._underlying_instrument_id}:sip"
-        )
-        context.market.subscribe_consolidated_quotes(
-            underlying_instrument,
-            provider_id="massive",
-            provider_product="equity",
-            provider_symbol=self.underlying,
-            source_id=self.massive_equity_source_id,
-            network_id="sip",
+        market = next(iter(markets), None)
+        if market is None:
+            raise RuntimeError(f"no active equity market found for {self.underlying}")
+        self._underlying_market_id = market.id
+        self._underlying_scope_key = str(market.id)
+        context.market.subscribe(
+            market.id,
+            data=[MarketData.QUOTE],
+            participants=ParticipantSet.only(Participant.MASSIVE),
         )
         context.logger.info(
             "spy_underlying_subscribed",
@@ -71,65 +69,33 @@ class PrintSpyOptionChain(Strategy):
         spot: Decimal,
         observed_at: datetime,
     ) -> None:
+        if self._underlying_market_id is None:
+            raise RuntimeError("underlying market is not initialized")
         start, end = _expiry_window(observed_at, self.max_days_to_expiry)
-        chain = context.reference.option_chain(
-            self._underlying_instrument_id,
-            expiry_from_unix_nanos=start,
-            expiry_to_unix_nanos=end,
-            limit=5_000,
+        lower = spot * (Decimal("1") - self.strike_offset_percent)
+        upper = spot * (Decimal("1") + self.strike_offset_percent)
+        context.market.subscribe(
+            Options(
+                self._underlying_market_id,
+                OptionFilter(
+                    expiry=ExpiryRange.between_unix_nanos(start, end),
+                    strike=StrikeRange.between(lower, upper),
+                    right=OptionRight.BOTH,
+                    limit=self.max_contracts,
+                ),
+            ),
+            data=[MarketData.QUOTE],
+            participants=ParticipantSet.only(Participant.MASSIVE),
         )
-        selected_chain = _select_contracts(
-            chain,
-            spot=spot,
-            strike_offset_percent=self.strike_offset_percent,
-            max_expiries=self.max_expiries,
-            max_contracts=self.max_contracts,
-        )
-        if not selected_chain:
-            lower = spot * (Decimal("1") - self.strike_offset_percent)
-            upper = spot * (Decimal("1") + self.strike_offset_percent)
-            raise RuntimeError(
-                f"no active {self.underlying} options expire within "
-                f"{self.max_days_to_expiry} days with strikes in [{lower}, {upper}]"
-            )
-
-        contracts = {str(instrument.id): instrument for instrument in selected_chain}
-        for instrument in contracts.values():
-            expiry = instrument.expiry_unix_nanos
-            if expiry is None:
-                continue
-            scope_key = f"consolidated:{instrument.id}:opra"
-            self._option_details[scope_key] = (
-                str(instrument.option_right or "-").upper(),
-                str(instrument.strike or "-"),
-                _utc_date(expiry),
-            )
-            context.market.subscribe_consolidated_quotes(
-                instrument,
-                provider_id="massive",
-                provider_product="options",
-                provider_symbol=_massive_option_symbol(self.underlying, instrument),
-                source_id=self.massive_options_source_id,
-                network_id="opra",
-            )
-
-        expiries = sorted(
-            {
-                _utc_date(instrument.expiry_unix_nanos)
-                for instrument in selected_chain
-                if instrument.expiry_unix_nanos is not None
-            }
-        )
-        strikes = [Decimal(str(instrument.strike)) for instrument in selected_chain]
         context.logger.info(
-            "spy_option_chain_subscribed",
+            "spy_option_window_subscribed",
             underlying=self.underlying,
             spot=str(spot),
-            expiries=expiries,
-            option_contracts=len(self._option_details),
-            available_contracts=len(chain),
-            minimum_strike=str(min(strikes)),
-            maximum_strike=str(max(strikes)),
+            expiry_from_unix_nanos=start,
+            expiry_to_unix_nanos=end,
+            minimum_strike=str(lower),
+            maximum_strike=str(upper),
+            maximum_contracts=self.max_contracts,
             strike_offset_percent=str(self.strike_offset_percent),
         )
 
@@ -161,44 +127,20 @@ class PrintSpyOptionChain(Strategy):
                     )
             return
 
-        details = self._option_details.get(scope_key)
-        if details is None:
+        if not str(quote.instrument.id).startswith("instrument:option:"):
             return
-        right, strike, expiry = details
         context.logger.info(
             "spy_option_quote",
             symbol=self.underlying,
-            expiry=expiry,
-            right=right,
-            strike=strike,
+            market=quote.market_id,
+            instrument=quote.instrument.id,
             bid=_price(quote.bid_price),
             ask=_price(quote.ask_price),
             bid_size=_price(quote.bid_quantity),
             ask_size=_price(quote.ask_quantity),
             scope=scope_key,
+            source=quote.source_id or "unknown",
         )
-
-
-def _utc_date(unix_nanos: int) -> str:
-    return (
-        datetime.fromtimestamp(unix_nanos / 1_000_000_000, tz=timezone.utc)
-        .date()
-        .isoformat()
-    )
-
-
-def _massive_option_symbol(underlying: str, instrument: object) -> str:
-    expiry_unix_nanos = getattr(instrument, "expiry_unix_nanos", None)
-    strike = getattr(instrument, "strike", None)
-    right = str(getattr(instrument, "option_right", "") or "").upper()
-    if expiry_unix_nanos is None or strike is None or right[:1] not in {"C", "P"}:
-        raise RuntimeError(f"incomplete option contract: {instrument}")
-    expiry = datetime.fromtimestamp(
-        expiry_unix_nanos / 1_000_000_000, tz=timezone.utc
-    ).strftime("%y%m%d")
-    strike_code = int(Decimal(str(strike)) * 1_000)
-    ticker = f"O:{underlying}{expiry}{right[:1]}{strike_code:08d}"
-    return ticker
 
 
 def _expiry_window(observed_at: datetime, max_days: int) -> tuple[int, int]:
@@ -208,54 +150,5 @@ def _expiry_window(observed_at: datetime, max_days: int) -> tuple[int, int]:
     return int(start.timestamp() * 1_000_000_000), int(end.timestamp() * 1_000_000_000)
 
 
-def _select_contracts(
-    chain: tuple[Instrument, ...],
-    *,
-    spot: Decimal,
-    strike_offset_percent: Decimal,
-    max_expiries: int,
-    max_contracts: int,
-) -> tuple[Instrument, ...]:
-    lower = spot * (Decimal("1") - strike_offset_percent)
-    upper = spot * (Decimal("1") + strike_offset_percent)
-    eligible = tuple(
-        instrument
-        for instrument in chain
-        if getattr(instrument, "expiry_unix_nanos", None) is not None
-        and getattr(instrument, "strike", None) is not None
-        and str(getattr(instrument, "option_right", "") or "").upper()
-        in {"CALL", "PUT"}
-        and lower <= Decimal(str(getattr(instrument, "strike"))) <= upper
-    )
-    expiries = sorted(
-        {int(getattr(instrument, "expiry_unix_nanos")) for instrument in eligible}
-    )[:max_expiries]
-    if not expiries:
-        return ()
-
-    selected: list[Instrument] = []
-    remaining_expiries = len(expiries)
-    for expiry in expiries:
-        expiry_budget = max(2, (max_contracts - len(selected)) // remaining_expiries)
-        per_right = max(1, expiry_budget // 2)
-        for right in ("CALL", "PUT"):
-            candidates = sorted(
-                (
-                    instrument
-                    for instrument in eligible
-                    if int(getattr(instrument, "expiry_unix_nanos")) == expiry
-                    and str(getattr(instrument, "option_right", "") or "").upper()
-                    == right
-                ),
-                key=lambda instrument: (
-                    abs(Decimal(str(getattr(instrument, "strike"))) - spot),
-                    Decimal(str(getattr(instrument, "strike"))),
-                ),
-            )
-            selected.extend(candidates[:per_right])
-        remaining_expiries -= 1
-    return tuple(selected[:max_contracts])
-
-
-def _price(value: object | None) -> str:
+def _price(value: Decimal | None) -> str:
     return "-" if value is None else str(value)

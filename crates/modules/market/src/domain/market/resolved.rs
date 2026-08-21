@@ -1,6 +1,8 @@
+use kairos_primitives::decimal::Price;
 use kairos_primitives::reference::{
     AssetClass, Exchange, InstrumentId, InstrumentKind, MarketId, ReferenceStatus,
 };
+use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
 use super::MarketDataRoute;
@@ -21,6 +23,12 @@ pub struct ResolvedMarket {
     pub asset_type: Option<AssetClass>,
     #[serde(default)]
     pub underlying_instrument_id: Option<InstrumentId>,
+    #[serde(default)]
+    pub expiry_unix_nanos: Option<UnixNanos>,
+    #[serde(default)]
+    pub strike: Option<Price>,
+    #[serde(default)]
+    pub option_right: Option<String>,
     pub route: MarketDataRoute,
     /// Optional Market-owned runtime source constraint.
     #[serde(default)]
@@ -46,6 +54,9 @@ impl ResolvedMarket {
             exchange_id: Some(exchange_id),
             asset_type: None,
             underlying_instrument_id: None,
+            expiry_unix_nanos: None,
+            strike: None,
+            option_right: None,
             route,
             source_id: None,
             status: ReferenceStatus::Active,
@@ -76,6 +87,9 @@ impl ResolvedMarket {
             exchange_id: Some(Exchange::new(exchange_id).map_err(|error| error.to_string())?),
             asset_type: None,
             underlying_instrument_id: None,
+            expiry_unix_nanos: None,
+            strike: None,
+            option_right: None,
             route,
             source_id: None,
             status: ReferenceStatus::Active,
@@ -104,6 +118,9 @@ impl ResolvedMarket {
             exchange_id: None,
             asset_type: None,
             underlying_instrument_id: None,
+            expiry_unix_nanos: None,
+            strike: None,
+            option_right: None,
             route,
             source_id: None,
             status: ReferenceStatus::Active,
@@ -137,6 +154,9 @@ impl ResolvedMarket {
             exchange_id: None,
             asset_type: None,
             underlying_instrument_id: None,
+            expiry_unix_nanos: None,
+            strike: None,
+            option_right: None,
             route,
             source_id: None,
             status: ReferenceStatus::Active,
@@ -150,7 +170,10 @@ impl ResolvedMarket {
     }
 
     pub fn member_id(&self) -> String {
-        self.scope.key()
+        match self.source_id.as_ref() {
+            Some(source_id) => format!("{}#source:{source_id}", self.scope.key()),
+            None => self.scope.key(),
+        }
     }
 
     pub fn with_source(mut self, source_id: impl Into<String>) -> Result<Self, String> {

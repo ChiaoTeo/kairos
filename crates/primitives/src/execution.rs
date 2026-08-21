@@ -11,6 +11,7 @@ text_type!(PlanId);
 text_type!(LegId);
 text_type!(FillId);
 text_type!(OrderOptionCode);
+text_type!(OrderEntrySymbol);
 
 impl Default for ExecutionRouteId {
     fn default() -> Self {

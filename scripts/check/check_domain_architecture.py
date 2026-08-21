@@ -13,6 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULES = ROOT / "crates" / "modules"
+PRIMITIVES_INTEGRATION = ROOT / "crates" / "primitives" / "src" / "integration.rs"
 
 TYPED_FIELDS = {
     ROOT / "crates" / "modules" / "reference" / "src" / "domain" / "entities.rs": [
@@ -252,6 +253,13 @@ def rust_sources() -> list[Path]:
 def main() -> int:
     failures: list[str] = []
 
+    primitives_integration = PRIMITIVES_INTEGRATION.read_text()
+    if re.search(r"\bProviderSymbol\b", primitives_integration):
+        failures.append(
+            "retired ProviderSymbol primitive must not be reintroduced: "
+            f"{PRIMITIVES_INTEGRATION}"
+        )
+
     for path in rust_sources():
         text = path.read_text()
         # Provider-native `source_venue` is an allowed external fact until
@@ -260,6 +268,8 @@ def main() -> int:
         legacy_exchange_identifier = r"\b(?:Venue|venue_id)\b"
         if re.search(legacy_exchange_identifier, text):
             failures.append(f"forbidden legacy exchange terminology in Rust source: {path}")
+        if re.search(r"\bProviderSymbol\b", text):
+            failures.append(f"retired ProviderSymbol type used in business Rust source: {path}")
         for name in CANONICAL_PRIMITIVE_TYPES:
             if re.search(rf"\bpub\s+(?:struct|enum|type)\s+{name}\b", text):
                 failures.append(f"duplicate canonical primitive {name}: {path}")

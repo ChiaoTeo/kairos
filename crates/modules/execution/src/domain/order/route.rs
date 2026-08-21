@@ -1,5 +1,5 @@
-use kairos_primitives::execution::ExecutionRouteId;
-use kairos_primitives::integration::{ProviderProductCode, ProviderSymbol};
+use kairos_primitives::execution::{ExecutionRouteId, OrderEntrySymbol};
+use kairos_primitives::integration::ProviderProductCode;
 use kairos_primitives::reference::MarketId;
 use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,8 @@ pub struct SelectedExecutionRoute {
     pub route_id: ExecutionRouteId,
     pub participant_id: String,
     pub provider_product: ProviderProductCode,
-    pub provider_symbol: ProviderSymbol,
+    #[serde(alias = "provider_symbol")]
+    pub order_entry_symbol: OrderEntrySymbol,
     #[serde(default)]
     pub destination_market_id: Option<MarketId>,
     pub selected_at_unix_nanos: UnixNanos,

@@ -155,6 +155,7 @@ class MarketCommandClient:
                 "subject": request.subject,
                 "selectors": list(request.selectors),
                 "source_id": request.source_id,
+                "source_ids": list(request.source_ids),
                 "exchange": request.exchange,
                 "market_type": request.market_type,
                 "asset_type": request.asset_type,
@@ -164,6 +165,9 @@ class MarketCommandClient:
         )
         value = self.client.call("market_subscribe", [body])
         return _handle(request_id, 202, value)
+
+    def data_sources(self, query: Mapping[str, object] | None = None) -> dict[str, Any]:
+        return self.client.call("market_data_sources", [dict(query or {})])
 
     def unsubscribe(
         self,

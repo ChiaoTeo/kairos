@@ -70,6 +70,10 @@ class InMemoryApplicationPorts:
             status="pending",
         )
 
+    def data_sources(self, query: Mapping[str, object] | None = None) -> dict[str, object]:
+        del query
+        return {"sources": []}
+
     def unsubscribe(
         self,
         subscription: object,

@@ -11,7 +11,7 @@ pub(crate) fn subscription_request(
     market: &ResolvedMarket,
 ) -> Result<MarketSubscriptionRequest, IntegrationError> {
     let symbol = kairos_primitives::integration::ParticipantSymbol::new(
-        market.route.provider_symbol.as_str(),
+        market.route.subscription_symbol.as_str(),
     )
     .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
     let mut feeds = Vec::new();

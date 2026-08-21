@@ -632,10 +632,7 @@ def test_interactive_system_menu_restarts_market(tmp_path, monkeypatch) -> None:
     text = output.getvalue()
     assert "你想维护哪个系统服务" in text
     assert "你想对 market 做什么" in text
-    assert (
-        "准备执行：kairos system restart --component market --format text"
-        in text
-    )
+    assert "准备执行：kairos system restart --component market --format text" in text
 
 
 def test_interactive_system_menu_does_not_offer_instance_components(
@@ -662,10 +659,7 @@ def test_interactive_system_menu_does_not_offer_instance_components(
     )
     text = output.getvalue()
     assert "account/risk/execution" not in text
-    assert (
-        "准备执行：kairos system status --component reference --format text"
-        in text
-    )
+    assert "准备执行：kairos system status --component reference --format text" in text
 
 
 def test_interactive_session_keeps_context_between_actions(
@@ -677,10 +671,15 @@ def test_interactive_session_keeps_context_between_actions(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["1", "2", "4", "8", "exit"])
-    confirmations = iter([True, True])
+    shell_input = iter(["1", "2", "4", "summary", "exit"])
+    confirmations = iter([True])
     executed: list[tuple[str, ...]] = []
-    monkeypatch.setattr("builtins.input", lambda *args, **kwargs: next(shell_input))
+
+    def read_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(shell_input)
+
+    monkeypatch.setattr("builtins.input", read_input)
     monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: next(confirmations))
 
     with redirect_stdout(output):
@@ -695,16 +694,61 @@ def test_interactive_session_keeps_context_between_actions(
     text = output.getvalue()
     assert status == 0
     assert executed[0][:4] == ("system", "restart", "--component", "market")
+    assert "无法识别这个命令" not in text
     assert "/system/market>" in text
     assert "| system service  | market" in text
     assert "kairos system restart --component market --format text" in text
     assert "| last status     | 0" in text
 
 
+def test_interactive_numeric_entry_opens_reference_context(
+    tmp_path, monkeypatch
+) -> None:
+    from kairospy.surface.cli.interactive import run_interactive
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    shell_input = iter(["3", "2", "exit"])
+    prompts = iter(["AAPL"])
+    confirmations = iter([True])
+    executed: list[tuple[str, ...]] = []
+
+    def read_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(shell_input)
+
+    monkeypatch.setattr("builtins.input", read_input)
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: next(confirmations))
+
+    with redirect_stdout(output):
+        status = run_interactive(
+            workspace=workspace.paths.root,
+            dry_run=False,
+            no_exec=False,
+            yes=False,
+            execute=lambda argv: executed.append(tuple(argv)) or 0,
+        )
+
+    text = output.getvalue()
+    assert status == 0
+    assert "无法识别这个命令" not in text
+    assert "/reference>" in text
+    assert executed[0][:4] == ("reference", "markets", "--asset-code", "AAPL")
+    assert (
+        "kairos reference markets --asset-code AAPL --active-only --format table"
+        in text
+    )
+
+
 def test_interactive_convenience_option_chain_uses_current_reference_option(
     tmp_path, monkeypatch
 ) -> None:
-    workspace = WorkspaceApplication().init_project(tmp_path / "demo", workspace_id="demo")
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
     output = StringIO()
     answers = iter(["4", "7", "instrument:equity:US:AAPL:common"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))

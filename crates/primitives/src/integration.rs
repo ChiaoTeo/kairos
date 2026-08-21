@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use crate::DomainTypeError;
 use crate::text::text_type;
 
-text_type!(ProviderSymbol);
 text_type!(ParticipantSymbol);
 text_type!(ParticipantId);
 text_type!(ProviderId);

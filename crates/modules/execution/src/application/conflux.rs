@@ -1292,7 +1292,7 @@ fn route_response(
         participant_id: kairos_primitives::integration::ParticipantId::new(route.participant_id)
             .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
         provider_product: route.provider_product,
-        provider_symbol: route.provider_symbol,
+        order_entry_symbol: route.order_entry_symbol,
         supported_order_types: route.supported_order_types,
         supported_options: route
             .supported_options

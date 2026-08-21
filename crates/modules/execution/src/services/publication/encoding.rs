@@ -274,8 +274,8 @@ pub(super) fn encode_current_fill<'a>(
         .provider_product
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
-    let provider_symbol = fill
-        .provider_symbol
+    let order_entry_symbol = fill
+        .order_entry_symbol
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
     let fee_asset_id = fill
@@ -303,7 +303,7 @@ pub(super) fn encode_current_fill<'a>(
             remote_order_id,
             reported_provider_id,
             provider_product,
-            provider_symbol,
+            provider_symbol: order_entry_symbol,
             side: match fill.side {
                 OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,
                 OrderSide::Sell => kairos_protocol::generated::kairos::common::v_2::Side::SELL,
@@ -637,7 +637,7 @@ fn encode_selected_route<'a>(
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
     let provider_product = builder.create_string(route.provider_product.as_str());
-    let provider_symbol = builder.create_string(route.provider_symbol.as_str());
+    let order_entry_symbol = builder.create_string(route.order_entry_symbol.as_str());
     fb::SelectedExecutionRoute::create(
         builder,
         &fb::SelectedExecutionRouteArgs {
@@ -651,7 +651,7 @@ fn encode_selected_route<'a>(
             participant_id: Some(participant_id),
             destination_market_id,
             provider_product: Some(provider_product),
-            provider_symbol: Some(provider_symbol),
+            provider_symbol: Some(order_entry_symbol),
             selected_at_unix_nanos: route.selected_at_unix_nanos.get(),
         },
     )

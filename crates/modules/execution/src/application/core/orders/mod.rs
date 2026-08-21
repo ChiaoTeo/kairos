@@ -197,7 +197,7 @@ impl ExecutionApplication {
             route_id: route.candidate.route_id.clone(),
             participant_id: route.candidate.participant_id.clone(),
             provider_product: route.candidate.provider_product.clone(),
-            provider_symbol: route.candidate.provider_symbol.clone(),
+            order_entry_symbol: route.candidate.order_entry_symbol.clone(),
             destination_market_id: route.candidate.market_id.clone(),
             selected_at_unix_nanos: now.into(),
             selection_kind: crate::domain::RouteSelectionKind::Explicit,

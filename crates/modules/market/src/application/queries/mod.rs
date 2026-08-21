@@ -56,7 +56,7 @@ impl MarketApplication {
                         source_id,
                         provider_id: market.route.provider_id.to_string(),
                         provider_product: market.route.provider_product.to_string(),
-                        provider_symbol: market.route.provider_symbol.to_string(),
+                        subscription_symbol: market.route.subscription_symbol.to_string(),
                         observation_capabilities: market
                             .route
                             .observation_capabilities
@@ -101,7 +101,7 @@ impl MarketApplication {
                     source_id: source.descriptor.id.clone(),
                     provider_id: market.route.provider_id.to_string(),
                     provider_product: market.route.provider_product.to_string(),
-                    provider_symbol: market.route.provider_symbol.to_string(),
+                    subscription_symbol: market.route.subscription_symbol.to_string(),
                     observation_capabilities: source
                         .descriptor
                         .observation_capabilities

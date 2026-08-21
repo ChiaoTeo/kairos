@@ -5,4 +5,6 @@ mod lifecycle;
 mod resolution;
 mod static_subscription;
 
-pub(crate) use resolution::{resolve_market, resolve_option_markets};
+pub(crate) use resolution::{
+    OptionSelectionFilter, resolve_market, resolve_market_by_id, resolve_option_markets,
+};

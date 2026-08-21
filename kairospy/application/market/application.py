@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, cast
 
 from kairospy.application.reference import Instrument, InstrumentRef, Market
@@ -9,7 +10,15 @@ from kairospy.domain_types import InstrumentId, MarketId
 
 from .events import BarEvent, MarketEvent, TradeEvent
 from .models import Bar, ObservationScope, OptionGreeks, Quote, Trade
-from .requests import SubscriptionRequest
+from .requests import (
+    MarketData,
+    OptionFilter,
+    Options,
+    ParticipantSet,
+    SourceSet,
+    StrikeRange,
+    SubscriptionRequest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +27,36 @@ class Subscription:
     request_id: str
     status: str
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionGroup:
+    """A strategy subscription intent expanded into one or more source requests."""
+
+    subscriptions: tuple[Subscription, ...]
+
+    def __post_init__(self) -> None:
+        if not self.subscriptions:
+            raise ValueError("subscription group must contain at least one subscription")
+
+    @property
+    def subscription_id(self) -> str:
+        return self.subscriptions[0].subscription_id
+
+    @property
+    def request_id(self) -> str:
+        return self.subscriptions[0].request_id
+
+    @property
+    def status(self) -> str:
+        statuses = {subscription.status for subscription in self.subscriptions}
+        if statuses == {"accepted"}:
+            return "accepted"
+        if "rejected" in statuses:
+            return "rejected"
+        if "accepted" in statuses:
+            return "partial"
+        return self.subscriptions[0].status
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,9 +207,20 @@ class MarketApplication:
         *,
         timeframe: str,
         source_id: str | None = None,
-    ) -> Subscription:
+        sources: SourceSet | tuple[str, ...] | list[str] | None = None,
+        participants: ParticipantSet | tuple[str, ...] | list[str] | None = None,
+    ) -> Subscription | SubscriptionGroup:
+        if sum(value is not None for value in (source_id, sources, participants)) > 1:
+            raise ValueError("use only one of source_id, sources, or participants")
         if not timeframe.strip():
             raise ValueError("bar timeframe is required")
+        if sources is not None or participants is not None:
+            return self.subscribe(
+                market,
+                data=[MarketData.bar(timeframe)],
+                sources=sources,
+                participants=participants,
+            )
         return self._subscribe(
             _market_subscription_request(
                 market, (f"bar:{timeframe}",), source_id=source_id
@@ -178,10 +228,103 @@ class MarketApplication:
         )
 
     def subscribe_quotes(
-        self, market: Market | MarketId, *, source_id: str | None = None
-    ) -> Subscription:
+        self,
+        market: Market | MarketId,
+        *,
+        source_id: str | None = None,
+        sources: SourceSet | tuple[str, ...] | list[str] | None = None,
+        participants: ParticipantSet | tuple[str, ...] | list[str] | None = None,
+    ) -> Subscription | SubscriptionGroup:
+        if sum(value is not None for value in (source_id, sources, participants)) > 1:
+            raise ValueError("use only one of source_id, sources, or participants")
+        if sources is not None or participants is not None:
+            return self.subscribe(
+                market,
+                data=[MarketData.QUOTE],
+                sources=sources,
+                participants=participants,
+            )
         return self._subscribe(
             _market_subscription_request(market, ("quote",), source_id=source_id)
+        )
+
+    def subscribe(
+        self,
+        market: Market | MarketId | Options,
+        *,
+        data: tuple[MarketData | str, ...] | list[MarketData | str],
+        sources: SourceSet | tuple[str, ...] | list[str] | None = None,
+        participants: ParticipantSet | tuple[str, ...] | list[str] | None = None,
+    ) -> SubscriptionGroup:
+        """Subscribe to typed Market data for one explicit market identity."""
+
+        if sources is not None and participants is not None:
+            raise ValueError("use either sources or participants, not both")
+        selectors = tuple(_selector(value) for value in data)
+        if not selectors:
+            raise ValueError("market subscription data selectors are required")
+        if isinstance(market, Options):
+            market = self._resolve_spot_relative_options_target(market)
+            source_ids = self._source_ids(market, sources, participants)
+            subscription = self._subscribe(
+                _options_subscription_request(
+                    market,
+                    selectors,
+                    source_ids=tuple(source_id for source_id in source_ids if source_id),
+                )
+            )
+            return SubscriptionGroup((subscription,))
+        source_ids = self._source_ids(market, sources, participants)
+        subscription = self._subscribe(
+            _market_subscription_request(
+                market,
+                selectors,
+                source_id=source_ids[0] if source_ids == (None,) else None,
+                source_ids=tuple(source_id for source_id in source_ids if source_id),
+            )
+        )
+        return SubscriptionGroup((subscription,))
+
+    def _resolve_spot_relative_options_target(self, target: Options) -> Options:
+        strike = target.filter.strike
+        if strike is None or strike.mode != "around_spot":
+            return target
+        if strike.percent is None:
+            raise ValueError("around_spot strike range requires a positive percent")
+        if not isinstance(target.underlying, (Market, MarketId)):
+            raise RuntimeError(
+                "around_spot option subscription requires a MarketId or Reference Market "
+                "underlying so the current quote can be read"
+            )
+        underlying_market_id = _market_id(target.underlying)
+        quote = self.latest_quote(underlying_market_id)
+        if quote is None:
+            raise RuntimeError(
+                "around_spot option subscription requires a current underlying quote"
+            )
+        spot = _quote_midpoint(quote)
+        lower = spot * (Decimal("1") - strike.percent)
+        upper = spot * (Decimal("1") + strike.percent)
+        resolved_filter = OptionFilter(
+            expiry=target.filter.expiry,
+            strike=StrikeRange.between(lower, upper),
+            right=target.filter.right,
+            limit=target.filter.limit,
+        )
+        return Options(target.underlying, resolved_filter)
+
+    def subscribe_quotes_for_sources(
+        self,
+        market: Market | MarketId,
+        *,
+        sources: SourceSet | tuple[str, ...] | list[str] | None = None,
+        participants: ParticipantSet | tuple[str, ...] | list[str] | None = None,
+    ) -> SubscriptionGroup:
+        return self.subscribe(
+            market,
+            data=[MarketData.QUOTE],
+            sources=sources,
+            participants=participants,
         )
 
     def subscribe_consolidated_quotes(
@@ -190,7 +333,7 @@ class MarketApplication:
         *,
         provider_id: str,
         provider_product: str,
-        provider_symbol: str,
+        subscription_symbol: str,
         source_id: str,
         network_id: str | None = None,
     ) -> Subscription:
@@ -210,7 +353,7 @@ class MarketApplication:
             params["network_id"] = network_id
         return self._subscribe(
             SubscriptionRequest(
-                subject=provider_symbol,
+                subject=subscription_symbol,
                 selectors=("quote",),
                 identity=ObservationScope.consolidated(instrument_id, network_id).key(),
                 source_id=source_id,
@@ -233,7 +376,11 @@ class MarketApplication:
             _market_subscription_request(market, ("greeks",), source_id=source_id)
         )
 
-    def unsubscribe(self, subscription: Subscription) -> None:
+    def unsubscribe(self, subscription: Subscription | SubscriptionGroup) -> None:
+        if isinstance(subscription, SubscriptionGroup):
+            for item in subscription.subscriptions:
+                self.unsubscribe(item)
+            return
         request_id = self._request_id("market.unsubscribe")
         handle = self._commands.unsubscribe(
             subscription.subscription_id,
@@ -397,6 +544,80 @@ class MarketApplication:
         self._handles[request_id] = handle
         return handle
 
+    def _source_ids(
+        self,
+        market: Market | MarketId | Options,
+        sources: SourceSet | tuple[str, ...] | list[str] | None,
+        participants: ParticipantSet | tuple[str, ...] | list[str] | None,
+    ) -> tuple[str | None, ...]:
+        if participants is not None:
+            return self._source_ids_for_participants(market, participants)
+        if sources is None:
+            return (None,)
+        if isinstance(sources, SourceSet):
+            if sources.all:
+                discovered = self._discover_source_ids(market)
+                if not discovered:
+                    raise RuntimeError(
+                        "Market source discovery is unavailable; pass explicit sources"
+                    )
+                return discovered
+            assert sources.source_ids is not None
+            return sources.source_ids
+        source_ids = tuple(_wire_value(source) for source in sources)
+        if not source_ids:
+            raise ValueError("sources must not be empty")
+        if any(not source_id.strip() for source_id in source_ids):
+            raise ValueError("sources must be non-empty strings")
+        return source_ids
+
+    def _source_ids_for_participants(
+        self,
+        market: Market | MarketId | Options,
+        participants: ParticipantSet | tuple[str, ...] | list[str],
+    ) -> tuple[str, ...]:
+        discovered = self._discover_source_ids(market)
+        if not discovered:
+            raise RuntimeError(
+                "Market participant routing is unavailable; source discovery returned no sources"
+            )
+        if isinstance(participants, ParticipantSet):
+            if participants.all:
+                return discovered
+            assert participants.participant_ids is not None
+            participant_ids = participants.participant_ids
+        else:
+            participant_ids = tuple(_participant_id(participant) for participant in participants)
+            if not participant_ids:
+                raise ValueError("participants must not be empty")
+        selected = tuple(
+            source_id
+            for source_id in discovered
+            if any(_source_belongs_to_participant(source_id, participant_id) for participant_id in participant_ids)
+        )
+        if not selected:
+            wanted = ", ".join(participant_ids)
+            raise RuntimeError(f"Market has no configured sources for participants: {wanted}")
+        return selected
+
+    def _discover_source_ids(self, market: Market | MarketId | Options) -> tuple[str, ...]:
+        data_sources = getattr(self._commands, "data_sources", None)
+        if not callable(data_sources):
+            return ()
+        query = _source_discovery_query(market)
+        value = data_sources(query)
+        sources = value.get("sources", ()) if isinstance(value, Mapping) else ()
+        if not isinstance(sources, (list, tuple)):
+            return ()
+        result = []
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            source_id = source.get("source_id")
+            if isinstance(source_id, str) and source_id.strip():
+                result.append(source_id)
+        return tuple(result)
+
     def _matches_subscription(self, event: MarketEvent) -> bool:
         """Apply this Strategy instance's requested Market demand."""
 
@@ -407,8 +628,9 @@ class MarketApplication:
             f"bar:{event.data.timeframe}" if isinstance(event, BarEvent) else event.kind
         )
         return any(
-            (request.identity or request.subject) == scope_key
+            _request_accepts_scope(request, scope_key, event)
             and selector in request.selectors
+            and _request_accepts_source(request, event.data.source_id)
             for request in self._subscription_requests.values()
         )
 
@@ -417,11 +639,69 @@ def _market_id(value: Market | MarketId) -> MarketId:
     return value.id if isinstance(value, Market) else value
 
 
+def _selector(value: MarketData | str) -> str:
+    return value.selector if isinstance(value, MarketData) else str(value)
+
+
+def _quote_midpoint(quote: Quote) -> Decimal:
+    if quote.bid_price is not None and quote.ask_price is not None:
+        return (quote.bid_price + quote.ask_price) / Decimal("2")
+    if quote.bid_price is not None:
+        return quote.bid_price
+    if quote.ask_price is not None:
+        return quote.ask_price
+    raise RuntimeError("around_spot option subscription requires a priced quote")
+
+
+def _wire_value(value: object) -> str:
+    enum_value = getattr(value, "value", None)
+    return enum_value if isinstance(enum_value, str) else str(value)
+
+
+def _participant_id(value: object) -> str:
+    text = _wire_value(value).strip().lower()
+    if text.startswith("data_provider:"):
+        return text.removeprefix("data_provider:")
+    if text.startswith("provider:"):
+        return text.removeprefix("provider:")
+    return text
+
+
+def _source_belongs_to_participant(source_id: str, participant_id: str) -> bool:
+    participant_id = _participant_id(participant_id)
+    source_id = source_id.strip().lower()
+    return source_id == participant_id or source_id.startswith(f"{participant_id}-")
+
+
+def _request_accepts_source(
+    request: SubscriptionRequest, event_source_id: str | None
+) -> bool:
+    if request.source_id is None and not request.source_ids:
+        return True
+    if event_source_id is None:
+        return False
+    if request.source_id is not None:
+        return event_source_id == request.source_id
+    return event_source_id in request.source_ids
+
+
+def _request_accepts_scope(
+    request: SubscriptionRequest, scope_key: str, event: MarketEvent
+) -> bool:
+    if (request.identity or request.subject) == scope_key:
+        return True
+    if request.params.get("target") != "options":
+        return False
+    instrument_id = str(event.data.instrument.id)
+    return instrument_id.startswith("instrument:option:")
+
+
 def _market_subscription_request(
     market: Market | MarketId,
     selectors: tuple[str, ...],
     *,
     source_id: str | None,
+    source_ids: tuple[str, ...] = (),
 ) -> SubscriptionRequest:
     market_id = _market_id(market)
     if isinstance(market, Market):
@@ -430,6 +710,7 @@ def _market_subscription_request(
             selectors=selectors,
             identity=str(market_id),
             source_id=source_id,
+            source_ids=source_ids,
             params={"market_id": str(market_id)},
         )
     return SubscriptionRequest(
@@ -437,7 +718,58 @@ def _market_subscription_request(
         selectors=selectors,
         identity=str(market_id),
         source_id=source_id,
+        source_ids=source_ids,
     )
+
+
+def _options_subscription_request(
+    target: Options,
+    selectors: tuple[str, ...],
+    *,
+    source_ids: tuple[str, ...],
+) -> SubscriptionRequest:
+    underlying_params = _underlying_params(target.underlying)
+    subject = f"options:{next(iter(underlying_params.values()))}"
+    params: dict[str, object] = {
+        "target": "options",
+        "mode": "chain",
+        **underlying_params,
+        "filter": target.filter.params(),
+    }
+    return SubscriptionRequest(
+        subject=subject,
+        selectors=selectors,
+        source_ids=source_ids,
+        params=params,
+        dynamic=True,
+    )
+
+
+def _source_discovery_query(target: Market | MarketId | Options) -> dict[str, object]:
+    if isinstance(target, Options):
+        query: dict[str, object] = {"target": "options"}
+        query.update(_underlying_params(target.underlying))
+        return query
+    return {"market_id": str(_market_id(target))}
+
+
+def _underlying_params(underlying: object) -> dict[str, str]:
+    if isinstance(underlying, Market):
+        return {"underlying_market_id": str(underlying.id)}
+    if isinstance(underlying, MarketId):
+        return {"underlying_market_id": str(underlying)}
+    if isinstance(underlying, (Instrument, InstrumentRef)):
+        return {"underlying_instrument_id": str(underlying.id)}
+    if isinstance(underlying, InstrumentId):
+        return {"underlying_instrument_id": str(underlying)}
+    value = str(underlying).strip()
+    if not value:
+        raise ValueError("options underlying is required")
+    if value.startswith("market:"):
+        return {"underlying_market_id": value}
+    if value.startswith("instrument:"):
+        return {"underlying_instrument_id": value}
+    return {"underlying": value.upper()}
 
 
 def _subscription(value: Any) -> Subscription:

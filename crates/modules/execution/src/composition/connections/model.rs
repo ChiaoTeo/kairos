@@ -50,7 +50,7 @@ pub struct ExecutionConnectionOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutionInstrumentRoute {
     pub instrument_id: String,
-    pub provider_symbol: String,
+    pub order_entry_symbol: String,
     pub destination_market_id: Option<String>,
 }
 
@@ -102,7 +102,7 @@ pub fn load_execution_routes_from_reference_markets(
                     configured,
                     &instrument.instrument_id,
                     destination.map(|market| market.market_id.as_str()),
-                    &address.provider_symbol,
+                    &address.order_entry_symbol,
                 )?);
             }
             continue;
@@ -119,14 +119,14 @@ pub fn load_execution_routes_from_reference_markets(
                 )
                 && market.venue_symbol.is_some()
         }) {
-            let provider_symbol = market
+            let order_entry_symbol = market
                 .venue_symbol
                 .as_deref()
                 .expect("filtered venue symbol");
             let participant_instrument = participant_instrument_for_route(
                 &configured.participant_id,
                 &configured.product,
-                provider_symbol,
+                order_entry_symbol,
             )?;
             let route_id = kairos_primitives::execution::ExecutionRouteId::new(format!(
                 "{}:{}",
@@ -151,8 +151,8 @@ pub fn load_execution_routes_from_reference_markets(
                         &configured.product,
                     )
                     .map_err(|error| error.to_string())?,
-                    provider_symbol: kairos_primitives::integration::ProviderSymbol::new(
-                        provider_symbol,
+                    order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new(
+                        order_entry_symbol,
                     )
                     .map_err(|error| error.to_string())?,
                     supported_order_types: vec![
@@ -178,7 +178,7 @@ pub(super) fn candidate_for_address(
     configured: &ExecutionConnectionOptions,
     instrument_id: &str,
     destination_market_id: Option<&str>,
-    provider_symbol: &str,
+    order_entry_symbol: &str,
 ) -> Result<
     (
         crate::application::ExecutionRouteCandidate,
@@ -189,7 +189,7 @@ pub(super) fn candidate_for_address(
     let participant_instrument = participant_instrument_for_route(
         &configured.participant_id,
         &configured.product,
-        provider_symbol,
+        order_entry_symbol,
     )?;
     let route_id = kairos_primitives::execution::ExecutionRouteId::new(format!(
         "{}:{}",
@@ -220,8 +220,10 @@ pub(super) fn candidate_for_address(
                 &configured.product,
             )
             .map_err(|error| error.to_string())?,
-            provider_symbol: kairos_primitives::integration::ProviderSymbol::new(provider_symbol)
-                .map_err(|error| error.to_string())?,
+            order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new(
+                order_entry_symbol,
+            )
+            .map_err(|error| error.to_string())?,
             supported_order_types: vec![
                 crate::application::OrderType::Market,
                 crate::application::OrderType::Limit,
@@ -302,7 +304,7 @@ fn supported_order_options(participant_id: &str, product: &str) -> Vec<String> {
 pub(super) fn participant_instrument_for_route(
     provider_id: &str,
     provider_product: &str,
-    provider_symbol: &str,
+    order_entry_symbol: &str,
 ) -> Result<ParticipantInstrumentRef, String> {
     let participant_kind = match (provider_id, provider_product) {
         ("binance", "equity") => ParticipantKind::Broker,
@@ -320,7 +322,7 @@ pub(super) fn participant_instrument_for_route(
             ParticipantInstrumentTypeRef::new(provider_product)
                 .map_err(|error| error.to_string())?,
         ),
-        provider_symbol,
+        order_entry_symbol,
     )
     .map_err(|error| error.to_string())
 }

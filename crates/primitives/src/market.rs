@@ -4,6 +4,7 @@ use crate::DomainTypeError;
 use crate::text::text_type;
 
 text_type!(SubscriptionId);
+text_type!(SubscriptionSymbol);
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]

@@ -1,4 +1,13 @@
-from kairospy.strategy import BarEvent, QuoteEvent, Strategy, StrategyContext
+from kairospy.strategy import (
+    BarEvent,
+    MarketData,
+    Participant,
+    ParticipantSet,
+    QuoteEvent,
+    Strategy,
+    StrategyContext,
+    Timeframe,
+)
 
 
 class PrintAaplMulti(Strategy):
@@ -8,43 +17,29 @@ class PrintAaplMulti(Strategy):
         self.symbol = symbol.strip().upper()
 
     def on_start(self, context: StrategyContext) -> None:
-        instruments = context.reference.find_instruments(
+        markets = context.reference.find_markets(
             symbol=self.symbol,
-            instrument_type="equity",
+            instrument_kind="equity",
         )
-        if not instruments:
-            raise RuntimeError(f"no active equity instrument found for {self.symbol}")
-        instrument_ids = {str(instrument.id) for instrument in instruments}
-        if len(instrument_ids) != 1:
+        if not markets:
+            raise RuntimeError(f"no active equity market found for {self.symbol}")
+        market_ids = {str(market.id) for market in markets}
+        if len(market_ids) != 1:
             raise RuntimeError(
-                f"{self.symbol} reference rows do not share one canonical instrument: "
-                f"{sorted(instrument_ids)}"
+                f"{self.symbol} reference rows do not share one canonical market: "
+                f"{sorted(market_ids)}"
             )
-        instrument = instruments[0]
-        for source in (
-            {
-                "source_id": "massive-equity",
-                "provider_id": "massive",
-                "provider_product": "equity",
-                "provider_symbol": self.symbol,
-                "network_id": "sip",
-            },
-            {
-                "source_id": "binance-equity",
-                "provider_id": "binance",
-                "provider_product": "equity",
-                "provider_symbol": self.symbol,
-                "network_id": None,
-            },
-        ):
-            context.market.subscribe_consolidated_quotes(instrument, **source)
-            print(
-                f"{self.symbol} subscribed source={source['source_id']} "
-                f"instrument={instrument.id} provider={source['provider_id']} "
-                f"product={source['provider_product']} symbol={source['provider_symbol']} "
-                f"network={source['network_id'] or '*'}",
-                flush=True,
-            )
+        market = markets[0]
+        context.market.subscribe(
+            market.id,
+            data=[MarketData.QUOTE, MarketData.bar(Timeframe.MIN_1)],
+            participants=ParticipantSet.only(Participant.MASSIVE, Participant.BINANCE),
+        )
+        print(
+            f"{self.symbol} subscribed market={market.id} "
+            "data=quote,bar:1m participants=massive,binance",
+            flush=True,
+        )
 
     def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
         del context

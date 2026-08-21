@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
-use kairos_primitives::integration::{ProviderId, ProviderProductCode, ProviderSymbol};
+use kairos_primitives::integration::{ProviderId, ProviderProductCode};
+use kairos_primitives::market::SubscriptionSymbol;
 use serde::{Deserialize, Serialize};
 
-/// Provider access selected by composition for one canonical market.
+/// Market-data access selected by composition for one canonical market.
 ///
 /// All fields are required: application and source code consume this resolved
 /// route and never infer provider facts from a listing symbol or market kind.
@@ -12,7 +13,8 @@ pub struct MarketDataRoute {
     pub route_id: String,
     pub provider_id: ProviderId,
     pub provider_product: ProviderProductCode,
-    pub provider_symbol: ProviderSymbol,
+    #[serde(alias = "provider_symbol")]
+    pub subscription_symbol: SubscriptionSymbol,
     /// Code-owned adapter capabilities resolved by composition. These are
     /// independent from whether a workspace currently configured a source.
     #[serde(default)]
@@ -24,7 +26,7 @@ impl MarketDataRoute {
         route_id: impl Into<String>,
         provider_id: impl Into<String>,
         provider_product: impl Into<String>,
-        provider_symbol: impl Into<String>,
+        subscription_symbol: impl Into<String>,
     ) -> Result<Self, String> {
         let route_id = route_id.into();
         if route_id.trim().is_empty() {
@@ -35,7 +37,7 @@ impl MarketDataRoute {
             provider_id: ProviderId::new(provider_id.into()).map_err(|error| error.to_string())?,
             provider_product: ProviderProductCode::new(provider_product.into())
                 .map_err(|error| error.to_string())?,
-            provider_symbol: ProviderSymbol::new(provider_symbol.into())
+            subscription_symbol: SubscriptionSymbol::new(subscription_symbol.into())
                 .map_err(|error| error.to_string())?,
             observation_capabilities: BTreeSet::new(),
         })

@@ -123,6 +123,80 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
 }
 
 #[test]
+fn static_subscription_can_hold_multiple_source_legs_for_one_market() {
+    let mut actor = MarketApplication::new("market-1", 10).unwrap();
+    let base = market("market:btc", "BTCUSDT");
+
+    actor
+        .subscribe_static_many_with_selectors(
+            SubscriptionId::new("multi-source").unwrap(),
+            "strategy",
+            vec![
+                base.clone().with_source("massive").unwrap(),
+                base.with_source("binance").unwrap(),
+            ],
+            vec![ObservationSelector::parse("quote").unwrap()],
+        )
+        .unwrap();
+
+    let subscription = actor
+        .current_view()
+        .subscriptions
+        .into_iter()
+        .find(|subscription| subscription.id.as_str() == "multi-source")
+        .unwrap();
+    assert_eq!(subscription.members.len(), 2);
+    assert!(
+        subscription
+            .members
+            .contains_key("market:btc#source:massive")
+    );
+    assert!(
+        subscription
+            .members
+            .contains_key("market:btc#source:binance")
+    );
+}
+
+#[test]
+fn market_universe_can_hold_multiple_source_legs_for_one_market() {
+    let base = market("market:btc", "BTCUSDT");
+    let mut actor = MarketApplication::new("market-1", 10).unwrap();
+    let id = SubscriptionId::new("dynamic-1").unwrap();
+    actor
+        .subscribe_dynamic(
+            id.clone(),
+            "strategy",
+            MarketSelectionQuery::default(),
+            vec![base.clone()],
+        )
+        .unwrap();
+
+    actor
+        .reconcile_market_universe(ReconcileMarketUniverse {
+            generation: 1.into(),
+            event_sequence: 1.into(),
+            markets: vec![
+                base.clone().with_source("massive").unwrap(),
+                base.with_source("binance").unwrap(),
+            ],
+        })
+        .unwrap();
+
+    let state = actor.current_view().subscriptions.remove(0);
+    assert_eq!(state.id, id);
+    assert_eq!(state.members.len(), 2);
+    assert_eq!(
+        state
+            .members
+            .values()
+            .map(|market| market.member_id())
+            .collect::<Vec<_>>(),
+        vec!["market:btc#source:binance", "market:btc#source:massive"]
+    );
+}
+
+#[test]
 fn out_of_order_observation_does_not_regress_current_projection() {
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
     let quote = |time: u64, price: &str| {

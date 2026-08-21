@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from .application import (
     MarketApplication,
     Subscription,
+    SubscriptionGroup,
     SubscriptionReleaseResult,
     SubscriptionStatus,
 )
@@ -33,7 +34,20 @@ from .models import (
     Quote,
     Trade,
 )
-from .requests import SubscriptionRequest
+from .requests import (
+    ExpiryRange,
+    MarketData,
+    OptionFilter,
+    OptionRight,
+    Options,
+    Participant,
+    ParticipantSet,
+    Source,
+    SourceSet,
+    StrikeRange,
+    SubscriptionRequest,
+    Timeframe,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,15 +357,27 @@ __all__ = [
     "MarketAnalyticalApplication",
     "MarketCliApplication",
     "MarketDataApplication",
+    "MarketData",
+    "OptionFilter",
     "OptionGreeksProjectionRequest",
     "OptionGreeksProjectionResult",
     "OptionGreeks",
+    "OptionRight",
+    "Options",
+    "Participant",
+    "ParticipantSet",
     "Quote",
     "QuoteEvent",
     "Subscription",
+    "SubscriptionGroup",
     "SubscriptionReleaseResult",
     "SubscriptionRequest",
     "SubscriptionStatus",
+    "Source",
+    "SourceSet",
+    "ExpiryRange",
+    "StrikeRange",
+    "Timeframe",
     "Trade",
     "TradeEvent",
     "materialize_replay_file",

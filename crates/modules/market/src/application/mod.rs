@@ -13,7 +13,9 @@ pub use model::{
 };
 pub use replay::{load_replay_events, load_replay_events_many};
 pub(crate) use sources::source_accepts;
-pub(crate) use subscriptions::{resolve_market, resolve_option_markets};
+pub(crate) use subscriptions::{
+    OptionSelectionFilter, resolve_market, resolve_market_by_id, resolve_option_markets,
+};
 pub use universe::ReconcileMarketUniverse;
 
 pub use crate::domain::events::{

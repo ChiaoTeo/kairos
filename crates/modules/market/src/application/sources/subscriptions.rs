@@ -146,18 +146,19 @@ pub(crate) fn source_accepts(source: &SourceDescriptor, market: &ResolvedMarket)
         .is_none_or(|id| id.as_str().eq_ignore_ascii_case(source.id.as_str()));
     source_id_matches
         && source.exchange_id.as_ref().is_none_or(|exchange| {
-            market.exchange_id.as_ref().is_some_and(|market_exchange| {
-                exchange
-                    .as_str()
-                    .strip_prefix("exchange:")
-                    .unwrap_or(exchange.as_str())
-                    .eq_ignore_ascii_case(
-                        market_exchange
-                            .as_str()
-                            .strip_prefix("exchange:")
-                            .unwrap_or(market_exchange.as_str()),
-                    )
-            })
+            provider_scoped_exchange(exchange.as_str())
+                || market.exchange_id.as_ref().is_some_and(|market_exchange| {
+                    exchange
+                        .as_str()
+                        .strip_prefix("exchange:")
+                        .unwrap_or(exchange.as_str())
+                        .eq_ignore_ascii_case(
+                            market_exchange
+                                .as_str()
+                                .strip_prefix("exchange:")
+                                .unwrap_or(market_exchange.as_str()),
+                        )
+                })
         })
         && source
             .market_type
@@ -171,6 +172,10 @@ pub(crate) fn source_accepts(source: &SourceDescriptor, market: &ResolvedMarket)
         })
 }
 
+fn provider_scoped_exchange(exchange: &str) -> bool {
+    exchange.starts_with("data_provider:") || exchange.starts_with("broker:")
+}
+
 pub(crate) fn source_supports_selectors(
     source: &SourceDescriptor,
     selectors: &[crate::domain::subscription::ObservationSelector],
@@ -181,4 +186,53 @@ pub(crate) fn source_supports_selectors(
                 .kind
                 .is_none_or(|kind| source.observation_capabilities.contains(&kind))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use kairos_primitives::reference::InstrumentKind;
+
+    use super::*;
+    use crate::domain::market::MarketDataRoute;
+
+    fn equity_market() -> ResolvedMarket {
+        let mut market = ResolvedMarket::new(
+            "market:exchange:nasdaq:equity:AAPL",
+            "instrument:equity:US:AAPL:common",
+            InstrumentKind::Equity,
+            "exchange:nasdaq",
+            MarketDataRoute::new("route:aapl", "massive", "equity", "AAPL").unwrap(),
+        )
+        .unwrap()
+        .with_source("massive-equity")
+        .unwrap();
+        market.asset_type = Some(kairos_primitives::reference::AssetClass::Equity);
+        market
+    }
+
+    #[test]
+    fn provider_scoped_source_accepts_canonical_exchange_market() {
+        let source = SourceDescriptor::new(
+            SourceId::new("massive-equity").unwrap(),
+            kairos_primitives::reference::Exchange::new("data_provider:massive").unwrap(),
+            "equity",
+            Some("equity".into()),
+        )
+        .unwrap();
+
+        assert!(source_accepts(&source, &equity_market()));
+    }
+
+    #[test]
+    fn exchange_scoped_source_still_requires_matching_exchange() {
+        let source = SourceDescriptor::new(
+            SourceId::new("nasdaq-equity").unwrap(),
+            kairos_primitives::reference::Exchange::new("exchange:nyse").unwrap(),
+            "equity",
+            Some("equity".into()),
+        )
+        .unwrap();
+
+        assert!(!source_accepts(&source, &equity_market()));
+    }
 }

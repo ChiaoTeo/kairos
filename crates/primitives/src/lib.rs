@@ -25,7 +25,7 @@ mod tests {
     use crate::account::BrokerId;
     use crate::execution::OrderId;
     use crate::integration::ProviderId;
-    use crate::reference::{Exchange, InstrumentId, ListingId, MarketId};
+    use crate::reference::{Exchange, InstrumentId, InstrumentKind, ListingId, MarketId};
 
     #[test]
     fn spot_identity_keeps_asset_and_market_context_separate() {
@@ -42,6 +42,24 @@ mod tests {
         assert_eq!(
             MarketId::spot(&exchange, "btcusdt").unwrap().as_str(),
             "market:binance:spot:BTCUSDT"
+        );
+    }
+
+    #[test]
+    fn venue_identities_use_exchange_key_and_keep_listing_out_of_quote_context() {
+        let exchange = Exchange::new("exchange:nasdaq").unwrap();
+
+        assert_eq!(
+            ListingId::venue(&exchange, InstrumentKind::Equity, "aapl")
+                .unwrap()
+                .as_str(),
+            "listing:nasdaq:equity:AAPL"
+        );
+        assert_eq!(
+            MarketId::venue(&exchange, InstrumentKind::Equity, "aapl:usd")
+                .unwrap()
+                .as_str(),
+            "market:nasdaq:equity:AAPL:USD"
         );
     }
 

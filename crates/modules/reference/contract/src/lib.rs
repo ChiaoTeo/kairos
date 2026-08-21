@@ -32,9 +32,10 @@ use kairos_primitives::runtime::ActorId;
 pub use kairos_transport::AeronEndpoint;
 pub use transport::{
     Asset, Entity, Instrument, LifecycleEntry, Listing, Market, ProviderHealthState,
-    REFERENCE_SQLITE_SCHEMA_VERSION, ReferenceCatalogStats, ReferenceCollection, ReferenceHealth,
-    ReferenceMarket, ReferenceMarketPage, ReferenceProjection, ReferenceProjectionSnapshot,
-    ReferenceSqliteReader, ReferenceWatermark, SqliteInstrumentQuery, SqliteMarketQuery,
+    REFERENCE_SQLITE_SCHEMA_VERSION, ReferenceCatalogStats, ReferenceCatalogStatus,
+    ReferenceCollection, ReferenceHealth, ReferenceIntegrityStats, ReferenceMarket,
+    ReferenceMarketPage, ReferenceProjection, ReferenceProjectionSnapshot, ReferenceSqliteReader,
+    ReferenceWatermark, SqliteInstrumentQuery, SqliteMarketQuery,
 };
 
 /// Unified Reference client. Business reads use consumer-scoped SQLite queries.
@@ -76,6 +77,21 @@ impl ReferenceClient {
 
     pub fn watermark(&self) -> ContractResult<ReferenceWatermark> {
         ReferenceSqliteReader::open(&self.database)?.watermark()
+    }
+
+    pub fn status(&self) -> ContractResult<ReferenceCatalogStatus> {
+        ReferenceSqliteReader::open(&self.database)?.status()
+    }
+
+    pub fn require_market(
+        &self,
+        market_id: &kairos_primitives::reference::MarketId,
+    ) -> ContractResult<ReferenceMarket> {
+        ReferenceSqliteReader::open(&self.database)?
+            .market(market_id)?
+            .ok_or_else(|| {
+                ContractError::Invalid(format!("required Reference market is missing: {market_id}"))
+            })
     }
 
     pub fn market_snapshot(&self) -> ContractResult<ReferenceProjectionSnapshot> {

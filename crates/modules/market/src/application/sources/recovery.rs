@@ -362,7 +362,7 @@ mod tests {
         exchange_id: &str,
         provider_product: &str,
         asset_type: &str,
-        provider_symbol: &str,
+        subscription_symbol: &str,
     ) -> Result<crate::ResolvedMarket, String> {
         let kind = match provider_product {
             "spot" => InstrumentKind::Spot,
@@ -380,7 +380,7 @@ mod tests {
                 format!("test:{market_id}"),
                 exchange_id,
                 provider_product,
-                provider_symbol,
+                subscription_symbol,
             )?,
         )?
         .with_asset_type(asset_type)
