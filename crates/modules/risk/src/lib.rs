@@ -10,9 +10,10 @@ pub mod domain;
 mod services;
 
 pub use application::{
-    CloseCircuit, ConsumeReservation, ExpireReservations, FundingRequirement, LimitView,
-    OpenCircuit, PublishPolicy, ReleaseReservation, ResizeReservation, RiskApplication,
-    RiskClockMode, RiskCurrentView, RiskDecision, RiskError, RiskEvent, RiskSnapshot,
+    CliRiskApplication, CloseCircuit, ConnectedRiskApplication, ConsumeReservation,
+    ExpireReservations, FundingRequirement, LimitView, OpenCircuit, PublishPolicy,
+    ReleaseReservation, ResizeReservation, RiskApplication, RiskCliRequestKind, RiskClockMode,
+    RiskCurrentView, RiskDecision, RiskError, RiskEvent, RiskSnapshot,
 };
 pub use composition::RiskHost;
 pub use domain::{

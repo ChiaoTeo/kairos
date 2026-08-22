@@ -446,6 +446,28 @@ impl TypedConnectionCollection<'_, MassiveRestConnection, MassiveRestConfig> {
     }
 }
 
+macro_rules! impl_remove_bounded_rest_connection {
+    ($connection:ty, $config:ty) => {
+        impl TypedConnectionCollection<'_, $connection, $config> {
+            /// Removes a bounded HTTP client that has no lifecycle or event poller.
+            pub fn remove(&mut self, key: &ConnectionKey) -> Result<(), ConnectionAccessError> {
+                self.remove_now(key)
+            }
+        }
+    };
+}
+
+impl_remove_bounded_rest_connection!(BinanceSpotRestConnection, BinanceRestConfig);
+impl_remove_bounded_rest_connection!(BinanceUsdMRestConnection, BinanceRestConfig);
+impl_remove_bounded_rest_connection!(BinanceCoinMRestConnection, BinanceRestConfig);
+impl_remove_bounded_rest_connection!(BinanceOptionsRestConnection, BinanceRestConfig);
+impl_remove_bounded_rest_connection!(BinanceStocksRestConnection, BinanceRestConfig);
+impl_remove_bounded_rest_connection!(HyperliquidInfoRestConnection, HyperliquidRestConfig);
+impl_remove_bounded_rest_connection!(
+    OkxPublicRestConnection,
+    kairos_integration::participants::okx::OkxRestConfig
+);
+
 pub struct ConnectionCollections<'a> {
     pub binance_capital_rest:
         TypedConnectionCollection<'a, BinanceCapitalRestConnection, BinanceCapitalRestConfig>,

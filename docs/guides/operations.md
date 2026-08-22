@@ -199,6 +199,9 @@ launch 配置。`--config` 仅用于显式指定其他配置文件。
 uv run kairospy launch status btc-sma --workspace my-project
 uv run kairospy launch logs btc-sma --lines 100 --workspace my-project
 uv run kairospy launch attach btc-sma --workspace my-project --lines 100
+uv run kairospy launch instance component market snapshot quote btc-sma --workspace my-project \
+  --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot
+uv run kairospy launch instance component execution status btc-sma --workspace my-project
 ```
 
 已知 `strategy_decision_id` 时，可以查看从策略决策、Execution Intent/Plan/Order/Fill 到通知
@@ -326,19 +329,18 @@ uv run kairospy system doctor --workspace my-project
 uv run kairospy system logs --component market --lines 100 --workspace my-project
 uv run kairospy system logs --component market --follow --workspace my-project
 uv run kairospy system up --component market --workspace my-project
-uv run kairospy market status --workspace my-project --format json
-uv run kairospy market snapshot --workspace my-project --format json
-uv run kairospy market snapshot quote --symbol BTCUSDT --exchange binance --market-type spot
-uv run kairospy market snapshot orderbook --symbol BTCUSDT --exchange binance --market-type spot --depth 5
-uv run kairospy market snapshot bar --symbol BTCUSDT --exchange binance --market-type spot --timeframe 1m
-uv run kairospy market snapshot greeks --symbol BTC-260814-70000-C --exchange binance --market-type options
-uv run kairospy market subscribe --workspace my-project \
+uv run kairospy system component market status --workspace my-project --format json
+uv run kairospy system component market sources --workspace my-project --format json
+uv run kairospy system component market snapshot quote --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot
+uv run kairospy system component market snapshot bar --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot --timeframe 1m
+uv run kairospy system component market snapshot greeks --symbol BTC-260814-70000-C --source-id binance-options --exchange binance --market-type options
+uv run kairospy system component market subscribe --workspace my-project \
   --subscription-id btc-quotes --subject BTCUSDT \
   --exchange binance --market-type spot --selector quote
-uv run kairospy market subscribe --workspace my-project \
+uv run kairospy system component market subscribe --workspace my-project \
   --subscription-id btc-option-greeks --subject BTC-260814-70000-C \
   --exchange binance --market-type options --asset-type crypto --selector greeks
-uv run kairospy market unsubscribe --workspace my-project \
+uv run kairospy system component market unsubscribe --workspace my-project \
   --subscription-id btc-quotes
 uv run kairospy account trade-lock list --workspace my-project
 uv run kairospy account trade-lock acquire --account-id main --workspace my-project
@@ -349,8 +351,8 @@ uv run kairospy account trade-lock release --account-id main --broker binance --
 `system doctor` 会检查残留 socket、health 文件和 advisory lock；如果组件显示为
 `stale`，表示运行时文件还在但对应进程已经退出，可以先确认日志后执行：
 
-`kairospy market subscribe/unsubscribe` 通过 Market 的 Unix 控制 socket 管理运行中
-订阅；订阅关系仍然属于当前 Market runtime，不会写入全局 manifest。
+`kairospy system component market subscribe/unsubscribe` 通过 Market owner contract
+client 管理运行中订阅；订阅关系仍然属于当前 Market runtime，不会写入全局 manifest。
 
 ```bash
 uv run kairospy system repair --workspace my-project
@@ -376,14 +378,15 @@ uv run kairospy launch instance timeline export \
 
 Reference 验证 CLI
 
-Reference CLI 是一次性控制/读取客户端，所有结构化结果写入 stdout。查询和刷新连接
-Workspace 中正在运行的 Reference server；snapshot/catalog 命令通过 contract-owned client 只读查询 Reference SQLite
-projection：
+Reference 顶层 CLI 查询目录事实，所有结构化结果写入 stdout。`markets`、`assets`、
+`entities`、`instruments`、`listings`、`events` 和 `catalog` 通过 contract-owned
+read-only client 查询 Reference SQLite projection。运行时 health、provider 验收和刷新
+属于 workspace component 连接模式：
 
 ```bash
-uv run kairospy reference health --workspace my-project --format json
-uv run kairospy reference validate --workspace my-project --format json
-uv run kairospy reference refresh --workspace my-project --format json
+uv run kairospy system component reference health --workspace my-project --format json
+uv run kairospy system component reference validate --workspace my-project --format json
+uv run kairospy system component reference refresh --workspace my-project --format json
 uv run kairospy reference events --sequence-from 1 --limit 100 --workspace my-project --format json
 uv run kairospy reference markets --exchange binance --active-only --workspace my-project
 uv run kairospy reference markets --symbol BTCUSDT --workspace my-project --format json
@@ -429,9 +432,10 @@ access 的可空和 require 版本；`require_*` 在缺失或结果不唯一时�
 查询边界、ownership 和一致性约束见
 [`Reference module README`](../../crates/modules/reference/README.md#query-boundary)。
 
-需要同时验收 Massive 时使用 `reference validate --require-massive`；缺失或不健康的
-Massive source 会让命令返回非零。实时 Aeron 推送可在另一个终端用
-`kairospy reference stream [--aeron-dir <dir>]` 观察，再触发 `reference refresh`。
+需要同时验收 Massive 时使用
+`system component reference validate --require-massive`；缺失或不健康的 Massive source
+会让命令返回非零。实时事件观察应从 scoped component 入口进入，再触发
+`system component reference refresh`。
 
 原生 binary 也可以直接调用：`kairos-reference-cli --workspace <workspace> query`。
 长驻 server 则由 `kairos-reference-server` 运行，两者共享同一个 Reference application
@@ -540,8 +544,8 @@ uv run kairospy account query positions main --segment coin_m_futures --symbol B
 
 ```bash
 uv run kairospy system account current main
-uv run kairospy system account balances main
-uv run kairospy system account positions main
+uv run kairospy system component account balances --account-id main
+uv run kairospy system component account positions --account-id main
 ```
 
 这三条命令依赖运行中的 System，用于观察运行时状态，不用于验证交易所 API 账号连接。

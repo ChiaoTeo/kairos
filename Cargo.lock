@@ -3027,6 +3027,7 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
+ "flatbuffers",
  "kairos-account-contract",
  "kairos-capital-contract",
  "kairos-conflux",
@@ -3034,6 +3035,7 @@ dependencies = [
  "kairos-protocol",
  "kairos-risk-contract",
  "kairos-workspace",
+ "rust_decimal",
  "serde",
  "serde_json",
  "tempfile",
@@ -3275,6 +3277,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
 ]
 

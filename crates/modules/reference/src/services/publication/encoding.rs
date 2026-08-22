@@ -1,12 +1,10 @@
-//! Typed Reference lifecycle publication preparation.
-
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_reference_contract::{EncodeContext, ReferenceEncoder};
 
 use crate::domain::{LifecycleEvent, ReferenceCatalog, ReferenceError, ReferenceResult};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StoredPublication {
+pub(crate) struct EncodedPublication {
     pub event_id: String,
     pub sequence: u64,
     pub payload: Vec<u8>,
@@ -15,7 +13,7 @@ pub(crate) struct StoredPublication {
 pub(crate) fn encode_publications(
     catalog: &ReferenceCatalog,
     events: &[LifecycleEvent],
-) -> ReferenceResult<Vec<StoredPublication>> {
+) -> ReferenceResult<Vec<EncodedPublication>> {
     events
         .iter()
         .map(|event| encode_publication(catalog, event))
@@ -25,7 +23,7 @@ pub(crate) fn encode_publications(
 fn encode_publication(
     catalog: &ReferenceCatalog,
     event: &LifecycleEvent,
-) -> ReferenceResult<StoredPublication> {
+) -> ReferenceResult<EncodedPublication> {
     let kind = event.record_kind.as_deref().ok_or_else(|| {
         ReferenceError::Publication("Reference event is missing record_kind".into())
     })?;
@@ -109,7 +107,7 @@ fn encode_publication(
         },
     }
     .map_err(|error| ReferenceError::Publication(error.to_string()))?;
-    Ok(StoredPublication {
+    Ok(EncodedPublication {
         event_id: event.event_id.clone(),
         sequence,
         payload,
@@ -120,7 +118,7 @@ fn missing(kind: &str, id: &str) -> ReferenceError {
     ReferenceError::Publication(format!("Reference record missing: {kind}:{id}"))
 }
 
-pub(crate) fn contract_entity(value: &crate::domain::Entity) -> kairos_reference_contract::Entity {
+fn contract_entity(value: &crate::domain::Entity) -> kairos_reference_contract::Entity {
     kairos_reference_contract::Entity {
         entity_id: value.entity_id.clone(),
         entity_type: value.entity_type.as_str().into(),
@@ -129,7 +127,7 @@ pub(crate) fn contract_entity(value: &crate::domain::Entity) -> kairos_reference
     }
 }
 
-pub(crate) fn contract_asset(value: &crate::domain::Asset) -> kairos_reference_contract::Asset {
+fn contract_asset(value: &crate::domain::Asset) -> kairos_reference_contract::Asset {
     kairos_reference_contract::Asset {
         asset_id: value.asset_id.clone(),
         code: value.code.clone(),
@@ -139,9 +137,7 @@ pub(crate) fn contract_asset(value: &crate::domain::Asset) -> kairos_reference_c
     }
 }
 
-pub(crate) fn contract_instrument(
-    value: &crate::domain::Instrument,
-) -> kairos_reference_contract::Instrument {
+fn contract_instrument(value: &crate::domain::Instrument) -> kairos_reference_contract::Instrument {
     kairos_reference_contract::Instrument {
         instrument_id: value.instrument_id.clone(),
         symbol: value.symbol.clone(),
@@ -159,9 +155,7 @@ pub(crate) fn contract_instrument(
     }
 }
 
-pub(crate) fn contract_listing(
-    value: &crate::domain::Listing,
-) -> kairos_reference_contract::Listing {
+fn contract_listing(value: &crate::domain::Listing) -> kairos_reference_contract::Listing {
     kairos_reference_contract::Listing {
         listing_id: value.listing_id.clone(),
         instrument_id: value.instrument_id.clone(),
@@ -173,7 +167,7 @@ pub(crate) fn contract_listing(
     }
 }
 
-pub(crate) fn contract_market(value: &crate::domain::Market) -> kairos_reference_contract::Market {
+fn contract_market(value: &crate::domain::Market) -> kairos_reference_contract::Market {
     kairos_reference_contract::Market {
         market_id: value.market_id.clone(),
         instrument_id: value.instrument_id.clone(),

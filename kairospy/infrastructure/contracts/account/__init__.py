@@ -11,6 +11,7 @@ from .control import AccountContractClient
 from .events import decode_event
 from .view import (
     AccountCurrentProjection,
+    AccountObservedOrdersProjection,
     AccountViewFrame,
     AccountViewKey,
     AccountViewKind,
@@ -22,6 +23,7 @@ from .view import (
 __all__ = [
     "AccountContractClient",
     "AccountCurrentProjection",
+    "AccountObservedOrdersProjection",
     "AccountViewFrame",
     "AccountViewKey",
     "AccountViewKind",

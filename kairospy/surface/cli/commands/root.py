@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
+from dataclasses import asdict
 from pathlib import Path
 import time
-from typing import cast
+from typing import Any, cast
 
 import typer
 
+from kairospy.application.launch.application import (
+    LaunchControlApplication,
+    LaunchRegistryApplication,
+)
 from kairospy.application.system import (
+    AccountSystemClient,
+    CapitalSystemClient,
     ComponentControlApplication,
     ComponentProcessApplication,
+    MarketSystemClient,
     NativeCliApplication,
+    RiskSystemClient,
     SystemRuntimeSupervisor,
 )
 from kairospy.application.system.process_logging import (
@@ -18,16 +29,8 @@ from kairospy.application.system.process_logging import (
     filter_log_lines,
     parse_since,
 )
-from decimal import Decimal
-from decimal import InvalidOperation
 from kairospy.application.config import ConfigApplication
-from kairospy.application.account import (
-    AccountAdminApplication,
-    AccountCliApplication,
-    CredentialApplication,
-    TradeLeaseApplication,
-)
-from kairospy.application.market import MarketCliApplication, MarketDataApplication
+from kairospy.infrastructure.transport.market import MarketProjection
 from kairospy.application.notification.composition import (
     test_notification_destination,
     validate_workspace_notifications,
@@ -40,131 +43,209 @@ def _emit(value: object, output: OutputFormat) -> None:
     typer.echo(render(value, output))
 
 
-def _decimal_option(value: str | None, name: str) -> Decimal | None:
-    if value is None:
-        return None
-    try:
-        parsed = Decimal(value)
-    except InvalidOperation as error:
-        raise typer.BadParameter(f"{name} must be a decimal") from error
-    if not parsed.is_finite():
-        raise typer.BadParameter(f"{name} must be finite")
-    return parsed
+def _is_active_launch_status(status: Mapping[str, Any]) -> bool:
+    return status.get("status") not in {
+        "not_running",
+        "stopped",
+        "failed",
+        "completed",
+    }
 
 
-def _required_decimal(value: str, name: str) -> Decimal:
-    parsed = _decimal_option(value, name)
-    if parsed is None:
-        raise typer.BadParameter(f"{name} is required")
-    return parsed
-
-
-def _execution_submit_args(
-    account: dict[str, object],
-    *,
-    order_id: str,
-    account_id: str,
-    instrument_id: str,
-    quantity: Decimal,
-    side: str,
-    order_type: str,
-    limit_price: Decimal | None,
-    intent_id: str | None = None,
-    market_id: str | None = None,
-) -> list[str]:
-    provider = str(account.get("broker") or account.get("exchange") or "simulated")
-    provider = "okx" if provider == "okex" else provider
-    segment = str(account.get("product_family") or account.get("segment") or "spot")
-    arguments = [
-        "submit",
-        "--order-id",
-        order_id,
-        "--account-id",
-        account_id,
-        "--segment-key",
-        segment,
-        "--instrument-id",
-        instrument_id,
-        "--quantity",
-        format(quantity, "f"),
-        "--side",
-        side,
-        "--order-type",
-        order_type,
-        "--provider",
-        provider,
-        "--product",
-        segment,
-    ]
-    credential = account.get("credential")
-    if credential:
-        arguments.extend(("--credential-id", str(credential)))
-    environment = str(account.get("environment") or "paper").lower()
-    if environment == "live":
-        arguments.append("--confirm-live")
-    if limit_price is not None:
-        arguments.extend(("--limit-price", format(limit_price, "f")))
-    if intent_id:
-        arguments.extend(("--intent-id", intent_id))
-    if market_id:
-        arguments.extend(("--market-id", market_id))
-    return arguments
-
-
-def _order_query_action(action: str):
-    def command(
-        order_id: str | None = typer.Option(None, "--order-id", "--id"),
-        account_id: str | None = typer.Option(None, "--account-id"),
-        workspace: Path = typer.Option(None, "--workspace"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        owner = WorkspaceApplication().open(workspace)
-        arguments = ["status", "--order-id", order_id] if order_id else ["orders"]
-        if account_id and not order_id:
-            arguments.extend(("--account-id", account_id))
-        value = NativeCliApplication(owner).run("execution", arguments)
-        _emit(value, output)
-
-    command.__name__ = f"order_query_{action}"
-    return command
-
-
-def _status_command(component: str):
-    """Retained only for the private command registry in this module.
-
-    The public account/market surfaces are registered as canonical passthrough
-    commands from ``app.py``. Order status remains a cross-module input adapter.
-    """
-
-    def status(
-        workspace: Path = typer.Option(None, "--workspace"),
-        account_id: str | None = typer.Option(None, "--account-id"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        if component != "order":
-            raise typer.BadParameter(
-                "account and market commands are canonical passthroughs"
+def _component_dependents(owner: Any, component: str) -> list[dict[str, Any]]:
+    registry = LaunchRegistryApplication(owner)
+    control = LaunchControlApplication(owner)
+    workspace_socket = str(owner.paths.process_socket(component))
+    dependents: list[dict[str, Any]] = []
+    for entry in registry.instances():
+        launch_id = str(entry.get("launch_id") or "")
+        mode = str(entry.get("mode") or "paper")
+        instance_id = str(entry.get("instance_id") or "")
+        if not launch_id or not instance_id:
+            continue
+        instance_workspace = owner.instance(mode, launch_id, instance_id)
+        try:
+            manifest = json.loads(
+                instance_workspace.component_manifest().read_text(encoding="utf-8")
             )
-        owner = WorkspaceApplication().open(workspace)
-        arguments = ["snapshot"]
-        if account_id:
-            arguments = ["--account-id", account_id, "snapshot"]
-        _emit(NativeCliApplication(owner).run("execution", arguments), output)
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            continue
+        components = manifest.get("components", {})
+        if not isinstance(components, Mapping):
+            continue
+        connection = components.get(component)
+        if not isinstance(connection, Mapping):
+            continue
+        if str(connection.get("socket") or "") != workspace_socket:
+            continue
+        status = control.status(control.target(launch_id, instance_id, mode=mode))
+        if _is_active_launch_status(status):
+            dependents.append(
+                {
+                    "launch_id": launch_id,
+                    "mode": mode,
+                    "instance_id": instance_id,
+                    "status": status.get("status", "unknown"),
+                    "component": component,
+                    "socket": workspace_socket,
+                }
+            )
+    return dependents
 
-    status.__name__ = f"{component}_status"
-    return status
+
+def _ensure_no_active_component_dependents(
+    owner: Any, component: str, action: str
+) -> None:
+    dependents = _component_dependents(owner, component)
+    if not dependents:
+        return
+    lines = [
+        f"{action} refused: {component} is used by running launches.",
+        *(
+            f"- {item['launch_id']} / {item['mode']} / {item['instance_id']} "
+            f"({item['status']})"
+            for item in dependents
+        ),
+        f"Stop dependent launches first, then rerun `kairos system {action} "
+        f"--component {component}`.",
+    ]
+    raise typer.BadParameter("\n".join(lines))
 
 
-def _socket_action(component: str, action: str):
-    """Fail clearly if an unregistered process command is reached."""
-
-    def command() -> None:
+def _workspace_market_client(owner: Any) -> MarketSystemClient:
+    socket = owner.paths.process_socket("market")
+    if not socket.exists():
         raise typer.BadParameter(
-            f"{component} process control belongs to kairos system; use system commands"
+            "target server not found: workspace Market is not running; "
+            "use `kairos system up --component market` first"
         )
+    return cast(MarketSystemClient, ComponentProcessApplication(owner).client("market", socket))
 
-    command.__name__ = f"{component}_{action}"
-    return command
+
+def _run_workspace_market_connected_command(
+    owner: Any, command: str, arguments: list[str]
+) -> dict[str, Any]:
+    return NativeCliApplication(owner).run("market", ["connected", command, *arguments])
+
+
+def _workspace_account_client(owner: Any) -> AccountSystemClient:
+    socket = owner.paths.process_socket("account")
+    if not socket.exists():
+        raise typer.BadParameter(
+            "target server not found: workspace Account is not running"
+        )
+    return AccountSystemClient(
+        socket,
+        view_root=owner.paths.snapshots,
+        timeout=30.0,
+    )
+
+
+def _run_workspace_account_connected_command(
+    owner: Any, account_id: str, command: str, arguments: list[str]
+) -> dict[str, Any]:
+    return NativeCliApplication(owner).run(
+        "account",
+        ["--account-id", account_id, "connected", command, *arguments],
+    )
+
+
+def _workspace_reference_client(owner: Any):
+    socket = owner.paths.process_socket("reference")
+    if not socket.exists():
+        raise typer.BadParameter(
+            "target server not found: workspace Reference is not running; "
+            "use `kairos system up --component reference` first"
+        )
+    from kairospy.infrastructure.contracts.reference import ReferenceClient
+
+    return ReferenceClient(
+        socket_path=socket,
+        database_path=owner.paths.reference_database(),
+        timeout=30.0,
+    )
+
+
+def _workspace_risk_client(owner: Any) -> RiskSystemClient:
+    socket = owner.paths.process_socket("risk")
+    if not socket.exists():
+        raise typer.BadParameter(
+            "target server not found: workspace Risk is not running; "
+            "use `kairos system up --component risk` first"
+        )
+    return RiskSystemClient(
+        socket,
+        view_root=owner.paths.snapshots,
+        timeout=30.0,
+    )
+
+
+def _run_workspace_risk_connected_command(
+    owner: Any, command: str, arguments: list[str]
+) -> dict[str, Any]:
+    return NativeCliApplication(owner).run("risk", ["connected", command, *arguments])
+
+
+def _workspace_capital_client(owner: Any) -> CapitalSystemClient:
+    socket = owner.paths.process_socket("capital")
+    if not socket.exists():
+        raise typer.BadParameter(
+            "target server not found: workspace Capital is not running; "
+            "use `kairos system up --component capital` first"
+        )
+    return CapitalSystemClient(
+        socket,
+        view_root=owner.paths.snapshots,
+        timeout=30.0,
+    )
+
+
+def _run_workspace_capital_connected_command(
+    owner: Any, command: str, arguments: list[str]
+) -> dict[str, Any]:
+    return NativeCliApplication(owner).run("capital", ["connected", command, *arguments])
+
+
+def _workspace_market_projection(owner: Any) -> MarketProjection:
+    view_root = owner.paths.child("snapshots", "market", "market-shared")
+    return MarketProjection(view_root)
+
+
+def _market_snapshot_value(
+    owner: Any,
+    *,
+    kind: str,
+    source_id: str,
+    market_id: str | None,
+    symbol: str | None,
+    exchange: str,
+    market_type: str,
+    timeframe: str | None,
+) -> dict[str, object]:
+    if market_id is None:
+        if not symbol:
+            raise typer.BadParameter("snapshot requires --market-id or --symbol")
+        market_id = (
+            f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
+        )
+    projection = _workspace_market_projection(owner)
+    if kind == "quote":
+        value = projection.read_quote(market_id, source_id)
+    elif kind == "bar":
+        if not timeframe:
+            raise typer.BadParameter("snapshot bar requires --timeframe")
+        value = projection.read_bar(market_id, source_id, timeframe)
+    elif kind == "greeks":
+        value = projection.read_greeks(market_id, source_id)
+    else:
+        raise typer.BadParameter("snapshot kind must be quote, bar, or greeks")
+    return {
+        "market_id": market_id,
+        "source_id": source_id,
+        "kind": kind,
+        "status": "ready" if value is not None else "not_found",
+        "value": None if value is None else asdict(value),
+    }
 
 
 def _add_group(
@@ -178,10 +259,31 @@ def _add_group(
 
 project_app = typer.Typer(no_args_is_help=True, help="Project commands")
 config_app = typer.Typer(no_args_is_help=True, help="Configuration commands")
-account_app = typer.Typer(no_args_is_help=True, help="Private account command registry")
-market_app = typer.Typer(no_args_is_help=True, help="Private market command registry")
-order_app = typer.Typer(no_args_is_help=True, help="Order commands")
 system_app = typer.Typer(no_args_is_help=True, help="System runtime commands")
+system_component_app = typer.Typer(
+    no_args_is_help=True, help="Connect to workspace-scoped runtime components"
+)
+system_component_account_app = typer.Typer(
+    no_args_is_help=True, help="Connect to the workspace-scoped Account component"
+)
+system_component_market_app = typer.Typer(
+    no_args_is_help=True, help="Connect to the workspace-scoped Market component"
+)
+system_component_reference_app = typer.Typer(
+    no_args_is_help=True, help="Connect to the workspace-scoped Reference component"
+)
+system_component_risk_app = typer.Typer(
+    no_args_is_help=True, help="Connect to the workspace-scoped Risk component"
+)
+system_component_capital_app = typer.Typer(
+    no_args_is_help=True, help="Connect to the workspace-scoped Capital component"
+)
+system_app.add_typer(system_component_app, name="component")
+system_component_app.add_typer(system_component_account_app, name="account")
+system_component_app.add_typer(system_component_market_app, name="market")
+system_component_app.add_typer(system_component_reference_app, name="reference")
+system_component_app.add_typer(system_component_risk_app, name="risk")
+system_component_app.add_typer(system_component_capital_app, name="capital")
 notifications_app = typer.Typer(no_args_is_help=True, help="Notification commands")
 
 
@@ -316,642 +418,6 @@ def project_doctor(
     _emit(ConfigApplication(WorkspaceApplication().open(workspace)).doctor(), output)
 
 
-# Keep the established top-level names as thin input adapters. Module use
-# cases are invoked through their application-owned CLI/application paths.
-for _app, _name in ((order_app, "order"),):
-    _app.command("status")(_status_command(_name))
-
-
-def _market_remote_action(action: str):
-    def command(
-        workspace: Path = typer.Option(None, "--workspace"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        owner = WorkspaceApplication().open(workspace)
-        client = ComponentProcessApplication(owner).ensure_running("market")
-        operation = {
-            "status": client.status,
-            "refresh": client.refresh,
-            "recover": client.recover,
-            "stop": client.stop,
-        }.get(action)
-        if operation is None:
-            raise typer.BadParameter(f"unsupported remote market action: {action}")
-        value = operation()
-        _emit(value, output)
-
-    command.__name__ = f"market_{action}"
-    return command
-
-
-for _command_name in ("status", "refresh", "recover", "stop"):
-    market_app.command(_command_name)(_market_remote_action(_command_name))
-
-
-@market_app.command("validate")
-def market_validate(
-    market_id: str | None = typer.Option(None, "--market-id"),
-    instrument_id: str | None = typer.Option(None, "--instrument-id"),
-    exchange_id: str = typer.Option("binance", "--exchange-id"),
-    market_type: str = typer.Option("spot", "--market-type"),
-    source_symbol: str = typer.Option("BTCUSDT", "--source-symbol"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    value = MarketCliApplication().run(
-        cast(
-            list[str],
-            [
-                "validate",
-                "--market-id",
-                market_id,
-                "--instrument-id",
-                instrument_id,
-                "--exchange-id",
-                exchange_id,
-                "--market-type",
-                market_type,
-                "--source-symbol",
-                source_symbol,
-            ],
-        )
-    )
-    _emit(value, output)
-
-
-@market_app.command("once")
-def market_once(
-    provider: str | None = typer.Option(None, "--provider"),
-    endpoint: str | None = typer.Option(None, "--endpoint"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    arguments = ["once"]
-    if provider is not None:
-        arguments.extend(("--provider", provider))
-    if endpoint is not None:
-        arguments.extend(("--endpoint", endpoint))
-    value = MarketCliApplication().run(arguments)
-    _emit(value, output)
-
-
-@market_app.command("replay")
-def market_replay(
-    file: Path = typer.Option(..., "--file"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    value = MarketCliApplication().run(["replay", "--file", str(file)])
-    _emit(value, output)
-
-
-def _account_admin(action: str):
-    def command(
-        account_id: str | None = typer.Option(None, "--account-id", "--id"),
-        workspace: Path = typer.Option(None, "--workspace"),
-        broker: str | None = typer.Option(None, "--broker"),
-        segment: str | None = typer.Option(None, "--segment"),
-        environment: str | None = typer.Option(None, "--environment"),
-        credential: str | None = typer.Option(None, "--credential"),
-        credential_role: str = typer.Option("readonly", "--credential-role"),
-        alias: str | None = typer.Option(None, "--alias"),
-        product_family: str | None = typer.Option(None, "--product-family"),
-        account_model: str | None = typer.Option(None, "--account-model"),
-        balance: list[str] = typer.Option(
-            [], "--balance", help="Initial simulated asset quantity, e.g. USDT=10000."
-        ),
-        fee_rate: str | None = typer.Option(None, "--fee-rate"),
-        force: bool = typer.Option(False, "--force"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        app = AccountAdminApplication(WorkspaceApplication().open(workspace))
-        if action in {"list", "browse"}:
-            value = app.list()
-        elif action == "schemas":
-            value = app.schemas()
-        elif action == "schema":
-            value = app.schema(broker or "binance")
-        elif action in {"show", "inspect"}:
-            if not account_id:
-                raise typer.BadParameter("--account-id is required")
-            value = app.show(account_id)
-        elif action == "connect":
-            if not account_id:
-                raise typer.BadParameter("--account-id is required")
-            value = app.connect(
-                account_id,
-                broker=broker or "binance",
-                segment=segment or "spot",
-                environment=environment or "live",
-                credential=credential,
-                credential_role=credential_role,
-                alias=alias,
-                product_family=product_family,
-                account_model=account_model,
-                force=force,
-            )
-        elif action == "simulate":
-            if not account_id:
-                raise typer.BadParameter("--account-id is required")
-            value = app.simulate(
-                account_id,
-                broker=broker or "paper",
-                segment=segment or "spot",
-                environment=environment or "paper",
-                account_model=account_model,
-                initial_balances=tuple(balance),
-                fee_rate=fee_rate or "0",
-                force=force,
-            )
-        elif action == "modify":
-            if not account_id:
-                raise typer.BadParameter("--account-id is required")
-            changes = {
-                key: value
-                for key, value in {
-                    "broker": broker,
-                    "segment": segment,
-                    "environment": environment,
-                    "credential": credential,
-                    "credential_role": credential_role,
-                    "alias": alias,
-                    "product_family": product_family,
-                    "account_model": account_model,
-                    "fee_rate": fee_rate,
-                    "initial_balances": balance or None,
-                }.items()
-                if value is not None
-            }
-            value = app.modify(account_id, **changes)
-        elif action in {"delete", "remove"}:
-            if not account_id:
-                raise typer.BadParameter("--account-id is required")
-            value = app.delete(account_id, force=force)
-        elif action == "doctor":
-            value = {"configured_accounts": len(app.list()), "path": str(app.path)}
-        else:
-            raise typer.BadParameter(f"unsupported account admin operation: {action}")
-        _emit(value, output)
-
-    command.__name__ = f"account_{action}"
-    return command
-
-
-for _command_name in (
-    "list",
-    "browse",
-    "schemas",
-    "schema",
-    "inspect",
-    "connect",
-    "simulate",
-    "modify",
-    "delete",
-    "remove",
-    "show",
-    "doctor",
-):
-    account_app.command(_command_name)(_account_admin(_command_name))
-account_credential_app = _add_group(
-    account_app, "credential", ("add", "list", "create", "show", "delete", "remove")
-)
-account_query_app = _add_group(
-    account_app, "query", ("balance", "positions", "open-orders", "snapshot")
-)
-account_trade_lock_app = _add_group(
-    account_app, "trade-lock", ("status", "list", "show", "release")
-)
-account_model_app = _add_group(account_app, "model", ("switch",))
-
-
-def _account_query(view: str):
-    def command(
-        workspace: Path = typer.Option(None, "--workspace"),
-        account_id: str | None = typer.Option(None, "--account-id"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        owner = WorkspaceApplication().open(workspace)
-        arguments = {
-            "balance": "balances",
-            "positions": "positions",
-            "open-orders": "open-orders",
-            "snapshot": "snapshot",
-        }[view]
-        if account_id:
-            arguments = ["--account-id", account_id, arguments]
-        else:
-            arguments = [arguments]
-        _emit(AccountCliApplication(owner).run(arguments), output)
-
-    command.__name__ = f"account_query_{view.replace('-', '_')}"
-    return command
-
-
-for _view in ("balance", "positions", "open-orders", "snapshot"):
-    account_query_app.command(_view)(_account_query(_view))
-
-
-def _trade_lock(action: str):
-    def command(
-        workspace: Path = typer.Option(None, "--workspace"),
-        owner: str = typer.Option("cli", "--owner"),
-        broker: str = typer.Option("binance", "--broker"),
-        account_id: str | None = typer.Option(None, "--account-id"),
-        environment: str = typer.Option("live", "--environment"),
-        launch_id: str = typer.Option("cli", "--launch-id"),
-        launch_instance_id: str = typer.Option("cli", "--launch-instance-id"),
-        mode: str = typer.Option("live", "--mode"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        app = TradeLeaseApplication(WorkspaceApplication().open(workspace))
-        account = account_id or owner
-        key = app.account_key(broker, account)
-        if action in {"status", "list"}:
-            value = app.list()
-        elif action == "show":
-            value = app.for_account(account_id or owner)
-        elif action == "acquire":
-            value = app.acquire(
-                broker=broker,
-                account_id=account,
-                environment=environment,
-                launch_id=launch_id,
-                launch_instance_id=launch_instance_id,
-                mode=mode,
-            )
-        elif action == "heartbeat":
-            value = app.heartbeat(key, launch_instance_id=launch_instance_id)
-        else:
-            value = app.release(key, force=True)
-        _emit(value, output)
-
-    command.__name__ = f"trade_lock_{action.replace('-', '_')}"
-    return command
-
-
-for _action in ("status", "list", "show", "acquire", "heartbeat", "release"):
-    account_trade_lock_app.command(_action)(_trade_lock(_action))
-
-
-def _credential(action: str):
-    def command(
-        credential_id: str | None = typer.Option(None, "--credential-id", "--id"),
-        provider: str = typer.Option("binance", "--provider"),
-        kind: str | None = typer.Option(None, "--kind"),
-        api_key: str | None = typer.Option(
-            None,
-            "--api-key",
-            help="Secret value is never persisted; use an external secret store.",
-        ),
-        api_secret: str | None = typer.Option(
-            None,
-            "--api-secret",
-            help="Secret value is never persisted; use an external secret store.",
-        ),
-        passphrase: str | None = typer.Option(
-            None,
-            "--passphrase",
-            help="Secret value is never persisted; use an external secret store.",
-        ),
-        field: list[str] = typer.Option([], "--field"),
-        workspace: Path = typer.Option(None, "--workspace"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        app = CredentialApplication(WorkspaceApplication().open(workspace))
-        if action == "list":
-            value = app.list()
-        elif action in {"add", "create"}:
-            if not credential_id:
-                raise typer.BadParameter("--credential-id is required")
-            secret_fields = tuple(field) + tuple(
-                name
-                for name, secret in (
-                    ("api_key", api_key),
-                    ("api_secret", api_secret),
-                    ("passphrase", passphrase),
-                )
-                if secret is not None
-            )
-            value = app.add(
-                credential_id, provider=provider, kind=kind, fields=secret_fields
-            )
-        elif action == "show":
-            if not credential_id:
-                raise typer.BadParameter("--credential-id is required")
-            value = app.show(credential_id)
-        else:
-            if not credential_id:
-                raise typer.BadParameter("--credential-id is required")
-            value = app.delete(credential_id)
-        _emit(value, output)
-
-    command.__name__ = f"credential_{action}"
-    return command
-
-
-for _action in ("add", "list", "create", "show", "delete", "remove"):
-    account_credential_app.command(_action)(_credential(_action))
-
-
-@account_model_app.command("switch")
-def account_model_switch(
-    account_id: str = typer.Option(..., "--account-id"),
-    model: str = typer.Option(..., "--model"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    value = AccountAdminApplication(
-        WorkspaceApplication().open(workspace)
-    ).switch_model(account_id, model)
-    _emit(value, output)
-
-
-market_source_app = _add_group(
-    market_app, "source", ("capabilities", "check", "doctor")
-)
-market_data_app = _add_group(market_app, "data", ("download", "prefetch"))
-market_dataset_app = _add_group(
-    market_app, "dataset", ("list", "inspect", "alias", "prune", "read")
-)
-market_stream_app = _add_group(market_app, "stream", ("replay", "watch", "persist"))
-
-
-def _market_source(action: str):
-    def command(
-        workspace: Path = typer.Option(None, "--workspace"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        owner = WorkspaceApplication().open(workspace)
-        value = ComponentProcessApplication(owner).ensure_running("market").status()
-        value["operation"] = action
-        _emit(value, output)
-
-    command.__name__ = f"market_source_{action}"
-    return command
-
-
-for _action in ("capabilities", "check", "doctor"):
-    market_source_app.command(_action)(_market_source(_action))
-
-
-def _market_data_ingest(action: str):
-    def command(
-        name: str = typer.Option(..., "--name"),
-        source_file: Path = typer.Option(..., "--source-file"),
-        storage_format: str | None = typer.Option(
-            None,
-            "--storage-format",
-            help="jsonl or parquet (defaults to source suffix)",
-        ),
-        workspace: Path = typer.Option(None, "--workspace"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        owner = WorkspaceApplication().open(workspace)
-        value = MarketDataApplication(owner.paths.state / "market").ingest(
-            name, source_file, format=storage_format
-        )
-        value["operation"] = action
-        _emit(value, output)
-
-    command.__name__ = f"market_data_{action}"
-    return command
-
-
-market_data_app.command("prefetch")(_market_data_ingest("prefetch"))
-
-
-@market_data_app.command("download")
-def market_data_download(
-    provider: str = typer.Option("binance", "--provider"),
-    symbol: str = typer.Option(..., "--symbol"),
-    start: int = typer.Option(..., "--start", help="Unix milliseconds, inclusive"),
-    end: int = typer.Option(..., "--end", help="Unix milliseconds, exclusive"),
-    name: str = typer.Option("market-history", "--name"),
-    file: Path = typer.Option(..., "--file"),
-    market_id: str | None = typer.Option(None, "--market-id"),
-    instrument_id: str | None = typer.Option(None, "--instrument-id"),
-    interval: str = typer.Option("1m", "--interval"),
-    api_key: str | None = typer.Option(None, "--api-key"),
-    endpoint: str | None = typer.Option(None, "--endpoint"),
-    storage_format: str = typer.Option("parquet", "--storage-format"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    """Download normalized bars and register a workspace dataset."""
-    owner = WorkspaceApplication().open(workspace)
-    arguments = [
-        "download",
-        "--provider",
-        provider,
-        "--symbol",
-        symbol,
-        "--start",
-        str(start),
-        "--end",
-        str(end),
-        "--dataset-id",
-        name,
-        "--file",
-        str(file),
-        "--interval",
-        interval,
-    ]
-    if market_id:
-        arguments.extend(("--market-id", market_id))
-    if instrument_id:
-        arguments.extend(("--instrument-id", instrument_id))
-    if api_key:
-        arguments.extend(("--api-key", api_key))
-    if endpoint:
-        arguments.extend(("--endpoint", endpoint))
-    result = MarketCliApplication(owner).run(arguments)
-    if storage_format not in {"parquet", "jsonl"}:
-        raise typer.BadParameter("--storage-format must be parquet or jsonl")
-    entry = MarketDataApplication(owner.paths.state / "market").ingest(
-        name,
-        Path(result["path"]),
-        format=storage_format,
-        metadata={
-            "provider": result.get("source", provider),
-            "symbol": result.get("symbol", symbol),
-            "market_id": result.get("market_id", market_id),
-            "instrument_id": result.get("instrument_id", instrument_id),
-            "observation_type": result.get("data_kind", "bar"),
-            "timeframe": result.get("interval", interval),
-            "start_time_unix_millis": result.get("start_time_unix_millis", start),
-            "end_time_unix_millis": result.get("end_time_unix_millis", end),
-        },
-    )
-    result = {**result, "dataset": entry, "storage_format": storage_format}
-    _emit(result, output)
-
-
-def _market_dataset(action: str):
-    def command(
-        name: str | None = typer.Option(None, "--name"),
-        alias: str | None = typer.Option(None, "--alias"),
-        workspace: Path = typer.Option(None, "--workspace"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        app = MarketDataApplication(
-            WorkspaceApplication().open(workspace).paths.state / "market"
-        )
-        if action == "list":
-            value = app.list()
-        elif action == "inspect":
-            if not name:
-                raise typer.BadParameter("--name is required")
-            value = app.inspect(name)
-        elif action == "alias":
-            if not name or not alias:
-                raise typer.BadParameter("--name and --alias are required")
-            value = app.alias(name, alias)
-        elif action == "prune":
-            if not name:
-                raise typer.BadParameter("--name is required")
-            value = app.prune(name)
-        else:
-            if not name:
-                raise typer.BadParameter("--name is required")
-            value = {"name": name, "content": app.read(name)}
-        _emit(value, output)
-
-    command.__name__ = f"market_dataset_{action}"
-    return command
-
-
-for _action in ("list", "inspect", "alias", "prune", "read"):
-    market_dataset_app.command(_action)(_market_dataset(_action))
-
-
-def _market_stream(action: str):
-    def command(
-        name: str = typer.Option(..., "--name"),
-        workspace: Path = typer.Option(None, "--workspace"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        app = MarketDataApplication(
-            WorkspaceApplication().open(workspace).paths.state / "market"
-        )
-        _emit({"operation": action, "name": name, "content": app.read(name)}, output)
-
-    command.__name__ = f"market_stream_{action}"
-    return command
-
-
-for _action in ("replay", "watch", "persist"):
-    market_stream_app.command(_action)(_market_stream(_action))
-for _command_name in (
-    "events",
-    "trace",
-    "open",
-    "list",
-    "browse",
-    "history",
-    "closed",
-    "show",
-    "inspect",
-):
-    order_app.command(_command_name)(_order_query_action(_command_name))
-for _command_name in ("place", "cancel", "replace"):
-    if _command_name == "place":
-
-        @order_app.command("place")
-        def order_place(
-            order_id: str = typer.Option(..., "--order-id", "--id"),
-            account_id: str = typer.Option(..., "--account-id"),
-            instrument_id: str = typer.Option(..., "--instrument-id"),
-            quantity: str = typer.Option(..., "--quantity"),
-            side: str = typer.Option("buy", "--side"),
-            order_type: str = typer.Option("market", "--order-type"),
-            limit_price: str | None = typer.Option(None, "--limit-price"),
-            intent_id: str | None = typer.Option(None, "--intent-id"),
-            market_id: str | None = typer.Option(None, "--market-id"),
-            workspace: Path = typer.Option(None, "--workspace"),
-            output: OutputFormat = typer.Option(
-                OutputFormat.TEXT, "--output", "--format"
-            ),
-        ) -> None:
-            owner = WorkspaceApplication().open(workspace)
-            account = AccountAdminApplication(owner).show(account_id)
-            value = NativeCliApplication(owner).run(
-                "execution",
-                _execution_submit_args(
-                    account,
-                    order_id=order_id,
-                    account_id=account_id,
-                    instrument_id=instrument_id,
-                    quantity=_required_decimal(quantity, "quantity"),
-                    side=side,
-                    order_type=order_type,
-                    limit_price=_decimal_option(limit_price, "limit-price"),
-                    intent_id=intent_id,
-                    market_id=market_id,
-                ),
-            )
-            _emit(value, output)
-    elif _command_name == "cancel":
-
-        @order_app.command("cancel")
-        def order_cancel(
-            order_id: str = typer.Option(..., "--order-id", "--id"),
-            workspace: Path = typer.Option(None, "--workspace"),
-            reason: str = typer.Option("cli cancel", "--reason"),
-            output: OutputFormat = typer.Option(
-                OutputFormat.TEXT, "--output", "--format"
-            ),
-        ) -> None:
-            owner = WorkspaceApplication().open(workspace)
-            value = NativeCliApplication(owner).run(
-                "execution", ["cancel", "--order-id", order_id, "--reason", reason]
-            )
-            _emit(value, output)
-    else:
-
-        @order_app.command("replace")
-        def order_replace(
-            old_order_id: str = typer.Option(..., "--old-order-id"),
-            order_id: str = typer.Option(..., "--order-id", "--id"),
-            account_id: str = typer.Option(..., "--account-id"),
-            instrument_id: str = typer.Option(..., "--instrument-id"),
-            quantity: str = typer.Option(..., "--quantity"),
-            side: str = typer.Option("buy", "--side"),
-            order_type: str = typer.Option("market", "--order-type"),
-            limit_price: str | None = typer.Option(None, "--limit-price"),
-            workspace: Path = typer.Option(None, "--workspace"),
-            output: OutputFormat = typer.Option(
-                OutputFormat.TEXT, "--output", "--format"
-            ),
-        ) -> None:
-            owner = WorkspaceApplication().open(workspace)
-            account = AccountAdminApplication(owner).show(account_id)
-            replacement = _execution_submit_args(
-                account,
-                order_id=order_id,
-                account_id=account_id,
-                instrument_id=instrument_id,
-                quantity=_required_decimal(quantity, "quantity"),
-                side=side,
-                order_type=order_type,
-                limit_price=_decimal_option(limit_price, "limit-price"),
-            )
-            value = NativeCliApplication(owner).run(
-                "execution", ["replace", "--order-id", old_order_id, *replacement[1:]]
-            )
-            _emit(value, output)
-
-
-system_account_app = _add_group(
-    system_app,
-    "account",
-    (
-        "trade-status",
-        "current",
-        "balances",
-        "positions",
-        "trade-acquire",
-        "trade-release",
-    ),
-)
-
-
 @system_app.command("inspect")
 def system_inspect(
     component: str = typer.Option(..., "--component"),
@@ -985,53 +451,6 @@ def system_command(
     owner = WorkspaceApplication().open(workspace)
     control = ComponentProcessApplication(owner).ensure_running("control")
     _emit(control.command(component, {"type": command}), output)
-
-
-def _system_account(action: str):
-    def command(
-        workspace: Path = typer.Option(None, "--workspace"),
-        account_id: str | None = typer.Option(None, "--account-id"),
-        owner_id: str = typer.Option("cli", "--owner"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        workspace_owner = WorkspaceApplication().open(workspace)
-        if action in {"trade-acquire", "trade-release", "trade-status"}:
-            lock = TradeLeaseApplication(workspace_owner)
-            account = account_id or owner_id
-            key = f"binance.{account}"
-            if action == "trade-status":
-                value = lock.list()
-            elif action == "trade-acquire":
-                value = lock.acquire(
-                    broker="binance",
-                    account_id=account,
-                    environment="live",
-                    launch_id="system",
-                    launch_instance_id=owner_id,
-                    mode="live",
-                )
-            else:
-                value = lock.release(key, force=True)
-        else:
-            arguments = ["snapshot"]
-            if account_id:
-                arguments = ["--account-id", account_id, "snapshot"]
-            value = AccountCliApplication(workspace_owner).run(arguments)
-        _emit(value, output)
-
-    command.__name__ = f"system_account_{action.replace('-', '_')}"
-    return command
-
-
-for _action in (
-    "trade-status",
-    "current",
-    "balances",
-    "positions",
-    "trade-acquire",
-    "trade-release",
-):
-    system_account_app.command(_action)(_system_account(_action))
 
 
 @system_app.command("up")
@@ -1072,6 +491,7 @@ def system_down(
             "use launch stop for instance-owned components"
         )
     owner = WorkspaceApplication().open(workspace)
+    _ensure_no_active_component_dependents(owner, component, "down")
     process = ComponentProcessApplication(owner)
     supervisor = SystemRuntimeSupervisor(process)
     supervisor.unregister(component)
@@ -1091,6 +511,7 @@ def system_restart(
             "use launch start/stop for instance-owned components"
         )
     owner = WorkspaceApplication().open(workspace)
+    _ensure_no_active_component_dependents(owner, component, "restart")
     process = ComponentProcessApplication(owner)
     text_output = effective_output(output) is OutputFormat.TEXT
     control = process.restart(
@@ -1228,6 +649,959 @@ def system_status(
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
     _emit(ComponentProcessApplication(owner).status(component), output)
+
+
+@system_component_app.command("status")
+def system_component_status(
+    component: str = typer.Argument(..., help="Workspace-scoped component name."),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect one workspace-scoped component server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ComponentProcessApplication(owner).status(component), output)
+
+
+@system_component_account_app.command("status")
+def system_component_account_status(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the workspace-scoped Account component server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ComponentProcessApplication(owner).status("account"), output)
+
+
+def _account_current_snapshot(owner: Any, account_id: str) -> dict[str, object]:
+    from kairospy.domain_types import AccountId
+
+    snapshot = _workspace_account_client(owner).current_projection(
+        AccountId(account_id)
+    ).snapshot(AccountId(account_id))
+    return asdict(snapshot)
+
+
+@system_component_account_app.command("snapshot")
+def system_component_account_snapshot(
+    account_id: str = typer.Option(..., "--account-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read one Account current projection from the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_account_current_snapshot(owner, account_id), output)
+
+
+@system_component_account_app.command("balances")
+def system_component_account_balances(
+    account_id: str = typer.Option(..., "--account-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Account balances from the workspace component projection."""
+    owner = WorkspaceApplication().open(workspace)
+    snapshot = _account_current_snapshot(owner, account_id)
+    balances = [
+        balance
+        for segment in snapshot["segments"]
+        for balance in segment.get("balances", [])
+    ]
+    _emit({"account_id": account_id, "balances": balances}, output)
+
+
+@system_component_account_app.command("positions")
+def system_component_account_positions(
+    account_id: str = typer.Option(..., "--account-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Account positions from the workspace component projection."""
+    owner = WorkspaceApplication().open(workspace)
+    snapshot = _account_current_snapshot(owner, account_id)
+    positions = [
+        position
+        for segment in snapshot["segments"]
+        for position in segment.get("positions", [])
+    ]
+    _emit({"account_id": account_id, "positions": positions}, output)
+
+
+@system_component_account_app.command("open-orders")
+def system_component_account_open_orders(
+    account_id: str = typer.Option(..., "--account-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Account observed-order facts from the workspace component projection."""
+    owner = WorkspaceApplication().open(workspace)
+    from kairospy.domain_types import AccountId
+
+    account_key = AccountId(account_id)
+    value = _workspace_account_client(owner).observed_orders_projection(
+        account_key
+    ).open_orders(account_key)
+    _emit(value, output)
+
+
+@system_component_account_app.command("refresh")
+def system_component_account_refresh(
+    account_id: str = typer.Option(..., "--account-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Request an Account refresh on the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_account_connected_command(owner, account_id, "refresh", []),
+        output,
+    )
+
+
+@system_component_account_app.command("reconcile")
+def system_component_account_reconcile(
+    account_id: str = typer.Option(..., "--account-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Request Account reconciliation on the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_account_connected_command(owner, account_id, "reconcile", []),
+        output,
+    )
+
+
+@system_component_market_app.command("status")
+def system_component_market_status(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the workspace-scoped Market component server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ComponentProcessApplication(owner).status("market"), output)
+
+
+@system_component_market_app.command("sources")
+def system_component_market_sources(
+    workspace: Path = typer.Option(None, "--workspace"),
+    market_id: str | None = typer.Option(None, "--market-id"),
+    instrument_id: str | None = typer.Option(None, "--instrument-id"),
+    observation_kind: str | None = typer.Option(None, "--observation-kind"),
+    provider_id: str | None = typer.Option(None, "--provider-id"),
+    configured_only: bool = typer.Option(False, "--configured-only"),
+    ready_only: bool = typer.Option(False, "--ready-only"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read data source readiness from the workspace-scoped Market server."""
+    owner = WorkspaceApplication().open(workspace)
+    query = {
+        key: value
+        for key, value in {
+            "market_id": market_id,
+            "instrument_id": instrument_id,
+            "observation_kind": observation_kind,
+            "provider_id": provider_id,
+            "configured_only": "true" if configured_only else None,
+            "ready_only": "true" if ready_only else None,
+        }.items()
+        if value is not None
+    }
+    _emit(_workspace_market_client(owner).data_sources(query), output)
+
+
+@system_component_market_app.command("snapshot")
+def system_component_market_snapshot(
+    kind: str = typer.Argument(..., help="Snapshot kind: quote, bar, or greeks."),
+    market_id: str | None = typer.Option(None, "--market-id"),
+    source_id: str = typer.Option(..., "--source-id"),
+    symbol: str | None = typer.Option(None, "--symbol"),
+    exchange: str = typer.Option("binance", "--exchange"),
+    market_type: str = typer.Option("spot", "--market-type"),
+    timeframe: str | None = typer.Option(None, "--timeframe"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read one current Market projection view from the workspace scope."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _market_snapshot_value(
+            owner,
+            kind=kind,
+            source_id=source_id,
+            market_id=market_id,
+            symbol=symbol,
+            exchange=exchange,
+            market_type=market_type,
+            timeframe=timeframe,
+        ),
+        output,
+    )
+
+
+@system_component_market_app.command("freshness")
+def system_component_market_freshness(
+    market_id: str = typer.Option(..., "--market-id"),
+    source_id: str = typer.Option(..., "--source-id"),
+    qualifier: str | None = typer.Option(None, "--qualifier"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read one current Market freshness projection from the workspace scope."""
+    owner = WorkspaceApplication().open(workspace)
+    arguments = [
+        "--market-id",
+        market_id,
+        "--source-id",
+        source_id,
+    ]
+    if qualifier is not None:
+        arguments.extend(["--qualifier", qualifier])
+    _emit(_run_workspace_market_connected_command(owner, "freshness", arguments), output)
+
+
+@system_component_market_app.command("subscribe")
+def system_component_market_subscribe(
+    subscription_id: str = typer.Option(..., "--subscription-id"),
+    subject: str = typer.Option(..., "--subject"),
+    source_id: str | None = typer.Option(None, "--source-id"),
+    strategy_id: str = typer.Option("cli", "--strategy-id"),
+    instance_id: str = typer.Option("cli", "--instance-id"),
+    selector: list[str] = typer.Option([], "--selector"),
+    exchange: str | None = typer.Option(None, "--exchange"),
+    market_type: str | None = typer.Option(None, "--market-type"),
+    asset_type: str | None = typer.Option(None, "--asset-type"),
+    identity: str | None = typer.Option(None, "--identity"),
+    param: list[str] = typer.Option([], "--param"),
+    chain: bool = typer.Option(False, "--chain"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Create a runtime subscription on the workspace-scoped Market server."""
+    for item in param:
+        if "=" not in item:
+            raise typer.BadParameter("--param must use KEY=VALUE")
+    if chain:
+        param = [*param, 'mode="chain"']
+    if identity is not None:
+        param = [*param, f"identity={json.dumps(identity)}"]
+    arguments = [
+        "--subscription-id",
+        subscription_id,
+        "--subject",
+        subject,
+        "--strategy-id",
+        strategy_id,
+        "--instance-id",
+        instance_id,
+    ]
+    if source_id is not None:
+        arguments.extend(["--source-id", source_id])
+    if exchange is not None:
+        arguments.extend(["--exchange", exchange])
+    if market_type is not None:
+        arguments.extend(["--market-type", market_type])
+    if asset_type is not None:
+        arguments.extend(["--asset-type", asset_type])
+    if chain:
+        arguments.append("--dynamic")
+    for value in selector:
+        arguments.extend(["--selector", value])
+    for value in param:
+        arguments.extend(["--param", value])
+    owner = WorkspaceApplication().open(workspace)
+    value = _run_workspace_market_connected_command(owner, "subscribe", arguments)
+    _emit(value, output)
+
+
+@system_component_market_app.command("unsubscribe")
+def system_component_market_unsubscribe(
+    subscription_id: str = typer.Option(..., "--subscription-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Remove a runtime subscription from the workspace-scoped Market server."""
+    owner = WorkspaceApplication().open(workspace)
+    value = _run_workspace_market_connected_command(
+        owner, "unsubscribe", ["--subscription-id", subscription_id]
+    )
+    _emit(value, output)
+
+
+@system_component_market_app.command("recover")
+def system_component_market_recover(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Request bounded source recovery on the workspace-scoped Market server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_run_workspace_market_connected_command(owner, "recover", []), output)
+
+
+@system_component_market_app.command("pause-replay")
+def system_component_market_pause_replay(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Pause Market replay input on the workspace-scoped Market server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_run_workspace_market_connected_command(owner, "pause-replay", []), output)
+
+
+@system_component_market_app.command("resume-replay")
+def system_component_market_resume_replay(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Resume Market replay input on the workspace-scoped Market server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_run_workspace_market_connected_command(owner, "resume-replay", []), output)
+
+
+@system_component_market_app.command("dependents")
+def system_component_market_dependents(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """List running launch instances that use the workspace-scoped Market."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        {
+            "component": "market",
+            "scope": "workspace",
+            "dependents": _component_dependents(owner, "market"),
+        },
+        output,
+    )
+
+
+@system_component_reference_app.command("status")
+def system_component_reference_status(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the workspace-scoped Reference component server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ComponentProcessApplication(owner).status("reference"), output)
+
+
+@system_component_risk_app.command("status")
+def system_component_risk_status(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the workspace-scoped Risk component server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ComponentProcessApplication(owner).status("risk"), output)
+
+
+@system_component_risk_app.command("health")
+def system_component_risk_health(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Risk runtime health through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_risk_client(owner).health(), output)
+
+
+@system_component_risk_app.command("latest")
+def system_component_risk_latest(
+    actor_id: str = typer.Option("risk", "--actor-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Risk latest-view business facts from the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_risk_client(owner).latest_metadata(actor_id=actor_id), output)
+
+
+@system_component_risk_app.command("limits")
+def system_component_risk_limits(
+    actor_id: str = typer.Option("risk", "--actor-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Risk limit usage resources from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_risk_client(owner).latest_limits(actor_id=actor_id), output)
+
+
+@system_component_risk_app.command("reservations")
+def system_component_risk_reservations(
+    actor_id: str = typer.Option("risk", "--actor-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Risk active reservations from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_risk_client(owner).latest_reservations(actor_id=actor_id), output)
+
+
+@system_component_risk_app.command("circuits")
+def system_component_risk_circuits(
+    actor_id: str = typer.Option("risk", "--actor-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Risk circuit states from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_risk_client(owner).latest_circuits(actor_id=actor_id), output)
+
+
+@system_component_risk_app.command("pre-trade-check")
+def system_component_risk_pre_trade_check(
+    file: Path = typer.Option(..., "--file"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Evaluate a Risk runtime authorization request through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_risk_connected_command(
+            owner, "pre-trade-check", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@system_component_risk_app.command("authorize-reserve")
+def system_component_risk_authorize_reserve(
+    file: Path = typer.Option(..., "--file"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Authorize and reserve Risk runtime budget through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_risk_connected_command(
+            owner, "authorize-reserve", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@system_component_risk_app.command("release")
+def system_component_risk_release(
+    reservation_id: str = typer.Option(..., "--reservation-id"),
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Release a Risk runtime reservation through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_risk_connected_command(
+            owner,
+            "release",
+            [
+                "--reservation-id",
+                reservation_id,
+                "--at-unix-nanos",
+                str(at_unix_nanos),
+            ],
+        ),
+        output,
+    )
+
+
+@system_component_risk_app.command("consume")
+def system_component_risk_consume(
+    reservation_id: str = typer.Option(..., "--reservation-id"),
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Consume a Risk runtime reservation through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_risk_connected_command(
+            owner,
+            "consume",
+            [
+                "--reservation-id",
+                reservation_id,
+                "--at-unix-nanos",
+                str(at_unix_nanos),
+            ],
+        ),
+        output,
+    )
+
+
+@system_component_risk_app.command("resize")
+def system_component_risk_resize(
+    reservation_id: str = typer.Option(..., "--reservation-id"),
+    amount: str = typer.Option(..., "--amount"),
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Resize a Risk runtime reservation through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_risk_connected_command(
+            owner,
+            "resize",
+            [
+                "--reservation-id",
+                reservation_id,
+                "--amount",
+                amount,
+                "--at-unix-nanos",
+                str(at_unix_nanos),
+            ],
+        ),
+        output,
+    )
+
+
+def _risk_circuit_arguments(
+    *,
+    account_id: str | None,
+    strategy_id: str | None,
+    exchange_id: str | None,
+) -> list[str]:
+    arguments: list[str] = []
+    if account_id is not None:
+        arguments.extend(["--account-id", account_id])
+    if strategy_id is not None:
+        arguments.extend(["--strategy-id", strategy_id])
+    if exchange_id is not None:
+        arguments.extend(["--exchange-id", exchange_id])
+    return arguments
+
+
+@system_component_risk_app.command("open-circuit")
+def system_component_risk_open_circuit(
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    reason: str = typer.Option(..., "--reason"),
+    reset_at_unix_nanos: int | None = typer.Option(None, "--reset-at-unix-nanos"),
+    account_id: str | None = typer.Option(None, "--account-id"),
+    strategy_id: str | None = typer.Option(None, "--strategy-id"),
+    exchange_id: str | None = typer.Option(None, "--exchange-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Open a Risk runtime circuit through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    arguments = [
+        "--at-unix-nanos",
+        str(at_unix_nanos),
+        "--reason",
+        reason,
+        *_risk_circuit_arguments(
+            account_id=account_id,
+            strategy_id=strategy_id,
+            exchange_id=exchange_id,
+        ),
+    ]
+    if reset_at_unix_nanos is not None:
+        arguments.extend(["--reset-at-unix-nanos", str(reset_at_unix_nanos)])
+    _emit(
+        _run_workspace_risk_connected_command(owner, "open-circuit", arguments),
+        output,
+    )
+
+
+@system_component_risk_app.command("close-circuit")
+def system_component_risk_close_circuit(
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    account_id: str | None = typer.Option(None, "--account-id"),
+    strategy_id: str | None = typer.Option(None, "--strategy-id"),
+    exchange_id: str | None = typer.Option(None, "--exchange-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Close a Risk runtime circuit through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_risk_connected_command(
+            owner,
+            "close-circuit",
+            [
+                "--at-unix-nanos",
+                str(at_unix_nanos),
+                *_risk_circuit_arguments(
+                    account_id=account_id,
+                    strategy_id=strategy_id,
+                    exchange_id=exchange_id,
+                ),
+            ],
+        ),
+        output,
+    )
+
+
+@system_component_risk_app.command("publish-policy")
+def system_component_risk_publish_policy(
+    file: Path = typer.Option(..., "--file"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Publish a Risk runtime policy through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_risk_connected_command(
+            owner, "publish-policy", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@system_component_risk_app.command("advance-time")
+def system_component_risk_advance_time(
+    event_time_unix_nanos: int = typer.Option(..., "--event-time-unix-nanos"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Advance Risk runtime time through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_risk_connected_command(
+            owner,
+            "advance-time",
+            ["--event-time-unix-nanos", str(event_time_unix_nanos)],
+        ),
+        output,
+    )
+
+
+@system_component_capital_app.command("status")
+def system_component_capital_status(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the workspace-scoped Capital component server."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ComponentProcessApplication(owner).status("capital"), output)
+
+
+@system_component_capital_app.command("health")
+def system_component_capital_health(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Capital runtime health through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_capital_client(owner).health(), output)
+
+
+@system_component_capital_app.command("current")
+def system_component_capital_current(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital current-view business facts from the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _workspace_capital_client(owner).current_metadata(capital_group_id),
+        output,
+    )
+
+
+@system_component_capital_app.command("availabilities")
+def system_component_capital_availabilities(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital availability facts from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _workspace_capital_client(owner).current_availabilities(capital_group_id),
+        output,
+    )
+
+
+@system_component_capital_app.command("objectives")
+def system_component_capital_objectives(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital funding objectives from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _workspace_capital_client(owner).current_objectives(capital_group_id),
+        output,
+    )
+
+
+@system_component_capital_app.command("demands")
+def system_component_capital_demands(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital demands from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _workspace_capital_client(owner).current_demands(capital_group_id),
+        output,
+    )
+
+
+@system_component_capital_app.command("plans")
+def system_component_capital_plans(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital plans from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _workspace_capital_client(owner).current_plans(capital_group_id),
+        output,
+    )
+
+
+@system_component_capital_app.command("routes")
+def system_component_capital_routes(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital routes from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _workspace_capital_client(owner).current_routes(capital_group_id),
+        output,
+    )
+
+
+@system_component_capital_app.command("reservations")
+def system_component_capital_reservations(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital reservations from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _workspace_capital_client(owner).current_reservations(capital_group_id),
+        output,
+    )
+
+
+@system_component_capital_app.command("operations")
+def system_component_capital_operations(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital operations from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _workspace_capital_client(owner).current_operations(capital_group_id),
+        output,
+    )
+
+
+@system_component_capital_app.command("alerts")
+def system_component_capital_alerts(
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Capital recovery alerts from the workspace component mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_capital_client(owner).current_alerts(capital_group_id), output)
+
+
+@system_component_capital_app.command("publish-funding-objective")
+def system_component_capital_publish_funding_objective(
+    file: Path = typer.Option(..., "--file"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Publish a Capital runtime funding objective through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_capital_connected_command(
+            owner, "publish-funding-objective", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@system_component_capital_app.command("observe-demand")
+def system_component_capital_observe_demand(
+    file: Path = typer.Option(..., "--file"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Observe a Capital runtime demand through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_capital_connected_command(
+            owner, "observe-demand", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@system_component_capital_app.command("cancel-funding-objective")
+def system_component_capital_cancel_funding_objective(
+    file: Path = typer.Option(..., "--file"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Cancel a Capital runtime funding objective through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_capital_connected_command(
+            owner, "cancel-funding-objective", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@system_component_capital_app.command("reconcile-plan")
+def system_component_capital_reconcile_plan(
+    file: Path = typer.Option(..., "--file"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Reconcile a Capital runtime plan through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_workspace_capital_connected_command(
+            owner, "reconcile-plan", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@system_component_reference_app.command("health")
+def system_component_reference_health(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Reference runtime health through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).health(), output)
+
+
+@system_component_reference_app.command("providers")
+def system_component_reference_providers(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Reference provider readiness through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).providers(), output)
+
+
+@system_component_reference_app.command("catalog")
+def system_component_reference_catalog(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read the Reference catalog projection from the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).catalog(), output)
+
+
+@system_component_reference_app.command("validate")
+def system_component_reference_validate(
+    require_massive: bool = typer.Option(False, "--require-massive"),
+    allow_pending_publication: bool = typer.Option(
+        False, "--allow-pending-publication"
+    ),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Run Reference runtime acceptance checks against the selected component."""
+    from kairospy.application.reference import (
+        MASSIVE_REFERENCE_SOURCES,
+        validate_reference_runtime,
+    )
+
+    owner = WorkspaceApplication().open(workspace)
+    client = _workspace_reference_client(owner)
+    provider_rows = client.providers().get("providers", [])
+    configured_sources = tuple(
+        str(value["source_id"])
+        for value in provider_rows
+        if isinstance(value, dict) and value.get("source_id")
+    )
+    required_sources = configured_sources + (
+        MASSIVE_REFERENCE_SOURCES if require_massive else ()
+    )
+    result = validate_reference_runtime(
+        client,
+        required_sources=required_sources,
+        require_published=not allow_pending_publication,
+    )
+    _emit(result, output)
+    if result["status"] != "passed":
+        raise typer.Exit(code=1)
+
+
+@system_component_reference_app.command("refresh")
+def system_component_reference_refresh(
+    source: str | None = typer.Option(None, "--source"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Request a Reference provider refresh on the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).refresh(source=source), output)
+
+
+@system_component_reference_app.command("pause")
+def system_component_reference_pause(
+    source: str = typer.Option(..., "--source"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Pause one Reference provider on the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).set_source_paused(source, True), output)
+
+
+@system_component_reference_app.command("resume")
+def system_component_reference_resume(
+    source: str = typer.Option(..., "--source"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Resume one Reference provider on the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).set_source_paused(source, False), output)
+
+
+@system_component_reference_app.command("options-coverage")
+def system_component_reference_options_coverage(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Reference option coverage through the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).option_coverage(), output)
+
+
+@system_component_reference_app.command("options-add")
+def system_component_reference_options_add(
+    underlying: str = typer.Option(..., "--underlying"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Add one underlying to Reference option coverage on the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).set_option_underlying(underlying, True), output)
+
+
+@system_component_reference_app.command("options-remove")
+def system_component_reference_options_remove(
+    underlying: str = typer.Option(..., "--underlying"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Remove one underlying from Reference option coverage on the workspace component."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(_workspace_reference_client(owner).set_option_underlying(underlying, False), output)
 
 
 @system_app.command("list")

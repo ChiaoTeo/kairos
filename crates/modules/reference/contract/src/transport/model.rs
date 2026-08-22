@@ -97,6 +97,12 @@ pub struct LifecycleEntry {
     pub event_time_unix_nanos: UnixNanos,
     pub record_kind: Option<String>,
     pub record_id: Option<String>,
+    #[serde(default)]
+    pub operation: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<String>,
+    #[serde(default)]
+    pub conflict_policy: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

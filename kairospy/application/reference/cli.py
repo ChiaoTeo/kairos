@@ -29,6 +29,22 @@ class ReferenceCliApplication:
             *arguments,
         ]
 
+    def invoke(self, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        """Forward canonical Rust argv without selecting a new output format."""
+        reject_owned_options(arguments, {"--workspace"})
+        return subprocess.run(
+            [
+                self.binary or resolve_binary("kairos-reference-cli"),
+                "--workspace",
+                str(self.workspace.paths.root),
+                *arguments,
+            ],
+            cwd=str(self.workspace.paths.root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def run(self, arguments: Sequence[str]) -> dict[str, Any]:
         result = subprocess.run(
             self.command(arguments),

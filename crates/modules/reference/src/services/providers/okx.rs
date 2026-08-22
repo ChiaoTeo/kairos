@@ -93,7 +93,7 @@ fn append_okx_instrument(
     let source_symbol = value.source_symbol.as_str().to_ascii_uppercase();
     let (base, quote) = okx_base_quote(&value)?;
     let (
-        _provider_family,
+        provider_product,
         canonical_family,
         instrument_id,
         canonical_symbol,
@@ -105,21 +105,21 @@ fn append_okx_instrument(
             ));
         },
         ExternalInstrumentKind::Spot => (
-            "spot",
+            OkxProduct::Spot,
             "spot",
             format!("instrument:spot:{base}"),
             base.clone(),
             None,
         ),
         ExternalInstrumentKind::Margin => (
-            "margin",
+            OkxProduct::Margin,
             "spot",
             format!("instrument:spot:{base}"),
             base.clone(),
             None,
         ),
         ExternalInstrumentKind::Perpetual => (
-            "swap",
+            OkxProduct::Swap,
             "perpetual",
             format!("instrument:perpetual:{base}-{quote}"),
             format!("{base}-{quote}"),
@@ -128,7 +128,7 @@ fn append_okx_instrument(
         ExternalInstrumentKind::Future => {
             let expiry = canonical_expiry(value.expiry_unix_nanos)?;
             (
-                "futures",
+                OkxProduct::Futures,
                 "future",
                 format!("instrument:future:{base}-{quote}:{expiry}"),
                 format!("{base}-{quote}-{expiry}"),
@@ -165,7 +165,7 @@ fn append_okx_instrument(
                 });
             }
             (
-                "options",
+                OkxProduct::Option,
                 "option",
                 format!(
                     "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
@@ -223,6 +223,7 @@ fn append_okx_instrument(
         ..Instrument::default()
     });
     catalog.listings.push(Listing {
+        source_id: Some(provider_product.source_id().into()),
         listing_id: listing_id.clone(),
         instrument_id: instrument_id.clone(),
         exchange_id: exchange_id.clone(),

@@ -1,5 +1,7 @@
+mod cli;
 pub(crate) mod conflux;
 pub(crate) use conflux::ReferenceProjectionConfig;
+mod connected;
 mod model;
 mod observations;
 mod queries;
@@ -7,6 +9,11 @@ pub mod replay;
 mod sources;
 mod subscriptions;
 mod universe;
+pub use cli::{
+    CliMarketApplication, CliMarketDiagnosticProvider, CliMarketHistoricalDataKind,
+    CliMarketHistoricalDownloadRequest, CliMarketHistoricalMarketType, CliMarketHistoricalProvider,
+};
+pub use connected::ConnectedMarketApplication;
 pub use model::{
     ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketError,
     MarketObservationResult, MarketQueryResult, OrderBookSide,

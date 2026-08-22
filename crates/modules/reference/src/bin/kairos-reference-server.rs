@@ -9,6 +9,7 @@ use kairos_reference::application::ReferenceRpcService;
 use kairos_reference::composition::{
     ReferenceCompositionConfig, build_application, ensure_database_parent,
 };
+use kairos_reference::logging::events as log_events;
 use kairos_reference_contract::ReferenceControlRpcServer;
 use kairos_workspace::workspace::Workspace;
 use tokio::task::LocalSet;
@@ -18,7 +19,17 @@ async fn main() {
     kairos_workspace::logging::init("reference");
     let result = LocalSet::new().run_until(run()).await;
     if let Err(error) = &result {
-        tracing::error!(event = "process_failed", component = "reference", error = %error, "reference server failed");
+        let log_event = log_events::STARTUP_STAGE_FAILED;
+        tracing::error!(
+            event = log_event.event,
+            component = log_event.component,
+            area = log_event.area,
+            action = log_event.action,
+            outcome = log_event.outcome,
+            legacy_event = "process_failed",
+            error = %error,
+            "reference server failed"
+        );
     }
     kairos_workspace::logging::shutdown();
     if let Err(error) = result {
@@ -50,10 +61,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         reference_changes_stream: args.reference_changes_stream,
     };
 
-    if args.run_mode == "once" {
-        return run_once(&config).await;
-    }
-
     let health_file = args
         .health_file
         .or_else(|| workspace.health_file("reference").ok());
@@ -65,39 +72,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     application.configure_conflux(args.refresh_interval, true);
 
     run_process(application, system, args.rpc_address, socket, health_file).await
-}
-
-async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let mut composition = build_application(config, true).await?;
-    composition.activate_sources().await?;
-    let (mut application, mut system) = composition.into_conflux();
-    let refresh = application
-        .refresh_with_connections(&mut system.connections())
-        .await?;
-    loop {
-        let publications = application.pending_publications(1_024).await?;
-        if publications.is_empty() {
-            break;
-        }
-        for publication in &publications {
-            system
-                .outputs()
-                .aeron
-                .publish("reference-changes", publication.payload())?;
-        }
-        let event_ids = publications
-            .iter()
-            .map(|event| event.event_id().to_owned())
-            .collect::<Vec<_>>();
-        application.acknowledge_publications(&event_ids).await?;
-    }
-    println!(
-        "reference generation={} event_sequence={} events={}",
-        application.generation().get(),
-        application.event_sequence().get(),
-        refresh.events.len()
-    );
-    Ok(())
 }
 
 async fn run_process(
@@ -127,9 +101,14 @@ async fn run_process(
         )
         .run()
         .await?;
+    let log_event = log_events::APP_PHASE_COMPLETED;
     tracing::info!(
-        event = "process_stopped",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "process_stopped",
         phase = ?outcome.phase,
         discarded_inputs = outcome.discarded_inputs,
         "Reference Conflux process stopped"
@@ -196,8 +175,6 @@ struct Args {
     aeron_dir: Option<String>,
     #[arg(long = "refresh-interval", default_value = "5m", value_parser = parse_refresh_interval)]
     refresh_interval: Duration,
-    #[arg(long = "run-mode", default_value = "daemon", value_parser = ["daemon", "once"])]
-    run_mode: String,
 }
 
 #[cfg(test)]
@@ -249,6 +226,16 @@ mod tests {
                 "/tmp/workspace",
                 "--channel",
                 "aeron:ipc",
+            ])
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "kairos-reference",
+                "--workspace",
+                "/tmp/workspace",
+                "--run-mode",
+                "once",
             ])
             .is_err()
         );

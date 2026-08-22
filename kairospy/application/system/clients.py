@@ -8,7 +8,7 @@ views.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -119,6 +119,9 @@ class AccountSystemClient(SystemRpcClient):
     def reconcile(self) -> dict[str, Any]:
         return dict(self.control.reconcile({}))
 
+    def refresh(self) -> dict[str, Any]:
+        return dict(self.control.refresh({}))
+
     def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
         return dict(self.control.advance_time(event_time_unix_nanos))
 
@@ -137,6 +140,16 @@ class AccountSystemClient(SystemRpcClient):
         from kairospy.infrastructure.contracts.account import AccountCurrentProjection
 
         return AccountCurrentProjection(self.require_view_root(), account_id=account_id)
+
+    def observed_orders_projection(self, account_id: AccountId):
+        from kairospy.infrastructure.contracts.account import (
+            AccountObservedOrdersProjection,
+        )
+
+        return AccountObservedOrdersProjection(
+            self.require_view_root(),
+            account_id=account_id,
+        )
 
 
 class ExecutionSystemClient(SystemRpcClient):
@@ -223,6 +236,9 @@ class MarketSystemClient(SystemRpcClient):
     def recover(self) -> dict[str, Any]:
         return dict(self.control.recover({}))
 
+    def pause_replay(self) -> dict[str, Any]:
+        return dict(self.control.pause_replay())
+
     def resume_replay(self) -> dict[str, Any]:
         return dict(self.control.resume_replay())
 
@@ -255,8 +271,48 @@ class RiskSystemClient(SystemRpcClient):
     def consume(self, request: Mapping[str, Any]) -> dict[str, Any]:
         return dict(self.control.consume_reservation(request))
 
+    def resize(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(self.control.resize_reservation(request))
+
+    def open_circuit(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(self.control.open_circuit(request))
+
+    def close_circuit(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(self.control.close_circuit(request))
+
     def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
         return dict(self.control.advance_time(event_time_unix_nanos))
+
+    def health(self) -> dict[str, Any]:
+        return dict(self.control.health())
+
+    def latest_metadata(self, *, actor_id: str) -> dict[str, Any]:
+        return self.latest(actor_id=actor_id)
+
+    def latest(self, *, actor_id: str) -> dict[str, Any]:
+        projection = self.latest_projection(actor_id=actor_id)
+        return projection.latest()
+
+    def latest_limits(self, *, actor_id: str) -> dict[str, Any]:
+        projection = self.latest_projection(actor_id=actor_id)
+        return {
+            "actor_id": actor_id,
+            "limits": list(projection.limits()),
+        }
+
+    def latest_reservations(self, *, actor_id: str) -> dict[str, Any]:
+        projection = self.latest_projection(actor_id=actor_id)
+        return {
+            "actor_id": actor_id,
+            "active_reservations": list(projection.active_reservations()),
+        }
+
+    def latest_circuits(self, *, actor_id: str) -> dict[str, Any]:
+        projection = self.latest_projection(actor_id=actor_id)
+        return {
+            "actor_id": actor_id,
+            "circuits": list(projection.circuits()),
+        }
 
     def latest_projection(self, *, actor_id: str):
         from kairospy.infrastructure.contracts.risk import RiskProjection, RiskViewKey
@@ -277,8 +333,16 @@ class CapitalSystemClient(SystemRpcClient):
             CapitalContractClient(self.socket_path, timeout=self.timeout),
         )
 
+    def health(self) -> dict[str, Any]:
+        return dict(self.control.health())
+
     def publish_funding_objective(self, objective, **scope: object) -> dict[str, Any]:
         return dict(self.control.publish_funding_objective(objective, **scope))
+
+    def publish_funding_objective_request(
+        self, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return dict(self.control.publish_funding_objective_request(dict(request)))
 
     def cancel_funding_objective(
         self, objective_id: str, *, expected_version: int, **scope: object
@@ -289,8 +353,18 @@ class CapitalSystemClient(SystemRpcClient):
             )
         )
 
+    def cancel_funding_objective_request(
+        self, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return dict(self.control.cancel_funding_objective_request(dict(request)))
+
     def observe_capital_demand(self, demand, **scope: object) -> dict[str, Any]:
         return dict(self.control.observe_capital_demand(demand, **scope))
+
+    def observe_capital_demand_request(
+        self, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return dict(self.control.observe_capital_demand_request(dict(request)))
 
     def availability(self, *, capital_group_id: str, location):
         return self.control.availability(
@@ -313,10 +387,78 @@ class CapitalSystemClient(SystemRpcClient):
             )
         )
 
+    def reconcile_plan_request(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(self.control.reconcile_plan_request(dict(request)))
+
     def current_projection(self, capital_group_id: str):
         from kairospy.infrastructure.contracts.capital import CapitalProjection
 
         return CapitalProjection(self.require_view_root(), capital_group_id)
+
+    def current_metadata(self, capital_group_id: str) -> dict[str, Any]:
+        return self.current(capital_group_id)
+
+    def current(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return projection.current()
+
+    def current_availabilities(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return {
+            "capital_group_id": capital_group_id,
+            "availabilities": [
+                asdict(value) for value in projection.availabilities()
+            ],
+        }
+
+    def current_objectives(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return {
+            "capital_group_id": capital_group_id,
+            "objectives": list(projection.objectives()),
+        }
+
+    def current_demands(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return {
+            "capital_group_id": capital_group_id,
+            "demands": list(projection.demands()),
+        }
+
+    def current_plans(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return {
+            "capital_group_id": capital_group_id,
+            "plans": list(projection.plans()),
+        }
+
+    def current_routes(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return {
+            "capital_group_id": capital_group_id,
+            "routes": list(projection.routes()),
+        }
+
+    def current_reservations(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return {
+            "capital_group_id": capital_group_id,
+            "reservations": list(projection.reservations()),
+        }
+
+    def current_operations(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return {
+            "capital_group_id": capital_group_id,
+            "operations": list(projection.operations()),
+        }
+
+    def current_alerts(self, capital_group_id: str) -> dict[str, Any]:
+        projection = self.current_projection(capital_group_id)
+        return {
+            "capital_group_id": capital_group_id,
+            "alerts": [asdict(value) for value in projection.alerts()],
+        }
 
 
 class ReferenceSystemClient(SystemRpcClient):

@@ -20,6 +20,9 @@ class CapitalContractClient:
     def __init__(self, socket_path: str | Path, *, timeout: float = 5.0) -> None:
         self._client = UnixJsonRpcClient(socket_path, timeout=timeout)
 
+    def health(self) -> dict[str, object]:
+        return self._client.call("capital_health")
+
     def publish_funding_objective(
         self,
         objective: FundingObjective,
@@ -47,6 +50,11 @@ class CapitalContractClient:
             },
         )
 
+    def publish_funding_objective_request(
+        self, request: dict[str, object]
+    ) -> dict[str, object]:
+        return self._call("capital_publish_funding_objective", request)
+
     def cancel_funding_objective(
         self, objective_id: str, *, expected_version: int, **scope: object
     ) -> dict[str, object]:
@@ -59,6 +67,11 @@ class CapitalContractClient:
                 "observed_at_unix_nanos": time.time_ns(),
             },
         )
+
+    def cancel_funding_objective_request(
+        self, request: dict[str, object]
+    ) -> dict[str, object]:
+        return self._call("capital_cancel_funding_objective", request)
 
     def observe_capital_demand(
         self, demand: CapitalDemand, **scope: object
@@ -82,6 +95,11 @@ class CapitalContractClient:
                 "causal_references": list(demand.causal_references),
             },
         )
+
+    def observe_capital_demand_request(
+        self, request: dict[str, object]
+    ) -> dict[str, object]:
+        return self._call("capital_observe_capital_demand", request)
 
     def availability(
         self, *, capital_group_id: str, location: FundingLocation
@@ -132,6 +150,9 @@ class CapitalContractClient:
                 "observed_at_unix_nanos": time.time_ns(),
             },
         )
+
+    def reconcile_plan_request(self, request: dict[str, object]) -> dict[str, object]:
+        return self._call("capital_reconcile_capital_plan", request)
 
     def _call(self, method: str, body: dict[str, object]) -> dict[str, object]:
         return self._client.call(method, [body])

@@ -1,6 +1,9 @@
 //! Reference domain entities and provider snapshots.
 
+use std::collections::BTreeSet;
+
 use kairos_primitives::decimal::{Money, Price, Quantity};
+use kairos_primitives::integration::{ProviderId, ProviderProductCode};
 use kairos_primitives::reference::{
     AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId, MarketId,
     ReferenceStatus, Symbol,
@@ -11,13 +14,528 @@ use serde::{Deserialize, Serialize};
 use super::{ReferenceError, ReferenceResult};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ProviderHealth {
+pub struct ReferenceSourceDefinition {
+    pub source_id: ProviderId,
+    pub provider_id: ProviderId,
+    #[serde(default)]
+    pub provider_product: Option<ProviderProductCode>,
+    #[serde(default)]
+    pub scope: SourceScope,
+    pub desired_state: SourceDesiredState,
+    #[serde(default)]
+    pub credential_binding: Option<SourceCredentialBinding>,
+    pub sync_policy: SourceSyncPolicy,
+}
+
+impl ReferenceSourceDefinition {
+    pub fn from_source_id(source_id: impl Into<String>) -> Self {
+        let source_id = source_id.into();
+        let (provider_id, provider_product, sync_policy) = match source_id.as_str() {
+            "binance-spot" => ("binance", Some("spot"), SourceSyncPolicy::FullSnapshot),
+            "binance-usdm-futures" => ("binance", Some("usdm"), SourceSyncPolicy::FullSnapshot),
+            "binance-coinm-futures" => ("binance", Some("coinm"), SourceSyncPolicy::FullSnapshot),
+            "binance-options" => ("binance", Some("options"), SourceSyncPolicy::FullSnapshot),
+            "binance-equity" | "reference-binance-stocks" => {
+                ("binance", Some("equity"), SourceSyncPolicy::FullSnapshot)
+            },
+            "okx-spot" => ("okx", Some("spot"), SourceSyncPolicy::FullSnapshot),
+            "okx-margin" => ("okx", Some("margin"), SourceSyncPolicy::FullSnapshot),
+            "okx-swap" => ("okx", Some("swap"), SourceSyncPolicy::FullSnapshot),
+            "okx-futures" => ("okx", Some("futures"), SourceSyncPolicy::FullSnapshot),
+            "okx-options" => ("okx", Some("options"), SourceSyncPolicy::FullSnapshot),
+            "hyperliquid-spot" => ("hyperliquid", Some("spot"), SourceSyncPolicy::FullSnapshot),
+            "hyperliquid-perpetual" => (
+                "hyperliquid",
+                Some("perpetual"),
+                SourceSyncPolicy::FullSnapshot,
+            ),
+            "massive-equity" => ("massive", Some("equity"), SourceSyncPolicy::PagedSnapshot),
+            "massive-options" => ("massive", Some("options"), SourceSyncPolicy::ScopedSnapshot),
+            _ => {
+                let mut parts = source_id.splitn(2, '-');
+                let provider_id = parts.next().unwrap_or(source_id.as_str());
+                let provider_product = parts.next();
+                (
+                    provider_id,
+                    provider_product,
+                    SourceSyncPolicy::FullSnapshot,
+                )
+            },
+        };
+        let provider_id = provider_id.to_owned();
+        let provider_product = provider_product.map(str::to_owned);
+        let source_id = ProviderId::new(source_id).expect("normalized reference source identity");
+        let provider_id = ProviderId::new(provider_id).expect("normalized provider identity");
+        let provider_product = provider_product
+            .map(ProviderProductCode::new)
+            .transpose()
+            .expect("normalized provider product code");
+        Self {
+            source_id,
+            provider_id,
+            provider_product,
+            scope: SourceScope::global(),
+            desired_state: SourceDesiredState::Enabled,
+            credential_binding: None,
+            sync_policy,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SourceCredentialBinding(String);
+
+impl SourceCredentialBinding {
+    pub fn new(value: impl Into<String>) -> ReferenceResult<Self> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ReferenceError::Invalid(
+                "source credential binding cannot be empty".into(),
+            ));
+        }
+        if value.trim() != value {
+            return Err(ReferenceError::Invalid(
+                "source credential binding cannot contain leading or trailing whitespace".into(),
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceCredentialBinding {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::ops::Deref for SourceCredentialBinding {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for SourceCredentialBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceScope {
+    pub kind: SourceScopeKind,
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+impl Default for SourceScope {
+    fn default() -> Self {
+        Self::global()
+    }
+}
+
+impl SourceScope {
+    pub fn global() -> Self {
+        Self {
+            kind: SourceScopeKind::Global,
+            id: None,
+        }
+    }
+
+    pub fn provider_catalog() -> Self {
+        Self {
+            kind: SourceScopeKind::ProviderCatalog,
+            id: None,
+        }
+    }
+
+    pub fn underlying_instrument(id: impl Into<String>) -> Self {
+        Self {
+            kind: SourceScopeKind::UnderlyingInstrument,
+            id: Some(id.into()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceScopeKind {
+    #[default]
+    Global,
+    ProviderCatalog,
+    UnderlyingInstrument,
+    Coverage,
+    Custom,
+}
+
+impl SourceScopeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::ProviderCatalog => "provider_catalog",
+            Self::UnderlyingInstrument => "underlying_instrument",
+            Self::Coverage => "coverage",
+            Self::Custom => "custom",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceDesiredState {
+    #[default]
+    Enabled,
+    Disabled,
+    Paused,
+    Removed,
+}
+
+impl SourceDesiredState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+            Self::Paused => "paused",
+            Self::Removed => "removed",
+        }
+    }
+}
+
+impl From<&str> for SourceDesiredState {
+    fn from(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "enabled" => Self::Enabled,
+            "disabled" => Self::Disabled,
+            "paused" => Self::Paused,
+            "removed" => Self::Removed,
+            _ => Self::Enabled,
+        }
+    }
+}
+
+impl From<String> for SourceDesiredState {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceSyncPolicy {
+    #[default]
+    FullSnapshot,
+    PagedSnapshot,
+    ScopedSnapshot,
+    IncrementalDelta,
+    ManualCurated,
+}
+
+impl SourceSyncPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FullSnapshot => "full_snapshot",
+            Self::PagedSnapshot => "paged_snapshot",
+            Self::ScopedSnapshot => "scoped_snapshot",
+            Self::IncrementalDelta => "incremental_delta",
+            Self::ManualCurated => "manual_curated",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceWorkItem {
+    pub work_item_id: String,
     pub source_id: String,
-    pub status: String,
+    pub scope: SourceScope,
+    pub reason: SourceWorkReason,
+    pub budget: SourceTickBudget,
+}
+
+impl SourceWorkItem {
+    pub fn runtime_snapshot(&self, cursor_present: Option<bool>) -> SourceRuntimeWorkItem {
+        SourceRuntimeWorkItem {
+            work_item_id: Some(self.work_item_id.clone()),
+            scope_id: self.scope.id.clone(),
+            scope_kind: Some(self.scope.kind.as_str().to_owned()),
+            cursor_present,
+            skip_reason: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AffectedReferenceSet {
+    pub entities: BTreeSet<String>,
+    pub assets: BTreeSet<String>,
+    pub instruments: BTreeSet<String>,
+    pub listings: BTreeSet<String>,
+    pub markets: BTreeSet<String>,
+    pub requires_full_replace: bool,
+}
+
+impl AffectedReferenceSet {
+    pub fn from_events<'a>(events: impl IntoIterator<Item = &'a LifecycleEvent>) -> Self {
+        let mut affected = Self::default();
+        for event in events {
+            let Some(kind) = event.record_kind.as_deref() else {
+                affected.requires_full_replace = true;
+                continue;
+            };
+            let Some(id) = event.record_id.as_deref() else {
+                affected.requires_full_replace = true;
+                continue;
+            };
+            match kind {
+                "entity" => {
+                    affected.entities.insert(id.to_owned());
+                },
+                "asset" => {
+                    affected.assets.insert(id.to_owned());
+                },
+                "instrument" => {
+                    affected.instruments.insert(id.to_owned());
+                },
+                "listing" => {
+                    affected.listings.insert(id.to_owned());
+                },
+                "market" => {
+                    affected.markets.insert(id.to_owned());
+                },
+                _ => affected.requires_full_replace = true,
+            }
+        }
+        affected
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+            && self.assets.is_empty()
+            && self.instruments.is_empty()
+            && self.listings.is_empty()
+            && self.markets.is_empty()
+            && !self.requires_full_replace
+    }
+
+    pub fn total_count(&self) -> usize {
+        self.entities.len()
+            + self.assets.len()
+            + self.instruments.len()
+            + self.listings.len()
+            + self.markets.len()
+    }
+
+    pub const fn write_mode(&self) -> &'static str {
+        if self.requires_full_replace {
+            "full_replace"
+        } else {
+            "affected_update"
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceWorkReason {
+    #[default]
+    ScheduledTick,
+    RpcRefresh,
+    CoverageChanged,
+    Startup,
+    Retry,
+}
+
+impl SourceWorkReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ScheduledTick => "scheduled_tick",
+            Self::RpcRefresh => "rpc_refresh",
+            Self::CoverageChanged => "coverage_changed",
+            Self::Startup => "startup",
+            Self::Retry => "retry",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceTickBudget {
+    pub max_sources_per_tick: u32,
+    pub max_batches_per_source: u32,
+    pub max_records_per_batch: Option<u64>,
+    pub max_wall_clock_millis: Option<u64>,
+    pub max_publications_per_tick: Option<u32>,
+}
+
+impl Default for SourceTickBudget {
+    fn default() -> Self {
+        Self {
+            max_sources_per_tick: 1,
+            max_batches_per_source: 1,
+            max_records_per_batch: None,
+            max_wall_clock_millis: None,
+            max_publications_per_tick: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceHealth {
+    pub source_id: String,
+    #[serde(default)]
+    pub definition: Option<ReferenceSourceDefinition>,
+    pub status: SourceRuntimePhase,
+    #[serde(default)]
+    pub progress: SourceRuntimeProgress,
+    #[serde(default)]
+    pub work_item: SourceRuntimeWorkItem,
     pub last_attempt_unix_nanos: Option<UnixNanos>,
     pub last_success_unix_nanos: Option<UnixNanos>,
+    #[serde(default)]
+    pub retry_after_unix_nanos: Option<UnixNanos>,
+    #[serde(default)]
+    pub retry_backoff_seconds: Option<u64>,
     pub consecutive_failures: u32,
     pub stale: bool,
+    #[serde(default)]
+    pub last_error: Option<SourceRuntimeError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceRuntimeError {
+    pub code: String,
+    pub retryable: bool,
+    #[serde(default)]
+    pub record_kind: Option<String>,
+    #[serde(default)]
+    pub record_id: Option<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceRuntimePhase {
+    #[default]
+    #[serde(alias = "unknown")]
+    Idle,
+    Registered,
+    Ready,
+    Scanning,
+    Promoting,
+    Syncing,
+    Degraded,
+    Unavailable,
+    Paused,
+    Disabled,
+}
+
+impl SourceRuntimePhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Registered => "registered",
+            Self::Ready => "ready",
+            Self::Scanning => "scanning",
+            Self::Promoting => "promoting",
+            Self::Syncing => "syncing",
+            Self::Degraded => "degraded",
+            Self::Unavailable => "unavailable",
+            Self::Paused => "paused",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub const fn is_healthy_for_catalog(self) -> bool {
+        matches!(
+            self,
+            Self::Idle | Self::Ready | Self::Scanning | Self::Promoting
+        )
+    }
+}
+
+impl From<SourceRuntimePhase> for String {
+    fn from(value: SourceRuntimePhase) -> Self {
+        value.as_str().to_owned()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceRuntimeProgress {
+    pub kind: SourceRuntimeProgressKind,
+    pub pages_done: Option<u64>,
+    pub pages_total: Option<u64>,
+    pub records_seen: Option<u64>,
+    pub records_changed: Option<u64>,
+}
+
+impl SourceRuntimeProgress {
+    pub const fn unknown() -> Self {
+        Self {
+            kind: SourceRuntimeProgressKind::Unknown,
+            pages_done: None,
+            pages_total: None,
+            records_seen: None,
+            records_changed: None,
+        }
+    }
+
+    pub const fn complete(
+        pages_done: Option<u64>,
+        pages_total: Option<u64>,
+        records_seen: Option<u64>,
+        records_changed: Option<u64>,
+    ) -> Self {
+        Self {
+            kind: SourceRuntimeProgressKind::Complete,
+            pages_done,
+            pages_total,
+            records_seen,
+            records_changed,
+        }
+    }
+
+    pub const fn paged(
+        pages_done: Option<u64>,
+        pages_total: Option<u64>,
+        records_seen: Option<u64>,
+        records_changed: Option<u64>,
+    ) -> Self {
+        Self {
+            kind: SourceRuntimeProgressKind::Paged,
+            pages_done,
+            pages_total,
+            records_seen,
+            records_changed,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceRuntimeProgressKind {
+    #[default]
+    Unknown,
+    Complete,
+    Paged,
+    Scoped,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceRuntimeWorkItem {
+    pub work_item_id: Option<String>,
+    pub scope_id: Option<String>,
+    pub scope_kind: Option<String>,
+    pub cursor_present: Option<bool>,
+    #[serde(default)]
+    pub skip_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -73,6 +591,179 @@ impl From<String> for EntityKind {
     }
 }
 
+#[cfg(test)]
+mod source_workflow_tests {
+    use super::{
+        ReferenceSourceDefinition, SourceCredentialBinding, SourceDesiredState, SourceScope,
+        SourceSyncPolicy, SourceTickBudget, SourceWorkItem, SourceWorkReason,
+    };
+    use kairos_primitives::integration::{ProviderId, ProviderProductCode};
+
+    #[test]
+    fn source_definition_infers_provider_product_and_policy() {
+        let definition = ReferenceSourceDefinition::from_source_id("massive-options");
+
+        assert_eq!(definition.provider_id, "massive");
+        assert_eq!(definition.provider_product.as_deref(), Some("options"));
+        assert_eq!(definition.sync_policy, SourceSyncPolicy::ScopedSnapshot);
+    }
+
+    #[test]
+    fn source_definition_normalizes_builtin_provider_products() {
+        let cases = [
+            (
+                "binance-spot",
+                "binance",
+                Some("spot"),
+                SourceSyncPolicy::FullSnapshot,
+            ),
+            (
+                "binance-usdm-futures",
+                "binance",
+                Some("usdm"),
+                SourceSyncPolicy::FullSnapshot,
+            ),
+            (
+                "binance-coinm-futures",
+                "binance",
+                Some("coinm"),
+                SourceSyncPolicy::FullSnapshot,
+            ),
+            (
+                "binance-options",
+                "binance",
+                Some("options"),
+                SourceSyncPolicy::FullSnapshot,
+            ),
+            (
+                "okx-swap",
+                "okx",
+                Some("swap"),
+                SourceSyncPolicy::FullSnapshot,
+            ),
+            (
+                "hyperliquid-perpetual",
+                "hyperliquid",
+                Some("perpetual"),
+                SourceSyncPolicy::FullSnapshot,
+            ),
+            (
+                "massive-equity",
+                "massive",
+                Some("equity"),
+                SourceSyncPolicy::PagedSnapshot,
+            ),
+            (
+                "massive-options",
+                "massive",
+                Some("options"),
+                SourceSyncPolicy::ScopedSnapshot,
+            ),
+        ];
+
+        for (source_id, provider_id, provider_product, sync_policy) in cases {
+            let definition = ReferenceSourceDefinition::from_source_id(source_id);
+            assert_eq!(definition.provider_id, provider_id);
+            assert_eq!(definition.provider_product.as_deref(), provider_product);
+            assert_eq!(definition.sync_policy, sync_policy);
+        }
+    }
+
+    #[test]
+    fn source_definition_credential_binding_is_typed_but_serializes_as_string() {
+        let definition = ReferenceSourceDefinition {
+            source_id: ProviderId::new("massive-options").unwrap(),
+            provider_id: ProviderId::new("massive").unwrap(),
+            provider_product: Some(ProviderProductCode::new("options").unwrap()),
+            scope: SourceScope::global(),
+            desired_state: SourceDesiredState::Enabled,
+            credential_binding: Some(SourceCredentialBinding::new("massive.default").unwrap()),
+            sync_policy: SourceSyncPolicy::ScopedSnapshot,
+        };
+
+        let value = serde_json::to_value(&definition).unwrap();
+        assert_eq!(value["credential_binding"], "massive.default");
+
+        let invalid = serde_json::json!({
+            "source_id": "massive-options",
+            "provider_id": "massive",
+            "provider_product": "options",
+            "desired_state": "enabled",
+            "credential_binding": " massive.default ",
+            "sync_policy": "scoped_snapshot"
+        });
+        assert!(serde_json::from_value::<ReferenceSourceDefinition>(invalid).is_err());
+    }
+
+    #[test]
+    fn source_work_item_projects_to_runtime_snapshot() {
+        let work_item = SourceWorkItem {
+            work_item_id: "massive-options:AAPL".to_owned(),
+            source_id: "massive-options".to_owned(),
+            scope: SourceScope::underlying_instrument("instrument:equity:US:AAPL:common"),
+            reason: SourceWorkReason::RpcRefresh,
+            budget: SourceTickBudget::default(),
+        };
+
+        let snapshot = work_item.runtime_snapshot(Some(true));
+
+        assert_eq!(
+            snapshot.work_item_id.as_deref(),
+            Some("massive-options:AAPL")
+        );
+        assert_eq!(
+            snapshot.scope_id.as_deref(),
+            Some("instrument:equity:US:AAPL:common")
+        );
+        assert_eq!(
+            snapshot.scope_kind.as_deref(),
+            Some("underlying_instrument")
+        );
+        assert_eq!(snapshot.cursor_present, Some(true));
+    }
+
+    #[test]
+    fn affected_reference_set_groups_known_event_records() {
+        let events = vec![
+            super::LifecycleEvent {
+                record_kind: Some("asset".into()),
+                record_id: Some("asset:BTC".into()),
+                ..super::LifecycleEvent::default()
+            },
+            super::LifecycleEvent {
+                record_kind: Some("market".into()),
+                record_id: Some("market:binance:spot:btc-usdt".into()),
+                ..super::LifecycleEvent::default()
+            },
+        ];
+
+        let affected = super::AffectedReferenceSet::from_events(&events);
+
+        assert!(!affected.requires_full_replace);
+        assert!(affected.assets.contains("asset:BTC"));
+        assert!(affected.markets.contains("market:binance:spot:btc-usdt"));
+        assert!(affected.entities.is_empty());
+        assert!(affected.instruments.is_empty());
+        assert!(affected.listings.is_empty());
+        assert_eq!(affected.total_count(), 2);
+        assert_eq!(affected.write_mode(), "affected_update");
+    }
+
+    #[test]
+    fn affected_reference_set_falls_back_for_unidentified_event() {
+        let events = vec![super::LifecycleEvent {
+            record_kind: Some("unknown".into()),
+            record_id: Some("id".into()),
+            ..super::LifecycleEvent::default()
+        }];
+
+        let affected = super::AffectedReferenceSet::from_events(&events);
+
+        assert!(affected.requires_full_replace);
+        assert_eq!(affected.write_mode(), "full_replace");
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Asset {
     #[serde(default)]
@@ -107,6 +798,8 @@ pub struct Instrument {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Listing {
+    #[serde(default)]
+    pub source_id: Option<String>,
     pub listing_id: ListingId,
     pub instrument_id: InstrumentId,
     pub exchange_id: Exchange,
@@ -165,6 +858,10 @@ pub struct LifecycleEvent {
     #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
+    pub provenance: Option<String>,
+    #[serde(default)]
+    pub conflict_policy: Option<String>,
+    #[serde(default)]
     pub generation: Generation,
 }
 
@@ -178,6 +875,14 @@ pub struct ProviderCatalog {
 }
 
 impl ProviderCatalog {
+    pub fn record_count(&self) -> usize {
+        self.entities.len()
+            + self.assets.len()
+            + self.instruments.len()
+            + self.listings.len()
+            + self.markets.len()
+    }
+
     /// Merge independently authoritative provider projections into one
     /// canonical candidate. This is a Reference domain rule: persistence and
     /// provider composition must not each invent their own conflict policy.

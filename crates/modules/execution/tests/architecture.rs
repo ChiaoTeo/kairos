@@ -58,11 +58,7 @@ fn execution_cli_accepts_semantic_decimal_arguments() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-execution-cli.rs"),
     )
     .expect("read execution CLI");
-    for expected in [
-        "quantity: String",
-        "limit_price: Option<String>",
-        "price: String",
-    ] {
+    for expected in ["quantity: String", "limit_price: Option<String>"] {
         assert!(cli.contains(expected), "CLI is missing {expected}");
     }
     for forbidden in [
@@ -220,31 +216,39 @@ fn execution_does_not_create_reference_contract_clients_inside_the_module() {
 }
 
 #[test]
-fn execution_cli_reads_durable_business_state_from_mmap_and_routes_from_control() {
-    let source = fs::read_to_string(
+fn execution_connected_facade_reads_mmap_and_routes_from_control() {
+    let cli = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-execution-cli.rs"),
     )
     .expect("read Execution CLI");
-    assert!(source.contains("ExecutionViewKind::CurrentExecution"));
-    assert!(source.contains("client.current_execution("));
-    assert!(source.contains("frame.view()?"));
-    assert!(source.contains("query command routed to typed mmap"));
-    assert!(source.contains("ConfluxSystem::new()"));
-    assert!(source.contains("install_execution_connection("));
-    assert!(source.contains("execution_client("));
-    assert!(source.contains("ExecutionControlRpcClient::routes"));
-    assert!(!source.contains("ExecutionConnection::control_only"));
-    assert!(!source.contains("ExecutionClient::connect"));
-    assert!(!source.contains("ExecutionViewReader::open"));
-    assert!(!source.contains("\"execution_routes\""));
-    assert!(!source.contains("RestControlClient::new"));
-    assert!(!source.contains("/v1/routes"));
-    assert!(!source.contains("compose_direct_execution_connections"));
-    assert!(!source.contains("ExecutionApplication::with_dependencies"));
-    assert!(!source.contains("Command::RemoteOpenOrders"));
-    assert!(!source.contains("Command::RemoteHistory"));
-    assert!(!source.contains("Command::RemoteInspect"));
-    assert!(!source.contains("Command::StreamNext"));
+    let server = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/connected.rs"),
+    )
+    .expect("read Execution server facade");
+    assert!(cli.contains("ConnectedExecutionApplication"));
+    assert!(cli.contains("connected_execution_app("));
+    assert!(!cli.contains("ExecutionControlRpcClient"));
+    assert!(!cli.contains("client.current_execution("));
+    assert!(!cli.contains("install_execution_connection("));
+    assert!(server.contains("current_execution(&self.identity)"));
+    assert!(server.contains("client.current_execution("));
+    assert!(server.contains("frame.view()?"));
+    assert!(server.contains("ConfluxSystem::new()"));
+    assert!(server.contains("install_execution_connection("));
+    assert!(server.contains("execution_client("));
+    assert!(server.contains("ExecutionControlRpcClient::routes"));
+    assert!(!server.contains("ExecutionConnection::control_only"));
+    assert!(!server.contains("ExecutionClient::connect"));
+    assert!(!server.contains("ExecutionViewReader::open"));
+    assert!(!server.contains("\"execution_routes\""));
+    assert!(!server.contains("RestControlClient::new"));
+    assert!(!server.contains("/v1/routes"));
+    assert!(!server.contains("compose_direct_execution_connections"));
+    assert!(!server.contains("ExecutionApplication::with_dependencies"));
+    assert!(!cli.contains("Command::RemoteOpenOrders"));
+    assert!(!cli.contains("Command::RemoteHistory"));
+    assert!(!cli.contains("Command::RemoteInspect"));
+    assert!(!cli.contains("Command::StreamNext"));
 
     let schema = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

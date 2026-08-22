@@ -26,8 +26,7 @@ pub use error::{ContractError, ContractResult};
 pub use event::{MarketEvent, MarketEventFrame, MarketEventPublisher, MarketEventStream};
 pub type MarketConnection = kairos_protocol::ContractClient;
 
-pub use kairos_transport::AeronEndpoint;
-use kairos_transport::SnapshotEnvelopeMetadata;
+pub use kairos_transport::{AeronEndpoint, SnapshotEnvelopeMetadata};
 pub use view::{
     MarketViewKey, MarketViewKind, MarketViewPublisher, ViewFrame, ViewMetadata, market_view_path,
 };

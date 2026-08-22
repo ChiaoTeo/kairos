@@ -116,6 +116,46 @@ class AccountCurrentProjection:
         )
 
 
+class AccountObservedOrdersProjection:
+    """Synchronous Account projection over the observed-orders view."""
+
+    def __init__(self, view_root: str | Path, *, account_id: AccountId) -> None:
+        sys.modules.setdefault("kairos", _generated_kairos)
+        self._key = AccountViewKey(
+            account_runtime_id=f"account:{account_id}",
+            account_id=str(account_id),
+            kind=AccountViewKind.OBSERVED_ORDERS,
+        )
+        self._reader = SharedSnapshotReader(account_view_path(view_root, self._key))
+
+    @property
+    def path(self) -> Path:
+        return self._reader.path
+
+    def open_orders(self, account_id: AccountId) -> dict[str, object]:
+        snapshot = self._reader.read()
+        root = cast(Any, decode_view(snapshot.payload, AccountViewKind.OBSERVED_ORDERS))
+        metadata = root.Metadata()
+        if metadata is None:
+            raise ValueError("Account observed-orders metadata is missing")
+        if _text(metadata.ViewKey()) != self._key.canonical_key():
+            raise ValueError("Account observed-orders view key identity mismatch")
+        if _text(root.AccountId()) != str(account_id):
+            raise ValueError(
+                f"account {account_id!s} is not present in Account observed-orders projection"
+            )
+        return {
+            "account_id": str(account_id),
+            "generation": snapshot.generation,
+            "event_sequence": int(metadata.AppliedRevision() or 0),
+            "open_orders": [
+                order
+                for segment_index in range(root.SegmentsLength())
+                for order in _segment_observed_orders(root.Segments(segment_index))
+            ],
+        }
+
+
 def _segment_snapshot(
     account: Any, account_id: AccountId, generation: int
 ) -> AccountSegmentSnapshot:
@@ -228,6 +268,48 @@ def _text(value: bytes | None) -> str | None:
     return None if value is None else value.decode("utf-8")
 
 
+def _segment_observed_orders(segment: Any | None) -> list[dict[str, object]]:
+    if segment is None:
+        raise ValueError("Account observed-orders view contains an empty segment")
+    segment_key = _text(segment.SegmentKey()) or ""
+    return [
+        {**_observed_order(segment.Orders(index)), "segment_key": segment_key}
+        for index in range(segment.OrdersLength())
+    ]
+
+
+def _observed_order(order: Any | None) -> dict[str, object]:
+    if order is None:
+        raise ValueError("Account observed-orders view contains an empty order")
+    return {
+        "observation_id": _text(order.ObservationId()),
+        "source_id": _text(order.SourceId()),
+        "execution_order_id": _text(order.ExecutionOrderId()),
+        "remote_order_id": _text(order.RemoteOrderId()),
+        "instrument_id": _text(order.InstrumentId()),
+        "market_id": _text(order.MarketId()),
+        "side": _observed_order_side(int(order.Side())),
+        "quantity": _decimal64(order.Quantity()),
+        "filled_quantity": _decimal64(order.FilledQuantity()),
+        "status": _observed_order_status(int(order.Status())),
+        "observed_at_unix_nanos": int(order.ObservedAtUnixNanos()),
+    }
+
+
+def _observed_order_side(value: int) -> str:
+    return {1: "buy", 2: "sell"}.get(value, f"unknown:{value}")
+
+
+def _observed_order_status(value: int) -> str:
+    return {
+        1: "open",
+        2: "partially_filled",
+        3: "pending_cancel",
+        4: "closed",
+        5: "unknown",
+    }.get(value, f"unknown:{value}")
+
+
 def _optional_watermark(value: int) -> int | None:
     return None if int(value) == 0 else int(value)
 
@@ -329,6 +411,7 @@ def _decimal_wire(value) -> str:
 __all__ = [
     "AccountContractClient",
     "AccountCurrentProjection",
+    "AccountObservedOrdersProjection",
     "CommandEnvelope",
     "QueryEnvelope",
     "backtest_mark_to_market_request",

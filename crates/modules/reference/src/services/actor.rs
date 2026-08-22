@@ -3,16 +3,20 @@
 use tracing::info;
 
 use super::providers::ReferenceSourcePlan;
-use super::publication::{StoredPublication, encode_publications};
+use super::publication::{EncodedPublication, encode_publications};
 #[cfg(not(test))]
-use super::source::ConfiguredReferenceSource;
-use super::source::ReferenceSource;
-use super::sqlx_storage::SqlxCatalogStore;
+use super::sources::ConfiguredReferenceSource;
+use super::sources::ReferenceSource;
+use super::storage::catalog_store::{CatalogReconcileSummary, SqlxCatalogStore};
+use super::storage::provider_sync_store::SqlxProviderSyncStore;
+use super::storage::publication_outbox_store::SqlxPublicationOutbox;
 use super::time::unix_nanos;
 use crate::domain::{
-    Asset, Instrument, LifecycleEvent, Listing, ProviderCatalog, ProviderHealth, ReferenceCatalog,
-    ReferenceResult,
+    AffectedReferenceSet, Asset, Instrument, LifecycleEvent, Listing, ManualUpsertPolicy, Market,
+    ProviderCatalog, ReferenceCatalog, ReferenceResult, ReferenceSourceDefinition,
+    SourceDesiredState, SourceHealth, SourceTickBudget,
 };
+use crate::logging::events as log_events;
 
 #[cfg(not(test))]
 type ActorReferenceSource = ConfiguredReferenceSource;
@@ -27,13 +31,27 @@ pub struct ReferenceActor {
     source: Option<ActorReferenceSource>,
     source_plan: Option<ReferenceSourcePlan>,
     store: SqlxCatalogStore,
+    provider_sync_store: SqlxProviderSyncStore,
+    publication_outbox: SqlxPublicationOutbox,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CatalogMetadata {
     pub generation: kairos_primitives::time::Generation,
     pub event_sequence: kairos_primitives::time::Sequence,
+    pub committed_at_unix_nanos: kairos_primitives::time::UnixNanos,
+    pub entity_count: usize,
+    pub asset_count: usize,
+    pub instrument_count: usize,
+    pub listing_count: usize,
     pub market_count: usize,
+    pub active_market_count: usize,
+    pub lifecycle_event_count: usize,
+    pub missing_equity_market_count: usize,
+    pub legacy_exchange_market_id_count: usize,
+    pub legacy_exchange_listing_id_count: usize,
+    pub option_listing_count: usize,
+    pub option_market_count: usize,
 }
 
 impl From<&ReferenceCatalog> for CatalogMetadata {
@@ -41,9 +59,126 @@ impl From<&ReferenceCatalog> for CatalogMetadata {
         Self {
             generation: catalog.generation,
             event_sequence: catalog.event_sequence,
+            committed_at_unix_nanos: kairos_primitives::time::UnixNanos::from(0),
+            entity_count: catalog.entities.len(),
+            asset_count: catalog.assets.len(),
+            instrument_count: catalog.instruments.len(),
+            listing_count: catalog.listings.len(),
             market_count: catalog.markets.len(),
+            active_market_count: catalog
+                .markets
+                .values()
+                .filter(|market| market_is_active(market))
+                .count(),
+            lifecycle_event_count: catalog.lifecycle_events.len(),
+            missing_equity_market_count: 0,
+            legacy_exchange_market_id_count: catalog
+                .markets
+                .keys()
+                .filter(|market_id| market_id.as_str().starts_with("market:exchange:"))
+                .count(),
+            legacy_exchange_listing_id_count: catalog
+                .listings
+                .keys()
+                .filter(|listing_id| listing_id.as_str().starts_with("listing:exchange:"))
+                .count(),
+            option_listing_count: catalog
+                .listings
+                .keys()
+                .filter(|listing_id| listing_id.as_str().contains(":option:"))
+                .count(),
+            option_market_count: catalog
+                .markets
+                .values()
+                .filter(|market| market.instrument_kind.as_str() == "option")
+                .count(),
         }
     }
+}
+
+impl From<super::storage::catalog_store::CatalogRuntimeSnapshot> for CatalogMetadata {
+    fn from(state: super::storage::catalog_store::CatalogRuntimeSnapshot) -> Self {
+        Self {
+            generation: state.generation,
+            event_sequence: state.event_sequence,
+            committed_at_unix_nanos: state.committed_at_unix_nanos,
+            entity_count: state.entity_count,
+            asset_count: state.asset_count,
+            instrument_count: state.instrument_count,
+            listing_count: state.listing_count,
+            market_count: state.market_count,
+            active_market_count: state.active_market_count,
+            lifecycle_event_count: state.lifecycle_event_count,
+            missing_equity_market_count: state.missing_equity_market_count,
+            legacy_exchange_market_id_count: state.legacy_exchange_market_id_count,
+            legacy_exchange_listing_id_count: state.legacy_exchange_listing_id_count,
+            option_listing_count: state.option_listing_count,
+            option_market_count: state.option_market_count,
+        }
+    }
+}
+
+fn market_is_active(market: &Market) -> bool {
+    matches!(market.status.as_str(), "active" | "trading")
+}
+
+fn log_catalog_loaded(metadata: &CatalogMetadata) {
+    let log_event = log_events::STARTUP_STAGE_COMPLETED;
+    info!(
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_state_loaded",
+        generation = metadata.generation.get(),
+        event_sequence = metadata.event_sequence.get(),
+        committed_at_unix_nanos = metadata.committed_at_unix_nanos.get(),
+        entity_count = metadata.entity_count,
+        asset_count = metadata.asset_count,
+        instrument_count = metadata.instrument_count,
+        listing_count = metadata.listing_count,
+        market_count = metadata.market_count,
+        active_market_count = metadata.active_market_count,
+        lifecycle_event_count = metadata.lifecycle_event_count,
+        missing_equity_market_count = metadata.missing_equity_market_count,
+        legacy_exchange_market_id_count = metadata.legacy_exchange_market_id_count,
+        legacy_exchange_listing_id_count = metadata.legacy_exchange_listing_id_count,
+        option_listing_count = metadata.option_listing_count,
+        option_market_count = metadata.option_market_count,
+        "reference catalog loaded from persistence"
+    );
+}
+
+fn log_reconcile_apply_completed(
+    metadata: &CatalogMetadata,
+    changed: bool,
+    event_count: usize,
+    affected_summary: &CatalogReconcileSummary,
+    duration_ms: u64,
+) {
+    let log_event = log_events::RECONCILE_APPLY_COMPLETED;
+    info!(
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_reconcile_completed",
+        generation = metadata.generation.get(),
+        event_sequence = metadata.event_sequence.get(),
+        changed,
+        event_count,
+        affected_write_mode = affected_summary.affected_write_mode,
+        affected_total_count = affected_summary.affected_total_count,
+        affected_entity_count = affected_summary.affected_entity_count,
+        affected_asset_count = affected_summary.affected_asset_count,
+        affected_instrument_count = affected_summary.affected_instrument_count,
+        affected_listing_count = affected_summary.affected_listing_count,
+        affected_market_count = affected_summary.affected_market_count,
+        duration_ms,
+        "reference reconcile completed"
+    );
 }
 
 impl ReferenceActor {
@@ -58,21 +193,10 @@ impl ReferenceActor {
         let metadata = CatalogMetadata::from(&catalog);
         #[cfg(not(test))]
         let metadata = {
-            let state = store.load_state().await?;
-            CatalogMetadata {
-                generation: state.generation,
-                event_sequence: state.event_sequence,
-                market_count: state.market_count,
-            }
+            let state = store.load_runtime_snapshot().await?;
+            CatalogMetadata::from(state)
         };
-        info!(
-            event = "reference_state_loaded",
-            component = "reference",
-            generation = metadata.generation.get(),
-            event_sequence = metadata.event_sequence.get(),
-            market_count = metadata.market_count,
-            "reference catalog loaded from persistence"
-        );
+        log_catalog_loaded(&metadata);
         Ok(Self {
             actor_id: actor_id.into(),
             metadata,
@@ -80,6 +204,8 @@ impl ReferenceActor {
             catalog,
             source: None,
             source_plan: Some(source_plan),
+            provider_sync_store: SqlxProviderSyncStore::from_pool(store.pool.clone()),
+            publication_outbox: SqlxPublicationOutbox::from_pool(store.pool.clone()),
             store,
         })
     }
@@ -101,6 +227,8 @@ impl ReferenceActor {
             catalog,
             source: Some(Box::new(source)),
             source_plan: None,
+            provider_sync_store: SqlxProviderSyncStore::from_pool(store.pool.clone()),
+            publication_outbox: SqlxPublicationOutbox::from_pool(store.pool.clone()),
             store,
         })
     }
@@ -112,10 +240,10 @@ impl ReferenceActor {
             .unwrap_or("reference-providers")
     }
 
-    pub fn provider_health(&self) -> Vec<ProviderHealth> {
+    pub fn source_health(&self) -> Vec<SourceHealth> {
         self.source
             .as_ref()
-            .map(|source| source.provider_health())
+            .map(|source| source.source_health())
             .unwrap_or_default()
     }
 
@@ -147,15 +275,16 @@ impl ReferenceActor {
         })
     }
 
-    pub async fn refresh_with_connections(
+    pub async fn advance_sources_with_connections(
         &mut self,
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        budget: SourceTickBudget,
     ) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
         let normalized = self.source_mut()?.normalized_facts_authoritative();
         let incoming = self
             .source_mut()?
-            .fetch_catalog_with_connections(connections)
+            .advance_workflow_with_budget(connections, budget)
             .await?;
         if normalized {
             return self.reconcile_normalized(incoming, started).await;
@@ -166,20 +295,24 @@ impl ReferenceActor {
     #[cfg(test)]
     pub async fn refresh(&mut self) -> ReferenceResult<RefreshResult> {
         let mut system = kairos_conflux::ConfluxSystem::new();
-        self.refresh_with_connections(&mut system.connections())
-            .await
+        self.advance_sources_with_connections(
+            &mut system.connections(),
+            SourceTickBudget::default(),
+        )
+        .await
     }
 
-    pub async fn refresh_source_with_connections(
+    pub async fn advance_source_with_connections(
         &mut self,
         source_id: &str,
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
+        budget: SourceTickBudget,
     ) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
         let normalized = self.source_mut()?.normalized_facts_authoritative();
         match self
             .source_mut()?
-            .advance_source_with_connections(source_id, connections)
+            .advance_source_with_budget(source_id, connections, budget)
             .await?
         {
             Some(incoming) if normalized => self.reconcile_normalized(incoming, started).await,
@@ -200,17 +333,50 @@ impl ReferenceActor {
         started: std::time::Instant,
     ) -> ReferenceResult<RefreshResult> {
         overlay.validate()?;
-        let candidate = self.store.load_provider_candidate(&overlay).await?;
+        let candidate = self
+            .provider_sync_store
+            .load_provider_candidate(&overlay)
+            .await?;
         self.reconcile_candidate(candidate, started, true).await
     }
 
-    pub async fn set_source_paused(
+    pub async fn set_source_desired_state(
         &mut self,
         source_id: &str,
-        paused: bool,
+        desired_state: SourceDesiredState,
     ) -> ReferenceResult<()> {
         self.source_mut()?
-            .set_source_paused(source_id, paused)
+            .set_source_desired_state(source_id, desired_state)
+            .await
+    }
+
+    pub async fn set_source_desired_state_with_connections(
+        &mut self,
+        source_id: &str,
+        desired_state: SourceDesiredState,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<()> {
+        self.source_mut()?
+            .set_source_desired_state_with_connections(source_id, desired_state, connections)
+            .await
+    }
+
+    pub async fn upsert_source_definition(
+        &mut self,
+        definition: ReferenceSourceDefinition,
+    ) -> ReferenceResult<()> {
+        self.source_mut()?
+            .upsert_source_definition(definition)
+            .await
+    }
+
+    pub async fn upsert_source_definition_with_connections(
+        &mut self,
+        definition: ReferenceSourceDefinition,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<()> {
+        self.source_mut()?
+            .upsert_source_definition_with_connections(definition, connections)
             .await
     }
 
@@ -221,21 +387,22 @@ impl ReferenceActor {
             .unwrap_or_default()
     }
 
-    /// Change Massive options coverage and immediately advance that source.
+    /// Change scoped source coverage and immediately advance that source.
     /// Additions may require more pages and therefore legitimately return an
     /// unchanged catalog until the scoped candidate is complete; removals are
     /// reconciled immediately from the remaining committed scopes.
     #[cfg(test)]
-    pub async fn set_option_underlying(
+    pub async fn set_source_scope(
         &mut self,
-        underlying: &str,
+        source_id: &str,
+        scope: crate::domain::SourceScope,
         enabled: bool,
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<RefreshResult> {
         self.source_mut()?
-            .set_option_underlying(underlying, enabled)
+            .set_source_scope_with_connections(source_id, scope, enabled, connections)
             .await?;
-        self.refresh_source_with_connections("massive-options", connections)
+        self.advance_source_with_connections(source_id, connections, SourceTickBudget::default())
             .await
     }
 
@@ -258,17 +425,18 @@ impl ReferenceActor {
     }
 
     #[cfg(not(test))]
-    pub async fn set_managed_option_underlying(
+    pub async fn set_managed_source_scope(
         &mut self,
-        underlying: &str,
+        source_id: &str,
+        scope: crate::domain::SourceScope,
         enabled: bool,
         connection_key: Option<kairos_conflux::ConnectionKey>,
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<RefreshResult> {
         self.source_mut()?
-            .set_managed_option_underlying(underlying, enabled, connection_key)
+            .set_managed_source_scope(source_id, scope, enabled, connection_key)
             .await?;
-        self.refresh_source_with_connections("massive-options", connections)
+        self.advance_source_with_connections(source_id, connections, SourceTickBudget::default())
             .await
     }
 
@@ -290,33 +458,34 @@ impl ReferenceActor {
         let mut candidate = self.store.load().await?.unwrap_or_default();
         let previous_generation = candidate.generation;
         let events = candidate.apply(incoming, unix_nanos());
+        let affected = AffectedReferenceSet::from_events(&events);
         const IN_MEMORY_LIFECYCLE_LIMIT: usize = 4096;
-        if candidate.lifecycle_events.len() > IN_MEMORY_LIFECYCLE_LIMIT {
-            let keep_from = candidate.lifecycle_events.len() - IN_MEMORY_LIFECYCLE_LIMIT;
-            candidate.lifecycle_events.drain(..keep_from);
-        }
+        candidate.retain_recent_lifecycle_events(IN_MEMORY_LIFECYCLE_LIMIT);
         let changed = previous_generation != candidate.generation || !events.is_empty();
+        let mut save_outcome = None;
         if changed || commit_provider_promotions {
             let publications = encode_publications(&candidate, &events)?;
-            self.store
-                .save_refresh(&candidate, &events, &publications)
-                .await?;
+            save_outcome = Some(
+                self.store
+                    .save_refresh(&candidate, &events, &publications)
+                    .await?,
+            );
         }
-        self.metadata = CatalogMetadata::from(&candidate);
+        self.metadata = CatalogMetadata::from(self.store.load_runtime_snapshot().await?);
         #[cfg(test)]
         {
             self.catalog = candidate;
         }
-        info!(
-            event = "reference_reconcile_completed",
-            component = "reference",
-            generation = self.metadata.generation.get(),
-            event_sequence = self.metadata.event_sequence.get(),
+        let affected_summary =
+            CatalogReconcileSummary::from_save_outcome(save_outcome.as_ref(), &affected);
+        log_reconcile_apply_completed(
+            &self.metadata,
             changed,
-            event_count = events.len(),
-            duration_ms = started.elapsed().as_millis() as u64,
-            "reference reconcile completed"
+            events.len(),
+            &affected_summary,
+            started.elapsed().as_millis() as u64,
         );
+        self.source_mut()?.mark_promotions_committed();
         Ok(RefreshResult {
             generation: self.metadata.generation,
             event_sequence: self.metadata.event_sequence,
@@ -326,135 +495,69 @@ impl ReferenceActor {
         })
     }
 
-    pub async fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<()> {
-        let mut current = self.store.load().await?.unwrap_or_default();
-        let mut candidate = provider_catalog(&current);
-        candidate
-            .assets
-            .retain(|value| value.asset_id != asset.asset_id);
-        candidate.assets.push(asset.clone());
-        candidate.validate()?;
-        if current.assets.get(asset.asset_id.as_str()) == Some(&asset) {
-            return Ok(());
-        }
-        let mut next = std::mem::take(&mut current);
-        let sequence = next.event_sequence + 1;
-        let asset_id = asset.asset_id.clone();
-        next.assets.insert(asset_id.to_string(), asset);
-        next.generation += 1;
-        next.event_sequence = sequence;
-        let event = LifecycleEvent {
-            event_id: format!("reference:{sequence:020}"),
-            event_type: "asset_changed".into(),
-            event_time_unix_nanos: unix_nanos(),
-            record_kind: Some("asset".into()),
-            record_id: Some(asset_id.to_string()),
-            operation: Some("upsert".into()),
-            generation: next.generation.get().into(),
-            ..LifecycleEvent::default()
-        };
-        next.lifecycle_events.push(event.clone());
-        let publications = encode_publications(&next, std::slice::from_ref(&event))?;
+    async fn commit_manual_event(
+        &mut self,
+        catalog: ReferenceCatalog,
+        event: LifecycleEvent,
+    ) -> ReferenceResult<()> {
+        let publications = encode_publications(&catalog, std::slice::from_ref(&event))?;
         self.store
-            .save_refresh(&next, std::slice::from_ref(&event), &publications)
+            .save_refresh(&catalog, std::slice::from_ref(&event), &publications)
             .await?;
-        self.metadata = CatalogMetadata::from(&next);
+        self.metadata = CatalogMetadata::from(self.store.load_runtime_snapshot().await?);
         #[cfg(test)]
         {
-            self.catalog = next;
+            self.catalog = catalog;
         }
         Ok(())
     }
 
-    pub async fn upsert_instrument(&mut self, instrument: Instrument) -> ReferenceResult<()> {
+    pub async fn upsert_asset(
+        &mut self,
+        asset: Asset,
+        policy: ManualUpsertPolicy,
+    ) -> ReferenceResult<()> {
         let mut current = self.store.load().await?.unwrap_or_default();
-        let mut candidate = provider_catalog(&current);
-        candidate
-            .instruments
-            .retain(|value| value.instrument_id != instrument.instrument_id);
-        candidate.instruments.push(instrument.clone());
-        candidate.validate()?;
-        if current.instruments.get(&instrument.instrument_id) == Some(&instrument) {
+        let Some(event) = current.upsert_manual_asset(asset, &policy, unix_nanos())? else {
             return Ok(());
-        }
-        let mut next = std::mem::take(&mut current);
-        let sequence = next.event_sequence + 1;
-        let instrument_id = instrument.instrument_id.clone();
-        next.instruments.insert(instrument_id.clone(), instrument);
-        next.generation += 1;
-        next.event_sequence = sequence;
-        let event = LifecycleEvent {
-            event_id: format!("reference:{sequence:020}"),
-            event_type: "instrument_changed".into(),
-            event_time_unix_nanos: unix_nanos(),
-            record_kind: Some("instrument".into()),
-            record_id: Some(instrument_id.to_string()),
-            operation: Some("upsert".into()),
-            generation: next.generation.get().into(),
-            ..LifecycleEvent::default()
         };
-        next.lifecycle_events.push(event.clone());
-        let publications = encode_publications(&next, std::slice::from_ref(&event))?;
-        self.store
-            .save_refresh(&next, std::slice::from_ref(&event), &publications)
-            .await?;
-        self.metadata = CatalogMetadata::from(&next);
-        #[cfg(test)]
-        {
-            self.catalog = next;
-        }
-        Ok(())
+        self.commit_manual_event(current, event).await
     }
 
-    pub async fn upsert_listing(&mut self, listing: Listing) -> ReferenceResult<()> {
+    pub async fn upsert_instrument(
+        &mut self,
+        instrument: Instrument,
+        policy: ManualUpsertPolicy,
+    ) -> ReferenceResult<()> {
         let mut current = self.store.load().await?.unwrap_or_default();
-        let mut candidate = provider_catalog(&current);
-        candidate
-            .listings
-            .retain(|value| value.listing_id != listing.listing_id);
-        candidate.listings.push(listing.clone());
-        candidate.validate()?;
-        if current.listings.get(&listing.listing_id) == Some(&listing) {
+        let Some(event) = current.upsert_manual_instrument(instrument, &policy, unix_nanos())?
+        else {
             return Ok(());
-        }
-        let mut next = std::mem::take(&mut current);
-        let sequence = next.event_sequence + 1;
-        let listing_id = listing.listing_id.clone();
-        next.listings.insert(listing_id.clone(), listing);
-        next.generation += 1;
-        next.event_sequence = sequence;
-        let event = LifecycleEvent {
-            event_id: format!("reference:{sequence:020}"),
-            event_type: "listing_changed".into(),
-            event_time_unix_nanos: unix_nanos(),
-            record_kind: Some("listing".into()),
-            record_id: Some(listing_id.to_string()),
-            operation: Some("upsert".into()),
-            generation: next.generation.get().into(),
-            ..LifecycleEvent::default()
         };
-        next.lifecycle_events.push(event.clone());
-        let publications = encode_publications(&next, std::slice::from_ref(&event))?;
-        self.store
-            .save_refresh(&next, std::slice::from_ref(&event), &publications)
-            .await?;
-        self.metadata = CatalogMetadata::from(&next);
-        #[cfg(test)]
-        {
-            self.catalog = next;
-        }
-        Ok(())
+        self.commit_manual_event(current, event).await
+    }
+
+    pub async fn upsert_listing(
+        &mut self,
+        listing: Listing,
+        policy: ManualUpsertPolicy,
+    ) -> ReferenceResult<()> {
+        let mut current = self.store.load().await?.unwrap_or_default();
+        let Some(event) = current.upsert_manual_listing(listing, &policy, unix_nanos())? else {
+            return Ok(());
+        };
+        self.commit_manual_event(current, event).await
     }
 
     pub async fn pending_publications(
         &mut self,
         limit: usize,
-    ) -> ReferenceResult<Vec<StoredPublication>> {
-        self.store.pending_publications(limit).await
+    ) -> ReferenceResult<Vec<EncodedPublication>> {
+        self.publication_outbox.pending_publications(limit).await
     }
 
     pub async fn pending_event_count(&mut self) -> ReferenceResult<usize> {
-        self.store.pending_event_count().await
+        self.publication_outbox.pending_event_count().await
     }
 
     pub async fn lifecycle_events(
@@ -536,17 +639,9 @@ impl ReferenceActor {
     }
 
     pub async fn acknowledge_publications(&mut self, event_ids: &[String]) -> ReferenceResult<()> {
-        self.store.acknowledge_publications(event_ids).await
-    }
-}
-
-fn provider_catalog(catalog: &ReferenceCatalog) -> ProviderCatalog {
-    ProviderCatalog {
-        entities: catalog.entities.values().cloned().collect(),
-        assets: catalog.assets.values().cloned().collect(),
-        instruments: catalog.instruments.values().cloned().collect(),
-        listings: catalog.listings.values().cloned().collect(),
-        markets: catalog.markets.values().cloned().collect(),
+        self.publication_outbox
+            .acknowledge_publications(event_ids)
+            .await
     }
 }
 

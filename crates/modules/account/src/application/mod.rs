@@ -1,10 +1,19 @@
+mod app;
+mod cli;
 mod command;
 mod conflux;
+mod connected;
 mod error;
 mod result;
-mod service;
 
+pub use app::{AccountApplication, AccountRuntimeMode};
+pub use cli::{
+    AccountCredentialProbeRequest, AccountProviderConnectionArgs, BindCredentialRequest,
+    CliAccountApplication, ConnectAccountProviderRequest, ConnectAccountRequest,
+    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+};
 pub use command::{MarkToMarket, ReconcileAccount, RefreshAccount};
+pub use connected::ConnectedAccountApplication;
 pub use error::AccountError;
 pub use result::{
     AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountDifference,
@@ -12,7 +21,6 @@ pub use result::{
     AccountSegmentFreshness, AccountSegmentSyncLifecycle, AccountSegmentSyncMode,
     AccountSegmentView,
 };
-pub use service::{AccountApplication, AccountRuntimeMode};
 
 pub use crate::domain::{AccountEvent, AccountObservedFill};
 

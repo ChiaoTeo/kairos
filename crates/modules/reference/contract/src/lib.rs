@@ -15,12 +15,22 @@ pub mod transport;
 use std::path::PathBuf;
 
 pub use control::{
+    ReferenceAppPhase, ReferenceAppRuntimeError, ReferenceAppRuntimeStatus,
+    ReferenceCatalogIntegrityStatus, ReferenceCatalogReadiness, ReferenceCatalogRuntimeStatus,
     ReferenceControlError, ReferenceControlRpcClient, ReferenceControlRpcServer,
+    ReferenceCoverageRuntimeStatus, ReferenceDiagnostic, ReferenceDiagnosticSeverity,
     ReferenceHealthResponse, ReferenceHealthStatus, ReferenceMutationResponse,
     ReferenceOptionCoverageRequest, ReferenceOptionCoverageResponse, ReferenceProviderHealth,
-    ReferenceProviderStatus, ReferencePublishResponse, ReferenceRefreshResponse,
-    ReferenceSourceControlRequest, ReferenceSourceStatusResponse, UpsertAssetRequest,
-    UpsertInstrumentRequest, UpsertListingRequest,
+    ReferenceProviderProduct, ReferenceProviderStatus, ReferencePublicationRuntimeError,
+    ReferencePublicationRuntimeStatus, ReferencePublishResponse, ReferenceRefreshResponse,
+    ReferenceRuntimeStatus, ReferenceRuntimeStatusResponse, ReferenceSourceControlRequest,
+    ReferenceSourceDefinitionRequest, ReferenceSourceDesiredState, ReferenceSourceKind,
+    ReferenceSourcePhase, ReferenceSourceProgress, ReferenceSourceProgressKind,
+    ReferenceSourceRuntimeError, ReferenceSourceRuntimeStatus, ReferenceSourceScope,
+    ReferenceSourceScopeKind, ReferenceSourceScopeRequest, ReferenceSourceScopeResponse,
+    ReferenceSourceStatusResponse, ReferenceSourceSyncPolicy, ReferenceSourceTickBudget,
+    ReferenceSourceWorkItem, ReferenceUpsertConflictPolicy, ReferenceUpsertProvenance,
+    UpsertAssetRequest, UpsertInstrumentRequest, UpsertListingRequest,
 };
 pub use encode::{EncodeContext, ReferenceEncoder, event_metadata};
 pub use error::{ContractError, ContractResult};

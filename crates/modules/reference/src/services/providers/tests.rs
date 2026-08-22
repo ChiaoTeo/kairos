@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use kairos_conflux::{
-    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, ParticipantKind,
-    ParticipantRef,
+    BinanceCredential, ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,
+    ParticipantKind, ParticipantRef,
 };
 use kairos_primitives::integration::ParticipantSymbol as ExternalSymbol;
 use kairos_primitives::reference::{
@@ -14,15 +14,20 @@ use kairos_primitives::reference::{
 };
 
 use super::{
-    BinanceProduct, BinanceSpotSource, CompositeSource, HyperliquidProduct, HyperliquidSource,
-    MassiveEquitySource, MassiveOptionsCoverageSource, OkxProduct, OkxSource, ReferenceSource,
-    binance_equity_provider_catalog, binance_provider_catalog, hyperliquid_provider_catalog,
-    massive_provider_catalog, okx_provider_catalog, provider_catalog_uses_current_canonical_shape,
+    BinanceProduct, BinanceSpotSource, HyperliquidProduct, HyperliquidSource, MassiveEquitySource,
+    MassiveOptionsCoverageSource, OkxProduct, OkxSource, ProviderFanInSource,
+    ReferenceCredentialResolver, ReferenceSource, binance_equity_provider_catalog,
+    binance_provider_catalog, hyperliquid_provider_catalog, massive_provider_catalog,
+    okx_provider_catalog, provider_catalog_uses_current_canonical_shape,
 };
-use crate::domain::{Asset, Entity, Instrument, Market, ProviderCatalog, ReferenceResult};
+use crate::domain::{
+    Asset, Entity, Instrument, Market, ProviderCatalog, ReferenceResult, ReferenceSourceDefinition,
+    SourceDesiredState, SourceRuntimePhase, SourceScope, SourceSyncPolicy, SourceTickBudget,
+};
 use crate::services::actor::ReferenceActor;
-use crate::services::source::ConfiguredProviderSource;
-use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
+use crate::services::sources::{ConfiguredProviderSource, ParticipantAugmentedSource};
+use crate::services::storage::catalog_store::SqlxCatalogStore;
+use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
 fn typed_market_id(value: &str) -> MarketId {
     MarketId::new(value).unwrap()
@@ -53,6 +58,13 @@ struct CountingSource {
     calls: Arc<AtomicUsize>,
 }
 
+struct DelayedCountingSource {
+    id: &'static str,
+    catalog: ProviderCatalog,
+    calls: Arc<AtomicUsize>,
+    delay: Duration,
+}
+
 struct BarrierSource {
     id: &'static str,
     barrier: Arc<tokio::sync::Barrier>,
@@ -65,6 +77,7 @@ enum TestProviderSource {
     AlwaysFail(AlwaysFailSource),
     Fixed(FixedSource),
     Counting(CountingSource),
+    DelayedCounting(DelayedCountingSource),
     Barrier(BarrierSource),
 }
 
@@ -84,6 +97,7 @@ test_source_from!(PagedSource, Paged);
 test_source_from!(AlwaysFailSource, AlwaysFail);
 test_source_from!(FixedSource, Fixed);
 test_source_from!(CountingSource, Counting);
+test_source_from!(DelayedCountingSource, DelayedCounting);
 test_source_from!(BarrierSource, Barrier);
 
 #[async_trait::async_trait(?Send)]
@@ -96,6 +110,7 @@ impl ReferenceSource for TestProviderSource {
             Self::AlwaysFail(source) => source.source_id(),
             Self::Fixed(source) => source.source_id(),
             Self::Counting(source) => source.source_id(),
+            Self::DelayedCounting(source) => source.source_id(),
             Self::Barrier(source) => source.source_id(),
         }
     }
@@ -108,11 +123,12 @@ impl ReferenceSource for TestProviderSource {
             Self::AlwaysFail(source) => source.fetch_catalog().await,
             Self::Fixed(source) => source.fetch_catalog().await,
             Self::Counting(source) => source.fetch_catalog().await,
+            Self::DelayedCounting(source) => source.fetch_catalog().await,
             Self::Barrier(source) => source.fetch_catalog().await,
         }
     }
 
-    async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::ProviderUpdate> {
+    async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::SourceUpdate> {
         match self {
             Self::Flaky(source) => source.fetch_catalog_step().await,
             Self::RefreshingPaged(source) => source.fetch_catalog_step().await,
@@ -120,6 +136,7 @@ impl ReferenceSource for TestProviderSource {
             Self::AlwaysFail(source) => source.fetch_catalog_step().await,
             Self::Fixed(source) => source.fetch_catalog_step().await,
             Self::Counting(source) => source.fetch_catalog_step().await,
+            Self::DelayedCounting(source) => source.fetch_catalog_step().await,
             Self::Barrier(source) => source.fetch_catalog_step().await,
         }
     }
@@ -167,14 +184,16 @@ async fn normalized_composite_persists_facts_without_returning_a_full_catalog() 
             ..Default::default()
         },
     };
-    let mut composite =
-        CompositeSource::new_with_sync_store(vec![TestProviderSource::from(source)], Some(store))
-            .await
-            .unwrap();
+    let mut fan_in = ProviderFanInSource::new_with_sync_store(
+        vec![TestProviderSource::from(source)],
+        Some(store),
+    )
+    .await
+    .unwrap();
 
-    assert!(composite.normalized_facts_authoritative());
+    assert!(fan_in.normalized_facts_authoritative());
     assert_eq!(
-        composite.fetch_catalog().await.unwrap(),
+        fan_in.fetch_catalog().await.unwrap(),
         ProviderCatalog::default()
     );
     let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
@@ -186,6 +205,138 @@ async fn normalized_composite_persists_facts_without_returning_a_full_catalog() 
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn normalized_fan_in_round_robins_source_tick_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let first_calls = Arc::new(AtomicUsize::new(0));
+    let second_calls = Arc::new(AtomicUsize::new(0));
+    let mut fan_in = ProviderFanInSource::new_with_sync_store(
+        vec![
+            TestProviderSource::from(CountingSource {
+                id: "provider-a",
+                catalog: ProviderCatalog {
+                    entities: vec![Entity {
+                        entity_id: "provider:a".into(),
+                        entity_type: "data_provider".into(),
+                        name: "Provider A".into(),
+                        status: "active".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                calls: Arc::clone(&first_calls),
+            }),
+            TestProviderSource::from(DelayedCountingSource {
+                id: "provider-b",
+                catalog: ProviderCatalog {
+                    entities: vec![Entity {
+                        entity_id: "provider:b".into(),
+                        entity_type: "data_provider".into(),
+                        name: "Provider B".into(),
+                        status: "active".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                calls: Arc::clone(&second_calls),
+                delay: Duration::from_millis(10),
+            }),
+        ],
+        Some(store),
+    )
+    .await
+    .unwrap();
+    let budget = SourceTickBudget {
+        max_sources_per_tick: 1,
+        ..SourceTickBudget::default()
+    };
+    let mut system = kairos_conflux::ConfluxSystem::new();
+
+    let first = fan_in
+        .advance_workflow_with_budget(&mut system.connections(), budget)
+        .await
+        .unwrap_err();
+    assert!(first.is_sync_in_progress());
+    assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(second_calls.load(Ordering::SeqCst), 0);
+
+    fan_in
+        .advance_workflow_with_budget(&mut system.connections(), budget)
+        .await
+        .unwrap();
+    assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(second_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn normalized_fan_in_defers_sources_after_wall_clock_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let first_calls = Arc::new(AtomicUsize::new(0));
+    let second_calls = Arc::new(AtomicUsize::new(0));
+    let mut fan_in = ProviderFanInSource::new_with_sync_store(
+        vec![
+            TestProviderSource::from(DelayedCountingSource {
+                id: "provider-a",
+                catalog: ProviderCatalog {
+                    entities: vec![Entity {
+                        entity_id: "provider:a".into(),
+                        entity_type: "data_provider".into(),
+                        name: "Provider A".into(),
+                        status: "active".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                calls: Arc::clone(&first_calls),
+                delay: Duration::from_millis(10),
+            }),
+            TestProviderSource::from(DelayedCountingSource {
+                id: "provider-b",
+                catalog: ProviderCatalog {
+                    entities: vec![Entity {
+                        entity_id: "provider:b".into(),
+                        entity_type: "data_provider".into(),
+                        name: "Provider B".into(),
+                        status: "active".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                calls: Arc::clone(&second_calls),
+                delay: Duration::from_millis(10),
+            }),
+        ],
+        Some(store),
+    )
+    .await
+    .unwrap();
+    let budget = SourceTickBudget {
+        max_sources_per_tick: 2,
+        max_wall_clock_millis: Some(1),
+        ..SourceTickBudget::default()
+    };
+    let mut system = kairos_conflux::ConfluxSystem::new();
+
+    let first = fan_in
+        .advance_workflow_with_budget(&mut system.connections(), budget)
+        .await
+        .unwrap_err();
+    assert!(first.is_sync_in_progress());
+    assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(second_calls.load(Ordering::SeqCst), 0);
+
+    fan_in
+        .advance_workflow_with_budget(&mut system.connections(), budget)
+        .await
+        .unwrap();
+    assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(second_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -240,14 +391,14 @@ async fn actor_commits_normalized_composite_facts_without_catalog_materializatio
             ..Default::default()
         },
     };
-    let composite = CompositeSource::new_with_sync_store(
+    let fan_in = ProviderFanInSource::new_with_sync_store(
         vec![TestProviderSource::from(source)],
         Some(provider_store),
     )
     .await
     .unwrap();
     let catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
-    let mut actor = ReferenceActor::new_test("reference-test", composite, catalog_store)
+    let mut actor = ReferenceActor::new_test("reference-test", fan_in, catalog_store)
         .await
         .unwrap();
 
@@ -270,7 +421,7 @@ impl ReferenceSource for PagedSource {
         Ok(ProviderCatalog::default())
     }
 
-    async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::ProviderUpdate> {
+    async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::SourceUpdate> {
         self.calls += 1;
         let mut markets = vec![Market {
             market_id: typed_market_id("market:page-1"),
@@ -284,7 +435,7 @@ impl ReferenceSource for PagedSource {
                 ..Default::default()
             });
         }
-        Ok(super::ProviderUpdate {
+        Ok(super::SourceUpdate {
             catalog: ProviderCatalog {
                 markets,
                 ..Default::default()
@@ -292,6 +443,7 @@ impl ReferenceSource for PagedSource {
             complete: self.calls >= 2,
             page_count: 1,
             facts_persisted: false,
+            ..Default::default()
         })
     }
 }
@@ -306,14 +458,14 @@ impl ReferenceSource for RefreshingPagedSource {
         Ok(ProviderCatalog::default())
     }
 
-    async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::ProviderUpdate> {
+    async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::SourceUpdate> {
         self.calls += 1;
         let market_id = if self.calls == 1 {
             "market:complete-old"
         } else {
             "market:complete-new"
         };
-        Ok(super::ProviderUpdate {
+        Ok(super::SourceUpdate {
             catalog: ProviderCatalog {
                 markets: vec![Market {
                     market_id: typed_market_id(market_id),
@@ -325,6 +477,7 @@ impl ReferenceSource for RefreshingPagedSource {
             complete: self.calls != 2,
             page_count: 1,
             facts_persisted: false,
+            ..Default::default()
         })
     }
 }
@@ -353,6 +506,34 @@ impl ReferenceSource for FixedSource {
     }
 }
 
+#[tokio::test]
+async fn participant_augmented_step_counts_appended_records_seen() {
+    let source = FixedSource {
+        id: "provider-a",
+        catalog: ProviderCatalog {
+            markets: vec![Market {
+                market_id: typed_market_id("market:provider-a"),
+                status: "active".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    };
+    let participants = vec![Entity {
+        entity_id: "participant:venue:a".into(),
+        entity_type: "venue".into(),
+        name: "Venue A".into(),
+        ..Default::default()
+    }];
+    let mut source = ParticipantAugmentedSource::wrap(source, participants);
+
+    let update = source.fetch_catalog_step().await.unwrap();
+
+    assert_eq!(update.records_seen, Some(2));
+    assert_eq!(update.catalog.entities.len(), 1);
+    assert_eq!(update.catalog.markets.len(), 1);
+}
+
 #[async_trait::async_trait(?Send)]
 impl ReferenceSource for CountingSource {
     fn source_id(&self) -> &str {
@@ -361,6 +542,19 @@ impl ReferenceSource for CountingSource {
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.catalog.clone())
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl ReferenceSource for DelayedCountingSource {
+    fn source_id(&self) -> &str {
+        self.id
+    }
+
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
         Ok(self.catalog.clone())
     }
 }
@@ -907,7 +1101,7 @@ fn hyperliquid_spot_and_perpetual_have_distinct_provider_products() {
 #[tokio::test]
 async fn provider_failure_keeps_last_known_good_snapshot() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let mut source = CompositeSource::new(vec![TestProviderSource::from(FlakySource {
+    let mut source = ProviderFanInSource::new(vec![TestProviderSource::from(FlakySource {
         calls: Arc::clone(&calls),
     })])
     .await
@@ -916,14 +1110,17 @@ async fn provider_failure_keeps_last_known_good_snapshot() {
     let second = source.fetch_catalog().await.unwrap();
     assert_eq!(first.markets, second.markets);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(source.provider_health()[0].status, "stale");
-    assert!(source.provider_health()[0].stale);
+    assert_eq!(
+        source.source_health()[0].status,
+        SourceRuntimePhase::Degraded
+    );
+    assert!(source.source_health()[0].stale);
 }
 
 #[tokio::test]
 async fn targeted_refresh_does_not_poll_unrelated_provider() {
     let peer_calls = Arc::new(AtomicUsize::new(0));
-    let mut source = CompositeSource::new(vec![
+    let mut source = ProviderFanInSource::new(vec![
         TestProviderSource::from(PagedSource { calls: 0 }),
         TestProviderSource::from(CountingSource {
             id: "test-peer",
@@ -964,7 +1161,7 @@ async fn paused_provider_keeps_its_snapshot_without_polling_peer() {
     let path = directory.path().join("reference.sqlite");
     let paused_calls = Arc::new(AtomicUsize::new(0));
     let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
-    let mut source = CompositeSource::new_with_sync_store(
+    let mut source = ProviderFanInSource::new_with_sync_store(
         vec![
             TestProviderSource::from(FixedSource {
                 id: "binance-spot",
@@ -998,7 +1195,7 @@ async fn paused_provider_keeps_its_snapshot_without_polling_peer() {
     assert_eq!(source.fetch_catalog().await.unwrap().markets.len(), 2);
     assert_eq!(paused_calls.load(Ordering::SeqCst), 1);
     source
-        .set_source_paused("massive-options", true)
+        .set_source_desired_state("massive-options", SourceDesiredState::Paused)
         .await
         .unwrap();
     let catalog = source.fetch_catalog().await.unwrap();
@@ -1007,12 +1204,12 @@ async fn paused_provider_keeps_its_snapshot_without_polling_peer() {
     assert_eq!(catalog.markets.len(), 2);
     assert_eq!(
         source
-            .provider_health()
+            .source_health()
             .into_iter()
             .find(|health| health.source_id == "massive-options")
             .unwrap()
             .status,
-        "paused"
+        SourceRuntimePhase::Paused
     );
 }
 
@@ -1023,7 +1220,7 @@ async fn provider_last_known_good_survives_composite_restart() {
     {
         let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut source = CompositeSource::new_with_sync_store(
+        let mut source = ProviderFanInSource::new_with_sync_store(
             vec![TestProviderSource::from(FlakySource {
                 calls: Arc::clone(&calls),
             })],
@@ -1034,7 +1231,7 @@ async fn provider_last_known_good_survives_composite_restart() {
         assert_eq!(source.fetch_catalog().await.unwrap().markets.len(), 1);
     }
     let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
-    let mut restarted = CompositeSource::new_with_sync_store(
+    let mut restarted = ProviderFanInSource::new_with_sync_store(
         vec![TestProviderSource::from(AlwaysFailSource)],
         Some(store),
     )
@@ -1042,12 +1239,683 @@ async fn provider_last_known_good_survives_composite_restart() {
     .unwrap();
     let catalog = restarted.fetch_catalog().await.unwrap();
     assert_eq!(catalog.markets.len(), 1);
-    assert_eq!(restarted.provider_health()[0].status, "stale");
+    assert_eq!(
+        restarted.source_health()[0].status,
+        SourceRuntimePhase::Degraded
+    );
+}
+
+#[tokio::test]
+async fn dynamic_source_definition_is_visible_in_source_health() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let mut source = ProviderFanInSource::new_with_sync_store(
+        vec![TestProviderSource::from(FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog::default(),
+        })],
+        Some(store),
+    )
+    .await
+    .unwrap();
+
+    source
+        .upsert_source_definition(ReferenceSourceDefinition {
+            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
+            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
+            provider_product: Some(
+                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
+            ),
+            scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
+            desired_state: SourceDesiredState::Paused,
+            credential_binding: Some(
+                crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
+            ),
+            sync_policy: SourceSyncPolicy::ScopedSnapshot,
+        })
+        .await
+        .unwrap();
+
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "massive-options")
+        .expect("dynamic source definition appears in provider health");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Paused);
+    assert_eq!(
+        dynamic
+            .definition
+            .as_ref()
+            .and_then(|definition| definition.provider_product.as_deref()),
+        Some("options")
+    );
+    let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let definitions = reopened.source_definitions().await.unwrap();
+    assert!(
+        definitions
+            .iter()
+            .any(|value| value.source_id == "provider-a")
+    );
+    assert!(
+        definitions
+            .iter()
+            .any(|value| value.source_id == "massive-options")
+    );
+}
+
+#[tokio::test]
+async fn enabled_registry_only_source_is_reported_as_registered() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let mut source = ProviderFanInSource::new_with_sync_store(
+        vec![TestProviderSource::from(FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog::default(),
+        })],
+        Some(store),
+    )
+    .await
+    .unwrap();
+
+    source
+        .upsert_source_definition(ReferenceSourceDefinition {
+            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
+            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
+            provider_product: Some(
+                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
+            ),
+            scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
+            desired_state: SourceDesiredState::Enabled,
+            credential_binding: Some(
+                crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
+            ),
+            sync_policy: SourceSyncPolicy::ScopedSnapshot,
+        })
+        .await
+        .unwrap();
+
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "massive-options")
+        .expect("dynamic source definition appears in provider health");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Registered);
+    assert!(dynamic.last_error.is_none());
+    assert!(dynamic.definition.as_ref().unwrap().sync_policy == SourceSyncPolicy::ScopedSnapshot);
+}
+
+#[tokio::test]
+async fn dynamic_scoped_massive_options_definition_activates_runtime_adapter() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let key = kairos_conflux::ConnectionKey::new("missing-reference-test").unwrap();
+    let mut resolver = ReferenceCredentialResolver::default();
+    resolver.insert_massive("massive.default", "test-massive-api-key");
+    let mut source = ProviderFanInSource::new_with_sync_store_and_credentials(
+        vec![ConfiguredProviderSource::BinanceSpot(
+            BinanceSpotSource::from_key(key),
+        )],
+        Some(store),
+        resolver,
+    )
+    .await
+    .unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+
+    source
+        .upsert_source_definition_with_connections(
+            ReferenceSourceDefinition {
+                source_id: kairos_primitives::integration::ProviderId::new("massive-options")
+                    .unwrap(),
+                provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
+                provider_product: Some(
+                    kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
+                ),
+                scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
+                desired_state: SourceDesiredState::Enabled,
+                credential_binding: Some(
+                    crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
+                ),
+                sync_policy: SourceSyncPolicy::ScopedSnapshot,
+            },
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(source.option_underlyings(), vec!["SPY"]);
+    assert!(
+        system
+            .connections()
+            .massive_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-massive-options-spy")
+    );
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "massive-options")
+        .expect("dynamic scoped source appears in source health");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Idle);
+
+    source
+        .upsert_source_definition_with_connections(
+            ReferenceSourceDefinition {
+                source_id: kairos_primitives::integration::ProviderId::new("massive-options")
+                    .unwrap(),
+                provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
+                provider_product: Some(
+                    kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
+                ),
+                scope: SourceScope::underlying_instrument("instrument:equity:US:QQQ:common"),
+                desired_state: SourceDesiredState::Enabled,
+                credential_binding: Some(
+                    crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
+                ),
+                sync_policy: SourceSyncPolicy::ScopedSnapshot,
+            },
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(source.option_underlyings(), vec!["QQQ", "SPY"]);
+    assert!(
+        system
+            .connections()
+            .massive_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-massive-options-qqq")
+    );
+
+    source
+        .set_source_desired_state_with_connections(
+            "massive-options",
+            SourceDesiredState::Removed,
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !system
+            .connections()
+            .massive_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-massive-options-spy")
+    );
+    assert!(
+        !system
+            .connections()
+            .massive_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-massive-options-qqq")
+    );
+}
+
+#[tokio::test]
+async fn dynamic_runtime_source_definition_activates_public_adapter() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let key = kairos_conflux::ConnectionKey::new("missing-reference-test").unwrap();
+    let mut source = ProviderFanInSource::new_with_sync_store(
+        vec![ConfiguredProviderSource::BinanceSpot(
+            BinanceSpotSource::from_key(key),
+        )],
+        Some(store),
+    )
+    .await
+    .unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+
+    source
+        .upsert_source_definition_with_connections(
+            ReferenceSourceDefinition {
+                source_id: kairos_primitives::integration::ProviderId::new("hyperliquid-spot")
+                    .unwrap(),
+                provider_id: kairos_primitives::integration::ProviderId::new("hyperliquid")
+                    .unwrap(),
+                provider_product: Some(
+                    kairos_primitives::integration::ProviderProductCode::new("spot").unwrap(),
+                ),
+                scope: SourceScope::global(),
+                desired_state: SourceDesiredState::Enabled,
+                credential_binding: None,
+                sync_policy: SourceSyncPolicy::FullSnapshot,
+            },
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "hyperliquid-spot")
+        .expect("dynamic runtime source appears in provider health");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Idle);
+    assert!(
+        system
+            .connections()
+            .hyperliquid_info_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-hyperliquid-spot")
+    );
+
+    source
+        .set_source_desired_state_with_connections(
+            "hyperliquid-spot",
+            SourceDesiredState::Removed,
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !system
+            .connections()
+            .hyperliquid_info_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-hyperliquid-spot")
+    );
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "hyperliquid-spot")
+        .expect("removed source definition remains observable");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Disabled);
+}
+
+#[tokio::test]
+async fn dynamic_credentialed_source_definition_activates_runtime_adapter() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let key = kairos_conflux::ConnectionKey::new("missing-reference-test").unwrap();
+    let mut resolver = ReferenceCredentialResolver::default();
+    resolver.insert_binance(
+        "binance.reference-stocks",
+        BinanceCredential {
+            principal_id: "reference-stocks".to_owned(),
+            api_key: secrecy::SecretString::new("test-api-key".to_owned().into()),
+            secret: secrecy::SecretString::new("test-secret".to_owned().into()),
+        },
+    );
+    let mut source = ProviderFanInSource::new_with_sync_store_and_credentials(
+        vec![ConfiguredProviderSource::BinanceSpot(
+            BinanceSpotSource::from_key(key),
+        )],
+        Some(store),
+        resolver,
+    )
+    .await
+    .unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+
+    source
+        .upsert_source_definition_with_connections(
+            ReferenceSourceDefinition {
+                source_id: kairos_primitives::integration::ProviderId::new("binance-equity")
+                    .unwrap(),
+                provider_id: kairos_primitives::integration::ProviderId::new("binance").unwrap(),
+                provider_product: Some(
+                    kairos_primitives::integration::ProviderProductCode::new("equity").unwrap(),
+                ),
+                scope: SourceScope::global(),
+                desired_state: SourceDesiredState::Enabled,
+                credential_binding: Some(
+                    crate::domain::SourceCredentialBinding::new("binance.reference-stocks")
+                        .unwrap(),
+                ),
+                sync_policy: SourceSyncPolicy::FullSnapshot,
+            },
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        system
+            .connections()
+            .binance_stocks_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-binance-stocks")
+    );
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "binance-equity")
+        .expect("dynamic credentialed source appears in source health");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Idle);
+}
+
+#[tokio::test]
+async fn dynamic_massive_equity_source_definition_activates_runtime_adapter() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let key = kairos_conflux::ConnectionKey::new("missing-reference-test").unwrap();
+    let mut resolver = ReferenceCredentialResolver::default();
+    resolver.insert_massive("massive.default", "test-massive-api-key");
+    let mut source = ProviderFanInSource::new_with_sync_store_and_credentials(
+        vec![ConfiguredProviderSource::BinanceSpot(
+            BinanceSpotSource::from_key(key),
+        )],
+        Some(store),
+        resolver,
+    )
+    .await
+    .unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+
+    source
+        .upsert_source_definition_with_connections(
+            ReferenceSourceDefinition {
+                source_id: kairos_primitives::integration::ProviderId::new("massive-equity")
+                    .unwrap(),
+                provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
+                provider_product: Some(
+                    kairos_primitives::integration::ProviderProductCode::new("equity").unwrap(),
+                ),
+                scope: SourceScope::global(),
+                desired_state: SourceDesiredState::Enabled,
+                credential_binding: Some(
+                    crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
+                ),
+                sync_policy: SourceSyncPolicy::FullSnapshot,
+            },
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        system
+            .connections()
+            .massive_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-massive-equity")
+    );
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "massive-equity")
+        .expect("dynamic Massive equity source appears in source health");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Idle);
+
+    source
+        .set_source_desired_state_with_connections(
+            "massive-equity",
+            SourceDesiredState::Removed,
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !system
+            .connections()
+            .massive_rest
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "reference-massive-equity")
+    );
+}
+
+#[tokio::test]
+async fn dynamic_activation_error_is_visible_in_registered_source_health() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let key = kairos_conflux::ConnectionKey::new("missing-reference-test").unwrap();
+    let mut source = ProviderFanInSource::new_with_sync_store_and_credentials(
+        vec![ConfiguredProviderSource::BinanceSpot(
+            BinanceSpotSource::from_key(key),
+        )],
+        Some(store),
+        ReferenceCredentialResolver::default(),
+    )
+    .await
+    .unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+
+    let error = source
+        .upsert_source_definition_with_connections(
+            ReferenceSourceDefinition {
+                source_id: kairos_primitives::integration::ProviderId::new("binance-equity")
+                    .unwrap(),
+                provider_id: kairos_primitives::integration::ProviderId::new("binance").unwrap(),
+                provider_product: Some(
+                    kairos_primitives::integration::ProviderProductCode::new("equity").unwrap(),
+                ),
+                scope: SourceScope::global(),
+                desired_state: SourceDesiredState::Enabled,
+                credential_binding: Some(
+                    crate::domain::SourceCredentialBinding::new("binance.missing").unwrap(),
+                ),
+                sync_policy: SourceSyncPolicy::FullSnapshot,
+            },
+            &mut system.connections(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("credential binding binance.missing is not available")
+    );
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "binance-equity")
+        .expect("failed dynamic source remains observable");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Registered);
+    assert_eq!(
+        dynamic.last_error.as_ref().map(|error| error.code.as_str()),
+        Some("reference.provider_failed")
+    );
+    assert!(
+        dynamic
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("credential binding binance.missing is not available")
+    );
+}
+
+#[tokio::test]
+async fn registered_source_targeted_refresh_reports_missing_adapter() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let mut source = ProviderFanInSource::new_with_sync_store(
+        vec![TestProviderSource::from(FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog::default(),
+        })],
+        Some(store),
+    )
+    .await
+    .unwrap();
+
+    source
+        .upsert_source_definition(ReferenceSourceDefinition {
+            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
+            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
+            provider_product: Some(
+                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
+            ),
+            scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
+            desired_state: SourceDesiredState::Enabled,
+            credential_binding: Some(
+                crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
+            ),
+            sync_policy: SourceSyncPolicy::ScopedSnapshot,
+        })
+        .await
+        .unwrap();
+
+    let error = source
+        .advance_one_source("massive-options")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("registered but has no active runtime adapter"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn paused_registry_only_source_targeted_refresh_is_skipped() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let mut source = ProviderFanInSource::new_with_sync_store(
+        vec![TestProviderSource::from(FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog::default(),
+        })],
+        Some(store),
+    )
+    .await
+    .unwrap();
+
+    source
+        .upsert_source_definition(ReferenceSourceDefinition {
+            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
+            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
+            provider_product: Some(
+                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
+            ),
+            scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
+            desired_state: SourceDesiredState::Paused,
+            credential_binding: Some(
+                crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
+            ),
+            sync_policy: SourceSyncPolicy::ScopedSnapshot,
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        source
+            .advance_one_source("massive-options")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn disabled_registry_only_source_targeted_refresh_preserves_disabled_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let mut source = ProviderFanInSource::new_with_sync_store(
+        vec![TestProviderSource::from(FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog::default(),
+        })],
+        Some(store),
+    )
+    .await
+    .unwrap();
+
+    source
+        .upsert_source_definition(ReferenceSourceDefinition {
+            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
+            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
+            provider_product: Some(
+                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
+            ),
+            scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
+            desired_state: SourceDesiredState::Disabled,
+            credential_binding: Some(
+                crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
+            ),
+            sync_policy: SourceSyncPolicy::ScopedSnapshot,
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        source
+            .advance_one_source("massive-options")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let health = source.source_health();
+    let dynamic = health
+        .iter()
+        .find(|value| value.source_id == "massive-options")
+        .expect("dynamic source definition appears in provider health");
+    assert_eq!(dynamic.status, SourceRuntimePhase::Disabled);
+    assert_eq!(
+        dynamic
+            .definition
+            .as_ref()
+            .map(|definition| definition.desired_state),
+        Some(SourceDesiredState::Disabled)
+    );
+}
+
+#[tokio::test]
+async fn configured_source_seed_preserves_durable_desired_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    {
+        let mut store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        store
+            .set_source_desired_state("massive-options", SourceDesiredState::Paused)
+            .await
+            .unwrap();
+    }
+    let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let source = ProviderFanInSource::new_with_sync_store(
+        vec![TestProviderSource::from(FixedSource {
+            id: "massive-options",
+            catalog: ProviderCatalog::default(),
+        })],
+        Some(store),
+    )
+    .await
+    .unwrap();
+
+    let health = source.source_health();
+    assert_eq!(health[0].source_id, "massive-options");
+    assert_eq!(health[0].status, SourceRuntimePhase::Paused);
+    assert_eq!(
+        health[0]
+            .definition
+            .as_ref()
+            .map(|definition| definition.desired_state),
+        Some(SourceDesiredState::Paused)
+    );
+
+    let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
+    let definitions = reopened.source_definitions().await.unwrap();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].source_id, "massive-options");
+    assert_eq!(definitions[0].desired_state, SourceDesiredState::Paused);
 }
 
 #[tokio::test]
 async fn provider_without_last_known_good_rejects_partial_refresh() {
-    let mut source = CompositeSource::new(vec![TestProviderSource::from(AlwaysFailSource)])
+    let mut source = ProviderFanInSource::new(vec![TestProviderSource::from(AlwaysFailSource)])
         .await
         .unwrap();
     let error = source.fetch_catalog().await.unwrap_err().to_string();
@@ -1056,14 +1924,14 @@ async fn provider_without_last_known_good_rejects_partial_refresh() {
 
 #[tokio::test]
 async fn provider_failure_opens_circuit_and_applies_backoff() {
-    let mut source = CompositeSource::new(vec![TestProviderSource::from(AlwaysFailSource)])
+    let mut source = ProviderFanInSource::new(vec![TestProviderSource::from(AlwaysFailSource)])
         .await
         .unwrap();
     let _ = source.fetch_catalog().await;
-    assert_eq!(source.provider_health()[0].consecutive_failures, 1);
+    assert_eq!(source.source_health()[0].consecutive_failures, 1);
     let error = source.fetch_catalog().await.unwrap_err().to_string();
-    assert!(error.contains("provider circuit is open"));
-    assert_eq!(source.provider_health()[0].consecutive_failures, 1);
+    assert!(error.contains("provider retry window is waiting"));
+    assert_eq!(source.source_health()[0].consecutive_failures, 1);
 }
 
 #[tokio::test]
@@ -1090,14 +1958,14 @@ async fn irreconcilable_provider_record_collision_rejects_the_refresh() {
             ..Default::default()
         },
     };
-    let mut source = CompositeSource::new(vec![
+    let mut source = ProviderFanInSource::new(vec![
         TestProviderSource::from(first),
         TestProviderSource::from(second),
     ])
     .await
     .unwrap();
     let error = source.fetch_catalog().await.unwrap_err().to_string();
-    assert!(error.contains("irreconcilable canonical record conflicts"));
+    assert!(error.contains("canonical record conflicts"));
     assert!(error.contains("market:market:shared"));
 }
 
@@ -1113,7 +1981,7 @@ async fn shared_canonical_instrument_aggregates_listing_availability() {
         status,
         ..Instrument::default()
     };
-    let mut source = CompositeSource::new(vec![
+    let mut source = ProviderFanInSource::new(vec![
         TestProviderSource::from(FixedSource {
             id: "provider-a",
             catalog: ProviderCatalog {
@@ -1153,7 +2021,7 @@ async fn shared_canonical_instrument_is_enriched_by_an_authoritative_optional_fa
     let mut without_currency = instrument();
     without_currency.primary_currency_asset_id = None;
     let with_currency = instrument();
-    let mut source = CompositeSource::new(vec![
+    let mut source = ProviderFanInSource::new(vec![
         TestProviderSource::from(FixedSource {
             id: "provider-a",
             catalog: ProviderCatalog {
@@ -1188,7 +2056,7 @@ async fn shared_canonical_asset_is_active_when_any_provider_observes_it_active()
         status,
         ..Asset::default()
     };
-    let mut source = CompositeSource::new(vec![
+    let mut source = ProviderFanInSource::new(vec![
         TestProviderSource::from(FixedSource {
             id: "provider-a",
             catalog: ProviderCatalog {
@@ -1253,7 +2121,7 @@ fn obsolete_provider_snapshot_shape_is_not_eligible_for_fallback() {
 #[tokio::test]
 async fn provider_fan_in_polls_sources_concurrently_on_caller_runtime() {
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
-    let mut source = CompositeSource::new(vec![
+    let mut source = ProviderFanInSource::new(vec![
         TestProviderSource::from(BarrierSource {
             id: "provider-a",
             barrier: Arc::clone(&barrier),
@@ -1573,7 +2441,11 @@ async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
 
     assert!(source.option_underlyings().is_empty());
     source
-        .set_option_underlying_with_connections("spy", true, &mut system.connections())
+        .set_scope_with_connections(
+            SourceScope::underlying_instrument("spy"),
+            true,
+            &mut system.connections(),
+        )
         .await
         .unwrap();
     assert_eq!(source.option_underlyings(), vec!["SPY"]);
@@ -1583,6 +2455,10 @@ async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
         .unwrap();
     server.join().unwrap();
     assert!(completed.complete);
+    assert_eq!(
+        completed.records_seen,
+        Some(completed.catalog.record_count() as u64)
+    );
     assert!(
         completed
             .catalog
@@ -1601,7 +2477,11 @@ async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
     assert!(completed.catalog.markets.is_empty());
 
     source
-        .set_option_underlying_with_connections("SPY", false, &mut system.connections())
+        .set_scope_with_connections(
+            SourceScope::underlying_instrument("SPY"),
+            false,
+            &mut system.connections(),
+        )
         .await
         .unwrap();
     let removed = source
@@ -1614,6 +2494,103 @@ async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
 }
 
 #[tokio::test]
+async fn massive_options_scope_replacement_is_syncing_until_scope_complete() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        for page in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(request.contains("underlying_ticker=SPY"));
+            let next = if page == 0 {
+                String::new()
+            } else {
+                format!(r#", "next_url":"http://{address}/v3/reference/tickers?cursor=page-2""#)
+            };
+            let strike = if page == 0 { 500 } else { 510 };
+            let body = format!(
+                r#"{{"results":[{{"ticker":"O:SPY260821C{strike:08}","underlying_ticker":"SPY","primary_exchange":"OPRA","expiration_date":"2026-08-21","strike_price":{strike},"contract_type":"call","active":true}}]{next}}}"#
+            );
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
+    let (mut source, mut system) =
+        MassiveOptionsCoverageSource::new("test-key", format!("http://{address}"), store)
+            .await
+            .unwrap();
+    source
+        .set_scope_with_connections(
+            SourceScope::underlying_instrument("SPY"),
+            true,
+            &mut system.connections(),
+        )
+        .await
+        .unwrap();
+    let first = source
+        .fetch_catalog_step_with_connections(&mut system.connections())
+        .await
+        .unwrap();
+    assert!(first.complete);
+    assert!(
+        first
+            .catalog
+            .instruments
+            .iter()
+            .any(|instrument| instrument.instrument_id == "instrument:option:SPY:20260821:500:C")
+    );
+    drop(source);
+
+    let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
+    let (mut resumed, mut resumed_system) =
+        MassiveOptionsCoverageSource::new("test-key", format!("http://{address}"), store)
+            .await
+            .unwrap();
+    let replacement = resumed
+        .fetch_catalog_step_with_connections(&mut resumed_system.connections())
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(!replacement.complete);
+    assert!(replacement.records_seen.is_some_and(|count| count > 0));
+    assert_eq!(
+        replacement.work_item_id.as_deref(),
+        Some("massive-options:SPY")
+    );
+    assert_eq!(
+        replacement.scope_id.as_deref(),
+        Some("instrument:equity:US:SPY:common")
+    );
+    assert_eq!(
+        replacement.scope_kind.as_deref(),
+        Some("underlying_instrument")
+    );
+    assert_eq!(replacement.cursor_present, Some(true));
+    let mut store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
+    let last_good = store
+        .load_last_good("massive-options:SPY")
+        .await
+        .unwrap()
+        .expect("completed scope remains authoritative while replacement pages");
+    assert!(
+        last_good
+            .instruments
+            .iter()
+            .any(|instrument| instrument.instrument_id == "instrument:option:SPY:20260821:500:C")
+    );
+}
+
+#[tokio::test]
 async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1623,6 +2600,7 @@ async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
             let mut request = [0_u8; 4096];
             let length = stream.read(&mut request).unwrap();
             let request = String::from_utf8_lossy(&request[..length]);
+            assert!(request.contains("limit=1000"));
             if page > 0 {
                 assert!(request.contains(&format!("cursor=page-{page}")));
             }
@@ -1659,6 +2637,7 @@ async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
         .unwrap();
     assert!(!partial.complete);
     assert_eq!(partial.page_count, 1);
+    assert_eq!(partial.pages_done, Some(1));
     assert!(partial.catalog.markets.is_empty());
     drop(first);
 
@@ -1674,6 +2653,7 @@ async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
             .unwrap();
         assert!(!partial.complete);
         assert_eq!(partial.page_count, 1);
+        assert!(partial.pages_done.is_some_and(|pages_done| pages_done >= 1));
         assert!(partial.catalog.markets.is_empty());
     }
     let complete = resumed
@@ -1684,6 +2664,8 @@ async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
 
     assert!(complete.complete);
     assert_eq!(complete.page_count, 1);
+    assert_eq!(complete.pages_done, Some(8));
+    assert_eq!(complete.pages_total, Some(8));
     assert_eq!(
         complete
             .catalog
@@ -1710,10 +2692,88 @@ async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
 }
 
 #[tokio::test]
-async fn partial_provider_pages_do_not_drop_previous_page() {
-    let mut source = CompositeSource::new(vec![TestProviderSource::from(PagedSource { calls: 0 })])
+async fn massive_full_catalog_uses_tick_budget_for_page_batches() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        for page in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(request.contains("limit=25"));
+            if page > 0 {
+                assert!(request.contains(&format!("cursor=page-{page}")));
+            }
+            let next = if page < 2 {
+                format!(
+                    r#", "next_url":"http://{address}/v3/reference/tickers?cursor=page-{}""#,
+                    page + 1
+                )
+            } else {
+                String::new()
+            };
+            let body = format!(
+                r#"{{"results":[{{"ticker":"BUDGET{page}","primary_exchange":"XNAS","active":true}}]{next}}}"#
+            );
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reference.sqlite");
+    let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
+    let (mut source, mut system) =
+        MassiveEquitySource::new_with_sync_store("test-key", format!("http://{address}"), store)
+            .await
+            .unwrap();
+    let budget = SourceTickBudget {
+        max_batches_per_source: 2,
+        max_records_per_batch: Some(25),
+        ..SourceTickBudget::default()
+    };
+
+    let partial = source
+        .fetch_catalog_step_with_budget(&mut system.connections(), budget)
         .await
         .unwrap();
+    assert!(!partial.complete);
+    assert_eq!(partial.page_count, 2);
+    assert_eq!(partial.pages_done, Some(2));
+    assert_eq!(partial.pages_total, None);
+    assert!(partial.catalog.markets.is_empty());
+
+    let complete = source
+        .fetch_catalog_step_with_budget(&mut system.connections(), budget)
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(complete.complete);
+    assert_eq!(complete.page_count, 1);
+    assert_eq!(complete.pages_done, Some(3));
+    assert_eq!(complete.pages_total, Some(3));
+    assert_eq!(
+        complete
+            .catalog
+            .instruments
+            .iter()
+            .filter(|instrument| instrument.instrument_type == InstrumentKind::Equity)
+            .count(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn partial_provider_pages_do_not_drop_previous_page() {
+    let mut source =
+        ProviderFanInSource::new(vec![TestProviderSource::from(PagedSource { calls: 0 })])
+            .await
+            .unwrap();
     let first_error = source.fetch_catalog().await.unwrap_err();
     assert!(matches!(
         &first_error,
@@ -1722,7 +2782,10 @@ async fn partial_provider_pages_do_not_drop_previous_page() {
     let first_error = first_error.to_string();
     assert!(first_error.contains("synchronization in progress"));
     assert!(first_error.contains("without last-known-good facts"));
-    assert_eq!(source.provider_health()[0].status, "syncing");
+    assert_eq!(
+        source.source_health()[0].status,
+        SourceRuntimePhase::Scanning
+    );
     let second = source.fetch_catalog().await.unwrap();
     assert_eq!(second.markets.len(), 2);
     assert!(
@@ -1735,18 +2798,19 @@ async fn partial_provider_pages_do_not_drop_previous_page() {
 
 #[tokio::test]
 async fn incomplete_provider_sync_does_not_replace_last_good_snapshot() {
-    let mut source = CompositeSource::new(vec![TestProviderSource::from(RefreshingPagedSource {
-        calls: 0,
-    })])
-    .await
-    .unwrap();
+    let mut source =
+        ProviderFanInSource::new(vec![TestProviderSource::from(RefreshingPagedSource {
+            calls: 0,
+        })])
+        .await
+        .unwrap();
     let first = source.fetch_catalog().await.unwrap();
     assert_eq!(first.markets[0].market_id, "market:complete-old");
     let second = source.fetch_catalog().await.unwrap();
     assert_eq!(second.markets[0].market_id, "market:complete-old");
-    assert_eq!(source.provider_health()[0].status, "ready");
-    assert!(!source.provider_health()[0].stale);
+    assert_eq!(source.source_health()[0].status, SourceRuntimePhase::Ready);
+    assert!(!source.source_health()[0].stale);
     let third = source.fetch_catalog().await.unwrap();
     assert_eq!(third.markets[0].market_id, "market:complete-new");
-    assert_eq!(source.provider_health()[0].status, "ready");
+    assert_eq!(source.source_health()[0].status, SourceRuntimePhase::Ready);
 }

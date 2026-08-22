@@ -47,8 +47,11 @@ Transport and runtime options use the canonical names below:
 --aeron-channel <URI>
 --reference-changes-stream <ID>
 --refresh-interval <30s|5m|1h>
---run-mode <daemon|once>
 ```
+
+`kairos-reference-server` is always a long-running daemon. One-shot refresh or
+publication behavior belongs behind explicit maintenance/bootstrap commands,
+not behind a server run mode.
 
 The Reference changes stream is a registered transport resource
 (`kairos-transport::stream_ids::REFERENCE_CHANGES`, currently `1201`) and is
@@ -146,7 +149,7 @@ adapts process transport; it is not a second catalog state owner.
 - atomic SQLite catalog recovery and typed publication outbox;
 - market resolution and typed reference queries;
 - catalog, markets, lifecycle, and change-event publication;
-- one-shot CLI and workspace-managed Unix-socket server.
+- read-only/operator CLI backed by the workspace-managed Reference daemon.
 
 Provider-specific implementation details are tracked in the Reference service
 code, tests, and adapter provenance under

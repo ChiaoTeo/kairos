@@ -6,15 +6,16 @@ use kairos_primitives::reference::InstrumentId;
 use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 use kairos_reference_contract::{
     ReferenceControlError, ReferenceHealthResponse, ReferenceMutationResponse,
-    ReferenceOptionCoverageResponse, ReferenceProviderHealth, ReferencePublishResponse,
-    ReferenceRefreshResponse, ReferenceSourceStatusResponse, UpsertAssetRequest,
-    UpsertInstrumentRequest, UpsertListingRequest,
+    ReferenceOptionCoverageResponse, ReferencePublishResponse, ReferenceRefreshResponse,
+    ReferenceRuntimeStatusResponse, ReferenceSourceControlRequest,
+    ReferenceSourceDefinitionRequest, ReferenceSourceScopeRequest, ReferenceSourceScopeResponse,
+    ReferenceSourceStatusResponse, UpsertAssetRequest, UpsertInstrumentRequest,
+    UpsertListingRequest,
 };
 
-use super::{ReferenceApplication, ReferenceRpcActor};
-use crate::domain::ReferenceError;
+use super::{ReferenceApplication, ReferenceRpcActor, ReferenceTickTrigger};
+use crate::domain::{ReferenceError, SourceDesiredState};
 
-const EVENT_BATCH_LIMIT: usize = 1_024;
 const REFERENCE_BUSINESS_ERROR_CODE: i32 = -31_001;
 
 impl ConfluxActor for ReferenceApplication {
@@ -22,74 +23,7 @@ impl ConfluxActor for ReferenceApplication {
     type LocalEvent = Infallible;
 
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
-        tracing::info!(
-            event = "reference_runtime_stage_started",
-            component = "reference",
-            stage = "activate_sources",
-            "reference runtime stage started"
-        );
-        self.activate_sources(&mut context.connections()).await?;
-        tracing::info!(
-            event = "reference_runtime_stage_completed",
-            component = "reference",
-            stage = "activate_sources",
-            "reference runtime stage completed"
-        );
-        if self.initial_refresh() {
-            tracing::info!(
-                event = "reference_runtime_stage_started",
-                component = "reference",
-                stage = "initial_refresh",
-                "reference runtime stage started"
-            );
-            if let Err(error) = self
-                .refresh_with_connections(&mut context.connections())
-                .await
-            {
-                tracing::warn!(
-                    event = "reference_initial_refresh_deferred",
-                    component = "reference",
-                    error = %error,
-                    "Reference starts from its durable catalog while provider synchronization retries"
-                );
-                tracing::warn!(
-                    event = "reference_runtime_stage_degraded",
-                    component = "reference",
-                    stage = "initial_refresh",
-                    error = %error,
-                    "reference runtime stage degraded"
-                );
-            } else {
-                tracing::info!(
-                    event = "reference_runtime_stage_completed",
-                    component = "reference",
-                    stage = "initial_refresh",
-                    "reference runtime stage completed"
-                );
-            }
-        }
-        tracing::info!(
-            event = "reference_runtime_stage_started",
-            component = "reference",
-            stage = "publish_pending",
-            "reference runtime stage started"
-        );
-        let _ = self.publish_pending(context).await;
-        tracing::info!(
-            event = "reference_runtime_stage_completed",
-            component = "reference",
-            stage = "publish_pending",
-            "reference runtime stage completed"
-        );
-        context.spawn_timer("refresh", self.refresh_interval());
-        tracing::info!(
-            event = "reference_runtime_stage_completed",
-            component = "reference",
-            stage = "serve",
-            refresh_interval_ms = self.refresh_interval().as_millis() as u64,
-            "reference runtime is serving"
-        );
-        Ok(())
+        self.start_runtime(context).await
     }
 
     async fn handle(
@@ -99,18 +33,7 @@ impl ConfluxActor for ReferenceApplication {
     ) -> Result<(), Self::FatalError> {
         match event {
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "refresh" => {
-                if let Err(error) = self
-                    .refresh_with_connections(&mut context.connections())
-                    .await
-                {
-                    tracing::warn!(
-                        event = "reference_refresh_failed",
-                        component = "reference",
-                        error = %error,
-                        "Reference retains its last durable catalog"
-                    );
-                }
-                let _ = self.publish_pending(context).await;
+                self.advance_timer_tick(context).await?;
             },
             _ => {},
         };
@@ -127,6 +50,14 @@ impl ReferenceRpcActor for ReferenceApplication {
         Ok(self.contract_health().await)
     }
 
+    async fn status(
+        &mut self,
+        (): (),
+        _context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceRuntimeStatusResponse> {
+        Ok(self.contract_runtime_status().await)
+    }
+
     async fn refresh(
         &mut self,
         source_id: Option<ProviderId>,
@@ -134,12 +65,19 @@ impl ReferenceRpcActor for ReferenceApplication {
     ) -> RpcResult<ReferenceRefreshResponse> {
         let result = match source_id.as_ref() {
             Some(source_id) => {
-                self.refresh_source_with_connections(source_id.as_str(), &mut context.connections())
-                    .await
+                self.advance_source_with_trigger(
+                    source_id.as_str(),
+                    &mut context.connections(),
+                    ReferenceTickTrigger::Rpc,
+                )
+                .await
             },
             None => {
-                self.refresh_with_connections(&mut context.connections())
-                    .await
+                self.advance_sources_with_trigger(
+                    &mut context.connections(),
+                    ReferenceTickTrigger::Rpc,
+                )
+                .await
             },
         }
         .map_err(rpc_reference_error)?;
@@ -170,22 +108,44 @@ impl ReferenceRpcActor for ReferenceApplication {
         })
     }
 
+    async fn set_source_desired_state(
+        &mut self,
+        request: ReferenceSourceControlRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceSourceStatusResponse> {
+        self.set_source_desired_state_from_contract(request, context)
+            .await
+            .map_err(rpc_control_error)
+    }
+
+    async fn upsert_source_definition(
+        &mut self,
+        request: ReferenceSourceDefinitionRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceSourceStatusResponse> {
+        self.upsert_source_definition_from_contract(request, context)
+            .await
+            .map_err(rpc_reference_error)
+    }
+
+    async fn set_source_scope(
+        &mut self,
+        request: ReferenceSourceScopeRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceSourceScopeResponse> {
+        self.change_source_scope(request, context)
+            .await
+            .map_err(rpc_control_error)
+    }
+
     async fn pause_source(
         &mut self,
         source_id: ProviderId,
         context: &mut Context<'_, Self>,
     ) -> RpcResult<ReferenceSourceStatusResponse> {
-        self.set_source_paused(source_id.as_str(), true)
+        self.set_source_desired_state_response(source_id, SourceDesiredState::Paused, context)
             .await
-            .map_err(rpc_reference_error)?;
-        let _ = self
-            .publish_pending(context)
-            .await
-            .map_err(rpc_control_error)?;
-        Ok(ReferenceSourceStatusResponse {
-            source_id,
-            status: kairos_reference_contract::ReferenceProviderStatus::Paused,
-        })
+            .map_err(rpc_control_error)
     }
 
     async fn resume_source(
@@ -193,17 +153,29 @@ impl ReferenceRpcActor for ReferenceApplication {
         source_id: ProviderId,
         context: &mut Context<'_, Self>,
     ) -> RpcResult<ReferenceSourceStatusResponse> {
-        self.set_source_paused(source_id.as_str(), false)
+        self.set_source_desired_state_response(source_id, SourceDesiredState::Enabled, context)
             .await
-            .map_err(rpc_reference_error)?;
-        let _ = self
-            .publish_pending(context)
+            .map_err(rpc_control_error)
+    }
+
+    async fn disable_source(
+        &mut self,
+        source_id: ProviderId,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceSourceStatusResponse> {
+        self.set_source_desired_state_response(source_id, SourceDesiredState::Disabled, context)
             .await
-            .map_err(rpc_control_error)?;
-        Ok(ReferenceSourceStatusResponse {
-            source_id,
-            status: kairos_reference_contract::ReferenceProviderStatus::Ready,
-        })
+            .map_err(rpc_control_error)
+    }
+
+    async fn enable_source(
+        &mut self,
+        source_id: ProviderId,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceSourceStatusResponse> {
+        self.set_source_desired_state_response(source_id, SourceDesiredState::Enabled, context)
+            .await
+            .map_err(rpc_control_error)
     }
 
     async fn add_option_coverage(
@@ -267,115 +239,6 @@ impl ReferenceRpcActor for ReferenceApplication {
 }
 
 impl ReferenceApplication {
-    pub(crate) async fn contract_health(&mut self) -> ReferenceHealthResponse {
-        let model = self.read_model().await;
-        let providers = model
-            .provider_health()
-            .iter()
-            .map(|provider| ReferenceProviderHealth {
-                source_id: kairos_primitives::integration::ProviderId::new(
-                    provider.source_id.clone(),
-                )
-                .expect("normalized provider source identity"),
-                status: match provider.status.as_str() {
-                    "ready" | "unknown" => {
-                        kairos_reference_contract::ReferenceProviderStatus::Ready
-                    },
-                    "paused" => kairos_reference_contract::ReferenceProviderStatus::Paused,
-                    "syncing" => kairos_reference_contract::ReferenceProviderStatus::Syncing,
-                    _ => kairos_reference_contract::ReferenceProviderStatus::Degraded,
-                },
-                stale: provider.stale,
-            })
-            .collect::<Vec<_>>();
-        let degraded = providers.iter().any(|provider| {
-            provider.stale
-                || !matches!(
-                    provider.status,
-                    kairos_reference_contract::ReferenceProviderStatus::Ready
-                )
-        });
-        ReferenceHealthResponse {
-            status: if degraded {
-                kairos_reference_contract::ReferenceHealthStatus::Degraded
-            } else {
-                kairos_reference_contract::ReferenceHealthStatus::Ready
-            },
-            providers,
-        }
-    }
-
-    async fn change_option_coverage(
-        &mut self,
-        underlying: InstrumentId,
-        enabled: bool,
-        context: &mut Context<'_, Self>,
-    ) -> Result<ReferenceOptionCoverageResponse, ReferenceControlError> {
-        #[cfg(not(test))]
-        let result = {
-            let key = kairos_conflux::ConnectionKey::new(
-                crate::services::providers::MassiveOptionsCoverageSource::connection_key(
-                    underlying.as_str(),
-                )
-                .map_err(control_error)?,
-            )
-            .map_err(|error| control_error(ReferenceError::Provider(error)))?;
-            let created = if enabled
-                && !self
-                    .option_underlyings()
-                    .iter()
-                    .any(|value| value == underlying.as_str())
-            {
-                let (planned_key, parameters) = self
-                    .massive_option_connection_plan(&underlying)
-                    .map_err(control_error)?;
-                context
-                    .connections()
-                    .massive_rest
-                    .create(planned_key.clone(), parameters)
-                    .map_err(|error| control_error(ReferenceError::Provider(error.to_string())))?;
-                Some(planned_key)
-            } else {
-                None
-            };
-            let result = self
-                .set_managed_option_underlying(
-                    &underlying,
-                    enabled,
-                    created.clone(),
-                    &mut context.connections(),
-                )
-                .await
-                .map_err(control_error);
-            if result.is_err() {
-                if let Some(created) = &created {
-                    let _ = context.connections().massive_rest.remove(created);
-                }
-            } else if !enabled {
-                let _ = context.connections().massive_rest.remove(&key);
-            }
-            result?
-        };
-        #[cfg(test)]
-        let result = self
-            .set_option_underlying(&underlying, enabled, &mut context.connections())
-            .await
-            .map_err(control_error)?;
-        let _ = self.publish_pending(context).await;
-        Ok(ReferenceOptionCoverageResponse {
-            underlying,
-            enabled,
-            underlyings: self
-                .option_underlyings()
-                .into_iter()
-                .filter_map(|value| InstrumentId::new(value).ok())
-                .collect(),
-            generation: result.generation,
-            event_sequence: result.event_sequence,
-            changed: result.changed,
-        })
-    }
-
     async fn mutation_response(
         &mut self,
         generation: kairos_primitives::time::Generation,
@@ -392,39 +255,7 @@ impl ReferenceApplication {
         &mut self,
         context: &mut Context<'_, Self>,
     ) -> Result<usize, ReferenceControlError> {
-        let publications = self
-            .pending_publications(EVENT_BATCH_LIMIT)
-            .await
-            .map_err(control_error)?;
-        if publications.is_empty() {
-            return Ok(0);
-        }
-
-        let event_ids = {
-            const OUTPUT: &str = "reference-changes";
-            if !context.outputs().aeron.contains(OUTPUT) {
-                return Err(control_error(ReferenceError::Publication(
-                    "reference Aeron publisher is not configured".into(),
-                )));
-            }
-            for publication in &publications {
-                context
-                    .outputs()
-                    .aeron
-                    .publish(OUTPUT, publication.payload())
-                    .map_err(|error| {
-                        control_error(ReferenceError::Publication(error.to_string()))
-                    })?;
-            }
-            publications
-                .iter()
-                .map(|publication| publication.event_id().to_owned())
-                .collect::<Vec<_>>()
-        };
-        self.acknowledge_publications(&event_ids)
-            .await
-            .map_err(control_error)?;
-        Ok(publications.len())
+        self.publish_pending_to_outputs(context).await
     }
 }
 

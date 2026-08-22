@@ -1,45 +1,15 @@
-use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use kairos_account::composition::account::{
-    AccountOptions, AccountSegmentBinding, compose_binance_async_account_application,
-    compose_ibkr_async_account_application, compose_local_account_application_for_segments,
-    compose_okx_async_account_application, default_rest_endpoint, inspect_account_credential,
+use kairos_account::domain::AccountFill;
+use kairos_account::{
+    AccountCredentialProbeRequest, AccountProviderConnectionArgs, BindCredentialRequest,
+    CliAccountApplication, ConnectAccountProviderRequest, ConnectedAccountApplication,
+    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
 };
-use kairos_account::composition::registry::{
-    AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
-};
-use kairos_account::domain::{AccountFill, AccountModel};
-use kairos_account_contract::{
-    AccountClient, AccountControlRpcClient, AccountControlRpcServer, AccountSegmentsRequest,
-    SimulatedSettlement,
-};
-use kairos_conflux::{
-    Conflux, ConfluxConfig, CredentialRecord, CredentialStore, ExternalAccountCredentialProfile,
-    ShutdownMode,
-};
-use kairos_protocol::generated::kairos::common::v_2::{Decimal64, ViewCompleteness};
+use kairos_account_contract::{AccountSegmentsRequest, SimulatedSettlement};
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};
-
-async fn inspect_credential(
-    options: &AccountOptions,
-    workspace: &Workspace,
-    egress_scope_id: &str,
-) -> Result<ExternalAccountCredentialProfile, String> {
-    inspect_account_credential(
-        options,
-        Some(
-            workspace
-                .state_root()
-                .join("integration")
-                .join("provider-quota.mmap"),
-        ),
-        egress_scope_id,
-    )
-    .await
-}
 
 /// One-shot account inspection and mutation commands.
 #[tokio::main(flavor = "current_thread")]
@@ -54,7 +24,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .to_string();
     std::env::set_var("KAIROS_CLI_FORMAT", output);
-    run_direct(&args, &workspace, args.command.clone()).await?;
+    match args.command.clone() {
+        Command::Standalone(command) => run_standalone(&args, &workspace, command).await?,
+        Command::Connected(command) => run_connected(&args, &workspace, command).await?,
+    }
     Ok(())
 }
 
@@ -123,10 +96,14 @@ struct ConnectionArgs {
 
 #[derive(Clone, Debug, Subcommand)]
 enum Command {
-    Fill {
-        #[command(flatten)]
-        fill: FillArgs,
-    },
+    #[command(name = "standalone", subcommand)]
+    Standalone(StandaloneCommand),
+    #[command(name = "connected", subcommand)]
+    Connected(ConnectedCommand),
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum StandaloneCommand {
     Browse {
         #[arg(long)]
         query: Option<String>,
@@ -140,6 +117,16 @@ enum Command {
         #[arg(long)]
         account_id: String,
     },
+    #[command(name = "snapshot", alias = "current")]
+    Snapshot,
+    #[command(alias = "balance")]
+    Balances {
+        #[arg(long)]
+        include_zero: bool,
+    },
+    Positions,
+    #[command(name = "observed-orders", alias = "open-orders")]
+    OpenOrders,
     Register {
         #[arg(long)]
         account_id: String,
@@ -267,6 +254,14 @@ enum Command {
         account_id: Option<String>,
     },
     Connect,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum ConnectedCommand {
+    Fill {
+        #[command(flatten)]
+        fill: FillArgs,
+    },
     #[command(name = "snapshot", alias = "current")]
     Snapshot {
         #[arg(long)]
@@ -422,89 +417,22 @@ impl FillArgs {
     }
 }
 
-async fn run_direct(
+async fn run_standalone(
     args: &Cli,
     workspace: &Workspace,
-    command: Command,
+    command: StandaloneCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let registry_path = workspace.child(&["config", "accounts", "accounts.toml"])?;
-    let registry_read_path = workspace.existing_path(
-        &["config", "accounts", "accounts.toml"],
-        &["accounts", "accounts.toml"],
-    )?;
-    let mut registry = AccountRegistry::load(&registry_read_path)?;
-    let credentials_path = workspace.child(&["config", "credentials", "credentials.toml"])?;
-    let credentials_read_path = workspace.existing_path(
-        &["config", "credentials", "credentials.toml"],
-        &["credentials", "credentials.toml"],
-    )?;
-    let mut credential_store = CredentialStore::load(&credentials_read_path)?;
-    for account in &mut registry.accounts {
-        if account.credentials.is_empty() {
-            if let Some(credential_id) = account.credential_id.clone() {
-                account.credentials.push(AccountCredentialBinding {
-                    name: "default".into(),
-                    credential_id,
-                    role: account
-                        .credential_role
-                        .clone()
-                        .unwrap_or_else(|| "readonly".into()),
-                });
-            }
-        }
-    }
-    if is_mmap_query(&command) {
-        let account_id = args
-            .connection
-            .account_id
-            .as_deref()
-            .ok_or("--account-id is required for an Account mmap query")?;
-        let account_id = resolve_account_id(&registry, account_id)?;
-        let value = read_mmap_query(args, workspace, &account_id, &command)?;
-        print_json(value);
-        return Ok(());
-    }
-    if is_runtime_control(&command) {
-        let account_id = args
-            .connection
-            .account_id
-            .as_deref()
-            .ok_or("--account-id is required for an Account runtime command")?;
-        let account_id = resolve_account_id(&registry, account_id)?;
-        let value = run_runtime_control(args, workspace, &account_id, &command).await?;
-        print_json(value);
-        return Ok(());
-    }
+    let mut app = CliAccountApplication::open(workspace)?;
     match &command {
-        Command::List => {
-            print_json(serde_json::to_value(&registry.accounts)?);
+        StandaloneCommand::List => {
+            print_json(app.list_accounts()?);
             return Ok(());
         },
-        Command::Browse { query } => {
-            let query = query.as_deref().map(str::to_ascii_lowercase);
-            let accounts: Vec<_> = registry
-                .accounts
-                .iter()
-                .filter(|record| {
-                    query.as_deref().is_none_or(|query| {
-                        record.account_id.to_ascii_lowercase().contains(query)
-                            || record.alias.to_ascii_lowercase().contains(query)
-                            || record.broker.to_ascii_lowercase().contains(query)
-                            || record
-                                .segments
-                                .iter()
-                                .any(|segment| segment.to_ascii_lowercase().contains(query))
-                    })
-                })
-                .cloned()
-                .collect();
-            print_json(serde_json::json!({
-                "accounts": accounts,
-                "count": accounts.len(),
-            }));
+        StandaloneCommand::Browse { query } => {
+            print_json(app.browse_accounts(query.as_deref())?);
             return Ok(());
         },
-        Command::Model {
+        StandaloneCommand::Model {
             command:
                 ModelCommand::Switch {
                     account_id,
@@ -512,45 +440,30 @@ async fn run_direct(
                     reason,
                 },
         } => {
-            let target_model = AccountModel::parse(target)
-                .ok_or_else(|| format!("unsupported account model: {target}"))?;
-            let mut record = registry
-                .accounts
-                .iter()
-                .find(|record| record.account_id == *account_id)
-                .cloned()
-                .ok_or_else(|| format!("account not found: {account_id}"))?;
-            let previous = record.account_model.clone();
-            if previous
-                .as_deref()
-                .is_some_and(|value| AccountModel::parse(value) == Some(target_model))
-            {
-                return Err(format!("account already uses target model: {target}").into());
-            }
-            record.account_model = Some(target.clone());
-            record.status = "reconciling".into();
-            registry.upsert_account(record.clone());
-            registry.save(&registry_path)?;
-            print_json(serde_json::json!({
-                "account_id": account_id,
-                "from_model": previous,
-                "to_model": target,
-                "status": "requested",
-                "reason": reason,
-                "account": record,
-            }));
+            print_json(app.switch_account_model(account_id, target, reason)?);
             return Ok(());
         },
-        Command::Show { account_id } => {
-            let value = registry
-                .accounts
-                .iter()
-                .find(|record| record.account_id == *account_id)
-                .ok_or_else(|| format!("account not found: {account_id}"))?;
-            print_json(serde_json::to_value(value)?);
+        StandaloneCommand::Show { account_id } => {
+            print_json(app.show_account(account_id)?);
             return Ok(());
         },
-        Command::Register {
+        StandaloneCommand::Snapshot => {
+            print_json(app.local_snapshot(&required_account_id(args)?)?);
+            return Ok(());
+        },
+        StandaloneCommand::Balances { include_zero } => {
+            print_json(app.local_balances(&required_account_id(args)?, *include_zero)?);
+            return Ok(());
+        },
+        StandaloneCommand::Positions => {
+            print_json(app.local_positions(&required_account_id(args)?)?);
+            return Ok(());
+        },
+        StandaloneCommand::OpenOrders => {
+            print_json(app.local_open_orders(&required_account_id(args)?)?);
+            return Ok(());
+        },
+        StandaloneCommand::Register {
             account_id,
             broker,
             integration_provider,
@@ -562,36 +475,21 @@ async fn run_direct(
             exchange,
             fields,
         } => {
-            let values = parse_field_values(fields)?;
-            registry.upsert_account(AccountBindingRecord {
+            print_json(app.register_account(RegisterAccountRequest {
                 account_id: account_id.clone(),
-                alias: account_id.clone(),
                 broker: broker.clone(),
                 integration_provider: integration_provider.clone(),
-                exchange: exchange.clone(),
                 environment: environment.clone(),
-                remote_identity: None,
-                permissions: BTreeMap::new(),
-                segments: vec![segment.clone()],
-                segment_products: BTreeMap::from([(segment.clone(), product.clone())]),
-                segment_trading_modes: trading_mode
-                    .as_ref()
-                    .map(|value| BTreeMap::from([(segment.clone(), value.clone())]))
-                    .unwrap_or_default(),
+                segment: segment.clone(),
+                product: product.clone(),
+                trading_mode: trading_mode.clone(),
                 account_model: account_model.clone(),
-                credential_id: None,
-                credentials: Vec::new(),
-                credential_role: None,
-                status: "configured".into(),
-                initial_balances: Vec::new(),
-                fee_rate: None,
-                values,
-            });
-            registry.save(&registry_path)?;
-            print_json(serde_json::json!({"account_id": account_id, "status": "registered"}));
+                exchange: exchange.clone(),
+                fields: fields.clone(),
+            })?);
             return Ok(());
         },
-        Command::Modify {
+        StandaloneCommand::Modify {
             account_id,
             broker,
             integration_provider,
@@ -610,142 +508,53 @@ async fn run_direct(
             clear_credential,
             fields,
         } => {
-            let mut record = registry
-                .accounts
-                .iter()
-                .find(|value| value.account_id == *account_id)
-                .cloned()
-                .ok_or_else(|| format!("account not found: {account_id}"))?;
-            if let Some(value) = broker {
-                record.broker = value.clone();
-            }
-            if let Some(value) = integration_provider {
-                record.integration_provider = value.clone();
-            }
-            if let Some(value) = exchange {
-                record.exchange = Some(value.clone());
-            }
-            if let Some(value) = alias {
-                record.alias = value.clone();
-            }
-            if let Some(value) = environment {
-                record.environment = value.clone();
-            }
-            if let Some(value) = segment {
-                record.segments = vec![value.clone()];
-                let provider_product = product
-                    .clone()
-                    .ok_or("--product is required when changing --segment")?;
-                record.segment_products = BTreeMap::from([(value.clone(), provider_product)]);
-                record.segment_trading_modes.clear();
-            } else if let Some(value) = product {
-                let segment_key = record
-                    .segments
-                    .first()
-                    .cloned()
-                    .ok_or("account has no segment to assign the product")?;
-                record.segment_products.insert(segment_key, value.clone());
-            }
-            if let Some(value) = trading_mode {
-                let segment_key = record
-                    .segments
-                    .first()
-                    .cloned()
-                    .ok_or("account has no segment to assign the trading mode")?;
-                record
-                    .segment_trading_modes
-                    .insert(segment_key, value.clone());
-            }
-            if account_model.is_some() {
-                record.account_model = account_model.clone();
-            }
-            if credential_id.is_some() {
-                record.credential_id = credential_id.clone();
-            }
-            if credential_role.is_some() {
-                record.credential_role = credential_role.clone();
-            }
-            if status.is_some() {
-                record.status = status.clone().unwrap_or_default();
-            }
-            if fee_rate.is_some() {
-                record.fee_rate = fee_rate.clone();
-            }
-            if !initial_balances.is_empty() {
-                record.initial_balances = initial_balances.clone();
-            }
-            record.values.extend(parse_field_values(fields)?);
-            if *clear_credential {
-                record.credential_id = None;
-                record.credential_role = None;
-                record.credentials.clear();
-            }
-            registry.upsert_account(record.clone());
-            registry.save(&registry_path)?;
-            print_json(serde_json::to_value(record)?);
+            print_json(app.modify_account(ModifyAccountRequest {
+                account_id: account_id.clone(),
+                broker: broker.clone(),
+                integration_provider: integration_provider.clone(),
+                exchange: exchange.clone(),
+                alias: alias.clone(),
+                environment: environment.clone(),
+                segment: segment.clone(),
+                product: product.clone(),
+                trading_mode: trading_mode.clone(),
+                account_model: account_model.clone(),
+                credential_id: credential_id.clone(),
+                credential_role: credential_role.clone(),
+                status: status.clone(),
+                fee_rate: fee_rate.clone(),
+                initial_balances: initial_balances.clone(),
+                clear_credential: *clear_credential,
+                fields: fields.clone(),
+            })?);
             return Ok(());
         },
-        Command::Simulate {
+        StandaloneCommand::Simulate {
             account_id,
             segment,
             account_model,
             initial_balances,
             fee_rate,
         } => {
-            let record = AccountBindingRecord {
+            print_json(app.simulate_account(SimulateAccountRequest {
                 account_id: account_id.clone(),
-                alias: account_id.clone(),
-                broker: "paper".into(),
-                integration_provider: "paper".into(),
-                exchange: Some("paper".into()),
-                environment: "paper".into(),
-                remote_identity: None,
-                permissions: BTreeMap::new(),
-                segments: vec![segment.clone()],
-                segment_products: BTreeMap::from([(segment.clone(), "paper".into())]),
-                segment_trading_modes: BTreeMap::new(),
                 account_model: account_model.clone(),
-                credential_id: None,
-                credentials: Vec::new(),
-                credential_role: None,
-                status: "simulated".into(),
+                segment: segment.clone(),
                 initial_balances: initial_balances.clone(),
                 fee_rate: fee_rate.clone(),
-                values: BTreeMap::new(),
-            };
-            registry.upsert_account(record.clone());
-            registry.save(&registry_path)?;
-            print_json(serde_json::json!({
-                "account": record,
-                "mode": "paper",
-                "status": "simulated"
-            }));
+            })?);
             return Ok(());
         },
-        Command::Remove { account_id, force } => {
+        StandaloneCommand::Remove { account_id, force } => {
             let _ = force;
-            let removed = registry.remove_account(account_id);
-            registry.save(&registry_path)?;
-            print_json(serde_json::json!({"account_id": account_id, "removed": removed}));
+            print_json(app.remove_account(account_id)?);
             return Ok(());
         },
-        Command::CredentialList => {
-            let values: Vec<_> = credential_store
-                .credentials
-                .iter()
-                .map(|record| {
-                    serde_json::json!({
-                        "credential_id": record.credential_id,
-                        "provider": record.provider,
-                        "role": record.role,
-                        "api_key": redact(&record.api_key),
-                    })
-                })
-                .collect();
-            print_json(serde_json::to_value(values)?);
+        StandaloneCommand::CredentialList => {
+            print_json(app.list_credentials()?);
             return Ok(());
         },
-        Command::CredentialAdd {
+        StandaloneCommand::CredentialAdd {
             account_id,
             name,
             credential_id,
@@ -753,88 +562,26 @@ async fn run_direct(
             check,
             force,
         } => {
-            let mut record = registry
-                .accounts
-                .iter()
-                .find(|value| value.account_id == *account_id)
-                .cloned()
-                .ok_or_else(|| format!("account not found: {account_id}"))?;
-            let credential = credential_store
-                .credentials
-                .iter()
-                .find(|value| value.credential_id == *credential_id)
-                .ok_or_else(|| format!("credential not found: {credential_id}"))?;
-            if *check {
-                let options = credential_probe_options(args, &record, credential)?;
-                let profile =
-                    inspect_credential(&options, workspace, &args.connection.egress_scope_id)
-                        .await
-                        .map_err(|error| format!("credential check failed: {error}"))?;
-                let permissions: std::collections::BTreeSet<_> = profile
-                    .permissions
-                    .iter()
-                    .map(|value| value.trim().to_ascii_lowercase())
-                    .collect();
-                if !permissions.contains("read") {
-                    return Err(format!(
-                        "credential {credential_id} does not provide read permission"
-                    )
-                    .into());
-                }
-                if role.trim().eq_ignore_ascii_case("trade") && !permissions.contains("trade") {
-                    return Err(format!(
-                        "credential {credential_id} does not provide trade permission"
-                    )
-                    .into());
-                }
-                if let (Some(expected), Some(actual)) = (
-                    record.remote_identity.as_deref(),
-                    profile.remote_identity.as_deref(),
-                ) {
-                    if expected != actual {
-                        return Err(format!(
-                            "credential remote identity mismatch: expected {expected}, got {actual}"
-                        )
-                        .into());
-                    }
-                }
-                record.remote_identity = profile.remote_identity.clone();
-                record.permissions = profile
-                    .permissions
-                    .iter()
-                    .map(|permission| (permission.clone(), "granted".into()))
-                    .collect();
-                if !profile.segments.is_empty() {
-                    record.segments = profile.segments.clone();
-                }
-            }
-            if !*force && record.credentials.iter().any(|value| value.name == *name) {
-                return Err(format!("account credential name already exists: {name}").into());
-            }
-            record.credentials.retain(|value| value.name != *name);
-            record.credentials.push(AccountCredentialBinding {
-                name: name.clone(),
-                credential_id: credential_id.clone(),
-                role: role.clone(),
-            });
-            if record.credential_id.is_none() {
-                record.credential_id = Some(credential_id.clone());
-                record.credential_role = Some(role.clone());
-            }
-            registry.upsert_account(record.clone());
-            registry.save(&registry_path)?;
-            print_json(serde_json::json!({
-                "account_id": account_id,
-                "name": name,
-                "credential_id": credential_id,
-                "role": role,
-                "checked": check,
-                "status": "bound",
-                "account": record,
-            }));
+            print_json(
+                app.bind_credential_with_probe(
+                    BindCredentialRequest {
+                        account_id: account_id.clone(),
+                        name: name.clone(),
+                        credential_id: credential_id.clone(),
+                        role: role.clone(),
+                        force: *force,
+                    },
+                    AccountCredentialProbeRequest {
+                        check: *check,
+                        egress_scope_id: args.connection.egress_scope_id.clone(),
+                        connection: provider_connection_args(&args.connection),
+                    },
+                )
+                .await?,
+            );
             return Ok(());
         },
-        Command::CredentialCreate {
+        StandaloneCommand::CredentialCreate {
             credential_id,
             provider,
             role,
@@ -842,480 +589,53 @@ async fn run_direct(
             secret,
             passphrase,
         } => {
-            credential_store.upsert(CredentialRecord {
+            print_json(app.create_credential(CreateCredentialRequest {
                 credential_id: credential_id.clone(),
                 provider: provider.clone(),
                 role: role.clone(),
-                api_key: api_key.clone().unwrap_or_default(),
-                secret: secret.clone().unwrap_or_default(),
+                api_key: api_key.clone(),
+                secret: secret.clone(),
                 passphrase: passphrase.clone(),
-            });
-            credential_store.save(&credentials_path)?;
-            print_json(serde_json::json!({"credential_id": credential_id, "status": "created"}));
+            })?);
             return Ok(());
         },
-        Command::CredentialDelete {
+        StandaloneCommand::CredentialDelete {
             credential_id,
             force,
         } => {
-            if !force
-                && registry
-                    .accounts
-                    .iter()
-                    .any(|account| account.credential_id.as_deref() == Some(credential_id))
-            {
-                return Err(format!(
-                    "credential is bound to an account: {credential_id}; use --force to delete"
-                )
-                .into());
-            }
-            let removed = credential_store.remove(credential_id);
-            credential_store.save(&credentials_path)?;
-            print_json(serde_json::json!({"credential_id": credential_id, "removed": removed}));
+            print_json(app.delete_credential(credential_id, *force)?);
             return Ok(());
         },
-        Command::CredentialShow {
+        StandaloneCommand::CredentialShow {
             credential_id,
             reveal_secrets,
         } => {
-            let credential = credential_store
-                .credentials
-                .iter()
-                .find(|record| record.credential_id == *credential_id)
-                .ok_or_else(|| format!("credential not found: {credential_id}"))?;
-            print_json(serde_json::json!({
-                "credential_id": credential.credential_id,
-                "provider": credential.provider,
-                "role": credential.role,
-                "api_key": if *reveal_secrets { credential.api_key_value().unwrap_or_default() } else { redact(&credential.api_key) },
-                "secret": if *reveal_secrets { credential.secret_value().unwrap_or_default() } else { "***".to_string() },
-                "passphrase": if *reveal_secrets { credential.passphrase_value().unwrap_or_default() } else { "***".to_string() },
-            }));
+            print_json(app.show_credential(credential_id, *reveal_secrets)?);
             return Ok(());
         },
-        Command::Schemas => {
-            print_json(serde_json::json!({
-                "binance": {"credential_fields": ["api_key", "api_secret"], "segments": ["spot", "cross_margin", "isolated_margin", "usd_m_futures", "coin_m_futures", "funding", "options"]},
-                "okx": {"credential_fields": ["api_key", "api_secret", "passphrase"], "segments": ["spot", "cross_margin", "isolated_margin", "swap", "futures", "options"]},
-                "ibkr": {"credential_fields": [], "connection_fields": ["host", "port", "client_id"], "segments": ["equity"]},
-                "paper": {"credential_fields": [], "segments": ["spot", "margin", "futures"]}
-            }));
+        StandaloneCommand::Schemas => {
+            print_json(app.schemas());
             return Ok(());
         },
-        Command::Schema { provider } => {
-            let provider = provider.to_ascii_lowercase();
-            let value = match provider.as_str() {
-                "binance" => {
-                    serde_json::json!({"provider":"binance","credential_fields":["api_key","api_secret"],"segments":["spot","cross_margin","isolated_margin","usd_m_futures","coin_m_futures","funding","options"]})
-                },
-                "okx" | "okex" => {
-                    serde_json::json!({"provider":"okx","credential_fields":["api_key","api_secret","passphrase"],"segments":["spot","cross_margin","isolated_margin","swap","futures","options"]})
-                },
-                "ibkr" => {
-                    serde_json::json!({"provider":"ibkr","credential_fields":[],"connection_fields":["host","port","client_id"],"segments":["equity"]})
-                },
-                "paper" => {
-                    serde_json::json!({"provider":"paper","credential_fields":[],"segments":["spot","margin","futures"]})
-                },
-                _ => return Err(format!("unsupported provider: {provider}").into()),
-            };
-            print_json(value);
+        StandaloneCommand::Schema { provider } => {
+            print_json(app.schema(provider)?);
             return Ok(());
         },
-        Command::Doctor { account_id } => {
-            let selected_account_id = account_id
-                .as_deref()
-                .map(|value| resolve_account_id(&registry, value))
-                .transpose()?;
-            let selected_accounts = registry
-                .accounts
-                .iter()
-                .filter(|account| {
-                    selected_account_id
-                        .as_deref()
-                        .is_none_or(|value| value == account.account_id)
-                })
-                .collect::<Vec<_>>();
-            let issues: Vec<_> = registry
-                .accounts
-                .iter()
-                .filter(|account| {
-                    selected_account_id
-                        .as_deref()
-                        .is_none_or(|value| value == account.account_id)
-                })
-                .filter(|account| {
-                    account.environment == "live"
-                        && !credential_store.credentials.iter().any(|credential| {
-                            credential.provider == account.integration_provider
-                                || account
-                                    .credential_id
-                                    .as_deref()
-                                    .is_some_and(|id| credential.credential_id == id)
-                        })
-                })
-                .map(|account| {
-                    format!(
-                        "{}: live account has no matching credential",
-                        account.account_id
-                    )
-                })
-                .collect();
-            let runtime = if args.launch_id.is_some() {
-                selected_accounts
-                    .iter()
-                    .map(|account| {
-                        runtime_account_diagnostic(args, workspace, account)
-                            .map(|value| (account.account_id.clone(), value))
-                    })
-                    .collect::<Result<serde_json::Map<_, _>, _>>()?
-            } else {
-                serde_json::Map::new()
-            };
-            print_json(serde_json::json!({
-                "accounts": selected_accounts,
-                "issues": issues,
-                "runtime": runtime,
-            }));
+        StandaloneCommand::Doctor { account_id } => {
+            print_json(app.doctor(account_id.as_deref())?);
             return Ok(());
         },
-        _ => {},
-    }
-    let account_id = args.connection.account_id.clone();
-    let selected_segment = selected_segment(&args.connection);
-    let account_id = account_id
-        // A live account can be connected from a credential alone.  The
-        // provider may not expose a stable universal user id (Binance Spot
-        // is one example), so the credential reference is the provisional
-        // local binding identity, exactly as legacy did before discovery
-        // returned a remote identity.
-        .or_else(|| {
-            if matches!(&command, Command::Connect) {
-                args.connection
-                    .alias
-                    .clone()
-                    .or_else(|| args.connection.credential_id.clone())
-                    .or_else(|| Some(format!("{}-{}", args.connection.provider, selected_segment)))
-            } else {
-                None
-            }
-        })
-        .ok_or("--account-id is required for a direct account command")?;
-    let account_id = resolve_account_id(&registry, &account_id)?;
-    let account_record = registry
-        .accounts
-        .iter()
-        .find(|record| record.account_id == account_id)
-        .cloned();
-    let provider = account_record
-        .as_ref()
-        .map(|record| record.integration_provider.clone())
-        .unwrap_or_else(|| args.connection.provider.clone());
-    let product = account_record
-        .as_ref()
-        .and_then(|record| {
-            record
-                .segments
-                .first()
-                .and_then(|segment| record.product_for_segment(segment))
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| args.connection.product.clone());
-    let environment = account_record
-        .as_ref()
-        .map(|record| record.environment.clone())
-        .unwrap_or_else(|| args.connection.environment.clone());
-    let credential_id = args.connection.credential_id.clone().or_else(|| {
-        account_record
-            .as_ref()
-            .and_then(|record| record.credential_id.clone())
-    });
-    let credential = credential_id.as_deref().and_then(|id| {
-        credential_store
-            .credentials
-            .iter()
-            .find(|record| record.credential_id == id)
-    });
-    let paper = matches!(
-        provider.trim().to_ascii_lowercase().as_str(),
-        "paper" | "simulated"
-    );
-    let api_key = if paper {
-        String::new()
-    } else {
-        args.connection
-            .api_key
-            .clone()
-            .or_else(|| credential.and_then(|record| record.api_key_value()))
-            .ok_or("an API key is required; provide --api-key or an Integration credential")?
-    };
-    let secret = if paper {
-        String::new()
-    } else {
-        args.connection
-            .secret
-            .clone()
-            .or_else(|| credential.and_then(|record| record.secret_value()))
-            .ok_or("an API secret is required; provide --secret or an Integration credential")?
-    };
-    let passphrase = if args.connection.passphrase.is_empty() {
-        credential
-            .and_then(|record| record.passphrase_value())
-            .unwrap_or_default()
-    } else {
-        args.connection.passphrase.clone()
-    };
-    let base_url = if args.connection.base_url.trim().is_empty() {
-        default_rest_endpoint(&provider, &product)?.to_owned()
-    } else {
-        args.connection.base_url.clone()
-    };
-    let options = AccountOptions {
-        provider,
-        product,
-        api_key: api_key.into(),
-        secret: secret.into(),
-        passphrase: passphrase.into(),
-        base_url,
-        account_id: account_id.clone(),
-        segment: selected_segment.clone(),
-        environment,
-        account_model: account_record
-            .as_ref()
-            .and_then(|record| record.account_model.clone()),
-        initial_balances: account_record
-            .as_ref()
-            .map(|record| record.initial_balances.clone())
-            .unwrap_or_default(),
-        host: args.connection.host.clone(),
-        port: args.connection.port,
-        client_id: args.connection.client_id,
-        isolated_margin_symbol: account_record
-            .as_ref()
-            .and_then(|value| value.values.get("isolated_margin_symbol").cloned()),
-        reference_database: Some(workspace.child(&["state", "reference", "reference.sqlite"])?),
-    };
-    let state = workspace.child(&["state", "account", "account-state.json"])?;
-    let configured_segment_keys = registry
-        .accounts
-        .iter()
-        .find(|record| record.account_id == account_id)
-        .map(|record| record.segments.clone())
-        .filter(|segments| !segments.is_empty())
-        .unwrap_or_else(|| vec![selected_segment.clone()]);
-    let configured_segments = if let Some(record) = account_record.as_ref() {
-        configured_segment_keys
-            .iter()
-            .map(|segment_key| {
-                record
-                    .product_for_segment(segment_key)
-                    .map(|product| {
-                        let binding = AccountSegmentBinding::new(segment_key, product);
-                        record
-                            .segment_trading_modes
-                            .get(segment_key)
-                            .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))
-                    })
-                    .ok_or_else(|| format!("account segment {segment_key} has no provider product"))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        let binding = AccountSegmentBinding::new(&selected_segment, &options.product);
-        vec![
-            args.connection
-                .trading_mode
-                .as_ref()
-                .map_or(binding.clone(), |mode| binding.with_trading_mode(mode)),
-        ]
-    };
-    let native_binance_account = options.provider.eq_ignore_ascii_case("binance")
-        && configured_segments.iter().all(|segment| {
-            matches!(
-                segment
-                    .provider_product
-                    .trim()
-                    .to_ascii_lowercase()
-                    .replace('_', "-")
-                    .as_str(),
-                "spot"
-                    | "funding"
-                    | "cross-margin"
-                    | "isolated-margin"
-                    | "usd-m-futures"
-                    | "coin-m-futures"
-                    | "options"
-            )
-        });
-    let native_okx_account = matches!(
-        options.provider.trim().to_ascii_lowercase().as_str(),
-        "okx" | "okex"
-    );
-    let native_ibkr_account = options.provider.trim().eq_ignore_ascii_case("ibkr");
-    let _provider_process_lock = native_ibkr_account
-        .then(|| {
-            let identity = format!(
-                "ibkr|{}|{}|client-id:{}",
-                options.host.trim().to_ascii_lowercase(),
-                options.port,
-                options.client_id
+        StandaloneCommand::Connect => {
+            print_json(
+                app.connect_account_from_provider(ConnectAccountProviderRequest {
+                    egress_scope_id: args.connection.egress_scope_id.clone(),
+                    connection: provider_connection_args(&args.connection),
+                })
+                .await?,
             );
-            workspace.exclusive_process_lock("ibkr-client", &identity)
-        })
-        .transpose()
-        .map_err(|error| error.to_string())?;
-    let shared_quota_ledger = workspace
-        .state_root()
-        .join("integration")
-        .join("provider-quota.mmap");
-    let composition = if native_binance_account {
-        compose_binance_async_account_application(
-            &options,
-            &configured_segments,
-            Some(state),
-            "wss://ws-api.binance.com:443/ws-api/v3",
-            Some(shared_quota_ledger.clone()),
-            &args.connection.egress_scope_id,
-        )?
-    } else if native_okx_account {
-        compose_okx_async_account_application(
-            &options,
-            &configured_segments,
-            Some(state),
-            None,
-            Some(shared_quota_ledger),
-            &args.connection.egress_scope_id,
-        )?
-    } else if native_ibkr_account {
-        compose_ibkr_async_account_application(&options, &configured_segments, Some(state))?
-    } else {
-        compose_local_account_application_for_segments(&options, &configured_segments, Some(state))?
-    };
-    let settlement = if let Command::Fill { fill } = &command {
-        if !paper {
-            return Err("simulated fill is available only for paper/simulated Account".into());
-        }
-        Some(fill.to_contract()?)
-    } else {
-        None
-    };
-    let (application, system) = composition.into_conflux(std::time::Duration::from_secs(30))?;
-    let (conflux, handle) = Conflux::new(application, system, ConfluxConfig::default())?;
-    let service = kairos_account::AccountRpcService::new(
-        handle.rpc_actor_invocation(std::time::Duration::from_secs(30)),
-    );
-    let commands = async move {
-        service
-            .health()
-            .await
-            .map_err(|error| format!("Account Conflux health failed: {error}"))?;
-        if let Some(settlement) = settlement {
-            service
-                .apply_simulated_settlement(settlement)
-                .await
-                .map_err(|error| format!("Account simulated settlement failed: {error}"))?;
-        }
-        handle.shutdown(ShutdownMode::Drain);
-        Ok::<(), String>(())
-    };
-    let (outcome, commands) = tokio::join!(conflux.run(), commands);
-    commands?;
-    outcome.map_err(|error| error.to_string())?;
-    if matches!(&command, Command::Fill { .. }) {
-        print_json(serde_json::json!({
-            "status": "accepted",
-        }));
-        return Ok(());
+            return Ok(());
+        },
     }
-    if matches!(&command, Command::Connect) {
-        let broker = args
-            .connection
-            .broker
-            .clone()
-            .ok_or("--broker is required when connect creates an Account binding")?;
-        let credential_profile =
-            inspect_credential(&options, workspace, &args.connection.egress_scope_id)
-                .await
-                .ok();
-        let connected_role = credential
-            .map(|value| value.role.clone())
-            .unwrap_or_else(|| "readonly".into());
-        let discovered_segments = credential_profile
-            .as_ref()
-            .map(|value| value.segments.clone())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| vec![options.segment.clone()]);
-        registry.upsert_account(AccountBindingRecord {
-            account_id: account_id.clone(),
-            alias: args
-                .connection
-                .alias
-                .clone()
-                .unwrap_or_else(|| account_id.clone()),
-            broker,
-            integration_provider: options.provider.clone(),
-            exchange: Some(options.provider.clone()),
-            environment: options.environment.clone(),
-            remote_identity: credential_profile
-                .as_ref()
-                .and_then(|value| value.remote_identity.clone()),
-            permissions: credential_profile
-                .as_ref()
-                .map(|value| {
-                    value
-                        .permissions
-                        .iter()
-                        .map(|permission| (permission.clone(), "granted".into()))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            segments: discovered_segments.clone(),
-            segment_products: discovered_segments
-                .iter()
-                .map(|value| (value.clone(), value.clone()))
-                .collect(),
-            segment_trading_modes: args
-                .connection
-                .trading_mode
-                .as_ref()
-                .map(|mode| {
-                    discovered_segments
-                        .iter()
-                        .map(|segment| (segment.clone(), mode.clone()))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            account_model: None,
-            credential_id: args.connection.credential_id.clone(),
-            credentials: args
-                .connection
-                .credential_id
-                .as_ref()
-                .map(|credential_id| {
-                    vec![AccountCredentialBinding {
-                        name: "default".into(),
-                        credential_id: credential_id.clone(),
-                        role: connected_role.clone(),
-                    }]
-                })
-                .unwrap_or_default(),
-            credential_role: Some(connected_role),
-            status: "connected".into(),
-            initial_balances: Vec::new(),
-            fee_rate: None,
-            values: BTreeMap::new(),
-        });
-        registry.save(&registry_path)?;
-        print_json(serde_json::json!({
-            "account_id": account_id,
-            "provider": options.provider,
-            "segment": options.segment,
-            "discovered_segments": discovered_segments,
-            "status": "connected",
-            "credential_profile": credential_profile,
-        }));
-        return Ok(());
-    }
-    unreachable!("all Account CLI commands return from their dedicated path")
 }
 
 fn print_json(value: serde_json::Value) {
@@ -1326,356 +646,174 @@ fn print_json(value: serde_json::Value) {
     println!("{}", render(&value, format));
 }
 
+fn required_account_id(args: &Cli) -> Result<String, Box<dyn std::error::Error>> {
+    args.connection
+        .account_id
+        .clone()
+        .ok_or_else(|| "--account-id is required for this account query".into())
+}
+
 fn selected_segment(args: &ConnectionArgs) -> String {
     args.segment.clone()
 }
 
-fn resolve_account_id(
-    registry: &AccountRegistry,
-    value: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    if registry
-        .accounts
-        .iter()
-        .any(|record| record.account_id == value)
-    {
-        return Ok(value.to_owned());
-    }
-    let matches: Vec<_> = registry
-        .accounts
-        .iter()
-        .filter(|record| record.alias == value)
-        .map(|record| record.account_id.clone())
-        .collect();
-    match matches.as_slice() {
-        [account_id] => Ok(account_id.clone()),
-        [] => Ok(value.to_owned()),
-        _ => Err(format!("account alias is ambiguous: {value}").into()),
+fn provider_connection_args(args: &ConnectionArgs) -> AccountProviderConnectionArgs {
+    AccountProviderConnectionArgs {
+        provider: args.provider.clone(),
+        broker: args.broker.clone(),
+        product: args.product.clone(),
+        environment: args.environment.clone(),
+        account_id: args.account_id.clone(),
+        alias: args.alias.clone(),
+        credential_id: args.credential_id.clone(),
+        trading_mode: args.trading_mode.clone(),
+        api_key: args.api_key.clone(),
+        secret: args.secret.clone(),
+        passphrase: args.passphrase.clone(),
+        base_url: args.base_url.clone(),
+        segment: selected_segment(args),
+        host: args.host.clone(),
+        port: args.port,
+        client_id: args.client_id,
     }
 }
 
-fn parse_field_values(
-    values: &[String],
-) -> Result<BTreeMap<String, String>, Box<dyn std::error::Error>> {
-    let mut fields = BTreeMap::new();
-    for value in values {
-        let (key, field_value) = value
-            .split_once('=')
-            .ok_or_else(|| format!("field must be key=value: {value}"))?;
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(format!("field key is empty: {value}").into());
-        }
-        fields.insert(key.to_owned(), field_value.to_owned());
+impl ConnectedCommand {
+    fn is_mmap_query(&self) -> bool {
+        matches!(
+            self,
+            Self::Snapshot { .. }
+                | Self::Balances { .. }
+                | Self::Positions { .. }
+                | Self::OpenOrders { .. }
+        )
     }
-    Ok(fields)
 }
 
-fn is_mmap_query(command: &Command) -> bool {
+async fn run_connected(
+    args: &Cli,
+    workspace: &Workspace,
+    command: ConnectedCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let app = CliAccountApplication::open(workspace)?;
+    let account_id = args
+        .connection
+        .account_id
+        .as_deref()
+        .ok_or("--account-id is required for an Account connected command")?;
+    let account_id = app.resolve_account_id(account_id)?;
+    let value = if command.is_mmap_query() {
+        let application = connected_account_app(args, workspace, &account_id, true)?;
+        read_mmap_query(&application, &account_id, &command)?
+    } else {
+        let application = connected_account_app(args, workspace, &account_id, false)?;
+        run_runtime_control(&application, args, &command).await?
+    };
+    print_json(value);
+    Ok(())
+}
+
+fn is_paper_or_simulated(value: &str) -> bool {
     matches!(
-        command,
-        Command::Snapshot { .. }
-            | Command::Balances { .. }
-            | Command::Positions { .. }
-            | Command::OpenOrders { .. }
+        value.trim().to_ascii_lowercase().as_str(),
+        "paper" | "simulated"
     )
 }
 
-fn is_runtime_control(command: &Command) -> bool {
-    matches!(command, Command::Refresh { .. } | Command::Reconcile { .. })
-}
-
-fn account_client_from_instance(
-    instance: &kairos_workspace::workspace::InstanceWorkspace,
-    socket_name: &str,
-    view_root: Option<std::path::PathBuf>,
-) -> Result<AccountClient, Box<dyn std::error::Error>> {
-    let mut system = kairos_conflux::ConfluxSystem::new();
-    system.install_account_connection("account", instance.socket(socket_name)?, view_root)?;
-    system
-        .account_client("account")
-        .ok_or_else(|| "managed Account client is missing: account".into())
-}
-
-async fn run_runtime_control(
+fn connected_account_app(
     args: &Cli,
     workspace: &Workspace,
     account_id: &str,
-    command: &Command,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let launch_id = args
-        .launch_id
-        .as_deref()
-        .ok_or("--launch-id is required for an Account runtime command")?;
-    let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
-    let socket_name =
-        resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
-    let segments = match command {
-        Command::Refresh { segments } | Command::Reconcile { segments } => segments,
-        _ => return Err("command is not an Account runtime control".into()),
+    require_views: bool,
+) -> Result<ConnectedAccountApplication, Box<dyn std::error::Error>> {
+    if let Some(launch_id) = args.launch_id.as_deref() {
+        let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
+        let socket_name =
+            resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
+        let view_root = if require_views {
+            Some(instance.snapshot(&[])?)
+        } else {
+            None
+        };
+        return ConnectedAccountApplication::connect(instance.socket(&socket_name)?, view_root);
+    }
+    let view_root = if require_views {
+        Some(workspace.paths().snapshot(&[])?)
+    } else {
+        None
     };
-    let client = account_client_from_instance(&instance, &socket_name, None)?;
+    ConnectedAccountApplication::connect(
+        workspace.process_socket(args.socket_name.as_deref().unwrap_or("account"))?,
+        view_root,
+    )
+}
+
+async fn run_runtime_control(
+    application: &ConnectedAccountApplication,
+    args: &Cli,
+    command: &ConnectedCommand,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    match command {
+        ConnectedCommand::Fill { fill } => {
+            if !is_paper_or_simulated(args.connection.provider.as_str()) {
+                return Err("simulated fill is available only for paper/simulated Account".into());
+            }
+            application
+                .apply_simulated_settlement(fill.to_contract()?)
+                .await
+        },
+        ConnectedCommand::Refresh { .. } => {
+            let request = account_segments_request(command)?;
+            application.refresh(request).await
+        },
+        ConnectedCommand::Reconcile { .. } => {
+            let request = account_segments_request(command)?;
+            application.reconcile(request).await
+        },
+        _ => unreachable!("runtime control command already matched"),
+    }
+}
+
+fn account_segments_request(
+    command: &ConnectedCommand,
+) -> Result<AccountSegmentsRequest, Box<dyn std::error::Error>> {
+    let segments = match command {
+        ConnectedCommand::Refresh { segments } | ConnectedCommand::Reconcile { segments } => {
+            segments
+        },
+        _ => return Err("command is not an Account segment runtime control".into()),
+    };
     let segments = segments
         .iter()
         .cloned()
         .map(kairos_primitives::account::SegmentKey::new)
         .collect::<Result<Vec<_>, _>>()?;
-    let request = AccountSegmentsRequest { segments };
-    let response = match command {
-        Command::Refresh { .. } => {
-            AccountControlRpcClient::refresh(&client.control(), request).await?
-        },
-        Command::Reconcile { .. } => {
-            AccountControlRpcClient::reconcile(&client.control(), request).await?
-        },
-        _ => unreachable!("runtime control command already matched"),
-    };
-    Ok(serde_json::to_value(response)?)
-}
-
-fn runtime_account_diagnostic(
-    args: &Cli,
-    workspace: &Workspace,
-    account: &AccountBindingRecord,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let launch_id = args
-        .launch_id
-        .as_deref()
-        .ok_or("--launch-id is required for runtime diagnostics")?;
-    let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(instance.component_manifest()?)?)?;
-    let endpoint = manifest
-        .get("accounts")
-        .and_then(|accounts| accounts.get(&account.account_id));
-    let health: Option<serde_json::Value> = endpoint
-        .and_then(|value| value.get("health"))
-        .and_then(serde_json::Value::as_str)
-        .and_then(|path| std::fs::read(path).ok())
-        .and_then(|payload| serde_json::from_slice(&payload).ok());
-    let (current, current_error) = match read_mmap_query(
-        args,
-        workspace,
-        &account.account_id,
-        &Command::Snapshot { symbol: None },
-    ) {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error.to_string())),
-    };
-    Ok(serde_json::json!({
-        "account_id": account.account_id,
-        "credential_role": account.credential_role,
-        "permissions": account.permissions,
-        "required_segments": endpoint
-            .and_then(|value| value.get("required_segments"))
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-        "health": health,
-        "current": current,
-        "error": current_error,
-    }))
-}
-
-fn decimal_text(value: &Decimal64) -> String {
-    let scale = value.scale() as usize;
-    let negative = value.mantissa() < 0;
-    let digits = i128::from(value.mantissa()).abs().to_string();
-    if scale == 0 {
-        return format!("{}{digits}", if negative { "-" } else { "" });
-    }
-    let padded = format!("{:0>width$}", digits, width = scale + 1);
-    let split = padded.len() - scale;
-    format!(
-        "{}{}.{}",
-        if negative { "-" } else { "" },
-        &padded[..split],
-        &padded[split..]
-    )
-}
-
-fn optional_decimal(value: Option<&Decimal64>) -> serde_json::Value {
-    value
-        .map(decimal_text)
-        .map(serde_json::Value::String)
-        .unwrap_or(serde_json::Value::Null)
+    Ok(AccountSegmentsRequest { segments })
 }
 
 fn read_mmap_query(
-    args: &Cli,
-    workspace: &Workspace,
+    application: &ConnectedAccountApplication,
     account_id: &str,
-    command: &Command,
+    command: &ConnectedCommand,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let launch_id = args
-        .launch_id
-        .as_deref()
-        .ok_or("--launch-id is required for an Account mmap query")?;
-    let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
-    let client = account_client_from_instance(&instance, "account", Some(instance.snapshot(&[])?))?;
-    if let Command::OpenOrders { symbol, limit } = command {
-        let frame = client
-            .observed_orders(format!("account:{account_id}"), account_id)?
-            .read()?;
-        let view = frame.view()?;
-        let metadata = view.metadata();
-        if view.account_id() != account_id
-            || metadata.completeness() != ViewCompleteness::COMPLETE
-            || metadata.generation() != frame.generation()
-            || metadata.applied_revision() != Some(frame.envelope_metadata().applied_event_sequence)
-        {
-            return Err(
-                "Account observed-orders mmap identity, completeness, or watermark mismatch".into(),
-            );
-        }
-        let mut orders = Vec::new();
-        for segment in view.segments() {
-            for order in segment.orders() {
-                if symbol.as_deref().is_some_and(|needle| {
-                    !order.instrument_id().eq_ignore_ascii_case(needle)
-                        && !order.market_id().eq_ignore_ascii_case(needle)
-                }) {
-                    continue;
-                }
-                orders.push(serde_json::json!({
-                    "segment_key": segment.segment_key(),
-                    "observation_id": order.observation_id(),
-                    "source_id": order.source_id(),
-                    "execution_order_id": order.execution_order_id(),
-                    "remote_order_id": order.remote_order_id(),
-                    "instrument_id": order.instrument_id(),
-                    "market_id": order.market_id(),
-                    "side": order.side().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                    "quantity": decimal_text(order.quantity()),
-                    "filled_quantity": decimal_text(order.filled_quantity()),
-                    "status": order.status().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                    "observed_at_unix_nanos": order.observed_at_unix_nanos(),
-                }));
-                if limit.is_some_and(|limit| orders.len() >= limit) {
-                    break;
-                }
-            }
-            if limit.is_some_and(|limit| orders.len() >= limit) {
-                break;
-            }
-        }
-        return Ok(serde_json::json!({
-            "account_id": account_id,
-            "generation": frame.generation(),
-            "orders": orders,
-        }));
+    if let ConnectedCommand::OpenOrders { symbol, limit } = command {
+        return application.observed_orders(account_id, symbol.as_deref(), *limit);
     }
-
-    let frame = client
-        .account_current(format!("account:{account_id}"), account_id)?
-        .read()?;
-    let view = frame.view()?;
-    let metadata = view.metadata();
-    if view.account_id() != account_id
-        || metadata.completeness() != ViewCompleteness::COMPLETE
-        || metadata.generation() != frame.generation()
-        || metadata.applied_revision() != Some(frame.envelope_metadata().applied_event_sequence)
-    {
-        return Err("Account current mmap identity, completeness, or watermark mismatch".into());
+    match command {
+        ConnectedCommand::Snapshot { symbol } => {
+            application.snapshot(account_id, symbol.as_deref())
+        },
+        ConnectedCommand::Balances {
+            segments,
+            include_zero,
+            page,
+            page_size,
+        } => application.balances(account_id, segments, *include_zero, *page, *page_size),
+        ConnectedCommand::Positions { segments, symbol } => {
+            application.positions(account_id, segments, symbol.as_deref())
+        },
+        _ => unreachable!("runtime control command routed to mmap"),
     }
-    let segment_filter: &[String] = match command {
-        Command::Balances { segments, .. } | Command::Positions { segments, .. } => segments,
-        _ => &[],
-    };
-    let symbol_filter = match command {
-        Command::Snapshot { symbol } | Command::Positions { symbol, .. } => symbol.as_deref(),
-        _ => None,
-    };
-    let include_zero = matches!(
-        command,
-        Command::Balances {
-            include_zero: true,
-            ..
-        }
-    );
-    let mut segments = Vec::new();
-    for segment in view.segments() {
-        if !segment_filter.is_empty()
-            && !segment_filter
-                .iter()
-                .any(|value| value == segment.segment_key())
-        {
-            continue;
-        }
-        let balances = segment
-            .balances()
-            .iter()
-            .filter(|balance| include_zero || balance.total().mantissa() != 0)
-            .map(|balance| {
-                serde_json::json!({
-                    "asset_id": balance.asset_id(),
-                    "asset_code": balance.asset_code(),
-                    "total": decimal_text(balance.total()),
-                    "available": optional_decimal(balance.available()),
-                    "locked": optional_decimal(balance.locked()),
-                    "borrowed": optional_decimal(balance.borrowed()),
-                    "interest": optional_decimal(balance.interest()),
-                })
-            })
-            .collect::<Vec<_>>();
-        let positions = segment
-            .positions()
-            .iter()
-            .filter(|position| {
-                symbol_filter.is_none_or(|needle| {
-                    position.instrument_id().eq_ignore_ascii_case(needle)
-                        || position.market_id().eq_ignore_ascii_case(needle)
-                })
-            })
-            .map(|position| {
-                serde_json::json!({
-                    "instrument_id": position.instrument_id(),
-                    "market_id": position.market_id(),
-                    "quantity": decimal_text(position.quantity()),
-                    "average_price": optional_decimal(position.average_price()),
-                    "mark_price": optional_decimal(position.mark_price()),
-                    "unrealized_pnl": optional_decimal(position.unrealized_pnl()),
-                    "realized_pnl": optional_decimal(position.realized_pnl()),
-                    "observed_at_unix_nanos": position.observed_at_unix_nanos(),
-                })
-            })
-            .collect::<Vec<_>>();
-        segments.push(serde_json::json!({
-            "segment_key": segment.segment_key(),
-            "environment": segment.environment(),
-            "broker": segment.broker(),
-            "status": segment.status().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-            "freshness": segment.freshness().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-            "sync_mode": segment.sync_mode().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-            "sync_lifecycle": segment.sync_lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-            "completeness": segment.completeness().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-            "snapshot_watermark": segment.snapshot_watermark(),
-            "event_watermark": segment.event_watermark(),
-            "channel_epoch": segment.channel_epoch(),
-            "last_event_at_unix_nanos": segment.last_event_at_unix_nanos(),
-            "last_success_at_unix_nanos": segment.last_success_at_unix_nanos(),
-            "last_error": segment.last_error(),
-            "recovery_buffer_depth": segment.recovery_buffer_depth(),
-            "observed_at_unix_nanos": segment.observed_at_unix_nanos(),
-            "state_generation": segment.state_generation(),
-            "balances": balances,
-            "positions": positions,
-        }));
-    }
-    let mut result = serde_json::json!({
-        "account_id": account_id,
-        "generation": frame.generation(),
-        "event_sequence": frame.envelope_metadata().applied_event_sequence,
-        "producer_incarnation": frame.envelope_metadata().producer_incarnation,
-        "segments": segments,
-    });
-    if let Command::Balances {
-        page, page_size, ..
-    } = command
-    {
-        result["page"] = (*page).into();
-        result["page_size"] = (*page_size).into();
-    }
-    Ok(result)
 }
 
 fn resolve_runtime_account_resource(
@@ -1706,88 +844,81 @@ fn resolve_runtime_account_resource(
     .into())
 }
 
-fn credential_probe_options(
-    args: &Cli,
-    account: &AccountBindingRecord,
-    credential: &CredentialRecord,
-) -> Result<AccountOptions, Box<dyn std::error::Error>> {
-    let paper = matches!(
-        account
-            .integration_provider
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "paper" | "simulated"
-    );
-    let api_key = if paper {
-        String::new()
-    } else {
-        credential
-            .api_key_value()
-            .ok_or("credential has no API key")?
-    };
-    let secret = if paper {
-        String::new()
-    } else {
-        credential
-            .secret_value()
-            .ok_or("credential has no API secret")?
-    };
-    let passphrase = credential.passphrase_value().unwrap_or_default();
-    let product = account
-        .segments
-        .first()
-        .and_then(|segment| account.product_for_segment(segment))
-        .map(str::to_owned)
-        .unwrap_or_else(|| args.connection.product.clone());
-    let base_url = if args.connection.base_url.trim().is_empty() {
-        default_rest_endpoint(&account.integration_provider, &product)?.to_owned()
-    } else {
-        args.connection.base_url.clone()
-    };
-    Ok(AccountOptions {
-        provider: account.integration_provider.clone(),
-        product,
-        api_key: api_key.into(),
-        secret: secret.into(),
-        passphrase: passphrase.into(),
-        base_url,
-        account_id: account.account_id.clone(),
-        segment: account
-            .segments
-            .first()
-            .cloned()
-            .unwrap_or_else(|| selected_segment(&args.connection)),
-        environment: account.environment.clone(),
-        account_model: account.account_model.clone(),
-        initial_balances: account.initial_balances.clone(),
-        host: args.connection.host.clone(),
-        port: args.connection.port,
-        client_id: args.connection.client_id,
-        isolated_margin_symbol: account.values.get("isolated_margin_symbol").cloned(),
-        reference_database: None,
-    })
-}
-
-fn redact(value: &str) -> String {
-    if value.len() <= 4 {
-        return "****".into();
-    }
-    format!("{}****{}", &value[..2], &value[value.len() - 2..])
-}
-
 #[cfg(test)]
 mod cli_tests {
     use clap::Parser;
 
-    use super::Cli;
+    use super::{Cli, Command, ConnectedCommand, StandaloneCommand};
 
     #[test]
-    fn command_surface_builds_without_duplicate_aliases() {
+    fn rust_command_surface_requires_an_explicit_mode() {
         let parsed = Cli::try_parse_from(["kairos-account-cli", "--workspace", "/tmp", "list"]);
         assert!(
-            parsed.is_ok(),
-            "account CLI command surface must parse: {parsed:?}"
+            parsed.is_err(),
+            "account Rust CLI must force explicit standalone/connected mode"
         );
+
+        let parsed = Cli::try_parse_from([
+            "kairos-account-cli",
+            "--workspace",
+            "/tmp",
+            "standalone",
+            "list",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "account standalone command surface must parse: {parsed:?}"
+        );
+
+        let parsed = Cli::try_parse_from([
+            "kairos-account-cli",
+            "--workspace",
+            "/tmp",
+            "--account-id",
+            "main",
+            "--launch-id",
+            "btc",
+            "connected",
+            "balances",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "account connected command surface must parse: {parsed:?}"
+        );
+    }
+
+    #[test]
+    fn account_commands_keep_the_explicit_execution_mode() {
+        let parsed = Cli::try_parse_from([
+            "kairos-account-cli",
+            "--workspace",
+            "/tmp",
+            "--account-id",
+            "main",
+            "standalone",
+            "balances",
+        ])
+        .expect("standalone local balances parses");
+        assert!(matches!(
+            parsed.command,
+            Command::Standalone(StandaloneCommand::Balances { .. })
+        ));
+
+        let parsed = Cli::try_parse_from([
+            "kairos-account-cli",
+            "--workspace",
+            "/tmp",
+            "--account-id",
+            "main",
+            "--launch-id",
+            "btc",
+            "connected",
+            "balances",
+        ])
+        .expect("connected balances parses");
+        assert!(matches!(
+            parsed.command,
+            Command::Connected(ConnectedCommand::Balances { .. })
+        ));
     }
 }

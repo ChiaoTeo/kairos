@@ -654,12 +654,15 @@ def test_reference_validate_cli_returns_nonzero_when_a_required_gate_fails(
             raise AssertionError("zero watermark must not query the event tail")
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.reference._client", lambda workspace: Client()
+        "kairospy.surface.cli.commands.root._workspace_reference_client",
+        lambda workspace: Client(),
     )
     from kairospy.surface.cli.app import execute_argv
 
     output = StringIO()
-    exit_code = execute_argv(["reference", "validate", "--output", "json"], output)
+    exit_code = execute_argv(
+        ["system", "component", "reference", "validate", "--output", "json"], output
+    )
 
     assert exit_code == 1
     assert '"status": "failed"' in output.getvalue()

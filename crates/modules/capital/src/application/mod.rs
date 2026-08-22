@@ -1,15 +1,16 @@
+mod app;
+mod cli;
 mod conflux;
+mod connected;
 pub mod contract;
 mod process;
-mod service;
 
 kairos_capital_contract::capital_control_rpc_conflux_actor! {
     pub trait CapitalRpcActor;
     service CapitalRpcService;
 }
 
-pub use process::{CapitalConfluxConfig, CapitalProcess, CapitalProcessError};
-pub use service::{
+pub use app::{
     AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
     CancelFundingObjective, CapitalApplication, CapitalDemandReceipt, CapitalError, CapitalEvent,
     CapitalSnapshot, CapitalYieldCandidate, EvaluateCapitalGroup, ExpireCapitalDemands,
@@ -19,3 +20,6 @@ pub use service::{
     RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
     UpdateCapitalPolicy, UpdateCapitalRoute,
 };
+pub use cli::{CapitalCliRequestKind, CliCapitalApplication};
+pub use connected::ConnectedCapitalApplication;
+pub use process::{CapitalConfluxConfig, CapitalProcess, CapitalProcessError};

@@ -4,6 +4,7 @@
 README；跨进程字段和编码规则应放在 `schemas/`。
 
 - [Capital management boundary](capital-management.md)
+- [CLI boundary](cli-boundary.md)
 - [Cargo 依赖管理规范](cargo-dependency-management.md)
 - [Conflux JSON-RPC control boundary](conflux-jsonrpc-control.md)
 

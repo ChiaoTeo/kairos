@@ -11,15 +11,24 @@ from kairospy.application.account.cli import AccountCliApplication
 from kairospy.application.workspace import WorkspaceApplication
 
 
-HELP = """Account commands are owned by kairos-account-cli.
+HELP = """Account standalone commands are owned by kairos-account-cli.
 
 Canonical commands include:
   list, show, register, modify, simulate, schemas, schema, doctor
   credential-list, credential-create, credential-show, credential-delete
-  balances, positions, open-orders, snapshot, refresh
+  snapshot, balances, positions, open-orders for local paper/simulated accounts
+
+Current runtime account facts are connected through scoped component commands:
+  kairos system component account ...
+  kairos launch instance component account ...
 
 """
 
+CONNECTED_COMMANDS = {
+    "fill",
+    "refresh",
+    "reconcile",
+}
 
 def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str]]:
     values: list[str] = []
@@ -46,8 +55,32 @@ def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str
 
 def account_passthrough(ctx: typer.Context) -> None:
     workspace, arguments = _workspace_and_arguments(ctx.args)
+    if not arguments or arguments == ["--help"] or arguments == ["-h"]:
+        typer.echo(HELP.rstrip(), nl=False)
+        return
+    if arguments and arguments[0] in {"standalone", "connected"}:
+        explicit_mode = arguments[0]
+        arguments = arguments[1:]
+    else:
+        explicit_mode = "standalone"
+    if explicit_mode == "connected":
+        raise typer.BadParameter(
+            "`kairos account` runs standalone Account commands. Use "
+            "`kairos system component account ...` or "
+            "`kairos launch instance component account ...` for connected mode."
+        )
+    if arguments and arguments[0] in CONNECTED_COMMANDS:
+        command = arguments[0]
+        raise typer.BadParameter(
+            f"`kairos account {command}` is a connected runtime command. "
+            "Use `kairos system component account ...` for a workspace-scoped "
+            "Account server or `kairos launch instance component account ...` "
+            "for a launch-scoped Account server."
+        )
     owner = WorkspaceApplication().resolve(workspace)
-    result = AccountCliApplication(owner).invoke(arguments or ["--help"])
+    result = AccountCliApplication(owner).invoke(
+        [explicit_mode, *(arguments or ["--help"])]
+    )
     output = result.stdout if result.returncode == 0 else result.stderr or result.stdout
     if output:
         typer.echo(output.rstrip(), nl=False)

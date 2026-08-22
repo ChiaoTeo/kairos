@@ -61,6 +61,2757 @@ def test_notifications_cli_exposes_validation_and_explicit_test() -> None:
     assert "test" in output.getvalue()
 
 
+def test_market_business_surface_rejects_connected_component_commands() -> None:
+    output = StringIO()
+
+    assert execute_argv(["market", "status"], output) != 0
+    text = output.getvalue()
+    assert "connected runtime command" in text
+    assert "kairos system component market" in text
+    assert "kairos launch instance component market" in text
+
+    output = StringIO()
+    assert execute_argv(["market", "sources"], output) != 0
+    text = output.getvalue()
+    assert "connected runtime command" in text
+    assert "kairos system component market" in text
+
+
+def test_system_component_status_inspects_workspace_component(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="component-status"
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "market",
+                "status",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    value = json.loads(output.getvalue())
+    assert value["component"] == "market"
+    assert value["status"] == "not_running"
+
+
+def test_launch_instance_component_market_status_uses_instance_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-component"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"components":{"market":{"socket":"%s"}},"accounts":{}}'
+        % instance.socket("market"),
+        encoding="utf-8",
+    )
+    seen: list[tuple[str, object]] = []
+
+    def status(_self, component, **kwargs):
+        seen.append((component, kwargs.get("instance_workspace")))
+        return {"component": component, "status": "ready"}
+
+    monkeypatch.setattr(ComponentProcessApplication, "status", status)
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "market",
+                "status",
+                "btc",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    value = json.loads(output.getvalue())
+    assert value["component"] == "market"
+    assert value["status"] == "ready"
+    assert value["scope"] == "launch-instance"
+    assert value["launch_id"] == "btc"
+    assert value["instance_id"] == "run-1"
+    assert ("market", instance) in seen
+
+
+def test_launch_instance_component_market_snapshot_uses_manifest_view_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-market-snapshot"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    view_root = instance.snapshot()
+    instance.component_manifest().write_text(
+        '{"components":{"market":{"socket":"%s","view_root":"%s"}},"accounts":{}}'
+        % (instance.socket("market"), view_root),
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    class Projection:
+        def __init__(self, path):
+            seen["path"] = str(path)
+
+        def read_quote(self, market_id, source_id):
+            seen["market_id"] = market_id
+            seen["source_id"] = source_id
+            return None
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.MarketProjection", Projection
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "market",
+                "snapshot",
+                "btc",
+                "quote",
+                "--market-id",
+                "market:binance:spot:BTCUSDT",
+                "--source-id",
+                "binance-spot",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    value = json.loads(output.getvalue())
+    assert value["scope"] == "launch-instance"
+    assert value["status"] == "not_found"
+    assert seen == {
+        "path": str(view_root),
+        "market_id": "market:binance:spot:BTCUSDT",
+        "source_id": "binance-spot",
+    }
+
+
+def test_launch_instance_component_execution_orders_uses_connected_owner_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-execution-orders"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    seen: dict[str, object] = {}
+
+    def run(self, component, arguments):
+        seen["root"] = self.workspace.paths.root
+        seen["component"] = component
+        seen["arguments"] = arguments
+        return {"orders": []}
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.NativeCliApplication.run",
+        run,
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "execution",
+                "orders",
+                "btc",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+                "--account-id",
+                "main",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    assert json.loads(output.getvalue()) == {
+        "orders": [],
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "mode": "paper",
+        "scope": "launch-instance",
+    }
+    assert seen == {
+        "root": workspace.paths.root,
+        "component": "execution",
+        "arguments": [
+            "--mode",
+            "paper",
+            "--launch-id",
+            "btc",
+            "--instance-id",
+            "run-1",
+            "connected",
+            "orders",
+            "--account-id",
+            "main",
+        ],
+    }
+
+
+def test_launch_instance_component_risk_latest_uses_connected_owner_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-risk-latest"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    seen: dict[str, object] = {}
+
+    def run(self, component, arguments):
+        seen["root"] = self.workspace.paths.root
+        seen["component"] = component
+        seen["arguments"] = arguments
+        return {"kind": "latest", "generation": 7}
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.NativeCliApplication.run",
+        run,
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "risk",
+                "latest",
+                "btc",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    instance = workspace.instance("paper", "btc", "run-1")
+    assert json.loads(output.getvalue()) == {
+        "kind": "latest",
+        "generation": 7,
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "mode": "paper",
+        "scope": "launch-instance",
+    }
+    assert seen == {
+        "root": instance.paths.root,
+        "component": "risk",
+        "arguments": [
+            "connected",
+            "latest",
+            "--actor-id",
+            "risk:run-1",
+        ],
+    }
+
+    limits_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "risk",
+                "limits",
+                "btc",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            limits_output,
+        )
+        == 0
+    )
+    assert json.loads(limits_output.getvalue()) == {
+        "kind": "latest",
+        "generation": 7,
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "mode": "paper",
+        "scope": "launch-instance",
+    }
+    assert seen == {
+        "root": instance.paths.root,
+        "component": "risk",
+        "arguments": [
+            "connected",
+            "limits",
+            "--actor-id",
+            "risk:run-1",
+        ],
+    }
+
+
+def test_risk_system_client_latest_returns_projection_business_facts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system.clients import RiskSystemClient
+
+    class FakeProjection:
+        def latest(self):
+            return {
+                "kind": "latest",
+                "generation": 3,
+                "limits": [{"policy": {"policy_id": "policy-1"}}],
+                "active_reservations": [{"reservation_id": "reservation-1"}],
+                "circuits": [{"circuit_id": "circuit-1", "status": "open"}],
+                "summary": {
+                    "limit_count": 1,
+                    "active_reservation_count": 1,
+                    "open_circuit_count": 1,
+                },
+            }
+
+        def limits(self):
+            return ({"policy": {"policy_id": "policy-1"}},)
+
+        def active_reservations(self):
+            return ({"reservation_id": "reservation-1"},)
+
+        def circuits(self):
+            return ({"circuit_id": "circuit-1", "status": "open"},)
+
+    seen: dict[str, object] = {}
+
+    def latest_projection(self, *, actor_id):
+        seen["actor_id"] = actor_id
+        return FakeProjection()
+
+    monkeypatch.setattr(RiskSystemClient, "latest_projection", latest_projection)
+
+    client = RiskSystemClient(tmp_path / "risk.sock", view_root=tmp_path / "snapshots")
+    assert client.latest(actor_id="risk:run-1") == {
+        "kind": "latest",
+        "generation": 3,
+        "limits": [{"policy": {"policy_id": "policy-1"}}],
+        "active_reservations": [{"reservation_id": "reservation-1"}],
+        "circuits": [{"circuit_id": "circuit-1", "status": "open"}],
+        "summary": {
+            "limit_count": 1,
+            "active_reservation_count": 1,
+            "open_circuit_count": 1,
+        },
+    }
+    assert client.latest_metadata(actor_id="risk:run-1") == client.latest(
+        actor_id="risk:run-1"
+    )
+    assert client.latest_limits(actor_id="risk:run-1") == {
+        "actor_id": "risk:run-1",
+        "limits": [{"policy": {"policy_id": "policy-1"}}],
+    }
+    assert client.latest_reservations(actor_id="risk:run-1") == {
+        "actor_id": "risk:run-1",
+        "active_reservations": [{"reservation_id": "reservation-1"}],
+    }
+    assert client.latest_circuits(actor_id="risk:run-1") == {
+        "actor_id": "risk:run-1",
+        "circuits": [{"circuit_id": "circuit-1", "status": "open"}],
+    }
+    assert seen["actor_id"] == "risk:run-1"
+
+
+def test_launch_instance_component_capital_current_uses_instance_client(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-capital-current"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    seen: dict[str, object] = {}
+
+    class FakeCapitalClient:
+        def current_metadata(self, capital_group_id):
+            seen["capital_group_id"] = capital_group_id
+            return {
+                "kind": "current",
+                "generation": 9,
+                "summary": {"availability_count": 1, "alert_count": 0},
+                "availabilities": [{"readiness": "ready"}],
+                "alerts": [],
+            }
+
+        def current_objectives(self, capital_group_id):
+            seen["objectives_group_id"] = capital_group_id
+            return {
+                "capital_group_id": capital_group_id,
+                "objectives": [{"objective_id": "objective-1"}],
+            }
+
+        def current_routes(self, capital_group_id):
+            seen["routes_group_id"] = capital_group_id
+            return {
+                "capital_group_id": capital_group_id,
+                "routes": [{"route_id": "route-1"}],
+            }
+
+    class FakeClients:
+        capital = FakeCapitalClient()
+
+    def from_connections(connections):
+        seen["connections"] = connections
+        return FakeClients()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.resolve_instance_connections",
+        lambda instance: {"instance": instance.paths.root},
+    )
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.InstanceSystemClients.from_connections",
+        staticmethod(from_connections),
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "capital",
+                "current",
+                "btc",
+                "--capital-group-id",
+                "group-1",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    instance = workspace.instance("paper", "btc", "run-1")
+    assert json.loads(output.getvalue()) == {
+        "kind": "current",
+        "generation": 9,
+        "summary": {"availability_count": 1, "alert_count": 0},
+        "availabilities": [{"readiness": "ready"}],
+        "alerts": [],
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "mode": "paper",
+        "scope": "launch-instance",
+    }
+    assert seen == {
+        "connections": {"instance": instance.paths.root},
+        "capital_group_id": "group-1",
+    }
+
+    objectives_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "capital",
+                "objectives",
+                "btc",
+                "--capital-group-id",
+                "group-1",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            objectives_output,
+        )
+        == 0
+    )
+    assert json.loads(objectives_output.getvalue()) == {
+        "capital_group_id": "group-1",
+        "objectives": [{"objective_id": "objective-1"}],
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "mode": "paper",
+        "scope": "launch-instance",
+    }
+    assert seen["objectives_group_id"] == "group-1"
+
+    routes_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "capital",
+                "routes",
+                "btc",
+                "--capital-group-id",
+                "group-1",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            routes_output,
+        )
+        == 0
+    )
+    assert json.loads(routes_output.getvalue()) == {
+        "capital_group_id": "group-1",
+        "routes": [{"route_id": "route-1"}],
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "mode": "paper",
+        "scope": "launch-instance",
+    }
+    assert seen["routes_group_id"] == "group-1"
+
+
+def test_capital_system_client_current_returns_projection_business_facts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system.clients import CapitalSystemClient
+
+    class FakeProjection:
+        def current(self):
+            return {
+                "capital_group_id": "group-1",
+                "kind": "current",
+                "generation": 4,
+                "summary": {
+                    "availability_count": 1,
+                    "alert_count": 1,
+                    "critical_alert_count": 1,
+                },
+                "availabilities": [{"readiness": "degraded"}],
+                "alerts": [{"severity": "critical"}],
+            }
+
+        def objectives(self):
+            return ({"objective_id": "objective-1"},)
+
+        def demands(self):
+            return ({"demand_id": "demand-1"},)
+
+        def plans(self):
+            return ({"plan_id": "plan-1"},)
+
+        def routes(self):
+            return ({"route_id": "route-1"},)
+
+        def reservations(self):
+            return ({"reservation_id": "reservation-1"},)
+
+        def operations(self):
+            return ({"operation_id": "operation-1"},)
+
+    seen: dict[str, object] = {}
+
+    def current_projection(self, capital_group_id):
+        seen["capital_group_id"] = capital_group_id
+        return FakeProjection()
+
+    monkeypatch.setattr(CapitalSystemClient, "current_projection", current_projection)
+
+    client = CapitalSystemClient(
+        tmp_path / "capital.sock", view_root=tmp_path / "snapshots"
+    )
+    assert client.current("group-1") == {
+        "capital_group_id": "group-1",
+        "kind": "current",
+        "generation": 4,
+        "summary": {
+            "availability_count": 1,
+            "alert_count": 1,
+            "critical_alert_count": 1,
+        },
+        "availabilities": [{"readiness": "degraded"}],
+        "alerts": [{"severity": "critical"}],
+    }
+    assert client.current_metadata("group-1") == client.current("group-1")
+    assert client.current_objectives("group-1") == {
+        "capital_group_id": "group-1",
+        "objectives": [{"objective_id": "objective-1"}],
+    }
+    assert client.current_demands("group-1") == {
+        "capital_group_id": "group-1",
+        "demands": [{"demand_id": "demand-1"}],
+    }
+    assert client.current_plans("group-1") == {
+        "capital_group_id": "group-1",
+        "plans": [{"plan_id": "plan-1"}],
+    }
+    assert client.current_routes("group-1") == {
+        "capital_group_id": "group-1",
+        "routes": [{"route_id": "route-1"}],
+    }
+    assert client.current_reservations("group-1") == {
+        "capital_group_id": "group-1",
+        "reservations": [{"reservation_id": "reservation-1"}],
+    }
+    assert client.current_operations("group-1") == {
+        "capital_group_id": "group-1",
+        "operations": [{"operation_id": "operation-1"}],
+    }
+    assert seen["capital_group_id"] == "group-1"
+
+
+def test_launch_instance_component_capital_controls_use_owner_cli_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-capital-controls"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    objective_file = tmp_path / "objective.json"
+    demand_file = tmp_path / "demand.json"
+    cancel_file = tmp_path / "cancel-objective.json"
+    reconcile_file = tmp_path / "reconcile-plan.json"
+    objective_file.write_text(
+        '{"request_id":"request-objective","objective_id":"objective-file"}',
+        encoding="utf-8",
+    )
+    demand_file.write_text(
+        '{"request_id":"request-demand","demand_id":"demand-file"}',
+        encoding="utf-8",
+    )
+    cancel_file.write_text(
+        json.dumps(
+            {
+                "request_id": "request-cancel",
+                "capital_group_id": "group-1",
+                "objective_id": "objective-1",
+                "expected_version": 3,
+                "strategy_id": "strategy-1",
+                "observed_at_unix_nanos": 10,
+            }
+        ),
+        encoding="utf-8",
+    )
+    reconcile_file.write_text(
+        json.dumps(
+            {
+                "request_id": "request-reconcile",
+                "capital_group_id": "group-1",
+                "plan_id": "plan-1",
+                "observed_at_unix_nanos": 11,
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen: list[tuple[str, list[str], Path]] = []
+
+    def run(_self, component, arguments):
+        seen.append((component, arguments, _self.workspace.root))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.resolve_instance_connections",
+        lambda instance: {"instance": instance.paths.root},
+    )
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+
+    for argv, expected_arguments in (
+        (
+            [
+                "publish-funding-objective",
+                "btc",
+                "--file",
+                str(objective_file),
+            ],
+            ["connected", "publish-funding-objective", "--file", str(objective_file)],
+        ),
+        (
+            [
+                "observe-demand",
+                "btc",
+                "--file",
+                str(demand_file),
+            ],
+            ["connected", "observe-demand", "--file", str(demand_file)],
+        ),
+        (
+            [
+                "cancel-funding-objective",
+                "btc",
+                "--file",
+                str(cancel_file),
+            ],
+            ["connected", "cancel-funding-objective", "--file", str(cancel_file)],
+        ),
+        (
+            [
+                "reconcile-plan",
+                "btc",
+                "--file",
+                str(reconcile_file),
+            ],
+            ["connected", "reconcile-plan", "--file", str(reconcile_file)],
+        ),
+    ):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    "launch",
+                    "instance",
+                    "component",
+                    "capital",
+                    *argv,
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--format",
+                    "json",
+                ],
+                output,
+            )
+            == 0
+        )
+        assert json.loads(output.getvalue()) == {
+            "status": "ok",
+            "launch_id": "btc",
+            "instance_id": "run-1",
+            "mode": "paper",
+            "scope": "launch-instance",
+        }
+        assert seen[-1] == ("capital", expected_arguments, instance.root)
+
+
+def test_system_component_market_dependents_reads_launch_manifest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="market-dependents"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.component_manifest().write_text(
+        '{"components":{"market":{"socket":"%s"}},"accounts":{}}'
+        % workspace.paths.process_socket("market"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        LaunchControlApplication,
+        "status",
+        lambda _self, _target: {"status": "ready"},
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "market",
+                "dependents",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    value = json.loads(output.getvalue())
+    assert value["component"] == "market"
+    assert value["scope"] == "workspace"
+    assert value["dependents"] == [
+        {
+            "launch_id": "btc",
+            "mode": "paper",
+            "instance_id": "run-1",
+            "status": "ready",
+            "component": "market",
+            "socket": str(workspace.paths.process_socket("market")),
+        }
+    ]
+
+
+def test_system_component_market_sources_requires_running_server(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="market-sources"
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "market",
+                "sources",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        != 0
+    )
+
+    text = output.getvalue()
+    assert "target server not found" in text
+    assert "system up --component market" in text
+
+
+def test_system_component_market_replay_control_uses_owner_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="market-replay-control"
+    )
+    calls: list[tuple[str, list[str], Path]] = []
+
+    def run(_self, component, arguments):
+        calls.append((component, arguments, _self.workspace.paths.root))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+
+    for command in (
+        "recover",
+        "pause-replay",
+        "resume-replay",
+    ):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    "system",
+                    "component",
+                    "market",
+                    command,
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--format",
+                    "json",
+                ],
+                output,
+            )
+            == 0
+        )
+        assert json.loads(output.getvalue()) == {"status": "ok"}
+        assert calls[-1] == (
+            "market",
+            ["connected", command],
+            workspace.paths.root,
+        )
+
+    assert [call[1][-1] for call in calls] == [
+        "recover",
+        "pause-replay",
+        "resume-replay",
+    ]
+
+
+def test_system_component_market_subscription_control_uses_owner_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="market-subscription-control"
+    )
+    calls: list[tuple[str, list[str], Path]] = []
+
+    def run(_self, component, arguments):
+        calls.append((component, list(arguments), _self.workspace.paths.root))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "market",
+                "subscribe",
+                "--workspace",
+                str(workspace.paths.root),
+                "--subscription-id",
+                "sub-1",
+                "--subject",
+                "btc-options",
+                "--source-id",
+                "binance-options",
+                "--strategy-id",
+                "strategy-1",
+                "--instance-id",
+                "instance-1",
+                "--selector",
+                "quote",
+                "--exchange",
+                "exchange:binance",
+                "--market-type",
+                "option",
+                "--asset-type",
+                "crypto",
+                "--identity",
+                "btc",
+                "--param",
+                "depth=10",
+                "--chain",
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {"status": "ok"}
+    assert calls[-1] == (
+        "market",
+        [
+            "connected",
+            "subscribe",
+            "--subscription-id",
+            "sub-1",
+            "--subject",
+            "btc-options",
+            "--strategy-id",
+            "strategy-1",
+            "--instance-id",
+            "instance-1",
+            "--source-id",
+            "binance-options",
+            "--exchange",
+            "exchange:binance",
+            "--market-type",
+            "option",
+            "--asset-type",
+            "crypto",
+            "--dynamic",
+            "--selector",
+            "quote",
+            "--param",
+            "depth=10",
+            "--param",
+            'mode="chain"',
+            "--param",
+            'identity="btc"',
+        ],
+        workspace.paths.root,
+    )
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "market",
+                "unsubscribe",
+                "--workspace",
+                str(workspace.paths.root),
+                "--subscription-id",
+                "sub-1",
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {"status": "ok"}
+    assert calls[-1] == (
+        "market",
+        ["connected", "unsubscribe", "--subscription-id", "sub-1"],
+        workspace.paths.root,
+    )
+
+
+def test_system_component_market_freshness_uses_owner_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="market-freshness"
+    )
+    calls: list[tuple[str, list[str], Path]] = []
+
+    def run(_self, component, arguments):
+        calls.append((component, list(arguments), _self.workspace.paths.root))
+        return {"status": "ready"}
+
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "market",
+                "freshness",
+                "--workspace",
+                str(workspace.paths.root),
+                "--market-id",
+                "market:binance:spot:BTCUSDT",
+                "--source-id",
+                "binance",
+                "--qualifier",
+                "quote",
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    assert json.loads(output.getvalue()) == {"status": "ready"}
+    assert calls[-1] == (
+        "market",
+        [
+            "connected",
+            "freshness",
+            "--market-id",
+            "market:binance:spot:BTCUSDT",
+            "--source-id",
+            "binance",
+            "--qualifier",
+            "quote",
+        ],
+        workspace.paths.root,
+    )
+
+
+def test_reference_business_surface_rejects_connected_component_commands() -> None:
+    output = StringIO()
+
+    assert execute_argv(["reference", "health"], output) != 0
+    text = output.getvalue()
+    assert "connected runtime command" in text
+    assert "kairos system component reference" in text
+    assert "kairos launch instance component reference" in text
+
+    output = StringIO()
+    assert execute_argv(["reference", "status"], output) != 0
+    text = output.getvalue()
+    assert "connected runtime command" in text
+    assert "kairos system component reference" in text
+
+
+def test_reference_business_surface_rejects_runtime_option_coverage() -> None:
+    output = StringIO()
+
+    assert execute_argv(["reference", "options-coverage"], output) != 0
+    text = output.getvalue()
+    assert "connected runtime command" in text
+    assert "kairos system component reference" in text
+    assert "kairos launch instance component reference" in text
+
+
+def test_reference_business_surface_rejects_catalog_mutation_shortcuts() -> None:
+    output = StringIO()
+
+    assert execute_argv(["reference", "assets", "add"], output) != 0
+    text = output.getvalue()
+    assert "mutates the Reference catalog" in text
+    assert "not a standalone catalog query" in text
+
+    output = StringIO()
+    assert execute_argv(["reference", "catalog", "listings", "add"], output) != 0
+    text = output.getvalue()
+    assert "mutates the Reference catalog" in text
+
+
+def test_reference_option_chain_passthrough_uses_owner_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="reference-option-chain"
+    )
+    seen: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"status":"ok"}'
+        stderr = ""
+
+    def invoke(_self, arguments):
+        seen.append(list(arguments))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.reference.ReferenceCliApplication.invoke",
+        invoke,
+    )
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "reference",
+                "option-chain",
+                "--underlying",
+                "instrument:equity:US:AAPL:common",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        == 0
+    )
+
+    assert seen == [
+        [
+            "standalone",
+            "option-chain",
+            "--underlying",
+            "instrument:equity:US:AAPL:common",
+        ]
+    ]
+    assert json.loads(output.getvalue()) == {"status": "ok"}
+
+
+def test_risk_preview_passthrough_uses_owner_standalone_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="risk-preview"
+    )
+    seen: list[tuple[str, list[str]]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"status":"checked"}'
+        stderr = ""
+
+    def invoke(_self, component, arguments):
+        seen.append((component, list(arguments)))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.risk.NativeCliApplication.invoke",
+        invoke,
+    )
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "risk",
+                "preview",
+                "--policy-file",
+                "policy.json",
+                "--request-file",
+                "request.json",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        == 0
+    )
+
+    assert seen == [
+        (
+            "risk",
+            [
+                "standalone",
+                "preview",
+                "--policy-file",
+                "policy.json",
+                "--request-file",
+                "request.json",
+            ],
+        )
+    ]
+    assert json.loads(output.getvalue()) == {"status": "checked"}
+
+
+def test_risk_business_surface_rejects_connected_runtime_commands() -> None:
+    output = StringIO()
+
+    assert execute_argv(["risk", "authorize-reserve", "--file", "request.json"], output) != 0
+    text = output.getvalue()
+    assert "connected Risk runtime command" in text
+    assert "kairos system component risk" in text
+    assert "kairos launch instance component risk" in text
+
+
+def test_capital_schema_passthrough_uses_owner_standalone_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="capital-schema"
+    )
+    seen: list[tuple[str, list[str]]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"status":"schema"}'
+        stderr = ""
+
+    def invoke(_self, component, arguments):
+        seen.append((component, list(arguments)))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.capital.NativeCliApplication.invoke",
+        invoke,
+    )
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "capital",
+                "schema",
+                "funding-objective",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        == 0
+    )
+
+    assert seen == [
+        ("capital", ["standalone", "schema", "funding-objective"])
+    ]
+    assert json.loads(output.getvalue()) == {"status": "schema"}
+
+    preview_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "capital",
+                "preview",
+                "--kind",
+                "funding-objective",
+                "--file",
+                "objective.json",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            preview_output,
+        )
+        == 0
+    )
+    assert seen[-1] == (
+        "capital",
+        [
+            "standalone",
+            "preview",
+            "--kind",
+            "funding-objective",
+            "--file",
+            "objective.json",
+        ],
+    )
+
+
+def test_capital_business_surface_rejects_connected_runtime_commands() -> None:
+    output = StringIO()
+
+    assert execute_argv(["capital", "transfer", "--amount", "1"], output) != 0
+    text = output.getvalue()
+    assert "connected Capital runtime command" in text
+    assert "kairos system component capital" in text
+    assert "kairos launch instance component capital" in text
+
+
+def test_system_component_reference_option_coverage_uses_workspace_client(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="reference-options-component"
+    )
+    calls: list[tuple[str, object]] = []
+
+    class ReferenceClient:
+        def option_coverage(self):
+            calls.append(("coverage", None))
+            return {"underlyings": ["SPY"]}
+
+        def set_option_underlying(self, underlying, enabled):
+            calls.append((underlying, enabled))
+            return {"underlying": underlying, "enabled": enabled}
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.root._workspace_reference_client",
+        lambda owner: ReferenceClient(),
+    )
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "reference",
+                "options-coverage",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {"underlyings": ["SPY"]}
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "reference",
+                "options-add",
+                "--underlying",
+                "QQQ",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {"underlying": "QQQ", "enabled": True}
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "reference",
+                "options-remove",
+                "--underlying",
+                "IWM",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {"underlying": "IWM", "enabled": False}
+    assert calls == [("coverage", None), ("QQQ", True), ("IWM", False)]
+
+
+def test_account_business_surface_rejects_connected_component_commands() -> None:
+    output = StringIO()
+
+    assert execute_argv(["account", "fill"], output) != 0
+    text = output.getvalue()
+    assert "connected runtime command" in text
+    assert "kairos system component account" in text
+    assert "kairos launch instance component account" in text
+
+
+def test_account_local_query_passthrough_uses_owner_standalone_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="account-local-query"
+    )
+    seen: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"source":"local_registry"}'
+        stderr = ""
+
+    def invoke(_self, arguments):
+        seen.append(list(arguments))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.account.AccountCliApplication.invoke",
+        invoke,
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "account",
+                "--account-id",
+                "paper-main",
+                "balances",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        == 0
+    )
+    assert seen == [["standalone", "--account-id", "paper-main", "balances"]]
+    assert json.loads(output.getvalue()) == {"source": "local_registry"}
+
+
+def test_order_business_surface_rejects_connected_execution_commands() -> None:
+    output = StringIO()
+
+    assert execute_argv(["order", "status"], output) != 0
+    text = output.getvalue()
+    assert "connected Execution runtime command" in text
+    assert "kairos launch instance component execution" in text
+    assert "kairos system component execution" not in text
+
+
+def test_order_evidence_short_path_uses_owner_standalone_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="order-evidence"
+    )
+    seen: list[tuple[str, list[str]]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"source":"local_evidence_file"}'
+        stderr = ""
+
+    def invoke(_self, component, arguments):
+        seen.append((component, list(arguments)))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
+        invoke,
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "order",
+                "audit",
+                "--workspace",
+                str(workspace.paths.root),
+                "--file",
+                "execution-evidence.json",
+                "--order-id",
+                "order-1",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    assert seen == [
+        (
+            "execution",
+            [
+                "standalone",
+                "audit",
+                "--file",
+                "execution-evidence.json",
+                "--order-id",
+                "order-1",
+            ],
+        )
+    ]
+    assert json.loads(output.getvalue()) == {"source": "local_evidence_file"}
+
+
+def test_order_preview_submit_uses_owner_standalone_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="order-preview-submit"
+    )
+    seen: list[tuple[str, list[str]]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"command":"preview-submit","submits_order":false}'
+        stderr = ""
+
+    def invoke(_self, component, arguments):
+        seen.append((component, list(arguments)))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
+        invoke,
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "order",
+                "preview-submit",
+                "--workspace",
+                str(workspace.paths.root),
+                "--order-id",
+                "order-1",
+                "--account-id",
+                "main",
+                "--instrument-id",
+                "BTC-USDT",
+                "--quantity",
+                "1",
+                "--execution-route-id",
+                "route-1",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    assert seen == [
+        (
+            "execution",
+            [
+                "standalone",
+                "preview-submit",
+                "--order-id",
+                "order-1",
+                "--account-id",
+                "main",
+                "--instrument-id",
+                "BTC-USDT",
+                "--quantity",
+                "1",
+                "--execution-route-id",
+                "route-1",
+            ],
+        )
+    ]
+    assert json.loads(output.getvalue()) == {
+        "command": "preview-submit",
+        "submits_order": False,
+    }
+
+
+def test_order_preview_cancel_and_replace_use_owner_standalone_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="order-preview-actions"
+    )
+    seen: list[tuple[str, list[str]]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"effect":"dry_run"}'
+        stderr = ""
+
+    def invoke(_self, component, arguments):
+        seen.append((component, list(arguments)))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
+        invoke,
+    )
+
+    cancel_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "order",
+                "preview-cancel",
+                "--workspace",
+                str(workspace.paths.root),
+                "--order-id",
+                "order-1",
+                "--reason",
+                "manual review",
+            ],
+            cancel_output,
+        )
+        == 0
+    )
+
+    replace_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "order",
+                "preview-replace",
+                "--workspace",
+                str(workspace.paths.root),
+                "--target-order-id",
+                "order-1",
+                "--order-id",
+                "order-2",
+                "--account-id",
+                "main",
+                "--instrument-id",
+                "BTC-USDT",
+                "--quantity",
+                "2",
+                "--execution-route-id",
+                "route-1",
+            ],
+            replace_output,
+        )
+        == 0
+    )
+
+    assert seen == [
+        (
+            "execution",
+            [
+                "standalone",
+                "preview-cancel",
+                "--order-id",
+                "order-1",
+                "--reason",
+                "manual review",
+            ],
+        ),
+        (
+            "execution",
+            [
+                "standalone",
+                "preview-replace",
+                "--target-order-id",
+                "order-1",
+                "--order-id",
+                "order-2",
+                "--account-id",
+                "main",
+                "--instrument-id",
+                "BTC-USDT",
+                "--quantity",
+                "2",
+                "--execution-route-id",
+                "route-1",
+            ],
+        ),
+    ]
+    assert json.loads(cancel_output.getvalue()) == {"effect": "dry_run"}
+    assert json.loads(replace_output.getvalue()) == {"effect": "dry_run"}
+
+
+def test_order_preview_file_commands_use_owner_standalone_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="order-preview-files"
+    )
+    seen: list[tuple[str, list[str]]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"source":"typed_request_file"}'
+        stderr = ""
+
+    def invoke(_self, component, arguments):
+        seen.append((component, list(arguments)))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
+        invoke,
+    )
+
+    for command, file_name in (
+        ("preview-submit-file", "submit-order.json"),
+        ("preview-cancel-file", "cancel-order.json"),
+        ("preview-replace-file", "replace-order.json"),
+    ):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    "order",
+                    command,
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--file",
+                    file_name,
+                ],
+                output,
+            )
+            == 0
+        )
+        assert json.loads(output.getvalue()) == {"source": "typed_request_file"}
+
+    assert seen == [
+        (
+            "execution",
+            ["standalone", "preview-submit-file", "--file", "submit-order.json"],
+        ),
+        (
+            "execution",
+            ["standalone", "preview-cancel-file", "--file", "cancel-order.json"],
+        ),
+        (
+            "execution",
+            ["standalone", "preview-replace-file", "--file", "replace-order.json"],
+        ),
+    ]
+
+
+def test_order_business_surface_rejects_all_runtime_execution_aliases() -> None:
+    output = StringIO()
+
+    assert execute_argv(["order", "unknown-remote-orders"], output) != 0
+    text = output.getvalue()
+    assert "connected Execution runtime command" in text
+    assert "kairos launch instance component execution" in text
+
+
+def test_order_business_surface_rejects_removed_backtest_short_path() -> None:
+    output = StringIO()
+
+    assert execute_argv(["order", "backtest"], output) != 0
+    text = output.getvalue()
+    assert "`kairos order backtest` has been removed" in text
+    assert "`kairos launch`" in text
+    assert "`kairos data`" in text
+    assert "`kairos research`" in text
+
+
+def test_order_business_surface_rejects_missing_link_unknown_contract() -> None:
+    output = StringIO()
+
+    assert execute_argv(["order", "link-unknown"], output) != 0
+    text = output.getvalue()
+    assert "`kairos order link-unknown` is not available" in text
+    assert "Execution runtime contract/API" in text
+
+
+def test_system_component_account_status_inspects_workspace_component(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="account-component-status"
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "account",
+                "status",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    value = json.loads(output.getvalue())
+    assert value["component"] == "account"
+    assert value["status"] == "not_running"
+
+
+def test_system_component_account_balances_requires_running_server(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="account-component-balances"
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "account",
+                "balances",
+                "--account-id",
+                "main",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        != 0
+    )
+    assert "target server not found" in output.getvalue()
+
+
+def test_system_component_account_refresh_and_reconcile_use_owner_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="account-component-control"
+    )
+    calls: list[tuple[str, list[str], Path]] = []
+
+    def run(_self, component, arguments):
+        calls.append((component, arguments, _self.workspace.paths.root))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "account",
+                "refresh",
+                "--account-id",
+                "main",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {"status": "ok"}
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "account",
+                "reconcile",
+                "--account-id",
+                "main",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {"status": "ok"}
+    assert calls == [
+        ("account", ["--account-id", "main", "connected", "refresh"], workspace.paths.root),
+        (
+            "account",
+            ["--account-id", "main", "connected", "reconcile"],
+            workspace.paths.root,
+        ),
+    ]
+
+
+def test_system_component_account_open_orders_uses_workspace_projection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="account-component-open-orders"
+    )
+    seen: dict[str, object] = {}
+
+    class ObservedOrdersProjection:
+        def open_orders(self, account_id):
+            seen["open_orders_account_id"] = str(account_id)
+            return {
+                "account_id": str(account_id),
+                "open_orders": [{"remote_order_id": "remote-1"}],
+            }
+
+    class AccountClient:
+        def observed_orders_projection(self, account_id):
+            seen["projection_account_id"] = str(account_id)
+            return ObservedOrdersProjection()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.root._workspace_account_client",
+        lambda owner: AccountClient(),
+    )
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "account",
+                "open-orders",
+                "--account-id",
+                "main",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    assert json.loads(output.getvalue()) == {
+        "account_id": "main",
+        "open_orders": [{"remote_order_id": "remote-1"}],
+    }
+    assert seen == {
+        "projection_account_id": "main",
+        "open_orders_account_id": "main",
+    }
+
+
+def test_launch_instance_component_execution_status_uses_instance_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-execution-component"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"components":{"execution":{"socket":"%s"}},"accounts":{}}'
+        % instance.socket("execution"),
+        encoding="utf-8",
+    )
+    seen: list[tuple[str, object]] = []
+
+    def status(_self, component, **kwargs):
+        seen.append((component, kwargs.get("instance_workspace")))
+        return {"component": component, "status": "ready"}
+
+    monkeypatch.setattr(ComponentProcessApplication, "status", status)
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "execution",
+                "status",
+                "btc",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    value = json.loads(output.getvalue())
+    assert value["component"] == "execution"
+    assert value["scope"] == "launch-instance"
+    assert ("execution", instance) in seen
+
+
+def test_launch_instance_component_reference_health_uses_manifest_client(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-reference-component"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"components":{"reference":{"socket":"%s","database":"%s"}},"accounts":{}}'
+        % (workspace.paths.process_socket("reference"), workspace.paths.reference_database()),
+        encoding="utf-8",
+    )
+
+    class ReferenceReader:
+        def health(self):
+            return {"status": "ready", "generation": 3}
+
+    class ReferenceClient:
+        reader = ReferenceReader()
+
+    class Clients:
+        reference = ReferenceClient()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.InstanceSystemClients.from_connections",
+        lambda connections: Clients(),
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "reference",
+                "health",
+                "btc",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    value = json.loads(output.getvalue())
+    assert value["status"] == "ready"
+    assert value["generation"] == 3
+    assert value["scope"] == "launch-instance"
+    assert value["launch_id"] == "btc"
+    assert value["instance_id"] == "run-1"
+
+
+def test_launch_instance_component_account_balances_uses_manifest_client(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.account import AccountSnapshot
+    from kairospy.domain_types import AccountId
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-account-component"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"components":{},"accounts":{"main":{"socket":"%s","view_root":"%s"}}}'
+        % (instance.socket("account-main"), instance.snapshot()),
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    class Projection:
+        def snapshot(self, account_id):
+            seen["snapshot_account_id"] = str(account_id)
+            return AccountSnapshot(
+                account_id=AccountId("main"),
+                segments=(),
+                generation=7,
+                event_sequence=11,
+            )
+
+    class AccountClient:
+        def current_projection(self, account_id):
+            seen["projection_account_id"] = str(account_id)
+            return Projection()
+
+    class Clients:
+        accounts = {AccountId("main"): AccountClient()}
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.InstanceSystemClients.from_connections",
+        lambda connections: Clients(),
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "account",
+                "balances",
+                "btc",
+                "--account-id",
+                "main",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    value = json.loads(output.getvalue())
+    assert value["account_id"] == "main"
+    assert value["balances"] == []
+    assert value["scope"] == "launch-instance"
+    assert value["launch_id"] == "btc"
+    assert value["instance_id"] == "run-1"
+    assert seen == {"projection_account_id": "main", "snapshot_account_id": "main"}
+
+
+def test_launch_instance_component_account_refresh_uses_owner_cli_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-account-refresh"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"components":{},"accounts":{"main":{"socket":"%s","view_root":"%s"}}}'
+        % (instance.socket("account-main"), instance.snapshot()),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, list[str], Path]] = []
+
+    def run(_self, component, arguments):
+        calls.append((component, arguments, _self.workspace.paths.root))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "account",
+                "refresh",
+                "btc",
+                "--account-id",
+                "main",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {
+        "status": "ok",
+        "account_id": "main",
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "mode": "paper",
+        "scope": "launch-instance",
+    }
+    assert calls == [
+        (
+            "account",
+            [
+                "--account-id",
+                "main",
+                "--launch-id",
+                "btc",
+                "--launch-mode",
+                "paper",
+                "--instance-id",
+                "run-1",
+                "connected",
+                "refresh",
+            ],
+            workspace.paths.root,
+        )
+    ]
+
+
+def test_launch_instance_component_account_open_orders_is_scoped_component_result(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.domain_types import AccountId
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-account-open-orders"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"components":{},"accounts":{"main":{"socket":"%s","view_root":"%s"}}}'
+        % (instance.socket("account-main"), instance.snapshot()),
+        encoding="utf-8",
+    )
+
+    seen: dict[str, object] = {}
+
+    class ObservedOrdersProjection:
+        def open_orders(self, account_id):
+            seen["open_orders_account_id"] = str(account_id)
+            return {
+                "account_id": str(account_id),
+                "open_orders": [{"remote_order_id": "remote-1"}],
+            }
+
+    class AccountClient:
+        def observed_orders_projection(self, account_id):
+            seen["projection_account_id"] = str(account_id)
+            return ObservedOrdersProjection()
+
+    class Clients:
+        accounts = {AccountId("main"): AccountClient()}
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.InstanceSystemClients.from_connections",
+        lambda connections: Clients(),
+    )
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "component",
+                "account",
+                "open-orders",
+                "btc",
+                "--account-id",
+                "main",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {
+        "account_id": "main",
+        "open_orders": [{"remote_order_id": "remote-1"}],
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "mode": "paper",
+        "scope": "launch-instance",
+    }
+    assert seen == {
+        "projection_account_id": "main",
+        "open_orders_account_id": "main",
+    }
+
+
+def test_system_component_reference_status_inspects_workspace_component(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="reference-component-status"
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "reference",
+                "status",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    value = json.loads(output.getvalue())
+    assert value["component"] == "reference"
+    assert value["status"] == "not_running"
+
+
+def test_system_component_risk_and_capital_status_are_scoped_components(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="risk-capital-component-status"
+    )
+
+    for component in ("risk", "capital"):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    "system",
+                    "component",
+                    component,
+                    "status",
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--format",
+                    "json",
+                ],
+                output,
+            )
+            == 0
+        )
+        value = json.loads(output.getvalue())
+        assert value["component"] == component
+        assert value["status"] == "not_running"
+
+
+def test_system_component_reference_health_requires_running_server(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="reference-component-health"
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "component",
+                "reference",
+                "health",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        != 0
+    )
+    text = output.getvalue()
+    assert "target server not found" in text
+    assert "system up --component reference" in text
+
+
+def test_system_component_risk_mutations_use_workspace_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="risk-component-mutations"
+    )
+    calls: list[tuple[str, list[str], Path]] = []
+
+    def run(_self, component, arguments):
+        calls.append((component, arguments, _self.workspace.paths.root))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+    policy_file = tmp_path / "risk-policy.json"
+    authorization_file = tmp_path / "risk-authorization.json"
+    authorization_file.write_text(
+        json.dumps(
+            {
+                "request_id": "request-1",
+                "idempotency_key": "idem-1",
+                "reservation_id": "reservation-0",
+            }
+        ),
+        encoding="utf-8",
+    )
+    policy_file.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "policy_id": "policy-1",
+                    "version": 1,
+                    "scope": {"account_id": "account-1"},
+                    "metric": "notional",
+                    "limit": "100.00",
+                    "enforcement": "reject",
+                    "valid_from_unix_nanos": 1,
+                    "valid_until_unix_nanos": None,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    for argv, expected_arguments in (
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "pre-trade-check",
+                "--file",
+                str(authorization_file),
+            ],
+            ["connected", "pre-trade-check", "--file", str(authorization_file)],
+        ),
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "authorize-reserve",
+                "--file",
+                str(authorization_file),
+            ],
+            ["connected", "authorize-reserve", "--file", str(authorization_file)],
+        ),
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "release",
+                "--reservation-id",
+                "reservation-1",
+                "--at-unix-nanos",
+                "10",
+            ],
+            [
+                "connected",
+                "release",
+                "--reservation-id",
+                "reservation-1",
+                "--at-unix-nanos",
+                "10",
+            ],
+        ),
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "consume",
+                "--reservation-id",
+                "reservation-2",
+                "--at-unix-nanos",
+                "11",
+            ],
+            [
+                "connected",
+                "consume",
+                "--reservation-id",
+                "reservation-2",
+                "--at-unix-nanos",
+                "11",
+            ],
+        ),
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "advance-time",
+                "--event-time-unix-nanos",
+                "12",
+            ],
+            ["connected", "advance-time", "--event-time-unix-nanos", "12"],
+        ),
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "resize",
+                "--reservation-id",
+                "reservation-3",
+                "--amount",
+                "12.50",
+                "--at-unix-nanos",
+                "13",
+            ],
+            [
+                "connected",
+                "resize",
+                "--reservation-id",
+                "reservation-3",
+                "--amount",
+                "12.50",
+                "--at-unix-nanos",
+                "13",
+            ],
+        ),
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "open-circuit",
+                "--account-id",
+                "account-1",
+                "--strategy-id",
+                "strategy-1",
+                "--exchange-id",
+                "exchange-1",
+                "--at-unix-nanos",
+                "14",
+                "--reset-at-unix-nanos",
+                "20",
+                "--reason",
+                "manual_hold",
+            ],
+            [
+                "connected",
+                "open-circuit",
+                "--at-unix-nanos",
+                "14",
+                "--reason",
+                "manual_hold",
+                "--account-id",
+                "account-1",
+                "--strategy-id",
+                "strategy-1",
+                "--exchange-id",
+                "exchange-1",
+                "--reset-at-unix-nanos",
+                "20",
+            ],
+        ),
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "close-circuit",
+                "--account-id",
+                "account-1",
+                "--at-unix-nanos",
+                "15",
+            ],
+            [
+                "connected",
+                "close-circuit",
+                "--at-unix-nanos",
+                "15",
+                "--account-id",
+                "account-1",
+            ],
+        ),
+        (
+            [
+                "system",
+                "component",
+                "risk",
+                "publish-policy",
+                "--file",
+                str(policy_file),
+            ],
+            ["connected", "publish-policy", "--file", str(policy_file)],
+        ),
+    ):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    *argv,
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--format",
+                    "json",
+                ],
+                output,
+            )
+            == 0
+        )
+        assert json.loads(output.getvalue()) == {"status": "ok"}
+        assert calls[-1] == ("risk", expected_arguments, workspace.paths.root)
+
+
+def test_system_component_capital_controls_use_workspace_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="capital-component-controls"
+    )
+    calls: list[tuple[str, list[str], Path]] = []
+    objective_file = tmp_path / "objective.json"
+    demand_file = tmp_path / "demand.json"
+    cancel_file = tmp_path / "cancel-objective.json"
+    reconcile_file = tmp_path / "reconcile-plan.json"
+    objective_file.write_text(
+        json.dumps(
+            {
+                "request_id": "request-objective",
+                "capital_group_id": "group-1",
+                "objective_id": "objective-file",
+            }
+        ),
+        encoding="utf-8",
+    )
+    demand_file.write_text(
+        json.dumps(
+            {
+                "request_id": "request-demand",
+                "capital_group_id": "group-1",
+                "demand_id": "demand-file",
+            }
+        ),
+        encoding="utf-8",
+    )
+    cancel_file.write_text(
+        json.dumps(
+            {
+                "request_id": "request-cancel",
+                "capital_group_id": "group-1",
+                "objective_id": "objective-1",
+                "expected_version": 3,
+                "strategy_id": "strategy-1",
+                "observed_at_unix_nanos": 10,
+            }
+        ),
+        encoding="utf-8",
+    )
+    reconcile_file.write_text(
+        json.dumps(
+            {
+                "request_id": "request-reconcile",
+                "capital_group_id": "group-1",
+                "plan_id": "plan-1",
+                "observed_at_unix_nanos": 11,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def run(_self, component, arguments):
+        calls.append((component, arguments, _self.workspace.paths.root))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+
+    for argv, expected_arguments in (
+        (
+            [
+                "publish-funding-objective",
+                "--file",
+                str(objective_file),
+            ],
+            ["connected", "publish-funding-objective", "--file", str(objective_file)],
+        ),
+        (
+            [
+                "observe-demand",
+                "--file",
+                str(demand_file),
+            ],
+            ["connected", "observe-demand", "--file", str(demand_file)],
+        ),
+        (
+            [
+                "cancel-funding-objective",
+                "--file",
+                str(cancel_file),
+            ],
+            ["connected", "cancel-funding-objective", "--file", str(cancel_file)],
+        ),
+        (
+            [
+                "reconcile-plan",
+                "--file",
+                str(reconcile_file),
+            ],
+            ["connected", "reconcile-plan", "--file", str(reconcile_file)],
+        ),
+    ):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    "system",
+                    "component",
+                    "capital",
+                    *argv,
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--format",
+                    "json",
+                ],
+                output,
+            )
+            == 0
+        )
+        assert json.loads(output.getvalue()) == {"status": "ok"}
+        assert calls[-1] == ("capital", expected_arguments, workspace.paths.root)
+
+
+def test_system_restart_refuses_market_with_active_launch_dependents(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="market-restart"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.component_manifest().write_text(
+        '{"components":{"market":{"socket":"%s"}},"accounts":{}}'
+        % workspace.paths.process_socket("market"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        LaunchControlApplication,
+        "status",
+        lambda _self, _target: {"status": "ready"},
+    )
+
+    def restart(*_args, **_kwargs):
+        raise AssertionError("restart should be blocked before process control")
+
+    monkeypatch.setattr(ComponentProcessApplication, "restart", restart)
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "restart",
+                "--component",
+                "market",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        != 0
+    )
+
+    text = output.getvalue()
+    assert "restart refused" in text
+    assert "btc / paper / run-1" in text
+
+
 def test_notifications_validate_reads_workspace_resources(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="n")
     output = StringIO()
@@ -882,15 +3633,21 @@ def test_readme_local_links_resolve() -> None:
 
 def test_cli_exposes_canonical_business_command_surfaces() -> None:
     for argv, expected in (
-        (["account", "--help"], ("credential-list", "balances", "snapshot")),
+        (["account", "--help"], ("credential-list", "simulate", "schema")),
         (["integration", "--help"], ("transfer", "earn")),
         (["market", "--help"], ("validate", "once", "replay")),
+        (["risk", "--help"], ("schema", "doctor", "preview")),
+        (["capital", "--help"], ("schema", "doctor")),
         (["launch", "--help"], ("targets", "diagnose", "replay", "instance")),
         (
             ["reference", "--help"],
             ("health", "catalog", "assets", "listings", "markets"),
         ),
-        (["system", "--help"], ("account", "restart", "list")),
+        (["system", "--help"], ("component", "restart", "list")),
+        (
+            ["system", "component", "--help"],
+            ("account", "market", "reference", "risk", "capital"),
+        ),
     ):
         output = StringIO()
         assert execute_argv(argv, output) == 0
@@ -1418,6 +4175,238 @@ def test_launch_status_aggregates_strategy_and_component_health(
         "execution",
         "account:main",
     }
+
+
+def test_launch_instance_component_risk_and_capital_status_use_instance_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="instance-risk-capital-status"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"components":{"capital":{"socket":"%s"}},"accounts":{}}'
+        % instance.socket("capital"),
+        encoding="utf-8",
+    )
+
+    def component_status(
+        _self, component, *, instance_workspace=None, socket_name=None
+    ):
+        del socket_name
+        return {
+            "component": component,
+            "status": "ready",
+            "scope_root": str(instance_workspace.root)
+            if instance_workspace is not None
+            else "workspace",
+        }
+
+    monkeypatch.setattr(ComponentProcessApplication, "status", component_status)
+
+    for component in ("risk", "capital"):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    "launch",
+                    "instance",
+                    "component",
+                    component,
+                    "status",
+                    "btc",
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--format",
+                    "json",
+                ],
+                output,
+            )
+            == 0
+        )
+        value = json.loads(output.getvalue())
+        assert value["component"] == component
+        assert value["status"] == "ready"
+        assert value["scope"] == "launch-instance"
+        assert value["instance_id"] == "run-1"
+        assert value["scope_root"] == str(instance.root)
+
+
+def test_launch_instance_component_risk_mutations_use_owner_cli_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.application.system import NativeCliApplication
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="instance-risk-mutations"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+    instance = workspace.instance("paper", "btc", "run-1")
+    instance.prepare()
+    policy_file = tmp_path / "risk-policy.json"
+    authorization_file = tmp_path / "risk-authorization.json"
+    policy_file.write_text('{"policy":{"policy_id":"policy-1"}}', encoding="utf-8")
+    authorization_file.write_text('{"request_id":"request-1"}', encoding="utf-8")
+    calls: list[tuple[str, list[str], Path]] = []
+
+    def run(_self, component, arguments):
+        calls.append((component, arguments, _self.workspace.root))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(NativeCliApplication, "run", run)
+
+    for argv, expected_arguments in (
+        (
+            ["pre-trade-check", "--file", str(authorization_file)],
+            ["connected", "pre-trade-check", "--file", str(authorization_file)],
+        ),
+        (
+            ["authorize-reserve", "--file", str(authorization_file)],
+            ["connected", "authorize-reserve", "--file", str(authorization_file)],
+        ),
+        (
+            [
+                "release",
+                "--reservation-id",
+                "reservation-1",
+                "--at-unix-nanos",
+                "10",
+            ],
+            [
+                "connected",
+                "release",
+                "--reservation-id",
+                "reservation-1",
+                "--at-unix-nanos",
+                "10",
+            ],
+        ),
+        (
+            [
+                "consume",
+                "--reservation-id",
+                "reservation-2",
+                "--at-unix-nanos",
+                "11",
+            ],
+            [
+                "connected",
+                "consume",
+                "--reservation-id",
+                "reservation-2",
+                "--at-unix-nanos",
+                "11",
+            ],
+        ),
+        (
+            ["advance-time", "--event-time-unix-nanos", "12"],
+            ["connected", "advance-time", "--event-time-unix-nanos", "12"],
+        ),
+        (
+            [
+                "resize",
+                "--reservation-id",
+                "reservation-3",
+                "--amount",
+                "12.50",
+                "--at-unix-nanos",
+                "13",
+            ],
+            [
+                "connected",
+                "resize",
+                "--reservation-id",
+                "reservation-3",
+                "--amount",
+                "12.50",
+                "--at-unix-nanos",
+                "13",
+            ],
+        ),
+        (
+            [
+                "open-circuit",
+                "--account-id",
+                "account-1",
+                "--strategy-id",
+                "strategy-1",
+                "--exchange-id",
+                "exchange-1",
+                "--at-unix-nanos",
+                "14",
+                "--reset-at-unix-nanos",
+                "20",
+                "--reason",
+                "manual_hold",
+            ],
+            [
+                "connected",
+                "open-circuit",
+                "--at-unix-nanos",
+                "14",
+                "--reason",
+                "manual_hold",
+                "--account-id",
+                "account-1",
+                "--strategy-id",
+                "strategy-1",
+                "--exchange-id",
+                "exchange-1",
+                "--reset-at-unix-nanos",
+                "20",
+            ],
+        ),
+        (
+            [
+                "close-circuit",
+                "--account-id",
+                "account-1",
+                "--at-unix-nanos",
+                "15",
+            ],
+            [
+                "connected",
+                "close-circuit",
+                "--at-unix-nanos",
+                "15",
+                "--account-id",
+                "account-1",
+            ],
+        ),
+        (
+            ["publish-policy", "--file", str(policy_file)],
+            ["connected", "publish-policy", "--file", str(policy_file)],
+        ),
+    ):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    "launch",
+                    "instance",
+                    "component",
+                    "risk",
+                    *argv,
+                    "btc",
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--format",
+                    "json",
+                ],
+                output,
+            )
+            == 0
+        )
+        assert json.loads(output.getvalue()) == {
+            "status": "ok",
+            "launch_id": "btc",
+            "instance_id": "run-1",
+            "mode": "paper",
+            "scope": "launch-instance",
+        }
+        assert calls[-1] == ("risk", expected_arguments, instance.root)
 
 
 def test_launch_status_reports_degraded_component(tmp_path, monkeypatch) -> None:

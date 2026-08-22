@@ -5,6 +5,25 @@ fn source(path: &str) -> String {
     std::fs::read_to_string(root.join(path)).expect("read Reference source")
 }
 
+fn reference_src_files() -> Vec<PathBuf> {
+    fn collect(path: PathBuf, files: &mut Vec<PathBuf>) {
+        if path.is_dir() {
+            for entry in std::fs::read_dir(path).expect("read Reference source directory") {
+                collect(entry.expect("read Reference source entry").path(), files);
+            }
+            return;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+            files.push(path);
+        }
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    collect(root, &mut files);
+    files
+}
+
 #[test]
 fn reference_control_transport_is_framework_owned() {
     let manifest = source("Cargo.toml");
@@ -26,6 +45,82 @@ fn reference_control_transport_is_framework_owned() {
     for forbidden in ["axum::", "UnixListener", "TcpListener"] {
         assert!(!server.contains(forbidden));
     }
+}
+
+#[test]
+fn reference_application_enters_sources_through_workflow_language() {
+    for path in [
+        "src/application/app.rs",
+        "src/application/tick.rs",
+        "src/application/conflux.rs",
+        "src/application/source_control.rs",
+        "src/services/actor.rs",
+    ] {
+        let text = source(path);
+        assert!(
+            !text.contains("fetch_catalog"),
+            "Application/actor layer must not use legacy catalog-fetch source entrypoints: {path}"
+        );
+    }
+
+    let actor = source("src/services/actor.rs");
+    assert!(actor.contains("advance_workflow_with_budget"));
+    assert!(actor.contains("advance_source_with_budget"));
+
+    let workflow = source("src/services/sources/workflow.rs");
+    assert!(workflow.contains("async fn advance_workflow"));
+    assert!(workflow.contains("async fn advance_workflow_step"));
+    assert!(workflow.contains("async fn fetch_catalog"));
+    assert!(workflow.contains("Provider implementations may still fetch"));
+
+    for path in reference_src_files() {
+        let text = std::fs::read_to_string(&path).expect("read Reference source file");
+        assert!(
+            !text.contains("ProviderUpdate"),
+            "source workflow output must be named SourceUpdate, not ProviderUpdate: {}",
+            path.display()
+        );
+        assert!(
+            !text.contains("CompositeSource"),
+            "provider fan-in source must not regress to the old CompositeSource name: {}",
+            path.display()
+        );
+        assert!(
+            !text.contains("activate_public_source_definition")
+                && !text.contains("deactivate_public_source_definition")
+                && !text.contains("public_source_connection_key")
+                && !text.contains("dynamic_public_source_definition"),
+            "dynamic source adapter activation must not be named public-only: {}",
+            path.display()
+        );
+        assert!(
+            !text.contains("services::source::") && !text.contains("services/source.rs"),
+            "internal callers must use services::sources, not old services::source: {}",
+            path.display()
+        );
+        for forbidden in [
+            "ProviderFactory",
+            "SourceFactory",
+            "ConnectionFactory",
+            "FactoryRegistry",
+            "ProviderAdapterRegistry",
+            "provider_factory",
+            "source_factory",
+            "connection_factory",
+            "factory_registry",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "Reference provider activation must stay workflow-specific until a real lower-level boundary exists: {} contains {forbidden}",
+                path.display()
+            );
+        }
+    }
+    assert!(
+        !PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/services/source.rs")
+            .exists()
+    );
 }
 
 #[test]
@@ -52,7 +147,7 @@ fn reference_connections_enter_through_exact_conflux_collections() {
         "src/application/app.rs",
         "src/application/conflux.rs",
         "src/services/actor.rs",
-        "src/services/source.rs",
+        "src/services/sources/mod.rs",
         "src/services/providers/fan_in.rs",
         "src/services/providers/binance.rs",
         "src/services/providers/hyperliquid.rs",
@@ -110,11 +205,14 @@ fn concrete_provider_adapters_and_fan_in_remain_separate_service_units() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let providers = root.join("src/services/providers");
     for unit in [
+        "activation.rs",
         "binance.rs",
+        "credentials.rs",
         "fan_in.rs",
         "hyperliquid.rs",
         "massive.rs",
         "okx.rs",
+        "plan.rs",
         "tests.rs",
     ] {
         assert!(
@@ -127,7 +225,17 @@ fn concrete_provider_adapters_and_fan_in_remain_separate_service_units() {
     assert!(!module.contains("impl ReferenceSource for Okx"));
     assert!(!module.contains("impl ReferenceSource for Hyperliquid"));
     assert!(!module.contains("impl ReferenceSource for Massive"));
-    assert!(!module.contains("impl<S> ReferenceSource for CompositeSource"));
+    assert!(!module.contains("impl<S> ReferenceSource for ProviderFanInSource"));
+
+    let activation = source("src/services/providers/activation.rs");
+    assert!(activation.contains("activate_runtime_source_definition"));
+    assert!(activation.contains("deactivate_runtime_source_definition"));
+    assert!(activation.contains("is_scoped_massive_options_definition"));
+    let credentials = source("src/services/providers/credentials.rs");
+    assert!(credentials.contains("struct ReferenceCredentialResolver"));
+    let plan = source("src/services/providers/plan.rs");
+    assert!(plan.contains("struct ReferenceSourcePlan"));
+    assert!(!plan.contains("activate_runtime_source_definition"));
 }
 
 #[test]
@@ -137,6 +245,7 @@ fn reference_domain_classification_is_not_unconstrained_text() {
         "asset_class: String",
         "instrument_type: String",
         "pub product_family: Option<String>",
+        "pub provider_product: Option<String>",
         "market_type: String",
         "asset_type: Option<String>",
         "pub provider_id: String",
@@ -150,6 +259,19 @@ fn reference_domain_classification_is_not_unconstrained_text() {
     assert!(entities.contains("asset_class: AssetClass"));
     assert!(entities.contains("instrument_type: InstrumentKind"));
     assert!(entities.contains("instrument_kind: InstrumentKind"));
+    let source_definition = entities
+        .split("pub struct ReferenceSourceDefinition")
+        .nth(1)
+        .expect("Reference source definition")
+        .split("impl ReferenceSourceDefinition")
+        .next()
+        .expect("Reference source definition body");
+    assert!(!source_definition.contains("pub source_id: String"));
+    assert!(source_definition.contains("pub source_id: ProviderId"));
+    assert!(source_definition.contains("pub provider_id: ProviderId"));
+    assert!(source_definition.contains("pub provider_product: Option<ProviderProductCode>"));
+    assert!(source_definition.contains("pub credential_binding: Option<SourceCredentialBinding>"));
+    assert!(!source_definition.contains("pub credential_binding: Option<String>"));
 }
 
 #[test]
@@ -194,7 +316,7 @@ fn reference_control_is_jsonrpc_service_first() {
         .split("pub struct ReferenceHealthResponse")
         .nth(1)
         .expect("Reference health response")
-        .split("pub struct ReferenceProviderHealth")
+        .split("pub struct ReferenceRuntimeStatusResponse")
         .next()
         .expect("Reference health response body");
     for forbidden in [
@@ -211,6 +333,142 @@ fn reference_control_is_jsonrpc_service_first() {
         assert!(
             !health.contains(forbidden),
             "Reference health leaks {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn conflux_adapter_does_not_own_publication_loop_details() {
+    let conflux = source("src/application/conflux.rs");
+    let publication = source("src/application/publication.rs");
+    assert!(conflux.contains("self.publish_pending_to_outputs(context).await"));
+    for forbidden in [
+        "DEFAULT_PUBLICATION_BATCH_LIMIT",
+        "REFERENCE_OUTPUT_STREAM",
+        ".outputs()",
+        "pending_publication_count()",
+        "pending_publications(batch_limit)",
+        "acknowledge_publications(&event_ids)",
+    ] {
+        assert!(
+            !conflux.contains(forbidden),
+            "Conflux adapter must delegate publication loop details to application/publication.rs: {forbidden}"
+        );
+        assert!(
+            publication.contains(forbidden),
+            "publication loop detail should live in application/publication.rs: {forbidden}"
+        );
+    }
+    assert!(publication.contains(".aeron"));
+    assert!(publication.contains(".publish(REFERENCE_OUTPUT_STREAM, publication.payload())"));
+}
+
+#[test]
+fn conflux_adapter_does_not_own_startup_sequence_details() {
+    let conflux = source("src/application/conflux.rs");
+    let startup = source("src/application/startup.rs");
+    assert!(conflux.contains("self.start_runtime(context).await"));
+    for (forbidden, required) in [
+        ("activate_sources", "activate_sources"),
+        ("initial_refresh", "initial_refresh"),
+        (
+            "stage = \"publish_pending\"",
+            "log_runtime_stage_started(\"publish_pending\")",
+        ),
+        ("spawn_timer", "spawn_timer"),
+        (
+            "reference_runtime_stage_started",
+            "reference_runtime_stage_started",
+        ),
+        (
+            "reference_runtime_stage_completed",
+            "reference_runtime_stage_completed",
+        ),
+        (
+            "reference_initial_refresh_deferred",
+            "reference_initial_refresh_deferred",
+        ),
+    ] {
+        assert!(
+            !conflux.contains(forbidden),
+            "Conflux started hook must delegate startup sequence details to application/startup.rs: {forbidden}"
+        );
+        assert!(
+            startup.contains(required),
+            "startup sequence detail should live in application/startup.rs: {required}"
+        );
+    }
+}
+
+#[test]
+fn conflux_adapter_does_not_own_timer_tick_sequence_details() {
+    let conflux = source("src/application/conflux.rs");
+    let tick = source("src/application/tick.rs");
+    assert!(conflux.contains("self.advance_timer_tick(context)"));
+    assert!(conflux.contains("ConfluxEvent::System(SystemEvent::Timer"));
+    for forbidden in [
+        "ReferenceTickTrigger::Timer",
+        "reference_refresh_failed",
+        "Reference retains its last durable catalog",
+        ".advance_sources_with_trigger(&mut context.connections(), ReferenceTickTrigger::Timer)",
+    ] {
+        assert!(
+            !conflux.contains(forbidden),
+            "Conflux timer hook must delegate timer tick details to application/tick.rs: {forbidden}"
+        );
+        assert!(
+            tick.contains(forbidden),
+            "timer tick detail should live in application/tick.rs: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn conflux_adapter_does_not_own_source_control_mapping_details() {
+    let conflux = source("src/application/conflux.rs");
+    let source_control = source("src/application/source_control.rs");
+    for forbidden in [
+        "domain_source_desired_state",
+        "domain_source_definition",
+        "domain_source_scope",
+        "domain_source_sync_policy",
+        "contract_provider_product_name",
+        "source_scope_subject",
+        "ReferenceSourceDesiredState",
+        "ReferenceSourceSyncPolicy",
+        "SourceCredentialBinding",
+        "MassiveOptionsCoverageSource",
+    ] {
+        assert!(
+            !conflux.contains(forbidden),
+            "Conflux RPC adapter must delegate source control mapping/workflow details to application/source_control.rs: {forbidden}"
+        );
+        assert!(
+            source_control.contains(forbidden),
+            "source control mapping/workflow detail should live in application/source_control.rs: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn conflux_adapter_does_not_own_health_projection_details() {
+    let conflux = source("src/application/conflux.rs");
+    let runtime_status = source("src/application/runtime_status.rs");
+    assert!(conflux.contains("Ok(self.contract_health().await)"));
+    for forbidden in [
+        "ReferenceProviderHealth",
+        "ReferenceHealthStatus",
+        "ReferenceProviderStatus",
+        "SourceRuntimePhase",
+        "contract_provider_health_status",
+    ] {
+        assert!(
+            !conflux.contains(forbidden),
+            "Conflux health RPC must delegate health projection to application/runtime_status.rs: {forbidden}"
+        );
+        assert!(
+            runtime_status.contains(forbidden),
+            "health projection detail should live in application/runtime_status.rs: {forbidden}"
         );
     }
 }
@@ -245,9 +503,12 @@ fn administrative_writes_enter_through_application_commands() {
     let commands = source("src/application/commands.rs");
     let contract = source("contract/src/control/types.rs");
     let server = source("src/bin/kairos-reference-server.rs");
-    assert!(application.contains("command: UpsertAssetCommand"));
-    assert!(application.contains("command: UpsertInstrumentCommand"));
-    assert!(application.contains("command: UpsertListingCommand"));
+    assert!(!application.contains("command: UpsertAssetCommand"));
+    assert!(!application.contains("command: UpsertInstrumentCommand"));
+    assert!(!application.contains("command: UpsertListingCommand"));
+    assert!(commands.contains("command: UpsertAssetCommand"));
+    assert!(commands.contains("command: UpsertInstrumentCommand"));
+    assert!(commands.contains("command: UpsertListingCommand"));
     assert!(commands.contains("pub use kairos_reference_contract"));
     assert!(contract.contains("pub struct UpsertAssetRequest"));
     assert!(contract.contains("pub struct UpsertInstrumentRequest"));

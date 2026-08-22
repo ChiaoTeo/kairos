@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import codeop
 from contextlib import redirect_stdout
+from dataclasses import asdict
 from io import StringIO
 import sys
 import time
@@ -28,6 +29,14 @@ from kairospy.application.launch.application.runtime import (
     requires_reference_runtime as _requires_reference_runtime,
     stop_component_safely as _stop_component_safely,
 )
+from kairospy.application.launch.application.connections import (
+    resolve_instance_connections,
+)
+from kairospy.application.system import (
+    InstanceSystemClients,
+    NativeCliApplication,
+    UnixRestClient,
+)
 from kairospy.application.launch.application.wizard import (
     build_and_validate,
     draft_preview,
@@ -35,7 +44,7 @@ from kairospy.application.launch.application.wizard import (
     prompt_draft,
 )
 from kairospy.application.workspace import WorkspaceApplication
-from kairospy.application.system import UnixRestClient
+from kairospy.infrastructure.transport.market import MarketProjection
 from kairospy.surface.cli.options import (
     OutputFormat,
     effective_output,
@@ -51,10 +60,43 @@ strategy_app = typer.Typer(
 )
 launch_app.add_typer(strategy_app, name="strategy")
 instance_app = typer.Typer(no_args_is_help=True, help="Inspect a launch instance")
+instance_component_app = typer.Typer(
+    no_args_is_help=True, help="Connect to components bound to a launch instance"
+)
+instance_component_market_app = typer.Typer(
+    no_args_is_help=True, help="Connect to the Market component bound to a launch instance"
+)
+instance_component_account_app = typer.Typer(
+    no_args_is_help=True,
+    help="Connect to Account components bound to a launch instance",
+)
+instance_component_execution_app = typer.Typer(
+    no_args_is_help=True,
+    help="Connect to the Execution component bound to a launch instance",
+)
+instance_component_reference_app = typer.Typer(
+    no_args_is_help=True,
+    help="Connect to the Reference component bound to a launch instance",
+)
+instance_component_risk_app = typer.Typer(
+    no_args_is_help=True,
+    help="Connect to the Risk component bound to a launch instance",
+)
+instance_component_capital_app = typer.Typer(
+    no_args_is_help=True,
+    help="Connect to the Capital component bound to a launch instance",
+)
 instance_timeline_app = typer.Typer(
     no_args_is_help=True, help="Inspect lifecycle records from one launch instance"
 )
 launch_app.add_typer(instance_app, name="instance")
+instance_app.add_typer(instance_component_app, name="component")
+instance_component_app.add_typer(instance_component_account_app, name="account")
+instance_component_app.add_typer(instance_component_market_app, name="market")
+instance_component_app.add_typer(instance_component_execution_app, name="execution")
+instance_component_app.add_typer(instance_component_reference_app, name="reference")
+instance_component_app.add_typer(instance_component_risk_app, name="risk")
+instance_component_app.add_typer(instance_component_capital_app, name="capital")
 instance_app.add_typer(instance_timeline_app, name="timeline")
 
 
@@ -435,6 +477,1574 @@ def _strategy_action(action: str):
 
 for _action in ("enable", "pause", "resume", "refresh"):
     strategy_app.command(_action)(_strategy_action(_action))
+
+
+def _instance_account_snapshot(
+    owner,
+    *,
+    launch_id: str,
+    instance: str | None,
+    account_id: str,
+) -> tuple[dict[str, object], str, str]:
+    from kairospy.domain_types import AccountId
+
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    connections = resolve_instance_connections(instance_workspace)
+    clients = InstanceSystemClients.from_connections(connections)
+    account_key = AccountId(account_id)
+    client = clients.accounts.get(account_key)
+    if client is None:
+        raise typer.BadParameter(
+            f"launch instance has no connected account component for {account_id}"
+        )
+    snapshot = client.current_projection(account_key).snapshot(account_key)
+    return asdict(snapshot), resolved_instance, mode
+
+
+def _instance_account_client(
+    owner,
+    *,
+    launch_id: str,
+    instance: str | None,
+    account_id: str,
+):
+    from kairospy.domain_types import AccountId
+
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    connections = resolve_instance_connections(instance_workspace)
+    clients = InstanceSystemClients.from_connections(connections)
+    account_key = AccountId(account_id)
+    client = clients.accounts.get(account_key)
+    if client is None:
+        raise typer.BadParameter(
+            f"launch instance has no connected account component for {account_id}"
+        )
+    return client, resolved_instance, mode
+
+
+def _run_account_connected_command(
+    owner: Any,
+    launch_id: str,
+    instance: str | None,
+    account_id: str,
+    command: str,
+    arguments: list[str],
+) -> dict[str, Any]:
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    value = NativeCliApplication(owner).run(
+        "account",
+        [
+            "--account-id",
+            account_id,
+            "--launch-id",
+            launch_id,
+            "--launch-mode",
+            mode,
+            "--instance-id",
+            resolved_instance,
+            "connected",
+            command,
+            *arguments,
+        ],
+    )
+    value.setdefault("account_id", account_id)
+    value.setdefault("launch_id", launch_id)
+    value.setdefault("instance_id", resolved_instance)
+    value.setdefault("mode", mode)
+    value.setdefault("scope", "launch-instance")
+    return value
+
+
+@instance_component_account_app.command("snapshot")
+def launch_instance_component_account_snapshot(
+    launch_id: str,
+    account_id: str = typer.Option(..., "--account-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read one Account current projection selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    snapshot, resolved_instance, mode = _instance_account_snapshot(
+        owner, launch_id=launch_id, instance=instance, account_id=account_id
+    )
+    _emit(
+        {
+            **snapshot,
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_account_app.command("balances")
+def launch_instance_component_account_balances(
+    launch_id: str,
+    account_id: str = typer.Option(..., "--account-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read balances from an Account component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    snapshot, resolved_instance, mode = _instance_account_snapshot(
+        owner, launch_id=launch_id, instance=instance, account_id=account_id
+    )
+    balances = [
+        balance
+        for segment in snapshot["segments"]
+        for balance in segment.get("balances", [])
+    ]
+    _emit(
+        {
+            "account_id": account_id,
+            "balances": balances,
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_account_app.command("positions")
+def launch_instance_component_account_positions(
+    launch_id: str,
+    account_id: str = typer.Option(..., "--account-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read positions from an Account component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    snapshot, resolved_instance, mode = _instance_account_snapshot(
+        owner, launch_id=launch_id, instance=instance, account_id=account_id
+    )
+    positions = [
+        position
+        for segment in snapshot["segments"]
+        for position in segment.get("positions", [])
+    ]
+    _emit(
+        {
+            "account_id": account_id,
+            "positions": positions,
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+def _market_snapshot_value(
+    view_root: Path,
+    *,
+    kind: str,
+    source_id: str,
+    market_id: str | None,
+    symbol: str | None,
+    exchange: str,
+    market_type: str,
+    timeframe: str | None,
+) -> dict[str, object]:
+    if market_id is None:
+        if not symbol:
+            raise typer.BadParameter("snapshot requires --market-id or --symbol")
+        market_id = (
+            f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
+        )
+    projection = MarketProjection(view_root)
+    if kind == "quote":
+        value = projection.read_quote(market_id, source_id)
+    elif kind == "bar":
+        if not timeframe:
+            raise typer.BadParameter("snapshot bar requires --timeframe")
+        value = projection.read_bar(market_id, source_id, timeframe)
+    elif kind == "greeks":
+        value = projection.read_greeks(market_id, source_id)
+    else:
+        raise typer.BadParameter("snapshot kind must be quote, bar, or greeks")
+    return {
+        "market_id": market_id,
+        "source_id": source_id,
+        "kind": kind,
+        "status": "ready" if value is not None else "not_found",
+        "value": None if value is None else asdict(value),
+    }
+
+
+@instance_component_market_app.command("status")
+def launch_instance_component_market_status(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the Market component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    market = LaunchRuntimeApplication(owner).component_status(instance_workspace)[
+        "market"
+    ]
+    _emit(
+        {
+            **market,
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_market_app.command("snapshot")
+def launch_instance_component_market_snapshot(
+    launch_id: str,
+    kind: str = typer.Argument(..., help="Snapshot kind: quote, bar, or greeks."),
+    source_id: str = typer.Option(..., "--source-id"),
+    market_id: str | None = typer.Option(None, "--market-id"),
+    symbol: str | None = typer.Option(None, "--symbol"),
+    exchange: str = typer.Option("binance", "--exchange"),
+    market_type: str = typer.Option("spot", "--market-type"),
+    timeframe: str | None = typer.Option(None, "--timeframe"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read one Market projection view selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    connections = resolve_instance_connections(instance_workspace)
+    if connections.market is None or connections.market.view_root is None:
+        raise typer.BadParameter("launch instance has no connected market view root")
+    value = _market_snapshot_value(
+        connections.market.view_root,
+        kind=kind,
+        source_id=source_id,
+        market_id=market_id,
+        symbol=symbol,
+        exchange=exchange,
+        market_type=market_type,
+        timeframe=timeframe,
+    )
+    _emit(
+        {
+            **value,
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_account_app.command("open-orders")
+def launch_instance_component_account_open_orders(
+    launch_id: str,
+    account_id: str = typer.Option(..., "--account-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read observed orders from an Account component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_account_client(
+        owner, launch_id=launch_id, instance=instance, account_id=account_id
+    )
+    from kairospy.domain_types import AccountId
+
+    account_key = AccountId(account_id)
+    _emit(
+        {
+            **client.observed_orders_projection(account_key).open_orders(account_key),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_account_app.command("refresh")
+def launch_instance_component_account_refresh(
+    launch_id: str,
+    account_id: str = typer.Option(..., "--account-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Request refresh on an Account component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_account_connected_command(
+            owner, launch_id, instance, account_id, "refresh", []
+        ),
+        output,
+    )
+
+
+@instance_component_account_app.command("reconcile")
+def launch_instance_component_account_reconcile(
+    launch_id: str,
+    account_id: str = typer.Option(..., "--account-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Request reconciliation on an Account component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_account_connected_command(
+            owner, launch_id, instance, account_id, "reconcile", []
+        ),
+        output,
+    )
+
+
+@instance_component_execution_app.command("status")
+def launch_instance_component_execution_status(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the Execution component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    statuses = LaunchRuntimeApplication(owner).component_status(instance_workspace)
+    if "execution" not in statuses:
+        raise typer.BadParameter("launch instance has no connected execution component")
+    _emit(
+        {
+            **statuses["execution"],
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+def _run_execution_connected_command(
+    owner: Any,
+    launch_id: str,
+    instance: str | None,
+    command: str,
+    arguments: list[str],
+) -> dict[str, Any]:
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    value = NativeCliApplication(owner).run(
+        "execution",
+        [
+            "--mode",
+            mode,
+            "--launch-id",
+            launch_id,
+            "--instance-id",
+            resolved_instance,
+            "connected",
+            command,
+            *arguments,
+        ],
+    )
+    value.setdefault("launch_id", launch_id)
+    value.setdefault("instance_id", resolved_instance)
+    value.setdefault("mode", mode)
+    value.setdefault("scope", "launch-instance")
+    return value
+
+
+def _execution_connected_passthrough(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None,
+    workspace: Path,
+    output: OutputFormat,
+    command: str,
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_execution_connected_command(
+            owner,
+            launch_id,
+            instance,
+            command,
+            list(ctx.args),
+        ),
+        output,
+    )
+
+
+_EXECUTION_PASSTHROUGH_CONTEXT = {
+    "allow_extra_args": True,
+    "ignore_unknown_options": True,
+}
+
+
+@instance_component_execution_app.command(
+    "snapshot", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_snapshot(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read the launch-scoped Execution runtime snapshot."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "snapshot")
+
+
+@instance_component_execution_app.command(
+    "routes", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_routes(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Execution route candidates."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "routes")
+
+
+@instance_component_execution_app.command(
+    "orders", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_orders(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """List launch-scoped Execution orders."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "orders")
+
+
+@instance_component_execution_app.command(
+    "open-orders", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_open_orders(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """List launch-scoped open Execution orders."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "open-orders")
+
+
+@instance_component_execution_app.command(
+    "history", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_history(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """List launch-scoped closed Execution orders."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "history")
+
+
+@instance_component_execution_app.command(
+    "fills", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_fills(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """List launch-scoped Execution fills."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "fills")
+
+
+@instance_component_execution_app.command(
+    "events", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_events(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """List launch-scoped Execution lifecycle events."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "events")
+
+
+@instance_component_execution_app.command(
+    "audit", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_audit(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Execution audit records."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "audit")
+
+
+@instance_component_execution_app.command(
+    "inspect", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_inspect(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Inspect one launch-scoped Execution order."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "inspect")
+
+
+@instance_component_execution_app.command(
+    "trace", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_trace(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Trace one launch-scoped Execution order."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "trace")
+
+
+@instance_component_execution_app.command(
+    "journal", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_journal(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read the journal for one launch-scoped Execution order."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "journal")
+
+
+@instance_component_execution_app.command(
+    "reconcile", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_reconcile(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Request launch-scoped Execution reconciliation."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "reconcile")
+
+
+@instance_component_execution_app.command(
+    "unknown-remote-orders", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_unknown_remote_orders(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """List launch-scoped unknown remote Execution orders."""
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, workspace, output, "unknown-remote-orders"
+    )
+
+
+@instance_component_execution_app.command(
+    "submit", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_submit(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Submit an order through the launch-scoped Execution runtime."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "submit")
+
+
+@instance_component_execution_app.command(
+    "cancel", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_cancel(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Cancel an order through the launch-scoped Execution runtime."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "cancel")
+
+
+@instance_component_execution_app.command(
+    "replace", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+)
+def launch_instance_component_execution_replace(
+    ctx: typer.Context,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Replace an order through the launch-scoped Execution runtime."""
+    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "replace")
+
+
+@instance_component_reference_app.command("status")
+def launch_instance_component_reference_status(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the Reference component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    statuses = LaunchRuntimeApplication(owner).component_status(instance_workspace)
+    if "reference" not in statuses:
+        raise typer.BadParameter("launch instance has no connected reference component")
+    _emit(
+        {
+            **statuses["reference"],
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+def _launch_instance_component_named_status(
+    owner, launch_id: str, component: str, instance: str | None
+) -> tuple[dict[str, object], str, str]:
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    statuses = LaunchRuntimeApplication(owner).component_status(instance_workspace)
+    if component not in statuses:
+        raise typer.BadParameter(
+            f"launch instance has no connected {component} component"
+        )
+    return statuses[component], resolved_instance, mode
+
+
+@instance_component_risk_app.command("status")
+def launch_instance_component_risk_status(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the Risk component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    value, resolved_instance, mode = _launch_instance_component_named_status(
+        owner, launch_id, "risk", instance
+    )
+    _emit(
+        {
+            **value,
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+def _run_risk_connected_command(
+    owner: Any,
+    launch_id: str,
+    instance: str | None,
+    command: str,
+    arguments: list[str],
+) -> dict[str, Any]:
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    value = NativeCliApplication(instance_workspace).run(
+        "risk",
+        [
+            "connected",
+            command,
+            *arguments,
+        ],
+    )
+    value.setdefault("launch_id", launch_id)
+    value.setdefault("instance_id", resolved_instance)
+    value.setdefault("mode", mode)
+    value.setdefault("scope", "launch-instance")
+    return value
+
+
+@instance_component_risk_app.command("health")
+def launch_instance_component_risk_health(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Risk health through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(owner, launch_id, instance, "health", []),
+        output,
+    )
+
+
+@instance_component_risk_app.command("latest")
+def launch_instance_component_risk_latest(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    actor_id: str | None = typer.Option(None, "--actor-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Risk latest-view business facts."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, _mode = _resolve_launch_target(owner, launch_id, None, instance)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "latest",
+            ["--actor-id", actor_id or f"risk:{resolved_instance}"],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("limits")
+def launch_instance_component_risk_limits(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    actor_id: str | None = typer.Option(None, "--actor-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Risk limit usage resources."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, _mode = _resolve_launch_target(owner, launch_id, None, instance)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "limits",
+            ["--actor-id", actor_id or f"risk:{resolved_instance}"],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("reservations")
+def launch_instance_component_risk_reservations(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    actor_id: str | None = typer.Option(None, "--actor-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Risk active reservations."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, _mode = _resolve_launch_target(owner, launch_id, None, instance)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "reservations",
+            ["--actor-id", actor_id or f"risk:{resolved_instance}"],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("circuits")
+def launch_instance_component_risk_circuits(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    actor_id: str | None = typer.Option(None, "--actor-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Risk circuit states."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, _mode = _resolve_launch_target(owner, launch_id, None, instance)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "circuits",
+            ["--actor-id", actor_id or f"risk:{resolved_instance}"],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("pre-trade-check")
+def launch_instance_component_risk_pre_trade_check(
+    launch_id: str,
+    file: Path = typer.Option(..., "--file"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Evaluate launch-scoped Risk authorization through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "pre-trade-check",
+            ["--file", str(file)],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("authorize-reserve")
+def launch_instance_component_risk_authorize_reserve(
+    launch_id: str,
+    file: Path = typer.Option(..., "--file"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Authorize and reserve launch-scoped Risk budget through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "authorize-reserve",
+            ["--file", str(file)],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("release")
+def launch_instance_component_risk_release(
+    launch_id: str,
+    reservation_id: str = typer.Option(..., "--reservation-id"),
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Release a launch-scoped Risk reservation through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "release",
+            [
+                "--reservation-id",
+                reservation_id,
+                "--at-unix-nanos",
+                str(at_unix_nanos),
+            ],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("consume")
+def launch_instance_component_risk_consume(
+    launch_id: str,
+    reservation_id: str = typer.Option(..., "--reservation-id"),
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Consume a launch-scoped Risk reservation through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "consume",
+            [
+                "--reservation-id",
+                reservation_id,
+                "--at-unix-nanos",
+                str(at_unix_nanos),
+            ],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("resize")
+def launch_instance_component_risk_resize(
+    launch_id: str,
+    reservation_id: str = typer.Option(..., "--reservation-id"),
+    amount: str = typer.Option(..., "--amount"),
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Resize a launch-scoped Risk reservation through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "resize",
+            [
+                "--reservation-id",
+                reservation_id,
+                "--amount",
+                amount,
+                "--at-unix-nanos",
+                str(at_unix_nanos),
+            ],
+        ),
+        output,
+    )
+
+
+def _risk_circuit_arguments(
+    *,
+    account_id: str | None,
+    strategy_id: str | None,
+    exchange_id: str | None,
+) -> list[str]:
+    arguments: list[str] = []
+    if account_id is not None:
+        arguments.extend(["--account-id", account_id])
+    if strategy_id is not None:
+        arguments.extend(["--strategy-id", strategy_id])
+    if exchange_id is not None:
+        arguments.extend(["--exchange-id", exchange_id])
+    return arguments
+
+
+@instance_component_risk_app.command("open-circuit")
+def launch_instance_component_risk_open_circuit(
+    launch_id: str,
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    reason: str = typer.Option(..., "--reason"),
+    reset_at_unix_nanos: int | None = typer.Option(None, "--reset-at-unix-nanos"),
+    account_id: str | None = typer.Option(None, "--account-id"),
+    strategy_id: str | None = typer.Option(None, "--strategy-id"),
+    exchange_id: str | None = typer.Option(None, "--exchange-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Open a launch-scoped Risk circuit through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    arguments = [
+        "--at-unix-nanos",
+        str(at_unix_nanos),
+        "--reason",
+        reason,
+        *_risk_circuit_arguments(
+            account_id=account_id,
+            strategy_id=strategy_id,
+            exchange_id=exchange_id,
+        ),
+    ]
+    if reset_at_unix_nanos is not None:
+        arguments.extend(["--reset-at-unix-nanos", str(reset_at_unix_nanos)])
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "open-circuit",
+            arguments,
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("close-circuit")
+def launch_instance_component_risk_close_circuit(
+    launch_id: str,
+    at_unix_nanos: int = typer.Option(..., "--at-unix-nanos"),
+    account_id: str | None = typer.Option(None, "--account-id"),
+    strategy_id: str | None = typer.Option(None, "--strategy-id"),
+    exchange_id: str | None = typer.Option(None, "--exchange-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Close a launch-scoped Risk circuit through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "close-circuit",
+            [
+                "--at-unix-nanos",
+                str(at_unix_nanos),
+                *_risk_circuit_arguments(
+                    account_id=account_id,
+                    strategy_id=strategy_id,
+                    exchange_id=exchange_id,
+                ),
+            ],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("publish-policy")
+def launch_instance_component_risk_publish_policy(
+    launch_id: str,
+    file: Path = typer.Option(..., "--file"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Publish a launch-scoped Risk policy through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "publish-policy",
+            ["--file", str(file)],
+        ),
+        output,
+    )
+
+
+@instance_component_risk_app.command("advance-time")
+def launch_instance_component_risk_advance_time(
+    launch_id: str,
+    event_time_unix_nanos: int = typer.Option(..., "--event-time-unix-nanos"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Advance launch-scoped Risk runtime time through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_risk_connected_command(
+            owner,
+            launch_id,
+            instance,
+            "advance-time",
+            ["--event-time-unix-nanos", str(event_time_unix_nanos)],
+        ),
+        output,
+    )
+
+
+@instance_component_capital_app.command("status")
+def launch_instance_component_capital_status(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect the Capital component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    value, resolved_instance, mode = _launch_instance_component_named_status(
+        owner, launch_id, "capital", instance
+    )
+    _emit(
+        {
+            **value,
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+def _instance_capital_client(owner, launch_id: str, instance: str | None):
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    connections = resolve_instance_connections(instance_workspace)
+    clients = InstanceSystemClients.from_connections(connections)
+    if clients.capital is None:
+        raise typer.BadParameter("launch instance has no connected capital component")
+    return clients.capital, resolved_instance, mode
+
+
+def _run_capital_connected_command(
+    owner: Any,
+    launch_id: str,
+    instance: str | None,
+    command: str,
+    arguments: list[str],
+) -> dict[str, Any]:
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    value = NativeCliApplication(instance_workspace).run(
+        "capital",
+        [
+            "connected",
+            command,
+            *arguments,
+        ],
+    )
+    value.setdefault("launch_id", launch_id)
+    value.setdefault("instance_id", resolved_instance)
+    value.setdefault("mode", mode)
+    value.setdefault("scope", "launch-instance")
+    return value
+
+
+@instance_component_capital_app.command("health")
+def launch_instance_component_capital_health(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital health through its owner contract."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.health(),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("current")
+def launch_instance_component_capital_current(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital current-view business facts."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_metadata(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("availabilities")
+def launch_instance_component_capital_availabilities(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital availability facts from mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_availabilities(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("objectives")
+def launch_instance_component_capital_objectives(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital funding objectives from mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_objectives(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("demands")
+def launch_instance_component_capital_demands(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital demands from mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_demands(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("plans")
+def launch_instance_component_capital_plans(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital plans from mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_plans(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("routes")
+def launch_instance_component_capital_routes(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital routes from mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_routes(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("reservations")
+def launch_instance_component_capital_reservations(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital reservations from mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_reservations(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("operations")
+def launch_instance_component_capital_operations(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital operations from mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_operations(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("alerts")
+def launch_instance_component_capital_alerts(
+    launch_id: str,
+    capital_group_id: str = typer.Option(..., "--capital-group-id"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read launch-scoped Capital recovery alerts from mmap."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_capital_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.current_alerts(capital_group_id),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_capital_app.command("publish-funding-objective")
+def launch_instance_component_capital_publish_funding_objective(
+    launch_id: str,
+    file: Path = typer.Option(..., "--file"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Publish a launch-scoped Capital funding objective."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_capital_connected_command(
+            owner, launch_id, instance, "publish-funding-objective", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@instance_component_capital_app.command("observe-demand")
+def launch_instance_component_capital_observe_demand(
+    launch_id: str,
+    file: Path = typer.Option(..., "--file"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Observe a launch-scoped Capital demand."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_capital_connected_command(
+            owner, launch_id, instance, "observe-demand", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@instance_component_capital_app.command("cancel-funding-objective")
+def launch_instance_component_capital_cancel_funding_objective(
+    launch_id: str,
+    file: Path = typer.Option(..., "--file"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Cancel a launch-scoped Capital funding objective."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_capital_connected_command(
+            owner, launch_id, instance, "cancel-funding-objective", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+@instance_component_capital_app.command("reconcile-plan")
+def launch_instance_component_capital_reconcile_plan(
+    launch_id: str,
+    file: Path = typer.Option(..., "--file"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Reconcile a launch-scoped Capital plan."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_capital_connected_command(
+            owner, launch_id, instance, "reconcile-plan", ["--file", str(file)]
+        ),
+        output,
+    )
+
+
+def _instance_reference_client(owner, launch_id: str, instance: str | None):
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    connections = resolve_instance_connections(instance_workspace)
+    clients = InstanceSystemClients.from_connections(connections)
+    if clients.reference is None:
+        raise typer.BadParameter("launch instance has no connected reference component")
+    return clients.reference.reader, resolved_instance, mode
+
+
+@instance_component_reference_app.command("health")
+def launch_instance_component_reference_health(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Reference health selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_reference_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.health(),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_reference_app.command("catalog")
+def launch_instance_component_reference_catalog(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Read Reference catalog selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    client, resolved_instance, mode = _instance_reference_client(
+        owner, launch_id, instance
+    )
+    _emit(
+        {
+            **client.catalog(),
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
+
+
+@instance_component_app.command("status")
+def launch_instance_component_status(
+    component: str,
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Inspect one component selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    statuses = LaunchRuntimeApplication(owner).component_status(instance_workspace)
+    if component not in statuses:
+        raise typer.BadParameter(
+            f"launch instance has no connected component named {component}"
+        )
+    value = statuses[component]
+    _emit(
+        {
+            **value,
+            "launch_id": launch_id,
+            "instance_id": resolved_instance,
+            "mode": mode,
+            "scope": "launch-instance",
+        },
+        output,
+    )
 
 
 def _registry_command(action: str):

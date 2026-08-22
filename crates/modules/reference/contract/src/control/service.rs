@@ -4,6 +4,8 @@ use kairos_protocol::control::jsonrpc::{RpcResult, conflux_rpc};
 pub trait ReferenceControlRpc {
     async fn health(&self) -> RpcResult<kairos_reference_contract::ReferenceHealthResponse>;
 
+    async fn status(&self) -> RpcResult<kairos_reference_contract::ReferenceRuntimeStatusResponse>;
+
     async fn refresh(
         &self,
         source_id: Option<kairos_primitives::integration::ProviderId>,
@@ -11,12 +13,37 @@ pub trait ReferenceControlRpc {
 
     async fn publish(&self) -> RpcResult<kairos_reference_contract::ReferencePublishResponse>;
 
+    async fn set_source_desired_state(
+        &self,
+        request: kairos_reference_contract::ReferenceSourceControlRequest,
+    ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
+
+    async fn upsert_source_definition(
+        &self,
+        request: kairos_reference_contract::ReferenceSourceDefinitionRequest,
+    ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
+
+    async fn set_source_scope(
+        &self,
+        request: kairos_reference_contract::ReferenceSourceScopeRequest,
+    ) -> RpcResult<kairos_reference_contract::ReferenceSourceScopeResponse>;
+
     async fn pause_source(
         &self,
         source_id: kairos_primitives::integration::ProviderId,
     ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
 
     async fn resume_source(
+        &self,
+        source_id: kairos_primitives::integration::ProviderId,
+    ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
+
+    async fn disable_source(
+        &self,
+        source_id: kairos_primitives::integration::ProviderId,
+    ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
+
+    async fn enable_source(
         &self,
         source_id: kairos_primitives::integration::ProviderId,
     ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;

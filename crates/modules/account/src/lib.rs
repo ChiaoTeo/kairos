@@ -10,6 +10,10 @@ pub mod domain;
 mod services;
 
 pub use application::{
-    AccountApplication, AccountCurrentView, AccountError, AccountEvent, AccountObservedFill,
-    AccountRpcService, AccountRuntimeMode, MarkToMarket, ReconcileAccount, RefreshAccount,
+    AccountApplication, AccountCredentialProbeRequest, AccountCurrentView, AccountError,
+    AccountEvent, AccountObservedFill, AccountProviderConnectionArgs, AccountRpcService,
+    AccountRuntimeMode, BindCredentialRequest, CliAccountApplication,
+    ConnectAccountProviderRequest, ConnectAccountRequest, ConnectedAccountApplication,
+    CreateCredentialRequest, MarkToMarket, ModifyAccountRequest, ReconcileAccount, RefreshAccount,
+    RegisterAccountRequest, SimulateAccountRequest,
 };

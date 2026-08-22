@@ -14,11 +14,13 @@ from typer.main import get_command
 from .commands.launch import launch_app
 from .commands.data import data_app
 from .commands.research import research_app
-from .commands.reference import reference_app
+from .commands.reference import reference_passthrough
 from .commands.account import account_passthrough
+from .commands.capital import capital_passthrough
 from .commands.integration import integration_passthrough
 from .commands.market import market_passthrough
 from .commands.order import order_passthrough
+from .commands.risk import risk_passthrough
 from .commands.root import (
     config_app,
     notifications_app,
@@ -75,7 +77,7 @@ app.command(
         "ignore_unknown_options": True,
         "help_option_names": [],
     },
-    help="Configure accounts and inspect balances, positions, and orders.",
+    help="Configure account registry, credentials, and standalone account tools.",
     rich_help_panel="Operations",
 )(account_passthrough)
 app.command(
@@ -95,7 +97,7 @@ app.command(
         "ignore_unknown_options": True,
         "help_option_names": [],
     },
-    help="Validate market data, manage subscriptions, and read snapshots.",
+    help="Run Market standalone commands such as validate, replay, and download.",
     rich_help_panel="Operations",
 )(market_passthrough)
 app.command(
@@ -105,9 +107,29 @@ app.command(
         "ignore_unknown_options": True,
         "help_option_names": [],
     },
-    help="Submit and inspect execution orders.",
+    help="Run Execution standalone order tools.",
     rich_help_panel="Operations",
 )(order_passthrough)
+app.command(
+    "risk",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+    help="Run Risk standalone schema, doctor, and preview tools.",
+    rich_help_panel="Operations",
+)(risk_passthrough)
+app.command(
+    "capital",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+    help="Run Capital standalone schema and doctor tools.",
+    rich_help_panel="Operations",
+)(capital_passthrough)
 app.add_typer(
     notifications_app,
     name="notifications",
@@ -120,12 +142,16 @@ app.add_typer(
     help="Diagnose and control workspace runtime components.",
     rich_help_panel="Operations",
 )
-app.add_typer(
-    reference_app,
-    name="reference",
-    help="Query reference assets, listings, and markets.",
+app.command(
+    "reference",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+    help="Query Reference standalone facts.",
     rich_help_panel="Operations",
-)
+)(reference_passthrough)
 
 
 def _cli_format(argv: Sequence[str]) -> str:
@@ -276,8 +302,8 @@ def _quickstart_payload() -> dict[str, object]:
             "observe": "Open the runtime overview console.",
             "data": "Plan, acquire, and inspect datasets.",
             "research": "Lock research plans and publish trust gates.",
-            "account": "Configure accounts and inspect balances or positions.",
-            "market": "Validate market data and read snapshots.",
+            "account": "Configure account registry and credentials.",
+            "market": "Run standalone Market validation and data tools.",
             "system": "Control and diagnose runtime components.",
             "reference": "Query instruments, listings, and markets.",
         },

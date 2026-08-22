@@ -1,9 +1,10 @@
 use kairos_primitives::reference::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
+use kairos_reference_contract::{ReferenceUpsertConflictPolicy, ReferenceUpsertProvenance};
 
 use crate::composition::{ReferenceCompositionConfig, build_application};
 use crate::domain::{Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceResult};
-use crate::services::source::ReferenceSource;
-use crate::services::sqlx_storage::SqlxCatalogStore;
+use crate::services::sources::ReferenceSource;
+use crate::services::storage::catalog_store::SqlxCatalogStore;
 use crate::{
     LifecycleQuery, MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery,
     ReferenceRecord, UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,
@@ -17,6 +18,10 @@ struct SequenceSource {
     catalogs: Vec<ProviderCatalog>,
     index: usize,
 }
+
+struct FailingSource;
+
+struct SyncInProgressSource;
 
 fn instrument_id(value: &str) -> InstrumentId {
     InstrumentId::new(value).unwrap()
@@ -63,6 +68,32 @@ impl ReferenceSource for TestSource {
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         Ok(self.catalog.clone())
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl ReferenceSource for FailingSource {
+    fn source_id(&self) -> &str {
+        "failing-test"
+    }
+
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        Err(crate::domain::ReferenceError::Provider(
+            "application test provider failed".into(),
+        ))
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl ReferenceSource for SyncInProgressSource {
+    fn source_id(&self) -> &str {
+        "syncing-test"
+    }
+
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        Err(crate::domain::ReferenceError::SyncInProgress {
+            providers: vec!["syncing-test".into()],
+        })
     }
 }
 
@@ -178,6 +209,122 @@ async fn application_reconciles_reference_catalog() {
 }
 
 #[tokio::test]
+async fn application_runtime_status_exposes_tick_timing() {
+    let mut application = application().await;
+    application.refresh().await.unwrap();
+
+    let status = application.contract_runtime_status().await;
+    assert!(status.catalog.committed_at_unix_nanos.get() > 0);
+    assert_eq!(status.catalog.entity_count, 1);
+    assert_eq!(status.catalog.asset_count, 2);
+    assert_eq!(status.catalog.instrument_count, 1);
+    assert_eq!(status.catalog.listing_count, 1);
+    assert_eq!(status.catalog.market_count, 1);
+    assert_eq!(status.catalog.active_market_count, 1);
+    assert_eq!(status.catalog.lifecycle_event_count, 6);
+    assert!(!status.catalog.integrity.degraded);
+    assert_eq!(status.catalog.integrity.missing_equity_market_count, 0);
+    assert_eq!(status.catalog.integrity.legacy_exchange_market_id_count, 0);
+    assert_eq!(status.catalog.integrity.legacy_exchange_listing_id_count, 0);
+    assert!(status.app_runtime.last_tick_started_unix_nanos.is_some());
+    assert!(status.app_runtime.last_tick_finished_unix_nanos.is_some());
+    assert!(status.app_runtime.last_tick_duration_millis.is_some());
+    assert!(status.app_runtime.next_tick_due_unix_nanos.is_some());
+    assert_eq!(status.app_runtime.last_error, None);
+    assert!(
+        status.app_runtime.last_tick_finished_unix_nanos
+            >= status.app_runtime.last_tick_started_unix_nanos
+    );
+    assert!(
+        status.app_runtime.next_tick_due_unix_nanos
+            >= status.app_runtime.last_tick_finished_unix_nanos
+    );
+}
+
+#[tokio::test]
+async fn application_runtime_status_exposes_last_tick_error() {
+    let mut application =
+        ReferenceApplication::new_test("reference-test", FailingSource, test_store().await)
+            .await
+            .unwrap();
+
+    let error = application.refresh().await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("application test provider failed")
+    );
+    let status = application.contract_runtime_status().await;
+    let last_error = status
+        .app_runtime
+        .last_error
+        .expect("failed tick is visible in app runtime");
+    assert_eq!(last_error.code, "reference.provider_failed");
+    assert!(last_error.retryable);
+    assert!(
+        last_error
+            .message
+            .contains("application test provider failed")
+    );
+}
+
+#[tokio::test]
+async fn application_sync_in_progress_does_not_record_last_tick_error() {
+    let mut application =
+        ReferenceApplication::new_test("reference-test", SyncInProgressSource, test_store().await)
+            .await
+            .unwrap();
+
+    let error = application.refresh().await.unwrap_err();
+    assert!(error.is_sync_in_progress());
+
+    let status = application.contract_runtime_status().await;
+    assert_eq!(status.app_runtime.last_error, None);
+    assert_ne!(
+        status.app_runtime.phase,
+        kairos_reference_contract::ReferenceAppPhase::Degraded
+    );
+}
+
+#[tokio::test]
+async fn application_runtime_status_exposes_last_publication_error() {
+    let mut application = application().await;
+    application.record_publication_error_summary(
+        "reference.publication_failed",
+        true,
+        "reference publication failed: missing publisher",
+    );
+
+    let status = application.contract_runtime_status().await;
+    let last_error = status
+        .publication
+        .last_error
+        .expect("failed publication is visible in publication runtime");
+    assert_eq!(last_error.code, "reference.publication_failed");
+    assert!(last_error.retryable);
+    assert!(last_error.message.contains("missing publisher"));
+
+    application.record_publication_ready();
+    let status = application.contract_runtime_status().await;
+    assert_eq!(status.publication.last_error, None);
+}
+
+#[tokio::test]
+async fn acknowledge_publications_clears_publication_error_status() {
+    let mut application = application().await;
+    application.record_publication_error_summary(
+        "reference.publication_failed",
+        true,
+        "reference publication failed: transient ack failure",
+    );
+
+    application.acknowledge_publications(&[]).await.unwrap();
+
+    let status = application.contract_runtime_status().await;
+    assert_eq!(status.publication.last_error, None);
+}
+
+#[tokio::test]
 async fn application_exposes_read_only_market_queries() {
     let mut application = application().await;
     application.refresh().await.unwrap();
@@ -223,6 +370,47 @@ async fn default_reference_registry_composes_without_market_configuration() {
 }
 
 #[tokio::test]
+async fn composition_applies_runtime_tick_budget_from_reference_config() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("kairos.toml"),
+        r#"
+        version = 1
+        workspace_id = "reference-test"
+
+        [reference.runtime.tick_budget]
+        max_sources_per_tick = 2
+        max_batches_per_source = 7
+        max_records_per_batch = 1000
+        max_wall_clock_millis = 3000
+        max_publications_per_tick = 25
+        "#,
+    )
+    .unwrap();
+
+    let composition = build_application(
+        &ReferenceCompositionConfig {
+            workspace: Some(root.to_path_buf()),
+            database: root.join("reference.sqlite"),
+            aeron_dir: None,
+            aeron_channel: kairos_conflux::DEFAULT_AERON_CHANNEL.into(),
+            reference_changes_stream: kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
+        },
+        false,
+    )
+    .await
+    .unwrap();
+
+    let budget = composition.application.tick_budget();
+    assert_eq!(budget.max_sources_per_tick, 2);
+    assert_eq!(budget.max_batches_per_source, 7);
+    assert_eq!(budget.max_records_per_batch, Some(1000));
+    assert_eq!(budget.max_wall_clock_millis, Some(3000));
+    assert_eq!(budget.max_publications_per_tick, Some(25));
+}
+
+#[tokio::test]
 async fn application_does_not_emit_duplicate_events_for_same_catalog() {
     let mut application = application().await;
     assert_eq!(application.refresh().await.unwrap().events.len(), 6);
@@ -242,6 +430,8 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
             asset_class: kairos_primitives::reference::AssetClass::Crypto,
             status: "active".into(),
             name: None,
+            provenance: ReferenceUpsertProvenance::Manual,
+            conflict_policy: ReferenceUpsertConflictPolicy::RejectProviderOwned,
         })
         .await
         .unwrap();
@@ -254,7 +444,43 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
     assert_eq!(event.event_type, "asset_changed");
     assert_eq!(event.record_kind.as_deref(), Some("asset"));
     assert_eq!(event.record_id.as_deref(), Some("asset:sol"));
+    assert_eq!(event.provenance.as_deref(), Some("manual"));
+    assert_eq!(
+        event.conflict_policy.as_deref(),
+        Some("reject_provider_owned")
+    );
     assert_eq!(application.catalog().event_sequence, 7.into());
+}
+
+#[tokio::test]
+async fn administrative_asset_upsert_rejects_provider_owned_records_by_default() {
+    let mut catalog = provider_catalog();
+    catalog.assets[0].source_id = Some("binance-spot".to_owned());
+    let mut application = ReferenceApplication::new_test(
+        "reference-test",
+        TestSource { catalog },
+        test_store().await,
+    )
+    .await
+    .unwrap();
+    application.refresh().await.unwrap();
+
+    let error = application
+        .upsert_asset(UpsertAssetCommand {
+            asset_id: asset_id("asset:BTC"),
+            code: symbol("BTC"),
+            asset_class: kairos_primitives::reference::AssetClass::Crypto,
+            status: "active".into(),
+            name: Some("Manual Bitcoin".into()),
+            provenance: ReferenceUpsertProvenance::Manual,
+            conflict_policy: ReferenceUpsertConflictPolicy::RejectProviderOwned,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("provider-owned asset asset:BTC"));
+    assert!(error.contains("binance-spot"));
 }
 
 #[tokio::test]
@@ -275,6 +501,8 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
             expiry_unix_nanos: None,
             strike: None,
             option_right: None,
+            provenance: ReferenceUpsertProvenance::Manual,
+            conflict_policy: ReferenceUpsertConflictPolicy::RejectProviderOwned,
         })
         .await
         .unwrap();
@@ -288,6 +516,8 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
             status: "active".into(),
             effective_from_unix_nanos: 1.into(),
             effective_to_unix_nanos: None,
+            provenance: ReferenceUpsertProvenance::Manual,
+            conflict_policy: ReferenceUpsertConflictPolicy::RejectProviderOwned,
         })
         .await
         .unwrap();
@@ -302,6 +532,39 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
     assert_eq!(events[0].record_kind.as_deref(), Some("listing"));
     assert_eq!(events[1].record_kind.as_deref(), Some("instrument"));
     assert_eq!(application.catalog().lifecycle_events.len(), 8);
+}
+
+#[tokio::test]
+async fn administrative_listing_upsert_rejects_provider_owned_records_by_default() {
+    let mut catalog = provider_catalog();
+    catalog.listings[0].source_id = Some("binance-spot".to_owned());
+    let mut application = ReferenceApplication::new_test(
+        "reference-test",
+        TestSource { catalog },
+        test_store().await,
+    )
+    .await
+    .unwrap();
+    application.refresh().await.unwrap();
+
+    let error = application
+        .upsert_listing(UpsertListingCommand {
+            listing_id: listing_id("listing:binance:spot:BTC:USDT"),
+            instrument_id: instrument_id("instrument:spot:BTC-USDT"),
+            exchange_id: Exchange::new("exchange:binance").unwrap(),
+            exchange_symbol: Symbol::new("BTC-USDT").unwrap(),
+            status: "active".into(),
+            effective_from_unix_nanos: 1.into(),
+            effective_to_unix_nanos: None,
+            provenance: ReferenceUpsertProvenance::Manual,
+            conflict_policy: ReferenceUpsertConflictPolicy::RejectProviderOwned,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("provider-owned listing listing:binance:spot:BTC:USDT"));
+    assert!(error.contains("binance-spot"));
 }
 
 #[tokio::test]

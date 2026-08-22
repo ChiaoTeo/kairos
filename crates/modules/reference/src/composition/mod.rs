@@ -1,4 +1,4 @@
-//! Composition shared by the one-shot CLI and the long-running server.
+//! Runtime composition for the long-running Reference server.
 
 mod config;
 
@@ -6,15 +6,21 @@ use std::path::Path;
 
 pub use config::{
     ReferenceConfig, ReferenceParticipantConfig, ReferenceProductConfig, ReferenceProviderConfig,
+    ReferenceRuntimeConfig, ReferenceTickBudgetConfig,
 };
-use kairos_conflux::{AeronOutputDeclaration, BinanceCredential, load_workspace_credential};
+use kairos_conflux::{
+    AeronOutputDeclaration, BinanceCredential, CredentialStore, load_workspace_credential,
+};
 
 use crate::ReferenceApplication;
 use crate::domain::ReferenceResult;
+use crate::logging::events as log_events;
 use crate::services::providers::{
-    HyperliquidProduct, OkxProduct, ReferenceProviderPlan, ReferenceSourcePlan,
+    HyperliquidProduct, OkxProduct, ReferenceCredentialResolver, ReferenceProviderPlan,
+    ReferenceSourcePlan, default_endpoint,
 };
-use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
+use crate::services::storage::catalog_store::SqlxCatalogStore;
+use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
 impl From<kairos_reference_contract::ContractError> for crate::domain::ReferenceError {
     fn from(error: kairos_reference_contract::ContractError) -> Self {
@@ -31,12 +37,11 @@ pub struct ReferenceCompositionConfig {
     pub reference_changes_stream: i32,
 }
 
-/// Build the same business application for both process modes.
+/// Concrete runtime assembly for the Reference daemon.
 ///
-/// Read-only CLI commands use `publish = false`, while refresh/publish and the
-/// server use the real Aeron publisher. The provider and store are always the
-/// production implementations; the disabled publisher is only for local
-/// catalog inspection where no media driver is required.
+/// Composition owns static startup choices: workspace configuration, durable
+/// stores, source plans, Conflux connections, and publication transport. It
+/// does not process CLI commands or become a second application facade.
 pub struct ReferenceComposition {
     pub application: ComposedReferenceApplication,
     system: kairos_conflux::ConfluxSystem,
@@ -44,9 +49,14 @@ pub struct ReferenceComposition {
 
 impl ReferenceComposition {
     pub async fn activate_sources(&mut self) -> ReferenceResult<()> {
+        let log_event = log_events::APP_PHASE_STARTED;
         tracing::info!(
-            event = "reference_runtime_stage_started",
-            component = "reference",
+            event = log_event.event,
+            component = log_event.component,
+            area = log_event.area,
+            action = log_event.action,
+            outcome = log_event.outcome,
+            legacy_event = "reference_runtime_stage_started",
             stage = "activate_sources",
             "reference runtime stage started"
         );
@@ -55,9 +65,14 @@ impl ReferenceComposition {
             .activate_sources(&mut self.system.connections())
             .await;
         if result.is_ok() {
+            let log_event = log_events::APP_PHASE_COMPLETED;
             tracing::info!(
-                event = "reference_runtime_stage_completed",
-                component = "reference",
+                event = log_event.event,
+                component = log_event.component,
+                area = log_event.area,
+                action = log_event.action,
+                outcome = log_event.outcome,
+                legacy_event = "reference_runtime_stage_completed",
                 stage = "activate_sources",
                 "reference runtime stage completed"
             );
@@ -80,28 +95,6 @@ impl ReferenceComposition {
 }
 
 pub type ComposedReferenceApplication = ReferenceApplication;
-
-/// Canonical provider endpoint defaults shared by the one-shot CLI and the
-/// long-running Reference server.
-pub fn default_endpoint(provider: &str) -> &'static str {
-    match provider {
-        "hyperliquid" => "https://api.hyperliquid.xyz/info",
-        "binance-spot" | "binance-spot-rest" => "https://api.binance.com",
-        "binance-equity" | "binance-equity-rest" => "https://api.binance.com",
-        "binance-options" | "binance-options-rest" => "https://eapi.binance.com",
-        "binance-usdm-futures" | "binance-usdm-futures-rest" => "https://fapi.binance.com",
-        "binance-coinm-futures" | "binance-coinm-futures-rest" => "https://dapi.binance.com",
-        "okx-spot" | "okx-margin" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options"
-        | "okx-spot-rest" | "okx-margin-rest" | "okx-swap-rest" | "okx-futures-rest"
-        | "okx-options-rest" => "https://www.okx.com",
-        "massive"
-        | "massive-equity"
-        | "massive-equity-websocket"
-        | "massive-options"
-        | "massive-options-websocket" => "http://api.massiveprivateserver.site",
-        _ => "",
-    }
-}
 
 /// Build the normal Workspace Reference catalog.
 ///
@@ -182,6 +175,15 @@ async fn build_source_plan(
     let credentials_root = workspace
         .as_ref()
         .map(|workspace| workspace.config_root().join("credentials"));
+    let credential_resolver = credentials_root
+        .as_ref()
+        .map(|root| {
+            CredentialStore::load(root.join("credentials.toml"))
+                .map(ReferenceCredentialResolver::from_store)
+        })
+        .transpose()
+        .map_err(crate::domain::ReferenceError::Provider)?
+        .unwrap_or_default();
     if !provider_disabled(reference, "okx") {
         for (product, source_id, instrument_type) in [
             ("spot", "okx-spot", OkxProduct::Spot),
@@ -343,10 +345,11 @@ async fn build_source_plan(
             }
         }
     }
-    Ok(ReferenceSourcePlan::new(
+    Ok(ReferenceSourcePlan::new_with_credential_resolver(
         providers,
         participants,
         sync_store,
+        credential_resolver,
     ))
 }
 
@@ -451,9 +454,14 @@ pub async fn build_application(
     config: &ReferenceCompositionConfig,
     publish: bool,
 ) -> ReferenceResult<ReferenceComposition> {
+    let log_event = log_events::STARTUP_STAGE_STARTED;
     tracing::info!(
-        event = "reference_startup_stage_started",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_started",
         stage = "validate_configuration",
         "reference startup stage started"
     );
@@ -463,31 +471,51 @@ pub async fn build_application(
             kairos_conflux::output_stream_ids::REFERENCE_CHANGES
         )));
     }
+    let log_event = log_events::STARTUP_STAGE_COMPLETED;
     tracing::info!(
-        event = "reference_startup_stage_completed",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_completed",
         stage = "validate_configuration",
         "reference startup stage completed"
     );
 
+    let log_event = log_events::STARTUP_STAGE_STARTED;
     tracing::info!(
-        event = "reference_startup_stage_started",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_started",
         stage = "open_database",
         database = %config.database.display(),
         "reference startup stage started"
     );
     let mut store = SqlxCatalogStore::open(&config.database).await?;
+    let log_event = log_events::STARTUP_STAGE_COMPLETED;
     tracing::info!(
-        event = "reference_startup_stage_completed",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_completed",
         stage = "open_database",
         "reference startup stage completed"
     );
 
+    let log_event = log_events::STARTUP_STAGE_STARTED;
     tracing::info!(
-        event = "reference_startup_stage_started",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_started",
         stage = "integrity_audit",
         "reference startup stage started"
     );
@@ -495,9 +523,14 @@ pub async fn build_application(
     if !startup_audit.missing_current_equity_markets.is_empty()
         || !startup_audit.missing_provider_equity_markets.is_empty()
     {
+        let log_event = log_events::STARTUP_STAGE_DEGRADED;
         tracing::warn!(
-            event = "reference_startup_integrity_repair",
-            component = "reference",
+            event = log_event.event,
+            component = log_event.component,
+            area = log_event.area,
+            action = log_event.action,
+            outcome = log_event.outcome,
+            legacy_event = "reference_startup_integrity_repair",
             missing_current_equity_market_count =
                 startup_audit.missing_current_equity_markets.len(),
             missing_provider_equity_market_count =
@@ -506,9 +539,14 @@ pub async fn build_application(
             "reference startup integrity audit found missing equity markets"
         );
     }
+    let log_event = log_events::STARTUP_STAGE_COMPLETED;
     tracing::info!(
-        event = "reference_startup_stage_completed",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_completed",
         stage = "integrity_audit",
         missing_current_equity_market_count = startup_audit.missing_current_equity_markets.len(),
         missing_provider_equity_market_count = startup_audit.missing_provider_equity_markets.len(),
@@ -517,51 +555,96 @@ pub async fn build_application(
         "reference startup stage completed"
     );
 
+    let log_event = log_events::STARTUP_STAGE_STARTED;
     tracing::info!(
-        event = "reference_startup_stage_started",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_started",
         stage = "build_source_plan",
         "reference startup stage started"
     );
     let source_plan = build_source_plan(config).await?;
+    let log_event = log_events::STARTUP_STAGE_COMPLETED;
     tracing::info!(
-        event = "reference_startup_stage_completed",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_completed",
         stage = "build_source_plan",
         "reference startup stage completed"
     );
 
+    let log_event = log_events::STARTUP_STAGE_STARTED;
     tracing::info!(
-        event = "reference_startup_stage_started",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_started",
         stage = "install_connections",
         "reference startup stage started"
     );
     let mut system = kairos_conflux::ConfluxSystem::new();
     source_plan.install(&mut system.connections())?;
+    let log_event = log_events::STARTUP_STAGE_COMPLETED;
     tracing::info!(
-        event = "reference_startup_stage_completed",
-        component = "reference",
+        event = log_event.event,
+        component = log_event.component,
+        area = log_event.area,
+        action = log_event.action,
+        outcome = log_event.outcome,
+        legacy_event = "reference_startup_stage_completed",
         stage = "install_connections",
         "reference startup stage completed"
     );
     if publish {
+        let log_event = log_events::STARTUP_STAGE_STARTED;
         tracing::info!(
-            event = "reference_startup_stage_started",
-            component = "reference",
+            event = log_event.event,
+            component = log_event.component,
+            area = log_event.area,
+            action = log_event.action,
+            outcome = log_event.outcome,
+            legacy_event = "reference_startup_stage_started",
             stage = "declare_publication",
             "reference startup stage started"
         );
         declare_reference_changes_output(config, &mut system)?;
+        let log_event = log_events::STARTUP_STAGE_COMPLETED;
         tracing::info!(
-            event = "reference_startup_stage_completed",
-            component = "reference",
+            event = log_event.event,
+            component = log_event.component,
+            area = log_event.area,
+            action = log_event.action,
+            outcome = log_event.outcome,
+            legacy_event = "reference_startup_stage_completed",
             stage = "declare_publication",
             "reference startup stage completed"
         );
     }
+    let runtime_config = config
+        .workspace
+        .as_ref()
+        .map(kairos_workspace::workspace::Workspace::open)
+        .transpose()
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?
+        .as_ref()
+        .map(ReferenceConfig::load)
+        .transpose()
+        .map_err(crate::domain::ReferenceError::Provider)?
+        .map(|reference| reference.runtime)
+        .unwrap_or_default();
+    let tick_budget = runtime_config.tick_budget.to_domain()?;
+    let mut application = ReferenceApplication::new("reference-actor", source_plan, store).await?;
+    application.configure_tick_budget(tick_budget);
     Ok(ReferenceComposition {
-        application: ReferenceApplication::new("reference-actor", source_plan, store).await?,
+        application,
         system,
     })
 }

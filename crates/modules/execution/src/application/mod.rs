@@ -1,5 +1,7 @@
 pub mod backtest;
+mod cli;
 mod conflux;
+mod connected;
 pub(crate) mod core;
 mod model;
 
@@ -8,6 +10,8 @@ kairos_execution_contract::execution_control_rpc_conflux_actor! {
     service ExecutionRpcService;
 }
 
+pub use cli::CliExecutionApplication;
+pub use connected::ConnectedExecutionApplication;
 pub use core::ExecutionApplication;
 pub(crate) use core::apply_connection_event;
 

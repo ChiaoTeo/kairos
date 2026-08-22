@@ -1,16 +1,19 @@
 use kairos_conflux::{
-    BinanceCredential, BinanceRestConfig, ConnectionCollections, ConnectionKey,
-    HyperliquidRestConfig, MassiveInstrumentQuery, MassiveRestConfig, OkxRestConfig,
+    BinanceCredential, ConnectionCollections, ConnectionKey, HyperliquidRestConfig,
+    MassiveInstrumentQuery, MassiveRestConfig, OkxRestConfig,
 };
 
 use super::{
     BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource,
-    CompositeSource, HyperliquidProduct, HyperliquidSource, MassiveEquitySource,
-    MassiveOptionsCoverageSource, OkxProduct, OkxSource, ParticipantAugmentedSource,
+    HyperliquidProduct, HyperliquidSource, MassiveEquitySource, MassiveOptionsCoverageSource,
+    OkxProduct, OkxSource, ProviderFanInSource, ReferenceCredentialResolver, binance_config,
+    provider_error,
 };
-use crate::domain::{Entity, ReferenceError, ReferenceResult};
-use crate::services::source::{ConfiguredProviderSource, ConfiguredReferenceSource};
-use crate::services::sqlx_storage::SqlxProviderSyncStore;
+use crate::domain::{Entity, ReferenceResult};
+use crate::services::sources::{
+    ConfiguredProviderSource, ConfiguredReferenceSource, ParticipantAugmentedSource,
+};
+use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
 pub(crate) enum ReferenceProviderPlan {
     BinanceSpot {
@@ -63,18 +66,21 @@ pub(crate) struct ReferenceSourcePlan {
     providers: Vec<ReferenceProviderPlan>,
     participants: Vec<Entity>,
     sync_store: SqlxProviderSyncStore,
+    credential_resolver: ReferenceCredentialResolver,
 }
 
 impl ReferenceSourcePlan {
-    pub(crate) fn new(
+    pub(crate) fn new_with_credential_resolver(
         providers: Vec<ReferenceProviderPlan>,
         participants: Vec<Entity>,
         sync_store: SqlxProviderSyncStore,
+        credential_resolver: ReferenceCredentialResolver,
     ) -> Self {
         Self {
             providers,
             participants,
             sync_store,
+            credential_resolver,
         }
     }
 
@@ -292,22 +298,14 @@ impl ReferenceSourcePlan {
             };
             sources.push(source);
         }
-        let composite =
-            CompositeSource::new_with_sync_store(sources, Some(self.sync_store)).await?;
+        let fan_in = ProviderFanInSource::new_with_sync_store_and_credentials(
+            sources,
+            Some(self.sync_store),
+            self.credential_resolver,
+        )
+        .await?;
         Ok(ConfiguredReferenceSource::new(
-            ParticipantAugmentedSource::wrap(composite, self.participants),
+            ParticipantAugmentedSource::wrap(fan_in, self.participants),
         ))
     }
-}
-
-fn binance_config(endpoint: &str, credential: Option<BinanceCredential>) -> BinanceRestConfig {
-    BinanceRestConfig {
-        environment: "public".into(),
-        endpoint: endpoint.into(),
-        credential,
-    }
-}
-
-fn provider_error(error: impl ToString) -> ReferenceError {
-    ReferenceError::Provider(error.to_string())
 }

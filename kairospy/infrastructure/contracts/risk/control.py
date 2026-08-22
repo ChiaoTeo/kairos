@@ -38,6 +38,15 @@ class RiskControlClient:
     def consume_reservation(self, request: Mapping[str, object]) -> Mapping[str, Any]:
         return self.call("risk_consume_reservation", [request])
 
+    def resize_reservation(self, request: Mapping[str, object]) -> Mapping[str, Any]:
+        return self.call("risk_resize_reservation", [request])
+
+    def open_circuit(self, request: Mapping[str, object]) -> Mapping[str, Any]:
+        return self.call("risk_open_circuit", [request])
+
+    def close_circuit(self, request: Mapping[str, object]) -> Mapping[str, Any]:
+        return self.call("risk_close_circuit", [request])
+
     def call(
         self,
         method: str,

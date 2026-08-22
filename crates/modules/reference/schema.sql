@@ -21,8 +21,34 @@ CREATE INDEX IF NOT EXISTS reference_lifecycle_type_idx
 CREATE TABLE IF NOT EXISTS reference_provider_control (
     provider TEXT PRIMARY KEY,
     paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
+    desired_state TEXT NOT NULL DEFAULT 'enabled'
+        CHECK (desired_state IN ('enabled', 'disabled', 'paused', 'removed')),
     updated_at_unix_nanos INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS reference_source_registry (
+    source_id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    provider_product TEXT,
+    scope_kind TEXT NOT NULL,
+    scope_id TEXT,
+    desired_state TEXT NOT NULL
+        CHECK (desired_state IN ('enabled', 'disabled', 'paused', 'removed')),
+    credential_binding TEXT,
+    sync_policy TEXT NOT NULL
+        CHECK (sync_policy IN (
+            'full_snapshot',
+            'paged_snapshot',
+            'scoped_snapshot',
+            'incremental_delta',
+            'manual_curated'
+        )),
+    payload TEXT NOT NULL,
+    updated_at_unix_nanos INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS reference_source_registry_provider_idx
+    ON reference_source_registry(provider_id, provider_product, desired_state, source_id);
 
 CREATE TABLE IF NOT EXISTS reference_option_coverage (
     provider TEXT NOT NULL,

@@ -78,11 +78,11 @@ Provider 集成和通知目的地。
 
 ```bash
 kairos account list
-kairos account snapshot --workspace my-project
-kairos account balances --workspace my-project
+kairos system component account snapshot --account-id main --workspace my-project
+kairos system component account balances --account-id main --workspace my-project
 kairos market validate
-kairos market snapshot quote --market-id market:binance:spot:BTCUSDT --source-id binance-spot
-kairos order status --order-id <order-id> --workspace my-project
+kairos system component market snapshot quote --market-id market:binance:spot:BTCUSDT --source-id binance-spot
+kairos launch instance component execution status <launch-id> --workspace my-project
 kairos reference markets --active-only --workspace my-project
 kairos reference markets --asset-code AAPL --active-only --workspace my-project
 kairos reference listings --symbol BTCUSDT --workspace my-project
@@ -363,9 +363,9 @@ Account、Market、Execution、Reference 这些模块边界：
 确认后再映射到现有命令，例如：
 
 ```bash
-kairos account balances
-kairos market snapshot quote
-kairos order status
+kairos system component account balances --account-id main
+kairos system component market snapshot quote
+kairos launch instance component execution status <launch-id>
 kairos reference option-chain
 kairos notifications validate
 kairos integration earn
@@ -380,7 +380,8 @@ kairos integration earn
 3. launch 配置无效：执行 `launch diagnose validate`。
 4. launch 已启动但策略无输出：先看 `launch status` 和 `launch logs`。
 5. 组件或 socket 异常：转到 `system doctor`。
-6. 市场快照或订阅异常：转到 `market data-sources` / `market snapshot`。
+6. 市场快照或订阅异常：转到 `system component market sources` /
+   `system component market snapshot`。
 
 交互式诊断的价值不是隐藏命令，而是帮用户选择第一条排障命令。
 

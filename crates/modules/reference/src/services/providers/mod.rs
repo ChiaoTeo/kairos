@@ -1,15 +1,16 @@
 //! Concrete provider connections, Reference mapping, and source fan-in.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use futures_util::future::join_all;
 use kairos_conflux::{
-    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, InstrumentCatalogQuery,
-    MassiveInstrumentQuery, MassiveRestConfig, ParticipantKind,
+    BinanceCredential, BinanceRestConfig, ExternalInstrument, ExternalInstrumentCatalog,
+    ExternalInstrumentKind, InstrumentCatalogQuery, MassiveInstrumentQuery, MassiveRestConfig,
+    ParticipantKind,
 };
 use kairos_primitives::reference::{AssetClass, InstrumentKind};
 
@@ -21,26 +22,32 @@ impl ConnectionRef {
     }
 }
 
+mod activation;
 mod binance;
+mod credentials;
 mod fan_in;
 mod hyperliquid;
 mod massive;
 mod okx;
 mod plan;
 
+pub(crate) use activation::{
+    activate_runtime_source_definition, deactivate_runtime_source_definition,
+};
 pub use binance::{
     BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource,
 };
 #[cfg(test)]
 use binance::{binance_equity_provider_catalog, binance_provider_catalog};
-pub use fan_in::CompositeSource;
-pub(crate) use fan_in::ParticipantAugmentedSource;
+pub(crate) use credentials::ReferenceCredentialResolver;
+use fan_in::MASSIVE_PAGE_TIMEOUT;
+pub use fan_in::ProviderFanInSource;
 #[cfg(test)]
 use fan_in::provider_catalog_uses_current_canonical_shape;
-use fan_in::{MASSIVE_PAGE_TIMEOUT, MASSIVE_PAGES_PER_REFRESH, merge_provider_catalog_views};
 pub use hyperliquid::HyperliquidSource;
 #[cfg(test)]
 use hyperliquid::hyperliquid_provider_catalog;
+pub(crate) use massive::massive_options_underlying_from_scope;
 #[cfg(test)]
 use massive::massive_provider_catalog;
 pub use massive::{MassiveEquitySource, MassiveOptionsCoverageSource};
@@ -50,11 +57,13 @@ use okx::okx_provider_catalog;
 pub(crate) use plan::{ReferenceProviderPlan, ReferenceSourcePlan};
 
 use crate::domain::{
-    Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ProviderHealth, ReferenceError,
-    ReferenceResult,
+    Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceError, ReferenceResult,
+    ReferenceSourceDefinition, SourceDesiredState, SourceHealth, SourceScope, SourceScopeKind,
+    SourceTickBudget,
 };
-use crate::services::source::{ProviderUpdate, ReferenceSource};
-use crate::services::sqlx_storage::SqlxProviderSyncStore;
+use crate::services::sources::{ReferenceSource, SourceUpdate};
+use crate::services::storage::provider_sync::PROVIDER_PROJECTION_VERSION;
+use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BinanceProduct {
@@ -62,6 +71,17 @@ pub(crate) enum BinanceProduct {
     UsdMFutures,
     CoinMFutures,
     Option,
+}
+
+impl BinanceProduct {
+    const fn source_id(self) -> &'static str {
+        match self {
+            Self::Spot => "binance-spot",
+            Self::UsdMFutures => "binance-usdm-futures",
+            Self::CoinMFutures => "binance-coinm-futures",
+            Self::Option => "binance-options",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,10 +93,66 @@ pub(crate) enum OkxProduct {
     Option,
 }
 
+impl OkxProduct {
+    const fn source_id(self) -> &'static str {
+        match self {
+            Self::Spot => "okx-spot",
+            Self::Margin => "okx-margin",
+            Self::Swap => "okx-swap",
+            Self::Futures => "okx-futures",
+            Self::Option => "okx-options",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HyperliquidProduct {
     Perpetual,
     Spot,
+}
+
+impl HyperliquidProduct {
+    const fn source_id(self) -> &'static str {
+        match self {
+            Self::Perpetual => "hyperliquid-perpetual",
+            Self::Spot => "hyperliquid-spot",
+        }
+    }
+}
+
+pub(crate) fn default_endpoint(provider: &str) -> &'static str {
+    match provider {
+        "hyperliquid" => "https://api.hyperliquid.xyz/info",
+        "binance-spot" | "binance-spot-rest" => "https://api.binance.com",
+        "binance-equity" | "binance-equity-rest" => "https://api.binance.com",
+        "binance-options" | "binance-options-rest" => "https://eapi.binance.com",
+        "binance-usdm-futures" | "binance-usdm-futures-rest" => "https://fapi.binance.com",
+        "binance-coinm-futures" | "binance-coinm-futures-rest" => "https://dapi.binance.com",
+        "okx-spot" | "okx-margin" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options"
+        | "okx-spot-rest" | "okx-margin-rest" | "okx-swap-rest" | "okx-futures-rest"
+        | "okx-options-rest" => "https://www.okx.com",
+        "massive"
+        | "massive-equity"
+        | "massive-equity-websocket"
+        | "massive-options"
+        | "massive-options-websocket" => "http://api.massiveprivateserver.site",
+        _ => "",
+    }
+}
+
+pub(super) fn binance_config(
+    endpoint: &str,
+    credential: Option<BinanceCredential>,
+) -> BinanceRestConfig {
+    BinanceRestConfig {
+        environment: "public".into(),
+        endpoint: endpoint.into(),
+        credential,
+    }
+}
+
+pub(super) fn provider_error(error: impl ToString) -> ReferenceError {
+    ReferenceError::Provider(error.to_string())
 }
 
 fn normalize_option_underlying(value: &str) -> ReferenceResult<String> {

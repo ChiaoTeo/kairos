@@ -11,14 +11,14 @@ mod services;
 
 pub use application::{
     AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
-    CancelFundingObjective, CapitalApplication, CapitalConfluxConfig, CapitalDemandReceipt,
-    CapitalError, CapitalEvent, CapitalProcess, CapitalProcessError, CapitalSnapshot,
-    CapitalYieldCandidate, EvaluateCapitalGroup, ExpireCapitalDemands, ExpireCapitalPlans,
-    ExpireFundingObjectives, FundingObjectiveReceipt, MarkCapitalDeliveryStarted,
-    ObserveCapitalDemand, ObserveCapitalFacts, ObserveCapitalMemberAccount,
-    ObserveCapitalSettlement, PublishFundingObjective, RecordCapitalParticipantStatus,
-    RecordCapitalRecoveryRequired, RecordCapitalSubmission, UpdateCapitalPolicy,
-    UpdateCapitalRoute,
+    CancelFundingObjective, CapitalApplication, CapitalCliRequestKind, CapitalConfluxConfig,
+    CapitalDemandReceipt, CapitalError, CapitalEvent, CapitalProcess, CapitalProcessError,
+    CapitalSnapshot, CapitalYieldCandidate, CliCapitalApplication, ConnectedCapitalApplication,
+    EvaluateCapitalGroup, ExpireCapitalDemands, ExpireCapitalPlans, ExpireFundingObjectives,
+    FundingObjectiveReceipt, MarkCapitalDeliveryStarted, ObserveCapitalDemand, ObserveCapitalFacts,
+    ObserveCapitalMemberAccount, ObserveCapitalSettlement, PublishFundingObjective,
+    RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
+    UpdateCapitalPolicy, UpdateCapitalRoute,
 };
 pub use domain::{
     CapitalAvailabilityView, CapitalDemand, CapitalDemandId, CapitalDemandRecord,

@@ -771,12 +771,18 @@ class NativeCliApplication:
     def command(
         self, component: str, arguments: list[str], *, output: str | None = "json"
     ) -> list[str]:
-        if component != "execution":
+        binary_names = {
+            "account": "kairos-account-cli",
+            "capital": "kairos-capital-cli",
+            "execution": "kairos-execution-cli",
+            "market": "kairos-market-cli",
+            "risk": "kairos-risk-cli",
+        }
+        if component not in binary_names:
             raise ValueError(f"unsupported native CLI component: {component}")
-        binary_name = "kairos-execution-cli"
         reject_owned_options(arguments, {"--workspace"})
         command = [
-            self.binaries.get(component) or resolve_binary(binary_name),
+            self.binaries.get(component) or resolve_binary(binary_names[component]),
             "--workspace",
             str(self.workspace.paths.root),
         ]

@@ -71,7 +71,7 @@ pub(crate) fn build_reference_projection(
     crate::services::reference_projection::ReferenceUniverseProjection::new(sources)
 }
 
-pub(crate) fn project_market_universe(
+pub fn project_market_universe(
     snapshot: &kairos_reference_contract::ReferenceProjectionSnapshot,
     sources: &BTreeMap<String, MarketSourceBinding>,
 ) -> Result<ReconcileMarketUniverse, String> {

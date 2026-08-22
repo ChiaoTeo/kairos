@@ -13,6 +13,7 @@ pub use config::{
 };
 pub use host::MarketHost;
 pub use launch::{DiagnosticProvider, MarketStartupError, build_market_host, run_diagnostic_once};
+pub use reference::project_reference_market_universe;
 pub use sources::{
     attach_replay_source, attach_replay_source_with_checkpoint, attach_replay_source_with_policy,
     default_endpoint,

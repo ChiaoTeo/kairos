@@ -90,10 +90,64 @@ class RiskProjection:
     def path(self) -> Path:
         return self._reader.path
 
+    def read_frame(self) -> RiskViewFrame:
+        return self._reader.read()
+
+    def latest(self) -> dict[str, Any]:
+        frame = self.read_frame()
+        root = cast(Any, frame.value)
+        state = root.State()
+        if state is None:
+            raise ValueError("Risk latest view state is missing")
+        limits = tuple(_limit_usage(value) for value in _table_items(state, "Limits"))
+        reservations = tuple(
+            _reservation(value) for value in _table_items(state, "ActiveReservations")
+        )
+        circuits = tuple(_circuit(value) for value in _table_items(state, "Circuits"))
+        return {
+            "actor_id": self._reader.key.actor_id,
+            "kind": "latest",
+            "generation": frame.generation,
+            "path": str(self.path),
+            "policy_version": int(state.PolicyVersion()),
+            "limits": list(limits),
+            "active_reservations": list(reservations),
+            "circuits": list(circuits),
+            "summary": {
+                "limit_count": len(limits),
+                "active_reservation_count": len(reservations),
+                "open_circuit_count": sum(
+                    1 for value in circuits if value["status"] == "open"
+                ),
+            },
+        }
+
+    def limits(self) -> tuple[dict[str, Any], ...]:
+        state = self._latest_state()
+        return tuple(_limit_usage(value) for value in _table_items(state, "Limits"))
+
+    def active_reservations(self) -> tuple[dict[str, Any], ...]:
+        state = self._latest_state()
+        return tuple(
+            _reservation(value) for value in _table_items(state, "ActiveReservations")
+        )
+
+    def circuits(self) -> tuple[dict[str, Any], ...]:
+        state = self._latest_state()
+        return tuple(_circuit(value) for value in _table_items(state, "Circuits"))
+
+    def _latest_state(self) -> Any:
+        frame = self.read_frame()
+        root = cast(Any, frame.value)
+        state = root.State()
+        if state is None:
+            raise ValueError("Risk latest view state is missing")
+        return state
+
     def status(self, account_id: AccountId) -> RiskStatus:
         from kairospy.application.risk import RiskStatus, RiskViolation
 
-        frame = self._reader.read()
+        frame = self.read_frame()
         root = cast(Any, frame.value)
         state = root.State()
         if state is None:
@@ -171,6 +225,42 @@ def decode_view(payload: bytes) -> Any:
 _METRIC_NOTIONAL = 1
 _CIRCUIT_OPEN = 2
 
+_METRICS = {
+    0: "unspecified",
+    1: "notional",
+    2: "margin",
+    3: "gross_exposure",
+    4: "net_exposure",
+    5: "turnover",
+    6: "order_rate",
+    7: "daily_loss",
+    8: "drawdown",
+    9: "leverage",
+    10: "price_deviation",
+    11: "stress_loss",
+}
+
+_ENFORCEMENT = {
+    0: "unspecified",
+    1: "reject",
+    2: "warn",
+    3: "observe",
+}
+
+_RESERVATION_STATUS = {
+    0: "unspecified",
+    1: "reserved",
+    2: "consumed",
+    3: "released",
+    4: "expired",
+}
+
+_CIRCUIT_STATUS = {
+    0: "unspecified",
+    1: "closed",
+    2: "open",
+}
+
 
 def _table_items(value: object, name: str) -> tuple[Any, ...]:
     table = cast(Any, value)
@@ -197,6 +287,120 @@ def _policy_id(policy: object | None) -> str:
     return _text(None if policy is None else cast(Any, policy).PolicyId()) or "unknown"
 
 
+def _limit_usage(value: object) -> dict[str, Any]:
+    row = cast(Any, value)
+    policy = row.Policy()
+    if policy is None:
+        raise ValueError("Risk limit usage policy is missing")
+    return {
+        "policy": _policy(policy),
+        "used": _decimal_text(row.Used()),
+        "reserved": _decimal_text(row.Reserved()),
+        "available": _decimal_text(row.Available()),
+    }
+
+
+def _policy(policy: object) -> dict[str, Any]:
+    row = cast(Any, policy)
+    return {
+        "policy_id": _text(row.PolicyId()),
+        "version": int(row.Version()),
+        "scope": _policy_scope(row.Scope()),
+        "metric": _enum_name(_METRICS, int(row.Metric())),
+        "limit": _decimal_text(row.Limit()),
+        "enforcement": _enum_name(_ENFORCEMENT, int(row.Enforcement())),
+        "valid_from_unix_nanos": int(row.ValidFromUnixNanos()),
+        "valid_until_unix_nanos": _optional_int(row.ValidUntilUnixNanos()),
+        "window_nanos": _optional_int(row.WindowNanos()),
+    }
+
+
+def _reservation(value: object) -> dict[str, Any]:
+    row = cast(Any, value)
+    return {
+        "reservation_id": _text(row.ReservationId()),
+        "request_id": _text(row.RequestId()),
+        "account_id": _text(row.AccountId()),
+        "strategy_id": _text(row.StrategyId()),
+        "instrument_id": _text(row.InstrumentId()),
+        "idempotency_key": _text(row.IdempotencyKey()),
+        "requested_usages": [
+            _risk_usage(row.RequestedUsages(index))
+            for index in range(int(row.RequestedUsagesLength()))
+        ],
+        "allocations": [
+            _allocation(row.Allocations(index))
+            for index in range(int(row.AllocationsLength()))
+        ],
+        "status": _enum_name(_RESERVATION_STATUS, int(row.Status())),
+        "created_at_unix_nanos": int(row.CreatedAtUnixNanos()),
+        "updated_at_unix_nanos": int(row.UpdatedAtUnixNanos()),
+        "expires_at_unix_nanos": int(row.ExpiresAtUnixNanos()),
+        "policy_version": int(row.PolicyVersion()),
+    }
+
+
+def _risk_usage(value: object | None) -> dict[str, Any]:
+    if value is None:
+        raise ValueError("Risk reservation contains an empty requested usage")
+    row = cast(Any, value)
+    return {
+        "metric": _enum_name(_METRICS, int(row.Metric())),
+        "amount": _decimal_text(row.Amount()),
+    }
+
+
+def _allocation(value: object | None) -> dict[str, Any]:
+    if value is None:
+        raise ValueError("Risk reservation contains an empty allocation")
+    row = cast(Any, value)
+    return {
+        "policy_id": _text(row.PolicyId()),
+        "metric": _enum_name(_METRICS, int(row.Metric())),
+        "amount": _decimal_text(row.Amount()),
+    }
+
+
+def _circuit(value: object) -> dict[str, Any]:
+    row = cast(Any, value)
+    return {
+        "circuit_id": _text(row.CircuitId()),
+        "scope": _circuit_scope(row.Scope()),
+        "status": _enum_name(_CIRCUIT_STATUS, int(row.Status())),
+        "opened_at_unix_nanos": _optional_int(row.OpenedAtUnixNanos()),
+        "reset_at_unix_nanos": _optional_int(row.ResetAtUnixNanos()),
+        "reason": _text(row.Reason()),
+    }
+
+
+def _policy_scope(scope: object | None) -> dict[str, str | None]:
+    if scope is None:
+        return {
+            "account_id": None,
+            "strategy_id": None,
+            "instrument_id": None,
+            "exchange_id": None,
+        }
+    row = cast(Any, scope)
+    return {
+        "account_id": _text(row.AccountId()),
+        "strategy_id": _text(row.StrategyId()),
+        "instrument_id": _text(row.InstrumentId()),
+        "exchange_id": _text(row.ExchangeId()),
+    }
+
+
+def _circuit_scope(scope: object | None) -> dict[str, str | None]:
+    if scope is None:
+        return {"account_id": None, "strategy_id": None, "exchange_id": None}
+    row = cast(Any, scope)
+    return {
+        "account_id": _text(row.AccountId()),
+        "strategy_id": _text(row.StrategyId()),
+        "exchange_id": _text(row.ExchangeId()),
+    }
+
+
 def _text(value: bytes | None) -> str | None:
     return None if value is None else value.decode("utf-8")
 
@@ -215,6 +419,19 @@ def _decimal64(value: object | None) -> Decimal | None:
         return None
     raw = cast(Any, value)
     return Decimal(int(raw.Mantissa())).scaleb(-int(raw.Scale()))
+
+
+def _decimal_text(value: object | None) -> str | None:
+    decimal = _decimal64(value)
+    return None if decimal is None else str(decimal)
+
+
+def _optional_int(value: object | None) -> int | None:
+    return None if value is None else int(value)
+
+
+def _enum_name(mapping: dict[int, str], value: int) -> str:
+    return mapping.get(value, f"unknown:{value}")
 
 
 __all__ = [
