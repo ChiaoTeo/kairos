@@ -14,7 +14,7 @@ from kairospy.application.launch.application import (
     LaunchRuntimeApplication,
 )
 from kairospy.application.launch.application import new_instance_id
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.application.workspace import InstanceWorkspace, WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch import (
     _decorate_launch_status,
@@ -1454,7 +1454,6 @@ def test_account_business_surface_rejects_connected_component_commands() -> None
     assert execute_argv(["account", "fill"], output) != 0
     text = output.getvalue()
     assert "connected runtime command" in text
-    assert "kairos system component account" in text
     assert "kairos launch instance component account" in text
 
 
@@ -1827,183 +1826,13 @@ def test_order_business_surface_rejects_missing_link_unknown_contract() -> None:
     assert "Execution runtime contract/API" in text
 
 
-def test_system_component_account_status_inspects_workspace_component(
-    tmp_path: Path,
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="account-component-status"
-    )
+def test_system_component_account_is_not_a_workspace_component() -> None:
     output = StringIO()
 
-    assert (
-        execute_argv(
-            [
-                "system",
-                "component",
-                "account",
-                "status",
-                "--workspace",
-                str(workspace.paths.root),
-                "--format",
-                "json",
-            ],
-            output,
-        )
-        == 0
-    )
-    value = json.loads(output.getvalue())
-    assert value["component"] == "account"
-    assert value["status"] == "not_running"
-
-
-def test_system_component_account_balances_requires_running_server(
-    tmp_path: Path,
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="account-component-balances"
-    )
-    output = StringIO()
-
-    assert (
-        execute_argv(
-            [
-                "system",
-                "component",
-                "account",
-                "balances",
-                "--account-id",
-                "main",
-                "--workspace",
-                str(workspace.paths.root),
-            ],
-            output,
-        )
-        != 0
-    )
-    assert "target server not found" in output.getvalue()
-
-
-def test_system_component_account_refresh_and_reconcile_use_owner_cli(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from kairospy.application.system import NativeCliApplication
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="account-component-control"
-    )
-    calls: list[tuple[str, list[str], Path]] = []
-
-    def run(_self, component, arguments):
-        calls.append((component, arguments, _self.workspace.paths.root))
-        return {"status": "ok"}
-
-    monkeypatch.setattr(NativeCliApplication, "run", run)
-
-    output = StringIO()
-    assert (
-        execute_argv(
-            [
-                "system",
-                "component",
-                "account",
-                "refresh",
-                "--account-id",
-                "main",
-                "--workspace",
-                str(workspace.paths.root),
-                "--format",
-                "json",
-            ],
-            output,
-        )
-        == 0
-    )
-    assert json.loads(output.getvalue()) == {"status": "ok"}
-
-    output = StringIO()
-    assert (
-        execute_argv(
-            [
-                "system",
-                "component",
-                "account",
-                "reconcile",
-                "--account-id",
-                "main",
-                "--workspace",
-                str(workspace.paths.root),
-                "--format",
-                "json",
-            ],
-            output,
-        )
-        == 0
-    )
-    assert json.loads(output.getvalue()) == {"status": "ok"}
-    assert calls == [
-        ("account", ["--account-id", "main", "connected", "refresh"], workspace.paths.root),
-        (
-            "account",
-            ["--account-id", "main", "connected", "reconcile"],
-            workspace.paths.root,
-        ),
-    ]
-
-
-def test_system_component_account_open_orders_uses_workspace_projection(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="account-component-open-orders"
-    )
-    seen: dict[str, object] = {}
-
-    class ObservedOrdersProjection:
-        def open_orders(self, account_id):
-            seen["open_orders_account_id"] = str(account_id)
-            return {
-                "account_id": str(account_id),
-                "open_orders": [{"remote_order_id": "remote-1"}],
-            }
-
-    class AccountClient:
-        def observed_orders_projection(self, account_id):
-            seen["projection_account_id"] = str(account_id)
-            return ObservedOrdersProjection()
-
-    monkeypatch.setattr(
-        "kairospy.surface.cli.commands.root._workspace_account_client",
-        lambda owner: AccountClient(),
-    )
-
-    output = StringIO()
-    assert (
-        execute_argv(
-            [
-                "system",
-                "component",
-                "account",
-                "open-orders",
-                "--account-id",
-                "main",
-                "--workspace",
-                str(workspace.paths.root),
-                "--format",
-                "json",
-            ],
-            output,
-        )
-        == 0
-    )
-
-    assert json.loads(output.getvalue()) == {
-        "account_id": "main",
-        "open_orders": [{"remote_order_id": "remote-1"}],
-    }
-    assert seen == {
-        "projection_account_id": "main",
-        "open_orders_account_id": "main",
-    }
+    assert execute_argv(["system", "component", "account", "balances"], output) != 0
+    text = output.getvalue()
+    assert "No such command" in text
+    assert "account" in text
 
 
 def test_launch_instance_component_execution_status_uses_instance_scope(
@@ -3014,6 +2843,7 @@ def test_generated_backtest_start_assembles_only_offline_runtime_components(
     market_options = started_components[0][1]
     assert market_options["market_runtime_profile"] == "replay"
     instance = market_options["instance_workspace"]
+    assert isinstance(instance, InstanceWorkspace)
     assert instance.market_state("replay.jsonl").is_file()
     assert "reference" not in names
     assert resumed_replay == ["market"]
@@ -3646,7 +3476,7 @@ def test_cli_exposes_canonical_business_command_surfaces() -> None:
         (["system", "--help"], ("component", "restart", "list")),
         (
             ["system", "component", "--help"],
-            ("account", "market", "reference", "risk", "capital"),
+            ("market", "reference", "risk", "capital"),
         ),
     ):
         output = StringIO()

@@ -15,7 +15,7 @@ use kairos_risk_contract::{
 };
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// One-shot Risk inspection commands.
 ///

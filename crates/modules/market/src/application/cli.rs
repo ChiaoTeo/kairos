@@ -18,7 +18,7 @@ use crate::application::{
     MarketApplication, ResolvedMarket, SubscriptionId, load_replay_events_many,
 };
 use crate::composition::{
-    DiagnosticProvider, MarketCompositionConfig, attach_replay_source, default_endpoint,
+    DiagnosticProvider, MarketCompositionConfig, attach_replay_source,
     project_reference_market_universe, run_diagnostic_once,
 };
 
@@ -274,7 +274,7 @@ impl CliMarketApplication {
                 let api_key = if let Some(value) = request.api_key.clone() {
                     value
                 } else {
-                    let workspace_root = self.workspace_root.as_ref().ok_or(
+                    let _workspace_root = self.workspace_root.as_ref().ok_or(
                         "Massive download requires --workspace or the deprecated --api-key",
                     )?;
                     let workspace = workspace

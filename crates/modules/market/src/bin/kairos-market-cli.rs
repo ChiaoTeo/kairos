@@ -11,7 +11,7 @@ use kairos_market::{
 };
 use kairos_market_contract::{MarketClient, MarketConnection};
 use kairos_primitives::market::{SourceId, SubscriptionId};
-use kairos_primitives::reference::{AssetClass, Exchange, InstrumentId, InstrumentKind};
+use kairos_primitives::reference::{Exchange, InstrumentKind};
 use kairos_primitives::runtime::{IdempotencyKey, InstanceId, RequestId, StrategyId};
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};

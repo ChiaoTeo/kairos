@@ -540,15 +540,14 @@ uv run kairospy account query positions main --segment usd_m_futures
 uv run kairospy account query positions main --segment coin_m_futures --symbol BTC/USD:BTC
 ```
 
-`account query` 下的命令都直接面向已绑定的 ExternalAccount。需要读取已启动 Account Actor 的运行时投影时，使用显式的 System 命令：
+`account query` 下的命令都直接面向已绑定的 ExternalAccount。需要读取已启动 Account Actor 的运行时投影时，使用显式的 launch instance component 命令：
 
 ```bash
-uv run kairospy system account current main
-uv run kairospy system component account balances --account-id main
-uv run kairospy system component account positions --account-id main
+uv run kairospy launch instance component account balances <launch-id> --account-id main
+uv run kairospy launch instance component account positions <launch-id> --account-id main
 ```
 
-这三条命令依赖运行中的 System，用于观察运行时状态，不用于验证交易所 API 账号连接。
+这类命令依赖运行中的 launch instance，用于观察运行时状态，不用于验证交易所 API 账号连接。
 
 ## 🧪 示例配置
 

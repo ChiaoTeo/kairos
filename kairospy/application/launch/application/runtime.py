@@ -21,7 +21,7 @@ from ...system import (
     MarketSystemClient,
     ReferenceProcessConfig,
 )
-from ...workspace import Workspace
+from ...workspace import InstanceWorkspace, Workspace
 from ..domain.identity import new_instance_id
 from ..composition import release_strategy_market_owner
 from .configuration import (
@@ -116,7 +116,7 @@ def release_launch_leases(
 
 
 def write_instance_manifest(
-    instance_workspace: Any,
+    instance_workspace: InstanceWorkspace,
     *,
     accounts: dict[str, dict[str, Any]],
     components: dict[str, dict[str, Any]],
@@ -142,7 +142,7 @@ def stop_component_safely(
     components: ComponentProcessApplication,
     component: str,
     *,
-    instance_workspace: Any = None,
+    instance_workspace: InstanceWorkspace | None = None,
     socket_name: str | None = None,
 ) -> dict[str, Any]:
     try:
@@ -161,7 +161,7 @@ def stop_component_safely(
 
 def cleanup_instance_components(
     owner: Workspace,
-    instance_workspace: Any,
+    instance_workspace: InstanceWorkspace,
     account_ids: list[str] | None = None,
     *,
     stop_strategy: bool = True,
@@ -426,9 +426,11 @@ class LaunchRuntimeApplication:
             )
             raise
 
-        market_instance_workspace = None
+        market_instance_workspace: InstanceWorkspace | None = None
         try:
-            instance_workspace = self.workspace.instance(mode, launch_id, instance)
+            instance_workspace: InstanceWorkspace = self.workspace.instance(
+                mode, launch_id, instance
+            )
             instance_workspace.prepare()
             market_runtime_profile = plan.market_profile
             market_replay_file: Path | None = None
@@ -762,7 +764,9 @@ class LaunchRuntimeApplication:
             ),
         }
 
-    def component_status(self, instance_workspace: Any) -> dict[str, dict[str, Any]]:
+    def component_status(
+        self, instance_workspace: InstanceWorkspace
+    ) -> dict[str, dict[str, Any]]:
         components = ComponentProcessApplication(self.workspace)
         try:
             manifest = json.loads(

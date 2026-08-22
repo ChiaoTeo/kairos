@@ -19,7 +19,6 @@ Canonical commands include:
   snapshot, balances, positions, open-orders for local paper/simulated accounts
 
 Current runtime account facts are connected through scoped component commands:
-  kairos system component account ...
   kairos launch instance component account ...
 
 """
@@ -66,16 +65,14 @@ def account_passthrough(ctx: typer.Context) -> None:
     if explicit_mode == "connected":
         raise typer.BadParameter(
             "`kairos account` runs standalone Account commands. Use "
-            "`kairos system component account ...` or "
             "`kairos launch instance component account ...` for connected mode."
         )
     if arguments and arguments[0] in CONNECTED_COMMANDS:
         command = arguments[0]
         raise typer.BadParameter(
             f"`kairos account {command}` is a connected runtime command. "
-            "Use `kairos system component account ...` for a workspace-scoped "
-            "Account server or `kairos launch instance component account ...` "
-            "for a launch-scoped Account server."
+            "Use `kairos launch instance component account ...` for a "
+            "running launch-scoped Account component."
         )
     owner = WorkspaceApplication().resolve(workspace)
     result = AccountCliApplication(owner).invoke(

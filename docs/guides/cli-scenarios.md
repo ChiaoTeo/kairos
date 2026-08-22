@@ -78,8 +78,8 @@ Provider 集成和通知目的地。
 
 ```bash
 kairos account list
-kairos system component account snapshot --account-id main --workspace my-project
-kairos system component account balances --account-id main --workspace my-project
+kairos account snapshot --account-id main --workspace my-project
+kairos account balances --account-id main --workspace my-project
 kairos market validate
 kairos system component market snapshot quote --market-id market:binance:spot:BTCUSDT --source-id binance-spot
 kairos launch instance component execution status <launch-id> --workspace my-project
@@ -363,7 +363,7 @@ Account、Market、Execution、Reference 这些模块边界：
 确认后再映射到现有命令，例如：
 
 ```bash
-kairos system component account balances --account-id main
+kairos account balances --account-id main
 kairos system component market snapshot quote
 kairos launch instance component execution status <launch-id>
 kairos reference option-chain

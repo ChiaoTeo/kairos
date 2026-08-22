@@ -37,7 +37,7 @@ BUSINESS_BOUNDARIES = (
         / "bin"
         / "kairos-account-cli.rs",
         rust_cli_must_be_grouped=True,
-        system_component="account",
+        system_component=None,
         launch_component="account",
         cli_application_required=True,
         connected_application_required=True,
@@ -583,25 +583,23 @@ def main() -> int:
     native_text = (ROOT / "kairospy" / "application" / "system" / "__init__.py").read_text(
         encoding="utf-8"
     )
-    for token in (
-        '_run_workspace_account_connected_command(',
-        'NativeCliApplication(owner).run(\n        "account"',
-    ):
-        if token not in root_text:
-            failures.append(
-                "system component account runtime controls must passthrough "
-                f"to the owner Rust CLI connected mode: {token}"
-            )
     if '"account": "kairos-account-cli"' not in native_text:
         failures.append("NativeCliApplication must support kairos-account-cli")
     for token in (
+        "system_component_account_app",
+        "@system_component_account_app.command",
+        "system_component_app.add_typer(system_component_account_app",
+        "_workspace_account_client(",
+        "_run_workspace_account_connected_command(",
         "_workspace_account_client(owner).refresh(",
         "_workspace_account_client(owner).reconcile(",
+        "_workspace_account_client(owner).current_projection(",
+        "_workspace_account_client(owner).observed_orders_projection(",
     ):
         if token in root_text:
             failures.append(
-                "system component account runtime controls must not bypass "
-                f"the owner Rust CLI connected mode: {token}"
+                "Account has no workspace-scoped system component; use "
+                f"`kairos account ...` or launch instance component account instead: {token}"
             )
     for token in (
         '_run_workspace_market_connected_command(',
@@ -651,13 +649,6 @@ def main() -> int:
             "ExecutionControlRpc supports it"
         )
     for token in (
-        '@system_component_account_app.command("status")',
-        '@system_component_account_app.command("snapshot")',
-        '@system_component_account_app.command("balances")',
-        '@system_component_account_app.command("positions")',
-        '@system_component_account_app.command("open-orders")',
-        '@system_component_account_app.command("refresh")',
-        '@system_component_account_app.command("reconcile")',
         '@system_component_market_app.command("status")',
         '@system_component_market_app.command("sources")',
         '@system_component_market_app.command("snapshot")',

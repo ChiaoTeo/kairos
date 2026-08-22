@@ -156,7 +156,7 @@ impl CliReferenceApplication {
         resolve: bool,
     ) -> Result<Value, Box<dyn std::error::Error>> {
         let snapshot = self.diagnostic_snapshot()?;
-        let mut values = filter_markets(json_records(&snapshot.markets)?, request);
+        let values = filter_markets(json_records(&snapshot.markets)?, request);
         if resolve {
             match values.as_slice() {
                 [market] => Ok(json!(market)),

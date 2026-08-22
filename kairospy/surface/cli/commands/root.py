@@ -14,7 +14,6 @@ from kairospy.application.launch.application import (
     LaunchRegistryApplication,
 )
 from kairospy.application.system import (
-    AccountSystemClient,
     CapitalSystemClient,
     ComponentControlApplication,
     ComponentProcessApplication,
@@ -126,28 +125,6 @@ def _run_workspace_market_connected_command(
     owner: Any, command: str, arguments: list[str]
 ) -> dict[str, Any]:
     return NativeCliApplication(owner).run("market", ["connected", command, *arguments])
-
-
-def _workspace_account_client(owner: Any) -> AccountSystemClient:
-    socket = owner.paths.process_socket("account")
-    if not socket.exists():
-        raise typer.BadParameter(
-            "target server not found: workspace Account is not running"
-        )
-    return AccountSystemClient(
-        socket,
-        view_root=owner.paths.snapshots,
-        timeout=30.0,
-    )
-
-
-def _run_workspace_account_connected_command(
-    owner: Any, account_id: str, command: str, arguments: list[str]
-) -> dict[str, Any]:
-    return NativeCliApplication(owner).run(
-        "account",
-        ["--account-id", account_id, "connected", command, *arguments],
-    )
 
 
 def _workspace_reference_client(owner: Any):
@@ -263,9 +240,6 @@ system_app = typer.Typer(no_args_is_help=True, help="System runtime commands")
 system_component_app = typer.Typer(
     no_args_is_help=True, help="Connect to workspace-scoped runtime components"
 )
-system_component_account_app = typer.Typer(
-    no_args_is_help=True, help="Connect to the workspace-scoped Account component"
-)
 system_component_market_app = typer.Typer(
     no_args_is_help=True, help="Connect to the workspace-scoped Market component"
 )
@@ -279,7 +253,6 @@ system_component_capital_app = typer.Typer(
     no_args_is_help=True, help="Connect to the workspace-scoped Capital component"
 )
 system_app.add_typer(system_component_app, name="component")
-system_component_app.add_typer(system_component_account_app, name="account")
 system_component_app.add_typer(system_component_market_app, name="market")
 system_component_app.add_typer(system_component_reference_app, name="reference")
 system_component_app.add_typer(system_component_risk_app, name="risk")
@@ -660,115 +633,6 @@ def system_component_status(
     """Inspect one workspace-scoped component server."""
     owner = WorkspaceApplication().open(workspace)
     _emit(ComponentProcessApplication(owner).status(component), output)
-
-
-@system_component_account_app.command("status")
-def system_component_account_status(
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    """Inspect the workspace-scoped Account component server."""
-    owner = WorkspaceApplication().open(workspace)
-    _emit(ComponentProcessApplication(owner).status("account"), output)
-
-
-def _account_current_snapshot(owner: Any, account_id: str) -> dict[str, object]:
-    from kairospy.domain_types import AccountId
-
-    snapshot = _workspace_account_client(owner).current_projection(
-        AccountId(account_id)
-    ).snapshot(AccountId(account_id))
-    return asdict(snapshot)
-
-
-@system_component_account_app.command("snapshot")
-def system_component_account_snapshot(
-    account_id: str = typer.Option(..., "--account-id"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    """Read one Account current projection from the workspace component."""
-    owner = WorkspaceApplication().open(workspace)
-    _emit(_account_current_snapshot(owner, account_id), output)
-
-
-@system_component_account_app.command("balances")
-def system_component_account_balances(
-    account_id: str = typer.Option(..., "--account-id"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    """Read Account balances from the workspace component projection."""
-    owner = WorkspaceApplication().open(workspace)
-    snapshot = _account_current_snapshot(owner, account_id)
-    balances = [
-        balance
-        for segment in snapshot["segments"]
-        for balance in segment.get("balances", [])
-    ]
-    _emit({"account_id": account_id, "balances": balances}, output)
-
-
-@system_component_account_app.command("positions")
-def system_component_account_positions(
-    account_id: str = typer.Option(..., "--account-id"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    """Read Account positions from the workspace component projection."""
-    owner = WorkspaceApplication().open(workspace)
-    snapshot = _account_current_snapshot(owner, account_id)
-    positions = [
-        position
-        for segment in snapshot["segments"]
-        for position in segment.get("positions", [])
-    ]
-    _emit({"account_id": account_id, "positions": positions}, output)
-
-
-@system_component_account_app.command("open-orders")
-def system_component_account_open_orders(
-    account_id: str = typer.Option(..., "--account-id"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    """Read Account observed-order facts from the workspace component projection."""
-    owner = WorkspaceApplication().open(workspace)
-    from kairospy.domain_types import AccountId
-
-    account_key = AccountId(account_id)
-    value = _workspace_account_client(owner).observed_orders_projection(
-        account_key
-    ).open_orders(account_key)
-    _emit(value, output)
-
-
-@system_component_account_app.command("refresh")
-def system_component_account_refresh(
-    account_id: str = typer.Option(..., "--account-id"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
-) -> None:
-    """Request an Account refresh on the workspace component."""
-    owner = WorkspaceApplication().open(workspace)
-    _emit(
-        _run_workspace_account_connected_command(owner, account_id, "refresh", []),
-        output,
-    )
-
-
-@system_component_account_app.command("reconcile")
-def system_component_account_reconcile(
-    account_id: str = typer.Option(..., "--account-id"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
-) -> None:
-    """Request Account reconciliation on the workspace component."""
-    owner = WorkspaceApplication().open(workspace)
-    _emit(
-        _run_workspace_account_connected_command(owner, account_id, "reconcile", []),
-        output,
-    )
 
 
 @system_component_market_app.command("status")

@@ -143,7 +143,7 @@ kairos launch instance component market status
 | 模式 | 是否需要正在运行的 module server | 典型实现 | 示例 |
 | --- | --- | --- | --- |
 | 独立模式 | 不需要 | Rust module CLI、本地文件、本地 DB、provider one-shot、direct action | `market validate`、`account balances`、`order submit --direct`、本地 Account registry 命令 |
-| 连接模式 | 需要明确的 server 或当前 projection | contract client、projection reader、Rust CLI connected mode | `system component market snapshot`、`launch instance component market snapshot`、`system component account balances` |
+| 连接模式 | 需要明确的 server 或当前 projection | contract client、projection reader、Rust CLI connected mode | `system component market snapshot`、`launch instance component market snapshot`、`launch instance component account balances` |
 
 独立模式和连接模式是工程执行模式，不是同一个命令族里的隐式细节。用户入口也要体现
 这个区别：
@@ -256,9 +256,9 @@ fetch snapshot、map snapshot、extract balances/positions”的流程抽成 own
 或 `CliAccountApplication` 私有方法。不能让 standalone CLI 调用 server/conflux facade
 来获得一次性结果，因为那会把 direct one-shot 和 runtime lifecycle 重新绑在一起。
 在这个 service 存在前，live account 的 `balances/positions/snapshot/open-orders` 只能保持
-local paper/simulated registry 语义，或返回明确的 unsupported direct-provider 错误；当前
-系统值必须通过 `system component account ...` 或 `launch instance component account ...`
-读取 projection。
+local paper/simulated registry 语义，或返回明确的 unsupported direct-provider 错误；运行中
+Account projection 必须通过 `launch instance component account ...` 读取。当前产品没有
+workspace-scoped Account component。
 
 `CliAccountApplication` 明确不做 Conflux 生命周期：
 
@@ -445,11 +445,10 @@ connected；工作流命令可以聚合多个 owner，但不能成为新的 owne
 | `account mark-to-market/advance-time` | 不应存在 | paper/simulated Account runtime control | Connected |
 
 因此 `kairos account balances` 可以作为 standalone 短路径，但它必须是真正的 direct
-provider query 或明确的本地只读结果；如果实现读取的是当前 launch/workspace projection，
-那就是 connected 能力，应通过：
+provider query 或明确的本地只读结果；如果实现读取的是当前 launch projection，
+那就是 connected 能力，应通过 launch instance scope：
 
 ```text
-kairos system component account balances
 kairos launch instance component account balances
 ```
 
@@ -531,7 +530,7 @@ Capital 的 direct transfer/action 是最高风险 standalone 能力之一。它
 
 | 区域 | 当前风险 | 目标修复 |
 | --- | --- | --- |
-| `kairos account balances/positions/snapshot/open-orders` | 作为 standalone 短路径是合理的，但实现必须确认是 local registry、direct provider query 还是 runtime projection read。历史实现曾在 standalone 下读取 launch mmap/projection，用户心智错误。 | local paper/simulated registry 查询可 standalone；live direct provider query 仍需 Account-owned provider query facade；runtime projection 查询只通过 `system/launch ... component account ...`。 |
+| `kairos account balances/positions/snapshot/open-orders` | 作为 standalone 短路径是合理的，但实现必须确认是 local registry、direct provider query 还是 runtime projection read。历史实现曾在 standalone 下读取 launch mmap/projection，用户心智错误。 | local paper/simulated registry 查询可 standalone；live direct provider query 仍需 Account-owned provider query facade；runtime projection 查询只通过 `launch instance component account ...`。 |
 | `kairos account fill` | 不能 standalone；它写 paper/simulated runtime facts。 | 只保留 connected component 入口，并通过 Account contract `apply_simulated_settlement`；不得保留 direct/local settlement 旁路。 |
 | `kairos order submit/cancel/replace` | 产品上适合短路径，但当前如果依赖 Execution server，就不是 standalone。 | 要么实现 provider direct order action；要么只在 `launch instance component execution` 暴露 runtime API。 |
 | `reference assets/instruments/listings add` | 名字看起来像本地 catalog 编辑，但当前是 owner catalog 写入。 | 保持 connected；若未来需要 fixture 编辑，另建 `reference fixture ...` 或明确 offline 命令。 |
@@ -716,7 +715,7 @@ Python surface 是用户真正看到的 `kairos` 入口。它可以比 Rust modu
 | `system inspect/attach/command` | advanced runtime tooling | 否 | 高级调试入口，应避免成为业务操作主路径。 |
 | `system up/down/restart/repair/supervise` | workspace lifecycle | 否 | runtime lifecycle；破坏性动作必须做 dependent safety。 |
 | `system status/list/logs/doctor` | workspace runtime observe | 否 | workspace runtime 总览，不拥有业务事实。 |
-| `system component account status/snapshot/balances/positions/open-orders/refresh/reconcile` | Account connected | 否 | 当前 workspace Account projection/API 和 runtime control；`open-orders` 读取 Account observed-orders mmap；`refresh/reconcile` 进入 Account owner CLI connected。 |
+| `system component account ...` | 不存在 | 否 | Account 没有 workspace-scoped system component；standalone 读取走 `kairos account ...`，运行中 projection/control 走 `launch instance component account ...`。 |
 | `system component market status/sources/snapshot/subscribe/unsubscribe/recover/pause-replay/resume-replay/dependents` | Market connected | 否 | 当前 workspace Market API；`subscribe/unsubscribe/recover/pause-replay/resume-replay` 进入 Market owner CLI connected，不能进入 standalone。 |
 | `system component reference status/health/providers/catalog/validate/refresh/pause/resume/options-coverage/options-add/options-remove` | Reference connected | 否 | 当前 workspace Reference API；refresh/pause/resume/coverage 不能是 standalone。 |
 | `system component risk status/health/latest/limits/reservations/circuits/pre-trade-check/authorize-reserve/release/consume/resize/open-circuit/close-circuit/publish-policy/advance-time` | Risk connected | 否 | `status` 是进程状态；`health/latest/limits/reservations/circuits` 是 Risk owner contract/mmap 读取；其他命令是 typed Risk runtime control 或 authorization。 |
@@ -779,7 +778,7 @@ provider action。
 资源化、显式，不追求过度缩写：
 
 ```text
-kairos system component account balances
+kairos launch instance component account balances
 kairos system component market subscriptions list
 kairos system component market subscriptions create
 kairos launch instance component execution orders list
@@ -962,7 +961,7 @@ runtime 入口”和“standalone CLI 入口”在 owner crate 内命名分开�
 
 | 业务模块 | 顶层用户入口 | Rust CLI | Standalone mode | Connected mode | Workspace component | Launch component | 当前状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Account | `kairos account` | `kairos-account-cli` | registry、credential、schema、离线诊断、模拟 account 配置初始化；paper/simulated local snapshot/balances/positions/open-orders；live direct provider query 只有实现后才能进入 | runtime balances、positions、open orders、refresh/reconcile、paper/simulated fill/settlement | `system component account` 可读当前 workspace 组件 | `launch instance component account` 可读 instance account | 已接入；projection 查询和模拟事实写入必须 connected |
+| Account | `kairos account` | `kairos-account-cli` | registry、credential、schema、离线诊断、模拟 account 配置初始化；paper/simulated local snapshot/balances/positions/open-orders；live direct provider query 只有实现后才能进入 | runtime balances、positions、open orders、refresh/reconcile、paper/simulated fill/settlement | 无 workspace-scoped Account component | `launch instance component account` 可读 instance account | 已接入；standalone 读本地/direct，运行中 projection/control 只进入 launch instance component |
 | Market | `kairos market` | `kairos-market-cli` | validate、once、replay、download、历史数据工具 | sources、freshness、snapshot、subscribe/unsubscribe、recover/pause-replay/resume-replay | `system component market` 管共享 Market；freshness、subscription、replay、recovery control 已 passthrough 到 owner CLI connected | `launch instance component market` 管 instance Market | 已接入；顶层只表示独立模式，当前系统组件只表示连接模式 |
 | Reference | `kairos reference` | `kairos-reference-cli` | catalog 查询、events、markets、assets、listings、option chain | health、providers、validate、refresh、pause/resume、catalog projection | `system component reference` 管 workspace Reference | `launch instance component reference` 读 instance 绑定的 Reference | 已接入；Python 顶层入口只做 owner CLI passthrough |
 | Execution | `kairos order` | `kairos-execution-cli` | `audit/journal/inspect/fills --file` 本地 evidence 查询已落地；`preview-submit/preview-cancel/preview-replace` 和 `preview-submit-file/preview-cancel-file/preview-replace-file` 可本地校验和规范化订单动作请求但不执行；direct submit/cancel/replace 只有实现 provider one-shot 后才能进入 | runtime submit、cancel、replace、orders、fills、routes、snapshot | 当前产品无 workspace-scoped Execution 入口 | `launch instance component execution` 是运行态入口，已 passthrough 到 owner connected CLI | 已接入，`order` 不是独立模块；`order backtest` 和 `execution fill` 不作为 CLI 能力 |
@@ -1148,17 +1147,10 @@ settlement/fill 事实写入，必须通过 Account contract 连接当前目标 
 kairos launch instance component account fill ...
 ```
 
-如果未来支持 workspace-scoped paper Account，则可对应进入：
+当前 launch instance 级 Account server 的 balances、positions、open orders、runtime health
+等连接命令，应放在：
 
 ```text
-kairos system component account fill ...
-```
-
-当前系统级或 launch instance 级 Account server 的 balances、positions、open orders、
-runtime health 等连接命令，应放在：
-
-```text
-kairos system component account ...
 kairos launch instance component account ...
 ```
 
@@ -1504,7 +1496,7 @@ Python CLI 只能有三类业务入口：
 
 - `root.py` 中的 private account/market/order command registry。
 - `root.py` 中直接调用 Execution CLI 的 `order place/cancel/replace` 运行态入口。
-- `system account ...` 这类绕过 `system component account ...` 的旧入口。
+- `system account ...`、`system component account ...` 这类伪 workspace Account 入口。
 - `launch market restart`、`launch risk restart`、`launch capital restart` 这类局部
   runtime lifecycle 命令。
 - 未在全仓模块边界表登记的其他顶层业务入口。
