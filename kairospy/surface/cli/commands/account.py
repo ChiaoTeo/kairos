@@ -29,6 +29,19 @@ CONNECTED_COMMANDS = {
     "reconcile",
 }
 
+
+def _leading_account_selector(arguments: list[str]) -> tuple[list[str], list[str]]:
+    """Keep Account's invocation selector ahead of the Rust execution mode."""
+    if not arguments:
+        return [], arguments
+    if arguments[0] == "--account-id":
+        if len(arguments) < 2:
+            raise typer.BadParameter("--account-id requires a value")
+        return arguments[:2], arguments[2:]
+    if arguments[0].startswith("--account-id="):
+        return arguments[:1], arguments[1:]
+    return [], arguments
+
 def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str]]:
     values: list[str] = []
     result: list[str] = []
@@ -57,9 +70,9 @@ def account_passthrough(ctx: typer.Context) -> None:
     if not arguments or arguments == ["--help"] or arguments == ["-h"]:
         typer.echo(HELP.rstrip(), nl=False)
         return
+    account_selector, arguments = _leading_account_selector(arguments)
     if arguments and arguments[0] in {"standalone", "connected"}:
-        explicit_mode = arguments[0]
-        arguments = arguments[1:]
+        explicit_mode = arguments.pop(0)
     else:
         explicit_mode = "standalone"
     if explicit_mode == "connected":
@@ -76,11 +89,11 @@ def account_passthrough(ctx: typer.Context) -> None:
         )
     owner = WorkspaceApplication().resolve(workspace)
     result = AccountCliApplication(owner).invoke(
-        [explicit_mode, *(arguments or ["--help"])]
+        [*account_selector, explicit_mode, *(arguments or ["--help"])]
     )
     output = result.stdout if result.returncode == 0 else result.stderr or result.stdout
     if output:
-        typer.echo(output.rstrip(), nl=False)
+        typer.echo(output.rstrip())
     if result.returncode:
         raise typer.Exit(result.returncode)
 

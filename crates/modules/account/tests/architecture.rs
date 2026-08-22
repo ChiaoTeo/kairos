@@ -236,6 +236,8 @@ fn account_broker_identity_is_independent_from_integration_provider_route() {
         .expect("read account server");
     let cli =
         fs::read_to_string(root.join("src/bin/kairos-account-cli.rs")).expect("read account cli");
+    let cli_application = fs::read_to_string(root.join("src/application/cli.rs"))
+        .expect("read Account CLI application");
 
     assert!(registry.contains("pub broker: String"));
     assert!(registry.contains("pub integration_provider: String"));
@@ -243,7 +245,8 @@ fn account_broker_identity_is_independent_from_integration_provider_route() {
     assert!(!registry.contains("or_else(|| table_text(account, \"provider\"))"));
     assert!(server.contains("record.integration_provider.clone()"));
     assert!(!server.contains("let provider = record.broker.clone()"));
-    assert!(cli.contains("record.integration_provider.clone()"));
+    assert!(cli_application.contains("record.integration_provider.clone()"));
+    assert!(!cli.contains("record.integration_provider.clone()"));
     assert!(!cli.contains(".map(|record| record.broker.clone())"));
 }
 

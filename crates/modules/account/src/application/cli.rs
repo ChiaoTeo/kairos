@@ -2,7 +2,12 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use kairos_conflux::{CredentialRecord, CredentialStore, ExternalAccountCredentialProfile};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::decimal::DecimalParts;
+use kairos_primitives::integration::ProviderId;
+use kairos_primitives::reference::Currency;
 use kairos_workspace::Workspace;
+use serde::Serialize;
 
 use crate::composition::account::{
     AccountOptions, default_rest_endpoint, inspect_account_credential,
@@ -24,6 +29,62 @@ pub struct CliAccountApplication {
     pub credential_store: CredentialStore,
     provider_quota_ledger_path: PathBuf,
     reference_database: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountListResult {
+    pub accounts: Vec<AccountListItem>,
+    pub count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountListItem {
+    pub account_id: AccountId,
+    pub alias: String,
+    pub provider: ProviderId,
+    pub environment: String,
+    pub segments: Vec<SegmentKey>,
+    pub credential_id: Option<String>,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountBalancesResult {
+    pub account_id: AccountId,
+    pub source: String,
+    pub mode: String,
+    pub kind: String,
+    pub balances: Vec<AccountBalanceItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountBalanceItem {
+    pub segment: SegmentKey,
+    pub asset: Currency,
+    pub total: DecimalParts,
+    pub available: DecimalParts,
+    pub locked: DecimalParts,
+}
+
+impl TryFrom<&AccountBindingRecord> for AccountListItem {
+    type Error = kairos_primitives::DomainTypeError;
+
+    fn try_from(record: &AccountBindingRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            account_id: AccountId::new(record.account_id.clone())?,
+            alias: record.alias.clone(),
+            provider: ProviderId::new(record.integration_provider.clone())?,
+            environment: record.environment.clone(),
+            segments: record
+                .segments
+                .iter()
+                .cloned()
+                .map(SegmentKey::new)
+                .collect::<Result<_, _>>()?,
+            credential_id: record.credential_id.clone(),
+            status: record.status.clone(),
+        })
+    }
 }
 
 impl CliAccountApplication {
@@ -67,8 +128,15 @@ impl CliAccountApplication {
         })
     }
 
-    pub fn list_accounts(&self) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        Ok(serde_json::to_value(&self.registry.accounts)?)
+    pub fn list_accounts(&self) -> Result<AccountListResult, Box<dyn std::error::Error>> {
+        let accounts = self
+            .registry
+            .accounts
+            .iter()
+            .map(AccountListItem::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        let count = u64::try_from(accounts.len())?;
+        Ok(AccountListResult { accounts, count })
     }
 
     pub fn browse_accounts(
@@ -132,20 +200,20 @@ impl CliAccountApplication {
         &self,
         account_id: &str,
         include_zero: bool,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountBalancesResult, Box<dyn std::error::Error>> {
         let account = self.local_query_account(account_id)?;
         let balances: Vec<_> = self
             .local_balances_for(account)?
             .into_iter()
-            .filter(|value| include_zero || value["total"] != "0")
+            .filter(|value| include_zero || value.total.mantissa() != 0)
             .collect();
-        Ok(serde_json::json!({
-            "account_id": account.account_id,
-            "source": "local_registry",
-            "mode": "standalone",
-            "kind": "balances",
-            "balances": balances,
-        }))
+        Ok(AccountBalancesResult {
+            account_id: AccountId::new(account.account_id.clone())?,
+            source: "local_registry".into(),
+            mode: "standalone".into(),
+            kind: "balances".into(),
+            balances,
+        })
     }
 
     pub fn local_positions(
@@ -992,7 +1060,7 @@ impl CliAccountApplication {
             let mut balances = Vec::new();
             for value in &account.initial_balances {
                 if let Some(balance) = local_balance(segment, value)? {
-                    balances.push(balance);
+                    balances.push(serde_json::to_value(balance)?);
                 }
             }
             segments.push(serde_json::json!({
@@ -1007,7 +1075,7 @@ impl CliAccountApplication {
     fn local_balances_for(
         &self,
         account: &AccountBindingRecord,
-    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<AccountBalanceItem>, Box<dyn std::error::Error>> {
         let mut balances = Vec::new();
         for segment in &account.segments {
             for value in &account.initial_balances {
@@ -1023,7 +1091,7 @@ impl CliAccountApplication {
 fn local_balance(
     segment: &str,
     value: &str,
-) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+) -> Result<Option<AccountBalanceItem>, Box<dyn std::error::Error>> {
     let Some((asset, total)) = value.split_once('=') else {
         return Err(format!("initial balance must be ASSET=AMOUNT: {value}").into());
     };
@@ -1032,13 +1100,14 @@ fn local_balance(
     if asset.is_empty() || total.is_empty() {
         return Err(format!("initial balance must be ASSET=AMOUNT: {value}").into());
     }
-    Ok(Some(serde_json::json!({
-        "segment": segment,
-        "asset": asset,
-        "total": total,
-        "available": total,
-        "locked": "0",
-    })))
+    let total = total.parse::<DecimalParts>()?;
+    Ok(Some(AccountBalanceItem {
+        segment: SegmentKey::new(segment.to_owned())?,
+        asset: Currency::new(asset.to_ascii_uppercase())?,
+        total,
+        available: total,
+        locked: DecimalParts::default(),
+    }))
 }
 
 pub struct RegisterAccountRequest {
@@ -1218,4 +1287,79 @@ fn is_paper_or_simulated(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "paper" | "simulated"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{AccountBalanceItem, AccountBalancesResult, AccountListItem, AccountListResult};
+    use crate::composition::registry::AccountBindingRecord;
+    use kairos_primitives::account::{AccountId, SegmentKey};
+    use kairos_primitives::decimal::DecimalParts;
+    use kairos_primitives::reference::Currency;
+
+    #[test]
+    fn account_list_result_exposes_only_list_semantics() {
+        let record: AccountBindingRecord = serde_json::from_value(json!({
+            "account_id": "main",
+            "alias": "primary",
+            "broker": "binance",
+            "integration_provider": "binance",
+            "environment": "live",
+            "permissions": {"read": "granted", "trade": "granted"},
+            "segments": ["spot"],
+            "account_model": null,
+            "credential_id": "binance-readonly",
+            "credential_role": "readonly",
+            "status": "configured",
+            "values": {"provider_payload": "internal"}
+        }))
+        .unwrap();
+        let item = AccountListItem::try_from(&record).unwrap();
+        let value = serde_json::to_value(AccountListResult {
+            accounts: vec![item],
+            count: 1,
+        })
+        .unwrap();
+
+        assert_eq!(value["accounts"][0]["account_id"], "main");
+        assert_eq!(value["accounts"][0]["provider"], "binance");
+        assert_eq!(value["accounts"][0]["segments"], json!(["spot"]));
+        assert_eq!(value["count"], 1);
+        for internal in [
+            "values",
+            "permissions",
+            "credentials",
+            "segment_products",
+            "credential_role",
+        ] {
+            assert!(value["accounts"][0].get(internal).is_none());
+        }
+    }
+
+    #[test]
+    fn account_balances_result_is_a_typed_account_query_result() {
+        let value = serde_json::to_value(AccountBalancesResult {
+            account_id: AccountId::new("paper-account").unwrap(),
+            source: "local_registry".into(),
+            mode: "standalone".into(),
+            kind: "balances".into(),
+            balances: vec![AccountBalanceItem {
+                segment: SegmentKey::new("spot").unwrap(),
+                asset: Currency::new("USDT").unwrap(),
+                total: "10000".parse::<DecimalParts>().unwrap(),
+                available: "10000".parse::<DecimalParts>().unwrap(),
+                locked: DecimalParts::default(),
+            }],
+        })
+        .unwrap();
+
+        assert_eq!(value["account_id"], "paper-account");
+        assert_eq!(value["balances"][0]["asset"], "USDT");
+        assert_eq!(value["balances"][0]["total"], "10000");
+        assert_eq!(value["balances"][0]["locked"], "0");
+        assert!(value.get("initial_balances").is_none());
+        assert!(value.get("credentials").is_none());
+    }
 }

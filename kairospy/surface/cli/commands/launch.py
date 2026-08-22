@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from prettytable import PrettyTable
 
 from kairospy.application.market import read_replay_events
 from kairospy.application.launch.application import (
@@ -226,6 +227,42 @@ def _resolve_stop_instance(
 
 def _emit(value: object, output: OutputFormat) -> None:
     typer.echo(render(value, output))
+
+
+def _emit_launch_account_balances(
+    value: dict[str, object], output: OutputFormat
+) -> None:
+    if effective_output(output) is OutputFormat.JSON:
+        _emit(value, output)
+        return
+    typer.echo(_render_launch_account_balances(value))
+
+
+def _render_launch_account_balances(value: dict[str, object]) -> str:
+    account_id = str(value["account_id"])
+    balances = value.get("balances", [])
+    if not isinstance(balances, list) or not balances:
+        return f"No balances for account {account_id}."
+
+    table = PrettyTable(["SEGMENT", "ASSET", "TOTAL", "AVAILABLE", "RESERVED"])
+    table.align = "l"
+    for balance in balances:
+        if not isinstance(balance, dict):
+            continue
+        table.add_row(
+            [
+                balance.get("segment_key", balance.get("segment", "—")),
+                balance.get("asset", "—"),
+                balance.get("total", "—"),
+                balance.get("available", "—"),
+                balance.get("reserved", balance.get("locked", "—")),
+            ]
+        )
+    context = (
+        f"Account {account_id} · launch {value['launch_id']}/{value['instance_id']} "
+        f"({value['mode']})"
+    )
+    return f"{context}\n{table}"
 
 
 def _launch_config_path(owner, target: str | Path) -> Path:
@@ -485,7 +522,7 @@ def _instance_account_snapshot(
     launch_id: str,
     instance: str | None,
     account_id: str,
-) -> tuple[dict[str, object], str, str]:
+) -> tuple[dict[str, Any], str, str]:
     from kairospy.domain_types import AccountId
 
     resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
@@ -600,7 +637,7 @@ def launch_instance_component_account_balances(
         for segment in snapshot["segments"]
         for balance in segment.get("balances", [])
     ]
-    _emit(
+    _emit_launch_account_balances(
         {
             "account_id": account_id,
             "balances": balances,

@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 import shlex
+from typing import Any
 
 from prettytable import PrettyTable
 import typer
 
+from kairospy.application.account.cli import AccountCliApplication
 from kairospy.application.launch.application import LaunchRegistryApplication
 from kairospy.application.system import ComponentProcessApplication
 from kairospy.application.workspace import WorkspaceApplication
@@ -36,10 +38,11 @@ ShellAction = GuidedCommand | ShellControl | None
 
 @dataclass(slots=True)
 class InteractiveContext:
-    owner: object | None
+    owner: Any | None
     snapshot: ObserveSnapshot | None
     workspace_arg: Path | None
     selected_launch: str | None = None
+    selected_account: str | None = None
     selected_service: str | None = None
     reference_asset_code: str | None = None
     last_command: str | None = None
@@ -103,7 +106,10 @@ def _run_shell(
             _print_shell_help(context)
             continue
         if line == "summary":
-            _print_context(context)
+            if len(context.shell_path) == 2 and context.shell_path[0] == "account":
+                _print_selected_account(context)
+            else:
+                _print_context(context)
             continue
         if line == "status" and not context.shell_path:
             _print_context(context)
@@ -114,9 +120,12 @@ def _run_shell(
             continue
         if line in {"home", "/"}:
             context.shell_path = ()
+            context.selected_account = None
             continue
         if line == "back":
             context.shell_path = context.shell_path[:-1]
+            if not context.shell_path or context.shell_path == ("account",):
+                context.selected_account = None
             if context.shell_path != ("system",):
                 context.selected_service = None
             continue
@@ -205,13 +214,38 @@ def _print_shell_menu(context: InteractiveContext) -> None:
             "\n".join(
                 (
                     "账户 / 行情 / 订单：",
-                    "  1. 账户列表",
-                    "  2. 账户余额",
-                    "  3. 账户持仓",
-                    "  4. 行情快照",
-                    "  5. 订单状态",
-                    "  6. 通知配置校验",
-                    "  7. Provider 集成帮助",
+                    "  1. 进入账户上下文",
+                    "  2. 行情快照",
+                    "  3. 订单状态",
+                    "  4. 通知配置校验",
+                    "  5. Provider 集成帮助",
+                )
+            )
+        )
+        return
+    if path == ("account",):
+        typer.echo(
+            "\n".join(
+                (
+                    "账户：",
+                    "  1. 选择并进入账户",
+                    "  2. 查看账户列表",
+                )
+            )
+        )
+        return
+    if len(path) == 2 and path[0] == "account":
+        typer.echo(
+            "\n".join(
+                (
+                    f"当前账户：{path[1]}",
+                    "  1. 账户概览",
+                    "  2. 查询余额",
+                    "  3. 查询持仓",
+                    "  4. 查询未完成订单",
+                    "  5. 选择运行实例",
+                    "  6. 切换账户",
+                    "  7. 发起转账（尚未开放）",
                 )
             )
         )
@@ -258,6 +292,7 @@ def _print_shell_help(context: InteractiveContext) -> None:
                     "  launch              进入策略运行",
                     "  reference           进入 Reference 查询",
                     "  query               进入账户 / 行情 / 订单",
+                    "  account             进入账户上下文",
                     "  data                进入数据与研究",
                     "  system reference    进入 /system/reference",
                     "  system market       进入 /system/market",
@@ -314,8 +349,14 @@ def _print_shell_help(context: InteractiveContext) -> None:
         )
         return
     if path == ("query",):
+        typer.echo("可用命令：account/snapshot/order/notifications/integration")
+        return
+    if path == ("account",):
+        typer.echo("可用命令：select/list/back/home/exit")
+        return
+    if len(path) == 2 and path[0] == "account":
         typer.echo(
-            "可用命令：accounts/balances/positions/snapshot/order/notifications/integration"
+            "可用命令：summary/balances/positions/open-orders/launch/switch/transfer"
         )
         return
     if path == ("data",):
@@ -366,6 +407,8 @@ def _shell_command(context: InteractiveContext, line: str) -> ShellAction:
         return _reference_shell_command(context, parts)
     if path == ("query",):
         return _query_shell_command(context, parts)
+    if path == ("account",) or (len(path) == 2 and path[0] == "account"):
+        return _account_shell_command(context, parts)
     if path == ("data",):
         return _data_shell_command(parts)
     if path in {("system", "reference"), ("system", "market")}:
@@ -385,8 +428,11 @@ def _root_shell_command(
     if parts in {("3",), ("reference",)}:
         context.shell_path = ("reference",)
         return ShellControl.HANDLED
-    if parts in {("4",), ("query",), ("account",), ("market-data",)}:
+    if parts in {("4",), ("query",), ("market-data",)}:
         context.shell_path = ("query",)
+        return ShellControl.HANDLED
+    if parts == ("account",):
+        context.shell_path = ("account",)
         return ShellControl.HANDLED
     if parts in {("5",), ("data",), ("research",)}:
         context.shell_path = ("data",)
@@ -637,20 +683,14 @@ def _reference_shell_command(
 
 def _query_shell_command(
     context: InteractiveContext, parts: tuple[str, ...]
-) -> GuidedCommand | None:
+) -> ShellAction:
     key = parts[0]
     if len(parts) != 1:
         return None
-    if key in {"1", "accounts"}:
-        return GuidedCommand(("account", "list", "--output", "table"), "查看已配置账户")
-    if key in {"2", "balances", "3", "positions"}:
-        account = typer.prompt("账户 id", default="demo-paper").strip()
-        command = "balances" if key in {"2", "balances"} else "positions"
-        return GuidedCommand(
-            ("account", "--account-id", account, command, "--output", "table"),
-            "查看账户事实",
-        )
-    if key in {"4", "snapshot"}:
+    if key in {"1", "account", "accounts"}:
+        context.shell_path = ("account",)
+        return ShellControl.HANDLED
+    if key in {"2", "snapshot"}:
         kind = _prompt_component(
             "快照类型", default="quote", choices=("quote", "bar", "greeks")
         )
@@ -672,7 +712,7 @@ def _query_shell_command(
             ),
             "读取运行中 Market 快照",
         )
-    if key in {"5", "order"}:
+    if key in {"3", "order"}:
         order_id = typer.prompt("order id", default="").strip()
         if not order_id:
             raise typer.BadParameter("order id 不能为空")
@@ -680,17 +720,217 @@ def _query_shell_command(
             ("order", "status", "--order-id", order_id, "--output", "text"),
             "查看订单状态",
         )
-    if key in {"6", "notifications"}:
+    if key in {"4", "notifications"}:
         return GuidedCommand(
             ("notifications", "validate", "--format", "text"), "校验通知目的地"
         )
-    if key in {"7", "integration"}:
+    if key in {"5", "integration"}:
         return GuidedCommand(
             ("integration", "--help"),
             "查看 Provider 集成入口；真实调用通常需要凭据",
             needs_workspace=False,
         )
     return None
+
+
+def _account_shell_command(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> ShellAction:
+    if len(parts) != 1:
+        return None
+    key = parts[0]
+    if context.shell_path == ("account",):
+        if key in {"1", "select", "enter"}:
+            _select_account(context)
+            return ShellControl.HANDLED
+        if key in {"2", "list", "ls"}:
+            return GuidedCommand(
+                ("account", "list", "--output", "table"), "查看已配置账户"
+            )
+        return None
+
+    account_id = context.shell_path[1]
+    context.selected_account = account_id
+    if key in {"1", "summary", "overview"}:
+        _print_selected_account(context)
+        return ShellControl.HANDLED
+    if key in {"2", "balances"}:
+        return _account_fact_command(context, "balances", "查询账户余额")
+    if key in {"3", "positions"}:
+        return _account_fact_command(context, "positions", "查询账户持仓")
+    if key in {"4", "open-orders", "orders"}:
+        return _account_fact_command(context, "open-orders", "查询账户未完成订单")
+    if key in {"5", "launch"}:
+        launch_ids = _launch_ids(context.owner, context.snapshot)
+        if not launch_ids:
+            typer.echo("当前 workspace 没有可选择的 launch。")
+            return ShellControl.HANDLED
+        context.selected_launch = _prompt_launch_id(
+            context.owner, context.snapshot, context.selected_launch
+        )
+        typer.echo(f"当前运行实例上下文：{context.selected_launch}")
+        return ShellControl.HANDLED
+    if key in {"6", "switch", "select"}:
+        _select_account(context)
+        return ShellControl.HANDLED
+    if key in {"7", "transfer"}:
+        typer.echo("转账工作流尚未开放。")
+        typer.echo("未来会以当前账户作为 source，先 preview，再由用户确认执行。")
+        return ShellControl.HANDLED
+    return None
+
+
+def _account_fact_command(
+    context: InteractiveContext, command: str, summary: str
+) -> ShellAction:
+    account_id = context.selected_account
+    if account_id is None:
+        typer.echo("请先选择账户。")
+        return ShellControl.HANDLED
+    account = _selected_account_record(context)
+    environment = str(account.get("environment") or "").strip().lower()
+
+    if context.selected_launch is not None:
+        return GuidedCommand(
+            (
+                "launch",
+                "instance",
+                "component",
+                "account",
+                command,
+                context.selected_launch,
+                "--account-id",
+                account_id,
+                "--format",
+                "table",
+            ),
+            f"{summary}（launch projection）",
+        )
+    if environment in {"paper", "simulated"}:
+        return GuidedCommand(
+            (
+                "account",
+                "--account-id",
+                account_id,
+                command,
+                "--output",
+                "table",
+            ),
+            f"{summary}（local registry）",
+        )
+
+    launch_ids = _launch_ids(context.owner, context.snapshot)
+    if not launch_ids:
+        typer.echo(
+            f"账户 {account_id} 是 live 账户，但当前没有可用的 launch projection。"
+        )
+        typer.echo("direct provider 余额查询尚未实现；不会退回本地配置值。")
+        return ShellControl.HANDLED
+    typer.echo("live 账户事实必须从运行中的 Account projection 读取。")
+    context.selected_launch = _prompt_launch_id(
+        context.owner, context.snapshot, context.selected_launch
+    )
+    return _account_fact_command(context, command, summary)
+
+
+def _account_records(context: InteractiveContext) -> tuple[dict[str, Any], ...]:
+    if context.owner is None:
+        return ()
+    try:
+        value = AccountCliApplication(context.owner).run(["standalone", "list"])
+    except (OSError, RuntimeError, ValueError) as error:
+        typer.echo(f"读取账户列表失败：{error}")
+        return ()
+    accounts = value.get("accounts", ()) if isinstance(value, dict) else value
+    if not isinstance(accounts, (list, tuple)):
+        return ()
+    return tuple(dict(account) for account in accounts if isinstance(account, dict))
+
+
+def _select_account(context: InteractiveContext) -> None:
+    accounts = _account_records(context)
+    if not accounts:
+        typer.echo("当前 workspace 没有可选择的账户。")
+        typer.echo("可先运行 kairos account simulate 或 kairos account register。")
+        return
+    table = PrettyTable(["序号", "account", "provider", "mode", "segments"])
+    table.align = "l"
+    for index, account in enumerate(accounts, start=1):
+        segments = account.get("segments") or ()
+        table.add_row(
+            [
+                index,
+                account.get("account_id", "-"),
+                account.get("provider", "-"),
+                account.get("environment", "-"),
+                ", ".join(str(value) for value in segments),
+            ]
+        )
+    typer.echo(table)
+    default = "1"
+    if context.selected_account is not None:
+        for index, account in enumerate(accounts, start=1):
+            if account.get("account_id") == context.selected_account:
+                default = str(index)
+                break
+    selected = typer.prompt(
+        "选择账户序号或直接输入 account id", default=default
+    ).strip()
+    if selected.isdigit() and 1 <= int(selected) <= len(accounts):
+        account_id = str(accounts[int(selected) - 1].get("account_id") or "")
+    else:
+        matches = [
+            account
+            for account in accounts
+            if selected in {account.get("account_id"), account.get("alias")}
+        ]
+        account_id = (
+            str(matches[0].get("account_id") or "") if len(matches) == 1 else ""
+        )
+    if not account_id:
+        typer.echo(f"找不到唯一账户：{selected}")
+        return
+    context.selected_account = account_id
+    context.selected_launch = None
+    context.shell_path = ("account", account_id)
+    _print_selected_account(context, accounts=accounts)
+
+
+def _selected_account_record(context: InteractiveContext) -> dict[str, Any]:
+    for account in _account_records(context):
+        if account.get("account_id") == context.selected_account:
+            return account
+    return {}
+
+
+def _print_selected_account(
+    context: InteractiveContext,
+    *,
+    accounts: tuple[dict[str, Any], ...] | None = None,
+) -> None:
+    values = accounts if accounts is not None else _account_records(context)
+    account = next(
+        (
+            value
+            for value in values
+            if value.get("account_id") == context.selected_account
+        ),
+        {},
+    )
+    if not account:
+        typer.echo("当前账户已不存在，请重新选择。")
+        return
+    table = PrettyTable(["账户上下文", "值"])
+    table.align = "l"
+    table.add_row(["account", account.get("account_id", "-")])
+    table.add_row(["provider", account.get("provider", "-")])
+    table.add_row(["environment", account.get("environment", "-")])
+    table.add_row(
+        ["segments", ", ".join(str(value) for value in account.get("segments") or ())]
+    )
+    table.add_row(["credential", account.get("credential_id") or "-"])
+    table.add_row(["launch", context.selected_launch or "-"])
+    typer.echo(table)
 
 
 def _data_shell_command(parts: tuple[str, ...]) -> GuidedCommand | None:
@@ -805,6 +1045,7 @@ def _print_context(context: InteractiveContext) -> None:
 def _context_table(context: InteractiveContext) -> str:
     table = PrettyTable(["上下文", "值"])
     table.align = "l"
+    table.add_row(["account", context.selected_account or "-"])
     table.add_row(["launch", context.selected_launch or "-"])
     table.add_row(["system service", context.selected_service or "-"])
     table.add_row(["reference asset", context.reference_asset_code or "-"])

@@ -3,13 +3,14 @@ use std::str::FromStr;
 use clap::{Args, Parser, Subcommand};
 use kairos_account::domain::AccountFill;
 use kairos_account::{
-    AccountCredentialProbeRequest, AccountProviderConnectionArgs, BindCredentialRequest,
-    CliAccountApplication, ConnectAccountProviderRequest, ConnectedAccountApplication,
-    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+    AccountBalancesResult, AccountCredentialProbeRequest, AccountListItem, AccountListResult,
+    AccountProviderConnectionArgs, BindCredentialRequest, CliAccountApplication,
+    ConnectAccountProviderRequest, ConnectedAccountApplication, CreateCredentialRequest,
+    ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
 };
 use kairos_account_contract::{AccountSegmentsRequest, SimulatedSettlement};
 use kairos_workspace::Workspace;
-use kairos_workspace::cli::{OutputFormat, render};
+use kairos_workspace::cli::{OutputFormat, render, render_compact_table};
 
 /// One-shot account inspection and mutation commands.
 #[tokio::main(flavor = "current_thread")]
@@ -425,7 +426,7 @@ async fn run_standalone(
     let mut app = CliAccountApplication::open(workspace)?;
     match &command {
         StandaloneCommand::List => {
-            print_json(app.list_accounts()?);
+            print_account_list(app.list_accounts()?)?;
             return Ok(());
         },
         StandaloneCommand::Browse { query } => {
@@ -452,7 +453,9 @@ async fn run_standalone(
             return Ok(());
         },
         StandaloneCommand::Balances { include_zero } => {
-            print_json(app.local_balances(&required_account_id(args)?, *include_zero)?);
+            print_account_balances(
+                app.local_balances(&required_account_id(args)?, *include_zero)?,
+            )?;
             return Ok(());
         },
         StandaloneCommand::Positions => {
@@ -639,11 +642,109 @@ async fn run_standalone(
 }
 
 fn print_json(value: serde_json::Value) {
-    let format = std::env::var("KAIROS_CLI_FORMAT")
+    println!("{}", render(&value, selected_output_format()));
+}
+
+fn selected_output_format() -> OutputFormat {
+    std::env::var("KAIROS_CLI_FORMAT")
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or(OutputFormat::Json);
-    println!("{}", render(&value, format));
+        .unwrap_or(OutputFormat::Json)
+}
+
+fn print_account_list(value: AccountListResult) -> Result<(), serde_json::Error> {
+    let output = match selected_output_format() {
+        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Text | OutputFormat::Table => render_account_list(&value),
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn print_account_balances(value: AccountBalancesResult) -> Result<(), serde_json::Error> {
+    let output = match selected_output_format() {
+        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Text | OutputFormat::Table => render_account_balances(&value),
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn render_account_balances(value: &AccountBalancesResult) -> String {
+    if value.balances.is_empty() {
+        return format!("No balances for account {}.", value.account_id);
+    }
+
+    let rows = value
+        .balances
+        .iter()
+        .map(|balance| {
+            vec![
+                balance.segment.to_string(),
+                balance.asset.to_string(),
+                balance.total.to_string(),
+                balance.available.to_string(),
+                balance.locked.to_string(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    render_compact_table(&["SEGMENT", "ASSET", "TOTAL", "AVAILABLE", "LOCKED"], &rows)
+}
+
+fn render_account_list(value: &AccountListResult) -> String {
+    if value.accounts.is_empty() {
+        return "No accounts configured.".to_owned();
+    }
+
+    let rows = value
+        .accounts
+        .iter()
+        .map(|account| {
+            vec![
+                account_list_name(account),
+                account.provider.to_string(),
+                display_or_dash(&account.environment),
+                if account.segments.is_empty() {
+                    "—".to_owned()
+                } else {
+                    account
+                        .segments
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+                account.credential_id.clone().unwrap_or_else(|| "—".into()),
+                display_or_dash(&account.status),
+            ]
+        })
+        .collect::<Vec<_>>();
+    render_compact_table(
+        &[
+            "ACCOUNT",
+            "PROVIDER",
+            "MODE",
+            "SEGMENTS",
+            "CREDENTIAL",
+            "STATUS",
+        ],
+        &rows,
+    )
+}
+
+fn account_list_name(account: &AccountListItem) -> String {
+    if account.alias.is_empty() || account.alias == account.account_id.as_str() {
+        return account.account_id.to_string();
+    }
+    format!("{} ({})", account.alias, account.account_id)
+}
+
+fn display_or_dash(value: &str) -> String {
+    if value.is_empty() {
+        "—".to_owned()
+    } else {
+        value.to_owned()
+    }
 }
 
 fn required_account_id(args: &Cli) -> Result<String, Box<dyn std::error::Error>> {
@@ -847,8 +948,18 @@ fn resolve_runtime_account_resource(
 #[cfg(test)]
 mod cli_tests {
     use clap::Parser;
+    use kairos_account::{
+        AccountBalanceItem, AccountBalancesResult, AccountListItem, AccountListResult,
+    };
+    use kairos_primitives::account::{AccountId, SegmentKey};
+    use kairos_primitives::decimal::DecimalParts;
+    use kairos_primitives::integration::ProviderId;
+    use kairos_primitives::reference::Currency;
 
-    use super::{Cli, Command, ConnectedCommand, StandaloneCommand};
+    use super::{
+        Cli, Command, ConnectedCommand, StandaloneCommand, render_account_balances,
+        render_account_list,
+    };
 
     #[test]
     fn rust_command_surface_requires_an_explicit_mode() {
@@ -910,6 +1021,27 @@ mod cli_tests {
             "/tmp",
             "--account-id",
             "main",
+            "standalone",
+            "balances",
+            "--output",
+            "table",
+        ])
+        .expect("Python passthrough ordering parses");
+        assert_eq!(
+            parsed.output,
+            Some(kairos_workspace::cli::OutputFormat::Table)
+        );
+        assert!(matches!(
+            parsed.command,
+            Command::Standalone(StandaloneCommand::Balances { .. })
+        ));
+
+        let parsed = Cli::try_parse_from([
+            "kairos-account-cli",
+            "--workspace",
+            "/tmp",
+            "--account-id",
+            "main",
             "--launch-id",
             "btc",
             "connected",
@@ -920,5 +1052,65 @@ mod cli_tests {
             parsed.command,
             Command::Connected(ConnectedCommand::Balances { .. })
         ));
+    }
+
+    #[test]
+    fn account_list_is_a_compact_human_summary() {
+        let output = render_account_list(&AccountListResult {
+            accounts: vec![
+                AccountListItem {
+                    account_id: AccountId::new("manual-live-readonly").unwrap(),
+                    alias: "manual-live-readonly".into(),
+                    provider: ProviderId::new("binance").unwrap(),
+                    environment: "live".into(),
+                    segments: ["funding", "spot", "usd_m_futures"]
+                        .map(|value| SegmentKey::new(value).unwrap())
+                        .into(),
+                    credential_id: Some("binance-equity-readonly".into()),
+                    status: "configured".into(),
+                },
+                AccountListItem {
+                    account_id: AccountId::new("paper-account").unwrap(),
+                    alias: "paper-account".into(),
+                    provider: ProviderId::new("paper").unwrap(),
+                    environment: "paper".into(),
+                    segments: vec![SegmentKey::new("spot").unwrap()],
+                    credential_id: None,
+                    status: "configured".into(),
+                },
+            ],
+            count: 2,
+        });
+
+        assert!(output.contains("ACCOUNT"));
+        assert!(output.contains("manual-live-readonly"));
+        assert!(output.contains("funding, spot, usd_m_futures"));
+        assert!(output.contains("paper-account"));
+        assert!(!output.contains("[0]."));
+        assert_eq!(output.lines().count(), 4);
+    }
+
+    #[test]
+    fn account_balances_are_rendered_as_business_columns() {
+        let output = render_account_balances(&AccountBalancesResult {
+            account_id: AccountId::new("paper-account").unwrap(),
+            source: "local_registry".into(),
+            mode: "standalone".into(),
+            kind: "balances".into(),
+            balances: vec![AccountBalanceItem {
+                segment: SegmentKey::new("spot").unwrap(),
+                asset: Currency::new("USDT").unwrap(),
+                total: "10000".parse::<DecimalParts>().unwrap(),
+                available: "10000".parse::<DecimalParts>().unwrap(),
+                locked: DecimalParts::default(),
+            }],
+        });
+
+        assert!(output.contains("SEGMENT"));
+        assert!(output.contains("ASSET"));
+        assert!(output.contains("spot"));
+        assert!(output.contains("USDT"));
+        assert!(!output.contains("balances"));
+        assert_eq!(output.lines().count(), 3);
     }
 }

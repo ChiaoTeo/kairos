@@ -1274,7 +1274,10 @@ def test_risk_preview_passthrough_uses_owner_standalone_cli(
 def test_risk_business_surface_rejects_connected_runtime_commands() -> None:
     output = StringIO()
 
-    assert execute_argv(["risk", "authorize-reserve", "--file", "request.json"], output) != 0
+    assert (
+        execute_argv(["risk", "authorize-reserve", "--file", "request.json"], output)
+        != 0
+    )
     text = output.getvalue()
     assert "connected Risk runtime command" in text
     assert "kairos system component risk" in text
@@ -1318,9 +1321,7 @@ def test_capital_schema_passthrough_uses_owner_standalone_cli(
         == 0
     )
 
-    assert seen == [
-        ("capital", ["standalone", "schema", "funding-objective"])
-    ]
+    assert seen == [("capital", ["standalone", "schema", "funding-objective"])]
     assert json.loads(output.getvalue()) == {"status": "schema"}
 
     preview_output = StringIO()
@@ -1494,8 +1495,9 @@ def test_account_local_query_passthrough_uses_owner_standalone_cli(
         )
         == 0
     )
-    assert seen == [["standalone", "--account-id", "paper-main", "balances"]]
+    assert seen == [["--account-id", "paper-main", "standalone", "balances"]]
     assert json.loads(output.getvalue()) == {"source": "local_registry"}
+    assert output.getvalue().endswith("\n")
 
 
 def test_order_business_surface_rejects_connected_execution_commands() -> None:
@@ -1894,7 +1896,10 @@ def test_launch_instance_component_reference_health_uses_manifest_client(
     instance.prepare()
     instance.component_manifest().write_text(
         '{"components":{"reference":{"socket":"%s","database":"%s"}},"accounts":{}}'
-        % (workspace.paths.process_socket("reference"), workspace.paths.reference_database()),
+        % (
+            workspace.paths.process_socket("reference"),
+            workspace.paths.reference_database(),
+        ),
         encoding="utf-8",
     )
 
@@ -2012,6 +2017,37 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
     assert value["launch_id"] == "btc"
     assert value["instance_id"] == "run-1"
     assert seen == {"projection_account_id": "main", "snapshot_account_id": "main"}
+
+
+def test_launch_account_balances_table_uses_balance_columns() -> None:
+    from kairospy.surface.cli.commands.launch import _render_launch_account_balances
+
+    output = _render_launch_account_balances(
+        {
+            "account_id": "main",
+            "balances": [
+                {
+                    "segment_key": "spot",
+                    "asset": "USDT",
+                    "total": "10000",
+                    "available": "9980",
+                    "reserved": "20",
+                }
+            ],
+            "launch_id": "btc",
+            "instance_id": "run-1",
+            "mode": "paper",
+            "scope": "launch-instance",
+        }
+    )
+
+    assert "Account main · launch btc/run-1 (paper)" in output
+    assert "SEGMENT" in output
+    assert "ASSET" in output
+    assert "RESERVED" in output
+    assert "spot" in output
+    assert "USDT" in output
+    assert "balances" not in output
 
 
 def test_launch_instance_component_account_refresh_uses_owner_cli_scope(
@@ -2915,6 +2951,31 @@ def test_generated_paper_account_loads_through_canonical_account_cli(tmp_path) -
     assert account["environment"] == "paper"
     assert account["initial_balances"] == ["USDT=100000"]
 
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "account",
+                "--workspace",
+                str(project),
+                "--account-id",
+                "demo-paper",
+                "balances",
+                "--output",
+                "table",
+            ],
+            output,
+        )
+        == 0
+    )
+    balances = output.getvalue()
+    assert "SEGMENT" in balances
+    assert "ASSET" in balances
+    assert "TOTAL" in balances
+    assert "USDT" in balances
+    assert "100000" in balances
+    assert "balances" not in balances
+
 
 def test_launch_start_missing_config_points_to_project_doctor(tmp_path) -> None:
     project = tmp_path / "demo"
@@ -3091,12 +3152,35 @@ def test_cli_registers_legacy_product_groups() -> None:
         assert command in text
     assert "catalog" not in text
     assert not any("│ shell " in line for line in text.splitlines())
-    assert "Daily workflow" in text
-    assert "Operations" in text
-    assert "Advanced tools" in text
+    panels = (
+        "Getting started",
+        "Strategy workflow",
+        "Research & data",
+        "System operations",
+        "Business tools",
+        "Advanced tools",
+    )
+    assert all(panel in text for panel in panels)
+    assert [text.index(panel) for panel in panels] == sorted(
+        text.index(panel) for panel in panels
+    )
     assert "quickstart" in text
     assert "Run strategies and inspect" in text
+    assert all(mode in text for mode in ("backtest", "paper", "live"))
+    assert "New to Kairos?" in text
+    assert "引导式菜单" in text
     assert "commands are owned by" not in text
+
+
+def test_cli_help_stays_compact_and_uses_canonical_program_name(monkeypatch) -> None:
+    monkeypatch.setenv("COLUMNS", "180")
+    output = StringIO()
+
+    assert execute_argv(["--help"], output, prog_name="kairos") == 0
+    text = output.getvalue()
+
+    assert "Usage: kairos " in text
+    assert max(len(line) for line in text.splitlines()) <= 100
 
 
 def test_quickstart_shows_first_run_path() -> None:
@@ -3280,6 +3364,176 @@ def test_interactive_session_keeps_context_between_actions(
     assert "| system service  | market" in text
     assert "kairos system restart --component market --format text" in text
     assert "| last status     | 0" in text
+
+
+def test_interactive_account_context_keeps_selected_paper_account(
+    tmp_path, monkeypatch
+) -> None:
+    from kairospy.surface.cli.interactive import run_interactive
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    accounts = {
+        "accounts": [
+            {
+                "account_id": "paper-account",
+                "alias": "paper-account",
+                "provider": "paper",
+                "environment": "paper",
+                "segments": ["spot"],
+                "credential_id": None,
+                "status": "configured",
+            }
+        ],
+        "count": 1,
+    }
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive.AccountCliApplication.run",
+        lambda _self, arguments: accounts,
+    )
+    shell_input = iter(["account", "1", "2", "7", "exit"])
+    prompts = iter(["1"])
+    executed: list[tuple[str, ...]] = []
+
+    def read_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(shell_input)
+
+    monkeypatch.setattr("builtins.input", read_input)
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
+    output = StringIO()
+    with redirect_stdout(output):
+        status = run_interactive(
+            workspace=workspace.paths.root,
+            dry_run=False,
+            no_exec=False,
+            yes=True,
+            execute=lambda argv: executed.append(tuple(argv)) or 0,
+        )
+
+    text = output.getvalue()
+    assert status == 0
+    assert executed[0][:6] == (
+        "account",
+        "--account-id",
+        "paper-account",
+        "balances",
+        "--output",
+        "table",
+    )
+    assert "/account/paper-account>" in text
+    assert "转账工作流尚未开放" in text
+    assert "无法识别这个命令" not in text
+
+
+def test_interactive_live_account_uses_selected_launch_projection(
+    tmp_path, monkeypatch
+) -> None:
+    from kairospy.surface.cli.interactive import run_interactive
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    LaunchRegistryApplication(workspace).add(
+        "live-strategy", mode="live", instance_id="run-1"
+    )
+    accounts = {
+        "accounts": [
+            {
+                "account_id": "manual-live-readonly",
+                "alias": "manual-live-readonly",
+                "provider": "binance",
+                "environment": "live",
+                "segments": ["spot", "usd_m_futures"],
+                "credential_id": "binance-equity-readonly",
+                "status": "configured",
+            }
+        ],
+        "count": 1,
+    }
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive.AccountCliApplication.run",
+        lambda _self, arguments: accounts,
+    )
+    shell_input = iter(["account", "1", "2", "exit"])
+    prompts = iter(["1", "1"])
+    executed: list[tuple[str, ...]] = []
+
+    def read_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(shell_input)
+
+    monkeypatch.setattr("builtins.input", read_input)
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
+    output = StringIO()
+    with redirect_stdout(output):
+        status = run_interactive(
+            workspace=workspace.paths.root,
+            dry_run=False,
+            no_exec=False,
+            yes=True,
+            execute=lambda argv: executed.append(tuple(argv)) or 0,
+        )
+
+    text = output.getvalue()
+    assert status == 0
+    assert executed[0][:9] == (
+        "launch",
+        "instance",
+        "component",
+        "account",
+        "balances",
+        "live-strategy",
+        "--account-id",
+        "manual-live-readonly",
+        "--format",
+    )
+    assert "live 账户事实必须从运行中的 Account projection 读取" in text
+    assert "无法识别这个命令" not in text
+
+
+def test_interactive_live_account_never_falls_back_to_local_balances(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    from kairospy.surface.cli.interactive import (
+        InteractiveContext,
+        ShellControl,
+        _account_fact_command,
+    )
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive.AccountCliApplication.run",
+        lambda _self, arguments: {
+            "accounts": [
+                {
+                    "account_id": "live-main",
+                    "provider": "binance",
+                    "environment": "live",
+                    "segments": ["spot"],
+                }
+            ],
+            "count": 1,
+        },
+    )
+    context = InteractiveContext(
+        owner=workspace,
+        snapshot=None,
+        workspace_arg=workspace.paths.root,
+        selected_account="live-main",
+        shell_path=("account", "live-main"),
+    )
+
+    result = _account_fact_command(context, "balances", "查询账户余额")
+
+    assert result is ShellControl.HANDLED
+    assert context.selected_launch is None
+    output = capsys.readouterr().out
+    assert "当前没有可用的 launch projection" in output
+    assert "不会退回本地配置值" in output
 
 
 def test_interactive_numeric_entry_opens_reference_context(

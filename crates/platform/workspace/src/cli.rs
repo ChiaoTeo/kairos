@@ -60,6 +60,50 @@ pub fn render(value: &Value, format: OutputFormat) -> String {
     }
 }
 
+/// Render caller-selected columns without imposing business field semantics.
+pub fn render_compact_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    if headers.is_empty() {
+        return String::new();
+    }
+    let widths = (0..headers.len())
+        .map(|index| {
+            std::iter::once(headers[index].chars().count())
+                .chain(
+                    rows.iter()
+                        .map(|row| row.get(index).map_or(0, |value| value.chars().count())),
+                )
+                .max()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    let line = |cells: &[String]| {
+        (0..headers.len())
+            .map(|index| {
+                let cell = cells.get(index).map(String::as_str).unwrap_or_default();
+                if index + 1 == headers.len() {
+                    cell.to_owned()
+                } else {
+                    format!("{cell:<width$}", width = widths[index])
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    let header = headers
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
+    let separator = widths
+        .iter()
+        .map(|width| "─".repeat(*width))
+        .collect::<Vec<_>>();
+    std::iter::once(line(&header))
+        .chain(std::iter::once(line(&separator)))
+        .chain(rows.iter().map(|row| line(row)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn render_text(value: &Value, prefix: &str, output: &mut String) {
     match value {
         Value::Object(values) => {
@@ -181,7 +225,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{OutputFormat, render};
+    use super::{OutputFormat, render, render_compact_table};
 
     #[test]
     fn parses_all_supported_formats() {
@@ -198,5 +242,18 @@ mod tests {
         assert!(output.contains("status"));
         assert!(output.contains("ready"));
         assert!(output.starts_with('+'));
+    }
+
+    #[test]
+    fn renders_compact_caller_selected_columns() {
+        let output = render_compact_table(
+            &["ACCOUNT", "MODE"],
+            &[vec!["paper-account".into(), "paper".into()]],
+        );
+
+        assert_eq!(
+            output,
+            "ACCOUNT        MODE\n─────────────  ─────\npaper-account  paper"
+        );
     }
 }

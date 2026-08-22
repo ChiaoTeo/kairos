@@ -8,9 +8,10 @@ mod result;
 
 pub use app::{AccountApplication, AccountRuntimeMode};
 pub use cli::{
-    AccountCredentialProbeRequest, AccountProviderConnectionArgs, BindCredentialRequest,
-    CliAccountApplication, ConnectAccountProviderRequest, ConnectAccountRequest,
-    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+    AccountBalanceItem, AccountBalancesResult, AccountCredentialProbeRequest, AccountListItem,
+    AccountListResult, AccountProviderConnectionArgs, BindCredentialRequest, CliAccountApplication,
+    ConnectAccountProviderRequest, ConnectAccountRequest, CreateCredentialRequest,
+    ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
 };
 pub use command::{MarkToMarket, ReconcileAccount, RefreshAccount};
 pub use connected::ConnectedAccountApplication;
