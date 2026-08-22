@@ -45,7 +45,10 @@ pub struct ReferenceCatalog {
 }
 
 impl ReferenceCatalog {
-    pub fn apply(&mut self, incoming: ProviderCatalog, now: UnixNanos) -> Vec<LifecycleEvent> {
+    pub fn apply(&mut self, mut incoming: ProviderCatalog, now: UnixNanos) -> Vec<LifecycleEvent> {
+        for entity in &mut incoming.entities {
+            entity.normalize_canonical_name();
+        }
         let previous_entities = std::mem::take(&mut self.entities);
         let previous_assets = std::mem::take(&mut self.assets);
         let previous_instruments = std::mem::take(&mut self.instruments);
@@ -518,6 +521,37 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn apply_repairs_stale_canonical_exchange_names() {
+        let mut catalog = ReferenceCatalog::default();
+        let events = catalog.apply(
+            ProviderCatalog {
+                entities: vec![
+                    Entity {
+                        entity_id: "exchange:arcx".into(),
+                        entity_type: "exchange".into(),
+                        name: "Exchange".into(),
+                        status: "active".into(),
+                        ..Default::default()
+                    },
+                    Entity {
+                        entity_id: "exchange:bats".into(),
+                        entity_type: "exchange".into(),
+                        name: "Exchange".into(),
+                        status: "active".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            10.into(),
+        );
+
+        assert_eq!(catalog.entities["exchange:arcx"].name, "NYSE Arca");
+        assert_eq!(catalog.entities["exchange:bats"].name, "Cboe BZX Exchange");
+        assert_eq!(events.len(), 2);
     }
 
     #[test]

@@ -1,0 +1,187 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from kairospy.application.launch.application import LaunchRegistryApplication
+from kairospy.application.workspace import WorkspaceApplication
+from kairospy.surface.cli.interactive.models import GuidedCommand, ShellControl
+from kairospy.surface.cli.interactive.sections.business import market
+
+
+def _market_record():
+    return SimpleNamespace(
+        id="market:binance:spot:BTCUSDT",
+        venue_symbol="BTCUSDT",
+        exchange_id="exchange:binance",
+        instrument=SimpleNamespace(display_symbol="BTC/USDT"),
+    )
+
+
+def _sources():
+    return {
+        "sources": [
+            {
+                "source_id": "binance-spot",
+                "provider_id": "binance",
+                "observation_capabilities": ["quote", "bar"],
+                "configured": True,
+                "status": "ready",
+                "ready": True,
+            }
+        ]
+    }
+
+
+def test_system_market_snapshot_numeric_and_text_alias_use_list_selections(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    interactive_context.shell_path = ("system", "market")
+    record = _market_record()
+    monkeypatch.setattr(market.reference, "select_market", lambda _context: record)
+    monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "1")
+
+    market.print_menu(interactive_context)
+    market.print_help(interactive_context)
+    numeric = market.handle(interactive_context, ("3",))
+    text = market.handle(interactive_context, ("quote",))
+
+    assert isinstance(numeric, GuidedCommand)
+    assert isinstance(text, GuidedCommand)
+    assert numeric.argv == text.argv
+    assert numeric.argv == (
+        "system",
+        "component",
+        "market",
+        "snapshot",
+        "quote",
+        "--market-id",
+        "market:binance:spot:BTCUSDT",
+        "--source-id",
+        "binance-spot",
+        "--format",
+        "table",
+    )
+    output = capsys.readouterr().out
+    assert "workspace 共享服务（连接模式）" in output
+    assert "只能从当前作用域返回的列表中选择" in output
+
+
+def test_market_source_cancel_never_constructs_snapshot(
+    interactive_context, monkeypatch
+) -> None:
+    interactive_context.shell_path = ("system", "market")
+    monkeypatch.setattr(
+        market.reference, "select_market", lambda _context: _market_record()
+    )
+    monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "b")
+
+    assert market.handle(interactive_context, ("quote",)) is ShellControl.HANDLED
+
+
+def test_launch_market_command_keeps_selected_instance_and_scope(
+    interactive_context, monkeypatch
+) -> None:
+    interactive_context.shell_path = ("launch", "demo", "market")
+    interactive_context.selected_launch = "demo"
+    interactive_context.selected_launch_instance = "instance-1"
+    monkeypatch.setattr(
+        market.reference, "select_market", lambda _context: _market_record()
+    )
+    monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "1")
+
+    command = market.handle(interactive_context, ("quote",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.argv[:9] == (
+        "launch",
+        "instance",
+        "component",
+        "market",
+        "snapshot",
+        "demo",
+        "quote",
+        "--instance",
+        "instance-1",
+    )
+
+
+def test_connected_market_has_no_subscription_or_raw_identity_entry(
+    interactive_context
+) -> None:
+    interactive_context.shell_path = ("system", "market")
+    assert market.handle(interactive_context, ("subscribe",)) is None
+    assert market.handle(interactive_context, ("market:binance:spot:BTCUSDT",)) is None
+
+
+def test_source_discovery_uses_scope_adapter_with_typed_filters(
+    interactive_context, monkeypatch
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("system", "market")
+    seen = {}
+
+    def run(owner, command, arguments):
+        seen.update(owner=owner, command=command, arguments=arguments)
+        return _sources()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.root._run_workspace_market_connected_command",
+        run,
+    )
+
+    assert market._load_sources(
+        interactive_context, "market:binance:spot:BTCUSDT", "quote"
+    ) == _sources()
+    assert seen == {
+        "owner": interactive_context.owner,
+        "command": "sources",
+        "arguments": [
+            "--market-id",
+            "market:binance:spot:BTCUSDT",
+            "--observation-kind",
+            "quote",
+            "--configured-only",
+        ],
+    }
+
+
+def test_launch_instance_is_selected_only_from_registry_and_persisted(
+    interactive_context, tmp_path, monkeypatch
+) -> None:
+    owner = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
+    LaunchRegistryApplication(owner).add("demo", mode="paper", instance_id="run-1")
+    LaunchRegistryApplication(owner).add("demo", mode="paper", instance_id="run-2")
+    interactive_context.owner = owner
+    interactive_context.selected_launch = "demo"
+    interactive_context.shell_path = ("launch", "demo")
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "2")
+
+    assert market.enter_launch_market(interactive_context) is ShellControl.HANDLED
+    assert interactive_context.selected_launch_instance == "run-2"
+    assert interactive_context.shell_path == ("launch", "demo", "market")
+    assert market._select_launch_instance(interactive_context) == "run-2"
+
+
+def test_preview_command_contains_explicit_system_scope(
+    interactive_context, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        market.reference, "select_market", lambda _context: _market_record()
+    )
+    monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
+    answers = iter(["1", "1", "1"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    command = market.choose(interactive_context)
+
+    assert command.argv[:5] == (
+        "system",
+        "component",
+        "market",
+        "snapshot",
+        "quote",
+    )
+    assert interactive_context.shell_path == ("system", "market")

@@ -53,6 +53,18 @@ Market snapshot，并根据最近状态提示下一条安全命令。无界面�
 uv run kairos observe --workspace my-project --once
 ```
 
+需要交互查询运行中行情时，使用产品化交互入口：
+
+```bash
+uv run kairos interactive --workspace my-project
+```
+
+workspace 共享行情从 `/system/market` 进入；某次策略运行的行情从
+`/launch/<launch-id>/market` 进入。两者都是连接模式：交互界面先从 Reference 目录列出并
+选择 Market，再从目标 runtime 列出兼容 Source，不接受手写 Market ID 或 Source ID，也不会
+用固定的 BTCUSDT 或 `binance-spot` 猜测 mmap 文件。脚本调用仍可显式传入 ID，但 owner
+connected CLI 会在读取 view 前验证 Market、Source 与 observation kind 的组合。
+
 初始化一个 Kairos 项目（省略参数时会交互式询问目录和项目名）：
 
 ```bash
@@ -199,8 +211,12 @@ launch 配置。`--config` 仅用于显式指定其他配置文件。
 uv run kairospy launch status btc-sma --workspace my-project
 uv run kairospy launch logs btc-sma --lines 100 --workspace my-project
 uv run kairospy launch attach btc-sma --workspace my-project --lines 100
-uv run kairospy launch instance component market snapshot quote btc-sma --workspace my-project \
+uv run kairospy launch instance component market sources btc-sma --workspace my-project \
+  --market-id market:binance:spot:BTCUSDT --observation-kind quote --configured-only
+uv run kairospy launch instance component market snapshot btc-sma quote --workspace my-project \
   --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot
+uv run kairospy launch instance component market freshness btc-sma --workspace my-project \
+  --market-id market:binance:spot:BTCUSDT --source-id binance-spot --qualifier quote
 uv run kairospy launch instance component execution status btc-sma --workspace my-project
 ```
 
@@ -330,7 +346,8 @@ uv run kairospy system logs --component market --lines 100 --workspace my-projec
 uv run kairospy system logs --component market --follow --workspace my-project
 uv run kairospy system up --component market --workspace my-project
 uv run kairospy system component market status --workspace my-project --format json
-uv run kairospy system component market sources --workspace my-project --format json
+uv run kairospy system component market sources --workspace my-project --format json \
+  --market-id market:binance:spot:BTCUSDT --observation-kind quote --configured-only
 uv run kairospy system component market snapshot quote --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot
 uv run kairospy system component market snapshot bar --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot --timeframe 1m
 uv run kairospy system component market snapshot greeks --symbol BTC-260814-70000-C --source-id binance-options --exchange binance --market-type options

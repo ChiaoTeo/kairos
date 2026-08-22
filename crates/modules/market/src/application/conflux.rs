@@ -496,7 +496,9 @@ impl MarketApplication {
             || query.exchange.is_some()
             || query.market_type.is_some()
             || query.asset_type.is_some()
-            || query.target.is_some();
+            || query.target.is_some()
+            || query.observation_kind.is_some()
+            || query.provider_id.is_some();
         let market_universe = self.market_universe();
         let option_target = query
             .target
@@ -542,34 +544,89 @@ impl MarketApplication {
                     && query.asset_type.as_ref().is_none_or(|value| {
                         market.asset_type.map(|class| class.as_str()) == Some(value.as_str())
                     })
+                    && query
+                        .provider_id
+                        .as_ref()
+                        .is_none_or(|value| market.route.provider_id.as_str() == value.as_str())
+                    && query
+                        .observation_kind
+                        .is_none_or(|kind| market.route.observation_capabilities.contains(&kind))
             })
             .collect::<Vec<_>>();
         let accepts_query = |descriptor: &SourceDescriptor| {
-            !has_filter
-                || matching_markets
-                    .iter()
-                    .any(|market| super::source_accepts(descriptor, market))
+            query
+                .observation_kind
+                .is_none_or(|kind| descriptor.observation_capabilities.contains(&kind))
+                && (!has_filter
+                    || matching_markets
+                        .iter()
+                        .any(|market| super::source_accepts(descriptor, market)))
+        };
+        let provider_for = |descriptor: &SourceDescriptor| {
+            matching_markets
+                .iter()
+                .find(|market| super::source_accepts(descriptor, market))
+                .map(|market| market.route.provider_id.clone())
         };
         let mut sources = BTreeMap::<SourceId, MarketDataSource>::new();
-        for plan in self.conflux.source_plans.values() {
-            if accepts_query(&plan.descriptor) {
-                sources.insert(
-                    plan.descriptor.id.clone(),
-                    MarketDataSource {
-                        source_id: plan.descriptor.id.clone(),
-                        status: MarketSourceStatus::Disconnected,
-                        ready: false,
-                        stale: false,
-                    },
-                );
+        if !query.ready_only {
+            for plan in self.conflux.source_plans.values() {
+                if accepts_query(&plan.descriptor) {
+                    sources.insert(
+                        plan.descriptor.id.clone(),
+                        source_control_state(
+                            &plan.descriptor,
+                            SourceStatus::Stopped,
+                            provider_for(&plan.descriptor),
+                        ),
+                    );
+                }
             }
         }
         for source in view.sources.values() {
-            if accepts_query(&source.descriptor) {
+            if accepts_query(&source.descriptor)
+                && (!query.ready_only || source.status == SourceStatus::Ready)
+            {
                 sources.insert(
                     source.descriptor.id.clone(),
-                    source_control_state(&source.descriptor.id, source.status),
+                    source_control_state(
+                        &source.descriptor,
+                        source.status,
+                        provider_for(&source.descriptor),
+                    ),
                 );
+            }
+        }
+        if !query.configured_only && !query.ready_only {
+            for market in &matching_markets {
+                let has_configured_source = self
+                    .conflux
+                    .source_plans
+                    .values()
+                    .any(|plan| super::source_accepts(&plan.descriptor, market));
+                if has_configured_source {
+                    continue;
+                }
+                let source_id = market.source_id.clone().unwrap_or_else(|| {
+                    SourceId::new(market.route.provider_id.as_str())
+                        .expect("provider identity is a valid fallback source identity")
+                });
+                sources
+                    .entry(source_id.clone())
+                    .or_insert(MarketDataSource {
+                        source_id,
+                        provider_id: Some(market.route.provider_id.clone()),
+                        observation_capabilities: market
+                            .route
+                            .observation_capabilities
+                            .iter()
+                            .copied()
+                            .collect(),
+                        configured: false,
+                        status: MarketSourceStatus::Disconnected,
+                        ready: false,
+                        stale: false,
+                    });
             }
         }
         MarketDataSourcesResponse {
@@ -1000,9 +1057,20 @@ fn idempotency_conflict() -> ErrorObjectOwned {
     )
 }
 
-fn source_control_state(source_id: &SourceId, status: SourceStatus) -> MarketDataSource {
+fn source_control_state(
+    descriptor: &SourceDescriptor,
+    status: SourceStatus,
+    provider_id: Option<kairos_primitives::integration::ProviderId>,
+) -> MarketDataSource {
     MarketDataSource {
-        source_id: source_id.clone(),
+        source_id: descriptor.id.clone(),
+        provider_id,
+        observation_capabilities: descriptor
+            .observation_capabilities
+            .iter()
+            .copied()
+            .collect(),
+        configured: true,
         status: match status {
             SourceStatus::Starting => MarketSourceStatus::Connecting,
             SourceStatus::Ready => MarketSourceStatus::Ready,
@@ -1505,7 +1573,7 @@ mod tests {
     use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
     use super::*;
-    use crate::{MarketDataRoute, ReconcileMarketUniverse, ResolvedMarket};
+    use crate::{MarketDataRoute, ObservationKind, ReconcileMarketUniverse, ResolvedMarket};
 
     #[test]
     fn data_sources_discovers_configured_source_plan_for_market_identity() {
@@ -1516,7 +1584,9 @@ mod tests {
             "instrument:equity:US:AAPL:common",
             InstrumentKind::Equity,
             "exchange:nasdaq",
-            MarketDataRoute::new("route:aapl", "massive", "equity", "AAPL").unwrap(),
+            MarketDataRoute::new("route:aapl", "massive", "equity", "AAPL")
+                .unwrap()
+                .with_observation_capabilities([ObservationKind::Quote]),
         )
         .unwrap()
         .with_source("massive-equity")
@@ -1535,7 +1605,8 @@ mod tests {
             "equity",
             Some("equity".into()),
         )
-        .unwrap();
+        .unwrap()
+        .with_observation_capabilities([ObservationKind::Quote]);
         application
             .configure_conflux(
                 Duration::from_secs(1),
@@ -1553,13 +1624,42 @@ mod tests {
 
         let response = application.data_sources_control(MarketDataSourcesQuery {
             market_id: Some(market_id),
+            observation_kind: Some(ObservationKind::Quote),
+            provider_id: Some(kairos_primitives::integration::ProviderId::new("massive").unwrap()),
+            configured_only: true,
             ..Default::default()
         });
 
         assert_eq!(response.sources.len(), 1);
         assert_eq!(response.sources[0].source_id.as_str(), "massive-equity");
+        assert_eq!(
+            response.sources[0]
+                .provider_id
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("massive")
+        );
+        assert_eq!(
+            response.sources[0].observation_capabilities,
+            vec![ObservationKind::Quote]
+        );
+        assert!(response.sources[0].configured);
         assert_eq!(response.sources[0].status, MarketSourceStatus::Disconnected);
         assert!(!response.sources[0].ready);
+
+        let incompatible = application.data_sources_control(MarketDataSourcesQuery {
+            observation_kind: Some(ObservationKind::Trade),
+            configured_only: true,
+            ..Default::default()
+        });
+        assert!(incompatible.sources.is_empty());
+
+        let ready = application.data_sources_control(MarketDataSourcesQuery {
+            observation_kind: Some(ObservationKind::Quote),
+            ready_only: true,
+            ..Default::default()
+        });
+        assert!(ready.sources.is_empty());
     }
 
     #[test]

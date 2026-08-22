@@ -13,7 +13,9 @@ pub use cli::{
     CliMarketApplication, CliMarketDiagnosticProvider, CliMarketHistoricalDataKind,
     CliMarketHistoricalDownloadRequest, CliMarketHistoricalMarketType, CliMarketHistoricalProvider,
 };
-pub use connected::ConnectedMarketApplication;
+pub use connected::{
+    ConnectedMarketApplication, ConnectedMarketSourceQuery, ConnectedSourceAvailability,
+};
 pub use model::{
     ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketError,
     MarketObservationResult, MarketQueryResult, OrderBookSide,

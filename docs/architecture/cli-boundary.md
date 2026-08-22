@@ -101,9 +101,10 @@ kairos launch instance component market ...
 例如：
 
 ```text
-kairos launch instance component market status
-kairos launch instance component market logs
-kairos launch instance component market snapshot
+kairos launch instance component market status <launch-id>
+kairos launch instance component market sources <launch-id>
+kairos launch instance component market snapshot <launch-id> quote
+kairos launch instance component market freshness <launch-id>
 ```
 
 这类命令本质上启用的是业务模块的连接模式：先解析当前要连接的 server，再创建 owner
@@ -133,6 +134,9 @@ kairos system component market sources
 kairos system component market subscriptions
 kairos system component market freshness
 kairos launch instance component market status
+kairos launch instance component market sources
+kairos launch instance component market snapshot
+kairos launch instance component market freshness
 ```
 
 ## 业务模块 CLI 的两种模式
@@ -549,7 +553,7 @@ Capital 的 direct transfer/action 是最高风险 standalone 能力之一。它
 | Account | `balances/positions/snapshot/open-orders` | Standalone direct provider/local query；Connected runtime projection query | connected projection 查询保留；`open-orders` 已改为读取 Account observed-orders mmap；standalone 已支持 paper/simulated account 的 local registry snapshot/balances/positions/open-orders，输出标记 `source=local_registry`；live direct provider 短路径待实现 | 在 `CliAccountApplication` 继续补 Account-owned provider snapshot service，并对 live direct one-shot 输出标记 `source=direct_provider`；projection 入口只保留在 component/connected。 |
 | Account | `fill/refresh/reconcile` | Connected runtime control | `fill` 已从 standalone enum 移除，direct/local settlement 旁路已删除；connected 走 Account contract；`system/launch component account refresh/reconcile` 已 passthrough 到 Account owner Rust CLI connected | 把 Python 聚合层提示统一指向 `system/launch ... component account ...`；模拟 fill 仍只允许 paper/simulated connected Account。 |
 | Market | validate、once、replay、download、reference-universe | Standalone local/direct/data | `validate/reference-universe/once/replay/download` 已进入 `CliMarketApplication`；不读 runtime | 继续删除顶层 runtime status/subscription；connected 保持 contract/projection client。 |
-| Market | status、sources、snapshot、freshness、subscribe/unsubscribe、recover/pause-replay/resume-replay | Connected runtime projection/control | `status/sources/snapshot/freshness/subscribe/unsubscribe/recover/pause-replay/resume-replay` 已在 Rust connected enum 对齐；`system component market freshness/subscribe/unsubscribe/recover/pause-replay/resume-replay` 已 passthrough 到 Market owner Rust CLI connected；`snapshot` 和 `freshness` 走 Market owner projection reader | 继续补更完整 snapshot payload 输出。 |
+| Market | status、sources、snapshot、freshness、subscribe/unsubscribe、recover/pause-replay/resume-replay | Connected runtime projection/control | `status/sources/snapshot/freshness/subscribe/unsubscribe/recover/pause-replay/resume-replay` 已在 Rust connected enum 对齐；system 与 launch 的 `sources/snapshot/freshness` 都解析明确 socket/view root 后进入 Market owner Rust CLI connected；sources 支持 market/instrument/observation/provider/configured/ready typed filter；snapshot 输出 typed payload，缺失 view 返回结构化错误 | 交互层只从 Reference Market 和 connected source 列表选择，不接受自由输入。 |
 | Reference | catalog/query/search/show/option-chain | Standalone local catalog query | 生产路径已通过 `CliReferenceApplication` 读 catalog；Python 顶层入口已收敛为 owner Rust CLI passthrough；`option-chain` 已作为 owner CLI standalone catalog query 落地；顶层已拒绝 `status/doctor/logs/coverage` 等 connected 命令和 `assets/instruments/listings add` catalog mutation；standalone/connected 不再归一化成总 command | 运行态 `health/providers/refresh/pause/resume/stream/coverage` 只保留 component/connected。 |
 | Execution / Order | 本地 evidence 查询和 order action preview | Standalone local | `order backtest` 用户入口已删除；`audit/journal/inspect/fills --file` 已通过 `CliExecutionApplication` 落地，输出标记 `source=local_evidence_file`；`preview-submit/preview-cancel/preview-replace` 及其 `*-file` typed request 版本已通过 `CliExecutionApplication` 校验和规范化本地订单请求，输出 `effect=dry_run`、`connects_server=false`，且不会发单、撤单或改单 | 避免把 runtime audit/projection 暴露为 `kairos order` 短路径；回测归 launch/data/research；真正 direct submit/cancel/replace 仍需 provider action service。 |
 | Execution / Order | submit/cancel/replace | Standalone direct provider action 或 Connected Execution runtime action | 已预留 `CliExecutionApplication`；当前无 direct order 短路径 | 若走 direct，在 `CliExecutionApplication` 补 provider action、确认、幂等和 risk/cap preview；若走 runtime，只暴露在 launch component。 |
@@ -716,14 +720,14 @@ Python surface 是用户真正看到的 `kairos` 入口。它可以比 Rust modu
 | `system up/down/restart/repair/supervise` | workspace lifecycle | 否 | runtime lifecycle；破坏性动作必须做 dependent safety。 |
 | `system status/list/logs/doctor` | workspace runtime observe | 否 | workspace runtime 总览，不拥有业务事实。 |
 | `system component account ...` | 不存在 | 否 | Account 没有 workspace-scoped system component；standalone 读取走 `kairos account ...`，运行中 projection/control 走 `launch instance component account ...`。 |
-| `system component market status/sources/snapshot/subscribe/unsubscribe/recover/pause-replay/resume-replay/dependents` | Market connected | 否 | 当前 workspace Market API；`subscribe/unsubscribe/recover/pause-replay/resume-replay` 进入 Market owner CLI connected，不能进入 standalone。 |
+| `system component market status/sources/snapshot/freshness/subscribe/unsubscribe/recover/pause-replay/resume-replay/dependents` | Market connected | 否 | 当前 workspace Market API；`sources/snapshot/freshness/subscribe/unsubscribe/recover/pause-replay/resume-replay` 进入 Market owner CLI connected，不能进入 standalone。 |
 | `system component reference status/health/providers/catalog/validate/refresh/pause/resume/options-coverage/options-add/options-remove` | Reference connected | 否 | 当前 workspace Reference API；refresh/pause/resume/coverage 不能是 standalone。 |
 | `system component risk status/health/latest/limits/reservations/circuits/pre-trade-check/authorize-reserve/release/consume/resize/open-circuit/close-circuit/publish-policy/advance-time` | Risk connected | 否 | `status` 是进程状态；`health/latest/limits/reservations/circuits` 是 Risk owner contract/mmap 读取；其他命令是 typed Risk runtime control 或 authorization。 |
 | `system component capital status/health/current/objectives/demands/availabilities/routes/plans/reservations/operations/alerts/publish-funding-objective/observe-demand/cancel-funding-objective/reconcile-plan` | Capital connected | 否 | `status` 是进程状态；`health/current/objectives/demands/availabilities/routes/plans/reservations/operations/alerts` 是 Capital owner contract/mmap 读取；其他命令是 typed Capital runtime control。 |
 | `launch start/plan/status/report/wait/stop/cleanup` | launch workflow | 是 | 管一次策略运行；不局部重启依赖组件。 |
 | `launch strategy status/decision/...` | strategy workflow | 是 | 策略层操作，不能替代模块 owner。 |
 | `launch instance component account snapshot/balances/positions/open-orders/refresh/reconcile` | Account connected | 否 | 某次 launch instance 的 Account projection 和 runtime control；`open-orders` 读取 Account observed-orders mmap；`refresh/reconcile` 进入 Account owner CLI connected。 |
-| `launch instance component market status/snapshot` | Market connected | 否 | 某次 launch instance 的 Market projection/API。 |
+| `launch instance component market status/sources/snapshot/freshness` | Market connected | 否 | 某次 launch instance 的 Market projection/API；sources/snapshot/freshness 与 system scope 使用相同 Market owner connected 语义。 |
 | `launch instance component execution status` | Execution component observe | 否 | 查看某个 instance 的 Execution 组件进程状态。 |
 | `launch instance component execution snapshot/routes/orders/open-orders/history/fills/events/audit/inspect/trace/journal/reconcile/unknown-remote-orders/submit/cancel/replace` | Execution connected | 否 | 解析 launch instance 后调用 Execution owner CLI connected/API 投影；不通过 `kairos order` 顶层；未进入 owner contract/RPC 的 `link-unknown` 不暴露。 |
 | `launch instance component reference status/health/catalog` | Reference connected | 否 | 某次 launch instance 绑定的 Reference 事实。 |

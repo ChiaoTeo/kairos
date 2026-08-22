@@ -1181,13 +1181,5 @@ fn massive_exchange_id(source_venue: Option<&str>) -> Option<String> {
 }
 
 fn massive_exchange_name(exchange_id: &str) -> &str {
-    match exchange_id {
-        "exchange:nasdaq" => "Nasdaq",
-        "exchange:nyse" => "NYSE",
-        "exchange:amex" => "NYSE American",
-        "exchange:arcx" => "NYSE Arca",
-        "exchange:bats" => "Cboe BZX Exchange",
-        "exchange:cboe-bzx-options" => "Cboe BZX Options Exchange",
-        _ => "Exchange",
-    }
+    crate::domain::canonical_entity_name(exchange_id).unwrap_or("Exchange")
 }

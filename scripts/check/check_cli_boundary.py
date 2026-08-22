@@ -1117,7 +1117,7 @@ def main() -> int:
                         for token in (
                             "pub struct ConnectedMarketApplication",
                             ".control().health().await",
-                            ".data_sources(MarketDataSourcesQuery::default())",
+                            ".data_sources(query)",
                             ".control().subscribe(",
                             ".control().unsubscribe(",
                             ".control().recover().await",

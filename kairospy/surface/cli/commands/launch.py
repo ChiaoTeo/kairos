@@ -45,7 +45,6 @@ from kairospy.application.launch.application.wizard import (
     prompt_draft,
 )
 from kairospy.application.workspace import WorkspaceApplication
-from kairospy.infrastructure.transport.market import MarketProjection
 from kairospy.surface.cli.options import (
     OutputFormat,
     effective_output,
@@ -681,40 +680,45 @@ def launch_instance_component_account_positions(
     )
 
 
-def _market_snapshot_value(
-    view_root: Path,
+def _run_instance_market_connected_command(
+    owner: Any,
     *,
-    kind: str,
-    source_id: str,
-    market_id: str | None,
-    symbol: str | None,
-    exchange: str,
-    market_type: str,
-    timeframe: str | None,
-) -> dict[str, object]:
-    if market_id is None:
-        if not symbol:
-            raise typer.BadParameter("snapshot requires --market-id or --symbol")
-        market_id = (
-            f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
+    launch_id: str,
+    instance: str | None,
+    command: str,
+    arguments: list[str],
+    require_views: bool,
+) -> dict[str, Any]:
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    connections = resolve_instance_connections(instance_workspace)
+    connection = connections.market
+    if connection is None:
+        raise typer.BadParameter(
+            f"launch {launch_id} instance {resolved_instance} has no connected Market component"
         )
-    projection = MarketProjection(view_root)
-    if kind == "quote":
-        value = projection.read_quote(market_id, source_id)
-    elif kind == "bar":
-        if not timeframe:
-            raise typer.BadParameter("snapshot bar requires --timeframe")
-        value = projection.read_bar(market_id, source_id, timeframe)
-    elif kind == "greeks":
-        value = projection.read_greeks(market_id, source_id)
-    else:
-        raise typer.BadParameter("snapshot kind must be quote, bar, or greeks")
+    if not connection.socket.exists():
+        raise typer.BadParameter(
+            f"无法连接 launch {launch_id} instance {resolved_instance} Market 服务。"
+            "请先查看该 launch instance 的组件状态。"
+        )
+    target = ["--socket", str(connection.socket)]
+    if connection.view_root is not None:
+        target.extend(("--view-root", str(connection.view_root)))
+    elif require_views:
+        raise typer.BadParameter(
+            f"launch {launch_id} instance {resolved_instance} Market connection "
+            "has no view root"
+        )
+    value = NativeCliApplication(owner).run(
+        "market", ["connected", command, *target, *arguments]
+    )
     return {
-        "market_id": market_id,
-        "source_id": source_id,
-        "kind": kind,
-        "status": "ready" if value is not None else "not_found",
-        "value": None if value is None else asdict(value),
+        **value,
+        "launch_id": launch_id,
+        "instance_id": resolved_instance,
+        "mode": mode,
+        "scope": "launch-instance",
     }
 
 
@@ -744,6 +748,47 @@ def launch_instance_component_market_status(
     )
 
 
+@instance_component_market_app.command("sources")
+def launch_instance_component_market_sources(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    market_id: str | None = typer.Option(None, "--market-id"),
+    instrument_id: str | None = typer.Option(None, "--instrument-id"),
+    observation_kind: str | None = typer.Option(None, "--observation-kind"),
+    provider_id: str | None = typer.Option(None, "--provider-id"),
+    configured_only: bool = typer.Option(False, "--configured-only"),
+    ready_only: bool = typer.Option(False, "--ready-only"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Market source readiness selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    arguments: list[str] = []
+    for option, value in (
+        ("--market-id", market_id),
+        ("--instrument-id", instrument_id),
+        ("--observation-kind", observation_kind),
+        ("--provider-id", provider_id),
+    ):
+        if value is not None:
+            arguments.extend((option, value))
+    if configured_only:
+        arguments.append("--configured-only")
+    if ready_only:
+        arguments.append("--ready-only")
+    _emit(
+        _run_instance_market_connected_command(
+            owner,
+            launch_id=launch_id,
+            instance=instance,
+            command="sources",
+            arguments=arguments,
+            require_views=False,
+        ),
+        output,
+    )
+
+
 @instance_component_market_app.command("snapshot")
 def launch_instance_component_market_snapshot(
     launch_id: str,
@@ -760,29 +805,50 @@ def launch_instance_component_market_snapshot(
 ) -> None:
     """Read one Market projection view selected by a launch instance."""
     owner = WorkspaceApplication().open(workspace)
-    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
-    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
-    connections = resolve_instance_connections(instance_workspace)
-    if connections.market is None or connections.market.view_root is None:
-        raise typer.BadParameter("launch instance has no connected market view root")
-    value = _market_snapshot_value(
-        connections.market.view_root,
-        kind=kind,
-        source_id=source_id,
-        market_id=market_id,
-        symbol=symbol,
-        exchange=exchange,
-        market_type=market_type,
-        timeframe=timeframe,
-    )
+    if market_id is None:
+        if not symbol:
+            raise typer.BadParameter("snapshot requires --market-id or --symbol")
+        market_id = f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
+    arguments = [kind, "--market-id", market_id, "--source-id", source_id]
+    if timeframe is not None:
+        arguments.extend(("--timeframe", timeframe))
     _emit(
-        {
-            **value,
-            "launch_id": launch_id,
-            "instance_id": resolved_instance,
-            "mode": mode,
-            "scope": "launch-instance",
-        },
+        _run_instance_market_connected_command(
+            owner,
+            launch_id=launch_id,
+            instance=instance,
+            command="snapshot",
+            arguments=arguments,
+            require_views=True,
+        ),
+        output,
+    )
+
+
+@instance_component_market_app.command("freshness")
+def launch_instance_component_market_freshness(
+    launch_id: str,
+    market_id: str = typer.Option(..., "--market-id"),
+    source_id: str = typer.Option(..., "--source-id"),
+    qualifier: str | None = typer.Option(None, "--qualifier"),
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read Market freshness selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    arguments = ["--market-id", market_id, "--source-id", source_id]
+    if qualifier is not None:
+        arguments.extend(("--qualifier", qualifier))
+    _emit(
+        _run_instance_market_connected_command(
+            owner,
+            launch_id=launch_id,
+            instance=instance,
+            command="freshness",
+            arguments=arguments,
+            require_views=True,
+        ),
         output,
     )
 

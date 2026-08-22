@@ -1,4 +1,5 @@
-use kairos_primitives::market::{SourceId, SubscriptionId};
+use kairos_primitives::integration::ProviderId;
+use kairos_primitives::market::{ObservationKind, SourceId, SubscriptionId};
 use kairos_primitives::reference::{AssetClass, Exchange, InstrumentId, InstrumentKind, MarketId};
 use kairos_primitives::runtime::{IdempotencyKey, InstanceId, LaunchId, RequestId, StrategyId};
 use kairos_primitives::time::Sequence;
@@ -77,6 +78,14 @@ pub struct MarketDataSourcesQuery {
     pub exchange: Option<Exchange>,
     pub market_type: Option<InstrumentKind>,
     pub asset_type: Option<AssetClass>,
+    #[serde(default)]
+    pub observation_kind: Option<ObservationKind>,
+    #[serde(default)]
+    pub provider_id: Option<ProviderId>,
+    #[serde(default)]
+    pub configured_only: bool,
+    #[serde(default)]
+    pub ready_only: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -107,6 +116,12 @@ pub enum MarketFeedStatus {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataSource {
     pub source_id: SourceId,
+    #[serde(default)]
+    pub provider_id: Option<ProviderId>,
+    #[serde(default)]
+    pub observation_capabilities: Vec<ObservationKind>,
+    #[serde(default)]
+    pub configured: bool,
     pub status: MarketSourceStatus,
     pub ready: bool,
     pub stale: bool,
@@ -202,7 +217,9 @@ pub enum MarketCommandOutcome {
 mod tests {
     use kairos_primitives::runtime::{IdempotencyKey, InstanceId, LaunchId, RequestId};
 
-    use super::{MarketCommandEnvelope, MarketOperation, MarketSubscribePayload};
+    use super::{
+        MarketCommandEnvelope, MarketDataSourcesQuery, MarketOperation, MarketSubscribePayload,
+    };
 
     #[test]
     fn subscription_command_has_a_typed_contract_shape() {
@@ -230,5 +247,33 @@ mod tests {
         assert_eq!(value["operation"], "subscribe");
         assert_eq!(value["payload"]["selectors"][0], "trades");
         assert!(value.get("payload").is_some());
+    }
+
+    #[test]
+    fn data_source_query_uses_typed_discovery_filters() {
+        let query: MarketDataSourcesQuery = serde_json::from_value(serde_json::json!({
+            "market_id": "market:binance:spot:BTCUSDT",
+            "instrument_id": "instrument:spot:BTC",
+            "observation_kind": "quote",
+            "provider_id": "binance",
+            "configured_only": true,
+            "ready_only": true
+        }))
+        .unwrap();
+
+        assert_eq!(
+            query.market_id.as_ref().map(|value| value.as_str()),
+            Some("market:binance:spot:BTCUSDT")
+        );
+        assert_eq!(
+            query.observation_kind,
+            Some(kairos_primitives::market::ObservationKind::Quote)
+        );
+        assert_eq!(
+            query.provider_id.as_ref().map(|value| value.as_str()),
+            Some("binance")
+        );
+        assert!(query.configured_only);
+        assert!(query.ready_only);
     }
 }

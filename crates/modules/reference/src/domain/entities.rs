@@ -548,6 +548,26 @@ pub struct Entity {
     pub status: ReferenceStatus,
 }
 
+impl Entity {
+    pub fn normalize_canonical_name(&mut self) {
+        if let Some(name) = canonical_entity_name(&self.entity_id) {
+            self.name = name.into();
+        }
+    }
+}
+
+pub fn canonical_entity_name(entity_id: &str) -> Option<&'static str> {
+    match entity_id {
+        "exchange:nasdaq" => Some("Nasdaq"),
+        "exchange:nyse" => Some("NYSE"),
+        "exchange:amex" => Some("NYSE American"),
+        "exchange:arcx" => Some("NYSE Arca"),
+        "exchange:bats" => Some("Cboe BZX Exchange"),
+        "exchange:cboe-bzx-options" => Some("Cboe BZX Options Exchange"),
+        _ => None,
+    }
+}
+
 #[derive(
     Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
 )]

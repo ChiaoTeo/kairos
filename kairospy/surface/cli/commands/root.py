@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict
 from pathlib import Path
 import time
-from typing import Any, cast
+from typing import Any
 
 import typer
 
@@ -17,7 +16,6 @@ from kairospy.application.system import (
     CapitalSystemClient,
     ComponentControlApplication,
     ComponentProcessApplication,
-    MarketSystemClient,
     NativeCliApplication,
     RiskSystemClient,
     SystemRuntimeSupervisor,
@@ -29,7 +27,6 @@ from kairospy.application.system.process_logging import (
     parse_since,
 )
 from kairospy.application.config import ConfigApplication
-from kairospy.infrastructure.transport.market import MarketProjection
 from kairospy.application.notification.composition import (
     test_notification_destination,
     validate_workspace_notifications,
@@ -111,20 +108,25 @@ def _ensure_no_active_component_dependents(
     raise typer.BadParameter("\n".join(lines))
 
 
-def _workspace_market_client(owner: Any) -> MarketSystemClient:
-    socket = owner.paths.process_socket("market")
-    if not socket.exists():
-        raise typer.BadParameter(
-            "target server not found: workspace Market is not running; "
-            "use `kairos system up --component market` first"
-        )
-    return cast(MarketSystemClient, ComponentProcessApplication(owner).client("market", socket))
-
-
 def _run_workspace_market_connected_command(
     owner: Any, command: str, arguments: list[str]
 ) -> dict[str, Any]:
-    return NativeCliApplication(owner).run("market", ["connected", command, *arguments])
+    socket = owner.paths.process_socket("market")
+    if not socket.exists():
+        raise typer.BadParameter(
+            "无法连接 workspace Market 服务。"
+            "请先运行：kairos system component market status"
+        )
+    value = NativeCliApplication(owner).run("market", [
+        "connected",
+        command,
+        "--socket",
+        str(socket),
+        "--view-root",
+        str(owner.paths.child("snapshots", "market", "market-shared")),
+        *arguments,
+    ])
+    return {**value, "scope": "system"}
 
 
 def _workspace_reference_client(owner: Any):
@@ -181,48 +183,6 @@ def _run_workspace_capital_connected_command(
     owner: Any, command: str, arguments: list[str]
 ) -> dict[str, Any]:
     return NativeCliApplication(owner).run("capital", ["connected", command, *arguments])
-
-
-def _workspace_market_projection(owner: Any) -> MarketProjection:
-    view_root = owner.paths.child("snapshots", "market", "market-shared")
-    return MarketProjection(view_root)
-
-
-def _market_snapshot_value(
-    owner: Any,
-    *,
-    kind: str,
-    source_id: str,
-    market_id: str | None,
-    symbol: str | None,
-    exchange: str,
-    market_type: str,
-    timeframe: str | None,
-) -> dict[str, object]:
-    if market_id is None:
-        if not symbol:
-            raise typer.BadParameter("snapshot requires --market-id or --symbol")
-        market_id = (
-            f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
-        )
-    projection = _workspace_market_projection(owner)
-    if kind == "quote":
-        value = projection.read_quote(market_id, source_id)
-    elif kind == "bar":
-        if not timeframe:
-            raise typer.BadParameter("snapshot bar requires --timeframe")
-        value = projection.read_bar(market_id, source_id, timeframe)
-    elif kind == "greeks":
-        value = projection.read_greeks(market_id, source_id)
-    else:
-        raise typer.BadParameter("snapshot kind must be quote, bar, or greeks")
-    return {
-        "market_id": market_id,
-        "source_id": source_id,
-        "kind": kind,
-        "status": "ready" if value is not None else "not_found",
-        "value": None if value is None else asdict(value),
-    }
 
 
 def _add_group(
@@ -642,7 +602,10 @@ def system_component_market_status(
 ) -> None:
     """Inspect the workspace-scoped Market component server."""
     owner = WorkspaceApplication().open(workspace)
-    _emit(ComponentProcessApplication(owner).status("market"), output)
+    _emit(
+        {**ComponentProcessApplication(owner).status("market"), "scope": "system"},
+        output,
+    )
 
 
 @system_component_market_app.command("sources")
@@ -658,19 +621,20 @@ def system_component_market_sources(
 ) -> None:
     """Read data source readiness from the workspace-scoped Market server."""
     owner = WorkspaceApplication().open(workspace)
-    query = {
-        key: value
-        for key, value in {
-            "market_id": market_id,
-            "instrument_id": instrument_id,
-            "observation_kind": observation_kind,
-            "provider_id": provider_id,
-            "configured_only": "true" if configured_only else None,
-            "ready_only": "true" if ready_only else None,
-        }.items()
-        if value is not None
-    }
-    _emit(_workspace_market_client(owner).data_sources(query), output)
+    arguments: list[str] = []
+    for option, value in (
+        ("--market-id", market_id),
+        ("--instrument-id", instrument_id),
+        ("--observation-kind", observation_kind),
+        ("--provider-id", provider_id),
+    ):
+        if value is not None:
+            arguments.extend((option, value))
+    if configured_only:
+        arguments.append("--configured-only")
+    if ready_only:
+        arguments.append("--ready-only")
+    _emit(_run_workspace_market_connected_command(owner, "sources", arguments), output)
 
 
 @system_component_market_app.command("snapshot")
@@ -687,19 +651,14 @@ def system_component_market_snapshot(
 ) -> None:
     """Read one current Market projection view from the workspace scope."""
     owner = WorkspaceApplication().open(workspace)
-    _emit(
-        _market_snapshot_value(
-            owner,
-            kind=kind,
-            source_id=source_id,
-            market_id=market_id,
-            symbol=symbol,
-            exchange=exchange,
-            market_type=market_type,
-            timeframe=timeframe,
-        ),
-        output,
-    )
+    if market_id is None:
+        if not symbol:
+            raise typer.BadParameter("snapshot requires --market-id or --symbol")
+        market_id = f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
+    arguments = [kind, "--market-id", market_id, "--source-id", source_id]
+    if timeframe is not None:
+        arguments.extend(("--timeframe", timeframe))
+    _emit(_run_workspace_market_connected_command(owner, "snapshot", arguments), output)
 
 
 @system_component_market_app.command("freshness")

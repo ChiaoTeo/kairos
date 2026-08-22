@@ -7,11 +7,13 @@ use kairos_market::composition::default_endpoint;
 use kairos_market::{
     CliMarketApplication, CliMarketDiagnosticProvider, CliMarketHistoricalDataKind,
     CliMarketHistoricalDownloadRequest, CliMarketHistoricalMarketType, CliMarketHistoricalProvider,
-    ConnectedMarketApplication, MarketDataRoute, ResolvedMarket,
+    ConnectedMarketApplication, ConnectedMarketSourceQuery, ConnectedSourceAvailability,
+    MarketDataRoute, ResolvedMarket,
 };
 use kairos_market_contract::{MarketClient, MarketConnection};
-use kairos_primitives::market::{SourceId, SubscriptionId};
-use kairos_primitives::reference::{Exchange, InstrumentKind};
+use kairos_primitives::integration::ProviderId;
+use kairos_primitives::market::{ObservationKind, SourceId, SubscriptionId};
+use kairos_primitives::reference::{Exchange, InstrumentId, InstrumentKind, MarketId};
 use kairos_primitives::runtime::{IdempotencyKey, InstanceId, RequestId, StrategyId};
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};
@@ -59,18 +61,44 @@ async fn run_connected(
                 .health()
                 .await
         },
-        ConnectedCommand::Sources(target) => {
-            connected_market_app(target, workspace_root, false)?
-                .sources()
+        ConnectedCommand::Sources(command) => {
+            connected_market_app(command.target.clone(), workspace_root, false)?
+                .sources(command.into_query()?)
                 .await
         },
         ConnectedCommand::Snapshot(command) => {
             let app = connected_market_app(command.target.clone(), workspace_root, true)?;
-            read_connected_snapshot(&app, command)
+            if let Some(error) = validate_connected_source(
+                &app,
+                &command.market_id,
+                &command.source_id,
+                Some(command.kind.observation_kind()),
+            )
+            .await?
+            {
+                Ok(error)
+            } else {
+                read_connected_snapshot(&app, command)
+            }
         },
         ConnectedCommand::Freshness(command) => {
             let app = connected_market_app(command.target.clone(), workspace_root, true)?;
-            app.freshness_snapshot(command.market_id, command.source_id, command.qualifier)
+            let observation_kind = command
+                .qualifier
+                .as_deref()
+                .and_then(|value| ObservationKind::parse_selector(value).ok());
+            if let Some(error) = validate_connected_source(
+                &app,
+                &command.market_id,
+                &command.source_id,
+                observation_kind,
+            )
+            .await?
+            {
+                Ok(error)
+            } else {
+                app.freshness_snapshot(command.market_id, command.source_id, command.qualifier)
+            }
         },
         ConnectedCommand::Subscribe(command) => {
             let app = connected_market_app(command.target.clone(), workspace_root, false)?;
@@ -96,6 +124,94 @@ async fn run_connected(
                 .await
         },
     }
+}
+
+async fn validate_connected_source(
+    app: &ConnectedMarketApplication,
+    market_id: &str,
+    source_id: &str,
+    observation_kind: Option<ObservationKind>,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let source_id = SourceId::new(source_id)?;
+    let kind = observation_kind.map_or("requested view", ObservationKind::as_str);
+    Ok(
+        match app
+            .source_availability(MarketId::new(market_id)?, &source_id, observation_kind)
+            .await?
+        {
+            ConnectedSourceAvailability::Available => None,
+            ConnectedSourceAvailability::NotReady => Some(source_not_ready_json(
+                market_id,
+                &source_id,
+                observation_kind,
+                kind,
+            )),
+            ConnectedSourceAvailability::NotAvailable => Some(source_not_available_json(
+                market_id,
+                &source_id,
+                observation_kind,
+                kind,
+            )),
+        },
+    )
+}
+
+fn source_not_ready_json(
+    market_id: &str,
+    source_id: &SourceId,
+    observation_kind: Option<ObservationKind>,
+    kind_label: &str,
+) -> Value {
+    serde_json::json!({
+        "kind": kind_label,
+        "market_id": market_id,
+        "source_id": source_id,
+        "status": "unavailable",
+        "present": false,
+        "value": Value::Null,
+        "error": {
+            "code": "source_not_ready",
+            "message": format!(
+                "configured source {source_id} is not ready for Market {market_id}"
+            ),
+            "retryable": true,
+            "details": {
+                "market_id": market_id,
+                "source_id": source_id,
+                "observation_kind": observation_kind.map(ObservationKind::as_str),
+                "next_action": "inspect connected sources and wait for source readiness",
+            }
+        }
+    })
+}
+
+fn source_not_available_json(
+    market_id: &str,
+    source_id: &SourceId,
+    observation_kind: Option<ObservationKind>,
+    kind_label: &str,
+) -> Value {
+    serde_json::json!({
+        "kind": kind_label,
+        "market_id": market_id,
+        "source_id": source_id,
+        "status": "unavailable",
+        "present": false,
+        "value": Value::Null,
+        "error": {
+            "code": "source_not_available",
+            "message": format!(
+                "Market {market_id} has no configured source {source_id} supporting {kind_label}"
+            ),
+            "retryable": false,
+            "details": {
+                "market_id": market_id,
+                "source_id": source_id,
+                "observation_kind": observation_kind.map(ObservationKind::as_str),
+                "next_action": "list connected sources before reading a view",
+            }
+        }
+    })
 }
 
 fn connected_market_app(
@@ -257,7 +373,7 @@ enum StandaloneCommand {
 #[derive(Debug, Subcommand)]
 enum ConnectedCommand {
     Status(ConnectedTargetArgs),
-    Sources(ConnectedTargetArgs),
+    Sources(SourcesCommand),
     Snapshot(SnapshotCommand),
     Freshness(FreshnessCommand),
     Subscribe(SubscribeCommand),
@@ -273,6 +389,41 @@ struct ConnectedTargetArgs {
     socket: Option<PathBuf>,
     #[arg(long)]
     view_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct SourcesCommand {
+    #[command(flatten)]
+    target: ConnectedTargetArgs,
+    #[arg(long)]
+    market_id: Option<String>,
+    #[arg(long)]
+    instrument_id: Option<String>,
+    #[arg(long)]
+    observation_kind: Option<String>,
+    #[arg(long)]
+    provider_id: Option<String>,
+    #[arg(long)]
+    configured_only: bool,
+    #[arg(long)]
+    ready_only: bool,
+}
+
+impl SourcesCommand {
+    fn into_query(self) -> Result<ConnectedMarketSourceQuery, Box<dyn std::error::Error>> {
+        Ok(ConnectedMarketSourceQuery {
+            market_id: self.market_id.map(MarketId::new).transpose()?,
+            instrument_id: self.instrument_id.map(InstrumentId::new).transpose()?,
+            observation_kind: self
+                .observation_kind
+                .as_deref()
+                .map(ObservationKind::parse_selector)
+                .transpose()?,
+            provider_id: self.provider_id.map(ProviderId::new).transpose()?,
+            configured_only: self.configured_only,
+            ready_only: self.ready_only,
+        })
+    }
 }
 
 #[derive(Debug, Args)]
@@ -417,6 +568,16 @@ enum SnapshotKind {
     Quote,
     Bar,
     Greeks,
+}
+
+impl SnapshotKind {
+    const fn observation_kind(&self) -> ObservationKind {
+        match self {
+            Self::Quote => ObservationKind::Quote,
+            Self::Bar => ObservationKind::Bar,
+            Self::Greeks => ObservationKind::OptionGreeks,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -613,5 +774,101 @@ impl Provider {
             Self::BinanceSpotWebsocket => CliMarketDiagnosticProvider::BinanceSpotWebsocket,
             Self::BinanceOptionsRest => CliMarketDiagnosticProvider::BinanceOptionsRest,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn connected_sources_maps_discovery_filters_to_typed_query() {
+        let cli = Cli::try_parse_from([
+            "kairos-market-cli",
+            "connected",
+            "sources",
+            "--socket",
+            "/tmp/market.sock",
+            "--market-id",
+            "market:binance:spot:BTCUSDT",
+            "--instrument-id",
+            "instrument:spot:BTC",
+            "--observation-kind",
+            "quote",
+            "--provider-id",
+            "binance",
+            "--configured-only",
+            "--ready-only",
+        ])
+        .unwrap();
+        let Command::Connected(ConnectedCommand::Sources(command)) = cli.command else {
+            panic!("expected connected sources command");
+        };
+        let query = command.into_query().unwrap();
+
+        assert_eq!(
+            query.market_id.as_ref().map(|value| value.as_str()),
+            Some("market:binance:spot:BTCUSDT")
+        );
+        assert_eq!(query.observation_kind, Some(ObservationKind::Quote));
+        assert_eq!(
+            query.provider_id.as_ref().map(|value| value.as_str()),
+            Some("binance")
+        );
+        assert!(query.configured_only);
+        assert!(query.ready_only);
+    }
+
+    #[test]
+    fn connected_sources_rejects_unknown_observation_kind() {
+        let cli = Cli::try_parse_from([
+            "kairos-market-cli",
+            "connected",
+            "sources",
+            "--socket",
+            "/tmp/market.sock",
+            "--observation-kind",
+            "mystery",
+        ])
+        .unwrap();
+        let Command::Connected(ConnectedCommand::Sources(command)) = cli.command else {
+            panic!("expected connected sources command");
+        };
+
+        assert!(command.into_query().is_err());
+    }
+
+    #[test]
+    fn unavailable_connected_source_returns_a_structured_result() {
+        let value = source_not_available_json(
+            "market:binance:spot:BTCUSDT",
+            &SourceId::new("binance-spot").unwrap(),
+            Some(ObservationKind::Quote),
+            "quote",
+        );
+
+        assert_eq!(value["status"], "unavailable");
+        assert_eq!(value["error"]["code"], "source_not_available");
+        assert_eq!(value["error"]["retryable"], false);
+        assert_eq!(
+            value["error"]["details"]["next_action"],
+            "list connected sources before reading a view"
+        );
+    }
+
+    #[test]
+    fn unready_connected_source_returns_a_retryable_structured_result() {
+        let value = source_not_ready_json(
+            "market:binance:spot:BTCUSDT",
+            &SourceId::new("binance-spot").unwrap(),
+            Some(ObservationKind::Quote),
+            "quote",
+        );
+
+        assert_eq!(value["status"], "unavailable");
+        assert_eq!(value["error"]["code"], "source_not_ready");
+        assert_eq!(value["error"]["retryable"], true);
     }
 }
