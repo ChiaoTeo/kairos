@@ -76,6 +76,7 @@ class ReferenceApplication:
         self,
         *,
         entity_ids: Sequence[str] | None = None,
+        query: str | None = None,
         entity_type: str | None = None,
         status: str | None = None,
         active_only: bool = False,
@@ -84,6 +85,7 @@ class ReferenceApplication:
     ) -> tuple[Entity, ...]:
         rows = self._require_client().entities(
             entity_ids=entity_ids,
+            query=query,
             entity_type=entity_type,
             status=status,
             active_only=active_only,
@@ -104,6 +106,7 @@ class ReferenceApplication:
         self,
         *,
         asset_ids: Sequence[str] | None = None,
+        query: str | None = None,
         code: str | None = None,
         asset_class: str | None = None,
         status: str | None = None,
@@ -113,6 +116,7 @@ class ReferenceApplication:
     ) -> tuple[Asset, ...]:
         rows = self._require_client().assets(
             asset_ids=asset_ids,
+            query=query,
             code=code,
             asset_class=asset_class,
             status=status,
@@ -134,6 +138,7 @@ class ReferenceApplication:
         self,
         *,
         instrument_ids: Sequence[InstrumentId | str] | None = None,
+        query: str | None = None,
         symbol: str | None = None,
         instrument_type: str | None = None,
         product_family: str | None = None,
@@ -149,6 +154,7 @@ class ReferenceApplication:
     ) -> tuple[Instrument, ...]:
         rows = self._require_client().instruments(
             instrument_ids=_strings(instrument_ids),
+            query=query,
             symbol=symbol,
             instrument_type=instrument_type,
             product_family=product_family,
@@ -204,6 +210,7 @@ class ReferenceApplication:
         self,
         *,
         listing_ids: Sequence[ListingId | str] | None = None,
+        query: str | None = None,
         instrument_id: InstrumentId | str | None = None,
         exchange: ExchangeId | str | None = None,
         exchange_symbol: str | None = None,
@@ -214,6 +221,7 @@ class ReferenceApplication:
     ) -> tuple[Listing, ...]:
         rows = self._require_client().listings(
             listing_ids=_strings(listing_ids),
+            query=query,
             instrument_id=_string(instrument_id),
             exchange_id=_string(exchange),
             exchange_symbol=exchange_symbol,
@@ -238,7 +246,9 @@ class ReferenceApplication:
         self,
         *,
         market_ids: Sequence[MarketId | str] | None = None,
+        query: str | None = None,
         symbol: str | None = None,
+        asset_code: str | None = None,
         exchange: ExchangeId | str | None = None,
         instrument_kind: str | None = None,
         asset_type: str | None = None,
@@ -252,7 +262,9 @@ class ReferenceApplication:
     ) -> tuple[Market, ...]:
         rows = self._require_client().markets(
             market_ids=_strings(market_ids),
+            query=query,
             symbol=symbol,
+            asset_code=asset_code,
             exchange_id=_string(exchange),
             instrument_kind=instrument_kind,
             asset_type=asset_type,

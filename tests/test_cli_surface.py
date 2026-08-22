@@ -3884,19 +3884,38 @@ def test_account_positions_uses_top_level_standalone_mode(
     ]
 
 
-def test_interactive_numeric_entry_opens_trading_target_context(
+def test_interactive_reference_selects_type_searches_and_shows_compact_detail(
     tmp_path, monkeypatch
 ) -> None:
+    from kairospy.application.reference import Instrument
+    from kairospy.domain_types import InstrumentId
     from kairospy.surface.cli.interactive import run_interactive
 
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["3", "2", "exit"])
-    prompts = iter(["AAPL"])
-    confirmations = iter([True])
+    shell_input = iter(["3", "5", "1", "AAPL", "4", "exit"])
+    prompts = iter(["1"])
     executed: list[tuple[str, ...]] = []
+
+    class ReferenceApplication:
+        def find_instruments(self, **filters):
+            assert filters["query"] == "AAPL"
+            assert filters["instrument_type"] == "equity"
+            return (
+                Instrument(
+                    InstrumentId("instrument:equity:US:AAPL:common"),
+                    "AAPL",
+                    "equity",
+                    name="Apple Inc.",
+                ),
+            )
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive._reference_application",
+        lambda _context: ReferenceApplication(),
+    )
 
     def read_input(prompt: str = "") -> str:
         print(prompt, end="")
@@ -3904,7 +3923,6 @@ def test_interactive_numeric_entry_opens_trading_target_context(
 
     monkeypatch.setattr("builtins.input", read_input)
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
-    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: next(confirmations))
 
     with redirect_stdout(output):
         status = run_interactive(
@@ -3918,13 +3936,112 @@ def test_interactive_numeric_entry_opens_trading_target_context(
     text = output.getvalue()
     assert status == 0
     assert "无法识别这个命令" not in text
-    assert "/targets>" in text
-    assert "交易标的：" in text
-    assert executed[0][:4] == ("reference", "markets", "--asset-code", "AAPL")
-    assert (
-        "kairos reference markets --asset-code AAPL --active-only --format table"
-        in text
+    assert "Reference 市场目录：" in text
+    assert "/reference/instruments/equities/AAPL>" in text
+    assert "Apple Inc." in text
+    assert "Instrument ID" in text
+    assert "instrument:equity:US:AAPL:common" in text
+    assert "expiry_unix_nanos" not in text
+    assert executed == []
+
+
+def test_interactive_reference_market_search_does_not_render_raw_wide_table(
+    tmp_path, monkeypatch
+) -> None:
+    from kairospy.application.reference import InstrumentRef, Market
+    from kairospy.domain_types import InstrumentId, MarketId
+    from kairospy.surface.cli.interactive import run_interactive
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
     )
+    output = StringIO()
+    shell_input = iter(["3", "6", "BTCUSDT", "exit"])
+
+    class ReferenceApplication:
+        def find_markets(self, **filters):
+            assert filters["query"] == "BTCUSDT"
+            return (
+                Market(
+                    MarketId("market:binance:spot:BTCUSDT"),
+                    InstrumentRef(InstrumentId("instrument:spot:BTC-USDT"), "BTC-USDT"),
+                    None,
+                    "exchange:binance",
+                    "spot",
+                    venue_symbol="BTCUSDT",
+                    base_asset="asset:crypto:BTC",
+                    quote_asset="asset:crypto:USDT",
+                ),
+            )
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive._reference_application",
+        lambda _context: ReferenceApplication(),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(shell_input))
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "b")
+
+    with redirect_stdout(output):
+        status = run_interactive(
+            workspace=workspace.paths.root,
+            dry_run=False,
+            no_exec=False,
+            yes=False,
+            execute=lambda _argv: 0,
+        )
+
+    text = output.getvalue()
+    assert status == 0
+    assert "计价资产" in text
+    assert "BTCUSDT" in text
+    assert "USDT" in text
+    assert "minimum_notional" not in text
+    assert "effective_from_unix_nanos" not in text
+
+
+def test_interactive_reference_participants_list_immediately(
+    tmp_path, monkeypatch
+) -> None:
+    from kairospy.application.reference import Entity
+    from kairospy.surface.cli.interactive import run_interactive
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    shell_input = iter(["3", "2", "exit"])
+
+    class ReferenceApplication:
+        def find_entities(self, **filters):
+            assert filters == {
+                "query": None,
+                "entity_type": "exchange",
+                "active_only": True,
+                "limit": 25,
+            }
+            return (Entity("exchange:binance", "exchange", "Binance"),)
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive._reference_application",
+        lambda _context: ReferenceApplication(),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(shell_input))
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "b")
+
+    with redirect_stdout(output):
+        status = run_interactive(
+            workspace=workspace.paths.root,
+            dry_run=False,
+            no_exec=False,
+            yes=False,
+            execute=lambda _argv: 0,
+        )
+
+    text = output.getvalue()
+    assert status == 0
+    assert "交易所：输入 refresh 重新读取列表" in text
+    assert "Binance" in text
+    assert "输入代码或名称" not in text
 
 
 def test_interactive_convenience_option_chain_uses_current_reference_option(
@@ -3955,14 +4072,12 @@ def test_interactive_convenience_option_chain_uses_current_reference_option(
     assert "--format table" in output.getvalue()
 
 
-def test_interactive_reference_menu_lists_markets_without_catalog(
-    tmp_path, monkeypatch
-) -> None:
+def test_interactive_reference_preview_searches_assets(tmp_path, monkeypatch) -> None:
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    answers = iter(["4", "6", "1", "25"])
+    answers = iter(["4", "6", "1", "BTC"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
 
     assert (
@@ -3978,9 +4093,9 @@ def test_interactive_reference_menu_lists_markets_without_catalog(
         == 0
     )
     text = output.getvalue()
-    assert "你想查询什么交易标的" in text
+    assert "你想查询市场目录中的什么" in text
     assert (
-        "准备执行：kairos reference markets --active-only --limit 25 --format table"
+        "准备执行：kairos reference assets --query BTC --active-only --limit 10 --format table"
         in text
     )
     assert "reference catalog" not in text
@@ -4043,7 +4158,7 @@ def test_interactive_reference_menu_searches_market_by_symbol(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    answers = iter(["4", "6", "5", "BTCUSDT", "2"])
+    answers = iter(["4", "6", "6", "BTCUSDT"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
 
     assert (
@@ -4058,19 +4173,20 @@ def test_interactive_reference_menu_searches_market_by_symbol(
         )
         == 0
     )
-    assert "准备执行：kairos reference markets --symbol BTCUSDT --format table" in (
-        output.getvalue()
+    assert (
+        "准备执行：kairos reference markets --symbol BTCUSDT --active-only --limit 10 --format table"
+        in output.getvalue()
     )
 
 
-def test_interactive_reference_menu_filters_markets_by_asset_code(
+def test_interactive_reference_preview_selects_instrument_type_before_search(
     tmp_path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    answers = iter(["4", "6", "2", "AAPL"])
+    answers = iter(["4", "6", "5", "3", "BTCUSDT"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
 
     assert (
@@ -4086,8 +4202,8 @@ def test_interactive_reference_menu_filters_markets_by_asset_code(
         == 0
     )
     assert (
-        "准备执行：kairos reference markets --asset-code AAPL --active-only --format table"
-        in output.getvalue()
+        "准备执行：kairos reference markets --instrument-kind perpetual "
+        "--symbol BTCUSDT --active-only --limit 10 --format table" in output.getvalue()
     )
 
 

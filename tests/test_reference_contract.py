@@ -224,6 +224,22 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
     )
 
 
+def test_reference_queries_search_names_and_escape_sql_wildcards(tmp_path) -> None:
+    client = ReferenceClient(database_path=_reference_database(tmp_path))
+
+    assert [value["code"] for value in client.assets(query="bitco", limit=10)] == [
+        "BTC"
+    ]
+    assert [value["entityId"] for value in client.entities(query="BIN", limit=10)] == [
+        "exchange:binance"
+    ]
+    assert [
+        value["instrumentId"]
+        for value in client.instruments(query="bitcoin spot", limit=10)
+    ] == ["instrument:spot:BTC"]
+    assert client.assets(query="%", limit=10) == []
+
+
 def test_reference_sqlite_client_reports_symbol_identity_integrity(tmp_path) -> None:
     path = _reference_database(tmp_path)
     connection = sqlite3.connect(path)

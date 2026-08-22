@@ -1185,6 +1185,8 @@ fn massive_exchange_name(exchange_id: &str) -> &str {
         "exchange:nasdaq" => "Nasdaq",
         "exchange:nyse" => "NYSE",
         "exchange:amex" => "NYSE American",
+        "exchange:arcx" => "NYSE Arca",
+        "exchange:bats" => "Cboe BZX Exchange",
         "exchange:cboe-bzx-options" => "Cboe BZX Options Exchange",
         _ => "Exchange",
     }

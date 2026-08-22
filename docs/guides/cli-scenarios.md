@@ -236,13 +236,13 @@ kairos interactive
 kairos i
 ```
 
-持续交互 shell 的根部按产品任务区分交易标的与运行中行情；Reference 只在
+持续交互 shell 的根部按产品任务区分市场目录与运行中行情；Reference 只在
 `system/reference` 运维路径中作为组件名出现：
 
 ```text
 1. 账户
 2. 策略运行
-3. 交易标的
+3. 市场目录
 4. 行情
 5. 数据与研究
 6. 系统状态
@@ -250,9 +250,35 @@ kairos i
 8. 命令帮助
 ```
 
-`交易标的` 使用 Reference 目录完成搜索、消歧和 market/listing 查询；`行情` 使用
+`市场目录` 使用 Reference 完成资产、市场参与方和交易品种的分类检索；`行情` 使用
 workspace Market component 读取 quote、bar、greeks 和 freshness。两者不能合并为同一个
 Reference 菜单。
+
+Reference 在 interactive shell 中是可逐层浏览的市场目录。集合检索最多展示 10 条精简
+候选，选中以后才展示纵向详情；canonical ID 等实现标识只在“技术标识”动作中出现：
+
+```text
+/reference
+  /assets
+  /participants/exchanges
+  /participants/brokers
+  /participants/providers
+  /instruments/equities
+  /instruments/spot
+  /instruments/perpetuals
+  /instruments/futures
+  /instruments/options
+  /instruments/indices
+  /markets
+```
+
+用户在交易品种目录中先选择股票、现货、永续合约、交割合约、期权或指数，再输入代码或
+名称并选择结果。交易所详情可以继续查看其上市信息；交易品种详情可以继续查看 listing 和
+具体 market。Reference 的 generation、provider 和 publication 状态仍只出现在
+`/system/reference` 运维路径。
+
+交易所、券商和数据提供商数量较少，进入对应目录后直接列出并允许选择详情，不额外要求
+用户先输入检索条件。资产、交易品种和具体市场仍采用“检索后选择”的流程。
 
 交互式入口不应该成为第二套业务 API。它只做三件事：
 
@@ -373,7 +399,7 @@ Account、Market、Execution、Reference 这些模块边界：
 1. Account balances or positions
 2. Market quote, bar, or greeks snapshot
 3. Order status or audit
-4. 交易标的：搜索、markets、listings 或标的详情
+4. 市场目录：资产、参与方、交易品种或具体市场
 5. Notification destination
 6. Provider integration operation
 ```

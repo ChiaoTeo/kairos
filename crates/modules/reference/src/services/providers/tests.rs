@@ -1019,6 +1019,51 @@ fn massive_same_ticker_on_distinct_primary_venues_has_distinct_listings() {
 }
 
 #[test]
+fn massive_equity_venues_have_specific_exchange_names() {
+    let equity = |symbol: &str, venue: &str| ExternalInstrument {
+        source_symbol: ExternalSymbol::new(symbol).unwrap(),
+        source_venue: Some(venue.into()),
+        kind: ExternalInstrumentKind::Equity,
+        base_currency: None,
+        quote_currency: Some(Currency::new("USD").unwrap()),
+        settlement_currency: None,
+        underlying: None,
+        expiry_unix_nanos: None,
+        strike: None,
+        option_right: None,
+        active: true,
+        price_tick: Some("0.01".into()),
+        quantity_tick: Some("1".into()),
+        minimum_quantity: None,
+        minimum_notional: None,
+        contract_value: Some("1".into()),
+        price_precision: Some(2),
+        quantity_precision: Some(0),
+    };
+    let catalog = massive_provider_catalog(ExternalInstrumentCatalog {
+        participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive").unwrap(),
+        instruments: vec![equity("AAA", "ARCX"), equity("BBB", "BATS")],
+    })
+    .unwrap();
+
+    assert!(
+        catalog
+            .entities
+            .iter()
+            .any(|entity| { entity.entity_id == "exchange:arcx" && entity.name == "NYSE Arca" })
+    );
+    assert!(catalog.entities.iter().any(|entity| {
+        entity.entity_id == "exchange:bats" && entity.name == "Cboe BZX Exchange"
+    }));
+    assert!(
+        catalog
+            .entities
+            .iter()
+            .all(|entity| entity.name != "Exchange")
+    );
+}
+
+#[test]
 fn hyperliquid_provider_facts_receive_canonical_identity_only_in_reference() {
     let catalog = hyperliquid_provider_catalog(
         ExternalInstrumentCatalog {

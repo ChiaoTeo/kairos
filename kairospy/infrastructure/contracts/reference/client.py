@@ -137,6 +137,7 @@ class ReferenceReadSession:
         self,
         *,
         entity_ids: Sequence[str] | None = None,
+        query: str | None = None,
         entity_type: str | None = None,
         status: str | None = None,
         active_only: bool = False,
@@ -147,6 +148,7 @@ class ReferenceReadSession:
             "entities",
             filters={"entity_type": entity_type, "status": status},
             ids=entity_ids,
+            query=query,
             active_only=active_only,
             limit=limit,
             offset=offset,
@@ -156,6 +158,7 @@ class ReferenceReadSession:
         self,
         *,
         asset_ids: Sequence[str] | None = None,
+        query: str | None = None,
         code: str | None = None,
         asset_class: str | None = None,
         status: str | None = None,
@@ -167,6 +170,7 @@ class ReferenceReadSession:
             "assets",
             filters={"code": code, "asset_class": asset_class, "status": status},
             ids=asset_ids,
+            query=query,
             active_only=active_only,
             limit=limit,
             offset=offset,
@@ -176,6 +180,7 @@ class ReferenceReadSession:
         self,
         *,
         instrument_ids: Sequence[str] | None = None,
+        query: str | None = None,
         symbol: str | None = None,
         instrument_type: str | None = None,
         product_family: str | None = None,
@@ -232,6 +237,7 @@ class ReferenceReadSession:
             "instruments",
             filters=filters,
             ids=instrument_ids,
+            query=query,
             active_only=active_only,
             extra_clauses=extra_clauses,
             extra_values=extra_values,
@@ -249,6 +255,7 @@ class ReferenceReadSession:
         self,
         *,
         listing_ids: Sequence[str] | None = None,
+        query: str | None = None,
         instrument_id: str | None = None,
         exchange_id: str | None = None,
         exchange_symbol: str | None = None,
@@ -266,6 +273,7 @@ class ReferenceReadSession:
                 "status": status,
             },
             ids=listing_ids,
+            query=query,
             active_only=active_only,
             limit=limit,
             offset=offset,
@@ -275,6 +283,7 @@ class ReferenceReadSession:
         self,
         *,
         market_ids: Sequence[str] | None = None,
+        query: str | None = None,
         symbol: str | None = None,
         asset_code: str | None = None,
         exchange_id: str | None = None,
@@ -329,6 +338,7 @@ class ReferenceReadSession:
                 "status": status,
             },
             ids=market_ids,
+            query=query,
             active_only=active_only,
             extra_clauses=extra_clauses,
             extra_values=extra_values,
@@ -352,6 +362,7 @@ class ReferenceReadSession:
         *,
         filters: dict[str, object | None],
         ids: Sequence[str] | None = None,
+        query: str | None = None,
         active_only: bool = False,
         extra_clauses: Sequence[str] = (),
         extra_values: Sequence[object] = (),
@@ -368,6 +379,7 @@ class ReferenceReadSession:
             key=key,
             filters=filters,
             ids=ids,
+            query=query,
             active_only=active_only,
             extra_clauses=extra_clauses,
             extra_values=extra_values,
@@ -384,6 +396,7 @@ class ReferenceReadSession:
         key: str,
         filters: dict[str, object | None],
         ids: Sequence[str] | None = None,
+        query: str | None = None,
         active_only: bool = False,
         extra_clauses: Sequence[str] = (),
         extra_values: Sequence[object] = (),
@@ -405,6 +418,16 @@ class ReferenceReadSession:
                 return []
             clauses.append(f"{key} IN ({','.join('?' for _ in normalized_ids)})")
             values.extend(normalized_ids)
+        if query is not None:
+            normalized_query = query.strip()
+            if not normalized_query:
+                raise ValueError("Reference query must not be empty")
+            pattern = _like_pattern(normalized_query)
+            clauses.append(
+                f"(LOWER({key}) LIKE LOWER(?) ESCAPE '\\' "
+                "OR LOWER(payload) LIKE LOWER(?) ESCAPE '\\')"
+            )
+            values.extend((pattern, pattern))
         if active_only:
             clauses.append("status IN ('active', 'trading')")
         clauses.extend(extra_clauses)
@@ -483,9 +506,7 @@ class ReferenceClient:
                 from .control import ReferenceControlClient
 
                 control = ReferenceControlClient(self.socket_path, timeout=timeout)
-            return dict(
-                control.call(method, params)
-            )
+            return dict(control.call(method, params))
         except OSError as error:
             raise RuntimeError(f"Reference request failed: {error}") from error
 
@@ -607,6 +628,11 @@ def _exchange_id(value: str | None) -> str | None:
     if value is None or value.startswith("exchange:"):
         return value
     return f"exchange:{value}"
+
+
+def _like_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _payload(value: str) -> dict[str, Any]:
