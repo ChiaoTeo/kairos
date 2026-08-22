@@ -175,9 +175,8 @@ mod tests {
     use kairos_primitives::risk::{MarginRuleCode, PolicyId, ReservationId};
     use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
     use kairos_risk_contract::{
-        Amount, AuthorizeRequest, EnforcementMode, Health, Metric, PolicyScope,
-        PublishPolicyRequest, RiskCommandStatus, RiskControlRpcClient, RiskControlRpcServer,
-        RiskDecision, RiskPolicy, TradeRiskProposal,
+        Amount, AuthorizeRequest, EnforcementMode, Metric, PolicyScope, PublishPolicyRequest,
+        RiskControlRpcClient, RiskControlRpcServer, RiskPolicy, TradeRiskProposal,
     };
 
     #[tokio::test(flavor = "current_thread")]

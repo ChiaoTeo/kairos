@@ -10,7 +10,8 @@ use kairos_workspace::Workspace;
 use serde::Serialize;
 
 use crate::composition::account::{
-    AccountOptions, default_rest_endpoint, inspect_account_credential,
+    AccountOptions, AccountSegmentBinding, default_rest_endpoint, inspect_account_credential,
+    query_direct_account_snapshot,
 };
 use crate::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
@@ -45,6 +46,7 @@ pub struct AccountListItem {
     pub environment: String,
     pub segments: Vec<SegmentKey>,
     pub credential_id: Option<String>,
+    pub capabilities: Vec<String>,
     pub status: String,
 }
 
@@ -54,7 +56,16 @@ pub struct AccountBalancesResult {
     pub source: String,
     pub mode: String,
     pub kind: String,
+    pub segments_requested: u64,
+    pub segments_succeeded: u64,
     pub balances: Vec<AccountBalanceItem>,
+    pub errors: Vec<AccountQueryError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountQueryError {
+    pub segment: SegmentKey,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -64,6 +75,30 @@ pub struct AccountBalanceItem {
     pub total: DecimalParts,
     pub available: DecimalParts,
     pub locked: DecimalParts,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountPositionsResult {
+    pub account_id: AccountId,
+    pub source: String,
+    pub mode: String,
+    pub kind: String,
+    pub segments_requested: u64,
+    pub segments_succeeded: u64,
+    pub positions: Vec<AccountPositionItem>,
+    pub errors: Vec<AccountQueryError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountPositionItem {
+    pub segment: SegmentKey,
+    pub symbol: String,
+    pub instrument_type: Option<String>,
+    pub side: String,
+    pub quantity: DecimalParts,
+    pub average_price: Option<DecimalParts>,
+    pub mark_price: Option<DecimalParts>,
+    pub unrealized_pnl: Option<DecimalParts>,
 }
 
 impl TryFrom<&AccountBindingRecord> for AccountListItem {
@@ -82,9 +117,38 @@ impl TryFrom<&AccountBindingRecord> for AccountListItem {
                 .map(SegmentKey::new)
                 .collect::<Result<_, _>>()?,
             credential_id: record.credential_id.clone(),
+            capabilities: account_capabilities(record),
             status: record.status.clone(),
         })
     }
+}
+
+fn account_capabilities(record: &AccountBindingRecord) -> Vec<String> {
+    let mut capabilities = vec!["read".to_owned()];
+    let roles = record.credential_role.iter().map(String::as_str).chain(
+        record
+            .credentials
+            .iter()
+            .map(|binding| binding.role.as_str()),
+    );
+    for role in roles {
+        match role.trim().to_ascii_lowercase().as_str() {
+            "trade" | "trading" => {
+                if !capabilities.iter().any(|value| value == "trade") {
+                    capabilities.push("trade".into());
+                }
+            },
+            "transfer" | "admin" => {
+                for capability in ["trade", "transfer"] {
+                    if !capabilities.iter().any(|value| value == capability) {
+                        capabilities.push(capability.into());
+                    }
+                }
+            },
+            _ => {},
+        }
+    }
+    capabilities
 }
 
 impl CliAccountApplication {
@@ -196,38 +260,175 @@ impl CliAccountApplication {
         }))
     }
 
-    pub fn local_balances(
+    pub async fn balances(
         &self,
         account_id: &str,
+        segments: &[String],
         include_zero: bool,
     ) -> Result<AccountBalancesResult, Box<dyn std::error::Error>> {
-        let account = self.local_query_account(account_id)?;
-        let balances: Vec<_> = self
-            .local_balances_for(account)?
-            .into_iter()
-            .filter(|value| include_zero || value.total.mantissa() != 0)
-            .collect();
+        let account = self.account(account_id)?;
+        if is_paper_or_simulated(&account.broker)
+            || is_paper_or_simulated(&account.integration_provider)
+            || is_paper_or_simulated(&account.environment)
+        {
+            let selected_segments = selected_segments(account, segments)?;
+            let balances = self
+                .local_balances_for(account)?
+                .into_iter()
+                .filter(|value| selected_segments.contains(&value.segment.to_string()))
+                .filter(|value| include_zero || value.total.mantissa() != 0)
+                .collect();
+            let segment_count = u64::try_from(selected_segments.len())?;
+            return Ok(AccountBalancesResult {
+                account_id: AccountId::new(account.account_id.clone())?,
+                source: "local_registry".into(),
+                mode: "standalone".into(),
+                kind: "balances".into(),
+                segments_requested: segment_count,
+                segments_succeeded: segment_count,
+                balances,
+                errors: Vec::new(),
+            });
+        }
+
+        let base_options = self.direct_query_options(account)?;
+        let mut balances = Vec::new();
+        let mut errors = Vec::new();
+        let selected_segments = selected_segments(account, segments)?;
+        let segments_requested = u64::try_from(selected_segments.len())?;
+        let mut segments_succeeded = 0_u64;
+        for segment in &selected_segments {
+            let product = account.product_for_segment(segment).unwrap_or(segment);
+            let binding = AccountSegmentBinding {
+                segment_key: segment.clone(),
+                provider_product: product.to_owned(),
+                trading_mode: account.segment_trading_modes.get(segment).cloned(),
+            };
+            let mut options = base_options.clone();
+            options.product = product.to_owned();
+            if account.values.get("base_url").is_none() {
+                options.base_url = default_rest_endpoint(&options.provider, product)?.to_owned();
+            }
+            match query_direct_account_snapshot(&options, &binding).await {
+                Ok(snapshot) => {
+                    segments_succeeded = segments_succeeded.saturating_add(1);
+                    for balance in snapshot.balances {
+                        let total = DecimalParts::new(balance.total.mantissa, balance.total.scale)?;
+                        if !include_zero && total.mantissa() == 0 {
+                            continue;
+                        }
+                        balances.push(AccountBalanceItem {
+                            segment: snapshot.segment_key.clone(),
+                            asset: balance.asset_code,
+                            total,
+                            available: decimal_parts(balance.available.unwrap_or(balance.total))?,
+                            locked: decimal_parts(balance.locked.unwrap_or_default())?,
+                        });
+                    }
+                },
+                Err(message) => errors.push(AccountQueryError {
+                    segment: SegmentKey::new(segment.clone())?,
+                    message,
+                }),
+            }
+        }
         Ok(AccountBalancesResult {
             account_id: AccountId::new(account.account_id.clone())?,
-            source: "local_registry".into(),
+            source: "direct_provider".into(),
             mode: "standalone".into(),
             kind: "balances".into(),
+            segments_requested,
+            segments_succeeded,
             balances,
+            errors,
         })
     }
 
-    pub fn local_positions(
+    pub async fn positions(
         &self,
         account_id: &str,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        let account = self.local_query_account(account_id)?;
-        Ok(serde_json::json!({
-            "account_id": account.account_id,
-            "source": "local_registry",
-            "mode": "standalone",
-            "kind": "positions",
-            "positions": [],
-        }))
+        segments: &[String],
+        symbol: Option<&str>,
+    ) -> Result<AccountPositionsResult, Box<dyn std::error::Error>> {
+        let account = self.account(account_id)?;
+        let selected_segments = selected_segments(account, segments)?;
+        let segments_requested = u64::try_from(selected_segments.len())?;
+        if is_paper_or_simulated(&account.broker)
+            || is_paper_or_simulated(&account.integration_provider)
+            || is_paper_or_simulated(&account.environment)
+        {
+            return Ok(AccountPositionsResult {
+                account_id: AccountId::new(account.account_id.clone())?,
+                source: "local_registry".into(),
+                mode: "standalone".into(),
+                kind: "positions".into(),
+                segments_requested,
+                segments_succeeded: segments_requested,
+                positions: Vec::new(),
+                errors: Vec::new(),
+            });
+        }
+
+        let base_options = self.direct_query_options(account)?;
+        let mut positions = Vec::new();
+        let mut errors = Vec::new();
+        let mut segments_succeeded = 0_u64;
+        for segment in &selected_segments {
+            let product = account.product_for_segment(segment).unwrap_or(segment);
+            let binding = AccountSegmentBinding {
+                segment_key: segment.clone(),
+                provider_product: product.to_owned(),
+                trading_mode: account.segment_trading_modes.get(segment).cloned(),
+            };
+            let mut options = base_options.clone();
+            options.product = product.to_owned();
+            if account.values.get("base_url").is_none() {
+                options.base_url = default_rest_endpoint(&options.provider, product)?.to_owned();
+            }
+            match query_direct_account_snapshot(&options, &binding).await {
+                Ok(snapshot) => {
+                    segments_succeeded = segments_succeeded.saturating_add(1);
+                    for position in snapshot.positions {
+                        let position_symbol =
+                            position.participant_instrument.source_symbol.to_string();
+                        if symbol.is_some_and(|value| !position_symbol.eq_ignore_ascii_case(value))
+                        {
+                            continue;
+                        }
+                        positions.push(AccountPositionItem {
+                            segment: snapshot.segment_key.clone(),
+                            symbol: position_symbol,
+                            instrument_type: position
+                                .participant_instrument
+                                .instrument_type
+                                .map(|value| value.as_str().to_owned()),
+                            side: position.position_side.as_str().into(),
+                            quantity: decimal_parts(position.quantity)?,
+                            average_price: position.average_price.map(decimal_parts).transpose()?,
+                            mark_price: position.mark_price.map(decimal_parts).transpose()?,
+                            unrealized_pnl: position
+                                .unrealized_pnl
+                                .map(decimal_parts)
+                                .transpose()?,
+                        });
+                    }
+                },
+                Err(message) => errors.push(AccountQueryError {
+                    segment: SegmentKey::new(segment.clone())?,
+                    message,
+                }),
+            }
+        }
+        Ok(AccountPositionsResult {
+            account_id: AccountId::new(account.account_id.clone())?,
+            source: "direct_provider".into(),
+            mode: "standalone".into(),
+            kind: "positions".into(),
+            segments_requested,
+            segments_succeeded,
+            positions,
+            errors,
+        })
     }
 
     pub fn local_open_orders(
@@ -1029,6 +1230,106 @@ impl CliAccountApplication {
         resolve_account_id(&self.registry, value)
     }
 
+    fn account(
+        &self,
+        account_id: &str,
+    ) -> Result<&AccountBindingRecord, Box<dyn std::error::Error>> {
+        self.registry
+            .accounts
+            .iter()
+            .find(|record| record.account_id == account_id)
+            .ok_or_else(|| format!("account not found: {account_id}").into())
+    }
+
+    fn direct_query_options(
+        &self,
+        account: &AccountBindingRecord,
+    ) -> Result<AccountOptions, Box<dyn std::error::Error>> {
+        let provider = account.integration_provider.trim().to_ascii_lowercase();
+        let credential_id = account
+            .credentials
+            .iter()
+            .find(|binding| binding.role.eq_ignore_ascii_case("readonly"))
+            .map(|binding| binding.credential_id.as_str())
+            .or(account.credential_id.as_deref());
+        let credential = credential_id.and_then(|credential_id| {
+            self.credential_store
+                .credentials
+                .iter()
+                .find(|credential| credential.credential_id == credential_id)
+        });
+        if provider != "ibkr" && credential.is_none() {
+            return Err(
+                format!("account {} has no readable credential", account.account_id).into(),
+            );
+        }
+        if let Some(credential) = credential {
+            if !credential.provider.eq_ignore_ascii_case(&provider) {
+                return Err(format!(
+                    "credential {} belongs to provider {}, not {}",
+                    credential.credential_id, credential.provider, provider
+                )
+                .into());
+            }
+        }
+        let product = account
+            .segments
+            .first()
+            .and_then(|segment| account.product_for_segment(segment))
+            .unwrap_or("spot")
+            .to_owned();
+        let base_url = account
+            .values
+            .get("base_url")
+            .cloned()
+            .unwrap_or_else(String::new);
+        self.account_options(AccountOptionInput {
+            provider,
+            product,
+            api_key: credential
+                .and_then(|value| value.api_key_value())
+                .unwrap_or_default(),
+            secret: credential
+                .and_then(|value| value.secret_value())
+                .unwrap_or_default(),
+            passphrase: credential
+                .and_then(|value| value.passphrase_value())
+                .unwrap_or_default(),
+            base_url,
+            account_id: account
+                .remote_identity
+                .clone()
+                .unwrap_or_else(|| account.account_id.clone()),
+            segment: account
+                .segments
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "spot".into()),
+            environment: account.environment.clone(),
+            account_model: account.account_model.clone(),
+            initial_balances: Vec::new(),
+            host: account
+                .values
+                .get("host")
+                .cloned()
+                .unwrap_or_else(|| "127.0.0.1".into()),
+            port: account
+                .values
+                .get("port")
+                .map(|value| value.parse())
+                .transpose()?
+                .unwrap_or(4002),
+            client_id: account
+                .values
+                .get("client_id")
+                .map(|value| value.parse())
+                .transpose()?
+                .unwrap_or_default(),
+            isolated_margin_symbol: account.values.get("isolated_margin_symbol").cloned(),
+            reference_database: None,
+        })
+    }
+
     fn local_query_account(
         &self,
         account_id: &str,
@@ -1108,6 +1409,35 @@ fn local_balance(
         available: total,
         locked: DecimalParts::default(),
     }))
+}
+
+fn decimal_parts(
+    value: kairos_conflux::ExternalDecimal,
+) -> Result<DecimalParts, kairos_primitives::DomainTypeError> {
+    DecimalParts::new(value.mantissa, value.scale)
+}
+
+fn selected_segments(
+    account: &AccountBindingRecord,
+    requested: &[String],
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    if requested.is_empty() {
+        return Ok(account.segments.clone());
+    }
+    let mut selected = Vec::new();
+    for segment in requested {
+        if !account.segments.iter().any(|value| value == segment) {
+            return Err(format!(
+                "account {} does not have segment {segment}",
+                account.account_id
+            )
+            .into());
+        }
+        if !selected.contains(segment) {
+            selected.push(segment.clone());
+        }
+    }
+    Ok(selected)
 }
 
 pub struct RegisterAccountRequest {
@@ -1291,13 +1621,13 @@ fn is_paper_or_simulated(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kairos_primitives::account::{AccountId, SegmentKey};
+    use kairos_primitives::decimal::DecimalParts;
+    use kairos_primitives::reference::Currency;
     use serde_json::json;
 
     use super::{AccountBalanceItem, AccountBalancesResult, AccountListItem, AccountListResult};
     use crate::composition::registry::AccountBindingRecord;
-    use kairos_primitives::account::{AccountId, SegmentKey};
-    use kairos_primitives::decimal::DecimalParts;
-    use kairos_primitives::reference::Currency;
 
     #[test]
     fn account_list_result_exposes_only_list_semantics() {
@@ -1345,6 +1675,8 @@ mod tests {
             source: "local_registry".into(),
             mode: "standalone".into(),
             kind: "balances".into(),
+            segments_requested: 1,
+            segments_succeeded: 1,
             balances: vec![AccountBalanceItem {
                 segment: SegmentKey::new("spot").unwrap(),
                 asset: Currency::new("USDT").unwrap(),
@@ -1352,6 +1684,7 @@ mod tests {
                 available: "10000".parse::<DecimalParts>().unwrap(),
                 locked: DecimalParts::default(),
             }],
+            errors: Vec::new(),
         })
         .unwrap();
 

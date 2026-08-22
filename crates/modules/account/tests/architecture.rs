@@ -135,7 +135,7 @@ fn account_contract_does_not_expose_execution_order_planning() {
 #[test]
 fn account_application_does_not_expose_provider_capability_or_fee_queries() {
     let source = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/service.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/app.rs"),
     )
     .expect("read account application");
     assert!(!source.contains("pub fn capabilities("));
@@ -166,7 +166,7 @@ fn account_conflux_has_one_live_fact_source_and_mode_gated_paper_settlement() {
     assert!(composition.contains("\"paper\" | \"simulated\""));
 
     let application = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/service.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/app.rs"),
     )
     .expect("read Account application");
     assert!(application.contains("AccountRuntimeMode::Live"));
@@ -308,7 +308,7 @@ fn native_account_refresh_does_not_bridge_async_io_through_blocking_threads() {
 
     assert!(!composition.contains("pub async fn refresh_report"));
     let application =
-        fs::read_to_string(root.join("application/service.rs")).expect("read application facade");
+        fs::read_to_string(root.join("application/app.rs")).expect("read application facade");
     assert!(!application.contains("pub async fn refresh_report_async"));
     assert!(!application.contains("refresh_market_profile"));
 }
@@ -527,21 +527,27 @@ fn account_control_plane_does_not_duplicate_balance_or_position_views() {
 }
 
 #[test]
-fn account_cli_business_state_queries_read_typed_mmap_without_composing_an_application() {
-    let cli = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-account-cli.rs"),
-    )
-    .expect("read account cli");
+fn account_cli_separates_standalone_direct_queries_from_launch_connected_views() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let cli =
+        fs::read_to_string(root.join("src/bin/kairos-account-cli.rs")).expect("read account cli");
+    let standalone = fs::read_to_string(root.join("src/application/cli.rs"))
+        .expect("read standalone Account facade");
+    let connected = fs::read_to_string(root.join("src/application/connected.rs"))
+        .expect("read connected Account facade");
 
-    assert!(cli.contains("fn read_mmap_query("));
-    assert!(cli.contains("install_account_connection("));
-    assert!(cli.contains("account_client("));
-    assert!(cli.contains(".account_current("));
-    assert!(cli.contains(".observed_orders("));
-    assert!(!cli.contains("AccountConnection::control_only"));
-    assert!(!cli.contains("AccountClient::connect"));
-    assert!(!cli.contains("AccountViewReader::open"));
-    assert!(cli.contains("if is_mmap_query(&command)"));
+    assert!(cli.contains("app.balances("));
+    assert!(standalone.contains("query_direct_account_snapshot("));
+    assert!(!standalone.contains("ConnectedAccountApplication"));
+    assert!(!standalone.contains("ConfluxSystem"));
+    assert!(!standalone.contains("configure_conflux("));
+
+    assert!(connected.contains("install_account_connection("));
+    assert!(connected.contains("account_client("));
+    assert!(connected.contains(".account_current("));
+    assert!(connected.contains(".observed_orders("));
+    assert!(cli.contains("Account connected mode is launch-scoped"));
+    assert!(cli.contains("command.is_mmap_query()"));
     for forbidden in [
         "composition.application.snapshot_query(",
         "composition.application.balances_query(",
@@ -549,18 +555,15 @@ fn account_cli_business_state_queries_read_typed_mmap_without_composing_an_appli
         "composition.application.positions_query(",
         "composition.application.open_orders_query(",
     ] {
-        assert!(
-            !cli.contains(forbidden),
-            "Account CLI retains direct application query path {forbidden}"
-        );
+        assert!(!cli.contains(forbidden));
     }
 }
 
 #[test]
 fn account_application_has_no_synchronous_business_query_facade() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let application = fs::read_to_string(root.join("src/application/service.rs"))
-        .expect("read Account application");
+    let application =
+        fs::read_to_string(root.join("src/application/app.rs")).expect("read Account application");
     let exports = fs::read_to_string(root.join("src/lib.rs")).expect("read Account exports");
 
     assert!(!root.join("src/application/query.rs").exists());

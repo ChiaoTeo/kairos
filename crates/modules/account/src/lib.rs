@@ -12,9 +12,9 @@ mod services;
 pub use application::{
     AccountApplication, AccountBalanceItem, AccountBalancesResult, AccountCredentialProbeRequest,
     AccountCurrentView, AccountError, AccountEvent, AccountListItem, AccountListResult,
-    AccountObservedFill, AccountProviderConnectionArgs, AccountRpcService, AccountRuntimeMode,
-    BindCredentialRequest, CliAccountApplication, ConnectAccountProviderRequest,
-    ConnectAccountRequest, ConnectedAccountApplication, CreateCredentialRequest, MarkToMarket,
-    ModifyAccountRequest, ReconcileAccount, RefreshAccount, RegisterAccountRequest,
-    SimulateAccountRequest,
+    AccountObservedFill, AccountPositionItem, AccountPositionsResult,
+    AccountProviderConnectionArgs, AccountRpcService, AccountRuntimeMode, BindCredentialRequest,
+    CliAccountApplication, ConnectAccountProviderRequest, ConnectAccountRequest,
+    ConnectedAccountApplication, CreateCredentialRequest, MarkToMarket, ModifyAccountRequest,
+    ReconcileAccount, RefreshAccount, RegisterAccountRequest, SimulateAccountRequest,
 };

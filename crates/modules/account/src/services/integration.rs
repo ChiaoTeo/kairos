@@ -8,12 +8,15 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use kairos_conflux::{
-    BinanceRestConfig, BinanceUserWebSocketConfig, ConnectionKey, EarnPosition, EarnPositionState,
-    EarnProductFamily, ExternalAccountEvent, ExternalAccountIdentity, ExternalAccountModel,
-    ExternalAccountSegment, ExternalAccountSnapshot, ExternalAccountStatus, ExternalBalance,
-    ExternalDecimal, ExternalMarginMode, ExternalOpenOrder, ExternalOrderStatus, ExternalPosition,
-    ExternalPositionMode, IbkrAccountQueryConfig, IbkrAccountStreamConfig, OkxPrivateRestConfig,
-    OkxPrivateWebSocketConfig, ParticipantInstrumentRef,
+    AccountQuery, BinanceCoinMRestConnection, BinanceFundingRestConnection,
+    BinanceMarginRestConnection, BinanceOptionsRestConnection, BinanceRestConfig,
+    BinanceSpotRestConnection, BinanceUsdMRestConnection, BinanceUserWebSocketConfig,
+    ConnectionKey, EarnPosition, EarnPositionState, EarnProductFamily, ExternalAccountEvent,
+    ExternalAccountIdentity, ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot,
+    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalOpenOrder,
+    ExternalOrderStatus, ExternalPosition, ExternalPositionMode, IbkrAccountQueryConfig,
+    IbkrAccountQueryConnection, IbkrAccountStreamConfig, OkxPrivateRestConfig,
+    OkxPrivateRestConnection, OkxPrivateWebSocketConfig, ParticipantInstrumentRef,
 };
 
 use crate::domain::{
@@ -290,6 +293,65 @@ pub(crate) enum AccountAsyncSnapshotConnection {
 }
 
 impl AccountAsyncSnapshotConnection {
+    pub(crate) async fn fetch(
+        self,
+        key: String,
+        segment: &ExternalAccountSegment,
+    ) -> Result<ExternalAccountSnapshot, String> {
+        let key = ConnectionKey::new(key).map_err(|error| error.to_string())?;
+        match self {
+            Self::BinanceSpot(parameters) => {
+                BinanceSpotRestConnection::new(key, parameters)
+                    .map_err(|error| error.to_string())?
+                    .fetch_account(segment)
+                    .await
+            },
+            Self::BinanceFunding(parameters) => {
+                BinanceFundingRestConnection::new(key, parameters)
+                    .map_err(|error| error.to_string())?
+                    .fetch_account(segment)
+                    .await
+            },
+            Self::BinanceMargin(parameters) => {
+                BinanceMarginRestConnection::new(key, parameters)
+                    .map_err(|error| error.to_string())?
+                    .fetch_account(segment)
+                    .await
+            },
+            Self::BinanceUsdM(parameters) => {
+                BinanceUsdMRestConnection::new(key, parameters)
+                    .map_err(|error| error.to_string())?
+                    .fetch_account(segment)
+                    .await
+            },
+            Self::BinanceCoinM(parameters) => {
+                BinanceCoinMRestConnection::new(key, parameters)
+                    .map_err(|error| error.to_string())?
+                    .fetch_account(segment)
+                    .await
+            },
+            Self::BinanceOptions(parameters) => {
+                BinanceOptionsRestConnection::new(key, parameters)
+                    .map_err(|error| error.to_string())?
+                    .fetch_account(segment)
+                    .await
+            },
+            Self::Ibkr(parameters) => {
+                IbkrAccountQueryConnection::new(key, parameters)
+                    .map_err(|error| error.to_string())?
+                    .fetch_account(segment)
+                    .await
+            },
+            Self::OkxTrading(parameters) => {
+                OkxPrivateRestConnection::new(key, parameters)
+                    .map_err(|error| error.to_string())?
+                    .fetch_account(segment)
+                    .await
+            },
+        }
+        .map_err(|error| error.to_string())
+    }
+
     pub(crate) fn into_conflux(
         self,
         key: String,

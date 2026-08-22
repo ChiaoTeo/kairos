@@ -4,9 +4,9 @@ use clap::{Args, Parser, Subcommand};
 use kairos_account::domain::AccountFill;
 use kairos_account::{
     AccountBalancesResult, AccountCredentialProbeRequest, AccountListItem, AccountListResult,
-    AccountProviderConnectionArgs, BindCredentialRequest, CliAccountApplication,
-    ConnectAccountProviderRequest, ConnectedAccountApplication, CreateCredentialRequest,
-    ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+    AccountPositionsResult, AccountProviderConnectionArgs, BindCredentialRequest,
+    CliAccountApplication, ConnectAccountProviderRequest, ConnectedAccountApplication,
+    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
 };
 use kairos_account_contract::{AccountSegmentsRequest, SimulatedSettlement};
 use kairos_workspace::Workspace;
@@ -37,7 +37,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Cli {
     #[arg(long)]
     workspace: String,
-    #[arg(long, global = true, value_parser = OutputFormat::from_str)]
+    #[arg(
+        long,
+        visible_alias = "format",
+        global = true,
+        value_parser = OutputFormat::from_str
+    )]
     output: Option<OutputFormat>,
     #[arg(long, global = true, default_value = "paper")]
     launch_mode: String,
@@ -122,10 +127,17 @@ enum StandaloneCommand {
     Snapshot,
     #[command(alias = "balance")]
     Balances {
+        #[arg(long = "segment")]
+        segments: Vec<String>,
         #[arg(long)]
         include_zero: bool,
     },
-    Positions,
+    Positions {
+        #[arg(long = "segment")]
+        segments: Vec<String>,
+        #[arg(long)]
+        symbol: Option<String>,
+    },
     #[command(name = "observed-orders", alias = "open-orders")]
     OpenOrders,
     Register {
@@ -452,14 +464,21 @@ async fn run_standalone(
             print_json(app.local_snapshot(&required_account_id(args)?)?);
             return Ok(());
         },
-        StandaloneCommand::Balances { include_zero } => {
+        StandaloneCommand::Balances {
+            segments,
+            include_zero,
+        } => {
             print_account_balances(
-                app.local_balances(&required_account_id(args)?, *include_zero)?,
+                app.balances(&required_account_id(args)?, segments, *include_zero)
+                    .await?,
             )?;
             return Ok(());
         },
-        StandaloneCommand::Positions => {
-            print_json(app.local_positions(&required_account_id(args)?)?);
+        StandaloneCommand::Positions { segments, symbol } => {
+            print_account_positions(
+                app.positions(&required_account_id(args)?, segments, symbol.as_deref())
+                    .await?,
+            )?;
             return Ok(());
         },
         StandaloneCommand::OpenOrders => {
@@ -670,9 +689,85 @@ fn print_account_balances(value: AccountBalancesResult) -> Result<(), serde_json
     Ok(())
 }
 
+fn print_account_positions(value: AccountPositionsResult) -> Result<(), serde_json::Error> {
+    let output = match selected_output_format() {
+        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Text | OutputFormat::Table => render_account_positions(&value),
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn render_account_positions(value: &AccountPositionsResult) -> String {
+    let heading = format!(
+        "Account {} · {} · {} · segments {}/{}",
+        value.account_id,
+        value.mode,
+        value.source.replace('_', " "),
+        value.segments_succeeded,
+        value.segments_requested,
+    );
+    let rows = value
+        .positions
+        .iter()
+        .map(|position| {
+            vec![
+                position.segment.to_string(),
+                position.symbol.clone(),
+                position.side.clone(),
+                position.quantity.to_string(),
+                position
+                    .average_price
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                position
+                    .mark_price
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                position
+                    .unrealized_pnl
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let mut output = if rows.is_empty() {
+        format!("{heading}\nNo positions returned.")
+    } else {
+        format!(
+            "{heading}\n{}",
+            render_compact_table(
+                &[
+                    "SEGMENT", "SYMBOL", "SIDE", "QUANTITY", "ENTRY", "MARK", "UPNL"
+                ],
+                &rows,
+            )
+        )
+    };
+    if !value.errors.is_empty() {
+        output.push_str("\n\nQuery errors:\n");
+        output.push_str(
+            &value
+                .errors
+                .iter()
+                .map(|error| format!("- {}: {}", error.segment, error.message))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    output
+}
+
 fn render_account_balances(value: &AccountBalancesResult) -> String {
-    if value.balances.is_empty() {
-        return format!("No balances for account {}.", value.account_id);
+    if value.balances.is_empty() && value.errors.is_empty() {
+        return format!(
+            "Account {} · {} · {} · segments {}/{}\nNo balances returned.",
+            value.account_id,
+            value.mode,
+            value.source.replace('_', " "),
+            value.segments_succeeded,
+            value.segments_requested,
+        );
     }
 
     let rows = value
@@ -688,7 +783,34 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
             ]
         })
         .collect::<Vec<_>>();
-    render_compact_table(&["SEGMENT", "ASSET", "TOTAL", "AVAILABLE", "LOCKED"], &rows)
+    let heading = format!(
+        "Account {} · {} · {} · segments {}/{}",
+        value.account_id,
+        value.mode,
+        value.source.replace('_', " "),
+        value.segments_succeeded,
+        value.segments_requested,
+    );
+    let mut output = if rows.is_empty() {
+        format!("{heading}\nNo balances returned.")
+    } else {
+        format!(
+            "{heading}\n{}",
+            render_compact_table(&["SEGMENT", "ASSET", "TOTAL", "AVAILABLE", "LOCKED"], &rows)
+        )
+    };
+    if !value.errors.is_empty() {
+        output.push_str("\n\nQuery errors:\n");
+        output.push_str(
+            &value
+                .errors
+                .iter()
+                .map(|error| format!("- {}: {}", error.segment, error.message))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    output
 }
 
 fn render_account_list(value: &AccountListResult) -> String {
@@ -810,8 +932,59 @@ async fn run_connected(
         let application = connected_account_app(args, workspace, &account_id, false)?;
         run_runtime_control(&application, args, &command).await?
     };
-    print_json(value);
+    print_connected_result(&command, value);
     Ok(())
+}
+
+fn print_connected_result(command: &ConnectedCommand, value: serde_json::Value) {
+    let output = match (selected_output_format(), command) {
+        (OutputFormat::Text | OutputFormat::Table, ConnectedCommand::Balances { .. }) => {
+            render_connected_balances(&value)
+        },
+        (format, _) => render(&value, format),
+    };
+    println!("{output}");
+}
+
+fn render_connected_balances(value: &serde_json::Value) -> String {
+    let account_id = value["account_id"].as_str().unwrap_or("unknown");
+    let rows = value["segments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|segment| {
+            let segment_key = segment["segment_key"].as_str().unwrap_or("—").to_owned();
+            let freshness = segment["freshness"].as_str().unwrap_or("—").to_owned();
+            segment["balances"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(move |balance| {
+                    vec![
+                        segment_key.clone(),
+                        balance["asset_code"].as_str().unwrap_or("—").to_owned(),
+                        balance["total"].as_str().unwrap_or("—").to_owned(),
+                        balance["available"].as_str().unwrap_or("—").to_owned(),
+                        balance["locked"].as_str().unwrap_or("—").to_owned(),
+                        freshness.clone(),
+                    ]
+                })
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return format!("No balances for account {account_id}.");
+    }
+    render_compact_table(
+        &[
+            "SEGMENT",
+            "ASSET",
+            "TOTAL",
+            "AVAILABLE",
+            "RESERVED",
+            "FRESHNESS",
+        ],
+        &rows,
+    )
 }
 
 fn is_paper_or_simulated(value: &str) -> bool {
@@ -827,26 +1000,18 @@ fn connected_account_app(
     account_id: &str,
     require_views: bool,
 ) -> Result<ConnectedAccountApplication, Box<dyn std::error::Error>> {
-    if let Some(launch_id) = args.launch_id.as_deref() {
-        let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
-        let socket_name =
-            resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
-        let view_root = if require_views {
-            Some(instance.snapshot(&[])?)
-        } else {
-            None
-        };
-        return ConnectedAccountApplication::connect(instance.socket(&socket_name)?, view_root);
-    }
+    let launch_id = args.launch_id.as_deref().ok_or(
+        "Account connected mode is launch-scoped; use `kairos launch instance component account ...`",
+    )?;
+    let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
+    let socket_name =
+        resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
     let view_root = if require_views {
-        Some(workspace.paths().snapshot(&[])?)
+        Some(instance.snapshot(&[])?)
     } else {
         None
     };
-    ConnectedAccountApplication::connect(
-        workspace.process_socket(args.socket_name.as_deref().unwrap_or("account"))?,
-        view_root,
-    )
+    ConnectedAccountApplication::connect(instance.socket(&socket_name)?, view_root)
 }
 
 async fn run_runtime_control(
@@ -950,6 +1115,7 @@ mod cli_tests {
     use clap::Parser;
     use kairos_account::{
         AccountBalanceItem, AccountBalancesResult, AccountListItem, AccountListResult,
+        AccountPositionItem, AccountPositionsResult,
     };
     use kairos_primitives::account::{AccountId, SegmentKey};
     use kairos_primitives::decimal::DecimalParts;
@@ -958,7 +1124,7 @@ mod cli_tests {
 
     use super::{
         Cli, Command, ConnectedCommand, StandaloneCommand, render_account_balances,
-        render_account_list,
+        render_account_list, render_account_positions,
     };
 
     #[test]
@@ -1022,6 +1188,25 @@ mod cli_tests {
             "--account-id",
             "main",
             "standalone",
+            "positions",
+            "--segment",
+            "usd_m_futures",
+            "--symbol",
+            "BTCUSDT",
+        ])
+        .expect("standalone direct positions parses");
+        assert!(matches!(
+            parsed.command,
+            Command::Standalone(StandaloneCommand::Positions { .. })
+        ));
+
+        let parsed = Cli::try_parse_from([
+            "kairos-account-cli",
+            "--workspace",
+            "/tmp",
+            "--account-id",
+            "main",
+            "standalone",
             "balances",
             "--output",
             "table",
@@ -1067,6 +1252,7 @@ mod cli_tests {
                         .map(|value| SegmentKey::new(value).unwrap())
                         .into(),
                     credential_id: Some("binance-equity-readonly".into()),
+                    capabilities: vec!["read".into()],
                     status: "configured".into(),
                 },
                 AccountListItem {
@@ -1076,6 +1262,7 @@ mod cli_tests {
                     environment: "paper".into(),
                     segments: vec![SegmentKey::new("spot").unwrap()],
                     credential_id: None,
+                    capabilities: vec!["read".into()],
                     status: "configured".into(),
                 },
             ],
@@ -1097,6 +1284,8 @@ mod cli_tests {
             source: "local_registry".into(),
             mode: "standalone".into(),
             kind: "balances".into(),
+            segments_requested: 1,
+            segments_succeeded: 1,
             balances: vec![AccountBalanceItem {
                 segment: SegmentKey::new("spot").unwrap(),
                 asset: Currency::new("USDT").unwrap(),
@@ -1104,6 +1293,7 @@ mod cli_tests {
                 available: "10000".parse::<DecimalParts>().unwrap(),
                 locked: DecimalParts::default(),
             }],
+            errors: Vec::new(),
         });
 
         assert!(output.contains("SEGMENT"));
@@ -1111,6 +1301,35 @@ mod cli_tests {
         assert!(output.contains("spot"));
         assert!(output.contains("USDT"));
         assert!(!output.contains("balances"));
-        assert_eq!(output.lines().count(), 3);
+        assert!(output.contains("standalone · local registry · segments 1/1"));
+        assert_eq!(output.lines().count(), 4);
+    }
+
+    #[test]
+    fn account_positions_are_rendered_as_business_columns() {
+        let output = render_account_positions(&AccountPositionsResult {
+            account_id: AccountId::new("live-main").expect("account id"),
+            source: "direct_provider".into(),
+            mode: "standalone".into(),
+            kind: "positions".into(),
+            segments_requested: 1,
+            segments_succeeded: 1,
+            positions: vec![AccountPositionItem {
+                segment: SegmentKey::new("usd_m_futures").expect("segment"),
+                symbol: "BTCUSDT".into(),
+                instrument_type: Some("perpetual".into()),
+                side: "net".into(),
+                quantity: "0.1".parse().expect("quantity"),
+                average_price: Some("60000".parse().expect("entry")),
+                mark_price: Some("61000".parse().expect("mark")),
+                unrealized_pnl: Some("100".parse().expect("upnl")),
+            }],
+            errors: Vec::new(),
+        });
+
+        assert!(output.contains("BTCUSDT"));
+        assert!(output.contains("QUANTITY"));
+        assert!(output.contains("UPNL"));
+        assert!(!output.contains("participant_instrument"));
     }
 }

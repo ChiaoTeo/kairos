@@ -15,8 +15,12 @@ impl AccountQuery for BinancePortfolioMarginRestConnection {
         &mut self,
         segment: &ExternalAccountSegment,
     ) -> Result<ExternalAccountSnapshot, IntegrationError> {
-        let value = self.service.signed_get("/papi/v1/balance", &[]).await?;
-        account::portfolio(segment, &value)
+        let balance = self.service.signed_get("/papi/v1/balance", &[]).await?;
+        let um_account = self.service.signed_get("/papi/v2/um/account", &[]).await?;
+        let mut snapshot = account::portfolio(segment, &balance)?;
+        snapshot.positions = account::futures(segment, &um_account, "perpetual")?.positions;
+        snapshot.partial = false;
+        Ok(snapshot)
     }
 }
 

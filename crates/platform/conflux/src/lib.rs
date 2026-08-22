@@ -28,6 +28,8 @@ pub use kairos_integration::blocking::{
 pub use kairos_integration::composition::credentials::{
     CredentialRecord, CredentialStore, load_workspace_credential,
 };
+pub use kairos_integration::participants::binance::advanced::portfolio::BinancePortfolioMarginRestConnection;
+pub use kairos_integration::participants::binance::advanced::portfolio::pro::BinancePortfolioMarginProRestConnection;
 pub use kairos_integration::participants::binance::advanced::stocks::{
     BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
     BinanceStocksWebSocketConnection,

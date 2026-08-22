@@ -77,7 +77,8 @@ pub(crate) fn futures(
                 return Ok(None);
             };
             let Some(total) = row
-                .get("walletBalance")
+                .get("balance")
+                .or_else(|| row.get("walletBalance"))
                 .and_then(Value::as_str)
                 .map(parse)
                 .transpose()?
@@ -89,9 +90,6 @@ pub(crate) fn futures(
                 .and_then(Value::as_str)
                 .map(parse)
                 .transpose()?;
-            if total.mantissa == 0 && available.is_none_or(|value| value.mantissa == 0) {
-                return Ok(None);
-            }
             Ok(Some(ExternalBalance {
                 asset_id: AssetId::new(format!("asset:crypto:{asset}")).map_err(payload)?,
                 asset_code: Currency::new(asset).map_err(payload)?,

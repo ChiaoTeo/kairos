@@ -805,7 +805,7 @@ macro_rules! websocket_api_connection {
 }
 
 macro_rules! futures_rest_capabilities {
-    ($name:ident, $prefix:literal, $kind:expr) => {
+    ($name:ident, $prefix:literal, $account_path:literal, $balance_path:literal, $kind:expr) => {
         impl crate::InstrumentCatalogQuery for $name {
             async fn fetch_instruments(
                 &mut self,
@@ -1044,10 +1044,13 @@ macro_rules! futures_rest_capabilities {
                 &mut self,
                 segment: &crate::ExternalAccountSegment,
             ) -> Result<crate::ExternalAccountSnapshot, crate::IntegrationError> {
-                let value = self
-                    .service
-                    .signed_get(concat!($prefix, "/account"), &[])
-                    .await?;
+                let mut value = self.service.signed_get($account_path, &[]).await?;
+                let balances = self.service.signed_get($balance_path, &[]).await?;
+                if let (Some(account), Some(balances)) =
+                    (value.as_object_mut(), balances.as_array())
+                {
+                    account.insert("assets".into(), serde_json::Value::Array(balances.clone()));
+                }
                 crate::services::participants::binance::account::futures(
                     segment,
                     &value,

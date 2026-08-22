@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 use kairos_conflux::{
-    AccountCredentialQuery, BinanceCredential, BinanceRestConfig, BinanceUserWebSocketConfig,
-    ConnectionKey, ExternalAccountCredentialProfile, IbkrAccountQueryConfig,
-    IbkrAccountStreamConfig, OkxCredential, OkxPrivateRestConfig, OkxPrivateWebSocketConfig,
-    OkxRestConfig, OkxWebSocketConfig,
+    AccountCredentialQuery, AccountQuery, BinanceCredential,
+    BinancePortfolioMarginProRestConnection, BinancePortfolioMarginRestConnection,
+    BinanceRestConfig, BinanceUserWebSocketConfig, ConnectionKey, ExternalAccountCredentialProfile,
+    ExternalAccountIdentity as IntegrationAccountIdentity, ExternalAccountSegment,
+    ExternalAccountSnapshot, IbkrAccountQueryConfig, IbkrAccountStreamConfig, OkxCredential,
+    OkxPrivateRestConfig, OkxPrivateWebSocketConfig, OkxRestConfig, OkxWebSocketConfig,
 };
 use secrecy::SecretString;
 
@@ -197,6 +199,148 @@ fn binance_rest_base_url(options: &AccountOptions, family: &str) -> String {
         "options" => "https://eapi.binance.com".into(),
         _ => options.base_url.clone(),
     }
+}
+
+/// Perform one provider query without creating a process, projection, or
+/// Conflux runtime. Top-level Account commands use this path; connected reads
+/// remain scoped to a launch component.
+pub async fn query_direct_account_snapshot(
+    options: &AccountOptions,
+    binding: &AccountSegmentBinding,
+) -> Result<ExternalAccountSnapshot, String> {
+    let provider = normalized_provider(&options.provider);
+    let product = normalized_segment(&binding.provider_product);
+    let segment_key =
+        SegmentKey::new(binding.segment_key.clone()).map_err(|error| error.to_string())?;
+    let segment = ExternalAccountSegment {
+        identity: IntegrationAccountIdentity::new(provider.clone(), options.account_id.clone())?,
+        segment_key,
+        environment: options.environment.clone(),
+        account_model: options.account_model.clone(),
+    };
+    let key = format!("account.direct.{provider}.{}", binding.segment_key);
+    if provider == "binance"
+        && product == "usd-m-futures"
+        && options
+            .account_model
+            .as_deref()
+            .is_some_and(|value| normalized_segment(value) == "portfolio-margin")
+    {
+        return match query_binance_portfolio_snapshot(options, key.clone(), &segment).await {
+            Ok(snapshot) => Ok(snapshot),
+            Err(portfolio_error) => query_binance_portfolio_pro_snapshot(options, key, &segment)
+                .await
+                .map_err(|pro_error| {
+                    format!(
+                        "Binance Portfolio Margin query failed: {portfolio_error}; Portfolio Margin Pro query failed: {pro_error}"
+                    )
+                }),
+        };
+    }
+    if provider == "binance"
+        && product == "usd-m-futures"
+        && options
+            .account_model
+            .as_deref()
+            .is_some_and(|value| normalized_segment(value) == "portfolio-margin-pro")
+    {
+        return query_binance_portfolio_pro_snapshot(options, key, &segment).await;
+    }
+    let connection = match provider.as_str() {
+        "binance" => {
+            let family = binance_endpoint_family(&product)?;
+            let mut segment_options = options.clone();
+            segment_options.base_url = binance_rest_base_url(options, family);
+            let config = binance_rest_config(&segment_options, key.clone());
+            match product.as_str() {
+                "spot" => AccountAsyncSnapshotConnection::BinanceSpot(config),
+                "funding" => AccountAsyncSnapshotConnection::BinanceFunding(config),
+                "cross-margin" | "isolated-margin" => {
+                    AccountAsyncSnapshotConnection::BinanceMargin(config)
+                },
+                "usd-m-futures" => AccountAsyncSnapshotConnection::BinanceUsdM(config),
+                "coin-m-futures" => AccountAsyncSnapshotConnection::BinanceCoinM(config),
+                "options" => AccountAsyncSnapshotConnection::BinanceOptions(config),
+                _ => unreachable!("validated Binance Account product"),
+            }
+        },
+        "okx" => AccountAsyncSnapshotConnection::OkxTrading(OkxPrivateRestConfig {
+            connection: OkxRestConfig {
+                environment: options.environment.clone(),
+                endpoint: options.base_url.clone(),
+            },
+            credential: okx_credential(options),
+        }),
+        "ibkr" => AccountAsyncSnapshotConnection::Ibkr(IbkrAccountQueryConfig {
+            environment: options.environment.clone(),
+            host: options.host.clone(),
+            port: options.port,
+            client_id: options.client_id,
+            account_id: options.account_id.clone(),
+        }),
+        _ => return Err(format!("unsupported direct Account provider: {provider}")),
+    };
+    let snapshot = connection.fetch(key.clone(), &segment).await?;
+    if provider == "binance"
+        && product == "usd-m-futures"
+        && snapshot.balances.is_empty()
+        && snapshot.positions.is_empty()
+        && options.environment.eq_ignore_ascii_case("live")
+    {
+        if let Ok(portfolio_snapshot) =
+            query_binance_portfolio_snapshot(options, key.clone(), &segment).await
+        {
+            if !portfolio_snapshot.balances.is_empty() || !portfolio_snapshot.positions.is_empty() {
+                return Ok(portfolio_snapshot);
+            }
+        }
+        if let Ok(portfolio_snapshot) =
+            query_binance_portfolio_pro_snapshot(options, key, &segment).await
+        {
+            if !portfolio_snapshot.balances.is_empty() || !portfolio_snapshot.positions.is_empty() {
+                return Ok(portfolio_snapshot);
+            }
+        }
+    }
+    Ok(snapshot)
+}
+
+async fn query_binance_portfolio_pro_snapshot(
+    options: &AccountOptions,
+    key: String,
+    segment: &ExternalAccountSegment,
+) -> Result<ExternalAccountSnapshot, String> {
+    let mut portfolio_options = options.clone();
+    portfolio_options.base_url = "https://api.binance.com".into();
+    let connection_key = format!("{key}.portfolio-pro");
+    let mut portfolio = BinancePortfolioMarginProRestConnection::new(
+        ConnectionKey::new(connection_key.clone())?,
+        binance_rest_config(&portfolio_options, connection_key),
+    )
+    .map_err(|error| error.to_string())?;
+    portfolio
+        .fetch_account(segment)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn query_binance_portfolio_snapshot(
+    options: &AccountOptions,
+    key: String,
+    segment: &ExternalAccountSegment,
+) -> Result<ExternalAccountSnapshot, String> {
+    let mut portfolio_options = options.clone();
+    portfolio_options.base_url = "https://papi.binance.com".into();
+    let connection_key = format!("{key}.portfolio");
+    let mut portfolio = BinancePortfolioMarginRestConnection::new(
+        ConnectionKey::new(connection_key.clone())?,
+        binance_rest_config(&portfolio_options, connection_key),
+    )
+    .map_err(|error| error.to_string())?;
+    portfolio
+        .fetch_account(segment)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Compose one Binance REST endpoint family from one principal connection.

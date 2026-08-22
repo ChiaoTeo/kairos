@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from enum import Enum
+from io import StringIO
 from pathlib import Path
 import shlex
+import sys
 from typing import Any
 
 from prettytable import PrettyTable
@@ -14,6 +17,7 @@ from kairospy.application.account.cli import AccountCliApplication
 from kairospy.application.launch.application import LaunchRegistryApplication
 from kairospy.application.system import ComponentProcessApplication
 from kairospy.application.workspace import WorkspaceApplication
+from kairospy.surface.cli.activity import TerminalActivity
 from kairospy.surface.console.data import SystemObserveReader
 from kairospy.surface.console.models import ObserveSnapshot, recommended_action
 
@@ -31,6 +35,7 @@ class GuidedCommand:
     summary: str
     dangerous: bool = False
     needs_workspace: bool = True
+    streaming: bool = False
 
 
 ShellAction = GuidedCommand | ShellControl | None
@@ -149,14 +154,13 @@ def _print_shell_menu(context: InteractiveContext) -> None:
             "\n".join(
                 (
                     "产品入口：",
-                    "  1. 系统服务",
+                    "  1. 账户",
                     "  2. 策略运行",
-                    "  3. Reference 查询",
-                    "  4. 账户 / 行情 / 订单",
-                    "  5. 数据与研究",
-                    "  6. 诊断",
-                    "  7. 观测台",
-                    "  8. 命令地图",
+                    "  3. 行情",
+                    "  4. 数据与研究",
+                    "  5. 系统状态",
+                    "  6. 诊断与观测",
+                    "  7. 命令帮助",
                 )
             )
         )
@@ -209,20 +213,6 @@ def _print_shell_menu(context: InteractiveContext) -> None:
             )
         )
         return
-    if path == ("query",):
-        typer.echo(
-            "\n".join(
-                (
-                    "账户 / 行情 / 订单：",
-                    "  1. 进入账户上下文",
-                    "  2. 行情快照",
-                    "  3. 订单状态",
-                    "  4. 通知配置校验",
-                    "  5. Provider 集成帮助",
-                )
-            )
-        )
-        return
     if path == ("account",):
         typer.echo(
             "\n".join(
@@ -243,9 +233,9 @@ def _print_shell_menu(context: InteractiveContext) -> None:
                     "  2. 查询余额",
                     "  3. 查询持仓",
                     "  4. 查询未完成订单",
-                    "  5. 选择运行实例",
-                    "  6. 切换账户",
-                    "  7. 发起转账（尚未开放）",
+                    "  5. 资金划转",
+                    "  6. 配置与凭据",
+                    "  7. 切换账户",
                 )
             )
         )
@@ -288,12 +278,11 @@ def _print_shell_help(context: InteractiveContext) -> None:
             "\n".join(
                 (
                     "可用命令：",
-                    "  system              进入系统服务",
+                    "  account             进入账户",
                     "  launch              进入策略运行",
-                    "  reference           进入 Reference 查询",
-                    "  query               进入账户 / 行情 / 订单",
-                    "  account             进入账户上下文",
+                    "  market              进入行情查询",
                     "  data                进入数据与研究",
+                    "  system              进入系统状态",
                     "  system reference    进入 /system/reference",
                     "  system market       进入 /system/market",
                     "  summary             显示当前概览",
@@ -348,15 +337,12 @@ def _print_shell_help(context: InteractiveContext) -> None:
             )
         )
         return
-    if path == ("query",):
-        typer.echo("可用命令：account/snapshot/order/notifications/integration")
-        return
     if path == ("account",):
         typer.echo("可用命令：select/list/back/home/exit")
         return
     if len(path) == 2 and path[0] == "account":
         typer.echo(
-            "可用命令：summary/balances/positions/open-orders/launch/switch/transfer"
+            "可用命令：summary/balances/positions/open-orders/transfer/settings/switch"
         )
         return
     if path == ("data",):
@@ -405,8 +391,6 @@ def _shell_command(context: InteractiveContext, line: str) -> ShellAction:
         return _system_shell_command(context, parts)
     if path == ("reference",):
         return _reference_shell_command(context, parts)
-    if path == ("query",):
-        return _query_shell_command(context, parts)
     if path == ("account",) or (len(path) == 2 and path[0] == "account"):
         return _account_shell_command(context, parts)
     if path == ("data",):
@@ -419,23 +403,20 @@ def _shell_command(context: InteractiveContext, line: str) -> ShellAction:
 def _root_shell_command(
     context: InteractiveContext, parts: tuple[str, ...]
 ) -> ShellAction:
-    if parts in {("1",), ("system",)}:
-        context.shell_path = ("system",)
+    if parts in {("1",), ("account",)}:
+        context.shell_path = ("account",)
         return ShellControl.HANDLED
     if parts in {("2",), ("launch",)}:
         context.shell_path = ("launch",)
         return ShellControl.HANDLED
-    if parts in {("3",), ("reference",)}:
+    if parts in {("3",), ("reference",), ("market",)}:
         context.shell_path = ("reference",)
         return ShellControl.HANDLED
-    if parts in {("4",), ("query",), ("market-data",)}:
-        context.shell_path = ("query",)
-        return ShellControl.HANDLED
-    if parts == ("account",):
-        context.shell_path = ("account",)
-        return ShellControl.HANDLED
-    if parts in {("5",), ("data",), ("research",)}:
+    if parts in {("4",), ("data",), ("research",)}:
         context.shell_path = ("data",)
+        return ShellControl.HANDLED
+    if parts in {("5",), ("system",)}:
+        context.shell_path = ("system",)
         return ShellControl.HANDLED
     if parts in {("system", "reference"), ("reference",)}:
         context.shell_path = ("system", "reference")
@@ -445,14 +426,12 @@ def _root_shell_command(
         context.shell_path = ("system", "market")
         context.selected_service = "market"
         return ShellControl.HANDLED
-    if parts in {("8",), ("quickstart",), ("map",)}:
+    if parts in {("7",), ("quickstart",), ("map",), ("help",)}:
         return GuidedCommand(
             ("quickstart",), "查看 CLI 场景地图", needs_workspace=False
         )
-    if parts in {("6",), ("doctor",)}:
-        return GuidedCommand(("project", "doctor"), "检查项目 readiness")
-    if parts in {("7",), ("observe",)}:
-        return GuidedCommand(("observe",), "打开项目观测台")
+    if parts in {("6",), ("doctor",), ("observe",)}:
+        return GuidedCommand(("observe",), "打开项目观测台", streaming=True)
     return None
 
 
@@ -496,6 +475,7 @@ def _launch_shell_command(
         ("launch", *tuple(action.split()), launch_id),
         summary,
         dangerous=dangerous,
+        streaming=action == "attach",
     )
 
 
@@ -760,22 +740,17 @@ def _account_shell_command(
         return _account_fact_command(context, "positions", "查询账户持仓")
     if key in {"4", "open-orders", "orders"}:
         return _account_fact_command(context, "open-orders", "查询账户未完成订单")
-    if key in {"5", "launch"}:
-        launch_ids = _launch_ids(context.owner, context.snapshot)
-        if not launch_ids:
-            typer.echo("当前 workspace 没有可选择的 launch。")
+    if key in {"5", "transfer"}:
+        account = _selected_account_record(context)
+        if "transfer" not in _account_capabilities(account):
+            typer.echo("当前账户凭据不具备资金划转能力。")
             return ShellControl.HANDLED
-        context.selected_launch = _prompt_launch_id(
-            context.owner, context.snapshot, context.selected_launch
-        )
-        typer.echo(f"当前运行实例上下文：{context.selected_launch}")
+        typer.echo("资金划转必须先 preview，再由用户确认执行；当前尚未开放执行。")
         return ShellControl.HANDLED
-    if key in {"6", "switch", "select"}:
+    if key in {"6", "settings", "configuration"}:
+        return _account_settings_command(context)
+    if key in {"7", "switch", "select"}:
         _select_account(context)
-        return ShellControl.HANDLED
-    if key in {"7", "transfer"}:
-        typer.echo("转账工作流尚未开放。")
-        typer.echo("未来会以当前账户作为 source，先 preview，再由用户确认执行。")
         return ShellControl.HANDLED
     return None
 
@@ -787,50 +762,45 @@ def _account_fact_command(
     if account_id is None:
         typer.echo("请先选择账户。")
         return ShellControl.HANDLED
-    account = _selected_account_record(context)
-    environment = str(account.get("environment") or "").strip().lower()
-
-    if context.selected_launch is not None:
-        return GuidedCommand(
-            (
-                "launch",
-                "instance",
-                "component",
-                "account",
-                command,
-                context.selected_launch,
-                "--account-id",
-                account_id,
-                "--format",
-                "table",
-            ),
-            f"{summary}（launch projection）",
-        )
-    if environment in {"paper", "simulated"}:
-        return GuidedCommand(
-            (
-                "account",
-                "--account-id",
-                account_id,
-                command,
-                "--output",
-                "table",
-            ),
-            f"{summary}（local registry）",
-        )
-
-    launch_ids = _launch_ids(context.owner, context.snapshot)
-    if not launch_ids:
-        typer.echo(
-            f"账户 {account_id} 是 live 账户，但当前没有可用的 launch projection。"
-        )
-        typer.echo("direct provider 余额查询尚未实现；不会退回本地配置值。")
-        return ShellControl.HANDLED
-    typer.echo("live 账户事实必须从运行中的 Account projection 读取。")
-    context.selected_launch = _prompt_launch_id(
-        context.owner, context.snapshot, context.selected_launch
+    return GuidedCommand(
+        ("account", command, account_id, "--format", "table"),
+        summary,
     )
-    return _account_fact_command(context, command, summary)
+
+
+def _account_settings_command(context: InteractiveContext) -> GuidedCommand:
+    account_id = context.selected_account or ""
+    action = _prompt_menu(
+        "账户配置与凭据：",
+        (
+            ("1", "查看账户配置"),
+            ("2", "运行账户诊断"),
+            ("3", "查看凭据列表"),
+        ),
+    )
+    mapping = {
+        "1": (("account", "show", "--account-id", account_id), "查看账户配置"),
+        "2": (
+            ("account", "doctor", "--account-id", account_id),
+            "运行账户诊断",
+        ),
+        "3": (("account", "credential-list"), "查看凭据列表"),
+    }
+    argv, summary = mapping[action]
+    return GuidedCommand((*argv, "--format", "text"), summary)
+
+
+def _account_capabilities(account: dict[str, Any]) -> set[str]:
+    capabilities = account.get("capabilities")
+    if isinstance(capabilities, list):
+        return {str(value) for value in capabilities}
+    role = str(account.get("credential_role") or "readonly").lower()
+    result = {"read"}
+    if role in {"trade", "trading", "transfer", "admin"}:
+        result.add("trade")
+    if role in {"transfer", "admin"}:
+        result.add("transfer")
+    return result
 
 
 def _account_records(context: InteractiveContext) -> tuple[dict[str, Any], ...]:
@@ -853,7 +823,9 @@ def _select_account(context: InteractiveContext) -> None:
         typer.echo("当前 workspace 没有可选择的账户。")
         typer.echo("可先运行 kairos account simulate 或 kairos account register。")
         return
-    table = PrettyTable(["序号", "account", "provider", "mode", "segments"])
+    table = PrettyTable(
+        ["序号", "account", "type", "provider", "status", "segments"]
+    )
     table.align = "l"
     for index, account in enumerate(accounts, start=1):
         segments = account.get("segments") or ()
@@ -861,8 +833,9 @@ def _select_account(context: InteractiveContext) -> None:
             [
                 index,
                 account.get("account_id", "-"),
-                account.get("provider", "-"),
                 account.get("environment", "-"),
+                account.get("provider", "-"),
+                account.get("status", "unknown"),
                 ", ".join(str(value) for value in segments),
             ]
         )
@@ -924,12 +897,14 @@ def _print_selected_account(
     table.align = "l"
     table.add_row(["account", account.get("account_id", "-")])
     table.add_row(["provider", account.get("provider", "-")])
-    table.add_row(["environment", account.get("environment", "-")])
+    table.add_row(["type", account.get("environment", "-")])
+    table.add_row(["status", account.get("status", "unknown")])
     table.add_row(
         ["segments", ", ".join(str(value) for value in account.get("segments") or ())]
     )
-    table.add_row(["credential", account.get("credential_id") or "-"])
-    table.add_row(["launch", context.selected_launch or "-"])
+    table.add_row(
+        ["capabilities", ", ".join(sorted(_account_capabilities(account)))]
+    )
     typer.echo(table)
 
 
@@ -988,14 +963,47 @@ def _execute_guided_command(
     typer.echo(f"用途：{command.summary}")
     if command.dangerous and not yes:
         typer.echo("这个动作可能改变运行状态。")
-    if not yes and not typer.confirm("确认执行这个命令吗？", default=True):
-        typer.echo("已取消。")
-        context.last_command = display
-        context.last_status = 0
-        return
+        if not typer.confirm("确认执行这个命令吗？", default=True):
+            typer.echo("已取消。")
+            context.last_command = display
+            context.last_status = 0
+            return
     context.last_command = display
-    context.last_status = execute(argv)
+    context.last_status = _execute_with_activity(
+        execute,
+        argv,
+        label=command.summary,
+        enabled=not command.streaming,
+    )
     _refresh_context(context)
+
+
+def _execute_with_activity(
+    execute: ExecuteCommand,
+    argv: Sequence[str],
+    *,
+    label: str,
+    enabled: bool,
+) -> int:
+    output = sys.stdout
+    activity = TerminalActivity(label, output)
+    if not enabled or not activity.enabled:
+        return execute(argv)
+
+    captured = StringIO()
+    activity.start()
+    try:
+        with redirect_stdout(captured):
+            status = execute(argv)
+    except BaseException:
+        activity.finish(succeeded=False)
+        output.write(captured.getvalue())
+        output.flush()
+        raise
+    activity.finish(succeeded=status == 0)
+    output.write(captured.getvalue())
+    output.flush()
+    return status
 
 
 def _workspace(workspace: Path | None):
@@ -1024,21 +1032,38 @@ def _print_context(context: InteractiveContext) -> None:
     snapshot = context.snapshot
     if owner is None:
         return
-    typer.echo(_workspace_table(owner.workspace_id, str(owner.paths.project_root)))
-    typer.echo()
-    typer.echo("当前上下文")
-    typer.echo(_context_table(context))
-    typer.echo()
+    typer.echo(f"Workspace: {owner.workspace_id} · {owner.paths.project_root}")
+    accounts = _account_records(context)
+    account_issues = sum(
+        account.get("status") not in {"configured", "connected", "ready"}
+        for account in accounts
+    )
     if snapshot is None:
-        typer.echo("状态：暂时无法读取运行状态")
+        typer.echo(f"{len(accounts)} 个账户 · {account_issues} 个配置异常 · 运行状态暂不可用")
         typer.echo()
         return
-    typer.echo("策略运行")
-    typer.echo(_launch_table(snapshot))
-    typer.echo()
-    typer.echo("系统服务")
-    typer.echo(_shared_service_table(snapshot))
-    typer.echo(f"建议：{recommended_action(snapshot)}")
+    failed_launches = sum(
+        str(value.get("state")) == "failed" for value in _unique_launches(snapshot)
+    )
+    unavailable_services = sum(
+        snapshot.components.get(name, {}).get("status")
+        not in {"ok", "ready", "running", "degraded"}
+        for name in ("reference", "market")
+    )
+    typer.echo(
+        f"{len(accounts)} 个账户 · {account_issues} 个配置异常 · "
+        f"{failed_launches} 个策略失败 · {unavailable_services} 个系统服务未运行"
+    )
+    if context.selected_account or context.selected_launch:
+        typer.echo(
+            f"当前：account={context.selected_account or '—'} · "
+            f"strategy={context.selected_launch or '—'}"
+        )
+    if context.last_command is not None:
+        typer.echo(
+            f"上次：status={context.last_status if context.last_status is not None else '—'} · "
+            f"{context.last_command}"
+        )
     typer.echo()
 
 
@@ -1135,7 +1160,7 @@ def _choose_command(context: InteractiveContext) -> GuidedCommand:
     if choice == "6":
         return _diagnose_workflow(context.owner, context.snapshot)
     if choice == "7":
-        return GuidedCommand(("observe",), "打开项目观测台")
+        return GuidedCommand(("observe",), "打开项目观测台", streaming=True)
     return GuidedCommand(("quickstart",), "查看 CLI 场景地图", needs_workspace=False)
 
 
@@ -1195,7 +1220,12 @@ def _strategy_workflow(context: InteractiveContext) -> GuidedCommand:
         "9": (("launch", "report", launch_id), "读取最近完成的报告", False),
     }
     argv, summary, dangerous = mapping[action]
-    return GuidedCommand(argv, summary, dangerous=dangerous)
+    return GuidedCommand(
+        argv,
+        summary,
+        dangerous=dangerous,
+        streaming=argv[:2] == ("launch", "attach"),
+    )
 
 
 def _system_workflow(context: InteractiveContext) -> GuidedCommand:

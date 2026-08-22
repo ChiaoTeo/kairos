@@ -14,12 +14,12 @@ from kairospy.application.workspace import WorkspaceApplication
 HELP = """Account standalone commands are owned by kairos-account-cli.
 
 Canonical commands include:
-  list, show, register, modify, simulate, schemas, schema, doctor
+  list, show, query balance <account>, positions, open-orders
+  connect, register, modify, simulate, schemas, schema, doctor
   credential-list, credential-create, credential-show, credential-delete
-  snapshot, balances, positions, open-orders for local paper/simulated accounts
 
-Current runtime account facts are connected through scoped component commands:
-  kairos launch instance component account ...
+Top-level Account queries always use standalone/direct mode and never require
+a launch instance. Connected Account commands exist only under a launch context.
 
 """
 
@@ -27,6 +27,15 @@ CONNECTED_COMMANDS = {
     "fill",
     "refresh",
     "reconcile",
+}
+ACCOUNT_QUERIES = {
+    "snapshot",
+    "current",
+    "balances",
+    "balance",
+    "positions",
+    "open-orders",
+    "observed-orders",
 }
 
 
@@ -41,6 +50,31 @@ def _leading_account_selector(arguments: list[str]) -> tuple[list[str], list[str
     if arguments[0].startswith("--account-id="):
         return arguments[:1], arguments[1:]
     return [], arguments
+
+
+def _query_account(
+    selector: list[str], arguments: list[str]
+) -> tuple[str | None, list[str]]:
+    account_id = (
+        selector[1]
+        if len(selector) == 2
+        else selector[0].split("=", 1)[1]
+        if selector and selector[0].startswith("--account-id=")
+        else None
+    )
+    if not arguments or arguments[0] not in ACCOUNT_QUERIES:
+        return account_id, arguments
+    values = list(arguments)
+    if len(values) >= 3 and values[1] == "--account-id":
+        account_id = values[2]
+        del values[1:3]
+    elif len(values) >= 2 and values[1].startswith("--account-id="):
+        account_id = values[1].split("=", 1)[1]
+        del values[1]
+    elif len(values) >= 2 and not values[1].startswith("-"):
+        account_id = values.pop(1)
+    return account_id, values
+
 
 def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str]]:
     values: list[str] = []
@@ -71,14 +105,20 @@ def account_passthrough(ctx: typer.Context) -> None:
         typer.echo(HELP.rstrip(), nl=False)
         return
     account_selector, arguments = _leading_account_selector(arguments)
+    if len(arguments) >= 2 and arguments[0] == "query":
+        query = arguments[1]
+        if query not in ACCOUNT_QUERIES:
+            raise typer.BadParameter(f"unsupported Account query: {query}")
+        arguments = [query, *arguments[2:]]
     if arguments and arguments[0] in {"standalone", "connected"}:
         explicit_mode = arguments.pop(0)
     else:
         explicit_mode = "standalone"
+    owner = WorkspaceApplication().resolve(workspace)
     if explicit_mode == "connected":
         raise typer.BadParameter(
-            "`kairos account` runs standalone Account commands. Use "
-            "`kairos launch instance component account ...` for connected mode."
+            "connected Account commands are available only under "
+            "`kairos launch instance component account ...`"
         )
     if arguments and arguments[0] in CONNECTED_COMMANDS:
         command = arguments[0]
@@ -87,7 +127,12 @@ def account_passthrough(ctx: typer.Context) -> None:
             "Use `kairos launch instance component account ...` for a "
             "running launch-scoped Account component."
         )
-    owner = WorkspaceApplication().resolve(workspace)
+    account_id, arguments = _query_account(account_selector, arguments)
+    if arguments and arguments[0] in ACCOUNT_QUERIES:
+        if not account_id:
+            raise typer.BadParameter("account query requires an account id")
+        if not account_selector:
+            account_selector = ["--account-id", account_id]
     result = AccountCliApplication(owner).invoke(
         [*account_selector, explicit_mode, *(arguments or ["--help"])]
     )

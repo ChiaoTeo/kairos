@@ -340,12 +340,48 @@ pub(crate) fn map_error(error: ExchangeError) -> IntegrationError {
         ExchangeError::InvalidRequest(message) => IntegrationError::InvalidRequest(message),
         ExchangeError::Http {
             status: 429, body, ..
-        } => IntegrationError::RateLimited(body),
-        ExchangeError::Http { status, body, .. } => {
-            IntegrationError::Transport(format!("Binance HTTP {status}: {body}"))
-        },
+        } => IntegrationError::RateLimited(summarize_http_body(&body)),
+        ExchangeError::Http { status, body, .. } => IntegrationError::Transport(format!(
+            "Binance HTTP {status}: {}",
+            summarize_http_body(&body)
+        )),
         other => IntegrationError::Transport(other.to_string()),
     }
+}
+
+fn summarize_http_body(body: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<Value>(body) {
+        let code = value.get("code").and_then(Value::as_i64);
+        let message = value
+            .get("msg")
+            .or_else(|| value.get("message"))
+            .and_then(Value::as_str);
+        if let Some(message) = message {
+            return match code {
+                Some(code) => format!("code {code}: {}", truncate_text(message, 240)),
+                None => truncate_text(message, 240),
+            };
+        }
+    }
+    let trimmed = body.trim();
+    if trimmed.starts_with('<') {
+        return "unexpected non-JSON response".into();
+    }
+    if trimmed.is_empty() {
+        return "empty response".into();
+    }
+    truncate_text(
+        &trimmed.split_whitespace().collect::<Vec<_>>().join(" "),
+        240,
+    )
+}
+
+fn truncate_text(value: &str, limit: usize) -> String {
+    let mut text = value.chars().take(limit).collect::<String>();
+    if value.chars().count() > limit {
+        text.push('…');
+    }
+    text
 }
 
 fn server_time_path(signed_path: &str) -> &'static str {
@@ -392,5 +428,17 @@ mod clock_tests {
             metadata: Default::default(),
         });
         assert!(is_timestamp_rejection(&timestamp));
+    }
+
+    #[test]
+    fn http_error_summary_keeps_json_reason_without_dumping_html() {
+        assert_eq!(
+            summarize_http_body(r#"{"code":-2015,"msg":"Invalid API-key permissions."}"#),
+            "code -2015: Invalid API-key permissions."
+        );
+        assert_eq!(
+            summarize_http_body("<!DOCTYPE html><html>large provider error</html>"),
+            "unexpected non-JSON response"
+        );
     }
 }

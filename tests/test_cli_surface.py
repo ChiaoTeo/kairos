@@ -1487,6 +1487,7 @@ def test_account_local_query_passthrough_uses_owner_standalone_cli(
                 "account",
                 "--account-id",
                 "paper-main",
+                "standalone",
                 "balances",
                 "--workspace",
                 str(workspace.paths.root),
@@ -2960,6 +2961,7 @@ def test_generated_paper_account_loads_through_canonical_account_cli(tmp_path) -
                 str(project),
                 "--account-id",
                 "demo-paper",
+                "standalone",
                 "balances",
                 "--output",
                 "table",
@@ -3336,7 +3338,7 @@ def test_interactive_session_keeps_context_between_actions(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["1", "2", "4", "summary", "exit"])
+    shell_input = iter(["5", "2", "4", "summary", "exit"])
     confirmations = iter([True])
     executed: list[tuple[str, ...]] = []
 
@@ -3361,9 +3363,9 @@ def test_interactive_session_keeps_context_between_actions(
     assert executed[0][:4] == ("system", "restart", "--component", "market")
     assert "无法识别这个命令" not in text
     assert "/system/market>" in text
-    assert "| system service  | market" in text
+    assert "0 个账户" in text
     assert "kairos system restart --component market --format text" in text
-    assert "| last status     | 0" in text
+    assert "上次：status=0 · kairos system restart --component market" in text
 
 
 def test_interactive_account_context_keeps_selected_paper_account(
@@ -3392,7 +3394,11 @@ def test_interactive_account_context_keeps_selected_paper_account(
         "kairospy.surface.cli.interactive.AccountCliApplication.run",
         lambda _self, arguments: accounts,
     )
-    shell_input = iter(["account", "1", "2", "7", "exit"])
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive.ComponentProcessApplication.status",
+        lambda _self, component, **kwargs: {"status": "ready"},
+    )
+    shell_input = iter(["account", "1", "2", "5", "exit"])
     prompts = iter(["1"])
     executed: list[tuple[str, ...]] = []
 
@@ -3414,29 +3420,25 @@ def test_interactive_account_context_keeps_selected_paper_account(
 
     text = output.getvalue()
     assert status == 0
-    assert executed[0][:6] == (
+    assert executed[0][:5] == (
         "account",
-        "--account-id",
-        "paper-account",
         "balances",
-        "--output",
+        "paper-account",
+        "--format",
         "table",
     )
     assert "/account/paper-account>" in text
-    assert "转账工作流尚未开放" in text
+    assert "不具备资金划转能力" in text
     assert "无法识别这个命令" not in text
 
 
-def test_interactive_live_account_uses_selected_launch_projection(
+def test_interactive_live_account_uses_standalone_direct_command(
     tmp_path, monkeypatch
 ) -> None:
     from kairospy.surface.cli.interactive import run_interactive
 
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
-    )
-    LaunchRegistryApplication(workspace).add(
-        "live-strategy", mode="live", instance_id="run-1"
     )
     accounts = {
         "accounts": [
@@ -3456,8 +3458,12 @@ def test_interactive_live_account_uses_selected_launch_projection(
         "kairospy.surface.cli.interactive.AccountCliApplication.run",
         lambda _self, arguments: accounts,
     )
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive.ComponentProcessApplication.status",
+        lambda _self, component, **kwargs: {"status": "ready"},
+    )
     shell_input = iter(["account", "1", "2", "exit"])
-    prompts = iter(["1", "1"])
+    prompts = iter(["1"])
     executed: list[tuple[str, ...]] = []
 
     def read_input(prompt: str = "") -> str:
@@ -3478,27 +3484,23 @@ def test_interactive_live_account_uses_selected_launch_projection(
 
     text = output.getvalue()
     assert status == 0
-    assert executed[0][:9] == (
-        "launch",
-        "instance",
-        "component",
+    assert executed[0][:5] == (
         "account",
         "balances",
-        "live-strategy",
-        "--account-id",
         "manual-live-readonly",
         "--format",
+        "table",
     )
-    assert "live 账户事实必须从运行中的 Account projection 读取" in text
+    assert "launch projection" not in text
     assert "无法识别这个命令" not in text
 
 
-def test_interactive_live_account_never_falls_back_to_local_balances(
-    tmp_path, monkeypatch, capsys
+def test_interactive_live_account_never_enters_launch_connected_mode(
+    tmp_path, monkeypatch
 ) -> None:
     from kairospy.surface.cli.interactive import (
+        GuidedCommand,
         InteractiveContext,
-        ShellControl,
         _account_fact_command,
     )
 
@@ -3529,11 +3531,151 @@ def test_interactive_live_account_never_falls_back_to_local_balances(
 
     result = _account_fact_command(context, "balances", "查询账户余额")
 
-    assert result is ShellControl.HANDLED
+    assert isinstance(result, GuidedCommand)
+    assert result.argv == (
+        "account",
+        "balances",
+        "live-main",
+        "--format",
+        "table",
+    )
     assert context.selected_launch is None
-    output = capsys.readouterr().out
-    assert "当前没有可用的 launch projection" in output
-    assert "不会退回本地配置值" in output
+    assert "launch" not in result.argv
+
+
+def test_interactive_readonly_command_executes_without_confirmation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from kairospy.surface.cli.interactive import (
+        GuidedCommand,
+        InteractiveContext,
+        _execute_guided_command,
+    )
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    context = InteractiveContext(
+        owner=workspace,
+        snapshot=None,
+        workspace_arg=workspace.paths.root,
+    )
+    executed: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        "typer.confirm",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("readonly commands must not ask for confirmation")
+        ),
+    )
+    monkeypatch.setattr(
+        "kairospy.surface.cli.interactive._refresh_context", lambda _context: None
+    )
+
+    _execute_guided_command(
+        context,
+        GuidedCommand(("account", "balances", "live-main"), "查询账户余额"),
+        execute=lambda argv: executed.append(tuple(argv)) or 0,
+        yes=False,
+    )
+
+    assert executed == [
+        (
+            "account",
+            "balances",
+            "live-main",
+            "--workspace",
+            str(workspace.paths.root),
+        )
+    ]
+
+
+def test_account_query_balance_uses_top_level_standalone_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    seen: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"mode":"standalone","source":"direct_provider"}'
+        stderr = ""
+
+    def invoke(_self, arguments):
+        seen.append(list(arguments))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.account.AccountCliApplication.invoke", invoke
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "account",
+                "query",
+                "balance",
+                "live-main",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        == 0
+    )
+    assert seen == [["--account-id", "live-main", "standalone", "balance"]]
+    assert "connected" not in seen[0]
+
+
+def test_account_positions_uses_top_level_standalone_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    seen: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"mode":"standalone","source":"direct_provider","positions":[]}'
+        stderr = ""
+
+    def invoke(_self, arguments):
+        seen.append(list(arguments))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.account.AccountCliApplication.invoke", invoke
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "account",
+                "positions",
+                "live-main",
+                "--segment",
+                "usd_m_futures",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        == 0
+    )
+    assert seen == [
+        [
+            "--account-id",
+            "live-main",
+            "standalone",
+            "positions",
+            "--segment",
+            "usd_m_futures",
+        ]
+    ]
 
 
 def test_interactive_numeric_entry_opens_reference_context(
