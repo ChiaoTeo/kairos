@@ -163,11 +163,12 @@ def _print_shell_menu(context: InteractiveContext) -> None:
                     "产品入口：",
                     "  1. 账户",
                     "  2. 策略运行",
-                    "  3. 行情",
-                    "  4. 数据与研究",
-                    "  5. 系统状态",
-                    "  6. 诊断与观测",
-                    "  7. 命令帮助",
+                    "  3. 交易标的",
+                    "  4. 行情",
+                    "  5. 数据与研究",
+                    "  6. 系统状态",
+                    "  7. 诊断与观测",
+                    "  8. 命令帮助",
                 )
             )
         )
@@ -210,17 +211,30 @@ def _print_shell_menu(context: InteractiveContext) -> None:
             )
         )
         return
-    if path == ("reference",):
+    if path == ("targets",):
         typer.echo(
             "\n".join(
                 (
-                    "Reference 查询：",
+                    "交易标的：",
                     "  1. 当前系统有哪些 market",
                     "  2. 某个 asset/symbol 相关的 market",
                     "  3. 有哪些 listing",
                     "  4. 某个 market 的信息",
                     "  5. 按 symbol 检索",
                     "  6. 期权链",
+                )
+            )
+        )
+        return
+    if path == ("market",):
+        typer.echo(
+            "\n".join(
+                (
+                    "行情：",
+                    "  1. 实时报价",
+                    "  2. K 线快照",
+                    "  3. Greeks 快照",
+                    "  4. 查看行情新鲜度",
                 )
             )
         )
@@ -288,7 +302,8 @@ def _print_shell_help(context: InteractiveContext) -> None:
                     "可用命令：",
                     "  account             进入账户",
                     "  launch              进入策略运行",
-                    "  market              进入行情查询",
+                    "  targets             进入交易标的",
+                    "  market              进入行情",
                     "  data                进入数据与研究",
                     "  system              进入系统状态",
                     "  system reference    进入 /system/reference",
@@ -344,7 +359,7 @@ def _print_shell_help(context: InteractiveContext) -> None:
             )
         )
         return
-    if path == ("reference",):
+    if path == ("targets",):
         typer.echo(
             "\n".join(
                 (
@@ -359,6 +374,9 @@ def _print_shell_help(context: InteractiveContext) -> None:
                 )
             )
         )
+        return
+    if path == ("market",):
+        typer.echo("可用命令：quote/bar/greeks/freshness/back/home/exit")
         return
     if path == ("account",):
         typer.echo("可用命令：<序号>/select/list/back/home/exit")
@@ -414,8 +432,10 @@ def _shell_command(context: InteractiveContext, line: str) -> ShellAction:
         return _launch_shell_command(context, parts)
     if path == ("system",):
         return _system_shell_command(context, parts)
-    if path == ("reference",):
+    if path == ("targets",):
         return _reference_shell_command(context, parts)
+    if path == ("market",):
+        return _market_shell_command(context, parts)
     if path == ("account",) or (len(path) == 2 and path[0] == "account"):
         return _account_shell_command(context, parts)
     if path == ("data",):
@@ -434,28 +454,31 @@ def _root_shell_command(
     if parts in {("2",), ("launch",)}:
         context.shell_path = ("launch",)
         return ShellControl.HANDLED
-    if parts in {("3",), ("reference",), ("market",)}:
-        context.shell_path = ("reference",)
+    if parts in {("3",), ("target",), ("targets",), ("reference",)}:
+        context.shell_path = ("targets",)
         return ShellControl.HANDLED
-    if parts in {("4",), ("data",), ("research",)}:
+    if parts in {("4",), ("market",), ("quotes",)}:
+        context.shell_path = ("market",)
+        return ShellControl.HANDLED
+    if parts in {("5",), ("data",), ("research",)}:
         context.shell_path = ("data",)
         return ShellControl.HANDLED
-    if parts in {("5",), ("system",)}:
+    if parts in {("6",), ("system",)}:
         context.shell_path = ("system",)
         return ShellControl.HANDLED
-    if parts in {("system", "reference"), ("reference",)}:
+    if parts == ("system", "reference"):
         context.shell_path = ("system", "reference")
         context.selected_service = "reference"
         return ShellControl.HANDLED
-    if parts in {("system", "market"), ("market",)}:
+    if parts == ("system", "market"):
         context.shell_path = ("system", "market")
         context.selected_service = "market"
         return ShellControl.HANDLED
-    if parts in {("7",), ("quickstart",), ("map",), ("help",)}:
+    if parts in {("8",), ("quickstart",), ("map",), ("help",)}:
         return GuidedCommand(
             ("quickstart",), "查看 CLI 场景地图", needs_workspace=False
         )
-    if parts in {("6",), ("doctor",), ("observe",)}:
+    if parts in {("7",), ("doctor",), ("observe",)}:
         return GuidedCommand(("observe",), "打开项目观测台", streaming=True)
     return None
 
@@ -711,6 +734,64 @@ def _reference_shell_command(
     return None
 
 
+def _market_shell_command(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> GuidedCommand | None:
+    if len(parts) != 1:
+        return None
+    key = parts[0]
+    if key not in {"1", "quote", "2", "bar", "3", "greeks", "4", "freshness"}:
+        return None
+
+    market_id = typer.prompt("market id", default="market:binance:spot:BTCUSDT").strip()
+    source_id = typer.prompt("source id", default="binance-spot").strip()
+    if not market_id or not source_id:
+        raise typer.BadParameter("market id 和 source id 不能为空")
+
+    if key in {"4", "freshness"}:
+        return GuidedCommand(
+            (
+                "system",
+                "component",
+                "market",
+                "freshness",
+                "--market-id",
+                market_id,
+                "--source-id",
+                source_id,
+                "--format",
+                "table",
+            ),
+            "查看运行中行情的新鲜度",
+        )
+
+    kind = {
+        "1": "quote",
+        "quote": "quote",
+        "2": "bar",
+        "bar": "bar",
+        "3": "greeks",
+        "greeks": "greeks",
+    }[key]
+    argv = (
+        "system",
+        "component",
+        "market",
+        "snapshot",
+        kind,
+        "--market-id",
+        market_id,
+        "--source-id",
+        source_id,
+    )
+    if kind == "bar":
+        timeframe = typer.prompt("timeframe", default="1m").strip()
+        if not timeframe:
+            raise typer.BadParameter("timeframe 不能为空")
+        argv = (*argv, "--timeframe", timeframe)
+    return GuidedCommand((*argv, "--format", "table"), f"读取当前 {kind} 行情快照")
+
+
 def _query_shell_command(
     context: InteractiveContext, parts: tuple[str, ...]
 ) -> ShellAction:
@@ -799,10 +880,15 @@ def _account_shell_command(
     if key in {"5", "open-orders", "orders"}:
         return _account_fact_command(context, "open-orders", "查询账户未完成订单")
     if key in {"6", "fees"}:
-        product = typer.prompt("product / segment", default="spot").strip()
-        symbol = typer.prompt("symbol", default="BTCUSDT").strip()
+        scope = typer.prompt(
+            "费率范围（产品:交易对，Binance 费率按交易对返回）",
+            default="spot:BTCUSDT",
+        ).strip()
+        if ":" not in scope:
+            raise typer.BadParameter("请使用 产品:交易对 格式，例如 spot:BTCUSDT")
+        product, symbol = (part.strip() for part in scope.split(":", 1))
         if not product or not symbol:
-            raise typer.BadParameter("product 和 symbol 不能为空")
+            raise typer.BadParameter("产品和交易对不能为空")
         return GuidedCommand(
             (
                 "account",
@@ -815,7 +901,7 @@ def _account_shell_command(
                 "--format",
                 "table",
             ),
-            "查询产品和 symbol 的真实费率；VIP 等级不可用时单独标记",
+            "查询指定产品和交易对的真实费率；直接回车使用 spot:BTCUSDT",
         )
     if key in {"7", "transfer"}:
         account = _selected_account_record(context)
@@ -1311,7 +1397,7 @@ def _choose_command(context: InteractiveContext) -> GuidedCommand:
             ("1", "从零开始创建项目并运行示例"),
             ("2", "运行或查看某个策略"),
             ("3", "维护系统服务"),
-            ("4", "查询账户、行情、订单或 Reference"),
+            ("4", "查询账户、行情、订单或交易标的"),
             ("5", "处理数据与研究流程"),
             ("6", "诊断现在哪里不对"),
             ("7", "打开观测台"),
@@ -1470,7 +1556,7 @@ def _convenience_workflow(context: InteractiveContext) -> GuidedCommand:
             ("3", "账户持仓"),
             ("4", "行情快照"),
             ("5", "订单状态"),
-            ("6", "Reference 查询"),
+            ("6", "交易标的"),
             ("7", "期权链"),
             ("8", "通知配置校验"),
             ("9", "Provider 集成帮助"),
@@ -1546,7 +1632,7 @@ def _convenience_workflow(context: InteractiveContext) -> GuidedCommand:
 
 def _reference_workflow(context: InteractiveContext) -> GuidedCommand:
     choice = _prompt_menu(
-        "你想查询 Reference 里的什么？",
+        "你想查询什么交易标的？",
         (
             ("1", "当前系统有哪些 market"),
             ("2", "某个 asset/symbol 相关的 market"),

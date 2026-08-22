@@ -10,6 +10,19 @@ rest_connection!(
     "advanced.portfolio.rest"
 );
 
+impl BinancePortfolioMarginRestConnection {
+    pub async fn fetch_position_mode(
+        &mut self,
+        family: &str,
+    ) -> Result<crate::ExternalPositionMode, IntegrationError> {
+        let value = self
+            .service
+            .signed_get(&format!("/papi/v1/{family}/positionSide/dual"), &[])
+            .await?;
+        crate::services::participants::binance::account::position_mode(&value)
+    }
+}
+
 impl crate::AccountProfileQuery for BinancePortfolioMarginRestConnection {
     async fn fetch_account_profile(
         &mut self,

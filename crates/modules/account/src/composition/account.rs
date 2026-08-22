@@ -349,6 +349,27 @@ pub async fn query_direct_account_profile(
     }
 }
 
+/// Query Binance account-wide commercial and product enablement facts.
+pub async fn query_direct_account_info(
+    options: &AccountOptions,
+) -> Result<kairos_conflux::ExternalAccountInfo, String> {
+    let provider = normalized_provider(&options.provider);
+    if provider != "binance" {
+        return Err(format!("direct account info is unsupported for {provider}"));
+    }
+    let mut query_options = options.clone();
+    query_options.base_url = "https://api.binance.com".into();
+    let key = format!("account.direct.{provider}.account-info");
+    BinanceSpotRestConnection::new(
+        ConnectionKey::new(key.clone())?,
+        binance_rest_config(&query_options, key),
+    )
+    .map_err(|error| error.to_string())?
+    .fetch_account_info()
+    .await
+    .map_err(|error| error.to_string())
+}
+
 fn external_account_model_name(model: kairos_conflux::ExternalAccountModel) -> &'static str {
     match model {
         kairos_conflux::ExternalAccountModel::NoMargin => "no_margin",
@@ -436,7 +457,7 @@ pub async fn query_direct_open_orders(
                     .as_deref()
                     .map(normalized_segment)
                     .as_deref(),
-                Some("portfolio-margin")
+                Some("portfolio-margin" | "portfolio-margin-pro")
             ) {
                 let mut portfolio_options = options.clone();
                 portfolio_options.base_url = "https://papi.binance.com".into();
@@ -449,18 +470,6 @@ pub async fn query_direct_open_orders(
                     .open_orders(&query)
                     .await
                     .map_err(|error| error.to_string());
-            }
-            if matches!(
-                options
-                    .account_model
-                    .as_deref()
-                    .map(normalized_segment)
-                    .as_deref(),
-                Some("portfolio-margin-pro")
-            ) {
-                return Err(
-                    "Binance Portfolio Margin Pro open-orders query is not supported yet".into(),
-                );
             }
             let family = binance_endpoint_family(&product)?;
             let mut segment_options = options.clone();
@@ -585,6 +594,67 @@ pub async fn query_direct_fee_schedule(
                 .await
         },
         _ => return Err(format!("Binance fee schedule is unsupported for {product}")),
+    }
+    .map_err(|error| error.to_string())
+}
+
+/// Query Binance's account-wide futures position mode. The account snapshot
+/// payload does not carry this setting, so it must be observed separately.
+pub async fn query_direct_position_mode(
+    options: &AccountOptions,
+    product: &str,
+) -> Result<kairos_conflux::ExternalPositionMode, String> {
+    let provider = normalized_provider(&options.provider);
+    if provider != "binance" {
+        return Err(format!(
+            "direct position-mode queries are unsupported for {provider}"
+        ));
+    }
+    let product = normalized_segment(product);
+    let family = binance_endpoint_family(&product)?;
+    let mut query_options = options.clone();
+    query_options.base_url = binance_rest_base_url(options, family);
+    let key = format!("account.direct.{provider}.{product}.position-mode");
+    if matches!(
+        options
+            .account_model
+            .as_deref()
+            .map(normalized_segment)
+            .as_deref(),
+        Some("portfolio-margin" | "portfolio-margin-pro")
+    ) {
+        let mut portfolio_options = options.clone();
+        portfolio_options.base_url = "https://papi.binance.com".into();
+        let mut connection = BinancePortfolioMarginRestConnection::new(
+            ConnectionKey::new(key.clone())?,
+            binance_rest_config(&portfolio_options, key),
+        )
+        .map_err(|error| error.to_string())?;
+        let family = match product.as_str() {
+            "usd-m-futures" => "um",
+            "coin-m-futures" => "cm",
+            _ => return Err(format!("position mode is not applicable to {product}")),
+        };
+        return connection
+            .fetch_position_mode(family)
+            .await
+            .map_err(|error| error.to_string());
+    }
+    let config = binance_rest_config(&query_options, key.clone());
+    match product.as_str() {
+        "usd-m-futures" => {
+            BinanceUsdMRestConnection::new(ConnectionKey::new(key)?, config)
+                .map_err(|error| error.to_string())?
+                .fetch_position_mode()
+                .await
+        },
+        "coin-m-futures" => {
+            BinanceCoinMRestConnection::new(ConnectionKey::new(key)?, config)
+                .map_err(|error| error.to_string())?
+                .fetch_position_mode()
+                .await
+        },
+        _ => return Err(format!("position mode is not applicable to {product}")),
     }
     .map_err(|error| error.to_string())
 }

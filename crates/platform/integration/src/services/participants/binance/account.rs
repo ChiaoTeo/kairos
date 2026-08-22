@@ -3,10 +3,44 @@ use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
-    ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot, ExternalAccountStatus,
-    ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalPosition, IntegrationError,
-    ParticipantKind, external_instrument_ref,
+    ExternalAccountInfo, ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot,
+    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalPosition,
+    ExternalPositionMode, IntegrationError, ParticipantKind, external_instrument_ref,
 };
+
+pub(crate) fn account_info(value: &Value) -> Result<ExternalAccountInfo, IntegrationError> {
+    let vip_level = value
+        .get("vipLevel")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| {
+            IntegrationError::InvalidPayload("Binance account info is missing vipLevel".into())
+        })?;
+    Ok(ExternalAccountInfo {
+        vip_level,
+        margin_enabled: value
+            .get("isMarginEnabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        futures_enabled: value
+            .get("isFutureEnabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        portfolio_margin_enabled: value
+            .get("isPortfolioMarginRetailEnabled")
+            .and_then(Value::as_bool),
+    })
+}
+
+pub(crate) fn position_mode(value: &Value) -> Result<ExternalPositionMode, IntegrationError> {
+    match value.get("dualSidePosition").and_then(Value::as_bool) {
+        Some(true) => Ok(ExternalPositionMode::Hedge),
+        Some(false) => Ok(ExternalPositionMode::OneWay),
+        None => Err(IntegrationError::InvalidPayload(
+            "Binance position mode response is missing dualSidePosition".into(),
+        )),
+    }
+}
 
 pub(crate) fn spot(
     segment: &ExternalAccountSegment,
@@ -31,6 +65,7 @@ pub(crate) fn margin(
         balances(value, "userAssets", true)?,
         Some(ExternalMarginMode::Cross),
     )?;
+    snapshot.collateral = snapshot.balances.clone();
     snapshot.provider_account_model = Some("cross_margin".into());
     snapshot.account_model = Some(ExternalAccountModel::Margin);
     Ok(snapshot)
@@ -428,8 +463,8 @@ fn snapshot(
 ) -> Result<ExternalAccountSnapshot, IntegrationError> {
     Ok(ExternalAccountSnapshot {
         segment_key: segment.segment_key.clone(),
-        balances: balances.clone(),
-        collateral: balances,
+        balances,
+        collateral: Vec::new(),
         positions: Vec::new(),
         open_orders: Vec::new(),
         status: ExternalAccountStatus::Ready,
@@ -490,7 +525,7 @@ fn now() -> UnixNanos {
 
 #[cfg(test)]
 mod tests {
-    use super::{funding, futures, portfolio, portfolio_pro, spot};
+    use super::{account_info, funding, futures, portfolio, portfolio_pro, spot};
     use crate::{
         ExternalAccountIdentity, ExternalAccountModel, ExternalAccountSegment, ExternalDecimal,
     };
@@ -529,6 +564,22 @@ mod tests {
             Some(ExternalDecimal::new(175, 2))
         );
         assert_eq!(snapshot.balances[0].total, ExternalDecimal::new(1200, 2));
+        assert!(snapshot.collateral.is_empty());
+    }
+
+    #[test]
+    fn account_info_preserves_observed_vip_and_product_enablement() {
+        let info = account_info(&serde_json::json!({
+            "vipLevel": 3,
+            "isMarginEnabled": true,
+            "isFutureEnabled": false,
+            "isPortfolioMarginRetailEnabled": true
+        }))
+        .unwrap();
+        assert_eq!(info.vip_level, 3);
+        assert!(info.margin_enabled);
+        assert!(!info.futures_enabled);
+        assert_eq!(info.portfolio_margin_enabled, Some(true));
     }
 
     #[test]
@@ -542,6 +593,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(spot.balances.len(), 1);
+        assert!(spot.collateral.is_empty());
         assert!(spot.positions.is_empty());
 
         let classic = futures(

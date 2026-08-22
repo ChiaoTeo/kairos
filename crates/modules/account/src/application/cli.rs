@@ -14,8 +14,9 @@ use serde::Serialize;
 
 use crate::composition::account::{
     AccountOptions, AccountSegmentBinding, default_rest_endpoint, inspect_account_credential,
-    query_direct_account_profile, query_direct_account_snapshot, query_direct_earn_positions,
-    query_direct_fee_schedule, query_direct_open_orders,
+    query_direct_account_info, query_direct_account_profile, query_direct_account_snapshot,
+    query_direct_earn_positions, query_direct_fee_schedule, query_direct_open_orders,
+    query_direct_position_mode,
 };
 use crate::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
@@ -573,7 +574,12 @@ impl CliAccountApplication {
             return Ok(AccountOverviewResult {
                 identity,
                 connection,
-                profile: overview_profile(account.account_model.clone(), segment_profiles, None),
+                profile: overview_profile(
+                    account.account_model.clone(),
+                    segment_profiles,
+                    None,
+                    None,
+                ),
                 permissions,
                 commercial: AccountOverviewCommercial {
                     vip_tier: None,
@@ -595,31 +601,23 @@ impl CliAccountApplication {
                     collateral_count: 0,
                     position_count: 0,
                     earn_holding_count: Some(0),
-                    open_order_count: None,
+                    open_order_count: Some(0),
                 },
                 health: AccountOverviewHealth {
                     source: "local_registry".into(),
                     mode: "standalone".into(),
                     overall_status: "configured".into(),
                     freshness: "local".into(),
-                    completeness: AccountQueryCompleteness::Partial,
+                    completeness: AccountQueryCompleteness::Complete,
                     segments_requested,
                     segments_succeeded: segments_requested,
                     observed_at_unix_nanos: None,
-                    issues: vec![AccountQueryError {
-                        segment: SegmentKey::new(
-                            selected_segments
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| "account".into()),
-                        )?,
-                        message: "Open orders were not queried by overview; use open-orders".into(),
-                    }],
+                    issues: Vec::new(),
                 },
             });
         }
 
-        let base_options = self.direct_query_options(account)?;
+        let mut base_options = self.direct_query_options(account)?;
         let mut non_zero_balance_count = 0_u64;
         let mut collateral_count = 0_u64;
         let mut position_count = 0_u64;
@@ -627,6 +625,51 @@ impl CliAccountApplication {
         let mut observed_at_unix_nanos: Option<u64> = None;
         let mut issues = Vec::new();
         let mut segment_profiles = Vec::new();
+        let account_info = if account.integration_provider.eq_ignore_ascii_case("binance") {
+            match query_direct_account_info(&base_options).await {
+                Ok(info) => Some(info),
+                Err(message) => {
+                    issues.push(AccountQueryError {
+                        segment: SegmentKey::new("account")?,
+                        message: format!("VIP 等级查询失败：{message}"),
+                    });
+                    None
+                },
+            }
+        } else {
+            None
+        };
+        let explicit_profile = if account.integration_provider.eq_ignore_ascii_case("binance") {
+            match account_info
+                .as_ref()
+                .and_then(|info| info.portfolio_margin_enabled)
+            {
+                Some(true) => {
+                    let profile = crate::composition::account::ObservedAccountProfile {
+                        account_model: "portfolio_margin".into(),
+                        provider_account_model: "portfolio_margin".into(),
+                    };
+                    base_options.account_model = Some(profile.provider_account_model.clone());
+                    Some(profile)
+                },
+                Some(false) => None,
+                None => match query_direct_account_profile(&base_options).await {
+                    Ok(profile) => {
+                        base_options.account_model = Some(profile.provider_account_model.clone());
+                        Some(profile)
+                    },
+                    Err(message) => {
+                        issues.push(AccountQueryError {
+                            segment: SegmentKey::new("account")?,
+                            message: format!("统一账户探测失败：{message}"),
+                        });
+                        None
+                    },
+                },
+            }
+        } else {
+            None
+        };
         for segment in &selected_segments {
             let product = account.product_for_segment(segment).unwrap_or(segment);
             let binding = AccountSegmentBinding {
@@ -663,6 +706,25 @@ impl CliAccountApplication {
                             .unwrap_or_default()
                             .max(snapshot.observed_at_unix_nanos.get()),
                     );
+                    let position_mode = if let Some(value) = snapshot.position_mode {
+                        Some(value)
+                    } else if matches!(
+                        product,
+                        "usd_m_futures" | "usd-m-futures" | "coin_m_futures" | "coin-m-futures"
+                    ) {
+                        match query_direct_position_mode(&options, product).await {
+                            Ok(value) => Some(value),
+                            Err(message) => {
+                                issues.push(AccountQueryError {
+                                    segment: snapshot.segment_key.clone(),
+                                    message: format!("持仓模式查询失败：{message}"),
+                                });
+                                None
+                            },
+                        }
+                    } else {
+                        None
+                    };
                     segment_profiles.push(AccountSegmentProfileItem {
                         segment: snapshot.segment_key,
                         source: "direct_provider".into(),
@@ -680,7 +742,7 @@ impl CliAccountApplication {
                             }
                             .into()
                         }),
-                        position_mode: snapshot.position_mode.map(|value| {
+                        position_mode: position_mode.map(|value| {
                             match value {
                                 kairos_conflux::ExternalPositionMode::OneWay => "one_way",
                                 kairos_conflux::ExternalPositionMode::Hedge => "hedge",
@@ -708,38 +770,7 @@ impl CliAccountApplication {
                 },
             }
         }
-        let needs_profile_probe = !segment_profiles
-            .iter()
-            .any(|segment| segment.observed_account_model.is_some());
-        let explicit_profile = if account.integration_provider.eq_ignore_ascii_case("binance")
-            && needs_profile_probe
-        {
-            match query_direct_account_profile(&base_options).await {
-                Ok(profile) => Some(profile),
-                Err(message) => {
-                    issues.push(AccountQueryError {
-                        segment: SegmentKey::new(
-                            selected_segments
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| "profile".into()),
-                        )?,
-                        message,
-                    });
-                    None
-                },
-            }
-        } else {
-            None
-        };
         let mut completeness = query_completeness(segments_succeeded, segments_requested);
-        if account.integration_provider.eq_ignore_ascii_case("binance")
-            && needs_profile_probe
-            && explicit_profile.is_none()
-            && completeness == AccountQueryCompleteness::Complete
-        {
-            completeness = AccountQueryCompleteness::Partial;
-        }
         let earn_holding_count = if account.integration_provider.eq_ignore_ascii_case("binance")
             && account.segments.iter().any(|segment| {
                 account
@@ -771,16 +802,38 @@ impl CliAccountApplication {
         } else {
             Some(0)
         };
-        issues.push(AccountQueryError {
-            segment: SegmentKey::new(
-                selected_segments
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "account".into()),
-            )?,
-            message: "Open orders were not queried by overview; use open-orders".into(),
-        });
-        if completeness == AccountQueryCompleteness::Complete {
+        let mut open_order_count = 0_u64;
+        let mut open_orders_complete = true;
+        for segment in &selected_segments {
+            let product = account.product_for_segment(segment).unwrap_or(segment);
+            if product.eq_ignore_ascii_case("funding") {
+                continue;
+            }
+            let binding = AccountSegmentBinding {
+                segment_key: segment.clone(),
+                provider_product: product.to_owned(),
+                trading_mode: account.segment_trading_modes.get(segment).cloned(),
+            };
+            let mut options = base_options.clone();
+            options.product = product.to_owned();
+            if account.values.get("base_url").is_none() {
+                options.base_url = default_rest_endpoint(&options.provider, product)?.to_owned();
+            }
+            match query_direct_open_orders(&options, &binding, None).await {
+                Ok(orders) => {
+                    open_order_count =
+                        open_order_count.saturating_add(u64::try_from(orders.len())?);
+                },
+                Err(message) => {
+                    open_orders_complete = false;
+                    issues.push(AccountQueryError {
+                        segment: SegmentKey::new(segment.clone())?,
+                        message: format!("未完成订单查询失败：{message}"),
+                    });
+                },
+            }
+        }
+        if !open_orders_complete && completeness == AccountQueryCompleteness::Complete {
             completeness = AccountQueryCompleteness::Partial;
         }
         Ok(AccountOverviewResult {
@@ -790,15 +843,18 @@ impl CliAccountApplication {
                 account.account_model.clone(),
                 segment_profiles,
                 explicit_profile,
+                account_info
+                    .as_ref()
+                    .and_then(|info| info.portfolio_margin_enabled),
             ),
             permissions,
             commercial: AccountOverviewCommercial {
-                vip_tier: None,
+                vip_tier: account_info.map(|info| format!("VIP {}", info.vip_level)),
                 bnb_fee_discount: None,
                 fee_summary_status: if account.fee_rate.is_some() {
                     "registry_value_deprecated_not_observed"
                 } else {
-                    "not_queried"
+                    "query_by_symbol"
                 }
                 .into(),
             },
@@ -807,7 +863,7 @@ impl CliAccountApplication {
                 collateral_count,
                 position_count,
                 earn_holding_count,
-                open_order_count: None,
+                open_order_count: open_orders_complete.then_some(open_order_count),
             },
             health: AccountOverviewHealth {
                 source: "direct_provider".into(),
@@ -1074,7 +1130,17 @@ impl CliAccountApplication {
                         kairos_conflux::ExternalMarginMode::Cross => "cross".into(),
                         kairos_conflux::ExternalMarginMode::Isolated => "isolated".into(),
                     });
-                    let position_mode = snapshot.position_mode.map(|value| match value {
+                    let observed_position_mode = if let Some(value) = snapshot.position_mode {
+                        Some(value)
+                    } else if matches!(
+                        product,
+                        "usd_m_futures" | "usd-m-futures" | "coin_m_futures" | "coin-m-futures"
+                    ) {
+                        query_direct_position_mode(&options, product).await.ok()
+                    } else {
+                        None
+                    };
+                    let position_mode = observed_position_mode.map(|value| match value {
                         kairos_conflux::ExternalPositionMode::OneWay => "one_way".into(),
                         kairos_conflux::ExternalPositionMode::Hedge => "hedge".into(),
                     });
@@ -1399,8 +1465,19 @@ impl CliAccountApplication {
         if account.values.get("base_url").is_none() {
             options.base_url = default_rest_endpoint(&options.provider, &product)?.to_owned();
         }
+        let account_info = query_direct_account_info(&options).await;
         match query_direct_fee_schedule(&options, &product, symbol).await {
-            Ok(schedule) => map_fee_schedule(account, product, schedule),
+            Ok(schedule) => {
+                let (vip_level, account_info_issue) = match account_info {
+                    Ok(info) => (Some(info.vip_level), None),
+                    Err(message) => (None, Some(format!("VIP 等级查询失败：{message}"))),
+                };
+                let mut result = map_fee_schedule(account, product, schedule, vip_level)?;
+                if let Some(issue) = account_info_issue {
+                    result.issues.push(issue);
+                }
+                Ok(result)
+            },
             Err(message) => Ok(AccountFeesResult {
                 account_id: AccountId::new(account.account_id.clone())?,
                 source: "direct_provider".into(),
@@ -2592,6 +2669,7 @@ fn map_fee_schedule(
     account: &AccountBindingRecord,
     product: String,
     schedule: ExternalFeeSchedule,
+    vip_level: Option<u32>,
 ) -> Result<AccountFeesResult, Box<dyn std::error::Error>> {
     Ok(AccountFeesResult {
         account_id: AccountId::new(account.account_id.clone())?,
@@ -2622,12 +2700,15 @@ fn map_fee_schedule(
             )
             .transpose()?,
         rpi: schedule.rpi.map(decimal_parts).transpose()?,
-        vip_tier: None,
-        vip_tier_status: "unavailable".into(),
+        vip_tier: vip_level.map(|level| format!("VIP {level}")),
+        vip_tier_status: if vip_level.is_some() {
+            "observed"
+        } else {
+            "included_in_observed_rate"
+        }
+        .into(),
         observed_at_unix_nanos: Some(now_unix_nanos()),
-        issues: vec![
-            "VIP tier is unavailable to this query and does not affect the fee schedule".into(),
-        ],
+        issues: Vec::new(),
     })
 }
 
@@ -2927,6 +3008,7 @@ fn overview_profile(
     configured_account_model: Option<String>,
     segments: Vec<AccountSegmentProfileItem>,
     explicit_profile: Option<crate::composition::account::ObservedAccountProfile>,
+    provider_unified: Option<bool>,
 ) -> AccountOverviewProfile {
     let observed_models = segments
         .iter()
@@ -2936,28 +3018,17 @@ fn overview_profile(
         .as_ref()
         .map(|profile| profile.account_model.clone())
         .or_else(|| {
-            [
-                "portfolio_margin",
-                "unified",
-                "contract_unified",
-                "contract",
-                "margin",
-                "no_margin",
-            ]
-            .into_iter()
-            .find(|candidate| observed_models.contains(*candidate))
-            .map(str::to_owned)
-            .or_else(|| {
-                (observed_models.len() == 1)
-                    .then(|| observed_models.first().expect("one observed model").clone())
-            })
+            (observed_models.len() == 1)
+                .then(|| observed_models.first().expect("one observed model").clone())
+                .or_else(|| (observed_models.len() > 1).then(|| "multiple".into()))
         });
     let provider_models = segments
         .iter()
         .filter_map(|segment| segment.provider_account_model.clone())
         .collect::<std::collections::BTreeSet<_>>();
     let provider_account_model = explicit_profile
-        .map(|profile| profile.provider_account_model)
+        .as_ref()
+        .map(|profile| profile.provider_account_model.clone())
         .or_else(|| {
             ["portfolio_margin_pro", "portfolio_margin"]
                 .into_iter()
@@ -2967,31 +3038,42 @@ fn overview_profile(
                     (provider_models.len() == 1)
                         .then(|| provider_models.first().expect("one provider model").clone())
                 })
+                .or_else(|| (provider_models.len() > 1).then(|| "multiple".into()))
         });
-    let model_match = match (
-        configured_account_model
-            .as_deref()
-            .and_then(AccountModel::parse),
-        observed_account_model
-            .as_deref()
-            .and_then(AccountModel::parse),
-    ) {
+    let configured_model = configured_account_model
+        .as_deref()
+        .and_then(AccountModel::parse);
+    let observed_model = observed_account_model
+        .as_deref()
+        .and_then(AccountModel::parse);
+    let model_match = match (configured_model, observed_model) {
         (Some(configured), Some(observed)) if configured == observed => "match",
         (Some(_), Some(_)) => "mismatch",
-        _ => "unknown",
+        (None, _) => "not_configured",
+        (Some(_), None) => "not_observed",
     }
     .into();
-    let unified = observed_account_model
-        .as_deref()
-        .or(configured_account_model.as_deref())
-        .and_then(AccountModel::parse)
-        .map(|model| {
-            matches!(
-                model,
-                AccountModel::ContractUnified
-                    | AccountModel::Unified
-                    | AccountModel::PortfolioMargin
-            )
+    let unified = explicit_profile
+        .as_ref()
+        .map(|_| true)
+        .or(provider_unified)
+        .or_else(|| {
+            configured_account_model
+                .as_deref()
+                .or_else(|| {
+                    (observed_models.len() == 1)
+                        .then(|| observed_models.first().map(String::as_str))
+                        .flatten()
+                })
+                .and_then(AccountModel::parse)
+                .map(|model| {
+                    matches!(
+                        model,
+                        AccountModel::ContractUnified
+                            | AccountModel::Unified
+                            | AccountModel::PortfolioMargin
+                    )
+                })
         });
     let margin_mode = segments
         .iter()
@@ -3105,6 +3187,7 @@ mod tests {
             Some("portfolio_margin".into()),
             vec![segment(Some("portfolio_margin"))],
             None,
+            None,
         );
         assert_eq!(matching.model_match, "match");
         assert_eq!(matching.unified, Some(true));
@@ -3116,6 +3199,7 @@ mod tests {
                 account_model: "portfolio_margin".into(),
                 provider_account_model: "portfolio_margin_pro".into(),
             }),
+            None,
         );
         assert_eq!(mismatching.model_match, "mismatch");
         assert_eq!(
@@ -3123,9 +3207,26 @@ mod tests {
             Some("portfolio_margin_pro")
         );
 
-        let unknown = overview_profile(None, vec![segment(None)], None);
-        assert_eq!(unknown.model_match, "unknown");
-        assert_eq!(unknown.unified, None);
+        let not_observed = overview_profile(None, vec![segment(None)], None, None);
+        assert_eq!(not_observed.model_match, "not_configured");
+        assert_eq!(not_observed.unified, None);
+
+        let multiple = overview_profile(
+            None,
+            vec![segment(Some("no_margin")), segment(Some("contract"))],
+            None,
+            None,
+        );
+        assert_eq!(multiple.observed_account_model.as_deref(), Some("multiple"));
+        assert_eq!(multiple.unified, None);
+
+        let provider_disabled = overview_profile(
+            None,
+            vec![segment(Some("no_margin")), segment(Some("contract"))],
+            None,
+            Some(false),
+        );
+        assert_eq!(provider_disabled.unified, Some(false));
     }
 
     #[test]

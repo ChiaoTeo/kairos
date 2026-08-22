@@ -75,6 +75,16 @@ pub struct ExternalAccountProfile {
     pub provider_account_model: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalAccountInfo {
+    pub vip_level: u32,
+    pub margin_enabled: bool,
+    pub futures_enabled: bool,
+    /// Binance's account-level Portfolio Margin (统一账户) enablement flag.
+    /// Older provider responses may omit it, so absence is not treated as false.
+    pub portfolio_margin_enabled: Option<bool>,
+}
+
 impl ExternalAccountModel {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {

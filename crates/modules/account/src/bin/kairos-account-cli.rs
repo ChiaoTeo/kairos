@@ -3,12 +3,12 @@ use std::str::FromStr;
 use clap::{Args, Parser, Subcommand};
 use kairos_account::domain::AccountFill;
 use kairos_account::{
-    AccountBalancesResult, AccountCredentialProbeRequest, AccountEarnHoldingsResult,
-    AccountFeesResult, AccountListItem, AccountListResult, AccountOpenOrdersResult,
-    AccountOverviewResult, AccountPositionsResult, AccountProviderConnectionArgs,
-    AccountQueryCompleteness, BindCredentialRequest, CliAccountApplication,
-    ConnectAccountProviderRequest, ConnectedAccountApplication, CreateCredentialRequest,
-    ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+    AccountBalanceItem, AccountBalancesResult, AccountCredentialProbeRequest,
+    AccountEarnHoldingsResult, AccountFeesResult, AccountListItem, AccountListResult,
+    AccountOpenOrdersResult, AccountOverviewResult, AccountPositionsResult,
+    AccountProviderConnectionArgs, AccountQueryCompleteness, BindCredentialRequest,
+    CliAccountApplication, ConnectAccountProviderRequest, ConnectedAccountApplication,
+    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
 };
 use kairos_account_contract::{AccountSegmentsRequest, SimulatedSettlement};
 use kairos_workspace::Workspace;
@@ -756,113 +756,124 @@ fn render_account_overview(value: &AccountOverviewResult) -> String {
     let unified = value
         .profile
         .unified
-        .map(|value| if value { "yes" } else { "no" })
-        .unwrap_or("unknown");
+        .map(|value| if value { "是" } else { "否" })
+        .unwrap_or("未能确认");
     let rows = vec![
-        vec!["account".into(), value.identity.account_id.to_string()],
-        vec!["broker/custodian".into(), value.identity.broker.to_string()],
+        vec!["账户".into(), value.identity.account_id.to_string()],
+        vec!["券商/托管方".into(), value.identity.broker.to_string()],
         vec![
-            "exchange".into(),
+            "交易所".into(),
             value
                 .identity
                 .exchange
                 .clone()
                 .unwrap_or_else(|| "—".into()),
         ],
-        vec!["environment".into(), value.identity.environment.clone()],
+        vec!["环境".into(), localized_status(&value.identity.environment)],
         vec![
-            "integration provider".into(),
+            "集成提供方".into(),
             value.connection.integration_provider.to_string(),
         ],
         vec![
-            "configured model".into(),
+            "配置账户模式".into(),
             value
                 .profile
                 .configured_account_model
                 .clone()
-                .unwrap_or_else(|| "—".into()),
+                .map(|model| localized_model(&model))
+                .unwrap_or_else(|| "未配置（采用实测）".into()),
         ],
         vec![
-            "observed model".into(),
+            "实测账户模式".into(),
             value
                 .profile
                 .observed_account_model
                 .clone()
-                .unwrap_or_else(|| "unknown".into()),
+                .map(|model| localized_model(&model))
+                .unwrap_or_else(|| "未能确认".into()),
         ],
         vec![
-            "provider model".into(),
+            "Binance 原生模式".into(),
             value
                 .profile
                 .provider_account_model
                 .clone()
-                .unwrap_or_else(|| "unknown".into()),
+                .map(|model| localized_model(&model))
+                .unwrap_or_else(|| "未能确认".into()),
         ],
         vec![
-            "model consistency".into(),
-            value.profile.model_match.clone(),
+            "模式一致性".into(),
+            localized_status(&value.profile.model_match),
         ],
-        vec!["unified".into(), unified.into()],
+        vec!["Binance 统一保证金账户".into(), unified.into()],
         vec![
-            "margin mode".into(),
+            "保证金模式".into(),
             value
                 .profile
                 .margin_mode
                 .clone()
-                .unwrap_or_else(|| "unknown".into()),
+                .map(|mode| localized_status(&mode))
+                .unwrap_or_else(|| "不适用或未返回".into()),
         ],
         vec![
-            "position mode".into(),
+            "持仓模式".into(),
             value
                 .profile
                 .position_mode
                 .clone()
-                .unwrap_or_else(|| "unknown".into()),
+                .map(|mode| localized_status(&mode))
+                .unwrap_or_else(|| "未能查询".into()),
         ],
         vec![
-            "fee summary".into(),
-            value.commercial.fee_summary_status.clone(),
+            "费率".into(),
+            localized_status(&value.commercial.fee_summary_status),
         ],
         vec![
-            "VIP tier".into(),
+            "VIP 等级".into(),
             value
                 .commercial
                 .vip_tier
                 .clone()
-                .unwrap_or_else(|| "unknown".into()),
+                .unwrap_or_else(|| "接口不单独返回（实际费率已含账户优惠）".into()),
         ],
         vec![
-            "effective access".into(),
-            value.permissions.effective_capabilities.join(", "),
+            "有效权限".into(),
+            value
+                .permissions
+                .effective_capabilities
+                .iter()
+                .map(|value| localized_status(value))
+                .collect::<Vec<_>>()
+                .join("、"),
         ],
         vec![
-            "assets".into(),
+            "非零资产".into(),
             value.facts.non_zero_balance_count.to_string(),
         ],
         vec![
-            "collateral".into(),
+            "保证金资产".into(),
             value.facts.collateral_count.to_string(),
         ],
+        vec!["交易持仓".into(), value.facts.position_count.to_string()],
         vec![
-            "trading positions".into(),
-            value.facts.position_count.to_string(),
-        ],
-        vec![
-            "earn holdings".into(),
+            "理财持有".into(),
             optional_count(value.facts.earn_holding_count),
         ],
         vec![
-            "open orders".into(),
+            "未完成订单".into(),
             optional_count(value.facts.open_order_count),
         ],
         vec![
-            "completeness".into(),
-            format!("{:?}", value.health.completeness).to_ascii_lowercase(),
+            "数据完整度".into(),
+            localized_status(&format!("{:?}", value.health.completeness).to_ascii_lowercase()),
         ],
-        vec!["health status".into(), value.health.overall_status.clone()],
-        vec!["freshness".into(), value.health.freshness.clone()],
         vec![
-            "segments".into(),
+            "健康状态".into(),
+            localized_status(&value.health.overall_status),
+        ],
+        vec!["数据时效".into(), localized_status(&value.health.freshness)],
+        vec![
+            "账户分区".into(),
             format!(
                 "{}/{}",
                 value.health.segments_succeeded, value.health.segments_requested
@@ -870,11 +881,11 @@ fn render_account_overview(value: &AccountOverviewResult) -> String {
         ],
     ];
     let mut output = format!(
-        "Account {} · {} · {}\n{}",
+        "账户 {} · {} · {}\n{}",
         value.identity.account_id,
-        value.health.mode,
-        value.health.source.replace('_', " "),
-        render_compact_table(&["ACCOUNT OVERVIEW", "VALUE"], &rows)
+        localized_status(&value.health.mode),
+        localized_status(&value.health.source),
+        render_compact_table(&["账户概览", "值"], &rows)
     );
     if !value.profile.segments.is_empty() {
         let segment_rows = value
@@ -884,16 +895,18 @@ fn render_account_overview(value: &AccountOverviewResult) -> String {
             .map(|segment| {
                 vec![
                     segment.segment.to_string(),
-                    format!("{:?}", segment.completeness).to_ascii_lowercase(),
-                    segment.freshness.clone(),
+                    localized_status(&format!("{:?}", segment.completeness).to_ascii_lowercase()),
+                    localized_status(&segment.freshness),
                     segment
                         .observed_account_model
                         .clone()
-                        .unwrap_or_else(|| "unknown".into()),
+                        .map(|model| localized_model(&model))
+                        .unwrap_or_else(|| "不适用".into()),
                     segment
                         .provider_account_model
                         .clone()
-                        .unwrap_or_else(|| "unknown".into()),
+                        .map(|model| localized_model(&model))
+                        .unwrap_or_else(|| "未返回".into()),
                     segment
                         .observed_at_unix_nanos
                         .map(|value| value.to_string())
@@ -905,19 +918,19 @@ fn render_account_overview(value: &AccountOverviewResult) -> String {
         output.push_str("\n\n");
         output.push_str(&render_compact_table(
             &[
-                "SEGMENT",
-                "COMPLETENESS",
-                "FRESHNESS",
-                "OBSERVED_MODEL",
-                "PROVIDER_MODEL",
-                "OBSERVED_NS",
-                "ISSUE",
+                "分区",
+                "完整度",
+                "时效",
+                "实测模式",
+                "原生模式",
+                "观测时间(NS)",
+                "问题",
             ],
             &segment_rows,
         ));
     }
     if !value.health.issues.is_empty() {
-        output.push_str("\n\nIssues:\n");
+        output.push_str("\n\n查询说明/问题：\n");
         output.push_str(
             &value
                 .health
@@ -934,7 +947,57 @@ fn render_account_overview(value: &AccountOverviewResult) -> String {
 fn optional_count(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())
-        .unwrap_or_else(|| "unknown".into())
+        .unwrap_or_else(|| "未能查询".into())
+}
+
+fn localized_model(value: &str) -> String {
+    match value {
+        "portfolio_margin_pro" => "统一账户 Pro（Portfolio Margin Pro）",
+        "portfolio_margin" => "统一账户（Portfolio Margin）",
+        "contract_unified" => "统一合约账户",
+        "unified" => "统一账户",
+        "contract" => "合约账户",
+        "margin" | "cross_margin" => "保证金账户",
+        "no_margin" | "spot" => "现货账户",
+        "classic_futures" => "经典合约账户",
+        "funding_wallet" => "资金钱包",
+        "multiple" => "多个分区模式（见下表）",
+        other => other,
+    }
+    .into()
+}
+
+fn localized_status(value: &str) -> String {
+    match value {
+        "live" => "实盘",
+        "standalone" => "独立查询",
+        "direct_provider" => "Provider 直连",
+        "local_registry" => "本地配置",
+        "complete" => "完整",
+        "partial" => "部分完整",
+        "unavailable" => "不可用（Provider 未提供）",
+        "unsupported" => "不支持",
+        "not_applicable" => "不适用",
+        "not_queried" => "尚未查询",
+        "ready" => "正常",
+        "configured" => "已配置",
+        "fresh" => "新鲜",
+        "local" => "本地",
+        "read" => "只读",
+        "trade" => "交易",
+        "match" => "一致",
+        "mismatch" => "不一致",
+        "not_configured" => "未配置，无法比较",
+        "not_observed" => "尚未观测",
+        "cross" => "全仓",
+        "isolated" => "逐仓",
+        "one_way" => "单向持仓",
+        "hedge" => "双向持仓",
+        "query_by_symbol" => "按交易对查询（菜单 6）",
+        "included_in_observed_rate" => "接口不单独返回（实际费率已含账户优惠）",
+        other => other,
+    }
+    .into()
 }
 
 fn print_account_fees(value: AccountFeesResult) -> Result<(), serde_json::Error> {
@@ -948,27 +1011,27 @@ fn print_account_fees(value: AccountFeesResult) -> Result<(), serde_json::Error>
 
 fn render_account_fees(value: &AccountFeesResult) -> String {
     let rows = vec![
-        vec!["product".into(), value.product.clone()],
+        vec!["产品".into(), value.product.clone()],
         vec![
-            "symbol".into(),
+            "交易对".into(),
             value.symbol.clone().unwrap_or_else(|| "—".into()),
         ],
         vec![
-            "maker".into(),
+            "Maker 费率".into(),
             value
                 .maker
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| "unavailable".into()),
+                .unwrap_or_else(|| "不可用".into()),
         ],
         vec![
-            "taker".into(),
+            "Taker 费率".into(),
             value
                 .taker
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| "unavailable".into()),
+                .unwrap_or_else(|| "不可用".into()),
         ],
         vec![
-            "discount asset".into(),
+            "折扣资产".into(),
             value
                 .discount
                 .as_ref()
@@ -976,35 +1039,35 @@ fn render_account_fees(value: &AccountFeesResult) -> String {
                 .unwrap_or_else(|| "—".into()),
         ],
         vec![
-            "discount enabled".into(),
+            "折扣已启用".into(),
             value
                 .discount
                 .as_ref()
                 .and_then(|discount| discount.enabled_for_account)
                 .map(|enabled| enabled.to_string())
-                .unwrap_or_else(|| "unknown".into()),
+                .unwrap_or_else(|| "未返回".into()),
         ],
         vec![
-            "VIP tier".into(),
+            "VIP 等级".into(),
             value
                 .vip_tier
                 .clone()
-                .unwrap_or_else(|| value.vip_tier_status.clone()),
+                .unwrap_or_else(|| localized_status(&value.vip_tier_status)),
         ],
         vec![
-            "completeness".into(),
-            format!("{:?}", value.completeness).to_ascii_lowercase(),
+            "数据完整度".into(),
+            localized_status(&format!("{:?}", value.completeness).to_ascii_lowercase()),
         ],
     ];
     let mut output = format!(
-        "Account {} · {} · {}\n{}",
+        "账户 {} · {} · {}\n{}",
         value.account_id,
-        value.mode,
-        value.source.replace('_', " "),
-        render_compact_table(&["FIELD", "VALUE"], &rows),
+        localized_status(&value.mode),
+        localized_status(&value.source),
+        render_compact_table(&["费率字段", "值"], &rows),
     );
     if !value.issues.is_empty() {
-        output.push_str("\n\nIssues:\n");
+        output.push_str("\n\n说明：\n");
         output.push_str(
             &value
                 .issues
@@ -1306,11 +1369,19 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
     let rows = value
         .balances
         .iter()
-        .chain(value.collateral.iter())
         .map(|balance| {
+            let role = if value
+                .collateral
+                .iter()
+                .any(|candidate| same_balance_value(balance, candidate))
+            {
+                "钱包/保证金".into()
+            } else {
+                localized_balance_role(&balance.role)
+            };
             vec![
                 balance.segment.to_string(),
-                balance.role.clone(),
+                role,
                 balance.asset.to_string(),
                 balance.total.to_string(),
                 optional_decimal(balance.available),
@@ -1319,13 +1390,36 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
                 optional_decimal(balance.interest),
             ]
         })
+        .chain(
+            value
+                .collateral
+                .iter()
+                .filter(|candidate| {
+                    !value
+                        .balances
+                        .iter()
+                        .any(|balance| same_balance_value(balance, candidate))
+                })
+                .map(|balance| {
+                    vec![
+                        balance.segment.to_string(),
+                        localized_balance_role(&balance.role),
+                        balance.asset.to_string(),
+                        balance.total.to_string(),
+                        optional_decimal(balance.available),
+                        optional_decimal(balance.locked),
+                        optional_decimal(balance.borrowed),
+                        optional_decimal(balance.interest),
+                    ]
+                }),
+        )
         .collect::<Vec<_>>();
     let heading = format!(
-        "Account {} · {} · {} · completeness {:?} · segments {}/{}",
+        "账户 {} · {} · {} · 完整度 {} · 分区 {}/{}",
         value.account_id,
-        value.mode,
-        value.source.replace('_', " "),
-        value.completeness,
+        localized_status(&value.mode),
+        localized_status(&value.source),
+        localized_status(&format!("{:?}", value.completeness).to_ascii_lowercase()),
         value.segments_succeeded,
         value.segments_requested,
     );
@@ -1336,14 +1430,7 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
             "{heading}\n{}",
             render_compact_table(
                 &[
-                    "SEGMENT",
-                    "CLASS",
-                    "ASSET",
-                    "TOTAL",
-                    "AVAILABLE",
-                    "LOCKED",
-                    "BORROWED",
-                    "INTEREST",
+                    "分区", "类别", "资产", "总额", "可用", "锁定", "借入", "利息",
                 ],
                 &rows,
             )
@@ -1361,6 +1448,25 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
         );
     }
     output
+}
+
+fn same_balance_value(left: &AccountBalanceItem, right: &AccountBalanceItem) -> bool {
+    left.segment == right.segment
+        && left.asset == right.asset
+        && left.total == right.total
+        && left.available == right.available
+        && left.locked == right.locked
+        && left.borrowed == right.borrowed
+        && left.interest == right.interest
+}
+
+fn localized_balance_role(value: &str) -> String {
+    match value {
+        "wallet" => "钱包",
+        "collateral" => "保证金",
+        other => other,
+    }
+    .into()
 }
 
 fn optional_decimal(value: Option<kairos_primitives::decimal::DecimalParts>) -> String {
@@ -1872,14 +1978,12 @@ mod cli_tests {
             errors: Vec::new(),
         });
 
-        assert!(output.contains("SEGMENT"));
-        assert!(output.contains("ASSET"));
+        assert!(output.contains("分区"));
+        assert!(output.contains("资产"));
         assert!(output.contains("spot"));
         assert!(output.contains("USDT"));
         assert!(!output.contains("balances"));
-        assert!(
-            output.contains("standalone · local registry · completeness Complete · segments 1/1")
-        );
+        assert!(output.contains("独立查询 · 本地配置 · 完整度 完整 · 分区 1/1"));
         assert_eq!(output.lines().count(), 4);
     }
 
@@ -1913,8 +2017,41 @@ mod cli_tests {
         });
 
         assert!(output.contains("USDT"));
-        assert!(output.contains("completeness Partial · segments 1/2"));
+        assert!(output.contains("完整度 部分完整 · 分区 1/2"));
         assert!(output.contains("funding: unauthorized"));
+    }
+
+    #[test]
+    fn assets_merge_identical_wallet_and_collateral_rows() {
+        let balance = AccountBalanceItem {
+            segment: SegmentKey::new("usd_m_futures").unwrap(),
+            role: "wallet".into(),
+            asset: Currency::new("USDT").unwrap(),
+            total: "100".parse().unwrap(),
+            available: Some("80".parse().unwrap()),
+            locked: None,
+            borrowed: None,
+            interest: None,
+        };
+        let mut collateral = balance.clone();
+        collateral.role = "collateral".into();
+        let output = render_account_balances(&AccountBalancesResult {
+            account_id: AccountId::new("live-main").unwrap(),
+            source: "direct_provider".into(),
+            mode: "standalone".into(),
+            kind: "assets".into(),
+            segments_requested: 1,
+            segments_succeeded: 1,
+            completeness: AccountQueryCompleteness::Complete,
+            observed_at_unix_nanos: Some(1),
+            balances: vec![balance],
+            collateral: vec![collateral],
+            outcomes: Vec::new(),
+            errors: Vec::new(),
+        });
+
+        assert_eq!(output.matches("USDT").count(), 1);
+        assert!(output.contains("钱包/保证金"));
     }
 
     #[test]
@@ -1994,6 +2131,6 @@ mod cli_tests {
             issues: Vec::new(),
         });
         assert!(output.contains("0.001"));
-        assert!(output.contains("unavailable"));
+        assert!(output.contains("不可用（Provider 未提供）"));
     }
 }

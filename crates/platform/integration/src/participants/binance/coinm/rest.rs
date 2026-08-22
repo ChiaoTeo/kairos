@@ -1,5 +1,17 @@
 rest_connection!(BinanceCoinMRestConnection, "coinm.rest");
 
+impl BinanceCoinMRestConnection {
+    pub async fn fetch_position_mode(
+        &mut self,
+    ) -> Result<crate::ExternalPositionMode, crate::IntegrationError> {
+        let value = self
+            .service
+            .signed_get("/dapi/v1/positionSide/dual", &[])
+            .await?;
+        crate::services::participants::binance::account::position_mode(&value)
+    }
+}
+
 impl crate::FeeQuery for BinanceCoinMRestConnection {
     async fn fetch_fee_schedule(
         &mut self,

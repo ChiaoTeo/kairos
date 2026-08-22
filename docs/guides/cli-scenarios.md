@@ -236,6 +236,24 @@ kairos interactive
 kairos i
 ```
 
+持续交互 shell 的根部按产品任务区分交易标的与运行中行情；Reference 只在
+`system/reference` 运维路径中作为组件名出现：
+
+```text
+1. 账户
+2. 策略运行
+3. 交易标的
+4. 行情
+5. 数据与研究
+6. 系统状态
+7. 诊断与观测
+8. 命令帮助
+```
+
+`交易标的` 使用 Reference 目录完成搜索、消歧和 market/listing 查询；`行情` 使用
+workspace Market component 读取 quote、bar、greeks 和 freshness。两者不能合并为同一个
+Reference 菜单。
+
 交互式入口不应该成为第二套业务 API。它只做三件事：
 
 1. 读取当前 workspace 状态。
@@ -254,7 +272,7 @@ What do you want to do?
 1. Start from scratch
 2. Run or inspect a strategy
 3. Operate the runtime system
-4. Check account, market, order, or reference data
+4. Check account, market, order, or trading-instrument data
 5. Work with data and research
 6. Diagnose what is wrong
 7. Open observe console
@@ -348,14 +366,14 @@ kairos system repair
 
 ### 便捷查询路径
 
-`Check account, market, order, or reference data` 应该先问用户要查什么，而不是先暴露
+`Check account, market, order, or trading-instrument data` 应该先问用户要查什么，而不是先暴露
 Account、Market、Execution、Reference 这些模块边界：
 
 ```text
 1. Account balances or positions
 2. Market quote, bar, or greeks snapshot
 3. Order status or audit
-4. Reference markets, listings, market details, or search
+4. 交易标的：搜索、markets、listings 或标的详情
 5. Notification destination
 6. Provider integration operation
 ```

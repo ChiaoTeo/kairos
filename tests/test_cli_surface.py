@@ -3338,7 +3338,7 @@ def test_interactive_session_keeps_context_between_actions(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["5", "2", "4", "summary", "exit"])
+    shell_input = iter(["6", "2", "4", "summary", "exit"])
     confirmations = iter([True])
     executed: list[tuple[str, ...]] = []
 
@@ -3517,7 +3517,6 @@ def test_interactive_account_context_keeps_selected_paper_account(
         lambda _self, component, **kwargs: {"status": "ready"},
     )
     shell_input = iter(["account", "1", "2", "7", "exit"])
-    prompts = iter(["1"])
     executed: list[tuple[str, ...]] = []
 
     def read_input(prompt: str = "") -> str:
@@ -3525,7 +3524,12 @@ def test_interactive_account_context_keeps_selected_paper_account(
         return next(shell_input)
 
     monkeypatch.setattr("builtins.input", read_input)
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr(
+        "typer.prompt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("输入账户序号后不应再次询问")
+        ),
+    )
     output = StringIO()
     with redirect_stdout(output):
         status = run_interactive(
@@ -3546,6 +3550,7 @@ def test_interactive_account_context_keeps_selected_paper_account(
         "table",
     )
     assert "/account/paper-account>" in text
+    assert "| 序号 | account       |" in text
     assert "broker/custodian" in text
     assert "paper" in text
     assert "environment" in text
@@ -3672,7 +3677,7 @@ def test_interactive_live_account_never_enters_launch_connected_mode(
     assert "launch" not in result.argv
 
 
-def test_interactive_account_fee_query_requires_product_and_symbol(
+def test_interactive_account_fee_query_uses_one_scoped_prompt(
     tmp_path: Path, monkeypatch
 ) -> None:
     from kairospy.surface.cli.interactive import (
@@ -3684,7 +3689,7 @@ def test_interactive_account_fee_query_requires_product_and_symbol(
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
-    prompts = iter(["usd_m_futures", "BTCUSDT"])
+    prompts = iter(["usd_m_futures:BTCUSDT"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
     context = InteractiveContext(
         owner=workspace,
@@ -3879,7 +3884,7 @@ def test_account_positions_uses_top_level_standalone_mode(
     ]
 
 
-def test_interactive_numeric_entry_opens_reference_context(
+def test_interactive_numeric_entry_opens_trading_target_context(
     tmp_path, monkeypatch
 ) -> None:
     from kairospy.surface.cli.interactive import run_interactive
@@ -3913,7 +3918,8 @@ def test_interactive_numeric_entry_opens_reference_context(
     text = output.getvalue()
     assert status == 0
     assert "无法识别这个命令" not in text
-    assert "/reference>" in text
+    assert "/targets>" in text
+    assert "交易标的：" in text
     assert executed[0][:4] == ("reference", "markets", "--asset-code", "AAPL")
     assert (
         "kairos reference markets --asset-code AAPL --active-only --format table"
@@ -3972,12 +3978,62 @@ def test_interactive_reference_menu_lists_markets_without_catalog(
         == 0
     )
     text = output.getvalue()
-    assert "你想查询 Reference 里的什么" in text
+    assert "你想查询什么交易标的" in text
     assert (
         "准备执行：kairos reference markets --active-only --limit 25 --format table"
         in text
     )
     assert "reference catalog" not in text
+
+
+def test_interactive_root_market_entry_reads_workspace_market_snapshot(
+    tmp_path, monkeypatch
+) -> None:
+    from kairospy.surface.cli.interactive import run_interactive
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    shell_input = iter(["4", "1", "exit"])
+    prompts = iter(["market:binance:spot:BTCUSDT", "binance-spot"])
+    executed: list[tuple[str, ...]] = []
+
+    def read_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(shell_input)
+
+    monkeypatch.setattr("builtins.input", read_input)
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
+
+    with redirect_stdout(output):
+        status = run_interactive(
+            workspace=workspace.paths.root,
+            dry_run=False,
+            no_exec=False,
+            yes=False,
+            execute=lambda argv: executed.append(tuple(argv)) or 0,
+        )
+
+    text = output.getvalue()
+    assert status == 0
+    assert "/market>" in text
+    assert "行情：" in text
+    assert executed[0][:13] == (
+        "system",
+        "component",
+        "market",
+        "snapshot",
+        "quote",
+        "--market-id",
+        "market:binance:spot:BTCUSDT",
+        "--source-id",
+        "binance-spot",
+        "--format",
+        "table",
+        "--workspace",
+        str(workspace.paths.root),
+    )
 
 
 def test_interactive_reference_menu_searches_market_by_symbol(

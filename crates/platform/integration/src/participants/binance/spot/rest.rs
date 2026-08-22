@@ -89,6 +89,18 @@ impl crate::FeeQuery for BinanceSpotRestConnection {
     }
 }
 
+impl BinanceSpotRestConnection {
+    pub async fn fetch_account_info(
+        &mut self,
+    ) -> Result<crate::ExternalAccountInfo, IntegrationError> {
+        let value = self
+            .service
+            .signed_get("/sapi/v1/account/info", &[])
+            .await?;
+        crate::services::participants::binance::account::account_info(&value)
+    }
+}
+
 impl InstrumentCatalogQuery for BinanceSpotRestConnection {
     async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let value = self.service.public_get("/api/v3/exchangeInfo", &[]).await?;
