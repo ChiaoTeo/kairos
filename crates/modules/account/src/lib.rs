@@ -11,10 +11,13 @@ mod services;
 
 pub use application::{
     AccountApplication, AccountBalanceItem, AccountBalancesResult, AccountCredentialProbeRequest,
-    AccountCurrentView, AccountError, AccountEvent, AccountListItem, AccountListResult,
-    AccountObservedFill, AccountPositionItem, AccountPositionsResult,
-    AccountProviderConnectionArgs, AccountRpcService, AccountRuntimeMode, BindCredentialRequest,
-    CliAccountApplication, ConnectAccountProviderRequest, ConnectAccountRequest,
-    ConnectedAccountApplication, CreateCredentialRequest, MarkToMarket, ModifyAccountRequest,
-    ReconcileAccount, RefreshAccount, RegisterAccountRequest, SimulateAccountRequest,
+    AccountCurrentView, AccountEarnHoldingItem, AccountEarnHoldingsResult, AccountError,
+    AccountEvent, AccountFeeComponent, AccountFeeDiscount, AccountFeesResult, AccountListItem,
+    AccountListResult, AccountObservedFill, AccountOpenOrderItem, AccountOpenOrdersResult,
+    AccountOverviewResult, AccountPositionItem, AccountPositionsResult,
+    AccountProviderConnectionArgs, AccountQueryCompleteness, AccountQueryError, AccountRpcService,
+    AccountRuntimeMode, BindCredentialRequest, CliAccountApplication,
+    ConnectAccountProviderRequest, ConnectAccountRequest, ConnectedAccountApplication,
+    CreateCredentialRequest, MarkToMarket, ModifyAccountRequest, ReconcileAccount, RefreshAccount,
+    RegisterAccountRequest, SimulateAccountRequest,
 };

@@ -1106,7 +1106,8 @@ macro_rules! futures_rest_capabilities {
                 &mut self,
                 query: &crate::ExternalOrderQuery,
             ) -> Result<Vec<crate::ExternalOrder>, crate::IntegrationError> {
-                let params = $crate::participants::binance::binance_order_query(query, false)?;
+                let params =
+                    $crate::participants::binance::binance_order_query(query, false, false)?;
                 let value = self
                     .service
                     .signed_get(concat!($prefix, "/openOrders"), &params)
@@ -1120,7 +1121,8 @@ macro_rules! futures_rest_capabilities {
                 &mut self,
                 query: &crate::ExternalOrderQuery,
             ) -> Result<Vec<crate::ExternalOrder>, crate::IntegrationError> {
-                let params = $crate::participants::binance::binance_order_query(query, false)?;
+                let params =
+                    $crate::participants::binance::binance_order_query(query, false, true)?;
                 let value = self
                     .service
                     .signed_get(concat!($prefix, "/allOrders"), &params)
@@ -1134,7 +1136,7 @@ macro_rules! futures_rest_capabilities {
                 &mut self,
                 query: &crate::ExternalOrderQuery,
             ) -> Result<Option<crate::ExternalOrder>, crate::IntegrationError> {
-                let params = $crate::participants::binance::binance_order_query(query, true)?;
+                let params = $crate::participants::binance::binance_order_query(query, true, true)?;
                 let value = self
                     .service
                     .signed_get(concat!($prefix, "/order"), &params)
@@ -1279,11 +1281,12 @@ macro_rules! futures_native_order_extensions {
 fn binance_order_query(
     query: &crate::ExternalOrderQuery,
     detail: bool,
+    symbol_required: bool,
 ) -> Result<Vec<(&'static str, String)>, crate::IntegrationError> {
     let mut values = Vec::new();
     if let Some(symbol) = &query.symbol {
         values.push(("symbol", symbol.to_string()));
-    } else {
+    } else if symbol_required {
         return Err(crate::IntegrationError::InvalidRequest(
             "Binance order query requires symbol".into(),
         ));
@@ -1308,6 +1311,7 @@ pub mod capital;
 pub mod coinm;
 mod config;
 pub mod earn;
+mod fees;
 pub mod funding;
 mod history;
 pub mod margin;

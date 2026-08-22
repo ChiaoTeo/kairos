@@ -1,13 +1,21 @@
 use std::path::PathBuf;
 
 use kairos_conflux::{
-    AccountCredentialQuery, AccountQuery, BinanceCredential,
+    AccountCredentialQuery, AccountProfileQuery, AccountQuery, BinanceCoinMRestConnection,
+    BinanceCredential, BinanceMarginRestConnection, BinanceOptionsRestConnection,
     BinancePortfolioMarginProRestConnection, BinancePortfolioMarginRestConnection,
-    BinanceRestConfig, BinanceUserWebSocketConfig, ConnectionKey, ExternalAccountCredentialProfile,
+    BinanceRestConfig, BinanceSimpleEarnRestConnection, BinanceSpotRestConnection,
+    BinanceUsdMRestConnection, BinanceUserWebSocketConfig, ConnectionKey,
+    ConnectionLifecycleCommand, EarnPosition, EarnPositionsRequest, EarnProductFamily,
+    EarnProductQuery, ExternalAccountCredentialProfile,
     ExternalAccountIdentity as IntegrationAccountIdentity, ExternalAccountSegment,
-    ExternalAccountSnapshot, IbkrAccountQueryConfig, IbkrAccountStreamConfig, OkxCredential,
-    OkxPrivateRestConfig, OkxPrivateWebSocketConfig, OkxRestConfig, OkxWebSocketConfig,
+    ExternalAccountSnapshot, ExternalFeeSchedule, ExternalFeeScheduleRequest, ExternalOrder,
+    ExternalOrderQuery, FeeQuery, IbkrAccountQueryConfig, IbkrAccountStreamConfig, IbkrOrderConfig,
+    IbkrOrderConnection, OkxCredential, OkxPrivateRestConfig, OkxPrivateRestConnection,
+    OkxPrivateWebSocketConfig, OkxRestConfig, OkxWebSocketConfig, OrderQuery,
+    ParticipantInstrumentTypeRef,
 };
+use kairos_primitives::reference::Symbol;
 use secrecy::SecretString;
 
 use crate::application::AccountApplication;
@@ -50,6 +58,12 @@ pub struct AccountSegmentBinding {
     pub segment_key: String,
     pub provider_product: String,
     pub trading_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedAccountProfile {
+    pub account_model: String,
+    pub provider_account_model: String,
 }
 
 impl AccountSegmentBinding {
@@ -280,29 +294,311 @@ pub async fn query_direct_account_snapshot(
         }),
         _ => return Err(format!("unsupported direct Account provider: {provider}")),
     };
-    let snapshot = connection.fetch(key.clone(), &segment).await?;
-    if provider == "binance"
-        && product == "usd-m-futures"
-        && snapshot.balances.is_empty()
-        && snapshot.positions.is_empty()
-        && options.environment.eq_ignore_ascii_case("live")
-    {
-        if let Ok(portfolio_snapshot) =
-            query_binance_portfolio_snapshot(options, key.clone(), &segment).await
-        {
-            if !portfolio_snapshot.balances.is_empty() || !portfolio_snapshot.positions.is_empty() {
-                return Ok(portfolio_snapshot);
+    connection.fetch(key, &segment).await
+}
+
+/// Observe Binance's account product through dedicated profile endpoints.
+/// Failed probes do not infer a classic or portfolio model from empty data.
+pub async fn query_direct_account_profile(
+    options: &AccountOptions,
+) -> Result<ObservedAccountProfile, String> {
+    let provider = normalized_provider(&options.provider);
+    if provider != "binance" {
+        return Err(format!(
+            "explicit account profile discovery is unsupported for {provider}"
+        ));
+    }
+    let mut profile_options = options.clone();
+    profile_options.base_url = "https://api.binance.com".into();
+    let pro_key = format!("account.direct.{provider}.profile.portfolio-pro");
+    let mut pro = BinancePortfolioMarginProRestConnection::new(
+        ConnectionKey::new(pro_key.clone())?,
+        binance_rest_config(&profile_options, pro_key),
+    )
+    .map_err(|error| error.to_string())?;
+    match pro.fetch_account_profile().await {
+        Ok(profile) => {
+            return Ok(ObservedAccountProfile {
+                account_model: external_account_model_name(profile.account_model).into(),
+                provider_account_model: profile
+                    .provider_account_model
+                    .unwrap_or_else(|| "portfolio_margin_pro".into()),
+            });
+        },
+        Err(pro_error) => {
+            let mut portfolio_options = options.clone();
+            portfolio_options.base_url = "https://papi.binance.com".into();
+            let portfolio_key = format!("account.direct.{provider}.profile.portfolio");
+            let mut portfolio = BinancePortfolioMarginRestConnection::new(
+                ConnectionKey::new(portfolio_key.clone())?,
+                binance_rest_config(&portfolio_options, portfolio_key),
+            )
+            .map_err(|error| error.to_string())?;
+            match portfolio.fetch_account_profile().await {
+                Ok(profile) => Ok(ObservedAccountProfile {
+                    account_model: external_account_model_name(profile.account_model).into(),
+                    provider_account_model: profile
+                        .provider_account_model
+                        .unwrap_or_else(|| "portfolio_margin".into()),
+                }),
+                Err(portfolio_error) => Err(format!(
+                    "Binance account profile remains unknown: Portfolio Margin Pro probe failed: {pro_error}; Portfolio Margin probe failed: {portfolio_error}"
+                )),
             }
+        },
+    }
+}
+
+fn external_account_model_name(model: kairos_conflux::ExternalAccountModel) -> &'static str {
+    match model {
+        kairos_conflux::ExternalAccountModel::NoMargin => "no_margin",
+        kairos_conflux::ExternalAccountModel::Margin => "margin",
+        kairos_conflux::ExternalAccountModel::Contract => "contract",
+        kairos_conflux::ExternalAccountModel::ContractUnified => "contract_unified",
+        kairos_conflux::ExternalAccountModel::Unified => "unified",
+        kairos_conflux::ExternalAccountModel::PortfolioMargin => "portfolio_margin",
+    }
+}
+
+/// Query every supported Binance Simple Earn holding family without creating
+/// an Account process. Earn holdings remain separate from trading positions.
+pub async fn query_direct_earn_positions(
+    options: &AccountOptions,
+) -> Result<Vec<EarnPosition>, String> {
+    let provider = normalized_provider(&options.provider);
+    if provider != "binance" {
+        return Err(format!(
+            "unsupported direct Earn positions provider: {provider}"
+        ));
+    }
+    let mut earn_options = options.clone();
+    earn_options.base_url = "https://api.binance.com".into();
+    let connection_key = format!("account.direct.{provider}.earn");
+    let mut connection = BinanceSimpleEarnRestConnection::new(
+        ConnectionKey::new(connection_key.clone())?,
+        binance_rest_config(&earn_options, connection_key),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut positions = Vec::new();
+    for family in [EarnProductFamily::Flexible, EarnProductFamily::Locked] {
+        let mut request = EarnPositionsRequest {
+            family: Some(family),
+            limit: Some(100),
+            ..EarnPositionsRequest::default()
+        };
+        let mut completed = false;
+        for _ in 0..100 {
+            let page = connection
+                .positions(&request)
+                .await
+                .map_err(|error| error.to_string())?;
+            positions.extend(page.items);
+            let Some(cursor) = page.next_cursor else {
+                completed = true;
+                break;
+            };
+            request.cursor = Some(cursor);
         }
-        if let Ok(portfolio_snapshot) =
-            query_binance_portfolio_pro_snapshot(options, key, &segment).await
-        {
-            if !portfolio_snapshot.balances.is_empty() || !portfolio_snapshot.positions.is_empty() {
-                return Ok(portfolio_snapshot);
-            }
+        if !completed {
+            return Err("Binance Earn positions exceeded the 100-page safety bound".into());
         }
     }
-    Ok(snapshot)
+    Ok(positions)
+}
+
+/// Query one configured Account segment's provider-native open orders.
+///
+/// This stays in composition because it selects concrete provider connectors;
+/// the application maps the normalized external facts into its own query DTO.
+pub async fn query_direct_open_orders(
+    options: &AccountOptions,
+    binding: &AccountSegmentBinding,
+    symbol: Option<&str>,
+) -> Result<Vec<ExternalOrder>, String> {
+    let provider = normalized_provider(&options.provider);
+    let product = normalized_segment(&binding.provider_product);
+    let query = ExternalOrderQuery {
+        symbol: symbol.map(Symbol::new).transpose()?,
+        instrument_type: order_instrument_type(&product)
+            .map(ParticipantInstrumentTypeRef::new)
+            .transpose()?,
+        ..ExternalOrderQuery::default()
+    };
+    let key = format!("account.direct.{provider}.{}.orders", binding.segment_key);
+    match provider.as_str() {
+        "binance" => {
+            if product == "funding" {
+                return Err("Binance Funding Wallet does not expose open orders".into());
+            }
+            if matches!(
+                options
+                    .account_model
+                    .as_deref()
+                    .map(normalized_segment)
+                    .as_deref(),
+                Some("portfolio-margin")
+            ) {
+                let mut portfolio_options = options.clone();
+                portfolio_options.base_url = "https://papi.binance.com".into();
+                let mut connection = BinancePortfolioMarginRestConnection::new(
+                    ConnectionKey::new(key.clone())?,
+                    binance_rest_config(&portfolio_options, key),
+                )
+                .map_err(|error| error.to_string())?;
+                return connection
+                    .open_orders(&query)
+                    .await
+                    .map_err(|error| error.to_string());
+            }
+            if matches!(
+                options
+                    .account_model
+                    .as_deref()
+                    .map(normalized_segment)
+                    .as_deref(),
+                Some("portfolio-margin-pro")
+            ) {
+                return Err(
+                    "Binance Portfolio Margin Pro open-orders query is not supported yet".into(),
+                );
+            }
+            let family = binance_endpoint_family(&product)?;
+            let mut segment_options = options.clone();
+            segment_options.base_url = binance_rest_base_url(options, family);
+            let config = binance_rest_config(&segment_options, key.clone());
+            match product.as_str() {
+                "spot" => {
+                    BinanceSpotRestConnection::new(ConnectionKey::new(key)?, config)
+                        .map_err(|error| error.to_string())?
+                        .open_orders(&query)
+                        .await
+                },
+                "cross-margin" | "isolated-margin" => {
+                    BinanceMarginRestConnection::new(ConnectionKey::new(key)?, config)
+                        .map_err(|error| error.to_string())?
+                        .open_orders(&query)
+                        .await
+                },
+                "usd-m-futures" => {
+                    BinanceUsdMRestConnection::new(ConnectionKey::new(key)?, config)
+                        .map_err(|error| error.to_string())?
+                        .open_orders(&query)
+                        .await
+                },
+                "coin-m-futures" => {
+                    BinanceCoinMRestConnection::new(ConnectionKey::new(key)?, config)
+                        .map_err(|error| error.to_string())?
+                        .open_orders(&query)
+                        .await
+                },
+                "options" => {
+                    BinanceOptionsRestConnection::new(ConnectionKey::new(key)?, config)
+                        .map_err(|error| error.to_string())?
+                        .open_orders(&query)
+                        .await
+                },
+                _ => unreachable!("validated Binance order product"),
+            }
+            .map_err(|error| error.to_string())
+        },
+        "okx" => {
+            let mut connection = OkxPrivateRestConnection::new(
+                ConnectionKey::new(key)?,
+                OkxPrivateRestConfig {
+                    connection: OkxRestConfig {
+                        environment: options.environment.clone(),
+                        endpoint: options.base_url.clone(),
+                    },
+                    credential: okx_credential(options),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            connection
+                .open_orders(&query)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        "ibkr" => {
+            let mut connection = IbkrOrderConnection::new(
+                ConnectionKey::new(key)?,
+                IbkrOrderConfig {
+                    environment: options.environment.clone(),
+                    host: options.host.clone(),
+                    port: options.port,
+                    client_id: options.client_id,
+                    account_id: options.account_id.clone(),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            connection
+                .connect()
+                .await
+                .map_err(|error| error.to_string())?;
+            connection
+                .open_orders(&query)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        _ => Err(format!(
+            "unsupported direct open-orders provider: {provider}"
+        )),
+    }
+}
+
+pub async fn query_direct_fee_schedule(
+    options: &AccountOptions,
+    product: &str,
+    symbol: &str,
+) -> Result<ExternalFeeSchedule, String> {
+    let provider = normalized_provider(&options.provider);
+    if provider != "binance" {
+        return Err(format!(
+            "direct fee schedules are unsupported for {provider}"
+        ));
+    }
+    let product = normalized_segment(product);
+    let family = binance_endpoint_family(&product)?;
+    let mut fee_options = options.clone();
+    fee_options.base_url = binance_rest_base_url(options, family);
+    let key = format!("account.direct.{provider}.{product}.fees");
+    let config = binance_rest_config(&fee_options, key.clone());
+    let request = ExternalFeeScheduleRequest {
+        symbol: Symbol::new(symbol)?,
+    };
+    match product.as_str() {
+        "spot" => {
+            BinanceSpotRestConnection::new(ConnectionKey::new(key)?, config)
+                .map_err(|error| error.to_string())?
+                .fetch_fee_schedule(&request)
+                .await
+        },
+        "usd-m-futures" => {
+            BinanceUsdMRestConnection::new(ConnectionKey::new(key)?, config)
+                .map_err(|error| error.to_string())?
+                .fetch_fee_schedule(&request)
+                .await
+        },
+        "coin-m-futures" => {
+            BinanceCoinMRestConnection::new(ConnectionKey::new(key)?, config)
+                .map_err(|error| error.to_string())?
+                .fetch_fee_schedule(&request)
+                .await
+        },
+        _ => return Err(format!("Binance fee schedule is unsupported for {product}")),
+    }
+    .map_err(|error| error.to_string())
+}
+
+fn order_instrument_type(product: &str) -> Option<&'static str> {
+    match product {
+        "spot" => Some("spot"),
+        "cross-margin" | "isolated-margin" => Some("margin"),
+        "usd-m-futures" => Some("perpetual"),
+        "coin-m-futures" => Some("coin-m"),
+        "options" => Some("option"),
+        "funding" => None,
+        _ => None,
+    }
 }
 
 async fn query_binance_portfolio_pro_snapshot(

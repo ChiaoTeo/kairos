@@ -17,12 +17,9 @@ from kairospy.application.workspace import WorkspaceApplication
 
 def test_reference_process_config_builds_business_process_spec(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace")
-    spec = ReferenceProcessConfig(
-        workspace=workspace,
-        run_mode="once",
-    ).process_spec()
+    spec = ReferenceProcessConfig(workspace=workspace).process_spec()
     assert spec.name == "reference"
-    assert spec.command[spec.command.index("--run-mode") + 1] == "once"
+    assert "--run-mode" not in spec.command
     assert "--provider" not in spec.command
     assert "--database" not in spec.command
     assert "--aeron-channel" in spec.command

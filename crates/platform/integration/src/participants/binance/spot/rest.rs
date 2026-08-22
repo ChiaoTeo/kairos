@@ -73,6 +73,22 @@ impl BinanceSpotRestConnection {
     }
 }
 
+impl crate::FeeQuery for BinanceSpotRestConnection {
+    async fn fetch_fee_schedule(
+        &mut self,
+        request: &crate::ExternalFeeScheduleRequest,
+    ) -> Result<crate::ExternalFeeSchedule, IntegrationError> {
+        let value = self
+            .service
+            .signed_get(
+                "/api/v3/account/commission",
+                &[("symbol", request.symbol.to_string())],
+            )
+            .await?;
+        crate::participants::binance::fees::spot(&value)
+    }
+}
+
 impl InstrumentCatalogQuery for BinanceSpotRestConnection {
     async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let value = self.service.public_get("/api/v3/exchangeInfo", &[]).await?;
@@ -344,7 +360,7 @@ impl OrderQuery for BinanceSpotRestConnection {
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
-        let params = query_params(query, false)?;
+        let params = query_params(query, false, false)?;
         let value = self
             .service
             .signed_get("/api/v3/openOrders", &params)
@@ -355,7 +371,7 @@ impl OrderQuery for BinanceSpotRestConnection {
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
-        let params = query_params(query, false)?;
+        let params = query_params(query, false, true)?;
         let value = self
             .service
             .signed_get("/api/v3/allOrders", &params)
@@ -366,7 +382,7 @@ impl OrderQuery for BinanceSpotRestConnection {
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Option<ExternalOrder>, IntegrationError> {
-        let params = query_params(query, true)?;
+        let params = query_params(query, true, true)?;
         let value = self.service.signed_get("/api/v3/order", &params).await?;
         Ok(
             execution::orders(&self.descriptor().connection_key, &value)?
@@ -378,11 +394,12 @@ impl OrderQuery for BinanceSpotRestConnection {
 fn query_params(
     query: &ExternalOrderQuery,
     detail: bool,
+    symbol_required: bool,
 ) -> Result<Vec<(&'static str, String)>, IntegrationError> {
     let mut values = Vec::new();
     if let Some(symbol) = &query.symbol {
         values.push(("symbol", symbol.to_string()));
-    } else {
+    } else if symbol_required {
         return Err(IntegrationError::InvalidRequest(
             "Binance Spot order query requires symbol".into(),
         ));
@@ -403,4 +420,17 @@ fn query_params(
 }
 fn participant() -> ParticipantRef {
     ParticipantRef::new(ParticipantKind::Exchange, "binance").expect("static Binance participant")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::query_params;
+    use crate::ExternalOrderQuery;
+
+    #[test]
+    fn open_orders_allow_account_scope_but_history_requires_symbol() {
+        let query = ExternalOrderQuery::default();
+        assert!(query_params(&query, false, false).is_ok());
+        assert!(query_params(&query, false, true).is_err());
+    }
 }

@@ -196,6 +196,22 @@ impl ConnectedAccountApplication {
                     })
                 })
                 .collect::<Vec<_>>();
+            let collateral = segment
+                .collateral()
+                .iter()
+                .filter(|balance| include_zero || balance.total().mantissa() != 0)
+                .map(|balance| {
+                    serde_json::json!({
+                        "asset_id": balance.asset_id(),
+                        "asset_code": balance.asset_code(),
+                        "total": decimal_text(balance.total()),
+                        "available": optional_decimal(balance.available()),
+                        "locked": optional_decimal(balance.locked()),
+                        "borrowed": optional_decimal(balance.borrowed()),
+                        "interest": optional_decimal(balance.interest()),
+                    })
+                })
+                .collect::<Vec<_>>();
             let positions = segment
                 .positions()
                 .iter()
@@ -218,10 +234,34 @@ impl ConnectedAccountApplication {
                     })
                 })
                 .collect::<Vec<_>>();
+            let earn_holdings = segment
+                .earn_holdings()
+                .iter()
+                .map(|holding| {
+                    serde_json::json!({
+                        "holding_key": holding.holding_key(),
+                        "participant_position_id": holding.participant_position_id(),
+                        "product_id": holding.product_id(),
+                        "asset": holding.asset(),
+                        "principal": decimal_text(holding.principal()),
+                        "redeemable": optional_decimal(holding.redeemable()),
+                        "state": holding.state().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+                        "participant_state": holding.participant_state(),
+                        "liquidity": holding.liquidity().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+                        "notice_seconds": holding.notice_seconds(),
+                        "matures_at_unix_nanos": holding.matures_at_unix_nanos(),
+                        "observed_at_unix_nanos": holding.observed_at_unix_nanos(),
+                    })
+                })
+                .collect::<Vec<_>>();
             segments.push(serde_json::json!({
                 "segment_key": segment.segment_key(),
                 "environment": segment.environment(),
                 "broker": segment.broker(),
+                "configured_account_model": segment.configured_account_model().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+                "observed_account_model": segment.observed_account_model().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+                "margin_mode": segment.margin_mode().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+                "position_mode": segment.position_mode().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
                 "status": segment.status().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
                 "freshness": segment.freshness().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
                 "sync_mode": segment.sync_mode().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
@@ -237,7 +277,10 @@ impl ConnectedAccountApplication {
                 "observed_at_unix_nanos": segment.observed_at_unix_nanos(),
                 "state_generation": segment.state_generation(),
                 "balances": balances,
+                "collateral": collateral,
                 "positions": positions,
+                "earn_holdings": earn_holdings,
+                "earn_watermark_unix_nanos": segment.earn_watermark_unix_nanos(),
             }));
         }
         let mut result = serde_json::json!({

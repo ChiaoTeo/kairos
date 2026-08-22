@@ -12,18 +12,28 @@ pub(crate) fn spot(
     segment: &ExternalAccountSegment,
     value: &Value,
 ) -> Result<ExternalAccountSnapshot, IntegrationError> {
-    snapshot(segment, balances(value, "balances", false)?, None)
+    let mut snapshot = snapshot(segment, balances(value, "balances", false)?, None)?;
+    snapshot.provider_account_model = value
+        .get("accountType")
+        .and_then(Value::as_str)
+        .map(|value| value.to_ascii_lowercase())
+        .or_else(|| Some("spot".into()));
+    snapshot.account_model = Some(ExternalAccountModel::NoMargin);
+    Ok(snapshot)
 }
 
 pub(crate) fn margin(
     segment: &ExternalAccountSegment,
     value: &Value,
 ) -> Result<ExternalAccountSnapshot, IntegrationError> {
-    snapshot(
+    let mut snapshot = snapshot(
         segment,
         balances(value, "userAssets", true)?,
         Some(ExternalMarginMode::Cross),
-    )
+    )?;
+    snapshot.provider_account_model = Some("cross_margin".into());
+    snapshot.account_model = Some(ExternalAccountModel::Margin);
+    Ok(snapshot)
 }
 
 pub(crate) fn funding(
@@ -57,7 +67,9 @@ pub(crate) fn funding(
             })
         })
         .collect::<Result<Vec<_>, IntegrationError>>()?;
-    snapshot(segment, balances, None)
+    let mut snapshot = snapshot(segment, balances, None)?;
+    snapshot.provider_account_model = Some("funding_wallet".into());
+    Ok(snapshot)
 }
 
 pub(crate) fn futures(
@@ -171,6 +183,7 @@ pub(crate) fn futures(
         initial_equity: None,
         net_profit: None,
         account_model: Some(ExternalAccountModel::Contract),
+        provider_account_model: Some("classic_futures".into()),
         margin_mode: Some(ExternalMarginMode::Cross),
         position_mode: None,
         partial: false,
@@ -221,10 +234,20 @@ pub(crate) fn portfolio(
         initial_equity: None,
         net_profit: None,
         account_model: Some(ExternalAccountModel::PortfolioMargin),
+        provider_account_model: Some("portfolio_margin".into()),
         margin_mode: Some(ExternalMarginMode::Cross),
         position_mode: None,
         partial: true,
     })
+}
+
+pub(crate) fn portfolio_pro(
+    segment: &ExternalAccountSegment,
+    value: &Value,
+) -> Result<ExternalAccountSnapshot, IntegrationError> {
+    let mut snapshot = portfolio(segment, value)?;
+    snapshot.provider_account_model = Some("portfolio_margin_pro".into());
+    Ok(snapshot)
 }
 
 pub(crate) fn options(
@@ -309,6 +332,7 @@ pub(crate) fn options(
         initial_equity: None,
         net_profit: first_decimal(value, &["unrealizedPNL"])?,
         account_model: Some(ExternalAccountModel::Contract),
+        provider_account_model: Some("options".into()),
         margin_mode: None,
         position_mode: None,
         partial: true,
@@ -413,10 +437,8 @@ fn snapshot(
         equity: None,
         initial_equity: None,
         net_profit: None,
-        account_model: segment
-            .account_model
-            .as_deref()
-            .and_then(ExternalAccountModel::parse),
+        account_model: None,
+        provider_account_model: None,
         margin_mode,
         position_mode: None,
         partial: false,
@@ -468,17 +490,23 @@ fn now() -> UnixNanos {
 
 #[cfg(test)]
 mod tests {
-    use super::funding;
-    use crate::{ExternalAccountIdentity, ExternalAccountSegment, ExternalDecimal};
+    use super::{funding, futures, portfolio, portfolio_pro, spot};
+    use crate::{
+        ExternalAccountIdentity, ExternalAccountModel, ExternalAccountSegment, ExternalDecimal,
+    };
+
+    fn segment(key: &str) -> ExternalAccountSegment {
+        ExternalAccountSegment {
+            identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
+            segment_key: kairos_primitives::account::SegmentKey::new(key).unwrap(),
+            environment: "test".into(),
+            account_model: None,
+        }
+    }
 
     #[test]
     fn funding_wallet_combines_every_unavailable_balance_bucket() {
-        let segment = ExternalAccountSegment {
-            identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
-            segment_key: kairos_primitives::account::SegmentKey::new("funding").unwrap(),
-            environment: "test".into(),
-            account_model: Some("no_margin".into()),
-        };
+        let segment = segment("funding");
         let snapshot = funding(
             &segment,
             &serde_json::json!([{
@@ -501,5 +529,56 @@ mod tests {
             Some(ExternalDecimal::new(175, 2))
         );
         assert_eq!(snapshot.balances[0].total, ExternalDecimal::new(1200, 2));
+    }
+
+    #[test]
+    fn account_model_fixtures_distinguish_classic_portfolio_and_portfolio_pro() {
+        let spot = spot(
+            &segment("spot"),
+            &serde_json::json!({
+                "accountType": "SPOT",
+                "balances": [{"asset": "BTC", "free": "1", "locked": "0"}]
+            }),
+        )
+        .unwrap();
+        assert_eq!(spot.balances.len(), 1);
+        assert!(spot.positions.is_empty());
+
+        let classic = futures(
+            &segment("usd_m_futures"),
+            &serde_json::json!({"assets": [], "positions": []}),
+            "perpetual",
+        )
+        .unwrap();
+        assert_eq!(classic.account_model, Some(ExternalAccountModel::Contract));
+        assert_eq!(
+            classic.provider_account_model.as_deref(),
+            Some("classic_futures")
+        );
+
+        let payload = serde_json::json!([{
+            "asset": "USDT",
+            "totalWalletBalance": "10",
+            "crossMarginFree": "8"
+        }]);
+        let portfolio = portfolio(&segment("portfolio"), &payload).unwrap();
+        assert_eq!(
+            portfolio.account_model,
+            Some(ExternalAccountModel::PortfolioMargin)
+        );
+        assert_eq!(
+            portfolio.provider_account_model.as_deref(),
+            Some("portfolio_margin")
+        );
+
+        let pro = portfolio_pro(&segment("portfolio_pro"), &payload).unwrap();
+        assert_eq!(
+            pro.account_model,
+            Some(ExternalAccountModel::PortfolioMargin)
+        );
+        assert_eq!(
+            pro.provider_account_model.as_deref(),
+            Some("portfolio_margin_pro")
+        );
     }
 }

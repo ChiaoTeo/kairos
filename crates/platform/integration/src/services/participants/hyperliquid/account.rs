@@ -93,6 +93,7 @@ pub(crate) fn snapshot(
         initial_equity: None,
         net_profit: None,
         account_model: Some(ExternalAccountModel::ContractUnified),
+        provider_account_model: Some("unified_perpetual".into()),
         margin_mode: Some(ExternalMarginMode::Cross),
         position_mode: None,
         partial: false,

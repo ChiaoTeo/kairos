@@ -160,6 +160,7 @@ pub(crate) fn normalize_account(
             .account_model
             .as_deref()
             .and_then(AccountModel::parse),
+        provider_account_model: None,
         margin_mode: None,
         position_mode: None,
         partial: false,

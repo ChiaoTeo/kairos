@@ -131,6 +131,7 @@ impl AccountQueryService {
                     .account_model
                     .as_deref()
                     .and_then(crate::ExternalAccountModel::parse),
+                provider_account_model: Some("ibkr_account".into()),
                 margin_mode: None,
                 position_mode: None,
                 partial: false,
@@ -241,6 +242,7 @@ fn partial_event(
         initial_equity: None,
         net_profit: None,
         account_model: None,
+        provider_account_model: Some("ibkr_account".into()),
         margin_mode: None,
         position_mode: None,
         partial: true,

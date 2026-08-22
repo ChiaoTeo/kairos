@@ -8,6 +8,7 @@ mod decimal;
 pub mod earn;
 mod event;
 pub mod execution;
+pub mod fees;
 pub mod instrument;
 pub mod market;
 pub mod operation;
@@ -23,6 +24,7 @@ pub use decimal::DecimalValue;
 pub use earn::*;
 pub use event::{ExternalEventDelivery, ExternalEventEnvelope, ExternalParticipantEvent};
 pub use execution::*;
+pub use fees::*;
 pub use instrument::{ParticipantInstrumentRef, ParticipantInstrumentTypeRef};
 pub use market::*;
 pub use operation::{

@@ -18,6 +18,7 @@ use crate::{
 
 const FLEXIBLE_LIST: &str = "/sapi/v1/simple-earn/flexible/list";
 const FLEXIBLE_POSITION: &str = "/sapi/v1/simple-earn/flexible/position";
+const LOCKED_POSITION: &str = "/sapi/v1/simple-earn/locked/position";
 const PERSONAL_QUOTA: &str = "/sapi/v1/simple-earn/flexible/personalLeftQuota";
 const SUBSCRIBE: &str = "/sapi/v1/simple-earn/flexible/subscribe";
 const REDEEM: &str = "/sapi/v1/simple-earn/flexible/redeem";
@@ -76,15 +77,32 @@ impl EarnProductQuery for BinanceSimpleEarnRestConnection {
         request
             .validate()
             .map_err(IntegrationError::InvalidRequest)?;
-        require_flexible(request.family.as_ref())?;
-        let params = page_params(
+        let family = request
+            .family
+            .as_ref()
+            .unwrap_or(&EarnProductFamily::Flexible);
+        let (endpoint, product_field, parser) = match family {
+            EarnProductFamily::Flexible => (
+                FLEXIBLE_POSITION,
+                "productId",
+                parse_position as fn(&Value) -> Result<EarnPosition, IntegrationError>,
+            ),
+            EarnProductFamily::Locked => (
+                LOCKED_POSITION,
+                "projectId",
+                parse_locked_position as fn(&Value) -> Result<EarnPosition, IntegrationError>,
+            ),
+            _ => return Err(IntegrationError::UnsupportedOperation),
+        };
+        let params = position_page_params(
             request.asset.as_ref().map(ToString::to_string),
+            product_field,
             request.product_id.clone(),
             request.cursor.as_deref(),
             request.limit,
         );
-        let value = self.service.signed_get(FLEXIBLE_POSITION, &params).await?;
-        parse_page(&value, parse_position)
+        let value = self.service.signed_get(endpoint, &params).await?;
+        parse_page(&value, parser)
     }
 
     async fn rewards(
@@ -360,6 +378,52 @@ fn parse_position(row: &Value) -> Result<EarnPosition, IntegrationError> {
     })
 }
 
+fn parse_locked_position(row: &Value) -> Result<EarnPosition, IntegrationError> {
+    let principal = decimal_field(row, "amount")?;
+    let reward_asset = text(row, "rewardAsset")?;
+    let mut accrued_rewards = Vec::new();
+    if let Some(amount) = optional_decimal(row, "rewardAmt")? {
+        accrued_rewards.push(crate::EarnAccruedReward {
+            asset: kairos_primitives::reference::Currency::new(reward_asset).map_err(payload)?,
+            amount,
+            component: Some(EarnRateComponentKind::Base),
+        });
+    }
+    if let (Some(asset), Some(amount)) = (
+        row.get("boostRewardAsset").and_then(Value::as_str),
+        optional_decimal(row, "totalBoostRewardAmt")?,
+    ) {
+        accrued_rewards.push(crate::EarnAccruedReward {
+            asset: kairos_primitives::reference::Currency::new(asset).map_err(payload)?,
+            amount,
+            component: Some(EarnRateComponentKind::Promotional),
+        });
+    }
+    let participant_state = row
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("UNKNOWN");
+    let state = match participant_state.to_ascii_uppercase().as_str() {
+        "HOLDING" | "ACTIVE" => EarnPositionState::Active,
+        "REDEEMING" | "REDEEMING_EARLY" => EarnPositionState::Redeeming,
+        "REDEEMED" | "CLOSED" => EarnPositionState::Redeemed,
+        _ => EarnPositionState::Unknown(participant_state.into()),
+    };
+    Ok(EarnPosition {
+        participant_position_id: scalar_string(row.get("positionId")),
+        product_id: text(row, "projectId")?.into(),
+        asset: kairos_primitives::reference::Currency::new(text(row, "asset")?).map_err(payload)?,
+        family: EarnProductFamily::Locked,
+        principal,
+        accrued_rewards,
+        redeemable_amount: optional_decimal(row, "redeemAmountEarly")?,
+        subscribed_at_unix_nanos: timestamp(row, &["purchaseTime"]),
+        matures_at_unix_nanos: timestamp(row, &["deliverDate", "rewardsEndDate"]),
+        state,
+        observed_at_unix_nanos: Some(now()),
+    })
+}
+
 fn parse_reward(row: &Value) -> Result<EarnReward, IntegrationError> {
     let amount = text(row, "rewards")?
         .parse::<SignedQuantity>()
@@ -452,6 +516,20 @@ fn page_params(
     }
     if let Some(size) = limit {
         params.push(("size", size.to_string()));
+    }
+    params
+}
+
+fn position_page_params(
+    asset: Option<String>,
+    product_field: &'static str,
+    product_id: Option<String>,
+    cursor: Option<&str>,
+    limit: Option<u16>,
+) -> Vec<(&'static str, String)> {
+    let mut params = page_params(asset, None, cursor, limit);
+    if let Some(product_id) = product_id {
+        params.push((product_field, product_id));
     }
     params
 }
@@ -555,6 +633,40 @@ mod tests {
         .unwrap();
         assert_eq!(position.principal, "125.5".parse().unwrap());
         assert_eq!(position.state, EarnPositionState::Redeeming);
+    }
+
+    #[test]
+    fn parses_locked_position_with_maturity_and_rewards() {
+        let position = parse_locked_position(&serde_json::json!({
+            "positionId": 347608038,
+            "projectId": "Bnb*120",
+            "asset": "BNB",
+            "amount": "0.05",
+            "purchaseTime": 1783439066000_u64,
+            "rewardAsset": "BNB",
+            "rewardAmt": "0.001",
+            "redeemAmountEarly": "0.05",
+            "rewardsEndDate": 1793836800000_u64,
+            "deliverDate": 1793959200000_u64,
+            "status": "HOLDING",
+            "boostRewardAsset": "USDT",
+            "totalBoostRewardAmt": "0.25"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            position.participant_position_id.as_deref(),
+            Some("347608038")
+        );
+        assert_eq!(position.product_id, "Bnb*120");
+        assert_eq!(position.family, EarnProductFamily::Locked);
+        assert_eq!(position.principal, "0.05".parse().unwrap());
+        assert_eq!(position.state, EarnPositionState::Active);
+        assert_eq!(position.accrued_rewards.len(), 2);
+        assert_eq!(
+            position.matures_at_unix_nanos,
+            Some(UnixNanos::new(1_793_959_200_000_000_000))
+        );
     }
 
     #[test]

@@ -18,6 +18,7 @@ pub use capabilities::connection::*;
 pub use capabilities::earn::*;
 pub use capabilities::event::*;
 pub use capabilities::execution::*;
+pub use capabilities::fees::*;
 pub use capabilities::market::*;
 pub use capabilities::reference::*;
 pub use capabilities::transfer::*;

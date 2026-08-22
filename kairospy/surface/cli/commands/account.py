@@ -14,7 +14,7 @@ from kairospy.application.workspace import WorkspaceApplication
 HELP = """Account standalone commands are owned by kairos-account-cli.
 
 Canonical commands include:
-  list, show, query balance <account>, positions, open-orders
+  list, show, overview, assets, positions, earn-holdings, open-orders, fees
   connect, register, modify, simulate, schemas, schema, doctor
   credential-list, credential-create, credential-show, credential-delete
 
@@ -29,13 +29,19 @@ CONNECTED_COMMANDS = {
     "reconcile",
 }
 ACCOUNT_QUERIES = {
+    "assets",
+    "overview",
+    "summary",
     "snapshot",
     "current",
     "balances",
     "balance",
     "positions",
+    "earn-holdings",
+    "earn",
     "open-orders",
     "observed-orders",
+    "fees",
 }
 
 

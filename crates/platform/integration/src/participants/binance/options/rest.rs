@@ -302,7 +302,7 @@ impl OrderQuery for BinanceOptionsRestConnection {
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
-        let params = query_params(query, false)?;
+        let params = query_params(query, false, false)?;
         let value = self
             .service
             .signed_get("/eapi/v1/openOrders", &params)
@@ -314,7 +314,7 @@ impl OrderQuery for BinanceOptionsRestConnection {
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
-        let params = query_params(query, false)?;
+        let params = query_params(query, false, true)?;
         let value = self
             .service
             .signed_get("/eapi/v1/historyOrders", &params)
@@ -326,7 +326,7 @@ impl OrderQuery for BinanceOptionsRestConnection {
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Option<ExternalOrder>, IntegrationError> {
-        let params = query_params(query, true)?;
+        let params = query_params(query, true, true)?;
         let value = self.service.signed_get("/eapi/v1/order", &params).await?;
         Ok(
             execution::orders(&self.descriptor().connection_key, &value)?
@@ -339,11 +339,16 @@ impl OrderQuery for BinanceOptionsRestConnection {
 fn query_params(
     query: &ExternalOrderQuery,
     detail: bool,
+    symbol_required: bool,
 ) -> Result<Vec<(&'static str, String)>, IntegrationError> {
-    let symbol = query.symbol.as_ref().ok_or_else(|| {
-        IntegrationError::InvalidRequest("Binance Options order query requires symbol".into())
-    })?;
-    let mut values = vec![("symbol", symbol.to_string())];
+    let mut values = Vec::new();
+    if let Some(symbol) = &query.symbol {
+        values.push(("symbol", symbol.to_string()));
+    } else if symbol_required {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance Options order query requires symbol".into(),
+        ));
+    }
     if detail {
         let order_id = query.order_id.as_ref().ok_or_else(|| {
             IntegrationError::InvalidRequest(

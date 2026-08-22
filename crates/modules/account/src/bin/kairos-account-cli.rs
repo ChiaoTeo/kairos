@@ -3,10 +3,12 @@ use std::str::FromStr;
 use clap::{Args, Parser, Subcommand};
 use kairos_account::domain::AccountFill;
 use kairos_account::{
-    AccountBalancesResult, AccountCredentialProbeRequest, AccountListItem, AccountListResult,
-    AccountPositionsResult, AccountProviderConnectionArgs, BindCredentialRequest,
-    CliAccountApplication, ConnectAccountProviderRequest, ConnectedAccountApplication,
-    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+    AccountBalancesResult, AccountCredentialProbeRequest, AccountEarnHoldingsResult,
+    AccountFeesResult, AccountListItem, AccountListResult, AccountOpenOrdersResult,
+    AccountOverviewResult, AccountPositionsResult, AccountProviderConnectionArgs,
+    AccountQueryCompleteness, BindCredentialRequest, CliAccountApplication,
+    ConnectAccountProviderRequest, ConnectedAccountApplication, CreateCredentialRequest,
+    ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
 };
 use kairos_account_contract::{AccountSegmentsRequest, SimulatedSettlement};
 use kairos_workspace::Workspace;
@@ -123,10 +125,18 @@ enum StandaloneCommand {
         #[arg(long)]
         account_id: String,
     },
+    #[command(alias = "summary")]
+    Overview,
     #[command(name = "snapshot", alias = "current")]
     Snapshot,
     #[command(alias = "balance")]
     Balances {
+        #[arg(long = "segment")]
+        segments: Vec<String>,
+        #[arg(long)]
+        include_zero: bool,
+    },
+    Assets {
         #[arg(long = "segment")]
         segments: Vec<String>,
         #[arg(long)]
@@ -138,8 +148,26 @@ enum StandaloneCommand {
         #[arg(long)]
         symbol: Option<String>,
     },
-    #[command(name = "observed-orders", alias = "open-orders")]
-    OpenOrders,
+    #[command(name = "earn-holdings", alias = "earn")]
+    EarnHoldings {
+        #[arg(long)]
+        family: Option<String>,
+        #[arg(long)]
+        asset: Option<String>,
+    },
+    #[command(name = "open-orders", alias = "observed-orders")]
+    OpenOrders {
+        #[arg(long = "segment")]
+        segments: Vec<String>,
+        #[arg(long)]
+        symbol: Option<String>,
+    },
+    Fees {
+        #[arg(long)]
+        product: String,
+        #[arg(long)]
+        symbol: Option<String>,
+    },
     Register {
         #[arg(long)]
         account_id: String,
@@ -460,6 +488,10 @@ async fn run_standalone(
             print_json(app.show_account(account_id)?);
             return Ok(());
         },
+        StandaloneCommand::Overview => {
+            print_account_overview(app.overview(&required_account_id(args)?).await?)?;
+            return Ok(());
+        },
         StandaloneCommand::Snapshot => {
             print_json(app.local_snapshot(&required_account_id(args)?)?);
             return Ok(());
@@ -474,6 +506,16 @@ async fn run_standalone(
             )?;
             return Ok(());
         },
+        StandaloneCommand::Assets {
+            segments,
+            include_zero,
+        } => {
+            print_account_balances(
+                app.assets(&required_account_id(args)?, segments, *include_zero)
+                    .await?,
+            )?;
+            return Ok(());
+        },
         StandaloneCommand::Positions { segments, symbol } => {
             print_account_positions(
                 app.positions(&required_account_id(args)?, segments, symbol.as_deref())
@@ -481,8 +523,29 @@ async fn run_standalone(
             )?;
             return Ok(());
         },
-        StandaloneCommand::OpenOrders => {
-            print_json(app.local_open_orders(&required_account_id(args)?)?);
+        StandaloneCommand::EarnHoldings { family, asset } => {
+            print_account_earn_holdings(
+                app.earn_holdings(
+                    &required_account_id(args)?,
+                    family.as_deref(),
+                    asset.as_deref(),
+                )
+                .await?,
+            )?;
+            return Ok(());
+        },
+        StandaloneCommand::OpenOrders { segments, symbol } => {
+            print_account_open_orders(
+                app.open_orders(&required_account_id(args)?, segments, symbol.as_deref())
+                    .await?,
+            )?;
+            return Ok(());
+        },
+        StandaloneCommand::Fees { product, symbol } => {
+            print_account_fees(
+                app.fees(&required_account_id(args)?, product, symbol.as_deref())
+                    .await?,
+            )?;
             return Ok(());
         },
         StandaloneCommand::Register {
@@ -680,6 +743,451 @@ fn print_account_list(value: AccountListResult) -> Result<(), serde_json::Error>
     Ok(())
 }
 
+fn print_account_overview(value: AccountOverviewResult) -> Result<(), serde_json::Error> {
+    let output = match selected_output_format() {
+        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Text | OutputFormat::Table => render_account_overview(&value),
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn render_account_overview(value: &AccountOverviewResult) -> String {
+    let unified = value
+        .profile
+        .unified
+        .map(|value| if value { "yes" } else { "no" })
+        .unwrap_or("unknown");
+    let rows = vec![
+        vec!["account".into(), value.identity.account_id.to_string()],
+        vec!["broker/custodian".into(), value.identity.broker.to_string()],
+        vec![
+            "exchange".into(),
+            value
+                .identity
+                .exchange
+                .clone()
+                .unwrap_or_else(|| "—".into()),
+        ],
+        vec!["environment".into(), value.identity.environment.clone()],
+        vec![
+            "integration provider".into(),
+            value.connection.integration_provider.to_string(),
+        ],
+        vec![
+            "configured model".into(),
+            value
+                .profile
+                .configured_account_model
+                .clone()
+                .unwrap_or_else(|| "—".into()),
+        ],
+        vec![
+            "observed model".into(),
+            value
+                .profile
+                .observed_account_model
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+        ],
+        vec![
+            "provider model".into(),
+            value
+                .profile
+                .provider_account_model
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+        ],
+        vec![
+            "model consistency".into(),
+            value.profile.model_match.clone(),
+        ],
+        vec!["unified".into(), unified.into()],
+        vec![
+            "margin mode".into(),
+            value
+                .profile
+                .margin_mode
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+        ],
+        vec![
+            "position mode".into(),
+            value
+                .profile
+                .position_mode
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+        ],
+        vec![
+            "fee summary".into(),
+            value.commercial.fee_summary_status.clone(),
+        ],
+        vec![
+            "VIP tier".into(),
+            value
+                .commercial
+                .vip_tier
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+        ],
+        vec![
+            "effective access".into(),
+            value.permissions.effective_capabilities.join(", "),
+        ],
+        vec![
+            "assets".into(),
+            value.facts.non_zero_balance_count.to_string(),
+        ],
+        vec![
+            "collateral".into(),
+            value.facts.collateral_count.to_string(),
+        ],
+        vec![
+            "trading positions".into(),
+            value.facts.position_count.to_string(),
+        ],
+        vec![
+            "earn holdings".into(),
+            optional_count(value.facts.earn_holding_count),
+        ],
+        vec![
+            "open orders".into(),
+            optional_count(value.facts.open_order_count),
+        ],
+        vec![
+            "completeness".into(),
+            format!("{:?}", value.health.completeness).to_ascii_lowercase(),
+        ],
+        vec!["health status".into(), value.health.overall_status.clone()],
+        vec!["freshness".into(), value.health.freshness.clone()],
+        vec![
+            "segments".into(),
+            format!(
+                "{}/{}",
+                value.health.segments_succeeded, value.health.segments_requested
+            ),
+        ],
+    ];
+    let mut output = format!(
+        "Account {} · {} · {}\n{}",
+        value.identity.account_id,
+        value.health.mode,
+        value.health.source.replace('_', " "),
+        render_compact_table(&["ACCOUNT OVERVIEW", "VALUE"], &rows)
+    );
+    if !value.profile.segments.is_empty() {
+        let segment_rows = value
+            .profile
+            .segments
+            .iter()
+            .map(|segment| {
+                vec![
+                    segment.segment.to_string(),
+                    format!("{:?}", segment.completeness).to_ascii_lowercase(),
+                    segment.freshness.clone(),
+                    segment
+                        .observed_account_model
+                        .clone()
+                        .unwrap_or_else(|| "unknown".into()),
+                    segment
+                        .provider_account_model
+                        .clone()
+                        .unwrap_or_else(|| "unknown".into()),
+                    segment
+                        .observed_at_unix_nanos
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "—".into()),
+                    segment.issue.clone().unwrap_or_else(|| "—".into()),
+                ]
+            })
+            .collect::<Vec<_>>();
+        output.push_str("\n\n");
+        output.push_str(&render_compact_table(
+            &[
+                "SEGMENT",
+                "COMPLETENESS",
+                "FRESHNESS",
+                "OBSERVED_MODEL",
+                "PROVIDER_MODEL",
+                "OBSERVED_NS",
+                "ISSUE",
+            ],
+            &segment_rows,
+        ));
+    }
+    if !value.health.issues.is_empty() {
+        output.push_str("\n\nIssues:\n");
+        output.push_str(
+            &value
+                .health
+                .issues
+                .iter()
+                .map(|issue| format!("- {}: {}", issue.segment, issue.message))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    output
+}
+
+fn optional_count(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn print_account_fees(value: AccountFeesResult) -> Result<(), serde_json::Error> {
+    let output = match selected_output_format() {
+        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Text | OutputFormat::Table => render_account_fees(&value),
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn render_account_fees(value: &AccountFeesResult) -> String {
+    let rows = vec![
+        vec!["product".into(), value.product.clone()],
+        vec![
+            "symbol".into(),
+            value.symbol.clone().unwrap_or_else(|| "—".into()),
+        ],
+        vec![
+            "maker".into(),
+            value
+                .maker
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unavailable".into()),
+        ],
+        vec![
+            "taker".into(),
+            value
+                .taker
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unavailable".into()),
+        ],
+        vec![
+            "discount asset".into(),
+            value
+                .discount
+                .as_ref()
+                .and_then(|discount| discount.asset.clone())
+                .unwrap_or_else(|| "—".into()),
+        ],
+        vec![
+            "discount enabled".into(),
+            value
+                .discount
+                .as_ref()
+                .and_then(|discount| discount.enabled_for_account)
+                .map(|enabled| enabled.to_string())
+                .unwrap_or_else(|| "unknown".into()),
+        ],
+        vec![
+            "VIP tier".into(),
+            value
+                .vip_tier
+                .clone()
+                .unwrap_or_else(|| value.vip_tier_status.clone()),
+        ],
+        vec![
+            "completeness".into(),
+            format!("{:?}", value.completeness).to_ascii_lowercase(),
+        ],
+    ];
+    let mut output = format!(
+        "Account {} · {} · {}\n{}",
+        value.account_id,
+        value.mode,
+        value.source.replace('_', " "),
+        render_compact_table(&["FIELD", "VALUE"], &rows),
+    );
+    if !value.issues.is_empty() {
+        output.push_str("\n\nIssues:\n");
+        output.push_str(
+            &value
+                .issues
+                .iter()
+                .map(|issue| format!("- {issue}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    output
+}
+
+fn print_account_open_orders(value: AccountOpenOrdersResult) -> Result<(), serde_json::Error> {
+    let output = match selected_output_format() {
+        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Text | OutputFormat::Table => render_account_open_orders(&value),
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn render_account_open_orders(value: &AccountOpenOrdersResult) -> String {
+    let heading = format!(
+        "Account {} · {} · {} · completeness {:?} · segments {}/{}",
+        value.account_id,
+        value.mode,
+        value.source.replace('_', " "),
+        value.completeness,
+        value.segments_succeeded,
+        value.segments_requested,
+    );
+    let rows = value
+        .orders
+        .iter()
+        .map(|order| {
+            vec![
+                order.segment.to_string(),
+                order.symbol.clone(),
+                order.side.clone(),
+                order.order_type.clone(),
+                order.status.clone(),
+                order.quantity.to_string(),
+                order.filled_quantity.to_string(),
+                order
+                    .average_fill_price
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                order.order_id.clone(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let mut output = if rows.is_empty() && value.completeness == AccountQueryCompleteness::Complete
+    {
+        format!("{heading}\nNo open orders returned.")
+    } else if rows.is_empty() {
+        format!("{heading}\nOpen orders could not be established for the requested scope.")
+    } else {
+        format!(
+            "{heading}\n{}",
+            render_compact_table(
+                &[
+                    "SEGMENT",
+                    "SYMBOL",
+                    "SIDE",
+                    "TYPE",
+                    "STATUS",
+                    "QUANTITY",
+                    "FILLED",
+                    "AVG_PRICE",
+                    "ORDER_ID",
+                ],
+                &rows,
+            )
+        )
+    };
+    let issues = value
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.outcome != AccountQueryCompleteness::Complete)
+        .collect::<Vec<_>>();
+    if !issues.is_empty() {
+        output.push_str("\n\nQuery outcomes:\n");
+        output.push_str(
+            &issues
+                .iter()
+                .map(|outcome| {
+                    format!(
+                        "- {}: {:?}: {}",
+                        outcome.segment,
+                        outcome.outcome,
+                        outcome.message.as_deref().unwrap_or("no details")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    output
+}
+
+fn print_account_earn_holdings(value: AccountEarnHoldingsResult) -> Result<(), serde_json::Error> {
+    let output = match selected_output_format() {
+        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Text | OutputFormat::Table => render_account_earn_holdings(&value),
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn render_account_earn_holdings(value: &AccountEarnHoldingsResult) -> String {
+    let heading = format!(
+        "Account {} · {} · {} · completeness {:?}",
+        value.account_id,
+        value.mode,
+        value.source.replace('_', " "),
+        value.completeness,
+    );
+    let rows = value
+        .holdings
+        .iter()
+        .map(|holding| {
+            vec![
+                holding.segment.to_string(),
+                holding.family.clone(),
+                holding.product_id.clone(),
+                holding.asset.to_string(),
+                holding.principal.to_string(),
+                holding
+                    .redeemable_amount
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                holding
+                    .matures_at_unix_nanos
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                holding.state.clone(),
+                holding
+                    .accrued_rewards
+                    .iter()
+                    .map(|reward| format!("{}:{}", reward.asset, reward.amount))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let mut output = if rows.is_empty() && value.completeness == AccountQueryCompleteness::Complete
+    {
+        format!("{heading}\nNo Earn or staking holdings returned.")
+    } else if rows.is_empty() {
+        format!("{heading}\nEarn holdings could not be established for the requested scope.")
+    } else {
+        format!(
+            "{heading}\n{}",
+            render_compact_table(
+                &[
+                    "SEGMENT",
+                    "FAMILY",
+                    "PRODUCT",
+                    "ASSET",
+                    "PRINCIPAL",
+                    "REDEEMABLE",
+                    "MATURITY_NS",
+                    "STATE",
+                    "REWARDS",
+                ],
+                &rows,
+            )
+        )
+    };
+    if !value.errors.is_empty() {
+        output.push_str("\n\nQuery errors:\n");
+        output.push_str(
+            &value
+                .errors
+                .iter()
+                .map(|error| format!("- {}: {}", error.segment, error.message))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    output
+}
+
 fn print_account_balances(value: AccountBalancesResult) -> Result<(), serde_json::Error> {
     let output = match selected_output_format() {
         OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
@@ -700,10 +1208,11 @@ fn print_account_positions(value: AccountPositionsResult) -> Result<(), serde_js
 
 fn render_account_positions(value: &AccountPositionsResult) -> String {
     let heading = format!(
-        "Account {} · {} · {} · segments {}/{}",
+        "Account {} · {} · {} · completeness {:?} · segments {}/{}",
         value.account_id,
         value.mode,
         value.source.replace('_', " "),
+        value.completeness,
         value.segments_succeeded,
         value.segments_requested,
     );
@@ -728,17 +1237,37 @@ fn render_account_positions(value: &AccountPositionsResult) -> String {
                     .unrealized_pnl
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "—".into()),
+                position
+                    .realized_pnl
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                position.margin_mode.clone().unwrap_or_else(|| "—".into()),
+                position.position_mode.clone().unwrap_or_else(|| "—".into()),
             ]
         })
         .collect::<Vec<_>>();
-    let mut output = if rows.is_empty() {
-        format!("{heading}\nNo positions returned.")
+    let mut output = if rows.is_empty() && value.completeness == AccountQueryCompleteness::Complete
+    {
+        format!(
+            "{heading}\nNo trading positions returned. Spot and funding assets are shown under balances."
+        )
+    } else if rows.is_empty() {
+        format!("{heading}\nTrading positions could not be established for the requested scope.")
     } else {
         format!(
             "{heading}\n{}",
             render_compact_table(
                 &[
-                    "SEGMENT", "SYMBOL", "SIDE", "QUANTITY", "ENTRY", "MARK", "UPNL"
+                    "SEGMENT",
+                    "SYMBOL",
+                    "SIDE",
+                    "QUANTITY",
+                    "ENTRY",
+                    "MARK",
+                    "UPNL",
+                    "RPNL",
+                    "MARGIN",
+                    "POSITION MODE"
                 ],
                 &rows,
             )
@@ -759,12 +1288,16 @@ fn render_account_positions(value: &AccountPositionsResult) -> String {
 }
 
 fn render_account_balances(value: &AccountBalancesResult) -> String {
-    if value.balances.is_empty() && value.errors.is_empty() {
+    if value.balances.is_empty()
+        && value.collateral.is_empty()
+        && value.completeness == AccountQueryCompleteness::Complete
+    {
         return format!(
-            "Account {} · {} · {} · segments {}/{}\nNo balances returned.",
+            "Account {} · {} · {} · completeness {:?} · segments {}/{}\nNo balances returned.",
             value.account_id,
             value.mode,
             value.source.replace('_', " "),
+            value.completeness,
             value.segments_succeeded,
             value.segments_requested,
         );
@@ -773,30 +1306,47 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
     let rows = value
         .balances
         .iter()
+        .chain(value.collateral.iter())
         .map(|balance| {
             vec![
                 balance.segment.to_string(),
+                balance.role.clone(),
                 balance.asset.to_string(),
                 balance.total.to_string(),
-                balance.available.to_string(),
-                balance.locked.to_string(),
+                optional_decimal(balance.available),
+                optional_decimal(balance.locked),
+                optional_decimal(balance.borrowed),
+                optional_decimal(balance.interest),
             ]
         })
         .collect::<Vec<_>>();
     let heading = format!(
-        "Account {} · {} · {} · segments {}/{}",
+        "Account {} · {} · {} · completeness {:?} · segments {}/{}",
         value.account_id,
         value.mode,
         value.source.replace('_', " "),
+        value.completeness,
         value.segments_succeeded,
         value.segments_requested,
     );
     let mut output = if rows.is_empty() {
-        format!("{heading}\nNo balances returned.")
+        format!("{heading}\nBalances could not be established for the requested scope.")
     } else {
         format!(
             "{heading}\n{}",
-            render_compact_table(&["SEGMENT", "ASSET", "TOTAL", "AVAILABLE", "LOCKED"], &rows)
+            render_compact_table(
+                &[
+                    "SEGMENT",
+                    "CLASS",
+                    "ASSET",
+                    "TOTAL",
+                    "AVAILABLE",
+                    "LOCKED",
+                    "BORROWED",
+                    "INTEREST",
+                ],
+                &rows,
+            )
         )
     };
     if !value.errors.is_empty() {
@@ -813,6 +1363,12 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
     output
 }
 
+fn optional_decimal(value: Option<kairos_primitives::decimal::DecimalParts>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".into())
+}
+
 fn render_account_list(value: &AccountListResult) -> String {
     if value.accounts.is_empty() {
         return "No accounts configured.".to_owned();
@@ -824,7 +1380,7 @@ fn render_account_list(value: &AccountListResult) -> String {
         .map(|account| {
             vec![
                 account_list_name(account),
-                account.provider.to_string(),
+                account.broker.to_string(),
                 display_or_dash(&account.environment),
                 if account.segments.is_empty() {
                     "—".to_owned()
@@ -844,8 +1400,8 @@ fn render_account_list(value: &AccountListResult) -> String {
     render_compact_table(
         &[
             "ACCOUNT",
-            "PROVIDER",
-            "MODE",
+            "BROKER/CUSTODIAN",
+            "ENVIRONMENT",
             "SEGMENTS",
             "CREDENTIAL",
             "STATUS",
@@ -1114,8 +1670,9 @@ fn resolve_runtime_account_resource(
 mod cli_tests {
     use clap::Parser;
     use kairos_account::{
-        AccountBalanceItem, AccountBalancesResult, AccountListItem, AccountListResult,
-        AccountPositionItem, AccountPositionsResult,
+        AccountBalanceItem, AccountBalancesResult, AccountFeesResult, AccountListItem,
+        AccountListResult, AccountOpenOrdersResult, AccountPositionItem, AccountPositionsResult,
+        AccountQueryCompleteness, AccountQueryError,
     };
     use kairos_primitives::account::{AccountId, SegmentKey};
     use kairos_primitives::decimal::DecimalParts;
@@ -1124,7 +1681,8 @@ mod cli_tests {
 
     use super::{
         Cli, Command, ConnectedCommand, StandaloneCommand, render_account_balances,
-        render_account_list, render_account_positions,
+        render_account_fees, render_account_list, render_account_open_orders,
+        render_account_positions,
     };
 
     #[test]
@@ -1246,22 +1804,32 @@ mod cli_tests {
                 AccountListItem {
                     account_id: AccountId::new("manual-live-readonly").unwrap(),
                     alias: "manual-live-readonly".into(),
+                    broker: kairos_primitives::account::BrokerId::new("binance").unwrap(),
+                    exchange: Some("binance".into()),
+                    integration_provider: ProviderId::new("binance").unwrap(),
                     provider: ProviderId::new("binance").unwrap(),
                     environment: "live".into(),
                     segments: ["funding", "spot", "usd_m_futures"]
                         .map(|value| SegmentKey::new(value).unwrap())
                         .into(),
+                    account_model: Some("portfolio_margin".into()),
                     credential_id: Some("binance-equity-readonly".into()),
+                    configured_credential_role: "readonly".into(),
                     capabilities: vec!["read".into()],
                     status: "configured".into(),
                 },
                 AccountListItem {
                     account_id: AccountId::new("paper-account").unwrap(),
                     alias: "paper-account".into(),
+                    broker: kairos_primitives::account::BrokerId::new("paper").unwrap(),
+                    exchange: Some("paper".into()),
+                    integration_provider: ProviderId::new("paper").unwrap(),
                     provider: ProviderId::new("paper").unwrap(),
                     environment: "paper".into(),
                     segments: vec![SegmentKey::new("spot").unwrap()],
+                    account_model: Some("no_margin".into()),
                     credential_id: None,
+                    configured_credential_role: "readonly".into(),
                     capabilities: vec!["read".into()],
                     status: "configured".into(),
                 },
@@ -1270,6 +1838,7 @@ mod cli_tests {
         });
 
         assert!(output.contains("ACCOUNT"));
+        assert!(output.contains("BROKER/CUSTODIAN"));
         assert!(output.contains("manual-live-readonly"));
         assert!(output.contains("funding, spot, usd_m_futures"));
         assert!(output.contains("paper-account"));
@@ -1286,13 +1855,20 @@ mod cli_tests {
             kind: "balances".into(),
             segments_requested: 1,
             segments_succeeded: 1,
+            completeness: AccountQueryCompleteness::Complete,
+            observed_at_unix_nanos: Some(1),
             balances: vec![AccountBalanceItem {
                 segment: SegmentKey::new("spot").unwrap(),
+                role: "wallet".into(),
                 asset: Currency::new("USDT").unwrap(),
                 total: "10000".parse::<DecimalParts>().unwrap(),
-                available: "10000".parse::<DecimalParts>().unwrap(),
-                locked: DecimalParts::default(),
+                available: Some("10000".parse::<DecimalParts>().unwrap()),
+                locked: Some(DecimalParts::default()),
+                borrowed: None,
+                interest: None,
             }],
+            collateral: Vec::new(),
+            outcomes: Vec::new(),
             errors: Vec::new(),
         });
 
@@ -1301,8 +1877,44 @@ mod cli_tests {
         assert!(output.contains("spot"));
         assert!(output.contains("USDT"));
         assert!(!output.contains("balances"));
-        assert!(output.contains("standalone · local registry · segments 1/1"));
+        assert!(
+            output.contains("standalone · local registry · completeness Complete · segments 1/1")
+        );
         assert_eq!(output.lines().count(), 4);
+    }
+
+    #[test]
+    fn partial_assets_keep_successful_rows_and_show_segment_errors() {
+        let output = render_account_balances(&AccountBalancesResult {
+            account_id: AccountId::new("live-main").unwrap(),
+            source: "direct_provider".into(),
+            mode: "standalone".into(),
+            kind: "assets".into(),
+            segments_requested: 2,
+            segments_succeeded: 1,
+            completeness: AccountQueryCompleteness::Partial,
+            observed_at_unix_nanos: Some(1),
+            balances: vec![AccountBalanceItem {
+                segment: SegmentKey::new("spot").unwrap(),
+                role: "wallet".into(),
+                asset: Currency::new("USDT").unwrap(),
+                total: "10".parse().unwrap(),
+                available: Some("10".parse().unwrap()),
+                locked: None,
+                borrowed: None,
+                interest: None,
+            }],
+            collateral: Vec::new(),
+            outcomes: Vec::new(),
+            errors: vec![AccountQueryError {
+                segment: SegmentKey::new("funding").unwrap(),
+                message: "unauthorized".into(),
+            }],
+        });
+
+        assert!(output.contains("USDT"));
+        assert!(output.contains("completeness Partial · segments 1/2"));
+        assert!(output.contains("funding: unauthorized"));
     }
 
     #[test]
@@ -1314,6 +1926,8 @@ mod cli_tests {
             kind: "positions".into(),
             segments_requested: 1,
             segments_succeeded: 1,
+            completeness: AccountQueryCompleteness::Complete,
+            observed_at_unix_nanos: Some(1),
             positions: vec![AccountPositionItem {
                 segment: SegmentKey::new("usd_m_futures").expect("segment"),
                 symbol: "BTCUSDT".into(),
@@ -1323,7 +1937,11 @@ mod cli_tests {
                 average_price: Some("60000".parse().expect("entry")),
                 mark_price: Some("61000".parse().expect("mark")),
                 unrealized_pnl: Some("100".parse().expect("upnl")),
+                realized_pnl: Some("20".parse().expect("rpnl")),
+                margin_mode: Some("cross".into()),
+                position_mode: Some("one_way".into()),
             }],
+            outcomes: Vec::new(),
             errors: Vec::new(),
         });
 
@@ -1331,5 +1949,51 @@ mod cli_tests {
         assert!(output.contains("QUANTITY"));
         assert!(output.contains("UPNL"));
         assert!(!output.contains("participant_instrument"));
+    }
+
+    #[test]
+    fn incomplete_open_orders_never_claim_an_empty_order_set() {
+        let output = render_account_open_orders(&AccountOpenOrdersResult {
+            account_id: AccountId::new("live-main").unwrap(),
+            source: "direct_provider".into(),
+            mode: "standalone".into(),
+            kind: "open_orders".into(),
+            completeness: AccountQueryCompleteness::Unavailable,
+            segments_requested: 1,
+            segments_succeeded: 0,
+            observed_at_unix_nanos: Some(1),
+            orders: Vec::new(),
+            outcomes: Vec::new(),
+        });
+        assert!(output.contains("could not be established"));
+        assert!(!output.contains("No open orders returned"));
+    }
+
+    #[test]
+    fn fee_output_keeps_unavailable_vip_separate_from_observed_rates() {
+        let output = render_account_fees(&AccountFeesResult {
+            account_id: AccountId::new("live-main").unwrap(),
+            source: "direct_provider".into(),
+            mode: "standalone".into(),
+            kind: "fees".into(),
+            product: "spot".into(),
+            symbol: Some("BTCUSDT".into()),
+            completeness: AccountQueryCompleteness::Complete,
+            maker: Some("0.001".parse().unwrap()),
+            taker: Some("0.001".parse().unwrap()),
+            buyer: None,
+            seller: None,
+            standard: None,
+            special: None,
+            tax: None,
+            discount: None,
+            rpi: None,
+            vip_tier: None,
+            vip_tier_status: "unavailable".into(),
+            observed_at_unix_nanos: Some(1),
+            issues: Vec::new(),
+        });
+        assert!(output.contains("0.001"));
+        assert!(output.contains("unavailable"));
     }
 }

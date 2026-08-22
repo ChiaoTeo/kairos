@@ -680,6 +680,7 @@ class ComponentProcessApplication:
             if initial_log_offset is not None
             else (log_path.stat().st_size if log_path and log_path.exists() else 0)
         )
+        startup_log_offset = log_offset
 
         def stream_new_logs() -> None:
             nonlocal log_offset
@@ -691,7 +692,7 @@ class ComponentProcessApplication:
                     payload = stream.read()
                     log_offset = stream.tell()
                 if payload:
-                    sys.stdout.buffer.write(payload)
+                    sys.stdout.write(payload.decode("utf-8", errors="replace"))
                     sys.stdout.flush()
             except OSError:
                 pass
@@ -701,7 +702,7 @@ class ComponentProcessApplication:
             return_code = process.poll() if process is not None else None
             if return_code is not None:
                 stream_new_logs()
-                detail = _startup_log_detail(log_path, log_offset)
+                detail = _startup_log_detail(log_path, startup_log_offset)
                 raise RuntimeError(
                     f"{component} process exited during startup with code {return_code}; "
                     f"log={log_path}"

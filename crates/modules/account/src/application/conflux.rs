@@ -800,32 +800,39 @@ async fn fetch_earn_positions<C: EarnProductQuery, P>(
             continue;
         };
         let started = Instant::now();
-        let mut request = EarnPositionsRequest {
-            family: Some(EarnProductFamily::Flexible),
-            limit: Some(100),
-            ..EarnPositionsRequest::default()
-        };
         let mut positions = Vec::new();
         let result = async {
-            for _ in 0..100 {
-                let page = connections
-                    .get(&key)
-                    .expect("key returned by typed connection collection")
-                    .positions(&request)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                positions.extend(page.items);
-                let Some(cursor) = page.next_cursor else {
-                    return Ok(map_earn_positions(
-                        segment.segment_key.clone(),
-                        positions,
-                        now_unix_nanos().into(),
-                        true,
-                    ));
+            for family in [EarnProductFamily::Flexible, EarnProductFamily::Locked] {
+                let mut request = EarnPositionsRequest {
+                    family: Some(family),
+                    limit: Some(100),
+                    ..EarnPositionsRequest::default()
                 };
-                request.cursor = Some(cursor);
+                let mut completed = false;
+                for _ in 0..100 {
+                    let page = connections
+                        .get(&key)
+                        .expect("key returned by typed connection collection")
+                        .positions(&request)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    positions.extend(page.items);
+                    let Some(cursor) = page.next_cursor else {
+                        completed = true;
+                        break;
+                    };
+                    request.cursor = Some(cursor);
+                }
+                if !completed {
+                    return Err("Binance Earn positions exceeded the 100-page safety bound".into());
+                }
             }
-            Err("Binance Earn positions exceeded the 100-page safety bound".into())
+            Ok(map_earn_positions(
+                segment.segment_key.clone(),
+                positions,
+                now_unix_nanos().into(),
+                true,
+            ))
         }
         .await;
         fetches.push((

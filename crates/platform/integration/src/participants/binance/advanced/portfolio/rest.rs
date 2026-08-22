@@ -10,6 +10,18 @@ rest_connection!(
     "advanced.portfolio.rest"
 );
 
+impl crate::AccountProfileQuery for BinancePortfolioMarginRestConnection {
+    async fn fetch_account_profile(
+        &mut self,
+    ) -> Result<crate::ExternalAccountProfile, IntegrationError> {
+        self.service.signed_get("/papi/v1/account", &[]).await?;
+        Ok(crate::ExternalAccountProfile {
+            account_model: crate::ExternalAccountModel::PortfolioMargin,
+            provider_account_model: Some("portfolio_margin".into()),
+        })
+    }
+}
+
 impl AccountQuery for BinancePortfolioMarginRestConnection {
     async fn fetch_account(
         &mut self,

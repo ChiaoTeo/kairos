@@ -251,13 +251,15 @@ fn account_broker_identity_is_independent_from_integration_provider_route() {
 }
 
 #[test]
-fn account_cli_does_not_expose_provider_money_operations() {
+fn account_cli_does_not_expose_provider_money_mutations() {
     let cli = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-account-cli.rs"),
     )
     .expect("read account cli");
     assert!(!cli.contains("Command::Transfer"));
-    assert!(!cli.contains("Command::Earn"));
+    assert!(!cli.contains("EarnSubscribe"));
+    assert!(!cli.contains("EarnRedeem"));
+    assert!(!cli.contains("EarnCommand"));
     assert!(!cli.contains("compose_binance_transfer"));
     assert!(!cli.contains("compose_binance_earn"));
 }
@@ -583,7 +585,7 @@ fn account_application_has_no_synchronous_business_query_facade() {
             "Account application retains synchronous business query {forbidden}"
         );
     }
-    assert!(!exports.contains("AccountQuery"));
+    assert!(!exports.contains("AccountQuery,"));
     assert!(!exports.contains("AccountDataQuery"));
 }
 

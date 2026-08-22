@@ -5,8 +5,9 @@ use std::task::{Context, Poll};
 
 use crate::IntegrationError;
 use crate::domain::account::{
-    ExternalAccountCredentialProfile, ExternalAccountEventEnvelope, ExternalAccountSegment,
-    ExternalAccountSnapshot, ExternalMarketProfile, ExternalMarketProfileRequest,
+    ExternalAccountCredentialProfile, ExternalAccountEventEnvelope, ExternalAccountProfile,
+    ExternalAccountSegment, ExternalAccountSnapshot, ExternalMarketProfile,
+    ExternalMarketProfileRequest,
 };
 
 pub trait AccountQuery: Send {
@@ -14,6 +15,12 @@ pub trait AccountQuery: Send {
         &mut self,
         segment: &ExternalAccountSegment,
     ) -> impl Future<Output = Result<ExternalAccountSnapshot, IntegrationError>> + Send;
+}
+
+pub trait AccountProfileQuery: Send {
+    fn fetch_account_profile(
+        &mut self,
+    ) -> impl Future<Output = Result<ExternalAccountProfile, IntegrationError>> + Send;
 }
 
 pub trait AccountMarketProfileQuery: Send {

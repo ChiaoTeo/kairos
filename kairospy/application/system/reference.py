@@ -26,12 +26,9 @@ class ReferenceProcessConfig:
     aeron_dir: Path | None = None
     refresh_interval: str = "5m"
     reference_changes_stream: int = REFERENCE_CHANGES_STREAM
-    run_mode: str = "daemon"
     stop_timeout: float = 15.0
 
     def __post_init__(self) -> None:
-        if self.run_mode not in {"daemon", "once"}:
-            raise ValueError("run_mode must be daemon or once")
         if not self.refresh_interval.strip():
             raise ValueError("refresh_interval is required")
         if self.reference_changes_stream <= 0:
@@ -63,7 +60,6 @@ class ReferenceProcessConfig:
         command.extend(
             ("--socket", str(socket_path), "--health-file", str(health_file))
         )
-        command.extend(("--run-mode", self.run_mode))
         return ProcessSpec(
             name="reference",
             command=tuple(command),

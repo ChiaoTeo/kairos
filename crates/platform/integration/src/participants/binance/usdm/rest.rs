@@ -1,4 +1,20 @@
 rest_connection!(BinanceUsdMRestConnection, "usdm.rest");
+
+impl crate::FeeQuery for BinanceUsdMRestConnection {
+    async fn fetch_fee_schedule(
+        &mut self,
+        request: &crate::ExternalFeeScheduleRequest,
+    ) -> Result<crate::ExternalFeeSchedule, crate::IntegrationError> {
+        let value = self
+            .service
+            .signed_get(
+                "/fapi/v1/commissionRate",
+                &[("symbol", request.symbol.to_string())],
+            )
+            .await?;
+        crate::participants::binance::fees::futures(&value)
+    }
+}
 futures_rest_capabilities!(
     BinanceUsdMRestConnection,
     "/fapi/v1",

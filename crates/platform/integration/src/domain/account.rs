@@ -69,6 +69,12 @@ pub enum ExternalAccountModel {
     PortfolioMargin,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalAccountProfile {
+    pub account_model: ExternalAccountModel,
+    pub provider_account_model: Option<String>,
+}
+
 impl ExternalAccountModel {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -184,6 +190,9 @@ pub struct ExternalAccountSnapshot {
     pub net_profit: Option<ExternalDecimal>,
     #[serde(default)]
     pub account_model: Option<ExternalAccountModel>,
+    /// Provider-native account/product model retained for diagnostics.
+    #[serde(default)]
+    pub provider_account_model: Option<String>,
     #[serde(default)]
     pub margin_mode: Option<ExternalMarginMode>,
     #[serde(default)]

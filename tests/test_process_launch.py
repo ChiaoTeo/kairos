@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+from io import StringIO
 import json
 import stat
 import sys
@@ -134,6 +136,42 @@ def test_component_start_reports_early_exit_and_log_detail(
     assert "exited during startup with code 23" in message
     assert "database migration failed" in message
     assert "kairos system logs --component execution" in message
+
+
+def test_reference_startup_logs_support_redirected_text_output(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="redirected-reference-start"
+    )
+    application = ComponentProcessApplication(workspace, ready_timeout=1)
+    log_path = workspace.paths.logs / "reference" / "process.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        '{"level":"ERROR","message":"unexpected argument --legacy"}\n',
+        encoding="utf-8",
+    )
+
+    class ExitedProcess:
+        @staticmethod
+        def poll() -> int:
+            return 2
+
+    output = StringIO()
+    control = application.client(
+        "reference", workspace.paths.process_socket("reference"), timeout=0.1
+    )
+    with redirect_stdout(output), pytest.raises(RuntimeError) as captured:
+        application._wait_ready(
+            "reference",
+            control,
+            process=ExitedProcess(),
+            log_path=log_path,
+            initial_log_offset=0,
+            stream_logs=True,
+        )
+
+    assert "unexpected argument --legacy" in output.getvalue()
+    assert "exited during startup with code 2" in str(captured.value)
+    assert "unexpected argument --legacy" in str(captured.value)
 
 
 def test_component_start_reuses_responsive_degraded_process(

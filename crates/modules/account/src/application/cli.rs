@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use kairos_conflux::{CredentialRecord, CredentialStore, ExternalAccountCredentialProfile};
-use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_conflux::{
+    CredentialRecord, CredentialStore, ExternalAccountCredentialProfile, ExternalFeeComponent,
+    ExternalFeeSchedule, ExternalOrder,
+};
+use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::DecimalParts;
 use kairos_primitives::integration::ProviderId;
 use kairos_primitives::reference::Currency;
@@ -11,12 +14,120 @@ use serde::Serialize;
 
 use crate::composition::account::{
     AccountOptions, AccountSegmentBinding, default_rest_endpoint, inspect_account_credential,
-    query_direct_account_snapshot,
+    query_direct_account_profile, query_direct_account_snapshot, query_direct_earn_positions,
+    query_direct_fee_schedule, query_direct_open_orders,
 };
 use crate::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
 };
 use crate::domain::AccountModel;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountQueryCompleteness {
+    Complete,
+    Partial,
+    Unsupported,
+    Unavailable,
+    Unauthorized,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOverviewResult {
+    pub identity: AccountOverviewIdentity,
+    pub connection: AccountOverviewConnection,
+    pub profile: AccountOverviewProfile,
+    pub permissions: AccountOverviewPermissions,
+    pub commercial: AccountOverviewCommercial,
+    pub facts: AccountOverviewFacts,
+    pub health: AccountOverviewHealth,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOverviewCommercial {
+    pub vip_tier: Option<String>,
+    pub bnb_fee_discount: Option<bool>,
+    pub fee_summary_status: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOverviewIdentity {
+    pub account_id: AccountId,
+    pub alias: String,
+    pub broker: BrokerId,
+    pub exchange: Option<String>,
+    pub environment: String,
+    pub masked_remote_identity: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOverviewConnection {
+    pub integration_provider: ProviderId,
+    pub credential_bindings: Vec<AccountCredentialSummary>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountCredentialSummary {
+    pub name: String,
+    pub credential_id: String,
+    pub role: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOverviewProfile {
+    pub configured_account_model: Option<String>,
+    pub observed_account_model: Option<String>,
+    pub provider_account_model: Option<String>,
+    pub model_match: String,
+    pub unified: Option<bool>,
+    pub margin_mode: Option<String>,
+    pub position_mode: Option<String>,
+    pub segments: Vec<AccountSegmentProfileItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountSegmentProfileItem {
+    pub segment: SegmentKey,
+    pub source: String,
+    pub freshness: String,
+    pub completeness: AccountQueryCompleteness,
+    pub observed_at_unix_nanos: Option<u64>,
+    pub issue: Option<String>,
+    pub configured_account_model: Option<String>,
+    pub observed_account_model: Option<String>,
+    pub provider_account_model: Option<String>,
+    pub margin_mode: Option<String>,
+    pub position_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOverviewPermissions {
+    pub configured_credential_role: String,
+    pub observed_permissions: BTreeMap<String, String>,
+    pub effective_capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOverviewFacts {
+    pub non_zero_balance_count: u64,
+    pub collateral_count: u64,
+    pub position_count: u64,
+    pub earn_holding_count: Option<u64>,
+    pub open_order_count: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOverviewHealth {
+    pub source: String,
+    pub mode: String,
+    pub overall_status: String,
+    pub freshness: String,
+    pub completeness: AccountQueryCompleteness,
+    pub segments_requested: u64,
+    pub segments_succeeded: u64,
+    pub observed_at_unix_nanos: Option<u64>,
+    pub issues: Vec<AccountQueryError>,
+}
 
 /// Standalone Account CLI facade.
 ///
@@ -42,10 +153,19 @@ pub struct AccountListResult {
 pub struct AccountListItem {
     pub account_id: AccountId,
     pub alias: String,
+    pub broker: BrokerId,
+    pub exchange: Option<String>,
+    pub integration_provider: ProviderId,
+    /// Deprecated compatibility alias for `integration_provider`.
+    ///
+    /// Account identity is carried by `broker`; callers must not interpret
+    /// this field as the account's business owner.
     pub provider: ProviderId,
     pub environment: String,
     pub segments: Vec<SegmentKey>,
+    pub account_model: Option<String>,
     pub credential_id: Option<String>,
+    pub configured_credential_role: String,
     pub capabilities: Vec<String>,
     pub status: String,
 }
@@ -58,7 +178,11 @@ pub struct AccountBalancesResult {
     pub kind: String,
     pub segments_requested: u64,
     pub segments_succeeded: u64,
+    pub completeness: AccountQueryCompleteness,
+    pub observed_at_unix_nanos: Option<u64>,
     pub balances: Vec<AccountBalanceItem>,
+    pub collateral: Vec<AccountBalanceItem>,
+    pub outcomes: Vec<AccountSegmentQueryOutcome>,
     pub errors: Vec<AccountQueryError>,
 }
 
@@ -71,10 +195,13 @@ pub struct AccountQueryError {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AccountBalanceItem {
     pub segment: SegmentKey,
+    pub role: String,
     pub asset: Currency,
     pub total: DecimalParts,
-    pub available: DecimalParts,
-    pub locked: DecimalParts,
+    pub available: Option<DecimalParts>,
+    pub locked: Option<DecimalParts>,
+    pub borrowed: Option<DecimalParts>,
+    pub interest: Option<DecimalParts>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -85,7 +212,10 @@ pub struct AccountPositionsResult {
     pub kind: String,
     pub segments_requested: u64,
     pub segments_succeeded: u64,
+    pub completeness: AccountQueryCompleteness,
+    pub observed_at_unix_nanos: Option<u64>,
     pub positions: Vec<AccountPositionItem>,
+    pub outcomes: Vec<AccountSegmentQueryOutcome>,
     pub errors: Vec<AccountQueryError>,
 }
 
@@ -99,6 +229,122 @@ pub struct AccountPositionItem {
     pub average_price: Option<DecimalParts>,
     pub mark_price: Option<DecimalParts>,
     pub unrealized_pnl: Option<DecimalParts>,
+    pub realized_pnl: Option<DecimalParts>,
+    pub margin_mode: Option<String>,
+    pub position_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountEarnHoldingsResult {
+    pub account_id: AccountId,
+    pub source: String,
+    pub mode: String,
+    pub kind: String,
+    pub completeness: AccountQueryCompleteness,
+    pub observed_at_unix_nanos: Option<u64>,
+    pub holdings: Vec<AccountEarnHoldingItem>,
+    pub outcomes: Vec<AccountSegmentQueryOutcome>,
+    pub errors: Vec<AccountQueryError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountEarnHoldingItem {
+    pub segment: SegmentKey,
+    pub participant_position_id: Option<String>,
+    pub product_id: String,
+    pub asset: Currency,
+    pub family: String,
+    pub principal: DecimalParts,
+    pub accrued_rewards: Vec<AccountEarnRewardItem>,
+    pub redeemable_amount: Option<DecimalParts>,
+    pub liquidity: String,
+    pub subscribed_at_unix_nanos: Option<u64>,
+    pub matures_at_unix_nanos: Option<u64>,
+    pub state: String,
+    pub observed_at_unix_nanos: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOpenOrdersResult {
+    pub account_id: AccountId,
+    pub source: String,
+    pub mode: String,
+    pub kind: String,
+    pub completeness: AccountQueryCompleteness,
+    pub segments_requested: u64,
+    pub segments_succeeded: u64,
+    pub observed_at_unix_nanos: Option<u64>,
+    pub orders: Vec<AccountOpenOrderItem>,
+    pub outcomes: Vec<AccountSegmentQueryOutcome>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountOpenOrderItem {
+    pub segment: SegmentKey,
+    pub order_id: String,
+    pub client_order_id: Option<String>,
+    pub symbol: String,
+    pub side: String,
+    pub order_type: String,
+    pub status: String,
+    pub quantity: DecimalParts,
+    pub filled_quantity: DecimalParts,
+    pub average_fill_price: Option<DecimalParts>,
+    pub occurred_at_unix_nanos: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountSegmentQueryOutcome {
+    pub segment: SegmentKey,
+    pub outcome: AccountQueryCompleteness,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountFeesResult {
+    pub account_id: AccountId,
+    pub source: String,
+    pub mode: String,
+    pub kind: String,
+    pub product: String,
+    pub symbol: Option<String>,
+    pub completeness: AccountQueryCompleteness,
+    pub maker: Option<DecimalParts>,
+    pub taker: Option<DecimalParts>,
+    pub buyer: Option<DecimalParts>,
+    pub seller: Option<DecimalParts>,
+    pub standard: Option<AccountFeeComponent>,
+    pub special: Option<AccountFeeComponent>,
+    pub tax: Option<AccountFeeComponent>,
+    pub discount: Option<AccountFeeDiscount>,
+    pub rpi: Option<DecimalParts>,
+    pub vip_tier: Option<String>,
+    pub vip_tier_status: String,
+    pub observed_at_unix_nanos: Option<u64>,
+    pub issues: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountFeeComponent {
+    pub maker: Option<DecimalParts>,
+    pub taker: Option<DecimalParts>,
+    pub buyer: Option<DecimalParts>,
+    pub seller: Option<DecimalParts>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountFeeDiscount {
+    pub enabled_for_account: Option<bool>,
+    pub enabled_for_symbol: Option<bool>,
+    pub asset: Option<String>,
+    pub rate: Option<DecimalParts>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountEarnRewardItem {
+    pub asset: Currency,
+    pub amount: DecimalParts,
+    pub component: Option<String>,
 }
 
 impl TryFrom<&AccountBindingRecord> for AccountListItem {
@@ -108,6 +354,9 @@ impl TryFrom<&AccountBindingRecord> for AccountListItem {
         Ok(Self {
             account_id: AccountId::new(record.account_id.clone())?,
             alias: record.alias.clone(),
+            broker: BrokerId::new(record.broker.clone())?,
+            exchange: record.exchange.clone(),
+            integration_provider: ProviderId::new(record.integration_provider.clone())?,
             provider: ProviderId::new(record.integration_provider.clone())?,
             environment: record.environment.clone(),
             segments: record
@@ -116,11 +365,27 @@ impl TryFrom<&AccountBindingRecord> for AccountListItem {
                 .cloned()
                 .map(SegmentKey::new)
                 .collect::<Result<_, _>>()?,
+            account_model: record.account_model.clone(),
             credential_id: record.credential_id.clone(),
+            configured_credential_role: configured_credential_role(record),
             capabilities: account_capabilities(record),
             status: record.status.clone(),
         })
     }
+}
+
+fn configured_credential_role(record: &AccountBindingRecord) -> String {
+    record
+        .credential_role
+        .clone()
+        .or_else(|| {
+            record
+                .credentials
+                .first()
+                .map(|binding| binding.role.clone())
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "readonly".into())
 }
 
 fn account_capabilities(record: &AccountBindingRecord) -> Vec<String> {
@@ -148,6 +413,14 @@ fn account_capabilities(record: &AccountBindingRecord) -> Vec<String> {
             _ => {},
         }
     }
+    capabilities.retain(|capability| {
+        record.permissions.get(capability).is_none_or(|permission| {
+            matches!(
+                permission.trim().to_ascii_lowercase().as_str(),
+                "granted" | "true" | "enabled" | "allowed"
+            )
+        })
+    });
     capabilities
 }
 
@@ -244,6 +517,322 @@ impl CliAccountApplication {
         Ok(serde_json::to_value(value)?)
     }
 
+    pub async fn overview(
+        &self,
+        account_id: &str,
+    ) -> Result<AccountOverviewResult, Box<dyn std::error::Error>> {
+        let account = self.account(account_id)?;
+        let identity = AccountOverviewIdentity {
+            account_id: AccountId::new(account.account_id.clone())?,
+            alias: account.alias.clone(),
+            broker: BrokerId::new(account.broker.clone())?,
+            exchange: account.exchange.clone(),
+            environment: account.environment.clone(),
+            masked_remote_identity: account.remote_identity.as_deref().map(mask_identity),
+        };
+        let connection = AccountOverviewConnection {
+            integration_provider: ProviderId::new(account.integration_provider.clone())?,
+            credential_bindings: account
+                .credentials
+                .iter()
+                .map(|binding| AccountCredentialSummary {
+                    name: binding.name.clone(),
+                    credential_id: binding.credential_id.clone(),
+                    role: binding.role.clone(),
+                })
+                .collect(),
+        };
+        let permissions = AccountOverviewPermissions {
+            configured_credential_role: configured_credential_role(account),
+            observed_permissions: account.permissions.clone(),
+            effective_capabilities: account_capabilities(account),
+        };
+        let selected_segments = selected_segments(account, &[])?;
+        let segments_requested = u64::try_from(selected_segments.len())?;
+        if is_paper_or_simulated(&account.broker)
+            || is_paper_or_simulated(&account.integration_provider)
+            || is_paper_or_simulated(&account.environment)
+        {
+            let balances = self.local_balances_for(account)?;
+            let segment_profiles = selected_segments
+                .iter()
+                .map(|segment| AccountSegmentProfileItem {
+                    segment: SegmentKey::new(segment.clone()).expect("selected segment is valid"),
+                    source: "local_registry".into(),
+                    freshness: "local".into(),
+                    completeness: AccountQueryCompleteness::Complete,
+                    observed_at_unix_nanos: None,
+                    issue: None,
+                    configured_account_model: account.account_model.clone(),
+                    observed_account_model: account.account_model.clone(),
+                    provider_account_model: None,
+                    margin_mode: None,
+                    position_mode: None,
+                })
+                .collect();
+            return Ok(AccountOverviewResult {
+                identity,
+                connection,
+                profile: overview_profile(account.account_model.clone(), segment_profiles, None),
+                permissions,
+                commercial: AccountOverviewCommercial {
+                    vip_tier: None,
+                    bnb_fee_discount: None,
+                    fee_summary_status: if account.fee_rate.is_some() {
+                        "simulated_configured"
+                    } else {
+                        "not_configured"
+                    }
+                    .into(),
+                },
+                facts: AccountOverviewFacts {
+                    non_zero_balance_count: u64::try_from(
+                        balances
+                            .iter()
+                            .filter(|balance| balance.total.mantissa() != 0)
+                            .count(),
+                    )?,
+                    collateral_count: 0,
+                    position_count: 0,
+                    earn_holding_count: Some(0),
+                    open_order_count: None,
+                },
+                health: AccountOverviewHealth {
+                    source: "local_registry".into(),
+                    mode: "standalone".into(),
+                    overall_status: "configured".into(),
+                    freshness: "local".into(),
+                    completeness: AccountQueryCompleteness::Partial,
+                    segments_requested,
+                    segments_succeeded: segments_requested,
+                    observed_at_unix_nanos: None,
+                    issues: vec![AccountQueryError {
+                        segment: SegmentKey::new(
+                            selected_segments
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "account".into()),
+                        )?,
+                        message: "Open orders were not queried by overview; use open-orders".into(),
+                    }],
+                },
+            });
+        }
+
+        let base_options = self.direct_query_options(account)?;
+        let mut non_zero_balance_count = 0_u64;
+        let mut collateral_count = 0_u64;
+        let mut position_count = 0_u64;
+        let mut segments_succeeded = 0_u64;
+        let mut observed_at_unix_nanos: Option<u64> = None;
+        let mut issues = Vec::new();
+        let mut segment_profiles = Vec::new();
+        for segment in &selected_segments {
+            let product = account.product_for_segment(segment).unwrap_or(segment);
+            let binding = AccountSegmentBinding {
+                segment_key: segment.clone(),
+                provider_product: product.to_owned(),
+                trading_mode: account.segment_trading_modes.get(segment).cloned(),
+            };
+            let mut options = base_options.clone();
+            options.product = product.to_owned();
+            if account.values.get("base_url").is_none() {
+                options.base_url = default_rest_endpoint(&options.provider, product)?.to_owned();
+            }
+            match query_direct_account_snapshot(&options, &binding).await {
+                Ok(snapshot) => {
+                    segments_succeeded = segments_succeeded.saturating_add(1);
+                    non_zero_balance_count = non_zero_balance_count.saturating_add(u64::try_from(
+                        snapshot
+                            .balances
+                            .iter()
+                            .filter(|balance| balance.total.mantissa != 0)
+                            .count(),
+                    )?);
+                    collateral_count = collateral_count.saturating_add(u64::try_from(
+                        snapshot
+                            .collateral
+                            .iter()
+                            .filter(|balance| balance.total.mantissa != 0)
+                            .count(),
+                    )?);
+                    position_count =
+                        position_count.saturating_add(u64::try_from(snapshot.positions.len())?);
+                    observed_at_unix_nanos = Some(
+                        observed_at_unix_nanos
+                            .unwrap_or_default()
+                            .max(snapshot.observed_at_unix_nanos.get()),
+                    );
+                    segment_profiles.push(AccountSegmentProfileItem {
+                        segment: snapshot.segment_key,
+                        source: "direct_provider".into(),
+                        freshness: "fresh".into(),
+                        completeness: AccountQueryCompleteness::Complete,
+                        observed_at_unix_nanos: Some(snapshot.observed_at_unix_nanos.get()),
+                        issue: None,
+                        configured_account_model: account.account_model.clone(),
+                        observed_account_model: snapshot.account_model.map(account_model_name),
+                        provider_account_model: snapshot.provider_account_model,
+                        margin_mode: snapshot.margin_mode.map(|value| {
+                            match value {
+                                kairos_conflux::ExternalMarginMode::Cross => "cross",
+                                kairos_conflux::ExternalMarginMode::Isolated => "isolated",
+                            }
+                            .into()
+                        }),
+                        position_mode: snapshot.position_mode.map(|value| {
+                            match value {
+                                kairos_conflux::ExternalPositionMode::OneWay => "one_way",
+                                kairos_conflux::ExternalPositionMode::Hedge => "hedge",
+                            }
+                            .into()
+                        }),
+                    });
+                },
+                Err(message) => {
+                    let segment = SegmentKey::new(segment.clone())?;
+                    segment_profiles.push(AccountSegmentProfileItem {
+                        segment: segment.clone(),
+                        source: "direct_provider".into(),
+                        freshness: "unknown".into(),
+                        completeness: classify_query_failure(&message),
+                        observed_at_unix_nanos: None,
+                        issue: Some(message.clone()),
+                        configured_account_model: account.account_model.clone(),
+                        observed_account_model: None,
+                        provider_account_model: None,
+                        margin_mode: None,
+                        position_mode: None,
+                    });
+                    issues.push(AccountQueryError { segment, message });
+                },
+            }
+        }
+        let needs_profile_probe = !segment_profiles
+            .iter()
+            .any(|segment| segment.observed_account_model.is_some());
+        let explicit_profile = if account.integration_provider.eq_ignore_ascii_case("binance")
+            && needs_profile_probe
+        {
+            match query_direct_account_profile(&base_options).await {
+                Ok(profile) => Some(profile),
+                Err(message) => {
+                    issues.push(AccountQueryError {
+                        segment: SegmentKey::new(
+                            selected_segments
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "profile".into()),
+                        )?,
+                        message,
+                    });
+                    None
+                },
+            }
+        } else {
+            None
+        };
+        let mut completeness = query_completeness(segments_succeeded, segments_requested);
+        if account.integration_provider.eq_ignore_ascii_case("binance")
+            && needs_profile_probe
+            && explicit_profile.is_none()
+            && completeness == AccountQueryCompleteness::Complete
+        {
+            completeness = AccountQueryCompleteness::Partial;
+        }
+        let earn_holding_count = if account.integration_provider.eq_ignore_ascii_case("binance")
+            && account.segments.iter().any(|segment| {
+                account
+                    .product_for_segment(segment)
+                    .is_some_and(|product| product.eq_ignore_ascii_case("funding"))
+            }) {
+            match query_direct_earn_positions(&base_options).await {
+                Ok(positions) => Some(u64::try_from(positions.len())?),
+                Err(message) => {
+                    let segment = account
+                        .segments
+                        .iter()
+                        .find(|segment| {
+                            account
+                                .product_for_segment(segment)
+                                .is_some_and(|product| product.eq_ignore_ascii_case("funding"))
+                        })
+                        .expect("Binance funding segment exists");
+                    issues.push(AccountQueryError {
+                        segment: SegmentKey::new(segment.clone())?,
+                        message: format!("Earn holdings: {message}"),
+                    });
+                    if completeness == AccountQueryCompleteness::Complete {
+                        completeness = AccountQueryCompleteness::Partial;
+                    }
+                    None
+                },
+            }
+        } else {
+            Some(0)
+        };
+        issues.push(AccountQueryError {
+            segment: SegmentKey::new(
+                selected_segments
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "account".into()),
+            )?,
+            message: "Open orders were not queried by overview; use open-orders".into(),
+        });
+        if completeness == AccountQueryCompleteness::Complete {
+            completeness = AccountQueryCompleteness::Partial;
+        }
+        Ok(AccountOverviewResult {
+            identity,
+            connection,
+            profile: overview_profile(
+                account.account_model.clone(),
+                segment_profiles,
+                explicit_profile,
+            ),
+            permissions,
+            commercial: AccountOverviewCommercial {
+                vip_tier: None,
+                bnb_fee_discount: None,
+                fee_summary_status: if account.fee_rate.is_some() {
+                    "registry_value_deprecated_not_observed"
+                } else {
+                    "not_queried"
+                }
+                .into(),
+            },
+            facts: AccountOverviewFacts {
+                non_zero_balance_count,
+                collateral_count,
+                position_count,
+                earn_holding_count,
+                open_order_count: None,
+            },
+            health: AccountOverviewHealth {
+                source: "direct_provider".into(),
+                mode: "standalone".into(),
+                overall_status: match completeness {
+                    AccountQueryCompleteness::Complete => "ready",
+                    AccountQueryCompleteness::Partial => "degraded",
+                    _ => "unavailable",
+                }
+                .into(),
+                freshness: if observed_at_unix_nanos.is_some() {
+                    "fresh"
+                } else {
+                    "unknown"
+                }
+                .into(),
+                completeness,
+                segments_requested,
+                segments_succeeded,
+                observed_at_unix_nanos,
+                issues,
+            },
+        })
+    }
+
     pub fn local_snapshot(
         &self,
         account_id: &str,
@@ -266,6 +855,27 @@ impl CliAccountApplication {
         segments: &[String],
         include_zero: bool,
     ) -> Result<AccountBalancesResult, Box<dyn std::error::Error>> {
+        self.query_assets(account_id, segments, include_zero, false)
+            .await
+    }
+
+    pub async fn assets(
+        &self,
+        account_id: &str,
+        segments: &[String],
+        include_zero: bool,
+    ) -> Result<AccountBalancesResult, Box<dyn std::error::Error>> {
+        self.query_assets(account_id, segments, include_zero, true)
+            .await
+    }
+
+    async fn query_assets(
+        &self,
+        account_id: &str,
+        segments: &[String],
+        include_zero: bool,
+        include_collateral: bool,
+    ) -> Result<AccountBalancesResult, Box<dyn std::error::Error>> {
         let account = self.account(account_id)?;
         if is_paper_or_simulated(&account.broker)
             || is_paper_or_simulated(&account.integration_provider)
@@ -283,17 +893,38 @@ impl CliAccountApplication {
                 account_id: AccountId::new(account.account_id.clone())?,
                 source: "local_registry".into(),
                 mode: "standalone".into(),
-                kind: "balances".into(),
+                kind: if include_collateral {
+                    "assets"
+                } else {
+                    "balances"
+                }
+                .into(),
                 segments_requested: segment_count,
                 segments_succeeded: segment_count,
+                completeness: AccountQueryCompleteness::Complete,
+                observed_at_unix_nanos: Some(now_unix_nanos()),
                 balances,
+                collateral: Vec::new(),
+                outcomes: selected_segments
+                    .into_iter()
+                    .map(|segment| {
+                        Ok(AccountSegmentQueryOutcome {
+                            segment: SegmentKey::new(segment)?,
+                            outcome: AccountQueryCompleteness::Complete,
+                            message: None,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, kairos_primitives::DomainTypeError>>()?,
                 errors: Vec::new(),
             });
         }
 
         let base_options = self.direct_query_options(account)?;
         let mut balances = Vec::new();
+        let mut collateral = Vec::new();
         let mut errors = Vec::new();
+        let mut outcomes = Vec::new();
+        let mut observed_at_unix_nanos: Option<u64> = None;
         let selected_segments = selected_segments(account, segments)?;
         let segments_requested = u64::try_from(selected_segments.len())?;
         let mut segments_succeeded = 0_u64;
@@ -312,34 +943,61 @@ impl CliAccountApplication {
             match query_direct_account_snapshot(&options, &binding).await {
                 Ok(snapshot) => {
                     segments_succeeded = segments_succeeded.saturating_add(1);
-                    for balance in snapshot.balances {
-                        let total = DecimalParts::new(balance.total.mantissa, balance.total.scale)?;
-                        if !include_zero && total.mantissa() == 0 {
-                            continue;
-                        }
-                        balances.push(AccountBalanceItem {
-                            segment: snapshot.segment_key.clone(),
-                            asset: balance.asset_code,
-                            total,
-                            available: decimal_parts(balance.available.unwrap_or(balance.total))?,
-                            locked: decimal_parts(balance.locked.unwrap_or_default())?,
-                        });
+                    observed_at_unix_nanos = Some(
+                        observed_at_unix_nanos
+                            .unwrap_or_default()
+                            .max(snapshot.observed_at_unix_nanos.get()),
+                    );
+                    outcomes.push(AccountSegmentQueryOutcome {
+                        segment: snapshot.segment_key.clone(),
+                        outcome: AccountQueryCompleteness::Complete,
+                        message: None,
+                    });
+                    append_external_balances(
+                        &mut balances,
+                        snapshot.segment_key.clone(),
+                        "wallet",
+                        snapshot.balances,
+                        include_zero,
+                    )?;
+                    if include_collateral {
+                        append_external_balances(
+                            &mut collateral,
+                            snapshot.segment_key,
+                            "collateral",
+                            snapshot.collateral,
+                            include_zero,
+                        )?;
                     }
                 },
-                Err(message) => errors.push(AccountQueryError {
-                    segment: SegmentKey::new(segment.clone())?,
-                    message,
-                }),
+                Err(message) => {
+                    let segment = SegmentKey::new(segment.clone())?;
+                    outcomes.push(AccountSegmentQueryOutcome {
+                        segment: segment.clone(),
+                        outcome: classify_query_failure(&message),
+                        message: Some(message.clone()),
+                    });
+                    errors.push(AccountQueryError { segment, message });
+                },
             }
         }
         Ok(AccountBalancesResult {
             account_id: AccountId::new(account.account_id.clone())?,
             source: "direct_provider".into(),
             mode: "standalone".into(),
-            kind: "balances".into(),
+            kind: if include_collateral {
+                "assets"
+            } else {
+                "balances"
+            }
+            .into(),
             segments_requested,
             segments_succeeded,
+            completeness: aggregate_outcomes(segments_succeeded, &outcomes),
+            observed_at_unix_nanos,
             balances,
+            collateral,
+            outcomes,
             errors,
         })
     }
@@ -364,7 +1022,19 @@ impl CliAccountApplication {
                 kind: "positions".into(),
                 segments_requested,
                 segments_succeeded: segments_requested,
+                completeness: AccountQueryCompleteness::Complete,
+                observed_at_unix_nanos: Some(now_unix_nanos()),
                 positions: Vec::new(),
+                outcomes: selected_segments
+                    .into_iter()
+                    .map(|segment| {
+                        Ok(AccountSegmentQueryOutcome {
+                            segment: SegmentKey::new(segment)?,
+                            outcome: AccountQueryCompleteness::Complete,
+                            message: None,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, kairos_primitives::DomainTypeError>>()?,
                 errors: Vec::new(),
             });
         }
@@ -372,6 +1042,8 @@ impl CliAccountApplication {
         let base_options = self.direct_query_options(account)?;
         let mut positions = Vec::new();
         let mut errors = Vec::new();
+        let mut outcomes = Vec::new();
+        let mut observed_at_unix_nanos: Option<u64> = None;
         let mut segments_succeeded = 0_u64;
         for segment in &selected_segments {
             let product = account.product_for_segment(segment).unwrap_or(segment);
@@ -388,6 +1060,24 @@ impl CliAccountApplication {
             match query_direct_account_snapshot(&options, &binding).await {
                 Ok(snapshot) => {
                     segments_succeeded = segments_succeeded.saturating_add(1);
+                    observed_at_unix_nanos = Some(
+                        observed_at_unix_nanos
+                            .unwrap_or_default()
+                            .max(snapshot.observed_at_unix_nanos.get()),
+                    );
+                    outcomes.push(AccountSegmentQueryOutcome {
+                        segment: snapshot.segment_key.clone(),
+                        outcome: AccountQueryCompleteness::Complete,
+                        message: None,
+                    });
+                    let margin_mode = snapshot.margin_mode.map(|value| match value {
+                        kairos_conflux::ExternalMarginMode::Cross => "cross".into(),
+                        kairos_conflux::ExternalMarginMode::Isolated => "isolated".into(),
+                    });
+                    let position_mode = snapshot.position_mode.map(|value| match value {
+                        kairos_conflux::ExternalPositionMode::OneWay => "one_way".into(),
+                        kairos_conflux::ExternalPositionMode::Hedge => "hedge".into(),
+                    });
                     for position in snapshot.positions {
                         let position_symbol =
                             position.participant_instrument.source_symbol.to_string();
@@ -410,13 +1100,21 @@ impl CliAccountApplication {
                                 .unrealized_pnl
                                 .map(decimal_parts)
                                 .transpose()?,
+                            realized_pnl: position.realized_pnl.map(decimal_parts).transpose()?,
+                            margin_mode: margin_mode.clone(),
+                            position_mode: position_mode.clone(),
                         });
                     }
                 },
-                Err(message) => errors.push(AccountQueryError {
-                    segment: SegmentKey::new(segment.clone())?,
-                    message,
-                }),
+                Err(message) => {
+                    let segment = SegmentKey::new(segment.clone())?;
+                    outcomes.push(AccountSegmentQueryOutcome {
+                        segment: segment.clone(),
+                        outcome: classify_query_failure(&message),
+                        message: Some(message.clone()),
+                    });
+                    errors.push(AccountQueryError { segment, message });
+                },
             }
         }
         Ok(AccountPositionsResult {
@@ -426,23 +1124,306 @@ impl CliAccountApplication {
             kind: "positions".into(),
             segments_requested,
             segments_succeeded,
+            completeness: aggregate_outcomes(segments_succeeded, &outcomes),
+            observed_at_unix_nanos,
             positions,
+            outcomes,
             errors,
         })
     }
 
-    pub fn local_open_orders(
+    pub async fn earn_holdings(
         &self,
         account_id: &str,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        let account = self.local_query_account(account_id)?;
-        Ok(serde_json::json!({
-            "account_id": account.account_id,
-            "source": "local_registry",
-            "mode": "standalone",
-            "kind": "open_orders",
-            "open_orders": [],
-        }))
+        family_filter: Option<&str>,
+        asset_filter: Option<&str>,
+    ) -> Result<AccountEarnHoldingsResult, Box<dyn std::error::Error>> {
+        let account = self.account(account_id)?;
+        let segment = account
+            .segments
+            .iter()
+            .find(|segment| {
+                account
+                    .product_for_segment(segment)
+                    .is_some_and(|product| product.eq_ignore_ascii_case("funding"))
+            })
+            .or_else(|| account.segments.first())
+            .ok_or("account has no segment for Earn holdings")?;
+        let segment_key = SegmentKey::new(segment.clone())?;
+        if is_paper_or_simulated(&account.broker)
+            || is_paper_or_simulated(&account.integration_provider)
+            || is_paper_or_simulated(&account.environment)
+        {
+            return Ok(AccountEarnHoldingsResult {
+                account_id: AccountId::new(account.account_id.clone())?,
+                source: "local_registry".into(),
+                mode: "standalone".into(),
+                kind: "earn_holdings".into(),
+                completeness: AccountQueryCompleteness::Complete,
+                observed_at_unix_nanos: Some(now_unix_nanos()),
+                holdings: Vec::new(),
+                outcomes: vec![AccountSegmentQueryOutcome {
+                    segment: segment_key,
+                    outcome: AccountQueryCompleteness::Complete,
+                    message: None,
+                }],
+                errors: Vec::new(),
+            });
+        }
+        let options = self.direct_query_options(account)?;
+        match query_direct_earn_positions(&options).await {
+            Ok(positions) => {
+                let holdings: Vec<AccountEarnHoldingItem> = positions
+                    .into_iter()
+                    .map(|position| map_earn_holding(segment_key.clone(), position))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .filter(|holding| {
+                        family_filter
+                            .is_none_or(|family| holding.family.eq_ignore_ascii_case(family))
+                            && asset_filter.is_none_or(|asset| {
+                                holding.asset.as_str().eq_ignore_ascii_case(asset)
+                            })
+                    })
+                    .collect();
+                Ok(AccountEarnHoldingsResult {
+                    account_id: AccountId::new(account.account_id.clone())?,
+                    source: "direct_provider".into(),
+                    mode: "standalone".into(),
+                    kind: "earn_holdings".into(),
+                    completeness: AccountQueryCompleteness::Complete,
+                    observed_at_unix_nanos: holdings
+                        .iter()
+                        .filter_map(|holding| holding.observed_at_unix_nanos)
+                        .max()
+                        .or_else(|| Some(now_unix_nanos())),
+                    holdings,
+                    outcomes: vec![AccountSegmentQueryOutcome {
+                        segment: segment_key,
+                        outcome: AccountQueryCompleteness::Complete,
+                        message: None,
+                    }],
+                    errors: Vec::new(),
+                })
+            },
+            Err(message) => {
+                let outcome = classify_query_failure(&message);
+                Ok(AccountEarnHoldingsResult {
+                    account_id: AccountId::new(account.account_id.clone())?,
+                    source: "direct_provider".into(),
+                    mode: "standalone".into(),
+                    kind: "earn_holdings".into(),
+                    completeness: outcome.clone(),
+                    observed_at_unix_nanos: Some(now_unix_nanos()),
+                    holdings: Vec::new(),
+                    outcomes: vec![AccountSegmentQueryOutcome {
+                        segment: segment_key.clone(),
+                        outcome,
+                        message: Some(message.clone()),
+                    }],
+                    errors: vec![AccountQueryError {
+                        segment: segment_key,
+                        message,
+                    }],
+                })
+            },
+        }
+    }
+
+    pub async fn open_orders(
+        &self,
+        account_id: &str,
+        segments: &[String],
+        symbol: Option<&str>,
+    ) -> Result<AccountOpenOrdersResult, Box<dyn std::error::Error>> {
+        let account = self.account(account_id)?;
+        let selected_segments = selected_segments(account, segments)?;
+        let segments_requested = u64::try_from(selected_segments.len())?;
+        if is_paper_or_simulated(&account.broker)
+            || is_paper_or_simulated(&account.integration_provider)
+            || is_paper_or_simulated(&account.environment)
+        {
+            return Ok(AccountOpenOrdersResult {
+                account_id: AccountId::new(account.account_id.clone())?,
+                source: "local_registry".into(),
+                mode: "standalone".into(),
+                kind: "open_orders".into(),
+                completeness: AccountQueryCompleteness::Complete,
+                segments_requested,
+                segments_succeeded: segments_requested,
+                observed_at_unix_nanos: Some(now_unix_nanos()),
+                orders: Vec::new(),
+                outcomes: selected_segments
+                    .into_iter()
+                    .map(|segment| {
+                        Ok(AccountSegmentQueryOutcome {
+                            segment: SegmentKey::new(segment)?,
+                            outcome: AccountQueryCompleteness::Complete,
+                            message: None,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, kairos_primitives::DomainTypeError>>()?,
+            });
+        }
+
+        let base_options = self.direct_query_options(account)?;
+        let mut orders = Vec::new();
+        let mut outcomes = Vec::new();
+        let mut segments_succeeded = 0_u64;
+        for segment in &selected_segments {
+            let product = account.product_for_segment(segment).unwrap_or(segment);
+            let binding = AccountSegmentBinding {
+                segment_key: segment.clone(),
+                provider_product: product.to_owned(),
+                trading_mode: account.segment_trading_modes.get(segment).cloned(),
+            };
+            let mut options = base_options.clone();
+            options.product = product.to_owned();
+            if account.values.get("base_url").is_none() {
+                options.base_url = default_rest_endpoint(&options.provider, product)?.to_owned();
+            }
+            let segment_key = SegmentKey::new(segment.clone())?;
+            match query_direct_open_orders(&options, &binding, symbol).await {
+                Ok(external_orders) => {
+                    segments_succeeded = segments_succeeded.saturating_add(1);
+                    orders.extend(
+                        external_orders
+                            .into_iter()
+                            .map(|order| map_open_order(segment_key.clone(), order))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    );
+                    outcomes.push(AccountSegmentQueryOutcome {
+                        segment: segment_key,
+                        outcome: AccountQueryCompleteness::Complete,
+                        message: None,
+                    });
+                },
+                Err(message) => outcomes.push(AccountSegmentQueryOutcome {
+                    segment: segment_key,
+                    outcome: classify_query_failure(&message),
+                    message: Some(message),
+                }),
+            }
+        }
+        let completeness = aggregate_outcomes(segments_succeeded, &outcomes);
+        Ok(AccountOpenOrdersResult {
+            account_id: AccountId::new(account.account_id.clone())?,
+            source: "direct_provider".into(),
+            mode: "standalone".into(),
+            kind: "open_orders".into(),
+            completeness,
+            segments_requested,
+            segments_succeeded,
+            observed_at_unix_nanos: Some(now_unix_nanos()),
+            orders,
+            outcomes,
+        })
+    }
+
+    pub async fn fees(
+        &self,
+        account_id: &str,
+        requested_product: &str,
+        symbol: Option<&str>,
+    ) -> Result<AccountFeesResult, Box<dyn std::error::Error>> {
+        let account = self.account(account_id)?;
+        let product = resolve_fee_product(account, requested_product)?;
+        if is_paper_or_simulated(&account.broker)
+            || is_paper_or_simulated(&account.integration_provider)
+            || is_paper_or_simulated(&account.environment)
+        {
+            let rate = account
+                .fee_rate
+                .as_deref()
+                .map(str::parse::<DecimalParts>)
+                .transpose()?;
+            return Ok(AccountFeesResult {
+                account_id: AccountId::new(account.account_id.clone())?,
+                source: "local_registry".into(),
+                mode: "standalone".into(),
+                kind: "fees".into(),
+                product,
+                symbol: symbol.map(str::to_owned),
+                completeness: if rate.is_some() {
+                    AccountQueryCompleteness::Complete
+                } else {
+                    AccountQueryCompleteness::Unavailable
+                },
+                maker: rate,
+                taker: rate,
+                buyer: None,
+                seller: None,
+                standard: None,
+                special: None,
+                tax: None,
+                discount: None,
+                rpi: None,
+                vip_tier: None,
+                vip_tier_status: "not_applicable".into(),
+                observed_at_unix_nanos: Some(now_unix_nanos()),
+                issues: if rate.is_some() {
+                    Vec::new()
+                } else {
+                    vec!["paper account has no simulated fee_rate configured".into()]
+                },
+            });
+        }
+        let Some(symbol) = symbol else {
+            return Ok(AccountFeesResult {
+                account_id: AccountId::new(account.account_id.clone())?,
+                source: "not_queried".into(),
+                mode: "standalone".into(),
+                kind: "fees".into(),
+                product,
+                symbol: None,
+                completeness: AccountQueryCompleteness::Unsupported,
+                maker: None,
+                taker: None,
+                buyer: None,
+                seller: None,
+                standard: None,
+                special: None,
+                tax: None,
+                discount: None,
+                rpi: None,
+                vip_tier: None,
+                vip_tier_status: "not_queried".into(),
+                observed_at_unix_nanos: None,
+                issues: vec![format!(
+                    "{requested_product} fee schedule requires --symbol"
+                )],
+            });
+        };
+        let mut options = self.direct_query_options(account)?;
+        options.product = product.clone();
+        if account.values.get("base_url").is_none() {
+            options.base_url = default_rest_endpoint(&options.provider, &product)?.to_owned();
+        }
+        match query_direct_fee_schedule(&options, &product, symbol).await {
+            Ok(schedule) => map_fee_schedule(account, product, schedule),
+            Err(message) => Ok(AccountFeesResult {
+                account_id: AccountId::new(account.account_id.clone())?,
+                source: "direct_provider".into(),
+                mode: "standalone".into(),
+                kind: "fees".into(),
+                product,
+                symbol: Some(symbol.into()),
+                completeness: classify_query_failure(&message),
+                maker: None,
+                taker: None,
+                buyer: None,
+                seller: None,
+                standard: None,
+                special: None,
+                tax: None,
+                discount: None,
+                rpi: None,
+                vip_tier: None,
+                vip_tier_status: "unavailable".into(),
+                observed_at_unix_nanos: Some(now_unix_nanos()),
+                issues: vec![message],
+            }),
+        }
     }
 
     pub fn switch_account_model(
@@ -521,6 +1502,7 @@ impl CliAccountApplication {
         &mut self,
         request: ModifyAccountRequest,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let fee_rate_requested = request.fee_rate.is_some();
         let mut record = self
             .registry
             .accounts
@@ -593,7 +1575,16 @@ impl CliAccountApplication {
         }
         self.registry.upsert_account(record.clone());
         self.registry.save(&self.registry_path)?;
-        Ok(serde_json::to_value(record)?)
+        let mut value = serde_json::to_value(&record)?;
+        if fee_rate_requested && record.environment.eq_ignore_ascii_case("live") {
+            value.as_object_mut().expect("record serializes as object").insert(
+                "warnings".into(),
+                serde_json::json!([
+                    "fee_rate is deprecated for live accounts; use the product/symbol fees query for observed rates"
+                ]),
+            );
+        }
+        Ok(value)
     }
 
     pub fn simulate_account(
@@ -1193,7 +2184,7 @@ impl CliAccountApplication {
                     .is_none_or(|value| value == account.account_id)
             })
             .collect::<Vec<_>>();
-        let issues: Vec<_> = self
+        let mut issues: Vec<_> = self
             .registry
             .accounts
             .iter()
@@ -1219,6 +2210,9 @@ impl CliAccountApplication {
                 )
             })
             .collect();
+        for account in &selected_accounts {
+            issues.extend(account_configuration_issues(account));
+        }
         Ok(serde_json::json!({
             "accounts": selected_accounts,
             "issues": issues,
@@ -1389,6 +2383,54 @@ impl CliAccountApplication {
     }
 }
 
+fn account_configuration_issues(account: &AccountBindingRecord) -> Vec<String> {
+    let mut issues = Vec::new();
+    let normalized_model = account
+        .account_model
+        .as_deref()
+        .and_then(AccountModel::parse);
+    if account.account_model.is_some() && normalized_model.is_none() {
+        issues.push(format!(
+            "{}: configured account_model is not a supported canonical model",
+            account.account_id
+        ));
+    }
+    let has_derivatives = account.segments.iter().any(|segment| {
+        account.product_for_segment(segment).is_some_and(|product| {
+            matches!(
+                product
+                    .trim()
+                    .to_ascii_lowercase()
+                    .replace('_', "-")
+                    .as_str(),
+                "usd-m-futures" | "coin-m-futures" | "options"
+            )
+        })
+    });
+    if account.integration_provider.eq_ignore_ascii_case("binance")
+        && has_derivatives
+        && normalized_model.is_none()
+    {
+        issues.push(format!(
+            "{}: derivative segments have no explicit account_model; run overview for profile discovery and configure the observed canonical model",
+            account.account_id
+        ));
+    }
+    if normalized_model == Some(AccountModel::PortfolioMargin) && !has_derivatives {
+        issues.push(format!(
+            "{}: portfolio_margin is configured without a derivatives/options segment",
+            account.account_id
+        ));
+    }
+    if account.environment.eq_ignore_ascii_case("live") && account.fee_rate.is_some() {
+        issues.push(format!(
+            "{}: fee_rate is deprecated for live accounts and is not treated as observed fee truth",
+            account.account_id
+        ));
+    }
+    issues
+}
+
 fn local_balance(
     segment: &str,
     value: &str,
@@ -1404,17 +2446,253 @@ fn local_balance(
     let total = total.parse::<DecimalParts>()?;
     Ok(Some(AccountBalanceItem {
         segment: SegmentKey::new(segment.to_owned())?,
+        role: "wallet".into(),
         asset: Currency::new(asset.to_ascii_uppercase())?,
         total,
-        available: total,
-        locked: DecimalParts::default(),
+        available: Some(total),
+        locked: Some(DecimalParts::default()),
+        borrowed: None,
+        interest: None,
     }))
+}
+
+fn append_external_balances(
+    output: &mut Vec<AccountBalanceItem>,
+    segment: SegmentKey,
+    role: &str,
+    balances: Vec<kairos_conflux::ExternalBalance>,
+    include_zero: bool,
+) -> Result<(), kairos_primitives::DomainTypeError> {
+    for balance in balances {
+        let total = decimal_parts(balance.total)?;
+        if !include_zero && total.mantissa() == 0 {
+            continue;
+        }
+        output.push(AccountBalanceItem {
+            segment: segment.clone(),
+            role: role.into(),
+            asset: balance.asset_code,
+            total,
+            available: balance.available.map(decimal_parts).transpose()?,
+            locked: balance.locked.map(decimal_parts).transpose()?,
+            borrowed: balance.borrowed.map(decimal_parts).transpose()?,
+            interest: balance.interest.map(decimal_parts).transpose()?,
+        });
+    }
+    Ok(())
+}
+
+fn map_earn_holding(
+    segment: SegmentKey,
+    position: kairos_conflux::EarnPosition,
+) -> Result<AccountEarnHoldingItem, kairos_primitives::DomainTypeError> {
+    let family = match &position.family {
+        kairos_conflux::EarnProductFamily::Flexible => "flexible".into(),
+        kairos_conflux::EarnProductFamily::Locked => "locked".into(),
+        kairos_conflux::EarnProductFamily::Staking => "staking".into(),
+        kairos_conflux::EarnProductFamily::YieldBearingAsset => "yield_bearing_asset".into(),
+        kairos_conflux::EarnProductFamily::Other(value) => value.clone(),
+    };
+    let liquidity = match position.family {
+        kairos_conflux::EarnProductFamily::Flexible => "immediate".into(),
+        kairos_conflux::EarnProductFamily::Locked => position
+            .matures_at_unix_nanos
+            .map(|value| format!("fixed_term:{}", value.get()))
+            .unwrap_or_else(|| "fixed_term".into()),
+        _ => "unknown".into(),
+    };
+    let state = match position.state {
+        kairos_conflux::EarnPositionState::Active => "active".into(),
+        kairos_conflux::EarnPositionState::Redeeming => "redeeming".into(),
+        kairos_conflux::EarnPositionState::Redeemed => "redeemed".into(),
+        kairos_conflux::EarnPositionState::Unknown(value) => format!("unknown:{value}"),
+    };
+    let accrued_rewards = position
+        .accrued_rewards
+        .into_iter()
+        .map(|reward| {
+            Ok(AccountEarnRewardItem {
+                asset: reward.asset,
+                amount: DecimalParts::new(reward.amount.mantissa(), reward.amount.scale())?,
+                component: reward
+                    .component
+                    .map(|component| format!("{component:?}").to_ascii_lowercase()),
+            })
+        })
+        .collect::<Result<Vec<_>, kairos_primitives::DomainTypeError>>()?;
+    Ok(AccountEarnHoldingItem {
+        segment,
+        participant_position_id: position.participant_position_id,
+        product_id: position.product_id,
+        asset: position.asset,
+        family,
+        principal: DecimalParts::new(position.principal.mantissa(), position.principal.scale())?,
+        accrued_rewards,
+        redeemable_amount: position
+            .redeemable_amount
+            .map(|value| DecimalParts::new(value.mantissa(), value.scale()))
+            .transpose()?,
+        liquidity,
+        subscribed_at_unix_nanos: position.subscribed_at_unix_nanos.map(|value| value.get()),
+        matures_at_unix_nanos: position.matures_at_unix_nanos.map(|value| value.get()),
+        state,
+        observed_at_unix_nanos: position.observed_at_unix_nanos.map(|value| value.get()),
+    })
 }
 
 fn decimal_parts(
     value: kairos_conflux::ExternalDecimal,
 ) -> Result<DecimalParts, kairos_primitives::DomainTypeError> {
     DecimalParts::new(value.mantissa, value.scale)
+}
+
+fn map_open_order(
+    segment: SegmentKey,
+    order: ExternalOrder,
+) -> Result<AccountOpenOrderItem, kairos_primitives::DomainTypeError> {
+    Ok(AccountOpenOrderItem {
+        segment,
+        order_id: order.order_id.to_string(),
+        client_order_id: order.client_order_id.map(|value| value.to_string()),
+        symbol: order.symbol.to_string(),
+        side: format!("{:?}", order.side).to_ascii_lowercase(),
+        order_type: format!("{:?}", order.order_type).to_ascii_lowercase(),
+        status: format!("{:?}", order.status).to_ascii_lowercase(),
+        quantity: decimal_parts(order.quantity)?,
+        filled_quantity: decimal_parts(order.filled_quantity)?,
+        average_fill_price: order.average_fill_price.map(decimal_parts).transpose()?,
+        occurred_at_unix_nanos: order.occurred_at_unix_nanos.map(|value| value.get()),
+    })
+}
+
+fn resolve_fee_product(
+    account: &AccountBindingRecord,
+    requested: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let normalized = requested.trim().to_ascii_lowercase().replace('_', "-");
+    account
+        .segments
+        .iter()
+        .find_map(|segment| {
+            let product = account.product_for_segment(segment).unwrap_or(segment);
+            ((segment.trim().to_ascii_lowercase().replace('_', "-") == normalized)
+                || (product.trim().to_ascii_lowercase().replace('_', "-") == normalized))
+                .then(|| product.to_owned())
+        })
+        .ok_or_else(|| {
+            format!(
+                "account {} does not configure fee product {requested}",
+                account.account_id
+            )
+            .into()
+        })
+}
+
+fn map_fee_schedule(
+    account: &AccountBindingRecord,
+    product: String,
+    schedule: ExternalFeeSchedule,
+) -> Result<AccountFeesResult, Box<dyn std::error::Error>> {
+    Ok(AccountFeesResult {
+        account_id: AccountId::new(account.account_id.clone())?,
+        source: "direct_provider".into(),
+        mode: "standalone".into(),
+        kind: "fees".into(),
+        product,
+        symbol: Some(schedule.symbol.to_string()),
+        completeness: AccountQueryCompleteness::Complete,
+        maker: Some(decimal_parts(schedule.maker)?),
+        taker: Some(decimal_parts(schedule.taker)?),
+        buyer: schedule.buyer.map(decimal_parts).transpose()?,
+        seller: schedule.seller.map(decimal_parts).transpose()?,
+        standard: schedule.standard.map(map_fee_component).transpose()?,
+        special: schedule.special.map(map_fee_component).transpose()?,
+        tax: schedule.tax.map(map_fee_component).transpose()?,
+        discount: schedule
+            .discount
+            .map(
+                |discount| -> Result<AccountFeeDiscount, kairos_primitives::DomainTypeError> {
+                    Ok(AccountFeeDiscount {
+                        enabled_for_account: discount.enabled_for_account,
+                        enabled_for_symbol: discount.enabled_for_symbol,
+                        asset: discount.asset.map(|asset| asset.to_string()),
+                        rate: discount.rate.map(decimal_parts).transpose()?,
+                    })
+                },
+            )
+            .transpose()?,
+        rpi: schedule.rpi.map(decimal_parts).transpose()?,
+        vip_tier: None,
+        vip_tier_status: "unavailable".into(),
+        observed_at_unix_nanos: Some(now_unix_nanos()),
+        issues: vec![
+            "VIP tier is unavailable to this query and does not affect the fee schedule".into(),
+        ],
+    })
+}
+
+fn map_fee_component(
+    component: ExternalFeeComponent,
+) -> Result<AccountFeeComponent, kairos_primitives::DomainTypeError> {
+    Ok(AccountFeeComponent {
+        maker: component.maker.map(decimal_parts).transpose()?,
+        taker: component.taker.map(decimal_parts).transpose()?,
+        buyer: component.buyer.map(decimal_parts).transpose()?,
+        seller: component.seller.map(decimal_parts).transpose()?,
+    })
+}
+
+fn classify_query_failure(message: &str) -> AccountQueryCompleteness {
+    let message = message.to_ascii_lowercase();
+    if message.contains("permission")
+        || message.contains("unauthorized")
+        || message.contains("api-key")
+        || message.contains("api key")
+        || message.contains("signature")
+    {
+        AccountQueryCompleteness::Unauthorized
+    } else if message.contains("does not expose") || message.contains("not supported") {
+        AccountQueryCompleteness::Unsupported
+    } else {
+        AccountQueryCompleteness::Unavailable
+    }
+}
+
+fn aggregate_outcomes(
+    succeeded: u64,
+    outcomes: &[AccountSegmentQueryOutcome],
+) -> AccountQueryCompleteness {
+    if outcomes
+        .iter()
+        .all(|outcome| outcome.outcome == AccountQueryCompleteness::Complete)
+    {
+        return AccountQueryCompleteness::Complete;
+    }
+    if succeeded > 0 {
+        return AccountQueryCompleteness::Partial;
+    }
+    if outcomes
+        .iter()
+        .all(|outcome| outcome.outcome == AccountQueryCompleteness::Unsupported)
+    {
+        AccountQueryCompleteness::Unsupported
+    } else if outcomes
+        .iter()
+        .all(|outcome| outcome.outcome == AccountQueryCompleteness::Unauthorized)
+    {
+        AccountQueryCompleteness::Unauthorized
+    } else {
+        AccountQueryCompleteness::Unavailable
+    }
+}
+
+fn now_unix_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 fn selected_segments(
@@ -1619,6 +2897,133 @@ fn is_paper_or_simulated(value: &str) -> bool {
     )
 }
 
+fn mask_identity(value: &str) -> String {
+    let characters = value.chars().collect::<Vec<_>>();
+    if characters.len() <= 4 {
+        return "****".into();
+    }
+    format!(
+        "{}****{}",
+        characters[..2].iter().collect::<String>(),
+        characters[characters.len() - 2..]
+            .iter()
+            .collect::<String>()
+    )
+}
+
+fn account_model_name(value: kairos_conflux::ExternalAccountModel) -> String {
+    match value {
+        kairos_conflux::ExternalAccountModel::NoMargin => "no_margin",
+        kairos_conflux::ExternalAccountModel::Margin => "margin",
+        kairos_conflux::ExternalAccountModel::Contract => "contract",
+        kairos_conflux::ExternalAccountModel::ContractUnified => "contract_unified",
+        kairos_conflux::ExternalAccountModel::Unified => "unified",
+        kairos_conflux::ExternalAccountModel::PortfolioMargin => "portfolio_margin",
+    }
+    .into()
+}
+
+fn overview_profile(
+    configured_account_model: Option<String>,
+    segments: Vec<AccountSegmentProfileItem>,
+    explicit_profile: Option<crate::composition::account::ObservedAccountProfile>,
+) -> AccountOverviewProfile {
+    let observed_models = segments
+        .iter()
+        .filter_map(|segment| segment.observed_account_model.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let observed_account_model = explicit_profile
+        .as_ref()
+        .map(|profile| profile.account_model.clone())
+        .or_else(|| {
+            [
+                "portfolio_margin",
+                "unified",
+                "contract_unified",
+                "contract",
+                "margin",
+                "no_margin",
+            ]
+            .into_iter()
+            .find(|candidate| observed_models.contains(*candidate))
+            .map(str::to_owned)
+            .or_else(|| {
+                (observed_models.len() == 1)
+                    .then(|| observed_models.first().expect("one observed model").clone())
+            })
+        });
+    let provider_models = segments
+        .iter()
+        .filter_map(|segment| segment.provider_account_model.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let provider_account_model = explicit_profile
+        .map(|profile| profile.provider_account_model)
+        .or_else(|| {
+            ["portfolio_margin_pro", "portfolio_margin"]
+                .into_iter()
+                .find(|candidate| provider_models.contains(*candidate))
+                .map(str::to_owned)
+                .or_else(|| {
+                    (provider_models.len() == 1)
+                        .then(|| provider_models.first().expect("one provider model").clone())
+                })
+        });
+    let model_match = match (
+        configured_account_model
+            .as_deref()
+            .and_then(AccountModel::parse),
+        observed_account_model
+            .as_deref()
+            .and_then(AccountModel::parse),
+    ) {
+        (Some(configured), Some(observed)) if configured == observed => "match",
+        (Some(_), Some(_)) => "mismatch",
+        _ => "unknown",
+    }
+    .into();
+    let unified = observed_account_model
+        .as_deref()
+        .or(configured_account_model.as_deref())
+        .and_then(AccountModel::parse)
+        .map(|model| {
+            matches!(
+                model,
+                AccountModel::ContractUnified
+                    | AccountModel::Unified
+                    | AccountModel::PortfolioMargin
+            )
+        });
+    let margin_mode = segments
+        .iter()
+        .find_map(|segment| segment.margin_mode.clone());
+    let position_mode = segments
+        .iter()
+        .find_map(|segment| segment.position_mode.clone());
+    AccountOverviewProfile {
+        configured_account_model,
+        observed_account_model,
+        provider_account_model,
+        model_match,
+        unified,
+        margin_mode,
+        position_mode,
+        segments,
+    }
+}
+
+fn query_completeness(
+    segments_succeeded: u64,
+    segments_requested: u64,
+) -> AccountQueryCompleteness {
+    if segments_succeeded == segments_requested {
+        AccountQueryCompleteness::Complete
+    } else if segments_succeeded == 0 {
+        AccountQueryCompleteness::Unavailable
+    } else {
+        AccountQueryCompleteness::Partial
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kairos_primitives::account::{AccountId, SegmentKey};
@@ -1626,7 +3031,12 @@ mod tests {
     use kairos_primitives::reference::Currency;
     use serde_json::json;
 
-    use super::{AccountBalanceItem, AccountBalancesResult, AccountListItem, AccountListResult};
+    use super::{
+        AccountBalanceItem, AccountBalancesResult, AccountListItem, AccountListResult,
+        AccountQueryCompleteness, AccountSegmentProfileItem, AccountSegmentQueryOutcome,
+        account_capabilities, account_configuration_issues, classify_query_failure,
+        overview_profile,
+    };
     use crate::composition::registry::AccountBindingRecord;
 
     #[test]
@@ -1634,7 +3044,7 @@ mod tests {
         let record: AccountBindingRecord = serde_json::from_value(json!({
             "account_id": "main",
             "alias": "primary",
-            "broker": "binance",
+            "broker": "custodian-x",
             "integration_provider": "binance",
             "environment": "live",
             "permissions": {"read": "granted", "trade": "granted"},
@@ -1654,9 +3064,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(value["accounts"][0]["account_id"], "main");
+        assert_eq!(value["accounts"][0]["broker"], "custodian-x");
+        assert_eq!(value["accounts"][0]["integration_provider"], "binance");
+        // Retained for one compatibility cycle; business identity is broker.
         assert_eq!(value["accounts"][0]["provider"], "binance");
+        assert_eq!(
+            value["accounts"][0]["configured_credential_role"],
+            "readonly"
+        );
         assert_eq!(value["accounts"][0]["segments"], json!(["spot"]));
         assert_eq!(value["count"], 1);
+        assert_eq!(account_capabilities(&record), vec!["read"]);
         for internal in [
             "values",
             "permissions",
@@ -1669,6 +3087,84 @@ mod tests {
     }
 
     #[test]
+    fn overview_profile_distinguishes_match_mismatch_and_unknown() {
+        let segment = |observed: Option<&str>| AccountSegmentProfileItem {
+            segment: SegmentKey::new("usd_m_futures").unwrap(),
+            source: "direct_provider".into(),
+            freshness: "fresh".into(),
+            completeness: AccountQueryCompleteness::Complete,
+            observed_at_unix_nanos: Some(1),
+            issue: None,
+            configured_account_model: None,
+            observed_account_model: observed.map(str::to_owned),
+            provider_account_model: None,
+            margin_mode: None,
+            position_mode: None,
+        };
+        let matching = overview_profile(
+            Some("portfolio_margin".into()),
+            vec![segment(Some("portfolio_margin"))],
+            None,
+        );
+        assert_eq!(matching.model_match, "match");
+        assert_eq!(matching.unified, Some(true));
+
+        let mismatching = overview_profile(
+            Some("contract".into()),
+            vec![segment(None)],
+            Some(crate::composition::account::ObservedAccountProfile {
+                account_model: "portfolio_margin".into(),
+                provider_account_model: "portfolio_margin_pro".into(),
+            }),
+        );
+        assert_eq!(mismatching.model_match, "mismatch");
+        assert_eq!(
+            mismatching.provider_account_model.as_deref(),
+            Some("portfolio_margin_pro")
+        );
+
+        let unknown = overview_profile(None, vec![segment(None)], None);
+        assert_eq!(unknown.model_match, "unknown");
+        assert_eq!(unknown.unified, None);
+    }
+
+    #[test]
+    fn doctor_flags_missing_derivative_model_and_live_registry_fee() {
+        let record: AccountBindingRecord = serde_json::from_value(json!({
+            "account_id": "live-main",
+            "alias": "main",
+            "broker": "binance",
+            "integration_provider": "binance",
+            "environment": "live",
+            "segments": ["usd_m_futures"],
+            "segment_products": {"usd_m_futures": "usd_m_futures"},
+            "account_model": null,
+            "fee_rate": "0.001"
+        }))
+        .unwrap();
+
+        let issues = account_configuration_issues(&record).join("\n");
+        assert!(issues.contains("derivative segments have no explicit account_model"));
+        assert!(issues.contains("fee_rate is deprecated for live accounts"));
+    }
+
+    #[test]
+    fn query_failures_preserve_permission_support_and_availability_semantics() {
+        assert_eq!(
+            classify_query_failure("provider rejected request: unauthorized"),
+            AccountQueryCompleteness::Unauthorized
+        );
+        assert_eq!(
+            classify_query_failure("this endpoint is not supported"),
+            AccountQueryCompleteness::Unsupported
+        );
+        assert_eq!(
+            classify_query_failure("connection timed out"),
+            AccountQueryCompleteness::Unavailable
+        );
+    }
+
+    #[test]
     fn account_balances_result_is_a_typed_account_query_result() {
         let value = serde_json::to_value(AccountBalancesResult {
             account_id: AccountId::new("paper-account").unwrap(),
@@ -1677,12 +3173,32 @@ mod tests {
             kind: "balances".into(),
             segments_requested: 1,
             segments_succeeded: 1,
+            completeness: AccountQueryCompleteness::Complete,
+            observed_at_unix_nanos: Some(1),
             balances: vec![AccountBalanceItem {
                 segment: SegmentKey::new("spot").unwrap(),
+                role: "wallet".into(),
                 asset: Currency::new("USDT").unwrap(),
                 total: "10000".parse::<DecimalParts>().unwrap(),
-                available: "10000".parse::<DecimalParts>().unwrap(),
-                locked: DecimalParts::default(),
+                available: Some("10000".parse::<DecimalParts>().unwrap()),
+                locked: Some(DecimalParts::default()),
+                borrowed: None,
+                interest: None,
+            }],
+            collateral: vec![AccountBalanceItem {
+                segment: SegmentKey::new("usd_m_futures").unwrap(),
+                role: "collateral".into(),
+                asset: Currency::new("USDT").unwrap(),
+                total: "5000".parse::<DecimalParts>().unwrap(),
+                available: Some("4000".parse::<DecimalParts>().unwrap()),
+                locked: None,
+                borrowed: None,
+                interest: None,
+            }],
+            outcomes: vec![AccountSegmentQueryOutcome {
+                segment: SegmentKey::new("spot").unwrap(),
+                outcome: AccountQueryCompleteness::Complete,
+                message: None,
             }],
             errors: Vec::new(),
         })
@@ -1692,6 +3208,8 @@ mod tests {
         assert_eq!(value["balances"][0]["asset"], "USDT");
         assert_eq!(value["balances"][0]["total"], "10000");
         assert_eq!(value["balances"][0]["locked"], "0");
+        assert_eq!(value["collateral"][0]["role"], "collateral");
+        assert_eq!(value["collateral"][0]["total"], "5000");
         assert!(value.get("initial_balances").is_none());
         assert!(value.get("credentials").is_none());
     }

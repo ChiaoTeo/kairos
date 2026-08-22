@@ -8,11 +8,17 @@ mod result;
 
 pub use app::{AccountApplication, AccountRuntimeMode};
 pub use cli::{
-    AccountBalanceItem, AccountBalancesResult, AccountCredentialProbeRequest, AccountListItem,
-    AccountListResult, AccountPositionItem, AccountPositionsResult, AccountProviderConnectionArgs,
-    BindCredentialRequest, CliAccountApplication, ConnectAccountProviderRequest,
-    ConnectAccountRequest, CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest,
-    SimulateAccountRequest,
+    AccountBalanceItem, AccountBalancesResult, AccountCredentialProbeRequest,
+    AccountEarnHoldingItem, AccountEarnHoldingsResult, AccountEarnRewardItem, AccountFeeComponent,
+    AccountFeeDiscount, AccountFeesResult, AccountListItem, AccountListResult,
+    AccountOpenOrderItem, AccountOpenOrdersResult, AccountOverviewCommercial,
+    AccountOverviewConnection, AccountOverviewFacts, AccountOverviewHealth,
+    AccountOverviewIdentity, AccountOverviewPermissions, AccountOverviewProfile,
+    AccountOverviewResult, AccountPositionItem, AccountPositionsResult,
+    AccountProviderConnectionArgs, AccountQueryCompleteness, AccountQueryError,
+    AccountSegmentProfileItem, AccountSegmentQueryOutcome, BindCredentialRequest,
+    CliAccountApplication, ConnectAccountProviderRequest, ConnectAccountRequest,
+    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
 };
 pub use command::{MarkToMarket, ReconcileAccount, RefreshAccount};
 pub use connected::ConnectedAccountApplication;

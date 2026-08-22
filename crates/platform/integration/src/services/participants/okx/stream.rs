@@ -249,6 +249,7 @@ fn snapshot(
         initial_equity: None,
         net_profit: None,
         account_model: None,
+        provider_account_model: None,
         margin_mode: None,
         position_mode: None,
         partial: true,
