@@ -4118,7 +4118,7 @@ def test_interactive_reference_preview_searches_assets(tmp_path, monkeypatch) ->
     assert "reference catalog" not in text
 
 
-def test_interactive_market_requires_system_scope_and_uses_list_selections(
+def test_interactive_market_separates_standalone_and_connected_scopes(
     tmp_path, monkeypatch
 ) -> None:
     from kairospy.surface.cli.interactive import run_interactive
@@ -4127,7 +4127,7 @@ def test_interactive_market_requires_system_scope_and_uses_list_selections(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["market", "system", "market", "quote", "exit"])
+    shell_input = iter(["market", "once", "system market", "quote", "exit"])
     executed: list[tuple[str, ...]] = []
 
     def read_input(prompt: str = "") -> str:
@@ -4140,7 +4140,10 @@ def test_interactive_market_requires_system_scope_and_uses_list_selections(
         id="market:binance:spot:BTCUSDT",
         venue_symbol="BTCUSDT",
         exchange_id="exchange:binance",
-        instrument=SimpleNamespace(display_symbol="BTC/USDT"),
+        instrument_kind="spot",
+        instrument=SimpleNamespace(
+            id="instrument:crypto:BTCUSDT", display_symbol="BTC/USDT"
+        ),
     )
     monkeypatch.setattr(
         "kairospy.surface.cli.interactive.sections.business.market.reference.select_market",
@@ -4173,10 +4176,13 @@ def test_interactive_market_requires_system_scope_and_uses_list_selections(
 
     text = output.getvalue()
     assert status == 0
-    assert "请从 system/market 或 launch/<id>/market 进入" in text
+    assert "/market>" in text
+    assert "Market 独立模式（直接访问 provider" in text
     assert "/system/market>" in text
     assert "workspace 共享服务（连接模式）" in text
-    assert executed[0][:13] == (
+    assert executed[0][:2] == ("market", "once")
+    assert "system" not in executed[0]
+    assert executed[1][:13] == (
         "system",
         "component",
         "market",

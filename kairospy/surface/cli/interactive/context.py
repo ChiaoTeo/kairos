@@ -47,7 +47,7 @@ def go_home(context: InteractiveContext) -> None:
 def go_back(context: InteractiveContext) -> None:
     previous = context.shell_path
     previous_section = next(iter(previous), None)
-    leaving_market = previous == ("system", "market") or (
+    leaving_market = previous in {("market",), ("system", "market")} or (
         len(previous) >= 3
         and previous_section == "launch"
         and previous[2] == "market"

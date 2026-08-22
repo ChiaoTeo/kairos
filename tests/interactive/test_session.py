@@ -29,12 +29,10 @@ def test_invalid_shell_quoting_is_handled(interactive_context, capsys) -> None:
     assert "命令解析失败" in capsys.readouterr().out
 
 
-def test_top_level_market_requires_an_explicit_connected_scope(
-    interactive_context, capsys
-) -> None:
+def test_top_level_market_enters_standalone_scope(interactive_context) -> None:
     assert shell_command(interactive_context, "market") is ShellControl.HANDLED
-    assert interactive_context.shell_path == ()
-    assert "请从 system/market 或 launch/<id>/market 进入" in capsys.readouterr().out
+    assert interactive_context.shell_path == ("market",)
+    assert prompt_path(interactive_context) == "/market"
 
 
 def test_cancelled_source_selection_does_not_execute_a_command(

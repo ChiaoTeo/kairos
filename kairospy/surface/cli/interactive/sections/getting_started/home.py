@@ -9,6 +9,8 @@ from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellContr
 
 _DIRECT_ROUTES = {
     "account": "account",
+    "market": "market",
+    "quotes": "market",
     "1": "launch",
     "launch": "launch",
     "3": "reference",
@@ -70,6 +72,7 @@ def print_menu(context: InteractiveContext) -> None:
                 "  5. 系统与集成",
                 "  6. 诊断与观测",
                 "  7. 项目与帮助",
+                "  market. Market 独立模式（直连 provider）",
             )
         )
     )
@@ -86,8 +89,9 @@ def print_help(context: InteractiveContext) -> None:
         return
     typer.echo(
         "输入 1-7 选择产品入口。也可直接输入命令：account/launch/reference/"
-        "data/research/order/risk/capital/system/integration/notifications/config；"
-        "行情请进入 system/market 或 launch/<id>/market。"
+        "market/data/research/order/risk/capital/system/integration/notifications/config；"
+        "market 是直连 provider 的独立模式；system/market 和 "
+        "launch/<id>/market 是连接模式。"
     )
 
 
@@ -140,11 +144,6 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
         return ShellControl.HANDLED
     if len(parts) == 1 and parts[0] in _GROUP_ROUTES:
         context.shell_path = (_GROUP_ROUTES[parts[0]],)
-        return ShellControl.HANDLED
-    if parts in {("market",), ("quotes",)}:
-        typer.echo(
-            "行情是连接模式能力，请从 system/market 或 launch/<id>/market 进入。"
-        )
         return ShellControl.HANDLED
     if parts == ("system", "reference"):
         context.shell_path = ("system", "reference")

@@ -13,7 +13,10 @@ def _market_record():
         id="market:binance:spot:BTCUSDT",
         venue_symbol="BTCUSDT",
         exchange_id="exchange:binance",
-        instrument=SimpleNamespace(display_symbol="BTC/USDT"),
+        instrument_kind="spot",
+        instrument=SimpleNamespace(
+            id="instrument:crypto:BTCUSDT", display_symbol="BTC/USDT"
+        ),
     )
 
 
@@ -172,7 +175,7 @@ def test_preview_command_contains_explicit_system_scope(
         market.reference, "select_market", lambda _context: _market_record()
     )
     monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
-    answers = iter(["1", "1", "1"])
+    answers = iter(["2", "1", "1"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
 
     command = market.choose(interactive_context)
@@ -185,3 +188,39 @@ def test_preview_command_contains_explicit_system_scope(
         "quote",
     )
     assert interactive_context.shell_path == ("system", "market")
+
+
+def test_top_level_market_once_uses_standalone_provider(
+    interactive_context, monkeypatch
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("market",)
+    monkeypatch.setattr(
+        market.reference, "select_market", lambda _context: _market_record()
+    )
+    answers = iter(["1", "1"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    command = market.handle(interactive_context, ("once",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.argv == (
+        "market",
+        "once",
+        "--market-id",
+        "market:binance:spot:BTCUSDT",
+        "--instrument-id",
+        "instrument:crypto:BTCUSDT",
+        "--exchange-id",
+        "binance",
+        "--market-type",
+        "spot",
+        "--source-symbol",
+        "BTCUSDT",
+        "--provider",
+        "binance-spot-rest",
+        "--format",
+        "table",
+    )
+    assert "system" not in command.argv
+    assert "source-id" not in " ".join(command.argv)

@@ -128,6 +128,8 @@ def shell_command(context: InteractiveContext, line: str) -> ShellAction:
         return launch.handle(context, parts)
     if section == "reference":
         return reference.handle(context, parts)
+    if section == "market":
+        return market.handle(context, parts)
     if section == "data":
         return data.handle(context, parts)
     if section == "research":
@@ -198,6 +200,7 @@ def _section_module(context: InteractiveContext):
         "account": account,
         "launch": launch,
         "reference": reference,
+        "market": market,
         "data": data,
         "research": research,
         "system": runtime,

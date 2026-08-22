@@ -19,6 +19,7 @@ def test_home_groups_complete_product_surface(interactive_context, capsys) -> No
     ):
         assert label in text
     assert "行情（请从" not in text
+    assert "Market 独立模式（直连 provider）" in text
     assert "  8." not in text
 
 
@@ -30,6 +31,11 @@ def test_home_numeric_and_text_navigation(interactive_context) -> None:
     assert interactive_context.shell_path == ("trade-control",)
     assert home.handle(interactive_context, ("3",)) is ShellControl.HANDLED
     assert interactive_context.shell_path == ("risk",)
+
+
+def test_home_market_navigation_is_standalone(interactive_context) -> None:
+    assert home.handle(interactive_context, ("market",)) is ShellControl.HANDLED
+    assert interactive_context.shell_path == ("market",)
 
 
 def test_home_quickstart_is_workspace_independent(interactive_context) -> None:

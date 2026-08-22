@@ -38,11 +38,13 @@ Reference、Data & Research、System & Integration、Observe、Project & Help。
 section 持有。文本命令可以从首页直接进入 owner section。新增 section 不自动获得新的首页编号，
 必须先判断它属于哪个用户任务入口。
 
-Market 行情交互只存在于 `/system/market` 和 `/launch/<launch-id>/market` 两个显式连接
-作用域。Market 必须从 Reference catalog 搜索结果中选择，Source 必须从目标 Market runtime
-的 `data_sources` 结果中选择；交互层不接受原始 Market ID 或 Source ID。launch 存在多个
-instance 时也必须先从 registry 列表选择，并在当前 context 中保存 instance、Market 和 Source
-选择。顶层 `kairos market` 仍只表示 standalone/direct，不作为 connected runtime 的隐式短路径。
+Market 行情交互分为两层。顶层 `/market` 是 standalone/direct，直接调用 provider 或读取本地
+文件，对应 `kairos market once/validate/replay/download/reference-universe`；它可以从 Reference
+选择描述，也允许显式输入底层 Market 描述。`/system/market` 和
+`/launch/<launch-id>/market` 是 connected runtime 作用域：Market 必须从 Reference catalog
+搜索结果中选择，Source 必须从目标 Market runtime 的 `data_sources` 结果中选择，交互层不接受
+原始 Market ID 或 Source ID。launch 存在多个 instance 时也必须先从 registry 列表选择，并在
+当前 context 中保存 instance、Market 和 Source 选择。两层不根据文件是否存在互相回退。
 
 交互测试镜像生产 section 目录。对内部函数的测试和 monkeypatch 指向实际所有者模块，不通过 package
 入口重导出私有实现。
