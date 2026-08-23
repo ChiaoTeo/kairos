@@ -6,8 +6,7 @@ use kairos_conflux::{
     MassiveInstrumentQuery as InstrumentQuery, MassiveRestConfig, load_workspace_credential,
 };
 use kairos_primitives::market::SourceId;
-use kairos_primitives::reference::InstrumentId;
-use kairos_primitives::reference::{InstrumentKind, ReferenceStatus};
+use kairos_primitives::reference::{InstrumentId, InstrumentKind, ReferenceStatus};
 use kairos_reference_contract::{
     ReferenceProjectionSnapshot, ReferenceSqliteReader, SqliteMarketQuery,
 };

@@ -125,6 +125,14 @@ enum StandaloneCommand {
         #[arg(long)]
         account_id: String,
     },
+    TradingBinding {
+        #[arg(long)]
+        account_id: String,
+        #[arg(long)]
+        segment: Option<String>,
+        #[arg(long, default_value = "read")]
+        access: String,
+    },
     #[command(alias = "summary")]
     Overview,
     #[command(name = "snapshot", alias = "current")]
@@ -486,6 +494,18 @@ async fn run_standalone(
         },
         StandaloneCommand::Show { account_id } => {
             print_json(app.show_account(account_id)?);
+            return Ok(());
+        },
+        StandaloneCommand::TradingBinding {
+            account_id,
+            segment,
+            access,
+        } => {
+            print_json(serde_json::to_value(app.trading_binding(
+                account_id,
+                segment.as_deref(),
+                access,
+            )?)?);
             return Ok(());
         },
         StandaloneCommand::Overview => {
@@ -1384,10 +1404,10 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
                 role,
                 balance.asset.to_string(),
                 balance.total.to_string(),
-                optional_decimal(balance.available),
-                optional_decimal(balance.locked),
-                optional_decimal(balance.borrowed),
-                optional_decimal(balance.interest),
+                optional_decimal_text(balance.available),
+                optional_decimal_text(balance.locked),
+                optional_decimal_text(balance.borrowed),
+                optional_decimal_text(balance.interest),
             ]
         })
         .chain(
@@ -1406,10 +1426,10 @@ fn render_account_balances(value: &AccountBalancesResult) -> String {
                         localized_balance_role(&balance.role),
                         balance.asset.to_string(),
                         balance.total.to_string(),
-                        optional_decimal(balance.available),
-                        optional_decimal(balance.locked),
-                        optional_decimal(balance.borrowed),
-                        optional_decimal(balance.interest),
+                        optional_decimal_text(balance.available),
+                        optional_decimal_text(balance.locked),
+                        optional_decimal_text(balance.borrowed),
+                        optional_decimal_text(balance.interest),
                     ]
                 }),
         )
@@ -1469,7 +1489,7 @@ fn localized_balance_role(value: &str) -> String {
     .into()
 }
 
-fn optional_decimal(value: Option<kairos_primitives::decimal::DecimalParts>) -> String {
+fn optional_decimal_text(value: Option<kairos_primitives::decimal::DecimalParts>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "—".into())
@@ -1918,6 +1938,7 @@ mod cli_tests {
                     segments: ["funding", "spot", "usd_m_futures"]
                         .map(|value| SegmentKey::new(value).unwrap())
                         .into(),
+                    products: vec!["funding".into(), "spot".into(), "usd_m_futures".into()],
                     account_model: Some("portfolio_margin".into()),
                     credential_id: Some("binance-equity-readonly".into()),
                     configured_credential_role: "readonly".into(),
@@ -1933,6 +1954,7 @@ mod cli_tests {
                     provider: ProviderId::new("paper").unwrap(),
                     environment: "paper".into(),
                     segments: vec![SegmentKey::new("spot").unwrap()],
+                    products: vec!["paper".into()],
                     account_model: Some("no_margin".into()),
                     credential_id: None,
                     configured_credential_role: "readonly".into(),

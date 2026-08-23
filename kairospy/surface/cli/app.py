@@ -194,7 +194,7 @@ app.command(
         "ignore_unknown_options": True,
         "help_option_names": [],
     },
-    help="Run Execution standalone order tools.",
+    help="Run account-scoped direct provider order operations.",
     rich_help_panel="Business tools",
 )(order_passthrough)
 app.command(

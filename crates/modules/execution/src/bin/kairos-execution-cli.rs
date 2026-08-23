@@ -1,12 +1,12 @@
-use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
 use kairos_execution::ConnectedExecutionApplication;
 use kairos_execution::application::{
-    CancelOrder, CliExecutionApplication, ExecutionOrderOptions, OrderSide, OrderType,
-    ReplaceOrder, SubmitOrder,
+    CliExecutionApplication, ExecutionOrderOptions, OrderSide, OrderType,
+    StandaloneExecutionBinding, SubmitOrder,
 };
+use kairos_execution::composition::compose_standalone_execution;
 use kairos_execution_contract::{
     CancelOrderRequest, CommandEnvelope, CompletionPolicy, ExecutionIntentRequest,
     ExecutionOrderOptionsRequest, ExecutionRoutesQuery, FailurePolicy, IntentLegRequest,
@@ -32,22 +32,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .to_string();
     std::env::set_var("KAIROS_CLI_FORMAT", output);
     match args.command {
-        Command::Standalone(command) => {
-            let application = CliExecutionApplication::open(&workspace);
-            print_json(execute_standalone_command(&application, command)?);
+        Command::Standalone(args) => {
+            let binding: StandaloneExecutionBinding = serde_json::from_str(&args.binding_json)?;
+            if binding.environment.eq_ignore_ascii_case("live")
+                && args.command.is_write()
+                && !args.confirm_live
+            {
+                return Err("live standalone order actions require explicit confirmation".into());
+            }
+            let mut application = compose_standalone_execution(&workspace, binding.clone())?;
+            print_json(execute_standalone_command(&mut application, &binding, args.command).await?);
         },
-        Command::Connected(command) => {
-            let instance = workspace.instance(&args.mode, &args.launch_id, &args.instance_id)?;
-            if command.is_mmap_query() {
+        Command::Connected(connected) => {
+            let instance = workspace.instance(
+                &connected.mode,
+                &connected.launch_id,
+                &connected.instance_id,
+            )?;
+            if connected.command.is_mmap_query() {
                 let application = connected_execution_app(&instance, workspace.id(), true)?;
-                print_json(execute_connected_query(&application, command)?);
+                print_json(connected_result(
+                    execute_connected_query(&application, connected.command)?,
+                    &connected.mode,
+                    &connected.launch_id,
+                    &connected.instance_id,
+                ));
                 return Ok(());
             }
             let application = connected_execution_app(&instance, workspace.id(), false)?;
-            print_json(execute_control_command(&application, command).await?);
+            print_json(connected_result(
+                execute_control_command(
+                    &application,
+                    connected.command,
+                    &connected.launch_id,
+                    &connected.instance_id,
+                )
+                .await?,
+                &connected.mode,
+                &connected.launch_id,
+                &connected.instance_id,
+            ));
         },
     }
     Ok(())
+}
+
+fn connected_result(
+    value: serde_json::Value,
+    mode: &str,
+    launch_id: &str,
+    instance_id: &str,
+) -> serde_json::Value {
+    let mut object = match value {
+        serde_json::Value::Object(object) => object,
+        value => serde_json::Map::from_iter([("result".into(), value)]),
+    };
+    object.insert("owner".into(), "execution".into());
+    object.insert("mode".into(), mode.into());
+    object.insert("launch_id".into(), launch_id.into());
+    object.insert("instance_id".into(), instance_id.into());
+    object.insert("scope".into(), "launch-instance".into());
+    serde_json::Value::Object(object)
 }
 
 #[derive(Debug, Parser)]
@@ -55,13 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Cli {
     #[arg(long)]
     workspace: String,
-    #[arg(long, global = true, default_value = "paper")]
-    mode: String,
-    #[arg(long, global = true, default_value = "default")]
-    launch_id: String,
-    #[arg(long, global = true, default_value = "default")]
-    instance_id: String,
-    #[arg(long, global = true, value_parser = OutputFormat::from_str)]
+    #[arg(long, alias = "format", global = true, value_parser = OutputFormat::from_str)]
     output: Option<OutputFormat>,
     #[command(subcommand)]
     command: Command,
@@ -149,55 +188,49 @@ fn execute_connected_query(
     }
 }
 
-fn execute_standalone_command(
-    application: &CliExecutionApplication,
+async fn execute_standalone_command(
+    application: &mut CliExecutionApplication,
+    binding: &StandaloneExecutionBinding,
     command: StandaloneCommand,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let value = match command {
-        StandaloneCommand::Inspect(args) => application
-            .inspect_file(&args.file, &args.order_id)
+        StandaloneCommand::OpenOrders(args) => application
+            .open_orders(args.symbol.as_deref(), args.limit)
+            .await
             .map_err(invalid_standalone_input)?,
-        StandaloneCommand::Journal(args) => application
-            .journal_file(&args.file, &args.order_id)
+        StandaloneCommand::History(args) => application
+            .history(args.symbol.as_deref(), args.limit)
+            .await
             .map_err(invalid_standalone_input)?,
-        StandaloneCommand::Audit(args) => application
-            .audit_file(
-                &args.file,
-                args.order_id.as_deref(),
-                args.remote_order_id.as_deref(),
-                args.status.as_deref(),
-                args.limit,
-            )
+        StandaloneCommand::Order { order_id, symbol } => application
+            .order(&order_id, symbol.as_deref())
+            .await
             .map_err(invalid_standalone_input)?,
         StandaloneCommand::Fills(args) => application
-            .fills_file(&args.file, args.order_id.as_deref())
+            .fills(args.symbol.as_deref(), args.order_id.as_deref(), args.limit)
+            .await
             .map_err(invalid_standalone_input)?,
-        StandaloneCommand::PreviewSubmit(args) => application
-            .preview_submit(submit_request(args)?)
+        StandaloneCommand::Submit(args) => application
+            .submit(
+                direct_submit_request(binding, &args)?,
+                args.symbol.as_deref(),
+            )
+            .await
             .map_err(invalid_standalone_input)?,
-        StandaloneCommand::PreviewSubmitFile(args) => application
-            .preview_submit_file(&args.file)
+        StandaloneCommand::Cancel { order_id, symbol } => application
+            .cancel(&order_id, symbol.as_deref())
+            .await
             .map_err(invalid_standalone_input)?,
-        StandaloneCommand::PreviewCancel(args) => application
-            .preview_cancel(CancelOrder {
-                order_id: OrderId::new(args.order_id.clone())?,
-                reason: args.reason.clone(),
-            })
-            .map_err(invalid_standalone_input)?,
-        StandaloneCommand::PreviewCancelFile(args) => application
-            .preview_cancel_file(&args.file)
-            .map_err(invalid_standalone_input)?,
-        StandaloneCommand::PreviewReplace {
+        StandaloneCommand::Replace {
             target_order_id,
             replacement,
         } => application
-            .preview_replace(ReplaceOrder {
-                order_id: OrderId::new(target_order_id.clone())?,
-                replacement: submit_request(replacement)?,
-            })
-            .map_err(invalid_standalone_input)?,
-        StandaloneCommand::PreviewReplaceFile(args) => application
-            .preview_replace_file(&args.file)
+            .replace(
+                &target_order_id,
+                direct_submit_request(binding, &replacement)?,
+                replacement.symbol.as_deref(),
+            )
+            .await
             .map_err(invalid_standalone_input)?,
     };
     Ok(value)
@@ -210,6 +243,8 @@ fn invalid_standalone_input(error: String) -> std::io::Error {
 async fn execute_control_command(
     application: &ConnectedExecutionApplication,
     command: ConnectedCommand,
+    launch_id: &str,
+    instance_id: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     match command {
         ConnectedCommand::Routes {
@@ -238,7 +273,11 @@ async fn execute_control_command(
         },
         ConnectedCommand::Submit(args) => {
             application
-                .submit_intent(submit_intent_request(submit_request(args)?)?)
+                .submit_intent(submit_intent_request(
+                    submit_request(args)?,
+                    launch_id,
+                    instance_id,
+                )?)
                 .await
         },
         ConnectedCommand::Cancel { order_id, reason } => {
@@ -255,14 +294,23 @@ async fn execute_control_command(
             order_id,
             replacement,
         } => {
-            let replacement = submit_request(replacement)?;
             application
                 .replace_order(
                     OrderId::new(order_id)?,
                     ReplaceOrderRequest {
-                        quantity: Some(replacement.quantity),
-                        limit_price: replacement.limit_price,
-                        options: Some(control_options(replacement.options)),
+                        quantity: Some(replacement.quantity.parse()?),
+                        limit_price: replacement
+                            .limit_price
+                            .as_deref()
+                            .map(str::parse)
+                            .transpose()?,
+                        options: Some(ExecutionOrderOptionsRequest {
+                            time_in_force: replacement.time_in_force,
+                            reduce_only: replacement.reduce_only,
+                            post_only: replacement.post_only,
+                            position_side: replacement.position_side,
+                            ..ExecutionOrderOptionsRequest::default()
+                        }),
                         reason: None,
                     },
                 )
@@ -274,35 +322,110 @@ async fn execute_control_command(
 
 #[derive(Clone, Debug, Subcommand)]
 enum Command {
-    #[command(name = "standalone", subcommand)]
-    Standalone(StandaloneCommand),
-    #[command(name = "connected", subcommand)]
-    Connected(ConnectedCommand),
+    Standalone(StandaloneArgs),
+    Connected(ConnectedArgs),
+}
+
+#[derive(Clone, Debug, Args)]
+struct ConnectedArgs {
+    #[arg(long)]
+    mode: String,
+    #[arg(long)]
+    launch_id: String,
+    #[arg(long)]
+    instance_id: String,
+    #[command(subcommand)]
+    command: ConnectedCommand,
 }
 
 #[derive(Clone, Debug, Subcommand)]
 enum StandaloneCommand {
-    Inspect(LocalOrderEvidenceArgs),
-    Journal(LocalOrderEvidenceArgs),
-    Audit(LocalAuditArgs),
-    Fills(LocalFillsArgs),
-    #[command(name = "preview-submit")]
-    PreviewSubmit(SubmitArgs),
-    #[command(name = "preview-submit-file")]
-    PreviewSubmitFile(FilePreviewArgs),
-    #[command(name = "preview-cancel")]
-    PreviewCancel(CancelPreviewArgs),
-    #[command(name = "preview-cancel-file")]
-    PreviewCancelFile(FilePreviewArgs),
-    #[command(name = "preview-replace")]
-    PreviewReplace {
+    OpenOrders(StandaloneQueryArgs),
+    History(StandaloneQueryArgs),
+    Order {
+        #[arg(long)]
+        order_id: String,
+        #[arg(long)]
+        symbol: Option<String>,
+    },
+    Fills(StandaloneFillsArgs),
+    Submit(StandaloneSubmitArgs),
+    Cancel {
+        #[arg(long)]
+        order_id: String,
+        #[arg(long)]
+        symbol: Option<String>,
+    },
+    Replace {
         #[arg(long = "target-order-id")]
         target_order_id: String,
         #[command(flatten)]
-        replacement: SubmitArgs,
+        replacement: StandaloneSubmitArgs,
     },
-    #[command(name = "preview-replace-file")]
-    PreviewReplaceFile(FilePreviewArgs),
+}
+
+impl StandaloneCommand {
+    fn is_write(&self) -> bool {
+        matches!(
+            self,
+            Self::Submit(_) | Self::Cancel { .. } | Self::Replace { .. }
+        )
+    }
+}
+
+#[derive(Clone, Debug, Args)]
+struct StandaloneArgs {
+    /// Account-owned, secret-free connection binding resolved by the public CLI.
+    #[arg(long, hide = true)]
+    binding_json: String,
+    #[arg(long, hide = true)]
+    confirm_live: bool,
+    #[command(subcommand)]
+    command: StandaloneCommand,
+}
+
+#[derive(Clone, Debug, Args)]
+struct StandaloneQueryArgs {
+    #[arg(long)]
+    symbol: Option<String>,
+    #[arg(long)]
+    limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Args)]
+struct StandaloneFillsArgs {
+    #[arg(long)]
+    symbol: Option<String>,
+    #[arg(long)]
+    order_id: Option<String>,
+    #[arg(long)]
+    limit: Option<u16>,
+}
+
+#[derive(Clone, Debug, Args)]
+struct StandaloneSubmitArgs {
+    #[arg(long)]
+    order_id: String,
+    #[arg(long)]
+    instrument_id: String,
+    #[arg(long)]
+    symbol: Option<String>,
+    #[arg(long)]
+    quantity: String,
+    #[arg(long, default_value = "buy")]
+    side: String,
+    #[arg(long, default_value = "market")]
+    order_type: String,
+    #[arg(long)]
+    limit_price: Option<String>,
+    #[arg(long)]
+    time_in_force: Option<String>,
+    #[arg(long)]
+    reduce_only: Option<bool>,
+    #[arg(long)]
+    post_only: Option<bool>,
+    #[arg(long)]
+    position_side: Option<String>,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -319,28 +442,23 @@ enum ConnectedCommand {
         #[arg(long)]
         market_id: Option<String>,
     },
-    #[command(alias = "list")]
     Orders {
         #[arg(long)]
         account_id: Option<String>,
     },
-    #[command(alias = "open")]
     OpenOrders {
         #[arg(long)]
         account_id: Option<String>,
     },
-    #[command(alias = "closed")]
     History {
         #[arg(long)]
         account_id: Option<String>,
     },
-    #[command(alias = "reconcile-remote")]
     Reconcile {
         #[arg(long)]
         order_id: Option<String>,
     },
     UnknownRemoteOrders,
-    #[command(alias = "show")]
     Status {
         #[arg(long)]
         order_id: String,
@@ -375,7 +493,6 @@ enum ConnectedCommand {
         #[arg(long)]
         order_id: Option<String>,
     },
-    #[command(alias = "place")]
     Submit(SubmitArgs),
     Cancel {
         #[arg(long)]
@@ -387,8 +504,24 @@ enum ConnectedCommand {
         #[arg(long)]
         order_id: String,
         #[command(flatten)]
-        replacement: SubmitArgs,
+        replacement: ConnectedReplaceArgs,
     },
+}
+
+#[derive(Clone, Debug, Args)]
+struct ConnectedReplaceArgs {
+    #[arg(long)]
+    quantity: String,
+    #[arg(long)]
+    limit_price: Option<String>,
+    #[arg(long)]
+    time_in_force: Option<String>,
+    #[arg(long)]
+    reduce_only: Option<bool>,
+    #[arg(long)]
+    post_only: Option<bool>,
+    #[arg(long)]
+    position_side: Option<String>,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -433,48 +566,32 @@ struct SubmitArgs {
     tokenize: Option<bool>,
 }
 
-#[derive(Clone, Debug, Args)]
-struct CancelPreviewArgs {
-    #[arg(long)]
-    order_id: String,
-    #[arg(long, default_value = "cli cancel")]
-    reason: String,
-}
-
-#[derive(Clone, Debug, Args)]
-struct LocalOrderEvidenceArgs {
-    #[arg(long)]
-    file: PathBuf,
-    #[arg(long)]
-    order_id: String,
-}
-
-#[derive(Clone, Debug, Args)]
-struct FilePreviewArgs {
-    #[arg(long)]
-    file: PathBuf,
-}
-
-#[derive(Clone, Debug, Args)]
-struct LocalAuditArgs {
-    #[arg(long)]
-    file: PathBuf,
-    #[arg(long)]
-    order_id: Option<String>,
-    #[arg(long)]
-    remote_order_id: Option<String>,
-    #[arg(long)]
-    status: Option<String>,
-    #[arg(long)]
-    limit: Option<usize>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct LocalFillsArgs {
-    #[arg(long)]
-    file: PathBuf,
-    #[arg(long)]
-    order_id: Option<String>,
+fn direct_submit_request(
+    binding: &StandaloneExecutionBinding,
+    args: &StandaloneSubmitArgs,
+) -> Result<SubmitOrder, Box<dyn std::error::Error>> {
+    Ok(SubmitOrder {
+        order_id: OrderId::new(args.order_id.clone())?,
+        intent_id: None,
+        strategy_id: None,
+        account_id: AccountId::new(binding.account_id.clone())?,
+        segment_key: SegmentKey::new(binding.segment_key.clone())?,
+        instrument_id: InstrumentId::new(args.instrument_id.clone())?,
+        market_id: None,
+        execution_route_id: None,
+        side: parse_side(&args.side)?,
+        order_type: parse_order_type(&args.order_type)?,
+        quantity: args.quantity.parse()?,
+        limit_price: args.limit_price.as_deref().map(str::parse).transpose()?,
+        options: ExecutionOrderOptions {
+            time_in_force: args.time_in_force.clone(),
+            reduce_only: args.reduce_only,
+            post_only: args.post_only,
+            position_side: args.position_side.clone(),
+            ..Default::default()
+        },
+        submitted_at_unix_nanos: None,
+    })
 }
 
 fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::Error>> {
@@ -508,6 +625,8 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
 
 fn submit_intent_request(
     request: SubmitOrder,
+    launch_id: &str,
+    instance_id: &str,
 ) -> Result<SubmitIntentRequest, Box<dyn std::error::Error>> {
     let intent_id = request
         .intent_id
@@ -547,8 +666,8 @@ fn submit_intent_request(
             intent_id,
             strategy_decision_id: None,
             strategy_id,
-            launch_id: LaunchId::new("cli")?,
-            instance_id: InstanceId::new("cli")?,
+            launch_id: LaunchId::new(launch_id)?,
+            instance_id: InstanceId::new(instance_id)?,
             instrument_id: request.instrument_id,
             market_id: request.market_id,
             execution_route_id: request.execution_route_id,
@@ -619,8 +738,14 @@ fn print_json(value: serde_json::Value) {
 #[cfg(test)]
 mod cli_tests {
     use clap::Parser;
+    use kairos_primitives::account::{AccountId, SegmentKey};
+    use kairos_primitives::execution::OrderId;
+    use kairos_primitives::reference::InstrumentId;
 
-    use super::Cli;
+    use super::{
+        Cli, ExecutionOrderOptions, OrderSide, OrderType, SubmitOrder, connected_result,
+        submit_intent_request,
+    };
 
     #[test]
     fn command_surface_requires_explicit_mode_and_exposes_connected_runtime() {
@@ -648,15 +773,27 @@ mod cli_tests {
             "--workspace",
             "/tmp",
             "standalone",
-            "audit",
-            "--file",
-            "/tmp/execution-evidence.json",
-            "--order-id",
-            "order-1",
+            "--binding-json",
+            r#"{"account_id":"main"}"#,
+            "open-orders",
         ]);
         assert!(
             parsed.is_ok(),
-            "execution standalone evidence query must parse: {parsed:?}"
+            "execution standalone direct query must parse: {parsed:?}"
+        );
+
+        let parsed = Cli::try_parse_from([
+            "kairos-execution-cli",
+            "--workspace",
+            "/tmp",
+            "standalone",
+            "--binding-json",
+            r#"{"account_id":"main"}"#,
+            "audit",
+        ]);
+        assert!(
+            parsed.is_err(),
+            "local evidence tools must not remain exposed"
         );
 
         let parsed = Cli::try_parse_from([
@@ -664,6 +801,12 @@ mod cli_tests {
             "--workspace",
             "/tmp",
             "connected",
+            "--mode",
+            "paper",
+            "--launch-id",
+            "demo",
+            "--instance-id",
+            "run-1",
             "snapshot",
         ]);
         assert!(
@@ -676,6 +819,52 @@ mod cli_tests {
             "--workspace",
             "/tmp",
             "connected",
+            "--launch-id",
+            "demo",
+            "--instance-id",
+            "run-1",
+            "snapshot",
+        ]);
+        assert!(parsed.is_err(), "connected identity must include mode");
+
+        for removed_alias in [
+            "list",
+            "open",
+            "closed",
+            "reconcile-remote",
+            "show",
+            "place",
+        ] {
+            let parsed = Cli::try_parse_from([
+                "kairos-execution-cli",
+                "--workspace",
+                "/tmp",
+                "connected",
+                "--mode",
+                "paper",
+                "--launch-id",
+                "demo",
+                "--instance-id",
+                "run-1",
+                removed_alias,
+            ]);
+            assert!(
+                parsed.is_err(),
+                "removed connected alias must not parse: {removed_alias}"
+            );
+        }
+
+        let parsed = Cli::try_parse_from([
+            "kairos-execution-cli",
+            "--workspace",
+            "/tmp",
+            "connected",
+            "--mode",
+            "paper",
+            "--launch-id",
+            "demo",
+            "--instance-id",
+            "run-1",
             "fill",
             "--fill-id",
             "fill-1",
@@ -696,6 +885,12 @@ mod cli_tests {
             "--workspace",
             "/tmp",
             "connected",
+            "--mode",
+            "paper",
+            "--launch-id",
+            "demo",
+            "--instance-id",
+            "run-1",
             "link-unknown",
             "--remote-order-id",
             "remote-1",
@@ -712,6 +907,12 @@ mod cli_tests {
             "--workspace",
             "/tmp",
             "connected",
+            "--mode",
+            "paper",
+            "--launch-id",
+            "demo",
+            "--instance-id",
+            "run-1",
             "routes",
             "--order-type",
             "limit",
@@ -726,6 +927,12 @@ mod cli_tests {
             "--workspace",
             "/tmp",
             "connected",
+            "--mode",
+            "paper",
+            "--launch-id",
+            "demo",
+            "--instance-id",
+            "run-1",
             "submit",
             "--order-id",
             "order-1",
@@ -743,5 +950,46 @@ mod cli_tests {
             parsed.is_err(),
             "execution connected submit must not expose dry-run before a real API exists"
         );
+    }
+
+    #[test]
+    fn connected_submit_preserves_selected_launch_instance_identity() {
+        let request = SubmitOrder {
+            order_id: OrderId::new("order-1").unwrap(),
+            intent_id: None,
+            strategy_id: None,
+            account_id: AccountId::new("main").unwrap(),
+            segment_key: SegmentKey::new("spot").unwrap(),
+            instrument_id: InstrumentId::new("BTC-USDT").unwrap(),
+            market_id: None,
+            execution_route_id: None,
+            side: OrderSide::Buy,
+            order_type: OrderType::Market,
+            quantity: "1".parse().unwrap(),
+            limit_price: None,
+            options: ExecutionOrderOptions::default(),
+            submitted_at_unix_nanos: None,
+        };
+
+        let intent = submit_intent_request(request, "grid-btc", "run-20260823-02")
+            .expect("connected submit intent");
+
+        assert_eq!(intent.intent.launch_id.as_str(), "grid-btc");
+        assert_eq!(intent.intent.instance_id.as_str(), "run-20260823-02");
+    }
+
+    #[test]
+    fn connected_output_is_self_describing_without_python_decoration() {
+        let value = connected_result(
+            serde_json::json!({"orders": []}),
+            "paper",
+            "grid-btc",
+            "run-1",
+        );
+        assert_eq!(value["owner"], "execution");
+        assert_eq!(value["mode"], "paper");
+        assert_eq!(value["launch_id"], "grid-btc");
+        assert_eq!(value["instance_id"], "run-1");
+        assert_eq!(value["scope"], "launch-instance");
     }
 }

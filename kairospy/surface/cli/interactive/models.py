@@ -42,8 +42,14 @@ class InteractiveContext:
     snapshot: ObserveSnapshot | None
     workspace_arg: Path | None
     selected_launch: str | None = None
+    selected_launch_mode: str | None = None
     selected_launch_instance: str | None = None
     selected_account: str | None = None
+    selected_account_provider: str | None = None
+    selected_account_environment: str | None = None
+    selected_account_segment: str | None = None
+    selected_order: str | None = None
+    selected_order_symbol: str | None = None
     selected_service: str | None = None
     selected_market: Any | None = None
     selected_market_source: dict[str, Any] | None = None

@@ -267,7 +267,7 @@ class LaunchRuntimeApplication:
             )
             if self._is_running_status(status):
                 running.append({**entry, **status})
-        if mode is None and len(running) > 1:
+        if len(running) > 1:
             raise LaunchRuntimeError(
                 f"launch {launch_id} has multiple running instances; specify instance"
             )
@@ -279,36 +279,47 @@ class LaunchRuntimeApplication:
         mode: str | None = None,
         instance: str | None = None,
     ) -> tuple[str, str]:
-        if instance and mode:
-            return instance, mode
         entries = LaunchRegistryApplication(self.workspace).instances(launch_id)
+        if mode is not None:
+            entries = [entry for entry in entries if entry.get("mode") == mode]
         if instance:
             matching_instance = [
-                entry
-                for entry in entries
-                if entry.get("instance_id") == instance
-                and (mode is None or entry.get("mode") == mode)
+                entry for entry in entries if entry.get("instance_id") == instance
             ]
-            if matching_instance:
-                entry = self._latest_entry(matching_instance)
-                return instance, str(entry.get("mode") or mode or "paper")
+            identities = {
+                (str(entry.get("instance_id") or ""), str(entry.get("mode") or ""))
+                for entry in matching_instance
+                if entry.get("instance_id") and entry.get("mode")
+            }
+            if len(identities) == 1:
+                return next(iter(identities))
+            if len(identities) > 1:
+                raise LaunchRuntimeError(
+                    f"launch {launch_id} instance {instance} exists in multiple modes; "
+                    "specify mode"
+                )
+            scope = f" in mode {mode}" if mode is not None else ""
+            raise LaunchRuntimeError(
+                f"launch {launch_id} has no registered instance {instance}{scope}"
+            )
         active = self.running_instance(launch_id, mode)
         if active is not None:
-            return str(active["instance_id"]), str(
-                active.get("mode") or mode or "paper"
-            )
-        matching = [
-            entry
+            return str(active["instance_id"]), str(active.get("mode") or mode)
+        identities = {
+            (str(entry.get("instance_id") or ""), str(entry.get("mode") or ""))
             for entry in entries
-            if (mode is None or entry.get("mode") == mode)
-            and (instance is None or entry.get("instance_id") == instance)
-        ]
-        if matching:
-            entry = self._latest_entry(matching)
-            return str(entry.get("instance_id") or instance or "default"), str(
-                entry.get("mode") or mode or "paper"
+            if entry.get("instance_id") and entry.get("mode")
+        }
+        if len(identities) == 1:
+            return next(iter(identities))
+        if len(identities) > 1:
+            raise LaunchRuntimeError(
+                f"launch {launch_id} has multiple registered instances; specify instance"
             )
-        return instance or "default", mode or "paper"
+        scope = f" in mode {mode}" if mode is not None else ""
+        raise LaunchRuntimeError(
+            f"launch {launch_id} has no registered instance{scope}"
+        )
 
     def resolve_stop_target(
         self,
@@ -379,14 +390,14 @@ class LaunchRuntimeApplication:
         }
         for record in initial_account_records.values():
             controller_id = str(
-                (record.get("values") or {}).get("capital_controller_account_id")
-                or ""
+                (record.get("values") or {}).get("capital_controller_account_id") or ""
             ).strip()
             if controller_id and controller_id not in lease_account_ids:
                 lease_account_ids.append(controller_id)
         account_records = {
             account_id: (
-                initial_account_records.get(account_id) or account_admin.show(account_id)
+                initial_account_records.get(account_id)
+                or account_admin.show(account_id)
             )
             for account_id in lease_account_ids
         }
@@ -489,9 +500,7 @@ class LaunchRuntimeApplication:
                 ),
             )
             account_connections: dict[str, dict[str, Any]] = {}
-            capital_member_readiness = dict(
-                plan.capital.get("member_readiness") or {}
-            )
+            capital_member_readiness = dict(plan.capital.get("member_readiness") or {})
             for bound_account_id in lease_account_ids:
                 required_segments = tuple(
                     plan.required_account_segments.get(bound_account_id, ())
@@ -522,7 +531,9 @@ class LaunchRuntimeApplication:
                     "required_segments": list(required_segments),
                     "permitted_segments": sorted(configured_segments),
                     "view_root": str(instance_workspace.snapshot()),
-                    "broker": str(account_records[bound_account_id].get("broker") or ""),
+                    "broker": str(
+                        account_records[bound_account_id].get("broker") or ""
+                    ),
                     "integration_provider": str(
                         account_records[bound_account_id].get("integration_provider")
                         or account_records[bound_account_id].get("broker")
@@ -632,10 +643,7 @@ class LaunchRuntimeApplication:
             started = control.start(target)
             if started.get("status") == "ready":
                 started = control.strategy_control(target, "enable")
-            if (
-                mode == "backtest"
-                and market_runtime_profile == "replay"
-            ):
+            if mode == "backtest" and market_runtime_profile == "replay":
                 market_control.resume_replay()
             started.update(
                 {

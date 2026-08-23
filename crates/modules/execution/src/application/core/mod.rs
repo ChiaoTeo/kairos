@@ -765,6 +765,7 @@ fn remote_order(order: kairos_conflux::ExternalOrder) -> RemoteOrder {
     RemoteOrder {
         binding_id: order.connection_key.to_string(),
         order_id: order.order_id,
+        remote_order_id: order.remote_order_id,
         client_order_id: order.client_order_id,
         symbol: order.symbol,
         side: match order.side {

@@ -1,73 +1,47 @@
-"""Transparent shell for the canonical Rust Execution CLI."""
+"""Account-scoped standalone order commands owned by Execution."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Sequence
 
 import typer
 
+from kairospy.application.account.cli import AccountCliApplication
 from kairospy.application.system import NativeCliApplication
 from kairospy.application.workspace import WorkspaceApplication
 
 
-HELP = """`kairos order` is the standalone order-facing entry for Execution.
+HELP = """`kairos order` opens a short-lived direct connection to the selected account's provider.
 
-The implementation owner is kairos-execution-cli; Order is not a separate
-module CLI.
+Every command requires an account context. Read operations use a read-capable
+credential; submit/cancel/replace require a trade-capable credential. Accounts
+with multiple trading segments also require `--segment`:
+  kairos order open-orders --account-id main
+  kairos order history --account-id main --symbol BTCUSDT
+  kairos order order --account-id main --order-id 12345 --symbol BTCUSDT
+  kairos order fills --account-id main --symbol BTCUSDT
+  kairos order submit --account-id main --order-id cli-1 --instrument-id BTC-USDT --symbol BTCUSDT --quantity 1
+  kairos order cancel --account-id main --order-id 12345 --symbol BTCUSDT
+  kairos order replace --account-id main --target-order-id 12345 --order-id cli-2 --instrument-id BTC-USDT --symbol BTCUSDT --quantity 2
 
-Standalone order evidence short paths read an explicit local evidence file and
-do not connect to a running Execution server:
-  kairos order audit --file execution-evidence.json
-  kairos order inspect --file execution-evidence.json --order-id order-1
-  kairos order journal --file execution-evidence.json --order-id order-1
-  kairos order fills --file execution-evidence.json
-
-Standalone order preview validates and normalizes a local order request without
-submitting it:
-  kairos order preview-submit --order-id order-1 --account-id main --instrument-id BTC-USDT --quantity 1 --execution-route-id route-1
-  kairos order preview-cancel --order-id order-1 --reason "manual review"
-  kairos order preview-replace --target-order-id order-1 --order-id order-2 --account-id main --instrument-id BTC-USDT --quantity 2 --execution-route-id route-1
-  kairos order preview-submit-file --file submit-order.json
-  kairos order preview-cancel-file --file cancel-order.json
-  kairos order preview-replace-file --file replace-order.json
-
-Current runtime execution actions and order facts are connected through scoped
-component commands:
-  kairos launch instance component execution ...
+These commands do not connect to an Execution server. Runtime state, audit,
+journal, trace, reconciliation and runtime order control are available only at
+`kairos launch instance component execution ...`.
 """
 
-CONNECTED_COMMANDS = {
-    "cancel",
-    "events",
-    "fill",
-    "history",
-    "open",
+DIRECT_COMMANDS = {
     "open-orders",
-    "orders",
-    "reconcile",
-    "reconcile-remote",
-    "replace",
-    "routes",
-    "show",
-    "snapshot",
-    "status",
+    "history",
+    "order",
+    "fills",
     "submit",
-    "trace",
-    "unknown-remote-orders",
+    "cancel",
+    "replace",
 }
 
-REMOVED_COMMANDS = {
-    "backtest": (
-        "`kairos order backtest` has been removed. Backtests belong to the "
-        "`kairos launch`, `kairos data`, and `kairos research` workflows."
-    ),
-    "link-unknown": (
-        "`kairos order link-unknown` is not available. Unknown remote order "
-        "linking requires an Execution runtime contract/API before it can be "
-        "exposed through the launch component."
-    ),
-}
+WRITE_COMMANDS = {"submit", "cancel", "replace"}
 
 
 def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str]]:
@@ -93,30 +67,96 @@ def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str
     return (Path(values[0]) if values else None), result
 
 
+def _take_option(arguments: list[str], name: str) -> tuple[str | None, list[str]]:
+    values: list[str] = []
+    result: list[str] = []
+    index = 0
+    prefix = f"{name}="
+    while index < len(arguments):
+        item = arguments[index]
+        if item == name:
+            if index + 1 >= len(arguments):
+                raise typer.BadParameter(f"{name} requires a value")
+            values.append(arguments[index + 1])
+            index += 2
+            continue
+        if item.startswith(prefix):
+            values.append(item[len(prefix) :])
+            index += 1
+            continue
+        result.append(item)
+        index += 1
+    if len(set(values)) > 1:
+        raise typer.BadParameter(f"{name} may be specified only once")
+    return (values[0] if values else None), result
+
+
+def _take_flag(arguments: list[str], name: str) -> tuple[bool, list[str]]:
+    found = False
+    result: list[str] = []
+    for item in arguments:
+        if item == name:
+            found = True
+        else:
+            result.append(item)
+    return found, result
+
+
 def order_passthrough(ctx: typer.Context) -> None:
-    workspace, arguments = _workspace_and_arguments(ctx.args)
-    if arguments and arguments[0] in {"standalone", "connected"}:
-        explicit_mode = arguments[0]
-        arguments = arguments[1:]
-    else:
-        explicit_mode = "standalone"
-    if explicit_mode == "connected":
+    workspace_path, arguments = _workspace_and_arguments(ctx.args)
+    if not arguments or arguments in (["--help"], ["-h"]):
+        typer.echo(HELP.rstrip(), nl=False)
+        return
+    if arguments[0] in {"standalone", "connected"}:
         raise typer.BadParameter(
-            "`kairos order` runs standalone Execution order tools. Use "
-            "`kairos launch instance component execution ...` for connected mode."
+            "`kairos order` is always standalone. Connected Execution commands live under "
+            "`kairos launch instance component execution ...`."
         )
-    if arguments and arguments[0] in REMOVED_COMMANDS:
-        raise typer.BadParameter(REMOVED_COMMANDS[arguments[0]])
-    if arguments and arguments[0] in CONNECTED_COMMANDS:
-        command = arguments[0]
+    command = arguments[0]
+    if command not in DIRECT_COMMANDS:
         raise typer.BadParameter(
-            f"`kairos order {command}` is a connected Execution runtime command. "
-            "Use `kairos launch instance component execution ...` for the "
-            "launch-scoped Execution server."
+            f"unsupported standalone order command: {command}. Runtime diagnostics and "
+            "control live under `kairos launch instance component execution ...`."
         )
-    owner = WorkspaceApplication().resolve(workspace)
+    account_id, arguments = _take_option(arguments, "--account-id")
+    segment, arguments = _take_option(arguments, "--segment")
+    confirmed, arguments = _take_flag(arguments, "--yes")
+    if not account_id:
+        raise typer.BadParameter("standalone order command requires --account-id")
+
+    owner = WorkspaceApplication().resolve(workspace_path)
+    binding_args = [
+        "standalone",
+        "trading-binding",
+        "--account-id",
+        account_id,
+        "--access",
+        "trade" if command in WRITE_COMMANDS else "read",
+    ]
+    if segment:
+        binding_args.extend(("--segment", segment))
+    try:
+        binding = AccountCliApplication(owner).run(binding_args)
+    except RuntimeError as error:
+        raise typer.BadParameter(str(error)) from error
+
+    if command in WRITE_COMMANDS and str(binding.get("environment", "")).lower() == "live":
+        typer.echo(
+            f"目标：account={account_id} · provider={binding.get('provider', 'unknown')} · "
+            "environment=live · scope=direct-provider"
+        )
+        if not confirmed and not typer.confirm("确认直接操作 live provider 吗？", default=False):
+            raise typer.Abort()
+
     result = NativeCliApplication(owner).invoke(
-        "execution", [explicit_mode, *(arguments or ["--help"])]
+        "execution",
+        [
+            "standalone",
+            "--binding-json",
+            json.dumps(binding),
+            *(["--confirm-live"] if command in WRITE_COMMANDS else []),
+            *arguments,
+        ],
     )
     output = result.stdout if result.returncode == 0 else result.stderr or result.stdout
     if output:

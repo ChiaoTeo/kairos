@@ -160,8 +160,8 @@ FORBIDDEN_ROOT_PRIVATE_BUSINESS_TOKENS = (
 )
 
 REQUIRED_RUST_MODE_TOKENS = (
-    "Standalone(StandaloneCommand)",
-    "Connected(ConnectedCommand)",
+    "Standalone(",
+    "Connected(",
     "enum StandaloneCommand",
     "enum ConnectedCommand",
 )
@@ -208,9 +208,9 @@ REQUIRED_RUST_CLI_APP_CALLS_BY_PRODUCT = {
         ".schema(",
         ".doctor(",
         ".local_snapshot(",
-        ".local_balances(",
-        ".local_positions(",
-        ".local_open_orders(",
+        ".balances(",
+        ".positions(",
+        ".open_orders(",
     ),
     "Market": (
         ".validate_market(",
@@ -244,16 +244,13 @@ REQUIRED_RUST_CLI_APP_CALLS_BY_PRODUCT = {
         ".plan(",
     ),
     "Execution": (
-        ".inspect_file(",
-        ".journal_file(",
-        ".audit_file(",
-        ".fills_file(",
-        ".preview_submit(",
-        ".preview_submit_file(",
-        ".preview_cancel(",
-        ".preview_cancel_file(",
-        ".preview_replace(",
-        ".preview_replace_file(",
+        ".open_orders(",
+        ".history(",
+        ".order(",
+        ".fills(",
+        ".submit(",
+        ".cancel(",
+        ".replace(",
     ),
 }
 
@@ -304,8 +301,6 @@ FORBIDDEN_STANDALONE_VARIANTS_BY_PRODUCT = {
         "Snapshot",
         "Routes",
         "Orders",
-        "OpenOrders",
-        "History",
         "Reconcile",
         "UnknownRemoteOrders",
         "LinkUnknown",
@@ -313,9 +308,15 @@ FORBIDDEN_STANDALONE_VARIANTS_BY_PRODUCT = {
         "Events",
         "Trace",
         "Fill",
-        "Submit",
-        "Cancel",
-        "Replace",
+        "Inspect",
+        "Journal",
+        "Audit",
+        "PreviewSubmit",
+        "PreviewSubmitFile",
+        "PreviewCancel",
+        "PreviewCancelFile",
+        "PreviewReplace",
+        "PreviewReplaceFile",
     },
     "Risk": {
         "Status",
@@ -474,11 +475,21 @@ def main() -> int:
                     f"{token}: {path.relative_to(ROOT)}"
                 )
         if boundary.product_name == "Execution":
-            for token in ('REMOVED_COMMANDS', '"backtest"', "has been removed"):
+            for token in (
+                "DIRECT_COMMANDS",
+                '"open-orders"',
+                '"history"',
+                '"order"',
+                '"fills"',
+                '"submit"',
+                '"cancel"',
+                '"replace"',
+                'arguments[0] in {"standalone", "connected"}',
+            ):
                 if token not in text:
                     failures.append(
-                        f"{path.relative_to(ROOT)} must reject removed order backtest "
-                        f"short path with an explicit message"
+                        f"{path.relative_to(ROOT)} must expose only account-scoped "
+                        f"provider-direct order commands and reject explicit modes: {token}"
                     )
         if boundary.product_name == "Account":
             for token in (
@@ -486,7 +497,7 @@ def main() -> int:
                 "positions",
                 "open-orders",
                 "AccountCliApplication",
-                "[explicit_mode, *(arguments or",
+                "[*account_selector, explicit_mode, *(arguments or",
             ):
                 if token not in text:
                     failures.append(
@@ -838,6 +849,16 @@ def main() -> int:
                 f"launch instance component execution is missing connected "
                 f"owner CLI passthrough command token: {token}"
             )
+    for token in (
+        '"--mode",\n            resolved_mode',
+        'value.setdefault("instance_id", resolved_instance)',
+        'value.setdefault("scope", "launch-instance")',
+    ):
+        if token not in launch_text:
+            failures.append(
+                "launch instance component execution must pass and expose the "
+                f"resolved mode/instance scope: {token}"
+            )
     for boundary in BUSINESS_BOUNDARIES:
         application_service = (
             module_root(boundary.product_name) / "src" / "application" / "service.rs"
@@ -900,22 +921,46 @@ def main() -> int:
                                 )
                     if boundary.product_name == "Execution":
                         for token in (
-                            "Inspect",
-                            "Journal",
-                            "Audit",
+                            "OpenOrders",
+                            "History",
+                            "Order",
                             "Fills",
-                            "PreviewSubmit",
-                            "PreviewSubmitFile",
-                            "PreviewCancel",
-                            "PreviewCancelFile",
-                            "PreviewReplace",
-                            "PreviewReplaceFile",
+                            "Submit",
+                            "Cancel",
+                            "Replace",
                         ):
                             if token not in variants:
                                 failures.append(
                                     f"{path.relative_to(ROOT)} must expose Execution "
-                                    f"standalone local evidence/preview {token} through "
+                                    f"standalone provider-direct {token} through "
                                     "CliExecutionApplication"
+                                )
+                        for token in (
+                            "connected_result(",
+                            '"launch-instance"',
+                            "&connected.launch_id",
+                            "&connected.instance_id",
+                        ):
+                            if token not in text:
+                                failures.append(
+                                    f"{path.relative_to(ROOT)} must preserve concrete "
+                                    f"connected Execution identity and scope: {token}"
+                                )
+                        for token in (
+                            'LaunchId::new("cli")',
+                            'InstanceId::new("cli")',
+                            'default_value = "paper"',
+                            '#[command(alias = "list")]',
+                            '#[command(alias = "open")]',
+                            '#[command(alias = "closed")]',
+                            '#[command(alias = "reconcile-remote")]',
+                            '#[command(alias = "show")]',
+                            '#[command(alias = "place")]',
+                        ):
+                            if token in text:
+                                failures.append(
+                                    f"{path.relative_to(ROOT)} must not fabricate/default "
+                                    f"connected identity or retain removed aliases: {token}"
                                 )
                 connected_body = _enum_body(text, "ConnectedCommand")
                 if connected_body is not None:

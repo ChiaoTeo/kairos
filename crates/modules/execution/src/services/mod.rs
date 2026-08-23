@@ -1,6 +1,7 @@
 pub mod actor;
 pub mod audit;
 pub(crate) mod dependencies;
+pub mod direct;
 pub(crate) mod gateway;
 pub(crate) mod persistence;
 pub(crate) mod publication;

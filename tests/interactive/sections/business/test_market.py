@@ -86,7 +86,9 @@ def test_market_source_cancel_never_constructs_snapshot(
 def test_launch_market_command_keeps_selected_instance_and_scope(
     interactive_context, monkeypatch
 ) -> None:
-    interactive_context.shell_path = ("launch", "demo", "market")
+    interactive_context.shell_path = (
+        "launch", "demo", "instances", "instance-1", "components", "market"
+    )
     interactive_context.selected_launch = "demo"
     interactive_context.selected_launch_instance = "instance-1"
     monkeypatch.setattr(
@@ -164,7 +166,9 @@ def test_launch_instance_is_selected_only_from_registry_and_persisted(
 
     assert market.enter_launch_market(interactive_context) is ShellControl.HANDLED
     assert interactive_context.selected_launch_instance == "run-2"
-    assert interactive_context.shell_path == ("launch", "demo", "market")
+    assert interactive_context.shell_path == (
+        "launch", "demo", "instances", "run-2", "components", "market"
+    )
     assert market._select_launch_instance(interactive_context) == "run-2"
 
 
@@ -224,3 +228,65 @@ def test_top_level_market_once_uses_standalone_provider(
     )
     assert "system" not in command.argv
     assert "source-id" not in " ".join(command.argv)
+
+
+def test_direct_market_menu_presents_tools_in_product_order(
+    interactive_context, capsys
+) -> None:
+    interactive_context.shell_path = ("market",)
+
+    market.print_menu(interactive_context)
+
+    output = capsys.readouterr().out
+    assert "Market 独立工具（不连接运行中的 Market）" in output
+    assert "1. 测试 Provider 行情" in output
+    assert "2. 下载历史行情" in output
+    assert "3. 检查本地行情文件" in output
+    assert "4. 验证市场定义" in output
+    assert "5. 检查 Reference → Market 映射" in output
+
+
+def test_connected_market_replay_controls_target_runtime(
+    interactive_context,
+) -> None:
+    interactive_context.shell_path = ("system", "market")
+    pause = market.handle(interactive_context, ("p",))
+    resume = market.handle(interactive_context, ("resume",))
+
+    assert isinstance(pause, GuidedCommand)
+    assert pause.argv == (
+        "system",
+        "component",
+        "market",
+        "pause-replay",
+        "--format",
+        "json",
+    )
+    assert isinstance(resume, GuidedCommand)
+    assert resume.argv[3] == "resume-replay"
+
+
+def test_launch_market_replay_control_keeps_instance_scope(
+    interactive_context,
+) -> None:
+    interactive_context.shell_path = (
+        "launch", "demo", "instances", "instance-1", "components", "market"
+    )
+    interactive_context.selected_launch = "demo"
+    interactive_context.selected_launch_instance = "instance-1"
+
+    command = market.handle(interactive_context, ("pause",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.argv == (
+        "launch",
+        "instance",
+        "component",
+        "market",
+        "pause-replay",
+        "demo",
+        "--instance",
+        "instance-1",
+        "--format",
+        "json",
+    )

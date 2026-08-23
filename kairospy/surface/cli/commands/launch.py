@@ -64,7 +64,8 @@ instance_component_app = typer.Typer(
     no_args_is_help=True, help="Connect to components bound to a launch instance"
 )
 instance_component_market_app = typer.Typer(
-    no_args_is_help=True, help="Connect to the Market component bound to a launch instance"
+    no_args_is_help=True,
+    help="Connect to the Market component bound to a launch instance",
 )
 instance_component_account_app = typer.Typer(
     no_args_is_help=True,
@@ -195,11 +196,6 @@ def _resolve_launch_target(
         )
     except LaunchRuntimeError as error:
         raise typer.BadParameter(str(error)) from error
-
-
-def _resolve_instance(owner, launch_id: str, mode: str, instance: str | None) -> str:
-    """Backward-compatible instance-only resolver for callers with a mode."""
-    return _resolve_launch_target(owner, launch_id, mode, instance)[0]
 
 
 def _decorate_launch_status(
@@ -853,6 +849,50 @@ def launch_instance_component_market_freshness(
     )
 
 
+@instance_component_market_app.command("pause-replay")
+def launch_instance_component_market_pause_replay(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Pause Market replay input selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_instance_market_connected_command(
+            owner,
+            launch_id=launch_id,
+            instance=instance,
+            command="pause-replay",
+            arguments=[],
+            require_views=False,
+        ),
+        output,
+    )
+
+
+@instance_component_market_app.command("resume-replay")
+def launch_instance_component_market_resume_replay(
+    launch_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
+) -> None:
+    """Resume Market replay input selected by a launch instance."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        _run_instance_market_connected_command(
+            owner,
+            launch_id=launch_id,
+            instance=instance,
+            command="resume-replay",
+            arguments=[],
+            require_views=False,
+        ),
+        output,
+    )
+
+
 @instance_component_account_app.command("open-orders")
 def launch_instance_component_account_open_orders(
     launch_id: str,
@@ -921,22 +961,26 @@ def launch_instance_component_account_reconcile(
 def launch_instance_component_execution_status(
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     """Inspect the Execution component selected by a launch instance."""
     owner = WorkspaceApplication().open(workspace)
-    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
-    instance_workspace = owner.instance(mode, launch_id, resolved_instance)
+    resolved_instance, resolved_mode = _resolve_launch_target(
+        owner, launch_id, mode, instance
+    )
+    instance_workspace = owner.instance(resolved_mode, launch_id, resolved_instance)
     statuses = LaunchRuntimeApplication(owner).component_status(instance_workspace)
     if "execution" not in statuses:
         raise typer.BadParameter("launch instance has no connected execution component")
     _emit(
         {
             **statuses["execution"],
+            "owner": "execution",
             "launch_id": launch_id,
             "instance_id": resolved_instance,
-            "mode": mode,
+            "mode": resolved_mode,
             "scope": "launch-instance",
         },
         output,
@@ -946,28 +990,32 @@ def launch_instance_component_execution_status(
 def _run_execution_connected_command(
     owner: Any,
     launch_id: str,
+    mode: str | None,
     instance: str | None,
     command: str,
     arguments: list[str],
 ) -> dict[str, Any]:
-    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    resolved_instance, resolved_mode = _resolve_launch_target(
+        owner, launch_id, mode, instance
+    )
     value = NativeCliApplication(owner).run(
         "execution",
         [
+            "connected",
             "--mode",
-            mode,
+            resolved_mode,
             "--launch-id",
             launch_id,
             "--instance-id",
             resolved_instance,
-            "connected",
             command,
             *arguments,
         ],
     )
     value.setdefault("launch_id", launch_id)
     value.setdefault("instance_id", resolved_instance)
-    value.setdefault("mode", mode)
+    value.setdefault("mode", resolved_mode)
+    value.setdefault("owner", "execution")
     value.setdefault("scope", "launch-instance")
     return value
 
@@ -976,6 +1024,7 @@ def _execution_connected_passthrough(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None,
+    mode: str | None,
     workspace: Path,
     output: OutputFormat,
     command: str,
@@ -985,6 +1034,7 @@ def _execution_connected_passthrough(
         _run_execution_connected_command(
             owner,
             launch_id,
+            mode,
             instance,
             command,
             list(ctx.args),
@@ -1006,11 +1056,14 @@ def launch_instance_component_execution_snapshot(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Read the launch-scoped Execution runtime snapshot."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "snapshot")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "snapshot"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1020,11 +1073,14 @@ def launch_instance_component_execution_routes(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Read launch-scoped Execution route candidates."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "routes")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "routes"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1034,11 +1090,14 @@ def launch_instance_component_execution_orders(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """List launch-scoped Execution orders."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "orders")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "orders"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1048,11 +1107,14 @@ def launch_instance_component_execution_open_orders(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """List launch-scoped open Execution orders."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "open-orders")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "open-orders"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1062,11 +1124,14 @@ def launch_instance_component_execution_history(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """List launch-scoped closed Execution orders."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "history")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "history"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1076,11 +1141,14 @@ def launch_instance_component_execution_fills(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """List launch-scoped Execution fills."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "fills")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "fills"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1090,11 +1158,14 @@ def launch_instance_component_execution_events(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """List launch-scoped Execution lifecycle events."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "events")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "events"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1104,11 +1175,14 @@ def launch_instance_component_execution_audit(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Read launch-scoped Execution audit records."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "audit")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "audit"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1118,11 +1192,14 @@ def launch_instance_component_execution_inspect(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Inspect one launch-scoped Execution order."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "inspect")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "inspect"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1132,11 +1209,14 @@ def launch_instance_component_execution_trace(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Trace one launch-scoped Execution order."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "trace")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "trace"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1146,11 +1226,14 @@ def launch_instance_component_execution_journal(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Read the journal for one launch-scoped Execution order."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "journal")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "journal"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1160,11 +1243,14 @@ def launch_instance_component_execution_reconcile(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Request launch-scoped Execution reconciliation."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "reconcile")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "reconcile"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1174,12 +1260,13 @@ def launch_instance_component_execution_unknown_remote_orders(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """List launch-scoped unknown remote Execution orders."""
     _execution_connected_passthrough(
-        ctx, launch_id, instance, workspace, output, "unknown-remote-orders"
+        ctx, launch_id, instance, mode, workspace, output, "unknown-remote-orders"
     )
 
 
@@ -1190,11 +1277,14 @@ def launch_instance_component_execution_submit(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Submit an order through the launch-scoped Execution runtime."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "submit")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "submit"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1204,11 +1294,14 @@ def launch_instance_component_execution_cancel(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Cancel an order through the launch-scoped Execution runtime."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "cancel")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "cancel"
+    )
 
 
 @instance_component_execution_app.command(
@@ -1218,11 +1311,14 @@ def launch_instance_component_execution_replace(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    mode: str | None = typer.Option(None, "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Replace an order through the launch-scoped Execution runtime."""
-    _execution_connected_passthrough(ctx, launch_id, instance, workspace, output, "replace")
+    _execution_connected_passthrough(
+        ctx, launch_id, instance, mode, workspace, output, "replace"
+    )
 
 
 @instance_component_reference_app.command("status")
@@ -2002,7 +2098,11 @@ def launch_instance_component_capital_publish_funding_objective(
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _run_capital_connected_command(
-            owner, launch_id, instance, "publish-funding-objective", ["--file", str(file)]
+            owner,
+            launch_id,
+            instance,
+            "publish-funding-objective",
+            ["--file", str(file)],
         ),
         output,
     )
@@ -2038,7 +2138,11 @@ def launch_instance_component_capital_cancel_funding_objective(
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _run_capital_connected_command(
-            owner, launch_id, instance, "cancel-funding-objective", ["--file", str(file)]
+            owner,
+            launch_id,
+            instance,
+            "cancel-funding-objective",
+            ["--file", str(file)],
         ),
         output,
     )

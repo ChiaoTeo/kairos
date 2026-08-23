@@ -212,13 +212,14 @@ launch 配置。`--config` 仅用于显式指定其他配置文件。
 uv run kairospy launch status btc-sma --workspace my-project
 uv run kairospy launch logs btc-sma --lines 100 --workspace my-project
 uv run kairospy launch attach btc-sma --workspace my-project --lines 100
-uv run kairospy launch instance component market sources btc-sma --workspace my-project \
+uv run kairospy launch instance component market sources btc-sma --instance <instance-id> --workspace my-project \
   --market-id market:binance:spot:BTCUSDT --observation-kind quote --configured-only
-uv run kairospy launch instance component market snapshot btc-sma quote --workspace my-project \
+uv run kairospy launch instance component market snapshot btc-sma quote --instance <instance-id> --workspace my-project \
   --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot
-uv run kairospy launch instance component market freshness btc-sma --workspace my-project \
+uv run kairospy launch instance component market freshness btc-sma --instance <instance-id> --workspace my-project \
   --market-id market:binance:spot:BTCUSDT --source-id binance-spot --qualifier quote
-uv run kairospy launch instance component execution status btc-sma --workspace my-project
+uv run kairospy launch instance component execution status btc-sma \
+  --instance <instance-id> --mode <mode> --workspace my-project
 ```
 
 已知 `strategy_decision_id` 时，可以查看从策略决策、Execution Intent/Plan/Order/Fill 到通知
@@ -517,6 +518,37 @@ ref = "binance_trade"
 ```
 
 如果需要交易权限，应将 trade credential 作为同一远端账户的另一个访问凭据绑定；credential 不是另一个账户。连接时系统会校验私有读取权限，并记录远端身份和已发现 segment。
+
+### 独立订单操作与运行中 Execution
+
+独立人工订单先选择账户，再由短生命周期的 Execution CLI 使用该账户的 provider binding 直接连接
+交易所。它不连接运行中的 Execution server，也不读取其 projection、journal 或 audit：
+
+```bash
+uv run kairospy order open-orders --account-id main
+uv run kairospy order history --account-id main --segment spot --symbol BTCUSDT
+uv run kairospy order fills --account-id main --segment spot --symbol BTCUSDT
+uv run kairospy order submit --account-id main --order-id manual-001 \
+  --instrument-id BTC-USDT --symbol BTCUSDT --quantity 0.001 --yes
+uv run kairospy order cancel --account-id main --order-id manual-001 --symbol BTCUSDT --yes
+```
+
+查询使用 read-capable credential；提交、撤单和修改要求 trade-capable credential。live 写操作会显示
+account、provider、environment 和 `scope=direct-provider` 并要求确认，自动化调用必须显式传入
+`--yes`。Provider 不支持的能力会直接失败，不会回退到缓存文件或运行中实例。
+非 live Binance 账户必须显式配置 test/demo `base_url`；环境与 endpoint 冲突时拒绝连接。
+OKX demo 交易在 simulated-trading authentication 完成前失败关闭，Binance isolated margin 也不会
+回退到 cross-margin。
+
+需要查看或控制策略运行中的订单时，先解析具体 instance，再进入它的 Execution component：
+
+```bash
+uv run kairospy launch instance component execution snapshot <launch-id> --instance <instance-id> --mode <mode>
+uv run kairospy launch instance component execution open-orders <launch-id> --instance <instance-id> --mode <mode>
+uv run kairospy launch instance component execution audit <launch-id> --instance <instance-id> --mode <mode>
+```
+
+`current` 仅是一次性实例选择器；后续操作应使用解析得到的真实 instance id。
 
 API key 不通过环境变量注入。`account credential create` 只保存凭据；`account connect` 才建立本地远端账户 binding。`--alias` 只是本地显示名，不是交易所账户 ID。旧的 `provider`、`exchange`、`market`、`currency` 字段仍可读取；新生成的 binding 文件默认只写发现所需字段。
 

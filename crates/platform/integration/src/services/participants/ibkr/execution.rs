@@ -622,6 +622,10 @@ fn normalize_order(
     Ok(ExternalOrder {
         connection_key: connection_key.clone(),
         order_id: typed_order_id(data.order_id)?,
+        remote_order_id: kairos_primitives::integration::RemoteOrderId::new(
+            data.order_id.to_string(),
+        )
+        .map_err(invalid_payload)?,
         client_order_id: (!order_ref.is_empty())
             .then(|| ClientOrderId::new(order_ref))
             .transpose()
@@ -785,6 +789,7 @@ mod tests {
 
         assert_eq!(order.connection_key.as_str(), "ibkr.principal.test");
         assert_eq!(order.order_id.as_str(), "ibkr:42");
+        assert_eq!(order.remote_order_id.as_str(), "42");
         assert_eq!(
             order.client_order_id.as_ref().map(ClientOrderId::as_str),
             Some("local-order-7")

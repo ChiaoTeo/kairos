@@ -20,6 +20,7 @@ from .sections.business import (
     reference,
     risk,
 )
+from .sections.business import execution_component
 from .sections.getting_started import home, project
 from .sections.research_data import data, research
 from .sections.strategy import launch, observe
@@ -118,11 +119,23 @@ def shell_command(context: InteractiveContext, line: str) -> ShellAction:
     if not path:
         return home.handle(context, parts)
     section = path[0]
-    if section in home.HOME_GROUPS:
+    if len(path) == 1 and section in home.HOME_GROUPS:
         return home.handle(context, parts)
-    if section == "account":
+    if path[:2] == ("trade", "accounts"):
+        if len(path) >= 4 and path[3] == "orders":
+            return order.handle(context, parts)
         return account.handle(context, parts)
-    if section == "launch" and len(path) >= 3 and path[2] == "market":
+    if (
+        len(path) >= 6
+        and path[0] == "launch"
+        and path[-2:] == ("components", "execution")
+    ):
+        return execution_component.handle(context, parts)
+    if (
+        section == "launch"
+        and len(path) >= 6
+        and path[-2:] == ("components", "market")
+    ):
         return market.handle(context, parts)
     if section == "launch":
         return launch.handle(context, parts)
@@ -140,8 +153,6 @@ def shell_command(context: InteractiveContext, line: str) -> ShellAction:
         return project.handle(context, parts)
     if section == "observe":
         return observe.handle(context, parts)
-    if section == "order":
-        return order.handle(context, parts)
     if section == "risk":
         return risk.handle(context, parts)
     if section == "capital":
@@ -167,7 +178,7 @@ def _print_help(context: InteractiveContext) -> None:
 
 def _print_summary(context: InteractiveContext) -> None:
     path = context.shell_path
-    if len(path) == 2 and path[0] == "account":
+    if len(path) >= 3 and path[:2] == ("trade", "accounts"):
         account.print_summary(context)
         return
     if len(path) == 2 and path[0] == "launch":
@@ -188,16 +199,25 @@ def _section_module(context: InteractiveContext):
     if not path:
         return home
     section = next(iter(path))
-    if section in home.HOME_GROUPS:
+    if len(path) == 1 and section in home.HOME_GROUPS:
         return home
-    if path == ("system", "market") or (
-        len(path) >= 3
+    if path[:2] == ("trade", "accounts"):
+        if len(path) >= 4 and path[3] == "orders":
+            return order
+        return account
+    if (
+        len(path) >= 6
         and path[0] == "launch"
-        and path[2] == "market"
+        and path[-2:] == ("components", "execution")
+    ):
+        return execution_component
+    if path == ("system", "market") or (
+        len(path) >= 6
+        and path[0] == "launch"
+        and path[-2:] == ("components", "market")
     ):
         return market
     return {
-        "account": account,
         "launch": launch,
         "reference": reference,
         "market": market,
@@ -206,7 +226,6 @@ def _section_module(context: InteractiveContext):
         "system": runtime,
         "project": project,
         "observe": observe,
-        "order": order,
         "risk": risk,
         "capital": capital,
         "integration": integration,

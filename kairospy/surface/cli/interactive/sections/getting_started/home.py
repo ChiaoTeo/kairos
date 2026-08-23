@@ -8,7 +8,7 @@ from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellContr
 
 
 _DIRECT_ROUTES = {
-    "account": "account",
+    "8": "market",
     "market": "market",
     "quotes": "market",
     "1": "launch",
@@ -21,8 +21,6 @@ _DIRECT_ROUTES = {
     "system": "system",
     "project": "project",
     "research": "research",
-    "order": "order",
-    "execution": "order",
     "risk": "risk",
     "capital": "capital",
     "integration": "integration",
@@ -31,8 +29,6 @@ _DIRECT_ROUTES = {
 }
 
 _GROUP_ROUTES = {
-    "2": "trade-control",
-    "trade-control": "trade-control",
     "4": "data-research",
     "data-research": "data-research",
     "5": "operations",
@@ -41,17 +37,15 @@ _GROUP_ROUTES = {
     "project-help": "project-help",
 }
 
-HOME_GROUPS = frozenset(_GROUP_ROUTES.values())
+HOME_GROUPS = frozenset((*_GROUP_ROUTES.values(), "trade"))
 
 
 def print_menu(context: InteractiveContext) -> None:
+    if context.shell_path == ("trade",):
+        typer.echo("交易管理：\n  1. 选择账户")
+        return
     if context.shell_path == ("data-research",):
         typer.echo("数据与研究：\n  1. 数据\n  2. 研究")
-        return
-    if context.shell_path == ("trade-control",):
-        typer.echo(
-            "交易管理：\n  1. 账户\n  2. Execution 订单\n  3. Risk\n  4. Capital"
-        )
         return
     if context.shell_path == ("operations",):
         typer.echo(
@@ -72,51 +66,42 @@ def print_menu(context: InteractiveContext) -> None:
                 "  5. 系统与集成",
                 "  6. 诊断与观测",
                 "  7. 项目与帮助",
-                "  market. Market 独立模式（直连 provider）",
+                "  8. 市场行情",
             )
         )
     )
 
 
 def print_help(context: InteractiveContext) -> None:
+    if context.shell_path == ("trade",):
+        typer.echo("可用命令：accounts/back/home/exit")
+        return
     if context.shell_path in {
         ("data-research",),
-        ("trade-control",),
         ("operations",),
         ("project-help",),
     }:
         typer.echo("输入序号选择；back 返回产品入口，home 返回首页。")
         return
     typer.echo(
-        "输入 1-7 选择产品入口。也可直接输入命令：account/launch/reference/"
-        "market/data/research/order/risk/capital/system/integration/notifications/config；"
+        "输入 1-8 选择产品入口。也可直接输入命令：account/launch/reference/"
+        "market/data/research/risk/capital/system/integration/notifications/config；"
         "market 是直连 provider 的独立模式；system/market 和 "
-        "launch/<id>/market 是连接模式。"
+        "launch/<id>/instances/<instance-id>/components/market 是连接模式。"
     )
 
 
 def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
+    if context.shell_path == ("trade",):
+        if parts in {("1",), ("account",), ("accounts",), ("select",)}:
+            context.shell_path = ("trade", "accounts")
+            return ShellControl.HANDLED
+        return None
     if context.shell_path == ("data-research",):
         return _navigate_group(
             context,
             parts,
             {"1": "data", "data": "data", "2": "research", "research": "research"},
-        )
-    if context.shell_path == ("trade-control",):
-        return _navigate_group(
-            context,
-            parts,
-            {
-                "1": "account",
-                "account": "account",
-                "2": "order",
-                "order": "order",
-                "execution": "order",
-                "3": "risk",
-                "risk": "risk",
-                "4": "capital",
-                "capital": "capital",
-            },
         )
     if context.shell_path == ("operations",):
         return _navigate_group(
@@ -139,6 +124,12 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
                 ("quickstart",), "查看 CLI 场景地图", needs_workspace=False
             )
         return _navigate_group(context, parts, {"1": "project", "project": "project"})
+    if parts in {("2",), ("trade",)}:
+        context.shell_path = ("trade",)
+        return ShellControl.HANDLED
+    if parts in {("account",), ("accounts",)}:
+        context.shell_path = ("trade", "accounts")
+        return ShellControl.HANDLED
     if len(parts) == 1 and parts[0] in _DIRECT_ROUTES:
         context.shell_path = (_DIRECT_ROUTES[parts[0]],)
         return ShellControl.HANDLED

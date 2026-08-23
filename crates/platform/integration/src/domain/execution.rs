@@ -202,6 +202,7 @@ pub struct ExternalOrderQuery {
 pub struct ExternalOrder {
     pub connection_key: crate::ConnectionKey,
     pub order_id: OrderId,
+    pub remote_order_id: RemoteOrderId,
     pub client_order_id: Option<ClientOrderId>,
     pub symbol: Symbol,
     pub side: OrderSide,

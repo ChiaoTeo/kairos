@@ -58,7 +58,8 @@ pub use kairos_integration::participants::binance::usdm::{
     BinanceUsdMRestConnection, BinanceUsdMUserWebSocketConnection, BinanceUsdMWebSocketConnection,
 };
 pub use kairos_integration::participants::binance::{
-    BinanceCredential, BinanceRestConfig, BinanceUserWebSocketConfig, BinanceWebSocketConfig,
+    BinanceCredential, BinanceHistoryQuery, BinanceRestConfig, BinanceUserWebSocketConfig,
+    BinanceWebSocketConfig,
 };
 pub use kairos_integration::participants::hyperliquid::info::HyperliquidInfoRestConnection;
 pub use kairos_integration::participants::hyperliquid::{
@@ -75,7 +76,7 @@ pub use kairos_integration::participants::massive::{
     MassiveWebSocketConfig,
 };
 pub use kairos_integration::participants::okx::private::{
-    OkxPrivateRestConnection, OkxPrivateWebSocketConnection,
+    OkxHistoryQuery, OkxPrivateRestConnection, OkxPrivateWebSocketConnection,
 };
 pub use kairos_integration::participants::okx::public::{
     OkxPublicRestConnection, OkxPublicWebSocketConnection,

@@ -39,7 +39,9 @@ pub(crate) fn normalize_okx_order(
     let average_fill_price = decimal_field(value, "avgPx").ok();
     Ok(ExternalOrder {
         connection_key: connection_key.clone(),
-        order_id: OrderId::try_from(order_id).map_err(|error| error.to_string())?,
+        order_id: OrderId::try_from(order_id.clone()).map_err(|error| error.to_string())?,
+        remote_order_id: kairos_primitives::integration::RemoteOrderId::new(order_id)
+            .map_err(|error| error.to_string())?,
         client_order_id: text("clOrdId")
             .map(ClientOrderId::try_from)
             .transpose()

@@ -146,7 +146,7 @@ kairos launch instance component market freshness
 
 | 模式 | 是否需要正在运行的 module server | 典型实现 | 示例 |
 | --- | --- | --- | --- |
-| 独立模式 | 不需要 | Rust module CLI、本地文件、本地 DB、provider one-shot、direct action | `market validate`、`account balances`、`order submit --direct`、本地 Account registry 命令 |
+| 独立模式 | 不需要 | Rust module CLI、本地文件、本地 DB、provider one-shot、direct action | `market validate`、`account balances`、`order submit --account-id ...`、本地 Account registry 命令 |
 | 连接模式 | 需要明确的 server 或当前 projection | contract client、projection reader、Rust CLI connected mode | `system component market snapshot`、`launch instance component market snapshot`、`launch instance component account balances` |
 
 独立模式和连接模式是工程执行模式，不是同一个命令族里的隐式细节。用户入口也要体现
@@ -282,7 +282,7 @@ workspace-scoped Account component。
 
 - `CliMarketApplication` 可以承载 `market once/download/validate` 这类 provider/local
   短路径。
-- `CliExecutionApplication` 可以承载未来 direct order submit/cancel/replace，但必须复用
+- `CliExecutionApplication` 承载 direct order submit/cancel/replace，并复用
   Execution-owned validation、idempotency 和 provider action service。
 - `CliCapitalApplication` 可以承载 direct transfer preview/action，但必须复用
   Capital-owned safety、confirmation 和 provider action service。
@@ -355,7 +355,7 @@ kairos account balances
 | 本地配置/registry/schema | 是 | 否 | 例如 account registry、credential、schema、fixture。它们写的是 workspace 配置，不是运行中业务事实。 |
 | 本地只读 catalog/fixture/history | 是 | 否 | 例如 reference catalog 查询、market replay 文件检查。 |
 | direct provider one-shot 查询 | 可以 | 否 | 必须明确 provider、account、credential、environment，输出标记为 direct result。 |
-| direct provider one-shot 动作 | 可以，但必须高安全门槛 | 否 | 例如未来的 direct order submit/cancel、transfer。不能写 runtime projection。 |
+| direct provider one-shot 动作 | 可以，但必须高安全门槛 | 否 | 例如已落地的 direct order submit/cancel/replace，以及未来的 transfer。不能写 runtime projection。 |
 | 当前 runtime projection 查询 | 否 | 是 | 即使只是 mmap/read-only，也依赖 launch/workspace runtime scope。 |
 | 当前 runtime control | 否 | 是 | refresh、reconcile、pause/resume、subscription mutation 等都必须连接目标 server。 |
 | 模拟 runtime 事实写入 | 否 | 是 | fill、settlement、mark-to-market、advance-time、simulated capital mutation 必须进入 paper/simulated server。 |
@@ -424,7 +424,7 @@ connected；工作流命令可以聚合多个 owner，但不能成为新的 owne
 | `research` | 固化研究计划和证据 | `plan lock/show`、`gate publish/show` | 不下载原始数据，不启动 backtest runtime | 面向可复现 evidence 和 trust gate |
 | `account` | Account standalone/direct 用户入口 | registry、credential、schema、doctor、direct balance/position query | 不操作当前 runtime projection，不写 simulated runtime facts | 调用 Account standalone CLI 或 provider one-shot |
 | `market` | Market standalone/direct 用户入口 | validate、once、replay、download、reference-universe | 不看当前 Market server status/subscription | 调用 Market standalone CLI/provider historical API |
-| `order` | Execution 的订单用户入口 | 未来 direct submit/cancel/replace、本地 evidence 查询、本地 submit preview | 不承载 backtest workflow，不隐式操作 launch runtime Execution | 当前 runtime 订单事实进入 `launch instance component execution`；回测归 `launch`/`data`/`research` |
+| `order` | Execution 的订单用户入口 | 账户作用域的 direct open-orders/history/order/fills/submit/cancel/replace | 不承载本地 evidence/preview 或 backtest，不隐式操作 launch runtime Execution | runtime 订单事实进入具体 `launch instance component execution`；回测归 `launch`/`data`/`research` |
 | `reference` | Reference catalog/query 用户入口 | query、search、show、markets、assets、option-chain | 不控制运行中 provider refresh/pause/resume | 本地 catalog/projection 查询；runtime 控制进 component |
 | `risk` | Risk standalone/dry-run 用户入口 | schema、doctor、preview、本地 policy/fixture 检查 | 不写 runtime reservation，不控制 circuit/policy runtime | 调用 Risk owner CLI standalone；运行中风险事实进 scoped component |
 | `capital` | Capital standalone/planning 用户入口 | schema、doctor、离线 plan/preview、direct transfer preview 预留 | 不隐式执行 runtime funding objective 或读取 launch projection | 调用 Capital owner CLI standalone；运行中资金事实进 scoped component |
@@ -493,8 +493,8 @@ Reference 有两类“目录”：本地 catalog DB/projection 和运行中 Refe
 
 | 用户能力 | Standalone 语义 | Connected 语义 | 当前归属判断 |
 | --- | --- | --- | --- |
-| `order inspect/audit/journal` | 本地日志或导出的 execution evidence 查询 | 当前 Execution runtime audit/projection | 两者可共存，但数据源必须显式 |
-| `order submit/cancel/replace` | direct provider one-shot；必须显式 account、credential、provider、market、环境和确认 | 操作当前 launch instance 的 Execution server | 两者可共存；当前若依赖 server，则 Connected |
+| `order inspect/audit/journal` | 不提供 | 当前 Execution runtime audit/projection | 只属于 connected runtime，不建立本地工具模式。 |
+| `order submit/cancel/replace` | direct provider one-shot；用户显式选择 account，其他连接事实由 Account binding 决定，并对 live 动作确认 | 操作当前 launch instance 的 Execution server | 两者可共存，入口上下文决定目标。 |
 | `order routes/orders/fills/snapshot` | 不应读取当前 runtime projection | 当前 Execution runtime projection/API | Connected |
 | `order backtest` | 不应作为 Order 用户短路径 | 不需要 | 删除用户入口；回测由 `launch`/`data`/`research` 工作流承载 |
 | `order fill` | 不应存在 | 不应由 Execution CLI 人工写入；成交事实来自 provider/reconciliation，Account simulated settlement 走 Account | 删除 CLI 入口 |
@@ -536,7 +536,7 @@ Capital 的 direct transfer/action 是最高风险 standalone 能力之一。它
 | --- | --- | --- |
 | `kairos account balances/positions/snapshot/open-orders` | 作为 standalone 短路径是合理的，但实现必须确认是 local registry、direct provider query 还是 runtime projection read。历史实现曾在 standalone 下读取 launch mmap/projection，用户心智错误。 | local paper/simulated registry 查询可 standalone；live direct provider query 仍需 Account-owned provider query facade；runtime projection 查询只通过 `launch instance component account ...`。 |
 | `kairos account fill` | 不能 standalone；它写 paper/simulated runtime facts。 | 只保留 connected component 入口，并通过 Account contract `apply_simulated_settlement`；不得保留 direct/local settlement 旁路。 |
-| `kairos order submit/cancel/replace` | 产品上适合短路径，但当前如果依赖 Execution server，就不是 standalone。 | 要么实现 provider direct order action；要么只在 `launch instance component execution` 暴露 runtime API。 |
+| `kairos order submit/cancel/replace` | 已通过 Account binding 建立短生命周期 provider 直连；不得读取 Execution runtime。 | 保持 provider-direct，并继续要求账户、segment、交易凭据、确认和来源标记；runtime 同名动作只在 `launch instance component execution`。 |
 | `reference assets/instruments/listings add` | 名字看起来像本地 catalog 编辑，但当前是 owner catalog 写入。 | 保持 connected；若未来需要 fixture 编辑，另建 `reference fixture ...` 或明确 offline 命令。 |
 | `risk/capital` | Risk/Capital 都已有 standalone 顶层和 scoped connected。 | 先定义 contract/API，再补 resource/action 命令；不要先加半成品顶层入口。 |
 | 聚合层交易/转账 | 用户需要高质量交互式体验，但 Python 不能复制 owner 业务规则。 | 在 `kairospy` 做 preview、证据收集、确认和编排；最终动作调用 owner contract。 |
@@ -555,8 +555,7 @@ Capital 的 direct transfer/action 是最高风险 standalone 能力之一。它
 | Market | validate、once、replay、download、reference-universe | Standalone local/direct/data | `validate/reference-universe/once/replay/download` 已进入 `CliMarketApplication`；不读 runtime | 继续删除顶层 runtime status/subscription；connected 保持 contract/projection client。 |
 | Market | status、sources、snapshot、freshness、subscribe/unsubscribe、recover/pause-replay/resume-replay | Connected runtime projection/control | `status/sources/snapshot/freshness/subscribe/unsubscribe/recover/pause-replay/resume-replay` 已在 Rust connected enum 对齐；system 与 launch 的 `sources/snapshot/freshness` 都解析明确 socket/view root 后进入 Market owner Rust CLI connected；sources 支持 market/instrument/observation/provider/configured/ready typed filter；snapshot 输出 typed payload，缺失 view 返回结构化错误 | 交互层只从 Reference Market 和 connected source 列表选择，不接受自由输入。 |
 | Reference | catalog/query/search/show/option-chain | Standalone local catalog query | 生产路径已通过 `CliReferenceApplication` 读 catalog；Python 顶层入口已收敛为 owner Rust CLI passthrough；`option-chain` 已作为 owner CLI standalone catalog query 落地；顶层已拒绝 `status/doctor/logs/coverage` 等 connected 命令和 `assets/instruments/listings add` catalog mutation；standalone/connected 不再归一化成总 command | 运行态 `health/providers/refresh/pause/resume/stream/coverage` 只保留 component/connected。 |
-| Execution / Order | 本地 evidence 查询和 order action preview | Standalone local | `order backtest` 用户入口已删除；`audit/journal/inspect/fills --file` 已通过 `CliExecutionApplication` 落地，输出标记 `source=local_evidence_file`；`preview-submit/preview-cancel/preview-replace` 及其 `*-file` typed request 版本已通过 `CliExecutionApplication` 校验和规范化本地订单请求，输出 `effect=dry_run`、`connects_server=false`，且不会发单、撤单或改单 | 避免把 runtime audit/projection 暴露为 `kairos order` 短路径；回测归 launch/data/research；真正 direct submit/cancel/replace 仍需 provider action service。 |
-| Execution / Order | submit/cancel/replace | Standalone direct provider action 或 Connected Execution runtime action | 已预留 `CliExecutionApplication`；当前无 direct order 短路径 | 若走 direct，在 `CliExecutionApplication` 补 provider action、确认、幂等和 risk/cap preview；若走 runtime，只暴露在 launch component。 |
+| Execution / Order | 账户作用域的交易所直连订单查询与动作 | Standalone direct | `open-orders/history/order/fills/submit/cancel/replace` 由 `CliExecutionApplication` 通过 Account 解析出的 binding 和 Integration provider connection 执行，输出标记 `scope=direct-provider`；不连接 Execution server，不读取本地 evidence 或 runtime projection | runtime audit/projection/reconciliation 只在具体 launch instance component；不提供本地工具或 preview 兼容命令。 |
 | Risk | policy/schema/doctor/assess preview | Standalone local dry-run | Rust CLI 已移除空 application 的假 `status/snapshot`；`schema/doctor/preview` 已进入 `CliRiskApplication`，可解释和校验本地 typed request file，并用本地 policy 文件做 dry-run `pre_trade_check` | 继续补更完整的本地 policy fixture/workflow 工具；不要把 reservation/authorization 混进 standalone。 |
 | Risk | health/latest/limits/reservations/circuits | Connected Risk runtime | 已在 `kairos-risk-cli connected health/latest/limits/reservations/circuits`、`system component risk health/latest/limits/reservations/circuits`、`launch instance component risk health/latest/limits/reservations/circuits` 落地；`status` 仍只表示 component process status；Python 和 Rust owner CLI connected `latest` 已从 mmap 输出 policy_version、limits、active_reservations、circuits 和 summary | `decisions` 不能从现有 latest mmap 伪造；需先新增 owner decision projection/schema 或明确 event/journal 查询边界。 |
 | Risk | pre-trade-check/authorize-reserve/release/consume/runtime snapshot | Connected Risk runtime | `pre-trade-check/authorize-reserve/release/consume/resize/open-circuit/close-circuit/publish-policy/advance-time` 已在 `kairos-risk-cli connected`、`system component risk`、`launch instance component risk` 对齐 typed contract；system/launch component 的 runtime control 都 passthrough 到 owner Rust CLI connected；`pre-trade-check`、`authorize-reserve` 和 `publish-policy` 都通过 typed request file，不是通用 JSON-RPC | 不要把会读取或修改 runtime budget 的能力加进 standalone；decision 查询必须等 typed projection 或 journal 查询能力。 |
@@ -635,18 +634,17 @@ Reference 的短路径价值很高，因为用户经常需要查 market/listing/
 | `order backtest` | 否 | 否 | 否 | 删除用户短路径；Execution 内部 backtest application/contract 可继续服务 launch/backtest workflow。 |
 | `execution connected snapshot` | 否 | 否 | 是 | 当前 Execution projection/API，产品入口是 launch instance component。 |
 | `execution connected routes` | 否 | 否 | 是 | 当前 runtime order route candidates/API。 |
-| `execution connected orders/open-orders/history/status/inspect` | 可有只读短路径，但需 context | 否，除非读本地导出 evidence | 是 | 默认 connected；本地 audit/export 查询需另显式数据源。 |
-| `execution connected events/trace/audit/journal/fills` | 可有只读短路径，但需 context | 可新增本地 evidence 查询 | 是 | 当前 runtime audit/projection 属 connected。 |
-| `execution connected submit/cancel/replace` | 是，产品上应有 | 只有 provider direct action 实现后才是 standalone | 是 | 当前若操作 runtime server，必须 connected；未来可新增 direct 短路径。 |
+| `execution connected orders/open-orders/history/status/inspect` | 账户下有 direct 查询短路径 | `order/open-orders/history` 直接查询 provider | 是 | standalone 与 connected 名称可相同，但目标由入口上下文决定。 |
+| `execution connected events/trace/audit/journal/fills` | 仅 fills 有 direct 短路径 | `fills` 直接查询 provider | 是 | event/trace/audit/journal 只属于 runtime；不提供本地 evidence 产品模式。 |
+| `execution connected submit/cancel/replace` | 是 | 是，使用账户 binding 直接调用 provider | 是 | standalone 不启动或发现 server；connected 只操作所选 instance。 |
 | `execution connected reconcile/unknown-remote-orders` | 否 | 否 | 是 | runtime reconciliation/control，必须 component/API 对齐；`link-unknown` 尚未进入 ExecutionControlRpc，不能作为半入口暴露。 |
 | `execution connected fill` | 否 | 否 | 否 | 删除半入口；Execution 成交事实来自 provider event/reconciliation，不提供人工 fill reporting CLI。Account paper/simulated settlement 走 Account component。 |
 
-`kairos order` 是用户心智入口，不是 Execution runtime 的别名。它可以做短路径，但短路径
-必须是 direct action、本地 evidence 或不会执行外部动作的本地 preview；当前已落地的短路径
-是显式 `--file` 的本地 `audit/journal/inspect/fills` evidence 查询，以及
-`preview-submit/preview-cancel/preview-replace` 和对应 `*-file` typed request 的本地请求校验。
-runtime 订单事实应通过
-`kairos launch instance component execution ...`。
+`kairos order` 是用户心智入口，不是 Execution runtime 的别名。它只提供账户作用域的 provider
+direct `open-orders/history/order/fills/submit/cancel/replace`。Account owner 解析账户、segment、
+credential role 和 provider binding，Execution composition 加载凭据并建立短生命周期 Integration
+connection。它不提供 evidence 文件读取、preview 或第三种“本地工具”模式。runtime 订单事实与控制
+统一通过 `kairos launch instance component execution ...`。
 
 #### Risk 现有命令
 
@@ -743,20 +741,19 @@ Python surface 是用户真正看到的 `kairos` 入口。它可以比 Rust modu
 | `data gate show` | data evidence | 是 | 数据 gate 证据读取。 |
 | `research plan lock/show` | research evidence | 是 | 固化研究计划，不下载数据。 |
 | `research gate publish/show` | research evidence | 是 | 发布/查看研究 gate 证据，不替代 data gate。 |
-| `reference health/providers/refresh/pause/resume` | Reference connected | 否 | 顶层 reference 里仍有连接语义，应迁移或保持为 deprecated shim 指向 component。 |
+| `reference health/providers/refresh/pause/resume` | Reference connected | 否 | 只进入 scoped component；顶层不保留 redirect 或 deprecated shim。 |
 | `reference catalog/events/markets/assets/entities/instruments/listings/option-chain` | Reference standalone | 是 | 本地 catalog/目录查询，保留短路径。 |
 | `reference validate` | Reference diagnostic | 是，若本地校验 | 若校验 runtime source，应走 component；需要在 help/output 标明。 |
 | `reference stream` | Reference connected/observe | 否 | 若跟随 runtime events，应迁移到 component 或 observe。 |
 | `reference options-coverage/options-add/options-remove` | Reference connected | 否 | coverage read/mutation/control 已迁移到 component；顶层只保留拒绝提示。 |
 | `account` passthrough | Account standalone/direct | 是 | 默认调用 Account standalone；connected 命令必须拒绝并提示 component。 |
 | `market` passthrough | Market standalone/direct | 是 | 默认调用 Market standalone；runtime status/subscription 必须拒绝。 |
-| `order` passthrough | Execution standalone/direct | 是 | 仅 provider direct 或本地 evidence 才能 standalone；runtime order API 走 launch component。 |
+| `order` passthrough | Execution standalone/direct | 是 | 只允许账户作用域的 provider direct；runtime order API 走具体 launch instance component。 |
 | `integration` passthrough | provider escape hatch | 高级短路径 | provider 原生命令，输出 external/provider result，不写 owner authoritative state。 |
 
 这张表给出迁移优先级：最需要清理的是“顶层业务命令里仍带 connected 语义”的入口，
-尤其是 `reference refresh/pause/resume/options-coverage/options-add/options-remove/stream`。这些可以作为
-短期兼容 shim，但长期产品入口应迁到 `system component reference ...` 或
-`launch instance component reference ...`。
+尤其是 `reference refresh/pause/resume/options-coverage/options-add/options-remove/stream`。这些只进入
+`system component reference ...` 或 `launch instance component reference ...`，顶层旧入口直接删除。
 
 ### 命名风格：短命令 vs API 对齐
 
@@ -782,11 +779,11 @@ provider action。
 资源化、显式，不追求过度缩写：
 
 ```text
-kairos launch instance component account balances
+kairos launch instance component account balances <launch-id> --instance <instance-id>
 kairos system component market subscriptions list
 kairos system component market subscriptions create
-kairos launch instance component execution orders list
-kairos launch instance component execution orders cancel
+kairos launch instance component execution orders <launch-id> --instance <instance-id> --mode <mode>
+kairos launch instance component execution cancel <launch-id> --instance <instance-id> --mode <mode> --order-id <order-id>
 kairos launch instance component risk reservations release
 kairos launch instance component capital reconcile-plan
 ```
@@ -879,12 +876,12 @@ impl From<ConnectedCommand> for ModuleCommand { /* ... */ }
 原因是 standalone 和 connected 的产品语义、数据来源、参数完整度和输出含义会逐渐分化。
 例如：
 
-- `StandaloneCommand::Orders` 如果未来存在，应表示 direct provider one-shot 查询，只能
+- `StandaloneCommand::OpenOrders` 表示 direct provider one-shot 查询，只能
   返回 provider 能直接证明的字段，并标记 `source=direct_provider`。
 - `ConnectedCommand::Orders` 表示当前 launch/workspace runtime projection 查询，可以包含
   strategy id、intent id、risk reservation、event sequence、generation、projection
   completeness、runtime lifecycle 等运行态字段。
-- `StandaloneCommand::Submit` 如果未来存在，应直接走 provider/order-entry action，并带
+- `StandaloneCommand::Submit` 直接走 provider/order-entry action，并带
   credential、provider、environment、confirmation、idempotency 等 direct action 参数。
 - `ConnectedCommand::Submit` 表示调用当前 Execution runtime contract，参数和返回值应贴近
   owner contract / REST API，并携带 launch instance scope。
@@ -897,7 +894,7 @@ async fn run_standalone(
     workspace: &Workspace,
     command: StandaloneCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // local / fixture / direct provider one-shot
+    // direct provider one-shot
 }
 
 async fn run_connected(
@@ -956,7 +953,7 @@ runtime 入口”和“standalone CLI 入口”在 owner crate 内命名分开�
 4. 是否存在一个 owner-owned service 可以在两个 application 边界下复用，而不是复用 CLI
    command enum？
 
-可以为旧 flat command 保留临时 alias 或兼容 shim，但新命令必须进入明确的模式分组。
+旧 flat command、alias 和兼容 shim 直接删除；新命令必须进入明确的模式分组。
 
 ### 全仓模块边界表
 
@@ -968,7 +965,7 @@ runtime 入口”和“standalone CLI 入口”在 owner crate 内命名分开�
 | Account | `kairos account` | `kairos-account-cli` | registry、credential、schema、离线诊断、模拟 account 配置初始化；paper/simulated local snapshot/balances/positions/open-orders；live direct provider query 只有实现后才能进入 | runtime balances、positions、open orders、refresh/reconcile、paper/simulated fill/settlement | 无 workspace-scoped Account component | `launch instance component account` 可读 instance account | 已接入；standalone 读本地/direct，运行中 projection/control 只进入 launch instance component |
 | Market | `kairos market` | `kairos-market-cli` | validate、once、replay、download、历史数据工具 | sources、freshness、snapshot、subscribe/unsubscribe、recover/pause-replay/resume-replay | `system component market` 管共享 Market；freshness、subscription、replay、recovery control 已 passthrough 到 owner CLI connected | `launch instance component market` 管 instance Market | 已接入；顶层只表示独立模式，当前系统组件只表示连接模式 |
 | Reference | `kairos reference` | `kairos-reference-cli` | catalog 查询、events、markets、assets、listings、option chain | health、providers、validate、refresh、pause/resume、catalog projection | `system component reference` 管 workspace Reference | `launch instance component reference` 读 instance 绑定的 Reference | 已接入；Python 顶层入口只做 owner CLI passthrough |
-| Execution | `kairos order` | `kairos-execution-cli` | `audit/journal/inspect/fills --file` 本地 evidence 查询已落地；`preview-submit/preview-cancel/preview-replace` 和 `preview-submit-file/preview-cancel-file/preview-replace-file` 可本地校验和规范化订单动作请求但不执行；direct submit/cancel/replace 只有实现 provider one-shot 后才能进入 | runtime submit、cancel、replace、orders、fills、routes、snapshot | 当前产品无 workspace-scoped Execution 入口 | `launch instance component execution` 是运行态入口，已 passthrough 到 owner connected CLI | 已接入，`order` 不是独立模块；`order backtest` 和 `execution fill` 不作为 CLI 能力 |
+| Execution | `kairos order` | `kairos-execution-cli` | 账户作用域的 provider direct `open-orders/history/order/fills/submit/cancel/replace` | runtime submit、cancel、replace、orders、fills、routes、snapshot、events、audit、trace、journal、reconcile | 当前产品无 workspace-scoped Execution 入口 | `launch instance component execution` 是运行态入口，已 passthrough 到 owner connected CLI | 已接入；`order` 不是独立模块，不提供 evidence/preview 本地工具模式 |
 | Risk | `kairos risk`，只表示独立模式 | `kairos-risk-cli` | `schema/doctor/preview` 已落地；未来可补风险策略/fixture workflow | runtime health、policy、pre-trade-check、authorize-reserve、release/consume、latest projection、limits、reservations、circuits | 已接入 `system component risk status/health/latest/limits/reservations/circuits` 和运行态 control；`status` 为进程状态，`health/latest/limits/reservations/circuits` 为业务 runtime 读取 | 已接入 `launch instance component risk status/health/latest/limits/reservations/circuits` 和运行态 control；业务写入动作按 contract 补齐 | Python 顶层入口只做 owner CLI standalone passthrough；`CliRiskApplication` 已承载本地 schema/doctor/preview；禁止 connected 半成品入口；空 application `status/snapshot` 不作为能力 |
 | Capital | `kairos capital`，只表示独立模式 | `kairos-capital-cli` | `schema/doctor/preview/plan` 已落地；`preview/plan` 只处理本地 typed request 文件；未来可补 fixture route preview、direct transfer preview 或明确 direct transfer | runtime health、current projection、objectives、demands、availability、routes、plans、reservations、operations、alerts、funding objective、capital demand、plan reconcile；owner CLI connected 已按 contract/projection 暴露 | 已接入 `system component capital status/health/current/objectives/demands/availabilities/routes/plans/reservations/operations/alerts` 和运行态 control；`status` 为进程状态，其他为业务 runtime 读取 | 已接入 `launch instance component capital status/health/current/objectives/demands/availabilities/routes/plans/reservations/operations/alerts` 和运行态 control；业务写入动作按 contract 补齐 | Python 顶层入口只做 owner CLI standalone passthrough；`CliCapitalApplication` 已承载本地 schema/doctor/preview/plan；禁止 connected 半成品入口 |
 
@@ -1163,13 +1160,11 @@ kairos launch instance component account ...
 ### `order`
 
 `kairos order` 是 Execution 模块的 standalone mode，也是面向用户的订单独立入口。
-它不是独立的 Order module。当前已落地的 standalone order 短路径是本地
-`audit/journal/inspect/fills --file` evidence 查询和
-`preview-submit/preview-cancel/preview-replace` 本地请求校验。参数式 preview 适合人工
-短路径；`preview-submit-file/preview-cancel-file/preview-replace-file` 适合聚合层或脚本把
-typed request 先交给 Execution owner 做 dry-run。未来如果补 direct order action，也必须
-先复用同一个 `CliExecutionApplication` 入口，并加入 provider action、确认、幂等、risk/cap
-preview 和 evidence 输出。
+它不是独立的 Order module。调用者必须显式选择 Account；Account owner 返回不含 secret 的
+provider binding，Execution composition 再从 workspace credential store 加载凭据并建立一次性
+provider connection。当前命令为 `open-orders/history/order/fills/submit/cancel/replace`，结果标记
+`scope=direct-provider`。命令不启动、不发现也不连接 Execution server，不读取 runtime projection，
+也不保留 evidence/preview 本地工具命令。
 
 `order backtest` 不应存在。回测是 launch/data/research 工作流，不是 Order 用户入口。
 Execution 内部的 backtest application/contract 可以继续服务 launch/backtest runtime，
@@ -1177,9 +1172,9 @@ Execution 内部的 backtest application/contract 可以继续服务 launch/back
 
 `kairos order submit/cancel/replace` 可以作为短路径存在，但必须在产品语义上区分：
 
-- direct one-shot：不启动 Execution server，直接通过 provider/order-entry 能力执行。
-  必须显式选择 account、credential、provider、market、environment，并对 live action
-  做确认。它返回的是一次性 direct action result。
+- direct one-shot：不启动 Execution server，直接通过账户解析出的 provider/order-entry 能力执行。
+  用户显式选择 account；credential、provider 和 environment 由 Account owner binding 决定，
+  live action 必须确认。它返回一次性 direct action result。
 - connected runtime：操作当前 launch instance 的 Execution server，必须通过明确的
   launch instance selector 创建 Execution contract client。
 
@@ -1189,9 +1184,8 @@ connected runtime 入口应是：
 kairos launch instance component execution ...
 ```
 
-如果产品希望 `kairos order submit` 默认走 direct one-shot，这是允许的；如果它要操作
-运行中的 Execution server，它必须只是连接模式的显式别名，并且必须要求或解析唯一目标
-server；不能静默连接。
+`kairos order submit` 只表示 direct one-shot，不作为 connected runtime 的别名。运行态提交只进入
+具体 `launch instance component execution`，并要求或解析唯一的 mode、launch 和 instance 三元组。
 
 当前产品模型里 Execution 是 launch instance 组件，不是 workspace 级共享组件。
 因此 `kairos order` 默认表示 Execution 的 standalone/direct order-facing mode；人工与
@@ -1505,12 +1499,8 @@ Python CLI 只能有三类业务入口：
   runtime lifecycle 命令。
 - 未在全仓模块边界表登记的其他顶层业务入口。
 
-旧入口如果必须暂时保留，只能作为兼容 shim，并且必须：
-
-- hidden 或明确标注 deprecated；
-- 输出迁移提示；
-- 在检查脚本中登记迁移期限；
-- 不新增业务逻辑。
+旧入口不保留兼容 shim、hidden alias 或 deprecated redirect。入口调整必须同步删除旧路由、帮助、
+测试与文档描述；旧输入按未知或不支持命令处理。
 
 ## 建议目录
 
@@ -1564,7 +1554,7 @@ Help 文案先回答用户问题：
 - 在 `kairos-market-cli` 中增加 `ConnectedCommand` clap enum。
 - 将 `validate`、`once`、`replay`、`download` 放入独立模式。
 - 将需要连接当前 server 的命令放入连接模式。
-- 旧 flat command 只作为临时 alias 或 shim。
+- 旧 flat command、alias 和 shim 直接删除。
 
 其他业务模块按同样模式收敛。
 

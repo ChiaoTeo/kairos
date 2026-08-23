@@ -38,13 +38,13 @@ def print_menu(context: InteractiveContext) -> None:
         typer.echo(
             "\n".join(
                 (
-                    "Market 独立模式（直接访问 provider，不连接 Market runtime）：",
-                    "  1. 读取一次远端行情",
-                    "  2. 验证 Market 描述",
-                    "  3. 回放本地行情文件",
-                    "  4. 下载历史行情",
-                    "  5. 查看 Reference universe",
-                    "  system market. 进入 workspace Market 连接模式",
+                    "Market 独立工具（不连接运行中的 Market）：",
+                    "  1. 测试 Provider 行情",
+                    "  2. 下载历史行情",
+                    "  3. 检查本地行情文件",
+                    "  4. 验证市场定义",
+                    "  5. 检查 Reference → Market 映射",
+                    "  c. 连接 workspace Market",
                 )
             )
         )
@@ -64,6 +64,8 @@ def print_menu(context: InteractiveContext) -> None:
                     "  8. 停止服务",
                     "  9. 重启服务",
                     "  10. 查看日志",
+                    "  p. 暂停行情回放",
+                    "  r. 继续行情回放",
                 )
             )
         )
@@ -80,6 +82,8 @@ def print_menu(context: InteractiveContext) -> None:
                 "  4. K 线快照",
                 "  5. Greeks 快照",
                 "  6. 查看行情新鲜度",
+                "  p. 暂停行情回放",
+                "  r. 继续行情回放",
             )
         )
     )
@@ -87,10 +91,16 @@ def print_menu(context: InteractiveContext) -> None:
 
 def print_help(context: InteractiveContext) -> None:
     if _scope(context) == "direct":
-        typer.echo("可用命令：once/validate/replay/download/reference-universe/back/home/exit")
-        typer.echo("这里直接调用 provider 或本地文件；运行中快照请进入 system/market。")
+        typer.echo(
+            "可用命令：once/download/replay/validate/"
+            "reference-universe/connect/back/home/exit"
+        )
+        typer.echo("这些工具不会读取或更改运行中的 Market 状态。")
         return
-    commands = "status/sources/quote/bar/greeks/freshness/back/home/exit"
+    commands = (
+        "status/sources/quote/bar/greeks/freshness/"
+        "pause-replay/resume-replay/back/home/exit"
+    )
     if _scope(context) == "system":
         commands = f"{commands}/start/stop/restart/logs"
     typer.echo(f"可用命令：{commands}")
@@ -115,6 +125,16 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
         if freshness_kind is None:
             return ShellControl.HANDLED
         return build_snapshot_command(context, "freshness", freshness_kind)
+    replay_action = {
+        "p": "pause-replay",
+        "pause-replay": "pause-replay",
+        "pause": "pause-replay",
+        "r": "resume-replay",
+        "resume-replay": "resume-replay",
+        "resume": "resume-replay",
+    }.get(key)
+    if replay_action is not None:
+        return _replay_control_command(context, replay_action)
     if _scope(context) != "system":
         return None
     action = {
@@ -152,7 +172,9 @@ def enter_launch_market(context: InteractiveContext) -> ShellControl:
         return ShellControl.HANDLED
     context.selected_launch_instance = instance_id
     launch_id = context.selected_launch or context.shell_path[1]
-    context.shell_path = ("launch", launch_id, "market")
+    context.shell_path = (
+        "launch", launch_id, "instances", instance_id, "components", "market"
+    )
     context.selected_market = None
     context.selected_market_source = None
     return ShellControl.HANDLED
@@ -266,7 +288,7 @@ def choose(context: InteractiveContext) -> GuidedCommand:
 
 
 def _handle_direct(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
-    if parts == ("system", "market"):
+    if parts in {("c",), ("connect",), ("system", "market")}:
         context.shell_path = ("system", "market")
         context.selected_service = "market"
         context.selected_market = None
@@ -276,12 +298,12 @@ def _handle_direct(context: InteractiveContext, parts: tuple[str, ...]) -> Shell
     action = {
         "1": "once",
         "once": "once",
-        "2": "validate",
-        "validate": "validate",
+        "2": "download",
+        "download": "download",
         "3": "replay",
         "replay": "replay",
-        "4": "download",
-        "download": "download",
+        "4": "validate",
+        "validate": "validate",
         "5": "reference-universe",
         "reference-universe": "reference-universe",
         "universe": "reference-universe",
@@ -326,7 +348,7 @@ def _direct_once_command(context: InteractiveContext) -> ShellAction:
             "--format",
             "table",
         ),
-        f"直接从 {provider} 读取一次远端行情",
+        f"直接测试 {provider} 行情",
     )
 
 
@@ -342,7 +364,7 @@ def _direct_validate_command(context: InteractiveContext) -> ShellAction:
             "--format",
             "table",
         ),
-        "在独立模式验证 Market 描述",
+        "验证市场定义",
     )
 
 
@@ -364,7 +386,7 @@ def _direct_replay_command(context: InteractiveContext) -> ShellAction:
             "--format",
             "table",
         ),
-        "在独立模式回放本地行情事件",
+        "检查本地行情文件（不启动 Market 服务）",
     )
 
 
@@ -457,7 +479,21 @@ def _direct_reference_universe_command() -> ShellAction:
             "--format",
             "table",
         ),
-        "读取独立模式 Reference Market universe",
+        "检查 Reference → Market 映射",
+    )
+
+
+def _replay_control_command(context: InteractiveContext, action: str) -> GuidedCommand:
+    label = "暂停" if action == "pause-replay" else "继续"
+    return GuidedCommand(
+        (
+            *_command_prefix(context),
+            action,
+            *_launch_argument(context),
+            "--format",
+            "json",
+        ),
+        f"{label}当前 Market 服务的行情回放",
     )
 
 
@@ -724,9 +760,9 @@ def _scope(context: InteractiveContext) -> str:
     if path[:2] == ("system", "market"):
         return "system"
     if (
-        len(path) >= 3
+        len(path) >= 6
         and path[0] == "launch"
-        and path[2] == "market"
+        and path[-2:] == ("components", "market")
     ):
         return "launch"
     raise RuntimeError("Market 交互必须从 system 或 launch 连接作用域进入")

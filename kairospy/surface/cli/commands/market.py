@@ -38,6 +38,8 @@ CONNECTED_COMMANDS = {
     "dependents",
     "subscribe",
     "unsubscribe",
+    "pause-replay",
+    "resume-replay",
 }
 
 

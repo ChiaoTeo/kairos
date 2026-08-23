@@ -687,6 +687,8 @@ fn remote_query_reconciliation_persists_unknown_order_once() {
     let remote = ExternalOrder {
         connection_key: kairos_conflux::ConnectionKey::new("execution.fixture.query").unwrap(),
         order_id: OrderId::new("exchange-unknown-1").unwrap(),
+        remote_order_id: kairos_primitives::integration::RemoteOrderId::new("exchange-unknown-1")
+            .unwrap(),
         client_order_id: None,
         symbol: Symbol::new("BTCUSDT").unwrap(),
         side: kairos_conflux::OrderSide::Buy,
@@ -721,6 +723,10 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
     let remote = ExternalOrder {
         connection_key: kairos_conflux::ConnectionKey::new("execution.fixture.query").unwrap(),
         order_id: OrderId::new("exchange-recovered-fill").unwrap(),
+        remote_order_id: kairos_primitives::integration::RemoteOrderId::new(
+            "exchange-recovered-fill",
+        )
+        .unwrap(),
         client_order_id: Some(ClientOrderId::new("local-recovered-fill").unwrap()),
         symbol: Symbol::new("BTCUSDT").unwrap(),
         side: kairos_conflux::OrderSide::Buy,

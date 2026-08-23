@@ -35,9 +35,15 @@ def refresh_context(context: InteractiveContext) -> None:
 def go_home(context: InteractiveContext) -> None:
     context.shell_path = ()
     context.selected_account = None
+    context.selected_account_provider = None
+    context.selected_account_environment = None
+    context.selected_account_segment = None
     context.selected_launch = None
+    context.selected_launch_mode = None
     context.selected_launch_instance = None
     context.selected_service = None
+    context.selected_order = None
+    context.selected_order_symbol = None
     context.selected_market = None
     context.selected_market_source = None
     context.selected_reference = None
@@ -48,23 +54,72 @@ def go_back(context: InteractiveContext) -> None:
     previous = context.shell_path
     previous_section = next(iter(previous), None)
     leaving_market = previous in {("market",), ("system", "market")} or (
-        len(previous) >= 3
+        len(previous) >= 6
         and previous_section == "launch"
-        and previous[2] == "market"
+        and previous[-2:] == ("components", "market")
     )
     context.shell_path = previous[:-1]
-    if not context.shell_path or context.shell_path == ("account",):
+    if previous[:2] == ("trade", "accounts"):
+        if len(previous) == 2:
+            context.shell_path = ("trade",)
+            context.selected_account = None
+            context.selected_account_provider = None
+            context.selected_account_environment = None
+            context.selected_account_segment = None
+            context.selected_order = None
+            context.selected_order_symbol = None
+            context.selected_market = None
+            context.selected_market_source = None
+        elif len(previous) == 3:
+            context.shell_path = ("trade", "accounts")
+            context.selected_account = None
+            context.selected_account_provider = None
+            context.selected_account_environment = None
+            context.selected_account_segment = None
+            context.selected_order = None
+            context.selected_order_symbol = None
+            context.selected_market = None
+            context.selected_market_source = None
+        elif len(previous) >= 4 and previous[3] == "orders":
+            if len(previous) == 4:
+                context.shell_path = previous[:3]
+                context.selected_account_segment = None
+                context.selected_order = None
+                context.selected_order_symbol = None
+            elif len(previous) == 5:
+                context.shell_path = previous[:4]
+                context.selected_order = None
+                context.selected_order_symbol = None
+    if not context.shell_path:
         context.selected_account = None
+        context.selected_account_provider = None
+        context.selected_account_environment = None
+        context.selected_account_segment = None
+        context.selected_order = None
+        context.selected_order_symbol = None
+    if context.shell_path == ("trade",):
+        context.selected_account = None
+        context.selected_account_provider = None
+        context.selected_account_environment = None
+        context.selected_account_segment = None
+        context.selected_order = None
+        context.selected_order_symbol = None
     if not context.shell_path or context.shell_path == ("launch",):
         context.selected_launch = None
+        context.selected_launch_mode = None
+        context.selected_launch_instance = None
+    elif (
+        context.shell_path[:1] == ("launch",)
+        and len(context.shell_path) == 3
+        and context.shell_path[2] == "instances"
+    ):
+        context.selected_launch_mode = None
         context.selected_launch_instance = None
     if not context.shell_path or context.shell_path == ("system",):
         context.selected_service = None
     if leaving_market:
         context.selected_market = None
         context.selected_market_source = None
-        if previous_section == "launch":
-            context.selected_launch_instance = None
     if previous_section == "reference" and len(previous) > 1:
         context.selected_reference = None
         context.selected_reference_kind = None

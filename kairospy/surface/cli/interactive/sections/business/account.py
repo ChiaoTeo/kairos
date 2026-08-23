@@ -12,37 +12,78 @@ from kairospy.application.account.cli import AccountCliApplication
 from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
 
 
+ACCOUNT_LIST_PATH = ("trade", "accounts")
+
+_VIEW_ACTIONS = {
+    "overview": ("overview", "查询账户概览"),
+    "assets": ("assets", "查询账户资产与余额"),
+    "positions": ("positions", "查询账户持仓"),
+    "earn": ("earn-holdings", "查询理财与质押持有"),
+}
+
+
 def print_menu(context: InteractiveContext) -> None:
-    if context.shell_path == ("account",):
-        typer.echo("账户：")
+    if context.shell_path == ACCOUNT_LIST_PATH:
+        typer.echo("交易：请选择账户")
         _print_account_list(context)
         typer.echo("输入序号选择并进入账户；refresh 刷新列表。")
         return
-    account_id = context.selected_account or context.shell_path[-1]
+    account_id = context.selected_account or context.shell_path[2]
+    if len(context.shell_path) == 4:
+        view = context.shell_path[3]
+        labels = {
+            "overview": "账户概览",
+            "assets": "资产与余额",
+            "positions": "交易仓位",
+            "earn": "理财与质押",
+            "fees": "费率与账户等级",
+            "transfer": "资金划转",
+            "settings": "配置与凭据",
+        }
+        typer.echo(f"{labels.get(view, view)} · {account_id}\n  r. 刷新/重新打开")
+        return
+    account = _selected_account_record(context)
+    provider = (
+        account.get("integration_provider")
+        or account.get("exchange")
+        or account.get("broker")
+        or "-"
+    )
+    environment = account.get("environment") or "-"
+    status = str(account.get("status") or "unknown")
+    availability = _connection_availability(status)
+    products = ", ".join(str(value) for value in account.get("products") or ()) or "-"
+    segments = ", ".join(str(value) for value in account.get("segments") or ()) or "-"
+    alias = str(account.get("alias") or "-")
     typer.echo(
         "\n".join(
             (
-                f"当前账户：{account_id}",
+                f"当前账户：{account_id} · 名称：{alias}",
+                f"Provider：{provider} · 产品：{products} · 分区：{segments} · 环境：{environment}",
+                f"连接可用性：{availability}（账户状态：{status}）",
                 "  1. 账户概览",
                 "  2. 资产与余额",
                 "  3. 交易仓位",
-                "  4. 理财与质押",
-                "  5. 未完成订单",
+                "  4. 订单管理",
+                "  5. 理财与质押",
                 "  6. 费率与账户等级",
                 "  7. 资金划转",
                 "  8. 配置与凭据",
-                "  9. 切换账户",
+                "  s. 切换账户",
             )
         )
     )
 
 
 def print_help(context: InteractiveContext) -> None:
-    if context.shell_path == ("account",):
+    if context.shell_path == ACCOUNT_LIST_PATH:
         typer.echo("可用命令：<序号>/select/list/back/home/exit")
         return
+    if len(context.shell_path) == 4:
+        typer.echo("可用命令：refresh/back/home/exit")
+        return
     typer.echo(
-        "可用命令：summary/assets/positions/earn/open-orders/fees/transfer/settings/switch"
+        "可用命令：summary/assets/positions/orders/earn/fees/transfer/settings/switch"
     )
 
 
@@ -72,13 +113,11 @@ def _prompt_menu(title: str, choices: tuple[tuple[str, str], ...]) -> str:
         typer.echo("这个选项不存在，请重新输入。")
 
 
-def handle(
-    context: InteractiveContext, parts: tuple[str, ...]
-) -> ShellAction:
+def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
     if len(parts) != 1:
         return None
     key = parts[0]
-    if context.shell_path == ("account",):
+    if context.shell_path == ACCOUNT_LIST_PATH:
         accounts = records(context)
         if key.isdigit():
             index = int(key)
@@ -95,53 +134,58 @@ def handle(
             return ShellControl.HANDLED
         return None
 
-    account_id = context.shell_path[1]
+    account_id = context.shell_path[2]
     context.selected_account = account_id
+    if len(context.shell_path) == 4:
+        view = context.shell_path[3]
+        if key not in {"r", "refresh", "open"}:
+            return None
+        if view in _VIEW_ACTIONS:
+            command, summary = _VIEW_ACTIONS[view]
+            return account_fact_command(context, command, summary)
+        if view == "fees":
+            return _fees_command(account_id)
+        if view == "transfer":
+            return _transfer_action(context)
+        if view == "settings":
+            return _account_settings_command(context)
+        return None
     if key in {"1", "summary", "overview"}:
-        return account_fact_command(context, "overview", "查询账户概览")
+        return _enter_fact_view(context, "overview")
     if key in {"2", "assets", "balances"}:
-        return account_fact_command(context, "assets", "查询账户资产与余额")
+        return _enter_fact_view(context, "assets")
     if key in {"3", "positions"}:
-        return account_fact_command(context, "positions", "查询账户持仓")
-    if key in {"4", "earn", "earn-holdings"}:
-        return account_fact_command(context, "earn-holdings", "查询理财与质押持有")
-    if key in {"5", "open-orders", "orders"}:
-        return account_fact_command(context, "open-orders", "查询账户未完成订单")
-    if key in {"6", "fees"}:
-        scope = typer.prompt(
-            "费率范围（产品:交易对，Binance 费率按交易对返回）",
-            default="spot:BTCUSDT",
-        ).strip()
-        if ":" not in scope:
-            raise typer.BadParameter("请使用 产品:交易对 格式，例如 spot:BTCUSDT")
-        product, symbol = (part.strip() for part in scope.split(":", 1))
-        if not product or not symbol:
-            raise typer.BadParameter("产品和交易对不能为空")
-        return GuidedCommand(
-            (
-                "account",
-                "fees",
-                account_id,
-                "--product",
-                product,
-                "--symbol",
-                symbol,
-                "--format",
-                "table",
-            ),
-            "查询指定产品和交易对的真实费率；直接回车使用 spot:BTCUSDT",
-        )
-    if key in {"7", "transfer"}:
-        account = _selected_account_record(context)
-        if "transfer" not in _account_capabilities(account):
-            typer.echo("当前账户凭据不具备资金划转能力。")
+        return _enter_fact_view(context, "positions")
+    if key in {"4", "orders"}:
+        if not _select_order_segment(context):
             return ShellControl.HANDLED
-        typer.echo("资金划转必须先 preview，再由用户确认执行；当前尚未开放执行。")
+        context.selected_order = None
+        context.selected_order_symbol = None
+        context.selected_market = None
+        context.selected_market_source = None
+        context.shell_path = (*ACCOUNT_LIST_PATH, account_id, "orders")
         return ShellControl.HANDLED
+    if key in {"5", "earn", "earn-holdings"}:
+        return _enter_fact_view(context, "earn")
+    if key in {"6", "fees"}:
+        context.shell_path = (*ACCOUNT_LIST_PATH, account_id, "fees")
+        return _fees_command(account_id)
+    if key in {"7", "transfer"}:
+        context.shell_path = (*ACCOUNT_LIST_PATH, account_id, "transfer")
+        return _transfer_action(context)
     if key in {"8", "settings", "configuration"}:
+        context.shell_path = (*ACCOUNT_LIST_PATH, account_id, "settings")
         return _account_settings_command(context)
-    if key in {"9", "switch", "select"}:
-        _select_account(context)
+    if key in {"s", "switch", "select"}:
+        context.selected_account = None
+        context.selected_account_provider = None
+        context.selected_account_environment = None
+        context.selected_account_segment = None
+        context.selected_order = None
+        context.selected_order_symbol = None
+        context.selected_market = None
+        context.selected_market_source = None
+        context.shell_path = ACCOUNT_LIST_PATH
         return ShellControl.HANDLED
     return None
 
@@ -156,12 +200,52 @@ def account_fact_command(
     return build_fact_command(account_id, command, summary)
 
 
-def build_fact_command(
-    account_id: str, command: str, summary: str
-) -> GuidedCommand:
+def build_fact_command(account_id: str, command: str, summary: str) -> GuidedCommand:
+    return GuidedCommand(("account", command, account_id, "--format", "table"), summary)
+
+
+def _enter_fact_view(context: InteractiveContext, view: str) -> GuidedCommand:
+    account_id = context.selected_account or ""
+    context.shell_path = (*ACCOUNT_LIST_PATH, account_id, view)
+    command, summary = _VIEW_ACTIONS[view]
+    result = account_fact_command(context, command, summary)
+    assert isinstance(result, GuidedCommand)
+    return result
+
+
+def _fees_command(account_id: str) -> GuidedCommand:
+    scope = typer.prompt(
+        "费率范围（产品:交易对，Binance 费率按交易对返回）",
+        default="spot:BTCUSDT",
+    ).strip()
+    if ":" not in scope:
+        raise typer.BadParameter("请使用 产品:交易对 格式，例如 spot:BTCUSDT")
+    product, symbol = (part.strip() for part in scope.split(":", 1))
+    if not product or not symbol:
+        raise typer.BadParameter("产品和交易对不能为空")
     return GuidedCommand(
-        ("account", command, account_id, "--format", "table"), summary
+        (
+            "account",
+            "fees",
+            account_id,
+            "--product",
+            product,
+            "--symbol",
+            symbol,
+            "--format",
+            "table",
+        ),
+        "查询指定产品和交易对的真实费率；直接回车使用 spot:BTCUSDT",
     )
+
+
+def _transfer_action(context: InteractiveContext) -> ShellAction:
+    account = _selected_account_record(context)
+    if "transfer" not in _account_capabilities(account):
+        typer.echo("当前账户凭据不具备资金划转能力。")
+        return ShellControl.HANDLED
+    typer.echo("资金划转必须先 preview，再由用户确认执行；当前尚未开放执行。")
+    return ShellControl.HANDLED
 
 
 def _account_settings_command(context: InteractiveContext) -> GuidedCommand:
@@ -197,6 +281,15 @@ def _account_capabilities(account: dict[str, Any]) -> set[str]:
     if role in {"transfer", "admin"}:
         result.add("transfer")
     return result
+
+
+def _connection_availability(status: str) -> str:
+    normalized = status.strip().lower()
+    if normalized in {"connected", "ready", "simulated"}:
+        return "可用"
+    if normalized == "configured":
+        return "未探测"
+    return "不可用"
 
 
 def records(context: InteractiveContext) -> tuple[dict[str, Any], ...]:
@@ -286,9 +379,46 @@ def _enter_account_context(
         typer.echo("账户缺少 account id，无法进入。")
         return
     context.selected_account = account_id
+    context.selected_account_provider = str(
+        account.get("integration_provider")
+        or account.get("exchange")
+        or account.get("broker")
+        or "unknown"
+    )
+    context.selected_account_environment = str(account.get("environment") or "unknown")
+    segments = [str(value) for value in account.get("segments") or ()]
+    context.selected_account_segment = segments[0] if len(segments) == 1 else None
     context.selected_launch = None
-    context.shell_path = ("account", account_id)
+    context.selected_launch_mode = None
+    context.selected_launch_instance = None
+    context.selected_order = None
+    context.selected_order_symbol = None
+    context.selected_market = None
+    context.selected_market_source = None
+    context.shell_path = (*ACCOUNT_LIST_PATH, account_id)
     print_summary(context, accounts=accounts)
+
+
+def _select_order_segment(context: InteractiveContext) -> bool:
+    if context.selected_account_segment:
+        return True
+    account = _selected_account_record(context)
+    segments = [str(value) for value in account.get("segments") or ()]
+    if not segments:
+        typer.echo("当前账户没有可用交易分区。")
+        return False
+    if len(segments) == 1:
+        context.selected_account_segment = segments[0]
+        return True
+    typer.echo("选择订单操作分区：")
+    for index, segment in enumerate(segments, start=1):
+        typer.echo(f"  {index}. {segment}")
+    selected = typer.prompt("选择分区序号", default="1").strip()
+    if not selected.isdigit() or not 1 <= int(selected) <= len(segments):
+        typer.echo(f"找不到分区序号：{selected}")
+        return False
+    context.selected_account_segment = segments[int(selected) - 1]
+    return True
 
 
 def _selected_account_record(context: InteractiveContext) -> dict[str, Any]:

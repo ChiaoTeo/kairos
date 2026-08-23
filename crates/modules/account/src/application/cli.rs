@@ -164,11 +164,30 @@ pub struct AccountListItem {
     pub provider: ProviderId,
     pub environment: String,
     pub segments: Vec<SegmentKey>,
+    pub products: Vec<String>,
     pub account_model: Option<String>,
     pub credential_id: Option<String>,
     pub configured_credential_role: String,
     pub capabilities: Vec<String>,
     pub status: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountTradingBinding {
+    pub account_id: AccountId,
+    pub remote_account_id: String,
+    pub provider: ProviderId,
+    pub environment: String,
+    pub segment_key: SegmentKey,
+    pub provider_product: String,
+    pub trading_mode: Option<String>,
+    pub credential_id: Option<String>,
+    pub credential_role: String,
+    pub base_url: String,
+    pub host: String,
+    pub port: u16,
+    pub client_id: i32,
+    pub isolated_symbol: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -366,6 +385,16 @@ impl TryFrom<&AccountBindingRecord> for AccountListItem {
                 .cloned()
                 .map(SegmentKey::new)
                 .collect::<Result<_, _>>()?,
+            products: record
+                .segments
+                .iter()
+                .map(|segment| {
+                    record
+                        .product_for_segment(segment)
+                        .unwrap_or(segment)
+                        .to_owned()
+                })
+                .collect(),
             account_model: record.account_model.clone(),
             credential_id: record.credential_id.clone(),
             configured_credential_role: configured_credential_role(record),
@@ -475,6 +504,114 @@ impl CliAccountApplication {
             .collect::<Result<Vec<_>, _>>()?;
         let count = u64::try_from(accounts.len())?;
         Ok(AccountListResult { accounts, count })
+    }
+
+    pub fn trading_binding(
+        &self,
+        account_id: &str,
+        segment: Option<&str>,
+        access: &str,
+    ) -> Result<AccountTradingBinding, Box<dyn std::error::Error>> {
+        let account = self.account(account_id)?;
+        let segment = match segment {
+            Some(value) if account.segments.iter().any(|item| item == value) => value,
+            Some(value) => {
+                return Err(
+                    format!("account {account_id} does not provide segment {value}").into(),
+                );
+            },
+            None if account.segments.len() == 1 => account.segments[0].as_str(),
+            None if account.segments.is_empty() => {
+                return Err(format!("account {account_id} has no trading segment").into());
+            },
+            None => {
+                return Err(format!(
+                    "account {account_id} has multiple trading segments; --segment is required"
+                )
+                .into());
+            },
+        };
+        let require_trade = matches!(access, "write" | "trade");
+        if !matches!(access, "read" | "write" | "trade") {
+            return Err(format!("unsupported trading binding access: {access}").into());
+        }
+        let selected = account.credentials.iter().find(|binding| {
+            let role = binding.role.trim().to_ascii_lowercase();
+            if require_trade {
+                matches!(role.as_str(), "trade" | "trading" | "transfer" | "admin")
+            } else {
+                matches!(
+                    role.as_str(),
+                    "readonly" | "read" | "trade" | "trading" | "transfer" | "admin"
+                )
+            }
+        });
+        let credential_id = selected
+            .map(|value| value.credential_id.clone())
+            .or_else(|| account.credential_id.clone());
+        let credential_role = selected
+            .map(|value| value.role.clone())
+            .or_else(|| account.credential_role.clone())
+            .unwrap_or_else(|| "readonly".into());
+        if require_trade
+            && !matches!(
+                credential_role.trim().to_ascii_lowercase().as_str(),
+                "trade" | "trading" | "transfer" | "admin"
+            )
+        {
+            return Err(
+                format!("account {account_id} has no credential with trade permission").into(),
+            );
+        }
+        let provider = account.integration_provider.trim().to_ascii_lowercase();
+        if !matches!(provider.as_str(), "ibkr" | "paper" | "simulated") && credential_id.is_none() {
+            return Err(format!("account {account_id} has no credential binding").into());
+        }
+        let provider_product = account
+            .product_for_segment(segment)
+            .unwrap_or(segment)
+            .to_owned();
+        let base_url = account
+            .values
+            .get("base_url")
+            .cloned()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                default_rest_endpoint(&provider, &provider_product)
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+        Ok(AccountTradingBinding {
+            account_id: AccountId::new(account.account_id.clone())?,
+            remote_account_id: account
+                .remote_identity
+                .clone()
+                .unwrap_or_else(|| account.account_id.clone()),
+            provider: ProviderId::new(provider)?,
+            environment: account.environment.clone(),
+            segment_key: SegmentKey::new(segment.to_owned())?,
+            provider_product,
+            trading_mode: account.segment_trading_modes.get(segment).cloned(),
+            credential_id,
+            credential_role,
+            base_url,
+            host: account
+                .values
+                .get("host")
+                .cloned()
+                .unwrap_or_else(|| "127.0.0.1".into()),
+            port: account
+                .values
+                .get("port")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(4002),
+            client_id: account
+                .values
+                .get("client_id")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_default(),
+            isolated_symbol: account.values.get("isolated_symbol").cloned(),
+        })
     }
 
     pub fn browse_accounts(
@@ -3116,8 +3253,8 @@ mod tests {
     use super::{
         AccountBalanceItem, AccountBalancesResult, AccountListItem, AccountListResult,
         AccountQueryCompleteness, AccountSegmentProfileItem, AccountSegmentQueryOutcome,
-        account_capabilities, account_configuration_issues, classify_query_failure,
-        overview_profile,
+        CliAccountApplication, account_capabilities, account_configuration_issues,
+        classify_query_failure, overview_profile,
     };
     use crate::composition::registry::AccountBindingRecord;
 
@@ -3155,6 +3292,7 @@ mod tests {
             "readonly"
         );
         assert_eq!(value["accounts"][0]["segments"], json!(["spot"]));
+        assert_eq!(value["accounts"][0]["products"], json!(["spot"]));
         assert_eq!(value["count"], 1);
         assert_eq!(account_capabilities(&record), vec!["read"]);
         for internal in [
@@ -3166,6 +3304,64 @@ mod tests {
         ] {
             assert!(value["accounts"][0].get(internal).is_none());
         }
+    }
+
+    #[test]
+    fn trading_binding_requires_segment_and_selects_permission_appropriate_credential() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace =
+            kairos_workspace::Workspace::init(directory.path(), "binding-test").expect("workspace");
+        let account_dir = workspace.root().join("config/accounts");
+        std::fs::create_dir_all(&account_dir).unwrap();
+        std::fs::write(
+            account_dir.join("accounts.toml"),
+            r#"
+[account]
+id = "main"
+broker = "binance"
+integration_provider = "binance"
+environment = "live"
+model = "contract"
+
+[segments.spot]
+product_family = "spot"
+
+[segments.usd_m]
+product_family = "usd_m_futures"
+
+[credentials.reader]
+ref = "binance-read"
+role = "readonly"
+
+[credentials.trader]
+ref = "binance-trade"
+role = "trade"
+"#,
+        )
+        .unwrap();
+        let application = CliAccountApplication::open(&workspace).unwrap();
+
+        let error = application
+            .trading_binding("main", None, "read")
+            .expect_err("multiple segments must not choose the first")
+            .to_string();
+        assert!(error.contains("--segment is required"), "{error}");
+
+        let read = application
+            .trading_binding("main", Some("spot"), "read")
+            .unwrap();
+        assert_eq!(read.segment_key.as_str(), "spot");
+        assert_eq!(read.credential_id.as_deref(), Some("binance-read"));
+
+        let trade = application
+            .trading_binding("main", Some("usd_m"), "trade")
+            .unwrap();
+        assert_eq!(trade.provider_product, "usd_m_futures");
+        assert_eq!(trade.credential_id.as_deref(), Some("binance-trade"));
+        assert_eq!(trade.credential_role, "trade");
+        let serialized = serde_json::to_value(trade).unwrap();
+        assert!(serialized.get("api_key").is_none());
+        assert!(serialized.get("secret").is_none());
     }
 
     #[test]

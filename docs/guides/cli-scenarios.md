@@ -80,9 +80,12 @@ Provider 集成和通知目的地。
 kairos account list
 kairos account snapshot --account-id main --workspace my-project
 kairos account balances --account-id main --workspace my-project
+kairos order open-orders --account-id main --workspace my-project
+kairos order history --account-id main --symbol BTCUSDT --workspace my-project
+kairos order fills --account-id main --symbol BTCUSDT --workspace my-project
 kairos market validate
 kairos system component market snapshot quote --market-id market:binance:spot:BTCUSDT --source-id binance-spot
-kairos launch instance component execution status <launch-id> --workspace my-project
+kairos launch instance component execution status <launch-id> --instance <instance-id> --mode <mode> --workspace my-project
 kairos reference markets --active-only --workspace my-project
 kairos reference markets --asset-code AAPL --active-only --workspace my-project
 kairos reference listings --symbol BTCUSDT --workspace my-project
@@ -96,7 +99,8 @@ kairos integration earn --help
 
 - `account` 回答“我的账户和仓位是什么状态”。
 - `market` 回答“行情输入和快照是什么状态”。
-- `order` 回答“订单和执行生命周期是什么状态”。
+- `order` 在明确账户后直接查询或操作 provider 订单；运行中 Execution 生命周期从具体
+  `launch instance component execution` 查看。
 - `reference` 回答“有哪些 market / listing、某个市场是什么、如何按 symbol 检索”。
 - `notifications` 回答“策略消息能不能发出去”。
 - `integration` 是直接调用 Provider 能力的低层入口，默认比 `account`、`market`
@@ -398,7 +402,7 @@ Account、Market、Execution、Reference 这些模块边界：
 ```text
 1. Account balances or positions
 2. Market quote, bar, or greeks snapshot
-3. Order status or audit
+3. 选择 Account 后查看 provider 未完成订单、历史订单或成交记录
 4. 市场目录：资产、参与方、交易品种或具体市场
 5. Notification destination
 6. Provider integration operation
@@ -409,7 +413,7 @@ Account、Market、Execution、Reference 这些模块边界：
 ```bash
 kairos account balances --account-id main
 kairos system component market snapshot quote
-kairos launch instance component execution status <launch-id>
+kairos launch instance component execution status <launch-id> --instance <instance-id> --mode <mode>
 kairos reference option-chain
 kairos notifications validate
 kairos integration earn

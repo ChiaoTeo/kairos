@@ -146,6 +146,8 @@ fn normalize_order(
     Ok(ExternalOrder {
         connection_key: connection_key.clone(),
         order_id: OrderId::new(local).map_err(payload)?,
+        remote_order_id: kairos_primitives::integration::RemoteOrderId::new(remote)
+            .map_err(payload)?,
         client_order_id: row
             .get("cloid")
             .and_then(Value::as_str)

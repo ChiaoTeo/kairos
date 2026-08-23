@@ -1,259 +1,444 @@
-use std::path::{Path, PathBuf};
+//! Standalone, short-lived Execution use cases.
 
-use kairos_workspace::Workspace;
-use serde_json::Value;
+use kairos_conflux::{
+    CommandOutcome, DecimalValue, ExternalOrder, ExternalOrderQuery, OrderEntryOptions,
+    OrderEntryRequest, ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind,
+    ParticipantRef, TimeInForce,
+};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::execution::{OrderId, OrderSide as PrimitiveOrderSide};
+use kairos_primitives::reference::{InstrumentId, Symbol};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
-use crate::application::{CancelOrder, OrderType, ReplaceOrder, SubmitOrder};
+use crate::application::{ExecutionOrderOptions, OrderSide, OrderType, SubmitOrder};
+use crate::services::direct::DirectOrderConnection;
 
-/// Standalone Execution CLI facade.
-///
-/// This facade is reserved for future direct order-entry previews/actions and
-/// local evidence inspection. It must not operate a running Execution server
-/// or read runtime mmap projections.
+/// Account-owned facts required to establish one short-lived provider session.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StandaloneExecutionBinding {
+    pub account_id: String,
+    pub remote_account_id: String,
+    pub provider: String,
+    pub environment: String,
+    pub segment_key: String,
+    pub provider_product: String,
+    pub trading_mode: Option<String>,
+    pub credential_id: Option<String>,
+    pub credential_role: String,
+    pub base_url: String,
+    pub host: String,
+    pub port: u16,
+    pub client_id: i32,
+    pub isolated_symbol: Option<String>,
+}
+
+/// Execution-owned facade for direct exchange/broker operations.
 pub struct CliExecutionApplication {
-    workspace_root: PathBuf,
+    binding: StandaloneExecutionBinding,
+    connection: DirectOrderConnection,
 }
 
 impl CliExecutionApplication {
-    pub fn open(workspace: &Workspace) -> Self {
-        Self {
-            workspace_root: workspace.root().to_path_buf(),
-        }
+    pub(crate) fn new(
+        binding: StandaloneExecutionBinding,
+        connection: DirectOrderConnection,
+    ) -> Result<Self, String> {
+        AccountId::new(binding.account_id.clone()).map_err(|error| error.to_string())?;
+        SegmentKey::new(binding.segment_key.clone()).map_err(|error| error.to_string())?;
+        Ok(Self {
+            binding,
+            connection,
+        })
     }
 
-    pub fn workspace_root(&self) -> &Path {
-        &self.workspace_root
-    }
-
-    pub fn audit_file(
-        &self,
-        file: &Path,
-        order_id: Option<&str>,
-        remote_order_id: Option<&str>,
-        status: Option<&str>,
-        limit: Option<usize>,
+    pub async fn open_orders(
+        &mut self,
+        symbol: Option<&str>,
+        limit: Option<u32>,
     ) -> Result<Value, String> {
-        let mut events = read_collection(file, "events")?
-            .into_iter()
-            .filter(|value| field_matches(value, "order_id", order_id))
-            .filter(|value| field_matches(value, "remote_order_id", remote_order_id))
-            .filter(|value| field_matches(value, "status", status))
-            .collect::<Vec<_>>();
-        if let Some(limit) = limit {
-            events.truncate(limit);
-        }
-        Ok(serde_json::json!({
+        let query = self.query(symbol, None, limit)?;
+        let orders = self.connection.open_orders(&query).await.map_err(display)?;
+        Ok(self.orders_result("open-orders", orders))
+    }
+
+    pub async fn history(
+        &mut self,
+        symbol: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Value, String> {
+        let query = self.query(symbol, None, limit)?;
+        let orders = self.connection.history(&query).await.map_err(display)?;
+        Ok(self.orders_result("history", orders))
+    }
+
+    pub async fn order(&mut self, order_id: &str, symbol: Option<&str>) -> Result<Value, String> {
+        let order = self.find_order(order_id, symbol).await?;
+        Ok(json!({
             "owner": "execution",
             "mode": "standalone",
-            "source": "local_evidence_file",
-            "file": file.display().to_string(),
-            "events": events,
+            "scope": "direct-provider",
+            "source": "provider",
+            "account_id": self.binding.account_id,
+            "provider": self.binding.provider,
+            "environment": self.binding.environment,
+            "segment": self.binding.segment_key,
+            "order": order_json(&order),
         }))
     }
 
-    pub fn journal_file(&self, file: &Path, order_id: &str) -> Result<Value, String> {
-        self.audit_file(file, Some(order_id), None, None, None)
-    }
-
-    pub fn inspect_file(&self, file: &Path, order_id: &str) -> Result<Value, String> {
-        let orders = read_collection(file, "orders")?;
-        let order = orders
-            .into_iter()
-            .find(|value| string_field(value, "order_id").is_some_and(|value| value == order_id))
-            .ok_or_else(|| format!("order not found in local evidence file: {order_id}"))?;
-        Ok(serde_json::json!({
+    pub async fn fills(
+        &mut self,
+        symbol: Option<&str>,
+        order_id: Option<&str>,
+        limit: Option<u16>,
+    ) -> Result<Value, String> {
+        let fills = self
+            .connection
+            .fills(symbol, order_id, limit)
+            .await
+            .map_err(display)?;
+        Ok(json!({
             "owner": "execution",
             "mode": "standalone",
-            "source": "local_evidence_file",
-            "file": file.display().to_string(),
-            "order": order,
-        }))
-    }
-
-    pub fn fills_file(&self, file: &Path, order_id: Option<&str>) -> Result<Value, String> {
-        let fills = read_collection(file, "fills")?
-            .into_iter()
-            .filter(|value| field_matches(value, "order_id", order_id))
-            .collect::<Vec<_>>();
-        Ok(serde_json::json!({
-            "owner": "execution",
-            "mode": "standalone",
-            "source": "local_evidence_file",
-            "file": file.display().to_string(),
+            "scope": "direct-provider",
+            "source": "provider",
+            "account_id": self.binding.account_id,
+            "provider": self.binding.provider,
+            "environment": self.binding.environment,
+            "segment": self.binding.segment_key,
             "fills": fills,
         }))
     }
 
-    pub fn preview_submit(&self, request: SubmitOrder) -> Result<Value, String> {
-        let mut issues = Vec::new();
-        if request.execution_route_id.is_none() {
-            issues.push("execution_route_id is required before a real submit action".to_owned());
-        }
-        if matches!(request.order_type, OrderType::Limit) && request.limit_price.is_none() {
-            issues.push("limit order requires limit_price".to_owned());
-        }
-        Ok(serde_json::json!({
-            "owner": "execution",
-            "mode": "standalone",
-            "command": "preview-submit",
-            "effect": "dry_run",
-            "connects_server": false,
-            "submits_order": false,
-            "source": "cli_arguments",
-            "valid_for_preview": issues.is_empty(),
-            "issues": issues,
-            "request": request,
-            "next_steps": [
-                "standalone direct submit requires an Execution-owned provider action service",
-                "runtime submit must use launch instance component execution submit"
-            ],
-        }))
+    pub async fn submit(
+        &mut self,
+        request: SubmitOrder,
+        symbol: Option<&str>,
+    ) -> Result<Value, String> {
+        self.assert_account(&request)?;
+        let provider_request = self.provider_request(&request, symbol)?;
+        let outcome = self
+            .connection
+            .submit(&provider_request)
+            .await
+            .map_err(display)?;
+        Ok(command_json(&self.binding, "submit", outcome))
     }
 
-    pub fn preview_submit_file(&self, file: &Path) -> Result<Value, String> {
-        let request = read_typed_file::<SubmitOrder>(file)?;
-        Ok(mark_typed_file(self.preview_submit(request)?, file))
+    pub async fn cancel(&mut self, order_id: &str, symbol: Option<&str>) -> Result<Value, String> {
+        let order = self.find_order(order_id, symbol).await?;
+        let request = self.request_from_external(&order)?;
+        let outcome = self
+            .connection
+            .cancel(&request, order.remote_order_id.as_str(), now_unix_nanos())
+            .await
+            .map_err(display)?;
+        Ok(command_json(&self.binding, "cancel", outcome))
     }
 
-    pub fn preview_cancel(&self, request: CancelOrder) -> Result<Value, String> {
-        let mut issues = Vec::new();
-        if request.reason.trim().is_empty() {
-            issues.push("cancel reason is empty".to_owned());
-        }
-        Ok(serde_json::json!({
-            "owner": "execution",
-            "mode": "standalone",
-            "command": "preview-cancel",
-            "effect": "dry_run",
-            "connects_server": false,
-            "cancels_order": false,
-            "source": "cli_arguments",
-            "valid_for_preview": issues.is_empty(),
-            "issues": issues,
-            "request": request,
-            "next_steps": [
-                "standalone direct cancel requires an Execution-owned provider action service",
-                "runtime cancel must use launch instance component execution cancel"
-            ],
-        }))
-    }
-
-    pub fn preview_cancel_file(&self, file: &Path) -> Result<Value, String> {
-        let request = read_typed_file::<CancelOrder>(file)?;
-        Ok(mark_typed_file(self.preview_cancel(request)?, file))
-    }
-
-    pub fn preview_replace(&self, request: ReplaceOrder) -> Result<Value, String> {
-        let mut issues = Vec::new();
-        if request.replacement.execution_route_id.is_none() {
-            issues.push(
-                "replacement execution_route_id is required before a real replace action"
-                    .to_owned(),
-            );
-        }
-        if matches!(request.replacement.order_type, OrderType::Limit)
-            && request.replacement.limit_price.is_none()
-        {
-            issues.push("replacement limit order requires limit_price".to_owned());
-        }
-        Ok(serde_json::json!({
-            "owner": "execution",
-            "mode": "standalone",
-            "command": "preview-replace",
-            "effect": "dry_run",
-            "connects_server": false,
-            "replaces_order": false,
-            "source": "cli_arguments",
-            "valid_for_preview": issues.is_empty(),
-            "issues": issues,
-            "request": request,
-            "next_steps": [
-                "standalone direct replace requires an Execution-owned provider action service",
-                "runtime replace must use launch instance component execution replace"
-            ],
-        }))
-    }
-
-    pub fn preview_replace_file(&self, file: &Path) -> Result<Value, String> {
-        let request = read_typed_file::<ReplaceOrder>(file)?;
-        Ok(mark_typed_file(self.preview_replace(request)?, file))
-    }
-}
-
-fn read_typed_file<T: serde::de::DeserializeOwned>(file: &Path) -> Result<T, String> {
-    let text = std::fs::read_to_string(file)
-        .map_err(|error| format!("failed to read typed request file {file:?}: {error}"))?;
-    serde_json::from_str(&text)
-        .map_err(|error| format!("failed to parse typed request file {file:?}: {error}"))
-}
-
-fn mark_typed_file(mut value: Value, file: &Path) -> Value {
-    if let Some(object) = value.as_object_mut() {
-        object.insert("source".into(), Value::String("typed_request_file".into()));
-        object.insert("file".into(), Value::String(file.display().to_string()));
-    }
-    value
-}
-
-fn read_collection(file: &Path, preferred_key: &str) -> Result<Vec<Value>, String> {
-    let text = std::fs::read_to_string(file)
-        .map_err(|error| format!("failed to read local evidence file {file:?}: {error}"))?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-        return collection_from_value(value, preferred_key);
-    }
-    let mut records = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let value = serde_json::from_str::<Value>(line).map_err(|error| {
-            format!(
-                "failed to parse local evidence JSON line {} in {file:?}: {error}",
-                index + 1
+    /// Portable replace semantics: confirm cancel first, then submit the replacement.
+    /// An indeterminate/rejected cancel never proceeds to the submit step.
+    pub async fn replace(
+        &mut self,
+        target_order_id: &str,
+        replacement: SubmitOrder,
+        symbol: Option<&str>,
+    ) -> Result<Value, String> {
+        self.assert_account(&replacement)?;
+        let target = self.find_order(target_order_id, symbol).await?;
+        let cancel_request = self.request_from_external(&target)?;
+        let canceled = self
+            .connection
+            .cancel(
+                &cancel_request,
+                target.remote_order_id.as_str(),
+                now_unix_nanos(),
             )
-        })?;
-        records.push(value);
+            .await
+            .map_err(display)?;
+        if !matches!(canceled, CommandOutcome::Confirmed(_)) {
+            return Ok(json!({
+                "owner": "execution", "mode": "standalone", "scope": "direct-provider", "command": "replace",
+                "account_id": self.binding.account_id,
+                "provider": self.binding.provider,
+                "environment": self.binding.environment,
+                "segment": self.binding.segment_key,
+                "source": "provider",
+                "result": "replacement_not_submitted",
+                "cancel": outcome_json(canceled),
+            }));
+        }
+        let provider_request = self.provider_request(&replacement, symbol)?;
+        let submitted = self
+            .connection
+            .submit(&provider_request)
+            .await
+            .map_err(display)?;
+        Ok(json!({
+            "owner": "execution", "mode": "standalone", "scope": "direct-provider", "command": "replace",
+            "account_id": self.binding.account_id,
+            "provider": self.binding.provider,
+            "environment": self.binding.environment,
+            "segment": self.binding.segment_key,
+            "source": "provider",
+            "cancel": outcome_json(canceled),
+            "submit": outcome_json(submitted),
+        }))
     }
-    Ok(records)
-}
 
-fn collection_from_value(value: Value, preferred_key: &str) -> Result<Vec<Value>, String> {
-    match value {
-        Value::Array(values) => Ok(values),
-        Value::Object(mut object) => {
-            if let Some(Value::Array(values)) = object.remove(preferred_key) {
-                return Ok(values);
+    fn query(
+        &self,
+        symbol: Option<&str>,
+        order_id: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<ExternalOrderQuery, String> {
+        Ok(ExternalOrderQuery {
+            symbol: symbol.map(Symbol::new).transpose().map_err(display)?,
+            instrument_type: Some(ParticipantInstrumentTypeRef::new(
+                self.binding.provider_product.clone(),
+            )?),
+            order_id: order_id.map(OrderId::new).transpose().map_err(display)?,
+            limit,
+            since_unix_nanos: None,
+        })
+    }
+
+    async fn find_order(
+        &mut self,
+        id: &str,
+        symbol: Option<&str>,
+    ) -> Result<ExternalOrder, String> {
+        let query = self.query(symbol, None, Some(100))?;
+        let matches = |order: &ExternalOrder| {
+            order.order_id.as_str() == id
+                || order.remote_order_id.as_str() == id
+                || order
+                    .client_order_id
+                    .as_ref()
+                    .is_some_and(|value| value.as_str() == id)
+        };
+        if let Some(order) = self
+            .connection
+            .open_orders(&query)
+            .await
+            .map_err(display)?
+            .into_iter()
+            .find(matches)
+        {
+            return Ok(order);
+        }
+        if symbol.is_some() {
+            if let Some(order) = self
+                .connection
+                .history(&query)
+                .await
+                .map_err(display)?
+                .into_iter()
+                .find(matches)
+            {
+                return Ok(order);
             }
-            Ok(vec![Value::Object(object)])
-        },
-        other => Err(format!(
-            "local evidence must be a JSON object, array, or JSONL records; got {}",
-            other_type(&other)
-        )),
+        }
+        let query = self.query(symbol, Some(id), Some(1))?;
+        self.connection
+            .order(&query)
+            .await
+            .map_err(display)?
+            .ok_or_else(|| format!("provider order not found: {id}"))
+    }
+
+    fn provider_request(
+        &self,
+        request: &SubmitOrder,
+        symbol: Option<&str>,
+    ) -> Result<OrderEntryRequest, String> {
+        let source_symbol = symbol.unwrap_or(request.instrument_id.as_str());
+        let mut options = provider_options(&request.options)?;
+        if options.wallet_type.is_none() {
+            options.wallet_type = self.binding.trading_mode.clone();
+        }
+        Ok(OrderEntryRequest {
+            order_id: request.order_id.clone(),
+            intent_id: request.intent_id.clone(),
+            account_id: request.account_id.clone(),
+            segment_key: request.segment_key.clone(),
+            instrument_id: request.instrument_id.clone(),
+            market_id: request.market_id.clone(),
+            participant_instrument: self.participant_instrument(source_symbol)?,
+            side: match request.side {
+                OrderSide::Buy => PrimitiveOrderSide::Buy,
+                OrderSide::Sell => PrimitiveOrderSide::Sell,
+            },
+            quantity: DecimalValue::new(request.quantity.mantissa(), request.quantity.scale()),
+            order_type: match request.order_type {
+                OrderType::Market => kairos_conflux::OrderType::Market,
+                OrderType::Limit => kairos_conflux::OrderType::Limit,
+            },
+            limit_price: request
+                .limit_price
+                .map(|value| DecimalValue::new(value.mantissa(), value.scale())),
+            options,
+        })
+    }
+
+    fn request_from_external(&self, order: &ExternalOrder) -> Result<OrderEntryRequest, String> {
+        Ok(OrderEntryRequest {
+            order_id: order.order_id.clone(),
+            intent_id: None,
+            account_id: AccountId::new(self.binding.account_id.clone()).map_err(display)?,
+            segment_key: SegmentKey::new(self.binding.segment_key.clone()).map_err(display)?,
+            instrument_id: InstrumentId::new(order.symbol.to_string()).map_err(display)?,
+            market_id: None,
+            participant_instrument: self.participant_instrument(order.symbol.as_str())?,
+            side: order.side,
+            quantity: order.quantity,
+            order_type: order.order_type,
+            limit_price: order.average_fill_price,
+            options: OrderEntryOptions::default(),
+        })
+    }
+
+    fn participant_instrument(&self, symbol: &str) -> Result<ParticipantInstrumentRef, String> {
+        ParticipantInstrumentRef::new(
+            ParticipantRef::new(
+                if self.binding.provider.eq_ignore_ascii_case("ibkr") {
+                    ParticipantKind::Broker
+                } else {
+                    ParticipantKind::Exchange
+                },
+                self.binding.provider.clone(),
+            )?,
+            Some(ParticipantInstrumentTypeRef::new(
+                self.binding.provider_product.clone(),
+            )?),
+            symbol,
+        )
+    }
+
+    fn assert_account(&self, request: &SubmitOrder) -> Result<(), String> {
+        if request.account_id.as_str() != self.binding.account_id {
+            return Err(format!(
+                "request account {} does not match selected account {}",
+                request.account_id, self.binding.account_id
+            ));
+        }
+        if request.segment_key.as_str() != self.binding.segment_key {
+            return Err(format!(
+                "request segment {} does not match selected segment {}",
+                request.segment_key, self.binding.segment_key
+            ));
+        }
+        Ok(())
+    }
+
+    fn orders_result(&self, command: &str, orders: Vec<ExternalOrder>) -> Value {
+        json!({
+            "owner": "execution", "mode": "standalone", "scope": "direct-provider", "source": "provider",
+            "command": command, "account_id": self.binding.account_id,
+            "provider": self.binding.provider,
+            "environment": self.binding.environment,
+            "segment": self.binding.segment_key,
+            "orders": orders.iter().map(order_json).collect::<Vec<_>>(),
+        })
     }
 }
 
-fn field_matches(value: &Value, field: &str, expected: Option<&str>) -> bool {
-    expected
-        .is_none_or(|expected| string_field(value, field).is_some_and(|value| value == expected))
+fn provider_options(options: &ExecutionOrderOptions) -> Result<OrderEntryOptions, String> {
+    Ok(OrderEntryOptions {
+        time_in_force: options
+            .time_in_force
+            .as_deref()
+            .map(parse_tif)
+            .transpose()?,
+        reduce_only: options.reduce_only,
+        post_only: options.post_only,
+        position_side: options.position_side.clone(),
+        quote_asset: options.quote_asset.clone(),
+        wallet_type: options.wallet_type.clone(),
+        trading_session: options.trading_session.clone(),
+        tokenize: options.tokenize,
+    })
 }
 
-fn string_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
-    value.as_object()?.get(field)?.as_str()
-}
-
-fn other_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
+fn parse_tif(value: &str) -> Result<TimeInForce, String> {
+    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "gtc" | "good-til-canceled" => Ok(TimeInForce::GoodTilCanceled),
+        "ioc" | "immediate-or-cancel" => Ok(TimeInForce::ImmediateOrCancel),
+        "fok" | "fill-or-kill" => Ok(TimeInForce::FillOrKill),
+        "day" => Ok(TimeInForce::Day),
+        value => Err(format!("unsupported time in force: {value}")),
     }
+}
+
+fn order_json(order: &ExternalOrder) -> Value {
+    json!({
+        "order_id": order.order_id.to_string(),
+        "remote_order_id": order.remote_order_id.to_string(),
+        "client_order_id": order.client_order_id.as_ref().map(ToString::to_string),
+        "symbol": order.symbol.to_string(),
+        "side": format!("{:?}", order.side).to_ascii_lowercase(),
+        "order_type": format!("{:?}", order.order_type).to_ascii_lowercase(),
+        "status": format!("{:?}", order.status).to_ascii_lowercase(),
+        "quantity": decimal(order.quantity),
+        "filled_quantity": decimal(order.filled_quantity),
+        "average_fill_price": order.average_fill_price.map(decimal),
+        "occurred_at_unix_nanos": order.occurred_at_unix_nanos.map(|value| value.get()),
+    })
+}
+
+fn command_json(
+    binding: &StandaloneExecutionBinding,
+    command: &str,
+    outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>,
+) -> Value {
+    json!({
+        "owner": "execution", "mode": "standalone", "scope": "direct-provider", "source": "provider",
+        "command": command,
+        "account_id": binding.account_id,
+        "provider": binding.provider,
+        "environment": binding.environment,
+        "segment": binding.segment_key,
+        "outcome": outcome_json(outcome),
+    })
+}
+
+fn outcome_json(outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>) -> Value {
+    match outcome {
+        CommandOutcome::Confirmed(event) => json!({
+            "status": "confirmed",
+            "order_id": event.order_id.to_string(),
+            "remote_order_id": event.remote_order_id.map(|value| value.to_string()),
+            "order_status": format!("{:?}", event.status).to_ascii_lowercase(),
+            "filled_quantity": event.filled_quantity.map(decimal),
+            "occurred_at_unix_nanos": event.occurred_at_unix_nanos.get(),
+            "reason": event.reason,
+        }),
+        CommandOutcome::Rejected(value) => json!({
+            "status": "rejected", "code": value.code, "message": value.message,
+            "participant_request_id": value.participant_request_id,
+        }),
+        CommandOutcome::Indeterminate(value) => json!({
+            "status": "indeterminate", "message": value.message,
+            "participant_request_id": value.participant_request_id,
+        }),
+    }
+}
+
+fn now_unix_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .min(u64::MAX as u128) as u64
+}
+
+fn display(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+fn decimal(value: DecimalValue) -> String {
+    value
+        .format_fixed()
+        .unwrap_or_else(|_| format!("{}e-{}", value.mantissa, value.scale))
 }

@@ -308,6 +308,7 @@ fn order(
     Ok(ExternalOrder {
         connection_key: connection_key.clone(),
         order_id: OrderId::new(text("clientOrderId").unwrap_or(&id)).map_err(payload)?,
+        remote_order_id: RemoteOrderId::new(id).map_err(payload)?,
         client_order_id: text("clientOrderId")
             .map(ClientOrderId::new)
             .transpose()

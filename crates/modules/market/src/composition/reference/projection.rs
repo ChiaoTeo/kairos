@@ -217,9 +217,8 @@ fn is_active(status: &kairos_primitives::reference::ReferenceStatus) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::composition::config::{MarketSourceBinding, MassiveMarketProduct};
-
     use super::{project_market_universe, project_market_universe_at_sequence};
+    use crate::composition::config::{MarketSourceBinding, MassiveMarketProduct};
 
     #[test]
     fn maps_reference_view_to_market_owned_universe() {

@@ -6,6 +6,7 @@
 
 mod connections;
 mod dependencies;
+mod direct;
 mod launch;
 mod persistence;
 
@@ -14,6 +15,7 @@ pub use connections::{
     SimulatedOrderEntry, compose_order_entry, load_execution_routes_from_reference_markets,
 };
 pub use dependencies::{configure_execution_dependencies, configure_simulated_risk};
+pub use direct::compose_standalone_execution;
 pub use launch::{ExecutionHostConfig, build_execution_host};
 pub use persistence::{FileExecutionStore, MemoryStateStore, SqlxExecutionStore};
 

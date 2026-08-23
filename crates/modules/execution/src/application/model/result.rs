@@ -34,6 +34,7 @@ pub enum UnknownRemoteOrderResolution {
 pub struct RemoteOrder {
     pub binding_id: String,
     pub order_id: OrderId,
+    pub remote_order_id: RemoteOrderId,
     pub client_order_id: Option<ClientOrderId>,
     pub symbol: Symbol,
     pub side: OrderSide,
@@ -50,6 +51,7 @@ struct RemoteOrderWire {
     #[serde(default)]
     binding_id: String,
     order_id: String,
+    remote_order_id: Option<String>,
     client_order_id: Option<String>,
     symbol: String,
     side: OrderSide,
@@ -67,9 +69,14 @@ impl<'de> Deserialize<'de> for RemoteOrder {
         D: serde::Deserializer<'de>,
     {
         let wire = RemoteOrderWire::deserialize(deserializer)?;
+        let remote_order_id = wire
+            .remote_order_id
+            .unwrap_or_else(|| wire.order_id.clone());
         Ok(Self {
             binding_id: wire.binding_id,
             order_id: OrderId::new(wire.order_id).map_err(serde::de::Error::custom)?,
+            remote_order_id: RemoteOrderId::new(remote_order_id)
+                .map_err(serde::de::Error::custom)?,
             client_order_id: wire
                 .client_order_id
                 .map(ClientOrderId::new)
@@ -105,6 +112,7 @@ impl Serialize for RemoteOrder {
         struct Wire<'a> {
             binding_id: &'a str,
             order_id: &'a str,
+            remote_order_id: &'a str,
             client_order_id: Option<&'a str>,
             symbol: &'a str,
             side: OrderSide,
@@ -131,6 +139,7 @@ impl Serialize for RemoteOrder {
         Wire {
             binding_id: &self.binding_id,
             order_id: self.order_id.as_str(),
+            remote_order_id: self.remote_order_id.as_str(),
             client_order_id: self.client_order_id.as_ref().map(ClientOrderId::as_str),
             symbol: self.symbol.as_str(),
             side: self.side,

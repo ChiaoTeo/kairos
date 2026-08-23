@@ -19,8 +19,7 @@ def test_home_groups_complete_product_surface(interactive_context, capsys) -> No
     ):
         assert label in text
     assert "行情（请从" not in text
-    assert "Market 独立模式（直连 provider）" in text
-    assert "  8." not in text
+    assert "8. 市场行情" in text
 
 
 def test_home_numeric_and_text_navigation(interactive_context) -> None:
@@ -28,13 +27,16 @@ def test_home_numeric_and_text_navigation(interactive_context) -> None:
     assert interactive_context.shell_path == ("risk",)
     interactive_context.shell_path = ()
     assert home.handle(interactive_context, ("2",)) is ShellControl.HANDLED
-    assert interactive_context.shell_path == ("trade-control",)
-    assert home.handle(interactive_context, ("3",)) is ShellControl.HANDLED
-    assert interactive_context.shell_path == ("risk",)
+    assert interactive_context.shell_path == ("trade",)
+    assert home.handle(interactive_context, ("accounts",)) is ShellControl.HANDLED
+    assert interactive_context.shell_path == ("trade", "accounts")
 
 
 def test_home_market_navigation_is_standalone(interactive_context) -> None:
     assert home.handle(interactive_context, ("market",)) is ShellControl.HANDLED
+    assert interactive_context.shell_path == ("market",)
+    interactive_context.shell_path = ()
+    assert home.handle(interactive_context, ("8",)) is ShellControl.HANDLED
     assert interactive_context.shell_path == ("market",)
 
 
@@ -50,7 +52,6 @@ def test_home_group_menus_expose_technical_sections_at_second_level(
 ) -> None:
     for path, labels in (
         (("data-research",), ("数据", "研究")),
-        (("trade-control",), ("账户", "Execution", "Risk", "Capital")),
         (("operations",), ("系统服务", "Provider", "通知", "高级配置")),
         (("project-help",), ("项目", "命令地图")),
     ):
@@ -58,3 +59,21 @@ def test_home_group_menus_expose_technical_sections_at_second_level(
         home.print_menu(interactive_context)
         text = capsys.readouterr().out
         assert all(label in text for label in labels)
+
+
+def test_trade_parent_exposes_only_account_selection(interactive_context, capsys) -> None:
+    interactive_context.shell_path = ("trade",)
+    home.print_menu(interactive_context)
+    home.print_help(interactive_context)
+    text = capsys.readouterr().out
+    assert "选择账户" in text
+    assert "Execution" not in text
+    assert "Risk" not in text
+    assert "Capital" not in text
+
+
+def test_removed_trade_control_route_has_no_compatibility_entry(
+    interactive_context,
+) -> None:
+    assert home.handle(interactive_context, ("trade-control",)) is None
+    assert interactive_context.shell_path == ()

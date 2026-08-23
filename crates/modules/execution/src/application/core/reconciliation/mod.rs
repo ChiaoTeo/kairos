@@ -94,8 +94,8 @@ impl ExecutionApplication {
         &mut self,
         mut remote: Vec<RemoteOrder>,
     ) -> Result<usize, ExecutionError> {
-        remote.sort_by(|left, right| left.order_id.cmp(&right.order_id));
-        remote.dedup_by(|left, right| left.order_id == right.order_id);
+        remote.sort_by(|left, right| left.remote_order_id.cmp(&right.remote_order_id));
+        remote.dedup_by(|left, right| left.remote_order_id == right.remote_order_id);
 
         let mut changed = 0;
         for remote_order in remote {
@@ -109,12 +109,14 @@ impl ExecutionApplication {
                             .client_order_id
                             .as_ref()
                             .is_some_and(|client_id| client_id.as_str() == order.order_id.as_str())
-                        || order.remote_order_id.as_deref() == Some(remote_order.order_id.as_str())
+                        || order.remote_order_id.as_deref()
+                            == Some(remote_order.remote_order_id.as_str())
                 })
                 .cloned();
             let Some(local) = local else {
                 self.record_unknown_remote_order(&RemoteOrderUpdate {
-                    order_id: remote_order.order_id.clone(),
+                    order_id: OrderId::new(remote_order.remote_order_id.to_string())
+                        .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                     symbol: remote_order.symbol,
                     status: remote_order.status,
                     fill_quantity: Some(remote_order.filled_quantity),
@@ -162,7 +164,7 @@ impl ExecutionApplication {
                         let fill_result = self.record_fill(ExecutionFillReport {
                             fill_id: FillId::new(format!(
                                 "reconcile:{}:{}:{}",
-                                remote_order.order_id,
+                                remote_order.remote_order_id,
                                 remote_filled,
                                 remote_filled.scale()
                             ))
@@ -187,10 +189,7 @@ impl ExecutionApplication {
                                 .selected_route
                                 .as_ref()
                                 .map(|route| route.order_entry_symbol.clone()),
-                            remote_order_id: Some(
-                                RemoteOrderId::new(remote_order.order_id.to_string())
-                                    .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-                            ),
+                            remote_order_id: Some(remote_order.remote_order_id.clone()),
                         });
                         match fill_result {
                             Ok(_) => changed += 1,
@@ -224,7 +223,7 @@ impl ExecutionApplication {
                 .cloned()
                 .ok_or_else(|| ExecutionError::Invalid("reconciled order disappeared".into()))?;
             if local.status != reconciled_status
-                || local.remote_order_id.as_deref() != Some(remote_order.order_id.as_str())
+                || local.remote_order_id.as_deref() != Some(remote_order.remote_order_id.as_str())
             {
                 let occurred_at = remote_order
                     .occurred_at_unix_nanos
@@ -234,7 +233,7 @@ impl ExecutionApplication {
                     .actor
                     .reconcile_order(
                         local.order_id.as_str(),
-                        &remote_order.order_id,
+                        remote_order.remote_order_id.as_str(),
                         reconciled_status,
                         occurred_at,
                         reconciliation_reason,

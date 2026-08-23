@@ -8,11 +8,15 @@ import re
 import shlex
 from types import SimpleNamespace
 
+import pytest
+import typer
+
 from kairospy.application.launch.application import (
     LaunchControlApplication,
     LaunchInstanceTimelineApplication,
     LaunchRegistryApplication,
     LaunchRuntimeApplication,
+    LaunchRuntimeError,
 )
 from kairospy.application.launch.application import new_instance_id
 from kairospy.application.workspace import InstanceWorkspace, WorkspaceApplication
@@ -20,7 +24,6 @@ from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch import (
     _decorate_launch_status,
     _resolve_launch_target,
-    _resolve_instance,
     _resolve_stop_instance,
     _requires_reference_runtime,
     _stop_component_safely,
@@ -182,9 +185,7 @@ def test_launch_instance_component_market_snapshot_uses_manifest_view_root(
         seen["arguments"] = list(arguments)
         return {"status": "view_not_found", "code": "view_not_found"}
 
-    monkeypatch.setattr(
-        "kairospy.application.system.NativeCliApplication.run", run
-    )
+    monkeypatch.setattr("kairospy.application.system.NativeCliApplication.run", run)
     output = StringIO()
 
     assert (
@@ -263,6 +264,10 @@ def test_launch_instance_component_execution_orders_uses_connected_owner_cli(
                 "execution",
                 "orders",
                 "btc",
+                "--instance",
+                "run-1",
+                "--mode",
+                "paper",
                 "--workspace",
                 str(workspace.paths.root),
                 "--format",
@@ -277,6 +282,7 @@ def test_launch_instance_component_execution_orders_uses_connected_owner_cli(
 
     assert json.loads(output.getvalue()) == {
         "orders": [],
+        "owner": "execution",
         "launch_id": "btc",
         "instance_id": "run-1",
         "mode": "paper",
@@ -286,13 +292,13 @@ def test_launch_instance_component_execution_orders_uses_connected_owner_cli(
         "root": workspace.paths.root,
         "component": "execution",
         "arguments": [
+            "connected",
             "--mode",
             "paper",
             "--launch-id",
             "btc",
             "--instance-id",
             "run-1",
-            "connected",
             "orders",
             "--account-id",
             "main",
@@ -958,7 +964,11 @@ def test_system_component_market_replay_control_uses_owner_cli(
         assert "--view-root" in calls[-1][1]
         assert calls[-1][2] == workspace.paths.root
 
-    assert [call[1][1] for call in calls] == ["recover", "pause-replay", "resume-replay"]
+    assert [call[1][1] for call in calls] == [
+        "recover",
+        "pause-replay",
+        "resume-replay",
+    ]
 
 
 def test_system_component_market_subscription_control_uses_owner_cli(
@@ -1512,298 +1522,41 @@ def test_order_business_surface_rejects_connected_execution_commands() -> None:
 
     assert execute_argv(["order", "status"], output) != 0
     text = output.getvalue()
-    assert "connected Execution runtime command" in text
+    assert "unsupported standalone order command" in text
     assert "kairos launch instance component execution" in text
     assert "kairos system component execution" not in text
 
 
-def test_order_evidence_short_path_uses_owner_standalone_cli(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="order-evidence"
-    )
-    seen: list[tuple[str, list[str]]] = []
-
-    class Result:
-        returncode = 0
-        stdout = '{"source":"local_evidence_file"}'
-        stderr = ""
-
-    def invoke(_self, component, arguments):
-        seen.append((component, list(arguments)))
-        return Result()
-
-    monkeypatch.setattr(
-        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
-        invoke,
-    )
+def test_order_business_surface_rejects_removed_evidence_command() -> None:
     output = StringIO()
 
-    assert (
-        execute_argv(
-            [
-                "order",
-                "audit",
-                "--workspace",
-                str(workspace.paths.root),
-                "--file",
-                "execution-evidence.json",
-                "--order-id",
-                "order-1",
-            ],
-            output,
-        )
-        == 0
-    )
-
-    assert seen == [
-        (
-            "execution",
-            [
-                "standalone",
-                "audit",
-                "--file",
-                "execution-evidence.json",
-                "--order-id",
-                "order-1",
-            ],
-        )
-    ]
-    assert json.loads(output.getvalue()) == {"source": "local_evidence_file"}
+    assert execute_argv(["order", "audit"], output) != 0
+    assert "unsupported standalone order command" in output.getvalue()
 
 
-def test_order_preview_submit_uses_owner_standalone_cli(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="order-preview-submit"
-    )
-    seen: list[tuple[str, list[str]]] = []
-
-    class Result:
-        returncode = 0
-        stdout = '{"command":"preview-submit","submits_order":false}'
-        stderr = ""
-
-    def invoke(_self, component, arguments):
-        seen.append((component, list(arguments)))
-        return Result()
-
-    monkeypatch.setattr(
-        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
-        invoke,
-    )
+def test_order_business_surface_rejects_removed_preview_submit_command() -> None:
     output = StringIO()
 
-    assert (
-        execute_argv(
-            [
-                "order",
-                "preview-submit",
-                "--workspace",
-                str(workspace.paths.root),
-                "--order-id",
-                "order-1",
-                "--account-id",
-                "main",
-                "--instrument-id",
-                "BTC-USDT",
-                "--quantity",
-                "1",
-                "--execution-route-id",
-                "route-1",
-            ],
-            output,
-        )
-        == 0
-    )
-
-    assert seen == [
-        (
-            "execution",
-            [
-                "standalone",
-                "preview-submit",
-                "--order-id",
-                "order-1",
-                "--account-id",
-                "main",
-                "--instrument-id",
-                "BTC-USDT",
-                "--quantity",
-                "1",
-                "--execution-route-id",
-                "route-1",
-            ],
-        )
-    ]
-    assert json.loads(output.getvalue()) == {
-        "command": "preview-submit",
-        "submits_order": False,
-    }
+    assert execute_argv(["order", "preview-submit"], output) != 0
+    assert "unsupported standalone order command" in output.getvalue()
 
 
-def test_order_preview_cancel_and_replace_use_owner_standalone_cli(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="order-preview-actions"
-    )
-    seen: list[tuple[str, list[str]]] = []
-
-    class Result:
-        returncode = 0
-        stdout = '{"effect":"dry_run"}'
-        stderr = ""
-
-    def invoke(_self, component, arguments):
-        seen.append((component, list(arguments)))
-        return Result()
-
-    monkeypatch.setattr(
-        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
-        invoke,
-    )
-
-    cancel_output = StringIO()
-    assert (
-        execute_argv(
-            [
-                "order",
-                "preview-cancel",
-                "--workspace",
-                str(workspace.paths.root),
-                "--order-id",
-                "order-1",
-                "--reason",
-                "manual review",
-            ],
-            cancel_output,
-        )
-        == 0
-    )
-
-    replace_output = StringIO()
-    assert (
-        execute_argv(
-            [
-                "order",
-                "preview-replace",
-                "--workspace",
-                str(workspace.paths.root),
-                "--target-order-id",
-                "order-1",
-                "--order-id",
-                "order-2",
-                "--account-id",
-                "main",
-                "--instrument-id",
-                "BTC-USDT",
-                "--quantity",
-                "2",
-                "--execution-route-id",
-                "route-1",
-            ],
-            replace_output,
-        )
-        == 0
-    )
-
-    assert seen == [
-        (
-            "execution",
-            [
-                "standalone",
-                "preview-cancel",
-                "--order-id",
-                "order-1",
-                "--reason",
-                "manual review",
-            ],
-        ),
-        (
-            "execution",
-            [
-                "standalone",
-                "preview-replace",
-                "--target-order-id",
-                "order-1",
-                "--order-id",
-                "order-2",
-                "--account-id",
-                "main",
-                "--instrument-id",
-                "BTC-USDT",
-                "--quantity",
-                "2",
-                "--execution-route-id",
-                "route-1",
-            ],
-        ),
-    ]
-    assert json.loads(cancel_output.getvalue()) == {"effect": "dry_run"}
-    assert json.loads(replace_output.getvalue()) == {"effect": "dry_run"}
+def test_order_business_surface_rejects_removed_preview_action_commands() -> None:
+    for command in ("preview-cancel", "preview-replace"):
+        output = StringIO()
+        assert execute_argv(["order", command], output) != 0
+        assert "unsupported standalone order command" in output.getvalue()
 
 
-def test_order_preview_file_commands_use_owner_standalone_cli(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="order-preview-files"
-    )
-    seen: list[tuple[str, list[str]]] = []
-
-    class Result:
-        returncode = 0
-        stdout = '{"source":"typed_request_file"}'
-        stderr = ""
-
-    def invoke(_self, component, arguments):
-        seen.append((component, list(arguments)))
-        return Result()
-
-    monkeypatch.setattr(
-        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
-        invoke,
-    )
-
-    for command, file_name in (
+def test_order_business_surface_rejects_removed_preview_file_commands() -> None:
+    for command, _file_name in (
         ("preview-submit-file", "submit-order.json"),
         ("preview-cancel-file", "cancel-order.json"),
         ("preview-replace-file", "replace-order.json"),
     ):
         output = StringIO()
-        assert (
-            execute_argv(
-                [
-                    "order",
-                    command,
-                    "--workspace",
-                    str(workspace.paths.root),
-                    "--file",
-                    file_name,
-                ],
-                output,
-            )
-            == 0
-        )
-        assert json.loads(output.getvalue()) == {"source": "typed_request_file"}
-
-    assert seen == [
-        (
-            "execution",
-            ["standalone", "preview-submit-file", "--file", "submit-order.json"],
-        ),
-        (
-            "execution",
-            ["standalone", "preview-cancel-file", "--file", "cancel-order.json"],
-        ),
-        (
-            "execution",
-            ["standalone", "preview-replace-file", "--file", "replace-order.json"],
-        ),
-    ]
+        assert execute_argv(["order", command], output) != 0
+        assert "unsupported standalone order command" in output.getvalue()
 
 
 def test_order_business_surface_rejects_all_runtime_execution_aliases() -> None:
@@ -1811,7 +1564,7 @@ def test_order_business_surface_rejects_all_runtime_execution_aliases() -> None:
 
     assert execute_argv(["order", "unknown-remote-orders"], output) != 0
     text = output.getvalue()
-    assert "connected Execution runtime command" in text
+    assert "unsupported standalone order command" in text
     assert "kairos launch instance component execution" in text
 
 
@@ -1820,10 +1573,7 @@ def test_order_business_surface_rejects_removed_backtest_short_path() -> None:
 
     assert execute_argv(["order", "backtest"], output) != 0
     text = output.getvalue()
-    assert "`kairos order backtest` has been removed" in text
-    assert "`kairos launch`" in text
-    assert "`kairos data`" in text
-    assert "`kairos research`" in text
+    assert "unsupported standalone order command" in text
 
 
 def test_order_business_surface_rejects_missing_link_unknown_contract() -> None:
@@ -1831,8 +1581,147 @@ def test_order_business_surface_rejects_missing_link_unknown_contract() -> None:
 
     assert execute_argv(["order", "link-unknown"], output) != 0
     text = output.getvalue()
-    assert "`kairos order link-unknown` is not available" in text
-    assert "Execution runtime contract/API" in text
+    assert "unsupported standalone order command" in text
+
+
+def test_order_direct_query_resolves_account_binding_before_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="order-direct"
+    )
+    binding = {
+        "account_id": "main",
+        "remote_account_id": "remote-main",
+        "provider": "binance",
+        "environment": "testnet",
+        "segment_key": "spot",
+        "provider_product": "spot",
+        "trading_mode": None,
+        "credential_id": "credential-main",
+        "credential_role": "readonly",
+        "base_url": "https://example.invalid",
+        "host": "",
+        "port": 0,
+        "client_id": 0,
+        "isolated_symbol": None,
+    }
+    account_calls: list[list[str]] = []
+    execution_calls: list[tuple[str, list[str]]] = []
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.order.AccountCliApplication.run",
+        lambda _self, arguments: account_calls.append(list(arguments)) or binding,
+    )
+
+    class Result:
+        returncode = 0
+        stdout = '{"orders":[]}'
+        stderr = ""
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
+        lambda _self, component, arguments: (
+            execution_calls.append((component, list(arguments))) or Result()
+        ),
+    )
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "order",
+                "open-orders",
+                "--workspace",
+                str(workspace.paths.root),
+                "--account-id",
+                "main",
+                "--segment",
+                "spot",
+                "--symbol",
+                "BTCUSDT",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert account_calls == [
+        [
+            "standalone",
+            "trading-binding",
+            "--account-id",
+            "main",
+            "--access",
+            "read",
+            "--segment",
+            "spot",
+        ]
+    ]
+    component, arguments = execution_calls[0]
+    assert component == "execution"
+    assert arguments[0:2] == ["standalone", "--binding-json"]
+    assert json.loads(arguments[2]) == binding
+    assert arguments[3:] == ["open-orders", "--symbol", "BTCUSDT"]
+
+
+def test_order_live_write_requires_confirmation_or_yes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="order-live-confirmation"
+    )
+    binding = {
+        "account_id": "main",
+        "remote_account_id": "remote-main",
+        "provider": "binance",
+        "environment": "live",
+        "segment_key": "spot",
+        "provider_product": "spot",
+        "trading_mode": None,
+        "credential_id": "credential-main",
+        "credential_role": "trade",
+        "base_url": "https://api.binance.com",
+        "host": "",
+        "port": 0,
+        "client_id": 0,
+        "isolated_symbol": None,
+    }
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.order.AccountCliApplication.run",
+        lambda _self, _arguments: binding,
+    )
+    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: False)
+
+    class Result:
+        returncode = 0
+        stdout = '{"outcome":{"status":"confirmed"}}'
+        stderr = ""
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.order.NativeCliApplication.invoke",
+        lambda _self, _component, arguments: calls.append(list(arguments)) or Result(),
+    )
+    argv = [
+        "order",
+        "cancel",
+        "--workspace",
+        str(workspace.paths.root),
+        "--account-id",
+        "main",
+        "--order-id",
+        "remote-1",
+    ]
+
+    denied = StringIO()
+    assert execute_argv(argv, denied) != 0
+    assert "scope=direct-provider" in denied.getvalue()
+    assert calls == []
+
+    accepted = StringIO()
+    assert execute_argv([*argv, "--yes"], accepted) == 0
+    assert calls and "--yes" not in calls[0]
+    assert "--confirm-live" in calls[0]
 
 
 def test_system_component_account_is_not_a_workspace_component() -> None:
@@ -1876,6 +1765,10 @@ def test_launch_instance_component_execution_status_uses_instance_scope(
                 "execution",
                 "status",
                 "btc",
+                "--instance",
+                "run-1",
+                "--mode",
+                "paper",
                 "--workspace",
                 str(workspace.paths.root),
                 "--format",
@@ -3481,8 +3374,8 @@ def test_interactive_b_returns_from_selected_account(tmp_path, monkeypatch) -> N
 
     text = output.getvalue()
     assert status == 0
-    assert "/account/paper-account>" in text
-    assert "/account>" in text
+    assert "/trade/accounts/paper-account" in text
+    assert "/trade/accounts>" in text
     assert "\n/>" in text
     assert "  b. 返回上一级" in text
     assert "无法识别这个命令" not in text
@@ -3522,7 +3415,7 @@ def test_interactive_account_context_keeps_selected_paper_account(
         "kairospy.surface.cli.interactive.context.ComponentProcessApplication.status",
         lambda _self, component, **kwargs: {"status": "ready"},
     )
-    shell_input = iter(["account", "1", "2", "7", "exit"])
+    shell_input = iter(["account", "1", "2", "b", "7", "exit"])
     executed: list[tuple[str, ...]] = []
 
     def read_input(prompt: str = "") -> str:
@@ -3555,7 +3448,7 @@ def test_interactive_account_context_keeps_selected_paper_account(
         "--format",
         "table",
     )
-    assert "/account/paper-account>" in text
+    assert "/trade/accounts/paper-account" in text
     assert "| 序号 | account       |" in text
     assert "broker/custodian" in text
     assert "paper" in text
@@ -3638,7 +3531,10 @@ def test_interactive_live_account_uses_standalone_direct_command(
 def test_interactive_live_account_never_enters_launch_connected_mode(
     tmp_path, monkeypatch
 ) -> None:
-    from kairospy.surface.cli.interactive.models import GuidedCommand, InteractiveContext
+    from kairospy.surface.cli.interactive.models import (
+        GuidedCommand,
+        InteractiveContext,
+    )
     from kairospy.surface.cli.interactive.sections.business.account import (
         account_fact_command,
     )
@@ -3665,7 +3561,7 @@ def test_interactive_live_account_never_enters_launch_connected_mode(
         snapshot=None,
         workspace_arg=workspace.paths.root,
         selected_account="live-main",
-        shell_path=("account", "live-main"),
+        shell_path=("trade", "accounts", "live-main"),
     )
 
     result = account_fact_command(context, "balances", "查询账户余额")
@@ -3685,7 +3581,10 @@ def test_interactive_live_account_never_enters_launch_connected_mode(
 def test_interactive_account_fee_query_uses_one_scoped_prompt(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.surface.cli.interactive.models import GuidedCommand, InteractiveContext
+    from kairospy.surface.cli.interactive.models import (
+        GuidedCommand,
+        InteractiveContext,
+    )
     from kairospy.surface.cli.interactive.sections.business.account import handle
 
     workspace = WorkspaceApplication().init_project(
@@ -3698,7 +3597,7 @@ def test_interactive_account_fee_query_uses_one_scoped_prompt(
         snapshot=None,
         workspace_arg=workspace.paths.root,
         selected_account="live-main",
-        shell_path=("account", "live-main"),
+        shell_path=("trade", "accounts", "live-main"),
     )
 
     result = handle(context, ("fees",))
@@ -3721,7 +3620,10 @@ def test_interactive_readonly_command_executes_without_confirmation(
     tmp_path: Path, monkeypatch
 ) -> None:
     from kairospy.surface.cli.interactive.execution import execute_guided_command
-    from kairospy.surface.cli.interactive.models import GuidedCommand, InteractiveContext
+    from kairospy.surface.cli.interactive.models import (
+        GuidedCommand,
+        InteractiveContext,
+    )
 
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
@@ -3739,7 +3641,8 @@ def test_interactive_readonly_command_executes_without_confirmation(
         ),
     )
     monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.execution.refresh_context", lambda _context: None
+        "kairospy.surface.cli.interactive.execution.refresh_context",
+        lambda _context: None,
     )
 
     execute_guided_command(
@@ -3764,7 +3667,10 @@ def test_interactive_command_output_has_clear_section_boundary(
     tmp_path: Path, monkeypatch
 ) -> None:
     from kairospy.surface.cli.interactive.execution import execute_guided_command
-    from kairospy.surface.cli.interactive.models import GuidedCommand, InteractiveContext
+    from kairospy.surface.cli.interactive.models import (
+        GuidedCommand,
+        InteractiveContext,
+    )
 
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
@@ -3775,7 +3681,8 @@ def test_interactive_command_output_has_clear_section_boundary(
         workspace_arg=workspace.paths.root,
     )
     monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.execution.refresh_context", lambda _context: None
+        "kairospy.surface.cli.interactive.execution.refresh_context",
+        lambda _context: None,
     )
     output = StringIO()
     with redirect_stdout(output):
@@ -4177,7 +4084,7 @@ def test_interactive_market_separates_standalone_and_connected_scopes(
     text = output.getvalue()
     assert status == 0
     assert "/market>" in text
-    assert "Market 独立模式（直接访问 provider" in text
+    assert "Market 独立工具（不连接运行中的 Market" in text
     assert "/system/market>" in text
     assert "workspace 共享服务（连接模式）" in text
     assert executed[0][:2] == ("market", "once")
@@ -4692,7 +4599,7 @@ def test_stop_resolves_mode_and_instance_from_the_only_running_entry(
     )
 
 
-def test_launch_commands_resolve_latest_instance_when_instance_is_omitted(
+def test_launch_commands_reject_multiple_instances_when_instance_is_omitted(
     tmp_path,
 ) -> None:
     workspace = WorkspaceApplication().init(
@@ -4702,11 +4609,15 @@ def test_launch_commands_resolve_latest_instance_when_instance_is_omitted(
     registry.add("btc-options", mode="paper", instance_id="run-1")
     registry.add("btc-options", mode="paper", instance_id="run-2")
 
-    assert _resolve_instance(workspace, "btc-options", "paper", None) == "run-2"
-    assert _resolve_instance(workspace, "btc-options", "paper", "run-1") == "run-1"
+    with pytest.raises(typer.BadParameter, match="multiple registered instances"):
+        _resolve_launch_target(workspace, "btc-options", "paper", None)
+    assert _resolve_launch_target(workspace, "btc-options", "paper", "run-1") == (
+        "run-1",
+        "paper",
+    )
 
 
-def test_launch_target_resolution_uses_recency_instead_of_instance_sort_order(
+def test_launch_target_resolution_does_not_guess_by_recency(
     tmp_path,
 ) -> None:
     workspace = WorkspaceApplication().init(
@@ -4716,10 +4627,8 @@ def test_launch_target_resolution_uses_recency_instead_of_instance_sort_order(
     registry.add("btc-options", mode="paper", instance_id="z-old")
     registry.add("btc-options", mode="paper", instance_id="a-new")
 
-    assert _resolve_launch_target(workspace, "btc-options", "paper", None) == (
-        "a-new",
-        "paper",
-    )
+    with pytest.raises(typer.BadParameter, match="multiple registered instances"):
+        _resolve_launch_target(workspace, "btc-options", "paper", None)
 
 
 def test_launch_target_resolution_honors_explicit_instance_before_active_lookup(
@@ -4774,6 +4683,25 @@ def test_running_instance_ignores_terminal_control_statuses(
     }
 
 
+def test_running_instance_never_guesses_between_multiple_active_instances(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="multiple-running"
+    )
+    registry = LaunchRegistryApplication(workspace)
+    registry.add("btc-options", mode="paper", instance_id="run-1")
+    registry.add("btc-options", mode="paper", instance_id="run-2")
+    monkeypatch.setattr(
+        LaunchControlApplication,
+        "status",
+        lambda _self, _target: {"status": "ready"},
+    )
+
+    with pytest.raises(LaunchRuntimeError, match="multiple running instances"):
+        LaunchRuntimeApplication(workspace).running_instance("btc-options", "paper")
+
+
 def test_launch_target_resolution_discovers_non_paper_mode(tmp_path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="mode")
     LaunchRegistryApplication(workspace).add(
@@ -4781,6 +4709,43 @@ def test_launch_target_resolution_discovers_non_paper_mode(tmp_path) -> None:
     )
 
     assert _resolve_launch_target(workspace, "btc", None, None) == ("run-1", "backtest")
+
+
+def test_launch_target_resolution_rejects_ambiguous_registered_instances(
+    tmp_path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="ambiguous"
+    )
+    registry = LaunchRegistryApplication(workspace)
+    registry.add("btc", mode="paper", instance_id="run-1")
+    registry.add("btc", mode="backtest", instance_id="run-2")
+
+    with pytest.raises(typer.BadParameter, match="multiple registered instances"):
+        _resolve_launch_target(workspace, "btc", None, None)
+
+
+def test_launch_target_resolution_rejects_unregistered_instance(tmp_path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="missing-instance"
+    )
+
+    with pytest.raises(typer.BadParameter, match="no registered instance"):
+        _resolve_launch_target(workspace, "btc", None, "run-missing")
+
+
+def test_launch_target_resolution_rejects_same_instance_id_across_modes(
+    tmp_path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="ambiguous-mode"
+    )
+    registry = LaunchRegistryApplication(workspace)
+    registry.add("btc", mode="paper", instance_id="run-1")
+    registry.add("btc", mode="backtest", instance_id="run-1")
+
+    with pytest.raises(typer.BadParameter, match="exists in multiple modes"):
+        _resolve_launch_target(workspace, "btc", None, "run-1")
 
 
 def test_launch_status_aggregates_strategy_and_component_health(

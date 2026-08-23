@@ -10,8 +10,6 @@ kairos_execution_contract::execution_control_rpc_conflux_actor! {
     service ExecutionRpcService;
 }
 
-pub use cli::CliExecutionApplication;
-pub use connected::ConnectedExecutionApplication;
 pub use core::ExecutionApplication;
 pub(crate) use core::apply_connection_event;
 
@@ -19,6 +17,8 @@ pub use backtest::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
     BacktestRunResult, Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar,
 };
+pub use cli::{CliExecutionApplication, StandaloneExecutionBinding};
+pub use connected::ConnectedExecutionApplication;
 pub(crate) use model::remote_status;
 pub use model::{
     CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent,

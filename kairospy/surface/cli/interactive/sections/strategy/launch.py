@@ -7,7 +7,10 @@ from typing import Any
 from prettytable import PrettyTable
 import typer
 
-from kairospy.application.launch.application import LaunchRegistryApplication
+from kairospy.application.launch.application import (
+    LaunchRegistryApplication,
+    LaunchRuntimeApplication,
+)
 from kairospy.surface.console.models import ObserveSnapshot
 
 from ...context import unique_launches
@@ -25,8 +28,6 @@ _ACTIONS = {
     "edit": (("edit",), "交互式编辑 launch 配置", True, False),
     "report": (("report",), "读取最近完成的报告", False, False),
     "restart": (("restart",), "重启策略运行", True, False),
-    "components": (("instance", "component", "--help"), "查看实例组件入口", False, False),
-    "timeline": (("instance", "timeline", "--help"), "查看实例时间线入口", False, False),
 }
 
 
@@ -37,14 +38,26 @@ def print_menu(context: InteractiveContext) -> None:
         typer.echo("输入序号选择并进入 launch；refresh 刷新列表。")
         return
     launch_id = context.selected_launch or context.shell_path[1]
-    if len(context.shell_path) == 3 and context.shell_path[2] == "components":
+    if _is_components_path(context.shell_path):
         typer.echo(
             "实例组件：\n  1. market\n  2. execution\n  3. reference\n"
             "  4. risk\n  5. capital\n  6. account 命令帮助"
         )
         return
-    if len(context.shell_path) == 3 and context.shell_path[2] == "timeline":
+    if _is_timeline_path(context.shell_path):
         typer.echo("实例时间线：\n  1. 列出记录\n  2. 导出记录")
+        return
+    if _is_instances_path(context.shell_path):
+        typer.echo(f"{launch_id} 的运行实例：")
+        _print_instance_list(context, launch_id)
+        typer.echo("输入序号选择实例；current 选择唯一运行实例。")
+        return
+    if _is_instance_path(context.shell_path):
+        instance_id = context.selected_launch_instance or context.shell_path[3]
+        typer.echo(
+            f"Launch Instance：{launch_id}/{instance_id}\n"
+            "  1. 实例概览\n  2. 实例组件\n  3. 实例时间线"
+        )
         return
     typer.echo(
         "\n".join(
@@ -61,9 +74,7 @@ def print_menu(context: InteractiveContext) -> None:
                 "  9. 编辑配置",
                 "  10. 查看最近报告",
                 "  11. 重启",
-                "  12. 查看实例组件",
-                "  13. 查看时间线",
-                "  14. Market 行情",
+                "  12. 查看运行实例",
             )
         )
     )
@@ -73,15 +84,15 @@ def print_help(context: InteractiveContext) -> None:
     if context.shell_path == ("launch",):
         typer.echo("可用命令：<序号>/select/list/back/home/exit")
         return
-    if len(context.shell_path) == 3 and context.shell_path[2] == "components":
+    if _is_components_path(context.shell_path):
         typer.echo("可用命令：market/execution/reference/risk/capital/account")
         return
-    if len(context.shell_path) == 3 and context.shell_path[2] == "timeline":
+    if _is_timeline_path(context.shell_path):
         typer.echo("可用命令：list/export")
         return
     typer.echo(
         "可用命令：summary/start/status/logs/attach/wait/stop/restart/validate/"
-        "edit/report/components/timeline/market"
+        "edit/report/instances/current"
     )
 
 
@@ -109,7 +120,14 @@ def handle(
                 return ShellControl.HANDLED
             launch_id = ids[index - 1]
             context.selected_launch = launch_id
+            context.selected_launch_mode = None
+            context.selected_launch_instance = None
             context.selected_account = None
+            context.selected_account_provider = None
+            context.selected_account_environment = None
+            context.selected_account_segment = None
+            context.selected_order = None
+            context.selected_order_symbol = None
             context.shell_path = ("launch", launch_id)
             print_summary(context)
             return ShellControl.HANDLED
@@ -120,7 +138,14 @@ def handle(
             if launch_id in {"b", "back"}:
                 return ShellControl.HANDLED
             context.selected_launch = launch_id
+            context.selected_launch_mode = None
+            context.selected_launch_instance = None
             context.selected_account = None
+            context.selected_account_provider = None
+            context.selected_account_environment = None
+            context.selected_account_segment = None
+            context.selected_order = None
+            context.selected_order_symbol = None
             context.shell_path = ("launch", launch_id)
             print_summary(context)
             return ShellControl.HANDLED
@@ -129,30 +154,30 @@ def handle(
             return ShellControl.HANDLED
         return None
 
-    if len(context.shell_path) == 3 and context.shell_path[2] == "components":
+    if _is_components_path(context.shell_path):
         return _handle_components(context, parts)
-    if len(context.shell_path) == 3 and context.shell_path[2] == "timeline":
+    if _is_timeline_path(context.shell_path):
         return _handle_timeline(context, parts)
+    if _is_instances_path(context.shell_path):
+        return _handle_instances(context, parts)
+    if _is_instance_path(context.shell_path):
+        return _handle_instance(context, parts)
 
     launch_id = context.shell_path[1]
     context.selected_launch = launch_id
     if parts in {("1",), ("summary",), ("overview",)}:
         print_summary(context)
         return ShellControl.HANDLED
-    if parts in {("12",), ("components",)}:
-        context.shell_path = ("launch", launch_id, "components")
+    if parts in {("12",), ("instances",)}:
+        context.shell_path = ("launch", launch_id, "instances")
+        _auto_select_only_instance(context)
         return ShellControl.HANDLED
-    if parts in {("13",), ("timeline",)}:
-        context.shell_path = ("launch", launch_id, "timeline")
-        return ShellControl.HANDLED
-    if parts in {("14",), ("market",)}:
-        from ..business import market
-
-        return market.enter_launch_market(context)
+    if parts == ("current",):
+        return _enter_current_instance(context)
     aliases = {
         "2": "start", "3": "status", "4": "logs", "5": "attach",
         "6": "wait", "7": "stop", "8": "validate", "9": "edit",
-        "10": "report", "11": "restart", "12": "components", "13": "timeline",
+        "10": "report", "11": "restart",
     }
     action = aliases.get(parts[0], parts[0]) if len(parts) == 1 else ""
     if action not in _ACTIONS:
@@ -175,17 +200,22 @@ def _handle_components(
     }.get(parts[0])
     if component is None:
         return None
+    launch_id = context.selected_launch or context.shell_path[1]
+    instance_id = context.selected_launch_instance or context.shell_path[3]
+    context.selected_launch = launch_id
+    context.selected_launch_instance = instance_id
     if component == "market":
         from ..business import market
-
-        return market.enter_launch_market(context)
+        context.shell_path = (*context.shell_path, "market")
+        return ShellControl.HANDLED
+    if component == "execution":
+        context.shell_path = (*context.shell_path, "execution")
+        return ShellControl.HANDLED
     if component == "account":
         return GuidedCommand(
             ("launch", "instance", "component", "account", "--help"),
             "查看 launch Account 组件入口",
         )
-    launch_id = context.selected_launch or context.shell_path[1]
-    instance_id = typer.prompt("instance id", default="current").strip()
     return GuidedCommand(
         (
             "launch", "instance", "component", component, "status", launch_id,
@@ -204,7 +234,7 @@ def _handle_timeline(
     if action is None:
         return None
     launch_id = context.selected_launch or context.shell_path[1]
-    instance_id = typer.prompt("instance id", default="current").strip()
+    instance_id = context.selected_launch_instance or context.shell_path[3]
     argv = ("launch", "instance", "timeline", action, launch_id, instance_id)
     if action == "list":
         limit = typer.prompt("limit", default="50").strip()
@@ -219,6 +249,154 @@ def _handle_timeline(
         "查看 launch instance 时间线" if action == "list" else "导出 launch instance 时间线",
         dangerous=action == "export",
     )
+
+
+def _handle_instances(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> ShellAction:
+    if len(parts) != 1:
+        return None
+    if parts == ("current",):
+        return _enter_current_instance(context)
+    entries = _instance_entries(context)
+    key = parts[0]
+    if key.isdigit():
+        index = int(key)
+        if not 1 <= index <= len(entries):
+            typer.echo(f"找不到 instance 序号：{key}")
+            return ShellControl.HANDLED
+        _enter_instance(context, entries[index - 1])
+        return ShellControl.HANDLED
+    matches = [entry for entry in entries if entry.get("instance_id") == key]
+    if len(matches) == 1:
+        _enter_instance(context, matches[0])
+        return ShellControl.HANDLED
+    if len(matches) > 1:
+        typer.echo(f"instance {key} 存在于多个 mode，请使用序号选择。")
+        return ShellControl.HANDLED
+    return None
+
+
+def _handle_instance(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> ShellAction:
+    if len(parts) != 1:
+        return None
+    key = parts[0]
+    if key in {"1", "summary", "overview"}:
+        _print_instance_summary(context)
+        return ShellControl.HANDLED
+    if key in {"2", "components"}:
+        context.shell_path = (*context.shell_path, "components")
+        return ShellControl.HANDLED
+    if key in {"3", "timeline"}:
+        context.shell_path = (*context.shell_path, "timeline")
+        return ShellControl.HANDLED
+    return None
+
+
+def _instance_entries(context: InteractiveContext) -> list[dict[str, Any]]:
+    if context.owner is None:
+        return []
+    launch_id = context.selected_launch or context.shell_path[1]
+    return LaunchRegistryApplication(context.owner).instances(launch_id)
+
+
+def _print_instance_list(context: InteractiveContext, launch_id: str) -> None:
+    entries = _instance_entries(context)
+    if not entries:
+        typer.echo("当前 launch 没有已注册 instance。")
+        return
+    table = PrettyTable(["序号", "instance", "mode", "state", "updated"])
+    table.align = "l"
+    for index, entry in enumerate(entries, start=1):
+        table.add_row(
+            [
+                index,
+                entry.get("instance_id", "-"),
+                entry.get("mode", "-"),
+                entry.get("state", "unknown"),
+                entry.get("updated_at", "-"),
+            ]
+        )
+    typer.echo(table)
+
+
+def _auto_select_only_instance(context: InteractiveContext) -> None:
+    entries = _instance_entries(context)
+    if len(entries) == 1:
+        _enter_instance(context, entries[0])
+
+
+def _enter_current_instance(context: InteractiveContext) -> ShellControl:
+    if context.owner is None:
+        typer.echo("当前没有可解析的 workspace。")
+        return ShellControl.HANDLED
+    launch_id = context.selected_launch or context.shell_path[1]
+    try:
+        entry = LaunchRuntimeApplication(context.owner).running_instance(launch_id)
+    except Exception as error:
+        typer.echo(f"无法解析 current instance：{error}")
+        return ShellControl.HANDLED
+    if entry is None:
+        typer.echo("当前 launch 没有唯一运行中的 instance。")
+        return ShellControl.HANDLED
+    _enter_instance(context, entry)
+    return ShellControl.HANDLED
+
+
+def _enter_instance(context: InteractiveContext, entry: dict[str, Any]) -> None:
+    launch_id = context.selected_launch or context.shell_path[1]
+    instance_id = str(entry.get("instance_id") or "")
+    mode = str(entry.get("mode") or "")
+    if not instance_id or not mode:
+        typer.echo("instance registry 记录缺少 instance_id 或 mode。")
+        return
+    context.selected_launch = launch_id
+    context.selected_launch_instance = instance_id
+    context.selected_launch_mode = mode
+    context.shell_path = ("launch", launch_id, "instances", instance_id)
+    _print_instance_summary(context)
+
+
+def _print_instance_summary(context: InteractiveContext) -> None:
+    launch_id = context.selected_launch or context.shell_path[1]
+    instance_id = context.selected_launch_instance or context.shell_path[3]
+    entry = next(
+        (
+            value
+            for value in _instance_entries(context)
+            if value.get("instance_id") == instance_id
+            and (
+                context.selected_launch_mode is None
+                or value.get("mode") == context.selected_launch_mode
+            )
+        ),
+        {},
+    )
+    table = PrettyTable(["Instance 上下文", "值"])
+    table.align = "l"
+    table.add_row(["launch", launch_id])
+    table.add_row(["instance", instance_id])
+    table.add_row(["mode", entry.get("mode") or context.selected_launch_mode or "-"])
+    table.add_row(["state", entry.get("state", "unknown")])
+    typer.echo(table)
+
+
+def _is_instances_path(path: tuple[str, ...]) -> bool:
+    return len(path) == 3 and path[0] == "launch" and path[2] == "instances"
+
+
+def _is_instance_path(path: tuple[str, ...]) -> bool:
+    return len(path) == 4 and path[0] == "launch" and path[2] == "instances"
+
+
+def _is_components_path(path: tuple[str, ...]) -> bool:
+    return len(path) == 5 and path[0] == "launch" and path[2] == "instances" and path[4] == "components"
+
+
+def _is_timeline_path(path: tuple[str, ...]) -> bool:
+    return len(path) == 5 and path[0] == "launch" and path[2] == "instances" and path[4] == "timeline"
 
 
 def print_list(context: InteractiveContext) -> None:
