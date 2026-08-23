@@ -13,7 +13,7 @@ def test_root_dispatches_to_product_section(interactive_context) -> None:
 def test_root_numeric_navigation_uses_product_groups(interactive_context) -> None:
     assert shell_command(interactive_context, "5") is ShellControl.HANDLED
     assert interactive_context.shell_path == ("operations",)
-    assert shell_command(interactive_context, "4") is ShellControl.HANDLED
+    assert shell_command(interactive_context, "3") is ShellControl.HANDLED
     assert interactive_context.shell_path == ("config",)
 
 

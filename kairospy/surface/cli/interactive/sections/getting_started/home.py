@@ -23,7 +23,6 @@ _DIRECT_ROUTES = {
     "research": "research",
     "risk": "risk",
     "capital": "capital",
-    "integration": "integration",
     "notifications": "notifications",
     "config": "config",
 }
@@ -48,9 +47,7 @@ def print_menu(context: InteractiveContext) -> None:
         typer.echo("数据与研究：\n  1. 数据\n  2. 研究")
         return
     if context.shell_path == ("operations",):
-        typer.echo(
-            "系统与集成：\n  1. 系统服务\n  2. Provider 集成\n  3. 通知\n  4. 高级配置"
-        )
+        typer.echo("系统与配置：\n  1. 系统服务\n  2. 通知\n  3. 高级配置")
         return
     if context.shell_path == ("project-help",):
         typer.echo("项目与帮助：\n  1. 项目\n  2. 命令地图")
@@ -63,7 +60,7 @@ def print_menu(context: InteractiveContext) -> None:
                 "  2. 交易管理",
                 "  3. 市场目录",
                 "  4. 数据与研究",
-                "  5. 系统与集成",
+                "  5. 系统与配置",
                 "  6. 诊断与观测",
                 "  7. 项目与帮助",
                 "  8. 市场行情",
@@ -85,7 +82,7 @@ def print_help(context: InteractiveContext) -> None:
         return
     typer.echo(
         "输入 1-8 选择产品入口。也可直接输入命令：account/launch/reference/"
-        "market/data/research/risk/capital/system/integration/notifications/config；"
+        "market/data/research/risk/capital/system/notifications/config；"
         "market 是直连 provider 的独立模式；system/market 和 "
         "launch/<id>/instances/<instance-id>/components/market 是连接模式。"
     )
@@ -110,11 +107,9 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
             {
                 "1": "system",
                 "system": "system",
-                "2": "integration",
-                "integration": "integration",
-                "3": "notifications",
+                "2": "notifications",
                 "notifications": "notifications",
-                "4": "config",
+                "3": "config",
                 "config": "config",
             },
         )
@@ -166,7 +161,7 @@ def _navigate_group(
 
 
 def choose(context: InteractiveContext) -> GuidedCommand:
-    from ..business import account, integration, market, notifications, order, reference
+    from ..business import account, market, notifications, order, reference
     from ..research_data import data, research
     from ..strategy import launch, observe
     from ..system import runtime
@@ -196,7 +191,7 @@ def choose(context: InteractiveContext) -> GuidedCommand:
         typer.echo(
             "  1. 账户列表\n  2. 账户余额\n  3. 账户持仓\n"
             "  4. 行情快照\n  5. 订单状态\n  6. 市场目录\n"
-            "  7. 期权链\n  8. 通知配置校验\n  9. Provider 集成帮助"
+            "  7. 期权链\n  8. 通知配置校验"
         )
         action = typer.prompt("请输入序号", default="1").strip()
         if action in {"1", "2", "3"}:
@@ -211,7 +206,7 @@ def choose(context: InteractiveContext) -> GuidedCommand:
             return reference.choose_option_chain()
         if action == "8":
             return notifications.choose()
-        return integration.choose()
+        raise typer.BadParameter("未知查询动作")
     if choice == "5":
         typer.echo(
             "  1. 列出 datasets\n  2. 审阅 data requirements\n"

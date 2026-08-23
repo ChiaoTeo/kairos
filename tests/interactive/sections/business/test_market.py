@@ -230,7 +230,7 @@ def test_top_level_market_once_uses_standalone_provider(
     assert "source-id" not in " ".join(command.argv)
 
 
-def test_direct_market_menu_presents_tools_in_product_order(
+def test_direct_market_menu_presents_user_tasks_in_product_order(
     interactive_context, capsys
 ) -> None:
     interactive_context.shell_path = ("market",)
@@ -238,12 +238,28 @@ def test_direct_market_menu_presents_tools_in_product_order(
     market.print_menu(interactive_context)
 
     output = capsys.readouterr().out
-    assert "Market 独立工具（不连接运行中的 Market）" in output
-    assert "1. 测试 Provider 行情" in output
+    assert "Market 行情" in output
+    assert "1. 查看实时行情" in output
     assert "2. 下载历史行情" in output
-    assert "3. 检查本地行情文件" in output
-    assert "4. 验证市场定义" in output
-    assert "5. 检查 Reference → Market 映射" in output
+    assert "3. 查看本地行情文件" in output
+    assert "d. 诊断工具" in output
+    assert "验证市场定义" not in output
+    assert "Reference → Market" not in output
+
+
+def test_market_diagnostics_are_separate_from_user_tasks(
+    interactive_context, capsys
+) -> None:
+    interactive_context.shell_path = ("market",)
+
+    assert market.handle(interactive_context, ("d",)) is ShellControl.HANDLED
+    assert interactive_context.shell_path == ("market", "diagnostics")
+
+    market.print_menu(interactive_context)
+    output = capsys.readouterr().out
+    assert "Market 诊断" in output
+    assert "1. 验证市场定义" in output
+    assert "2. 检查 Reference → Market 映射" in output
 
 
 def test_connected_market_replay_controls_target_runtime(

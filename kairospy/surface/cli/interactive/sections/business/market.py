@@ -35,16 +35,26 @@ _DIRECT_PROVIDERS = {
 def print_menu(context: InteractiveContext) -> None:
     scope = _scope(context)
     if scope == "direct":
+        if context.shell_path == ("market", "diagnostics"):
+            typer.echo(
+                "\n".join(
+                    (
+                        "Market 诊断：",
+                        "  1. 验证市场定义",
+                        "  2. 检查 Reference → Market 映射",
+                    )
+                )
+            )
+            return
         typer.echo(
             "\n".join(
                 (
-                    "Market 独立工具（不连接运行中的 Market）：",
-                    "  1. 测试 Provider 行情",
+                    "Market 行情：",
+                    "  1. 查看实时行情",
                     "  2. 下载历史行情",
-                    "  3. 检查本地行情文件",
-                    "  4. 验证市场定义",
-                    "  5. 检查 Reference → Market 映射",
+                    "  3. 查看本地行情文件",
                     "  c. 连接 workspace Market",
+                    "  d. 诊断工具",
                 )
             )
         )
@@ -91,11 +101,15 @@ def print_menu(context: InteractiveContext) -> None:
 
 def print_help(context: InteractiveContext) -> None:
     if _scope(context) == "direct":
+        if context.shell_path == ("market", "diagnostics"):
+            typer.echo("可用命令：validate/reference-universe/back/home/exit")
+            typer.echo("这里只检查市场定义和 Reference 到 Market 的映射。")
+            return
         typer.echo(
-            "可用命令：once/download/replay/validate/"
-            "reference-universe/connect/back/home/exit"
+            "可用命令：once/download/replay/connect/diagnostics/"
+            "back/home/exit"
         )
-        typer.echo("这些工具不会读取或更改运行中的 Market 状态。")
+        typer.echo("查看运行中 Market 的行情时，请选择“连接 workspace Market”。")
         return
     commands = (
         "status/sources/quote/bar/greeks/freshness/"
@@ -288,10 +302,28 @@ def choose(context: InteractiveContext) -> GuidedCommand:
 
 
 def _handle_direct(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
+    if context.shell_path == ("market", "diagnostics"):
+        if len(parts) != 1:
+            return None
+        action = {
+            "1": "validate",
+            "validate": "validate",
+            "2": "reference-universe",
+            "reference-universe": "reference-universe",
+            "universe": "reference-universe",
+        }.get(parts[0])
+        if action == "validate":
+            return _direct_validate_command(context)
+        if action == "reference-universe":
+            return _direct_reference_universe_command()
+        return None
     if parts in {("c",), ("connect",), ("system", "market")}:
         context.shell_path = ("system", "market")
         context.selected_service = "market"
         context.selected_market = None
+        return ShellControl.HANDLED
+    if parts in {("d",), ("diagnostics",)}:
+        context.shell_path = ("market", "diagnostics")
         return ShellControl.HANDLED
     if len(parts) != 1:
         return None
@@ -348,7 +380,7 @@ def _direct_once_command(context: InteractiveContext) -> ShellAction:
             "--format",
             "table",
         ),
-        f"直接测试 {provider} 行情",
+        f"查看 {provider} 实时行情",
     )
 
 
@@ -386,7 +418,7 @@ def _direct_replay_command(context: InteractiveContext) -> ShellAction:
             "--format",
             "table",
         ),
-        "检查本地行情文件（不启动 Market 服务）",
+        "查看本地行情文件",
     )
 
 
@@ -755,7 +787,7 @@ def _select_launch_instance(context: InteractiveContext) -> str | None:
 
 def _scope(context: InteractiveContext) -> str:
     path = context.shell_path
-    if path == ("market",):
+    if path[:1] == ("market",):
         return "direct"
     if path[:2] == ("system", "market"):
         return "system"

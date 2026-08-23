@@ -31,7 +31,10 @@ from .risk import RiskProcessConfig
 from .process_logging import start_logged_process
 
 
-SYSTEM_COMPONENTS = ("reference", "market", "account", "risk", "capital", "execution")
+# Only these runtimes have workspace-scoped identity. Account, Risk, Capital,
+# and Execution are owned by a launch instance and are inspected through that
+# instance rather than the workspace inventory.
+SYSTEM_COMPONENTS = ("reference", "market")
 
 
 def _lock_is_held(path: Path) -> bool:

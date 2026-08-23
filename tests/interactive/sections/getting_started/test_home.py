@@ -13,7 +13,7 @@ def test_home_groups_complete_product_surface(interactive_context, capsys) -> No
         "交易管理",
         "市场目录",
         "数据与研究",
-        "系统与集成",
+        "系统与配置",
         "诊断与观测",
         "项目与帮助",
     ):
@@ -52,13 +52,22 @@ def test_home_group_menus_expose_technical_sections_at_second_level(
 ) -> None:
     for path, labels in (
         (("data-research",), ("数据", "研究")),
-        (("operations",), ("系统服务", "Provider", "通知", "高级配置")),
+        (("operations",), ("系统服务", "通知", "高级配置")),
         (("project-help",), ("项目", "命令地图")),
     ):
         interactive_context.shell_path = path
         home.print_menu(interactive_context)
         text = capsys.readouterr().out
         assert all(label in text for label in labels)
+
+
+def test_operations_menu_does_not_expose_provider_integration(
+    interactive_context, capsys
+) -> None:
+    interactive_context.shell_path = ("operations",)
+    home.print_menu(interactive_context)
+    assert "Provider" not in capsys.readouterr().out
+    assert home.handle(interactive_context, ("integration",)) is None
 
 
 def test_trade_parent_exposes_only_account_selection(interactive_context, capsys) -> None:

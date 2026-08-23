@@ -71,8 +71,8 @@ kairos system down
 
 ## 第三条线：便捷查询与一次性操作
 
-这条线服务于临时查看或操作某类业务事实：账户、行情、订单、Reference 查询、
-Provider 集成和通知目的地。
+这条线服务于临时查看或操作某类业务事实：账户、行情、订单、Reference 查询和通知目的地。
+底层 Provider 命令保留给脚本和故障排查，不作为交互式产品导航入口。
 
 常用入口：
 
@@ -405,7 +405,6 @@ Account、Market、Execution、Reference 这些模块边界：
 3. 选择 Account 后查看 provider 未完成订单、历史订单或成交记录
 4. 市场目录：资产、参与方、交易品种或具体市场
 5. Notification destination
-6. Provider integration operation
 ```
 
 确认后再映射到现有命令，例如：

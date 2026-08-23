@@ -249,21 +249,14 @@ def test_component_status_does_not_start_a_missing_process(tmp_path: Path) -> No
     assert not workspace.paths.process_socket("market").exists()
 
 
-def test_component_list_reports_all_system_components_without_starting_them(
+def test_component_list_reports_workspace_components_without_starting_them(
     tmp_path: Path,
 ) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="list")
 
     value = ComponentProcessApplication(workspace).list_status()
 
-    assert set(value) == {
-        "reference",
-        "market",
-        "account",
-        "risk",
-        "capital",
-        "execution",
-    }
+    assert set(value) == {"reference", "market"}
     assert all(item["status"] == "not_running" for item in value.values())
     assert not any(workspace.paths.process_socket(name).exists() for name in value)
 
@@ -387,7 +380,8 @@ def test_runtime_supervisor_does_not_manage_instance_components(tmp_path: Path) 
         desired={"execution": {}},
     ).reconcile_once()
 
-    assert result["execution"]["status"] == "not_running"
+    assert "execution" not in result
+    assert socket.exists()
 
 
 def test_runtime_supervisor_rejects_instance_component_registration(

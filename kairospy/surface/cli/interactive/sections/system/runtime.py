@@ -7,7 +7,7 @@ import typer
 from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
 
 
-_COMPONENTS = ("reference", "market", "risk", "capital")
+_COMPONENTS = ("reference", "market")
 
 
 def print_menu(context: InteractiveContext) -> None:
@@ -18,11 +18,9 @@ def print_menu(context: InteractiveContext) -> None:
                     "系统服务：",
                     "  1. reference",
                     "  2. market",
-                    "  3. risk",
-                    "  4. capital",
-                    "  5. 查看所有系统服务",
-                    "  6. 运行 system doctor",
-                    "  7. 修复 stale 运行资源",
+                    "  3. 查看 Workspace 服务状态",
+                    "  4. 运行 system doctor",
+                    "  5. 修复 stale 运行资源",
                 )
             )
         )
@@ -50,9 +48,7 @@ def print_menu(context: InteractiveContext) -> None:
 
 def print_help(context: InteractiveContext) -> None:
     if context.shell_path == ("system",):
-        typer.echo(
-            "可用命令：reference/market/risk/capital/list/doctor/repair/back/home"
-        )
+        typer.echo("可用命令：reference/market/list/doctor/repair/back/home")
         return
     if context.shell_path == ("system", "market"):
         from ..business import market
@@ -69,10 +65,6 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
             "reference": "reference",
             "2": "market",
             "market": "market",
-            "3": "risk",
-            "risk": "risk",
-            "4": "capital",
-            "capital": "capital",
         }
         key = parts[0] if len(parts) == 1 else ""
         component = routes.get(key)
@@ -80,14 +72,14 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
             context.shell_path = ("system", component)
             context.selected_service = component
             return ShellControl.HANDLED
-        if parts in {("5",), ("list",), ("ls",), ("status",)}:
+        if parts in {("3",), ("list",), ("ls",), ("status",)}:
             return GuidedCommand(
                 ("system", "list", "--format", "table"),
                 "列出 workspace 系统服务状态",
             )
-        if parts in {("6",), ("doctor",)}:
+        if parts in {("4",), ("doctor",)}:
             return GuidedCommand(("system", "doctor"), "诊断 socket、健康文件和锁")
-        if parts in {("7",), ("repair",)}:
+        if parts in {("5",), ("repair",)}:
             return GuidedCommand(
                 ("system", "repair"), "清理确认 stale 的运行资源", dangerous=True
             )
