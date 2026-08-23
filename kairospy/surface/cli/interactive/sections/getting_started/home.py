@@ -8,12 +8,11 @@ from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellContr
 
 
 _DIRECT_ROUTES = {
-    "8": "market",
+    "1": "market",
     "market": "market",
     "quotes": "market",
-    "1": "launch",
     "launch": "launch",
-    "3": "reference",
+    "2": "reference",
     "target": "reference",
     "targets": "reference",
     "reference": "reference",
@@ -28,42 +27,60 @@ _DIRECT_ROUTES = {
 }
 
 _GROUP_ROUTES = {
-    "4": "data-research",
+    "3": "strategy",
+    "strategy": "strategy",
+    "4": "trade",
+    "trade": "trade",
+    "5": "data-research",
     "data-research": "data-research",
-    "5": "operations",
+    "6": "operations",
     "operations": "operations",
-    "7": "project-help",
-    "project-help": "project-help",
 }
 
-HOME_GROUPS = frozenset((*_GROUP_ROUTES.values(), "trade"))
+HOME_GROUPS = frozenset((*_GROUP_ROUTES.values(),))
+
+
+def is_group_path(path: tuple[str, ...]) -> bool:
+    return len(path) == 1 and path[0] in HOME_GROUPS
 
 
 def print_menu(context: InteractiveContext) -> None:
     if context.shell_path == ("trade",):
-        typer.echo("交易管理：\n  1. 选择账户")
+        typer.echo("交易管理：\n  1. 账户与订单\n  2. 风险管理\n  3. 资金管理")
+        return
+    if context.shell_path == ("strategy",):
+        typer.echo(
+            "策略运行：\n"
+            "  1. 运行列表与控制\n"
+            "  2. 打开运行观测台\n"
+            "  3. 输出一次运行快照\n"
+            "  4. 推荐诊断动作"
+        )
         return
     if context.shell_path == ("data-research",):
         typer.echo("数据与研究：\n  1. 数据\n  2. 研究")
         return
     if context.shell_path == ("operations",):
-        typer.echo("系统与配置：\n  1. 系统服务\n  2. 通知\n  3. 高级配置")
-        return
-    if context.shell_path == ("project-help",):
-        typer.echo("项目与帮助：\n  1. 项目\n  2. 命令地图")
+        typer.echo(
+            "系统与配置：\n"
+            "  1. 项目工作区\n"
+            "  2. 系统服务\n"
+            "  3. 通知\n"
+            "  4. 高级配置\n"
+            "  5. 系统诊断"
+        )
         return
     typer.echo(
         "\n".join(
             (
                 "产品入口：",
-                "  1. 策略运行",
-                "  2. 交易管理",
-                "  3. 市场目录",
-                "  4. 数据与研究",
-                "  5. 系统与配置",
-                "  6. 诊断与观测",
-                "  7. 项目与帮助",
-                "  8. 市场行情",
+                "  1. 市场行情",
+                "  2. 市场目录",
+                "  3. 策略运行",
+                "  4. 交易管理",
+                "  5. 数据与研究",
+                "  6. 系统与配置",
+                "  ?. 帮助（随时可用）",
             )
         )
     )
@@ -71,20 +88,24 @@ def print_menu(context: InteractiveContext) -> None:
 
 def print_help(context: InteractiveContext) -> None:
     if context.shell_path == ("trade",):
-        typer.echo("可用命令：accounts/back/home/exit")
+        typer.echo("输入序号选择；可用命令：accounts/risk/capital/back/home。")
+        return
+    if context.shell_path == ("strategy",):
+        typer.echo("输入序号选择；可用命令：launch/observe/once/doctor/back/home。")
         return
     if context.shell_path in {
         ("data-research",),
         ("operations",),
-        ("project-help",),
     }:
         typer.echo("输入序号选择；back 返回产品入口，home 返回首页。")
         return
     typer.echo(
-        "输入 1-8 选择产品入口。也可直接输入命令：account/launch/reference/"
+        "输入 1-6 选择产品入口，输入 ? 或 help 查看帮助。也可直接输入命令："
+        "account/launch/reference/"
         "market/data/research/risk/capital/system/notifications/config；"
         "market 是直连 provider 的独立模式；system/market 和 "
-        "launch/<id>/instances/<instance-id>/components/market 是连接模式。"
+        "launch/<id>/instances/<instance-id>/components/market 是连接模式；"
+        "输入 map 查看完整命令地图。"
     )
 
 
@@ -93,6 +114,25 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
         if parts in {("1",), ("account",), ("accounts",), ("select",)}:
             context.shell_path = ("trade", "accounts")
             return ShellControl.HANDLED
+        if parts in {("2",), ("risk",)}:
+            context.shell_path = ("risk",)
+            return ShellControl.HANDLED
+        if parts in {("3",), ("capital",)}:
+            context.shell_path = ("capital",)
+            return ShellControl.HANDLED
+        return None
+    if context.shell_path == ("strategy",):
+        from ..strategy import observe
+
+        if parts in {("1",), ("launch",), ("runs",)}:
+            context.shell_path = ("launch",)
+            return ShellControl.HANDLED
+        if parts in {("2",), ("observe",), ("open",)}:
+            return observe.handle(context, ("open",))
+        if parts in {("3",), ("once",)}:
+            return observe.handle(context, ("once",))
+        if parts in {("4",), ("doctor",), ("diagnose",)}:
+            return observe.diagnose(context)
         return None
     if context.shell_path == ("data-research",):
         return _navigate_group(
@@ -101,27 +141,23 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
             {"1": "data", "data": "data", "2": "research", "research": "research"},
         )
     if context.shell_path == ("operations",):
+        if parts in {("5",), ("doctor",), ("diagnose",)}:
+            return GuidedCommand(("system", "doctor"), "诊断 socket、健康文件和锁")
         return _navigate_group(
             context,
             parts,
             {
-                "1": "system",
+                "1": "project",
+                "project": "project",
+                "workspace": "project",
+                "2": "system",
                 "system": "system",
-                "2": "notifications",
+                "3": "notifications",
                 "notifications": "notifications",
-                "3": "config",
+                "4": "config",
                 "config": "config",
             },
         )
-    if context.shell_path == ("project-help",):
-        if parts in {("2",), ("quickstart",), ("map",)}:
-            return GuidedCommand(
-                ("quickstart",), "查看 CLI 场景地图", needs_workspace=False
-            )
-        return _navigate_group(context, parts, {"1": "project", "project": "project"})
-    if parts in {("2",), ("trade",)}:
-        context.shell_path = ("trade",)
-        return ShellControl.HANDLED
     if parts in {("account",), ("accounts",)}:
         context.shell_path = ("trade", "accounts")
         return ShellControl.HANDLED
@@ -139,7 +175,7 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
         context.shell_path = ("system", "market")
         context.selected_service = "market"
         return ShellControl.HANDLED
-    if parts in {("6",), ("doctor",), ("observe",)}:
+    if parts in {("doctor",), ("observe",)}:
         context.shell_path = ("observe",)
         return ShellControl.HANDLED
     if parts in {("quickstart",), ("map",)}:

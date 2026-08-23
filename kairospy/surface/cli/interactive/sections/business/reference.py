@@ -273,37 +273,67 @@ def _reference_search_and_select(
     return True
 
 
-def select_market(context: InteractiveContext) -> Any | None:
-    """Select one canonical Market from Reference without accepting a raw id."""
+def select_market(
+    context: InteractiveContext,
+    *,
+    allowed_instrument_kinds: Sequence[str] | None = None,
+    availability_label: str = "行情查询",
+) -> Any | None:
+    """Select one canonical Market, optionally limited to currently usable kinds."""
+    allowed_kinds = tuple(dict.fromkeys(allowed_instrument_kinds or ()))
     if context.selected_market is not None:
         record = context.selected_market
-        typer.echo(
-            "继续使用当前市场："
-            f"{record.venue_symbol or record.instrument.display_symbol} · "
-            f"{_short_id(record.exchange_id)}"
-        )
-        return record
+        if not allowed_kinds or str(record.instrument_kind) in allowed_kinds:
+            typer.echo(
+                "继续使用当前标的："
+                f"{record.venue_symbol or record.instrument.display_symbol} · "
+                f"{_short_id(record.exchange_id)}"
+            )
+            return record
+        context.selected_market = None
+        context.selected_market_source = None
 
-    query = typer.prompt(
-        "搜索市场代码或名称（直接回车浏览前 10 条）", default=""
-    ).strip()
+    query = typer.prompt("输入代码或名称（直接回车浏览可用标的）", default="").strip()
     try:
-        records = _application(context).find_markets(
-            query=query or None, active_only=True, limit=25
-        )
+        app = _application(context)
+        if allowed_kinds:
+            records = tuple(
+                record
+                for instrument_kind in allowed_kinds
+                for record in app.find_markets(
+                    query=query or None,
+                    instrument_kind=instrument_kind,
+                    active_only=True,
+                    limit=25,
+                )
+            )
+        else:
+            records = app.find_markets(
+                query=query or None, active_only=True, limit=25
+            )
     except Exception as error:
-        typer.echo(f"读取 Reference 市场目录失败：{error}")
+        typer.echo(f"读取标的目录失败：{error}")
         return None
-    ranked = _rank_reference_records("market", tuple(records), query or None)[:10]
+    unique_records = {str(record.id): record for record in records}
+    ranked = _rank_reference_records(
+        "market", tuple(unique_records.values()), query or None
+    )[:10]
     if not ranked:
-        typer.echo("Reference 目录中没有匹配的有效 Market。")
+        if allowed_kinds:
+            labels = "、".join(_instrument_type_label(kind) for kind in allowed_kinds)
+            typer.echo(
+                f"没有找到匹配且可用于{availability_label}的标的"
+                f"（当前支持：{labels}）。"
+            )
+        else:
+            typer.echo("标的目录中没有匹配的有效标的。")
         return None
     _render_reference_results("market", ranked)
-    choice = typer.prompt("选择市场序号；输入 b 返回", default="b").strip()
+    choice = typer.prompt("选择标的序号；输入 b 返回", default="b").strip()
     if choice in {"b", "back", ""}:
         return None
     if not choice.isdigit() or not 1 <= int(choice) <= len(ranked):
-        typer.echo("无效的市场序号；不会尝试读取行情文件。")
+        typer.echo("无效的标的序号；不会发起行情查询。")
         return None
     selected = ranked[int(choice) - 1]
     context.selected_market = selected

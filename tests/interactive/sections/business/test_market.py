@@ -199,10 +199,20 @@ def test_top_level_market_once_uses_standalone_provider(
 ) -> None:
     interactive_context.owner = object()
     interactive_context.shell_path = ("market",)
+    allowed_kinds = None
+
+    def select_market(
+        _context, *, allowed_instrument_kinds=None, availability_label="行情查询"
+    ):
+        nonlocal allowed_kinds
+        allowed_kinds = allowed_instrument_kinds
+        assert availability_label == "实时行情"
+        return _market_record()
+
     monkeypatch.setattr(
-        market.reference, "select_market", lambda _context: _market_record()
+        market.reference, "select_market", select_market
     )
-    answers = iter(["1", "1"])
+    answers = iter(["1"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
 
     command = market.handle(interactive_context, ("once",))
@@ -228,6 +238,7 @@ def test_top_level_market_once_uses_standalone_provider(
     )
     assert "system" not in command.argv
     assert "source-id" not in " ".join(command.argv)
+    assert allowed_kinds == ("spot", "option")
 
 
 def test_direct_market_menu_presents_user_tasks_in_product_order(
@@ -238,13 +249,126 @@ def test_direct_market_menu_presents_user_tasks_in_product_order(
     market.print_menu(interactive_context)
 
     output = capsys.readouterr().out
-    assert "Market 行情" in output
-    assert "1. 查看实时行情" in output
+    assert "行情中心" in output
+    assert "1. 搜索标的并查看实时行情" in output
     assert "2. 下载历史行情" in output
-    assert "3. 查看本地行情文件" in output
-    assert "d. 诊断工具" in output
+    assert "3. 查看本地行情数据" in output
+    assert "c. 连接运行中的行情服务" in output
+    assert "d. 诊断问题" in output
+    assert "a. 高级：输入完整市场标识" in output
     assert "验证市场定义" not in output
     assert "Reference → Market" not in output
+
+
+def test_local_market_data_lists_catalog_instead_of_starting_replay(
+    interactive_context,
+) -> None:
+    interactive_context.shell_path = ("market",)
+
+    command = market.handle(interactive_context, ("3",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.argv == ("market", "datasets", "--format", "table")
+    assert command.summary == "查看本地行情数据"
+
+
+def test_direct_market_once_does_not_ask_for_description_strategy(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("market",)
+    monkeypatch.setattr(
+        market.reference,
+        "select_market",
+        lambda _context, **_kwargs: _market_record(),
+    )
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "1")
+
+    command = market.handle(interactive_context, ("once",))
+
+    assert isinstance(command, GuidedCommand)
+    output = capsys.readouterr().out
+    assert "选择 Market 描述方式" not in output
+    assert "手动输入底层描述" not in output
+    assert "选择实时行情数据源" in output
+
+
+def test_history_download_starts_from_market_and_hides_canonical_ids(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("market",)
+    allowed_kinds = None
+
+    def select_market(
+        _context, *, allowed_instrument_kinds=None, availability_label="行情查询"
+    ):
+        nonlocal allowed_kinds
+        allowed_kinds = allowed_instrument_kinds
+        assert availability_label == "历史行情"
+        return _market_record()
+
+    monkeypatch.setattr(market.reference, "select_market", select_market)
+    prompts = []
+    answers = iter(["1", "2026-08-01", "2026-08-02", "prices.jsonl", "1h"])
+
+    def prompt(label, **_kwargs):
+        prompts.append(label)
+        return next(answers)
+
+    monkeypatch.setattr("typer.prompt", prompt)
+
+    command = market.handle(interactive_context, ("download",))
+
+    assert isinstance(command, GuidedCommand)
+    assert allowed_kinds == ("spot", "equity", "option")
+    assert command.argv == (
+        "market",
+        "download",
+        "--provider",
+        "binance",
+        "--symbol",
+        "BTCUSDT",
+        "--market-type",
+        "spot",
+        "--data-kind",
+        "bar",
+        "--instrument-id",
+        "instrument:crypto:BTCUSDT",
+        "--start",
+        "1785542400000",
+        "--end",
+        "1785715199999",
+        "--file",
+        "prices.jsonl",
+        "--market-id",
+        "market:binance:spot:BTCUSDT",
+        "--interval",
+        "1h",
+        "--format",
+        "table",
+    )
+    assert prompts == ["请输入序号；输入 b 返回", "开始日期", "结束日期", "保存位置", "K 线周期"]
+    assert "Canonical" not in capsys.readouterr().out
+
+
+def test_history_download_rejects_reversed_date_range(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("market",)
+    monkeypatch.setattr(
+        market.reference,
+        "select_market",
+        lambda _context, **_kwargs: _market_record(),
+    )
+    answers = iter(["1", "2026-08-03", "2026-08-02"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    result = market.handle(interactive_context, ("download",))
+
+    assert result is ShellControl.HANDLED
+    assert "开始日期必须早于结束日期" in capsys.readouterr().out
 
 
 def test_market_diagnostics_are_separate_from_user_tasks(

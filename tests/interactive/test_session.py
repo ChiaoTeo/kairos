@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from kairospy.surface.cli.interactive.models import GuidedCommand, ShellControl
-from kairospy.surface.cli.interactive.session import _run_shell, prompt_path, shell_command
+from kairospy.surface.cli.interactive.session import (
+    _run_shell,
+    prompt_path,
+    shell_command,
+)
 
 
 def test_root_dispatches_to_product_section(interactive_context) -> None:
@@ -11,10 +15,19 @@ def test_root_dispatches_to_product_section(interactive_context) -> None:
 
 
 def test_root_numeric_navigation_uses_product_groups(interactive_context) -> None:
-    assert shell_command(interactive_context, "5") is ShellControl.HANDLED
+    assert shell_command(interactive_context, "6") is ShellControl.HANDLED
     assert interactive_context.shell_path == ("operations",)
-    assert shell_command(interactive_context, "3") is ShellControl.HANDLED
+    assert shell_command(interactive_context, "4") is ShellControl.HANDLED
     assert interactive_context.shell_path == ("config",)
+
+
+def test_top_level_strategy_navigation_exposes_launch_and_observation(
+    interactive_context,
+) -> None:
+    assert shell_command(interactive_context, "3") is ShellControl.HANDLED
+    assert interactive_context.shell_path == ("strategy",)
+    assert shell_command(interactive_context, "1") is ShellControl.HANDLED
+    assert interactive_context.shell_path == ("launch",)
 
 
 def test_section_dispatch_returns_guided_command(interactive_context) -> None:
@@ -27,6 +40,23 @@ def test_section_dispatch_returns_guided_command(interactive_context) -> None:
 def test_invalid_shell_quoting_is_handled(interactive_context, capsys) -> None:
     assert shell_command(interactive_context, "'unfinished") is None
     assert "命令解析失败" in capsys.readouterr().out
+
+
+def test_question_mark_opens_global_help(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    lines = iter(["?", "exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(lines))
+
+    assert (
+        _run_shell(
+            interactive_context,
+            execute=lambda _argv: 0,
+            yes=False,
+        )
+        == 0
+    )
+    assert "输入 1-6 选择产品入口" in capsys.readouterr().out
 
 
 def test_top_level_market_enters_standalone_scope(interactive_context) -> None:

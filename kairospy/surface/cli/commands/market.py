@@ -14,7 +14,7 @@ from kairospy.application.workspace import WorkspaceApplication
 HELP = """Market standalone commands are owned by kairos-market-cli.
 
 Canonical commands:
-  validate, once, replay, download, reference-universe
+  validate, once, replay, download, datasets, reference-universe
 
 Current runtime components are connected through scoped component commands:
   kairos system component market ...

@@ -54,6 +54,7 @@ impl CliMarketHistoricalProvider {
 
 #[derive(Clone, Copy, Debug)]
 pub enum CliMarketHistoricalMarketType {
+    Spot,
     Equity,
     Option,
 }
@@ -61,6 +62,7 @@ pub enum CliMarketHistoricalMarketType {
 impl CliMarketHistoricalMarketType {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Spot => "spot",
             Self::Equity => "equity",
             Self::Option => "option",
         }
@@ -233,6 +235,21 @@ impl CliMarketApplication {
         &self,
         request: CliMarketHistoricalDownloadRequest,
     ) -> Result<Value, Box<dyn std::error::Error>> {
+        match (request.provider, request.market_type) {
+            (CliMarketHistoricalProvider::Binance, CliMarketHistoricalMarketType::Spot)
+            | (
+                CliMarketHistoricalProvider::Massive,
+                CliMarketHistoricalMarketType::Equity | CliMarketHistoricalMarketType::Option,
+            ) => {},
+            _ => {
+                return Err(format!(
+                    "historical provider {} does not support market type {}",
+                    request.provider.as_str(),
+                    request.market_type.as_str()
+                )
+                .into());
+            },
+        }
         let workspace = self
             .workspace_root
             .as_ref()
@@ -300,6 +317,9 @@ impl CliMarketApplication {
                         instrument_query: match request.market_type {
                             CliMarketHistoricalMarketType::Equity => InstrumentQuery::equities(),
                             CliMarketHistoricalMarketType::Option => InstrumentQuery::options(None),
+                            CliMarketHistoricalMarketType::Spot => {
+                                unreachable!("provider/market type compatibility was validated")
+                            },
                         },
                     },
                 )?;
@@ -441,6 +461,24 @@ impl CliMarketApplication {
             register_dataset(workspace_root, &manifest, &output, &manifest_path)?;
         }
         Ok(manifest)
+    }
+
+    pub fn historical_datasets(&self) -> Result<Value, Box<dyn std::error::Error>> {
+        let workspace_root = self
+            .workspace_root
+            .as_ref()
+            .ok_or("listing historical datasets requires --workspace")?;
+        let workspace = Workspace::open(workspace_root)?;
+        let catalog_path = workspace.state_root().join("market").join("datasets.json");
+        if !catalog_path.is_file() {
+            return Ok(json!({"datasets": []}));
+        }
+        let catalog: Value = serde_json::from_slice(&std::fs::read(catalog_path)?)?;
+        let datasets = catalog
+            .get("datasets")
+            .and_then(Value::as_array)
+            .ok_or("market dataset catalog has no datasets array")?;
+        Ok(json!({"datasets": datasets}))
     }
 }
 

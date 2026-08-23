@@ -60,7 +60,62 @@ def test_market_selection_accepts_search_and_numeric_choice_but_no_raw_id(
     assert reference.select_market(interactive_context) is record
     assert interactive_context.selected_market is record
     assert prompts == [
-        "搜索市场代码或名称（直接回车浏览前 10 条）",
-        "选择市场序号；输入 b 返回",
+        "输入代码或名称（直接回车浏览可用标的）",
+        "选择标的序号；输入 b 返回",
     ]
     assert all("market id" not in label.lower() for label in prompts)
+
+
+def test_market_selection_filters_to_currently_supported_instrument_kinds(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    spot = SimpleNamespace(
+        id="market:binance:spot:BTCUSDT",
+        venue_symbol="BTCUSDT",
+        exchange_id="exchange:binance",
+        instrument_kind="spot",
+        base_asset="asset:BTC",
+        quote_asset="asset:USDT",
+        status="active",
+        instrument=SimpleNamespace(display_symbol="BTC/USDT"),
+    )
+    seen_kinds = []
+
+    class Application:
+        def find_markets(self, **filters):
+            seen_kinds.append(filters["instrument_kind"])
+            assert filters["query"] == "BTC"
+            return (spot,) if filters["instrument_kind"] == "spot" else ()
+
+    monkeypatch.setattr(reference, "_application", lambda _context: Application())
+    answers = iter(["BTC", "1"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    selected = reference.select_market(
+        interactive_context,
+        allowed_instrument_kinds=("spot", "option"),
+    )
+
+    assert selected is spot
+    assert seen_kinds == ["spot", "option"]
+    output = capsys.readouterr().out
+    assert "股票" not in output
+
+
+def test_market_selection_explains_when_no_supported_market_matches(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    class Application:
+        def find_markets(self, **_filters):
+            return ()
+
+    monkeypatch.setattr(reference, "_application", lambda _context: Application())
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "ACCS")
+
+    selected = reference.select_market(
+        interactive_context,
+        allowed_instrument_kinds=("spot", "option"),
+    )
+
+    assert selected is None
+    assert "当前支持：现货、期权" in capsys.readouterr().out

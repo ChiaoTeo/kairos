@@ -33,15 +33,16 @@ from kairospy.surface.cli.interactive import run_interactive
 ```
 
 首页按用户任务组织，不直接展示内部 section 清单。稳定的一层入口为 Strategy、Trade Management、
-Reference、Data & Research、System & Integration、Observe、Project & Help 和 Market 行情。根据
+Reference、Data & Research、System & Integration、Observe、Project & Help 和行情中心。根据
 [Decision 0011](0011-trade-workbench-and-execution-modes.md)，Trade Management 使用 `/trade` 账户优先
 工作台：先进入 Account 列表并选择账户，再进入账户事实或 Execution standalone 订单操作；运行态
 Execution 必须从具体 Launch Instance 的 component 进入。本次不重组 Risk 与 Capital。新增 section
 不自动获得新的首页编号，必须先判断它属于哪个用户任务入口。
 
-Market 行情交互分为两层。顶层 `/market` 是 standalone/direct，直接调用 provider 或读取本地
-文件，对应 `kairos market once/validate/replay/download/reference-universe`；它可以从 Reference
-选择描述，也允许显式输入底层 Market 描述。`/system/market` 和
+行情中心交互分为两层。顶层 `/market` 是 standalone/direct，对应实时行情、历史下载和本地行情
+数据目录等用户任务。普通流程统一按代码或名称搜索标的，并在搜索阶段按数据源能力过滤；完整 Market
+标识只保留为显式高级入口。底层对应 `kairos market once/download/datasets/replay/validate/reference-universe`。
+`/system/market` 和
 `/launch/<launch-id>/instances/<instance-id>/components/market` 是 connected runtime 作用域：Market 必须从 Reference catalog
 搜索结果中选择，Source 必须从目标 Market runtime 的 `data_sources` 结果中选择，交互层不接受
 原始 Market ID 或 Source ID。launch 存在多个 instance 时也必须先从 registry 列表选择，并在

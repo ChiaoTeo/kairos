@@ -9,7 +9,13 @@ import typer
 
 from .context import create_context, go_back, go_home, print_context, refresh_context
 from .execution import display_command, execute_guided_command, with_workspace
-from .models import ExecuteCommand, GuidedCommand, InteractiveContext, ShellAction, ShellControl
+from .models import (
+    ExecuteCommand,
+    GuidedCommand,
+    InteractiveContext,
+    ShellAction,
+    ShellControl,
+)
 from .sections.business import (
     account,
     capital,
@@ -75,7 +81,7 @@ def _run_shell(
             continue
         if line in {"exit", "quit", "q"}:
             return context.last_status or 0
-        if line == "help":
+        if line in {"help", "?"}:
             _print_help(context)
             continue
         if line == "summary":
@@ -119,7 +125,7 @@ def shell_command(context: InteractiveContext, line: str) -> ShellAction:
     if not path:
         return home.handle(context, parts)
     section = path[0]
-    if len(path) == 1 and section in home.HOME_GROUPS:
+    if home.is_group_path(path):
         return home.handle(context, parts)
     if path[:2] == ("trade", "accounts"):
         if len(path) >= 4 and path[3] == "orders":
@@ -131,11 +137,7 @@ def shell_command(context: InteractiveContext, line: str) -> ShellAction:
         and path[-2:] == ("components", "execution")
     ):
         return execution_component.handle(context, parts)
-    if (
-        section == "launch"
-        and len(path) >= 6
-        and path[-2:] == ("components", "market")
-    ):
+    if section == "launch" and len(path) >= 6 and path[-2:] == ("components", "market"):
         return market.handle(context, parts)
     if section == "launch":
         return launch.handle(context, parts)
@@ -199,7 +201,7 @@ def _section_module(context: InteractiveContext):
     if not path:
         return home
     section = next(iter(path))
-    if len(path) == 1 and section in home.HOME_GROUPS:
+    if home.is_group_path(path):
         return home
     if path[:2] == ("trade", "accounts"):
         if len(path) >= 4 and path[3] == "orders":
@@ -212,9 +214,7 @@ def _section_module(context: InteractiveContext):
     ):
         return execution_component
     if path == ("system", "market") or (
-        len(path) >= 6
-        and path[0] == "launch"
-        and path[-2:] == ("components", "market")
+        len(path) >= 6 and path[0] == "launch" and path[-2:] == ("components", "market")
     ):
         return market
     return {

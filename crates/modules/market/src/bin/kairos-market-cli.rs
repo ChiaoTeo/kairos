@@ -298,6 +298,7 @@ async fn run_standalone(
                 .download_historical(command.into_request())
                 .await
         },
+        StandaloneCommand::Datasets => application.historical_datasets(),
     }
 }
 
@@ -368,6 +369,7 @@ enum StandaloneCommand {
     Once(OnceCommand),
     Replay(ReplayCommand),
     Download(DownloadCommand),
+    Datasets,
 }
 
 #[derive(Debug, Subcommand)]
@@ -712,6 +714,7 @@ enum HistoricalProvider {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum HistoricalMarketType {
+    Spot,
     Equity,
     Option,
 }
@@ -719,6 +722,7 @@ enum HistoricalMarketType {
 impl HistoricalMarketType {
     fn into_application(self) -> CliMarketHistoricalMarketType {
         match self {
+            Self::Spot => CliMarketHistoricalMarketType::Spot,
             Self::Equity => CliMarketHistoricalMarketType::Equity,
             Self::Option => CliMarketHistoricalMarketType::Option,
         }
@@ -838,6 +842,47 @@ mod tests {
         };
 
         assert!(command.into_query().is_err());
+    }
+
+    #[test]
+    fn historical_download_accepts_spot_as_a_canonical_market_type() {
+        let cli = Cli::try_parse_from([
+            "kairos-market-cli",
+            "standalone",
+            "download",
+            "--provider",
+            "binance",
+            "--symbol",
+            "BTCUSDT",
+            "--market-type",
+            "spot",
+            "--market-id",
+            "market:binance:spot:BTCUSDT",
+            "--instrument-id",
+            "instrument:spot:BTCUSDT",
+            "--start",
+            "1",
+            "--end",
+            "2",
+            "--file",
+            "prices.jsonl",
+        ])
+        .unwrap();
+        let Command::Standalone(StandaloneCommand::Download(command)) = cli.command else {
+            panic!("expected standalone historical download command");
+        };
+
+        assert!(matches!(command.market_type, HistoricalMarketType::Spot));
+    }
+
+    #[test]
+    fn historical_datasets_is_a_standalone_catalog_command() {
+        let cli = Cli::try_parse_from(["kairos-market-cli", "standalone", "datasets"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::Standalone(StandaloneCommand::Datasets)
+        ));
     }
 
     #[test]

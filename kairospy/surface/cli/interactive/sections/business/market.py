@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from prettytable import PrettyTable
@@ -31,6 +32,17 @@ _DIRECT_PROVIDERS = {
     "option": (("binance-options-rest", "Binance Options REST"),),
 }
 
+_HISTORICAL_PROVIDERS = {
+    "spot": (("binance", "Binance"),),
+    "equity": (("massive", "Massive"),),
+    "option": (("massive", "Massive"),),
+}
+
+_HISTORICAL_DATA_KINDS = {
+    "binance": (("bar", "K 线"), ("quote", "报价"), ("trade", "成交")),
+    "massive": (("bar", "K 线"), ("quote", "报价")),
+}
+
 
 def print_menu(context: InteractiveContext) -> None:
     scope = _scope(context)
@@ -49,12 +61,13 @@ def print_menu(context: InteractiveContext) -> None:
         typer.echo(
             "\n".join(
                 (
-                    "Market 行情：",
-                    "  1. 查看实时行情",
+                    "行情中心：",
+                    "  1. 搜索标的并查看实时行情",
                     "  2. 下载历史行情",
-                    "  3. 查看本地行情文件",
-                    "  c. 连接 workspace Market",
-                    "  d. 诊断工具",
+                    "  3. 查看本地行情数据",
+                    "  c. 连接运行中的行情服务",
+                    "  d. 诊断问题",
+                    "  a. 高级：输入完整市场标识",
                 )
             )
         )
@@ -106,10 +119,10 @@ def print_help(context: InteractiveContext) -> None:
             typer.echo("这里只检查市场定义和 Reference 到 Market 的映射。")
             return
         typer.echo(
-            "可用命令：once/download/replay/connect/diagnostics/"
+            "可用命令：once/download/datasets/replay/connect/diagnostics/advanced/"
             "back/home/exit"
         )
-        typer.echo("查看运行中 Market 的行情时，请选择“连接 workspace Market”。")
+        typer.echo("查看运行中服务的行情时，请选择“连接运行中的行情服务”。")
         return
     commands = (
         "status/sources/quote/bar/greeks/freshness/"
@@ -325,6 +338,8 @@ def _handle_direct(context: InteractiveContext, parts: tuple[str, ...]) -> Shell
     if parts in {("d",), ("diagnostics",)}:
         context.shell_path = ("market", "diagnostics")
         return ShellControl.HANDLED
+    if parts in {("a",), ("advanced",)}:
+        return _direct_once_command(context, manual=True)
     if len(parts) != 1:
         return None
     action = {
@@ -332,7 +347,9 @@ def _handle_direct(context: InteractiveContext, parts: tuple[str, ...]) -> Shell
         "once": "once",
         "2": "download",
         "download": "download",
-        "3": "replay",
+        "3": "datasets",
+        "datasets": "datasets",
+        "local": "datasets",
         "replay": "replay",
         "4": "validate",
         "validate": "validate",
@@ -346,30 +363,45 @@ def _handle_direct(context: InteractiveContext, parts: tuple[str, ...]) -> Shell
         return _direct_validate_command(context)
     if action == "replay":
         return _direct_replay_command(context)
+    if action == "datasets":
+        return GuidedCommand(
+            ("market", "datasets", "--format", "table"),
+            "查看本地行情数据",
+        )
     if action == "download":
-        return _direct_download_command()
+        return _direct_download_command(context)
     if action == "reference-universe":
         return _direct_reference_universe_command()
     return None
 
 
-def _direct_once_command(context: InteractiveContext) -> ShellAction:
-    descriptor = _direct_descriptor(context)
+def _direct_once_command(
+    context: InteractiveContext, *, manual: bool = False
+) -> ShellAction:
+    descriptor = (
+        _manual_descriptor()
+        if manual
+        else _direct_descriptor(
+            context,
+            allowed_market_types=tuple(_DIRECT_PROVIDERS),
+            availability_label="实时行情",
+        )
+    )
     if descriptor is None:
         return ShellControl.HANDLED
     providers = _DIRECT_PROVIDERS.get(descriptor["market_type"], ())
     if not providers:
         typer.echo(
-            f"独立 once 当前没有支持 {descriptor['market_type']} 的 direct provider。"
+            "当前没有支持该标的类型的实时行情数据源。"
         )
         return ShellControl.HANDLED
     provider = providers[0][0]
     if len(providers) > 1:
-        provider = _prompt_choice("选择 direct provider", providers)
+        provider = _prompt_choice("选择实时行情数据源", providers)
         if provider is None:
             return ShellControl.HANDLED
     else:
-        typer.echo(f"Direct provider：{providers[0][1]}")
+        typer.echo(f"实时行情数据源：{providers[0][1]}")
     return GuidedCommand(
         (
             "market",
@@ -418,37 +450,52 @@ def _direct_replay_command(context: InteractiveContext) -> ShellAction:
             "--format",
             "table",
         ),
-        "查看本地行情文件",
+        "回放本地行情数据文件",
     )
 
 
-def _direct_download_command() -> ShellAction:
-    provider = _prompt_choice(
-        "选择历史数据 provider", (("binance", "Binance"), ("massive", "Massive"))
+def _direct_download_command(context: InteractiveContext) -> ShellAction:
+    descriptor = _direct_descriptor(
+        context,
+        allowed_market_types=tuple(_HISTORICAL_PROVIDERS),
+        availability_label="历史行情",
     )
-    market_type = _prompt_choice(
-        "选择历史市场类型", (("equity", "股票"), ("option", "期权"))
-    )
-    data_kind = _prompt_choice(
-        "选择历史数据类型", (("bar", "K 线"), ("quote", "报价"), ("trade", "成交"))
-    )
-    if provider is None or market_type is None or data_kind is None:
+    if descriptor is None:
         return ShellControl.HANDLED
-    symbol = typer.prompt("远端 symbol").strip()
-    market_id = ""
-    if provider == "binance":
-        market_id = typer.prompt("Canonical Market ID").strip()
-    instrument_id = typer.prompt("Canonical Instrument ID").strip()
-    network_id = ""
-    if provider == "massive":
-        network_id = typer.prompt("Network ID（可留空）", default="").strip()
-    start = typer.prompt("开始时间（Unix 毫秒）").strip()
-    end = typer.prompt("结束时间（Unix 毫秒）").strip()
-    destination = typer.prompt("保存文件").strip()
-    if not all((symbol, instrument_id, start, end, destination)) or (
-        provider == "binance" and not market_id
-    ):
-        typer.echo("symbol、canonical ID、开始时间、结束时间和保存文件均不能为空。")
+    providers = _HISTORICAL_PROVIDERS[descriptor["market_type"]]
+    if len(providers) == 1:
+        provider = providers[0][0]
+        typer.echo(f"历史行情数据源：{providers[0][1]}")
+    else:
+        provider = _prompt_choice("选择历史行情数据源", providers)
+        if provider is None:
+            return ShellControl.HANDLED
+    data_kind = _prompt_choice(
+        "选择要下载的行情", _HISTORICAL_DATA_KINDS[provider]
+    )
+    if data_kind is None:
+        return ShellControl.HANDLED
+    today = datetime.now(timezone.utc).date()
+    start_text = typer.prompt(
+        "开始日期", default=(today - timedelta(days=30)).isoformat()
+    ).strip()
+    end_text = typer.prompt("结束日期", default=today.isoformat()).strip()
+    try:
+        start = _history_time_millis(start_text, end_of_day=False)
+        end = _history_time_millis(end_text, end_of_day=True)
+    except ValueError as error:
+        typer.echo(f"日期格式无效：{error}")
+        return ShellControl.HANDLED
+    if start >= end:
+        typer.echo("开始日期必须早于结束日期。")
+        return ShellControl.HANDLED
+    default_file = (
+        "market-history/"
+        f"{_safe_filename(descriptor['source_symbol'])}-{data_kind}.jsonl"
+    )
+    destination = typer.prompt("保存位置", default=default_file).strip()
+    if not destination:
+        typer.echo("保存位置不能为空。")
         return ShellControl.HANDLED
     argv = (
         "market",
@@ -456,30 +503,58 @@ def _direct_download_command() -> ShellAction:
         "--provider",
         provider,
         "--symbol",
-        symbol,
+        descriptor["source_symbol"],
         "--market-type",
-        market_type,
+        descriptor["market_type"],
         "--data-kind",
         data_kind,
         "--instrument-id",
-        instrument_id,
+        descriptor["instrument_id"],
         "--start",
-        start,
+        str(start),
         "--end",
-        end,
+        str(end),
         "--file",
         destination,
     )
-    if market_id:
-        argv = (*argv, "--market-id", market_id)
-    if network_id:
-        argv = (*argv, "--network-id", network_id)
+    if provider == "binance":
+        argv = (*argv, "--market-id", descriptor["market_id"])
     if data_kind == "bar":
-        interval = typer.prompt("K 线周期", default="1m").strip()
+        interval = typer.prompt("K 线周期", default="1d").strip()
         if not interval:
             return ShellControl.HANDLED
         argv = (*argv, "--interval", interval)
-    return GuidedCommand((*argv, "--format", "table"), f"直接从 {provider} 下载历史行情")
+    return GuidedCommand(
+        (*argv, "--format", "table"),
+        f"下载 {descriptor['source_symbol']} 历史行情",
+    )
+
+
+def _history_time_millis(value: str, *, end_of_day: bool) -> int:
+    normalized = value.strip()
+    if normalized.isdigit():
+        return int(normalized)
+    try:
+        parsed_date = date.fromisoformat(normalized)
+    except ValueError:
+        try:
+            parsed_datetime = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("请输入 YYYY-MM-DD、ISO 8601 时间或 Unix 毫秒") from error
+        if parsed_datetime.tzinfo is None:
+            parsed_datetime = parsed_datetime.replace(tzinfo=timezone.utc)
+        return int(parsed_datetime.timestamp() * 1000)
+    boundary = time.max if end_of_day else time.min
+    parsed_datetime = datetime.combine(parsed_date, boundary, tzinfo=timezone.utc)
+    return int(parsed_datetime.timestamp() * 1000)
+
+
+def _safe_filename(value: str) -> str:
+    cleaned = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "-"
+        for character in value
+    ).strip("-")
+    return cleaned or "market"
 
 
 def _direct_reference_universe_command() -> ShellAction:
@@ -529,30 +604,37 @@ def _replay_control_command(context: InteractiveContext, action: str) -> GuidedC
     )
 
 
-def _direct_descriptor(context: InteractiveContext) -> dict[str, str] | None:
+def _direct_descriptor(
+    context: InteractiveContext,
+    *,
+    allowed_market_types: tuple[str, ...] = (),
+    availability_label: str = "行情查询",
+) -> dict[str, str] | None:
     if context.owner is not None:
-        mode = _prompt_choice(
-            "选择 Market 描述方式",
-            (("reference", "从 Reference 列表选择"), ("manual", "手动输入底层描述")),
+        record = reference.select_market(
+            context,
+            allowed_instrument_kinds=allowed_market_types or None,
+            availability_label=availability_label,
         )
-        if mode is None:
+        if record is None:
             return None
-        if mode == "reference":
-            record = reference.select_market(context)
-            if record is None:
-                return None
-            symbol = record.venue_symbol or record.instrument.display_symbol
-            if not symbol:
-                typer.echo("所选 Reference Market 没有 provider symbol。")
-                return None
-            return {
-                "market_id": str(record.id),
-                "instrument_id": str(record.instrument.id),
-                "exchange_id": str(record.exchange_id).rsplit(":", 1)[-1],
-                "market_type": str(record.instrument_kind),
-                "source_symbol": str(symbol),
-            }
-    typer.echo("手动输入仅属于 standalone/direct，不会访问运行中的 Market runtime。")
+        symbol = record.venue_symbol or record.instrument.display_symbol
+        if not symbol:
+            typer.echo("所选标的缺少行情数据源使用的代码。")
+            return None
+        return {
+            "market_id": str(record.id),
+            "instrument_id": str(record.instrument.id),
+            "exchange_id": str(record.exchange_id).rsplit(":", 1)[-1],
+            "market_type": str(record.instrument_kind),
+            "source_symbol": str(symbol),
+        }
+    typer.echo("当前没有可用的标的目录，将进入高级输入。")
+    return _manual_descriptor()
+
+
+def _manual_descriptor() -> dict[str, str] | None:
+    typer.echo("高级模式：输入完整市场标识（仅用于本次直接查询）。")
     values = {
         "market_id": typer.prompt("Market ID").strip(),
         "instrument_id": typer.prompt("Instrument ID").strip(),
@@ -561,7 +643,7 @@ def _direct_descriptor(context: InteractiveContext) -> dict[str, str] | None:
         "source_symbol": typer.prompt("Provider symbol").strip(),
     }
     if any(not value for value in values.values()):
-        typer.echo("Market 底层描述字段均不能为空。")
+        typer.echo("完整市场标识的所有字段都不能为空。")
         return None
     return values
 

@@ -4054,7 +4054,7 @@ def test_interactive_market_separates_standalone_and_connected_scopes(
     )
     monkeypatch.setattr(
         "kairospy.surface.cli.interactive.sections.business.market.reference.select_market",
-        lambda _context: record,
+        lambda _context, **_kwargs: record,
     )
     monkeypatch.setattr(
         "kairospy.surface.cli.interactive.sections.business.market._load_sources",
@@ -4084,7 +4084,7 @@ def test_interactive_market_separates_standalone_and_connected_scopes(
     text = output.getvalue()
     assert status == 0
     assert "/market>" in text
-    assert "Market 行情" in text
+    assert "行情中心" in text
     assert "/system/market>" in text
     assert "workspace 共享服务（连接模式）" in text
     assert executed[0][:2] == ("market", "once")
