@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from rich.console import Console
 
 from kairospy.strategy.apps.agent.application.model_connections import (
     ModelProviderConnectionApplication,
@@ -24,6 +25,7 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.guided.market import observation_renderable
 from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
 from kairospy.surface.console.models import ObserveSnapshot
 from kairospy.surface.workbench.widgets import ActionList, WorkbenchCommandInput
@@ -40,7 +42,7 @@ from app_support import (
 
 
 def test_market_command_runs_in_worker_and_renders_result() -> None:
-    async def run() -> tuple[str, str]:
+    async def run() -> tuple[str, str, int]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -51,17 +53,45 @@ def test_market_command_runs_in_worker_and_renders_result() -> None:
             return (
                 _log_text(screen.query_one("#command-output", RichLog)),
                 str(screen.query_one("#command-status", Static).render()),
+                screen.query_one("#guided-actions", ActionList).option_count,
+            )
+
+    output, status, option_count = asyncio.run(run())
+
+    assert "AAPL" in output
+    assert "找到 1 个标的" not in output
+    assert status == "找到 1 个结果 · 请选择"
+    assert option_count == 1
+
+
+def test_guided_market_search_renders_one_complete_operation() -> None:
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen._find_markets = lambda query: (_market(),)  # type: ignore[method-assign]
+
+            screen.submit("1")
+            screen.submit("1")
+            screen.submit("AAPL")
+            await pilot.pause(0.1)
+            return (
+                _log_text(screen.query_one("#command-output", RichLog)),
+                str(screen.query_one("#command-status", Static).render()),
             )
 
     output, status = asyncio.run(run())
-
-    assert "找到 1 个标的" in output
-    assert "AAPL" in output
-    assert status == "首页 / 市场行情 / 查询结果 · 请选择结果"
+    operation = "首页 / 市场行情 › 搜索标的并查看行情 · AAPL"
+    assert output.count(operation) == 1
+    assert "kairos › 1" not in output
+    assert "kairos › AAPL" not in output
+    assert "找到 1 个标的" not in output
+    assert status == "找到 1 个结果 · 请选择"
 
 
 def test_reference_search_and_numbered_result_stay_in_one_input_stream() -> None:
-    async def run() -> tuple[type[object], str, int, bool, str]:
+    async def run() -> tuple[type[object], str, int, bool, str, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -88,18 +118,22 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream() -> None
                 actions.option_count,
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
                 output,
+                str(screen.query_one("#command-status", Static).render()),
             )
 
-    screen_type, context, option_count, input_focused, output = asyncio.run(run())
+    screen_type, context, option_count, input_focused, output, status = asyncio.run(
+        run()
+    )
     assert screen_type is CommandLineScreen
     assert context == "首页 / 市场标的 / 查询结果  ›"
     assert option_count == 1
     assert input_focused
-    assert "找到 1 条交易标的记录" in output
+    assert "找到 1 条交易标的记录" not in output
+    assert status == "找到 1 个结果 · 请选择"
 
 
-def test_market_menu_search_keeps_bottom_input_and_numbered_results() -> None:
-    async def run() -> tuple[str, int, bool, str]:
+def test_market_search_owns_action_area_until_results_are_ready() -> None:
+    async def run() -> tuple[str, bool, str, str, int, bool, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -110,23 +144,41 @@ def test_market_menu_search_keeps_bottom_input_and_numbered_results() -> None:
             await pilot.pause()
             assert (
                 screen.query_one("#command-input", WorkbenchCommandInput).placeholder
-                == "请输入市场代码、名称或完整 Market ID"
+                == "输入代码或名称"
             )
+            prompt_context = str(screen.query_one("#command-context", Static).render())
+            prompt_actions = screen.query_one("#guided-actions", ActionList)
+            prompt_actions_visible = prompt_actions.display
+            prompt_hints = str(screen.query_one("#command-hints", Static).render())
 
             await pilot.press("a", "a", "p", "l", "enter")
             await pilot.pause(0.1)
             return (
+                prompt_context,
+                prompt_actions_visible,
+                prompt_hints,
                 str(screen.query_one("#command-context", Static).render()),
                 screen.query_one("#guided-actions", ActionList).option_count,
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
                 _log_text(screen.query_one("#command-output", RichLog)),
             )
 
-    context, option_count, input_focused, output = asyncio.run(run())
+    (
+        prompt_context,
+        prompt_actions_visible,
+        prompt_hints,
+        context,
+        option_count,
+        input_focused,
+        output,
+    ) = asyncio.run(run())
+    assert prompt_context == "搜索市场  ›"
+    assert not prompt_actions_visible
+    assert prompt_hints == "Enter 搜索  ·  Esc 返回"
     assert context == "首页 / 市场行情 / 查询结果  ›"
     assert option_count == 1
     assert input_focused
-    assert "找到 1 个标的" in output
+    assert "找到 1 个标的" not in output
 
 
 def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
@@ -181,6 +233,51 @@ def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
     assert focused
 
 
+def test_selecting_market_enters_named_context_without_printing_raw_record() -> None:
+    async def run() -> tuple[str, str, tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen._find_markets = lambda query: (_market(),)  # type: ignore[method-assign]
+
+            for value in ("1", "1", "AAPL", "1"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+
+            actions = screen.query_one("#guided-actions", ActionList)
+            return (
+                str(screen.query_one("#command-context", Static).render()),
+                _log_text(screen.query_one("#command-output", RichLog)),
+                tuple(option.prompt.plain for option in actions._options),
+            )
+
+    context, output, actions = asyncio.run(run())
+    assert context == "首页 / 市场行情 / 已选标的 · AAPL  ›"
+    assert "MarketId(" not in output
+    assert "最新报价" in actions[0]
+    assert "订单簿" in actions[1]
+
+
+def test_order_book_observation_has_a_readable_two_sided_table() -> None:
+    rendered = observation_renderable(
+        {
+            "symbol": "BTCUSDT",
+            "data_type": "order_book",
+            "provider": "binance",
+            "bids": [["100", "2"]],
+            "asks": [["101", "3"]],
+        }
+    )
+    with Console(width=80, record=True) as console:
+        console.print(rendered)
+    output = console.export_text()
+    assert "ORDER BOOK" in output
+    assert "买价" in output
+    assert "100" in output
+    assert "101" in output
+
+
 def test_market_history_download_is_a_single_input_redacted_scope_preview() -> None:
     async def run() -> tuple[type[object], str, str, bool]:
         state = _state()
@@ -203,7 +300,7 @@ def test_market_history_download_is_a_single_input_redacted_scope_preview() -> N
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 市场行情 / 已选标的  ›"
+    assert context == "首页 / 市场行情 / 已选标的 · AAPL  ›"
     assert "Market 文件操作范围" in output
     assert "history/aapl.jsonl" in output
     assert "preview" in output

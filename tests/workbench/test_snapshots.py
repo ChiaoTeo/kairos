@@ -85,7 +85,8 @@ def test_command_market_results(snap_compare: Any) -> None:
     async def show_results(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
-        screen._write_prompt("/market AAPL")
+        screen._record_action("market.find", ("AAPL",))
+        screen._emit_operation("搜索市场标的")
         screen._render_result("market", (_market(),))
         await pilot.pause()
 
@@ -132,7 +133,12 @@ def test_command_observe_degraded_state(snap_compare: Any) -> None:
     async def show_snapshot(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
-        screen._write_prompt("observe")
+        screen._record_action(
+            "system.observe",
+            (),
+            equivalent_command=("kairos", "observe", "--once"),
+        )
+        screen._emit_operation("刷新系统状态")
         screen._render_result("observe", snapshot)
         await pilot.pause()
 

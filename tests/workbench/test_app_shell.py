@@ -50,7 +50,7 @@ def test_workbench_leaves_mouse_dragging_to_the_terminal(monkeypatch) -> None:
 
 
 def test_workbench_starts_as_one_guided_command_screen() -> None:
-    async def run() -> tuple[bool, str, str, str, int, bool, bool]:
+    async def run() -> tuple[bool, str, str, str, str, int, bool, bool]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
@@ -58,12 +58,16 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
                 "#command-input", WorkbenchCommandInput
             )
             output = _log_text(app.screen.query_one("#command-output", RichLog))
+            workspace_title = str(
+                app.screen.query_one("#workspace-title", Static).render()
+            )
             context = str(app.screen.query_one("#command-context", Static).render())
             actions = app.screen.query_one("#guided-actions", ActionList)
             return (
                 isinstance(app.screen, CommandLineScreen),
                 app.screen.sub_title or "",
                 output,
+                workspace_title,
                 context,
                 actions.option_count,
                 actions.can_focus,
@@ -74,6 +78,7 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
         is_command_screen,
         subtitle,
         output,
+        workspace_title,
         context,
         option_count,
         actions_can_focus,
@@ -82,9 +87,8 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
 
     assert is_command_screen
     assert subtitle == "命令"
-    assert "Kairos Workbench" in output
-    assert "trader" in output
-    assert "输入 1–6 选择" in output
+    assert output == ""
+    assert workspace_title == "KAIROS  /  trader"
     assert context == "首页  ›"
     assert option_count == 6
     assert not actions_can_focus
@@ -102,7 +106,7 @@ def test_copy_page_copies_complete_redacted_output_for_agent() -> None:
 
     clipboard, events = asyncio.run(run())
 
-    assert "Kairos Workbench" in clipboard
+    assert clipboard == "api_key=<redacted>"
     assert "api_key=<redacted>" in clipboard
     assert "should-not-leak" not in clipboard
     assert any(event["event"] == "page_copied" for event in events)
@@ -291,9 +295,9 @@ def test_command_screen_renders_in_supported_terminal_themes(theme: str) -> None
         async with app.run_test(size=(80, 24)) as pilot:
             app.theme = theme
             await pilot.pause()
-            return _log_text(app.screen.query_one("#command-output", RichLog))
+            return str(app.screen.query_one("#workspace-title", Static).render())
 
-    assert "Kairos Workbench" in asyncio.run(run())
+    assert asyncio.run(run()) == "KAIROS  /  trader"
 
 
 def test_command_screen_renders_when_no_color_is_requested(
@@ -305,9 +309,9 @@ def test_command_screen_renders_when_no_color_is_requested(
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(60, 20)) as pilot:
             await pilot.pause()
-            return _log_text(app.screen.query_one("#command-output", RichLog))
+            return str(app.screen.query_one("#workspace-title", Static).render())
 
-    assert "Kairos Workbench" in asyncio.run(run())
+    assert asyncio.run(run()) == "KAIROS  /  trader"
 
 
 def test_workspace_identity_is_visible_in_shared_header_context() -> None:
@@ -373,9 +377,9 @@ def test_market_command_guides_missing_argument_and_escape_cancels() -> None:
 
     placeholder, guided_status, ready_status = asyncio.run(run())
 
-    assert placeholder == "请输入市场代码或名称"
-    assert guided_status == "等待输入 · market"
-    assert ready_status == "首页 · 等待输入"
+    assert placeholder == "输入代码或名称"
+    assert guided_status == "搜索市场 · 等待输入"
+    assert ready_status == "就绪"
 
 
 def test_command_input_keeps_shell_style_history() -> None:
@@ -396,11 +400,11 @@ def test_command_input_keeps_shell_style_history() -> None:
     assert asyncio.run(run()) == ("/clear", "/help")
 
 
-def test_worker_error_is_rendered_and_input_remains_usable() -> None:
+def test_market_worker_error_keeps_search_prompt_usable_for_retry() -> None:
     def fail(_: str) -> tuple[Market, ...]:
         raise RuntimeError("reference database unavailable")
 
-    async def run() -> tuple[str, str, bool]:
+    async def run() -> tuple[str, str, bool, str, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -413,13 +417,17 @@ def test_worker_error_is_rendered_and_input_remains_usable() -> None:
                 _log_text(screen.query_one("#command-output", RichLog)),
                 str(screen.query_one("#command-status", Static).render()),
                 command_input.has_focus,
+                screen.session.prompt_mode.value,
+                command_input.placeholder or "",
             )
 
-    output, status, input_focused = asyncio.run(run())
+    output, status, input_focused, prompt_mode, placeholder = asyncio.run(run())
 
     assert "reference database unavailable" in output
-    assert status == "失败 · 可继续输入"
+    assert status == "搜索市场失败 · 请重试"
     assert input_focused
+    assert prompt_mode == "argument"
+    assert placeholder == "输入代码或名称"
 
 
 def test_command_layout_runs_at_supported_terminal_sizes() -> None:
@@ -427,10 +435,10 @@ def test_command_layout_runs_at_supported_terminal_sizes() -> None:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
-            return _log_text(app.screen.query_one("#command-output", RichLog))
+            return str(app.screen.query_one("#workspace-title", Static).render())
 
     for size in ((60, 20), (80, 24), (120, 30), (160, 40)):
-        assert "Kairos Workbench" in asyncio.run(run(size))
+        assert asyncio.run(run(size)) == "KAIROS  /  trader"
 
 
 def test_text_input_consumes_global_shortcuts_as_text() -> None:

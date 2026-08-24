@@ -32,8 +32,9 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
                 rows=24,
                 cwd=str(ROOT),
             )
-            await terminal.wait_text("Kairos Workbench", timeout=30_000)
-            assert "每一步都继续使用下方输入框" in await terminal.text()
+            await terminal.wait_text("KAIROS", timeout=30_000)
+            assert "KAIROS  /  visual-fixture" in await terminal.text()
+            assert "● 就绪" in await terminal.text()
 
             await terminal.type("2")
             await terminal.press("Enter")
@@ -53,7 +54,7 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
             await terminal.type("/market")
             await terminal.press("Enter")
             await asyncio.sleep(0.2)
-            assert "请输入市场代码或名称" in await terminal.text()
+            assert "输入代码或名称" in await terminal.text()
 
             await terminal.press("Escape")
             await asyncio.sleep(0.2)

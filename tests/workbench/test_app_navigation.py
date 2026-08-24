@@ -70,6 +70,61 @@ def test_home_number_enters_product_context_without_replacing_input(
     assert input_focused
 
 
+def test_home_navigation_does_not_append_to_content_stream() -> None:
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen.query_one("#command-output", RichLog)
+            before = _log_text(output)
+            await pilot.press("1", "enter")
+            await pilot.pause()
+            return before, _log_text(output)
+
+    before, after = asyncio.run(run())
+    assert after == before
+    assert "kairos › 1" not in after
+
+
+def test_market_menu_keeps_advanced_operations_out_of_primary_choices() -> None:
+    async def run() -> tuple[int, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.press("1", "enter")
+            await pilot.pause()
+            actions = app.screen.query_one("#guided-actions", ActionList)
+            app.screen.submit("/help")
+            return actions.option_count, _log_text(
+                app.screen.query_one("#command-output", RichLog)
+            )
+
+    option_count, output = asyncio.run(run())
+    assert option_count == 3
+    assert "/r" in output
+    assert "/c" in output
+    assert "/d" in output
+    assert "/a" in output
+
+
+def test_submenu_back_and_home_navigation_stay_out_of_content_stream() -> None:
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)):
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen.query_one("#command-output", RichLog)
+            before = _log_text(output)
+            screen.submit("5")
+            screen.submit("1")
+            screen.submit("/back")
+            screen.submit("/home")
+            return before, _log_text(output)
+
+    before, after = asyncio.run(run())
+    assert after == before
+
+
 def test_slash_back_returns_from_result_to_section_then_home() -> None:
     async def run() -> tuple[str, str, type[object], bool]:
         app = KairosWorkbenchApp(_state())

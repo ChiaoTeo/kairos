@@ -152,32 +152,33 @@ def selected_market_actions(market: Any) -> tuple[ActionItem, ...]:
     kinds = {
         "equity": (
             ("quote", "最新报价"),
+            ("order-book", "订单簿"),
             ("trade", "最近成交"),
             ("bar", "最新分钟 K"),
         ),
         "spot": (
             ("quote", "最新报价"),
+            ("order-book", "订单簿"),
             ("trade", "最近成交"),
             ("bar", "最新 K 线"),
-            ("order-book", "买卖盘口"),
         ),
         "perpetual": (
             ("quote", "最新报价"),
+            ("order-book", "订单簿"),
             ("trade", "最近成交"),
             ("bar", "最新 K 线"),
-            ("order-book", "买卖盘口"),
         ),
         "future": (
             ("quote", "最新报价"),
+            ("order-book", "订单簿"),
             ("trade", "最近成交"),
             ("bar", "最新 K 线"),
-            ("order-book", "买卖盘口"),
         ),
         "option": (
             ("quote", "最新报价"),
+            ("order-book", "订单簿"),
             ("trade", "最近成交"),
             ("bar", "最新 K 线"),
-            ("order-book", "买卖盘口"),
             ("option-greeks", "Greeks"),
         ),
     }.get(str(market.instrument_kind), ())
@@ -268,6 +269,8 @@ def observation_renderable(value: Any) -> RenderableType:
     data_type = str(value.get("data_type") or "行情")
     symbol = str(value.get("symbol") or "—")
     provider = str(value.get("provider") or "—")
+    if data_type in {"order-book", "order_book"}:
+        return _order_book_renderable(value, symbol=symbol, provider=provider)
     rows = Table.grid(padding=(0, 2))
     rows.add_column(style="dim", no_wrap=True)
     rows.add_column(style="bold")
@@ -300,6 +303,36 @@ def observation_renderable(value: Any) -> RenderableType:
     metadata = Text(f"{provider}  ·  {_observation_time(value)}", style="dim")
     return Panel(
         Group(heading, Text(""), rows, Text(""), metadata),
+        border_style="cyan",
+        padding=(1, 2),
+    )
+
+
+def _order_book_renderable(
+    value: Mapping[str, Any], *, symbol: str, provider: str
+) -> RenderableType:
+    bids = tuple(value.get("bids") or ())
+    asks = tuple(value.get("asks") or ())
+    book = Table(show_header=True, header_style="bold")
+    book.add_column("买价", justify="right", style="green")
+    book.add_column("买量", justify="right")
+    book.add_column("卖价", justify="right", style="red")
+    book.add_column("卖量", justify="right")
+    for index in range(max(len(bids), len(asks))):
+        bid = bids[index] if index < len(bids) else ()
+        ask = asks[index] if index < len(asks) else ()
+        book.add_row(
+            str(bid[0]) if len(bid) > 0 else "—",
+            str(bid[1]) if len(bid) > 1 else "—",
+            str(ask[0]) if len(ask) > 0 else "—",
+            str(ask[1]) if len(ask) > 1 else "—",
+        )
+    heading = Text()
+    heading.append(symbol, style="bold cyan")
+    heading.append("   ORDER BOOK", style="dim")
+    metadata = Text(f"{provider}  ·  {_observation_time(value)}", style="dim")
+    return Panel(
+        Group(heading, Text(""), book, Text(""), metadata),
         border_style="cyan",
         padding=(1, 2),
     )

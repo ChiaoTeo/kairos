@@ -26,6 +26,7 @@ from kairospy.surface.console.models import (
     recommended_action,
 )
 
+from ..transcript import redact_text
 from ..widgets import (
     ActionItem,
     GuidedActionList,
@@ -45,7 +46,12 @@ from .results import ResultKey, ResultKind, parse_result_kind
 
 if TYPE_CHECKING:
     from ..app import KairosWorkbenchApp
-from .guided.catalog import HOME_ACTIONS, SECTION_ACTIONS, SECTION_LABELS
+from .guided.catalog import (
+    HOME_ACTIONS,
+    MARKET_ADVANCED_ACTIONS,
+    SECTION_ACTIONS,
+    SECTION_LABELS,
+)
 from .guided.account import (
     ACCOUNT_ACTIONS as RESOURCE_ACCOUNT_ACTIONS,
     execute as execute_account_action,
@@ -181,6 +187,12 @@ class CommandLineScreen(Screen[None]):
         self._interrupt_exit_pending = False
         self._active_worker: Worker[Any] | None = None
         self._attach_refresh_worker: Worker[Any] | None = None
+        self._pending_operation: tuple[str, str] | None = None
+        self._pending_action_name: str | None = None
+        self._pending_operation_arguments: tuple[str, ...] = ()
+        self._pending_equivalent_command: tuple[str, ...] | None = None
+        self._operation_committed = False
+        self._skip_next_operation_output = False
         self.session = GuidedSession()
 
     @property
@@ -203,7 +215,7 @@ class CommandLineScreen(Screen[None]):
             classes="action-cards guided-actions",
             spacious=False,
         )
-        yield Static("就绪", id="command-status")
+        yield Static(id="guided-prompt")
         with Horizontal(id="command-bar"):
             yield Static("首页  /", id="command-context")
             yield WorkbenchCommandInput(id="command-input")
@@ -213,7 +225,6 @@ class CommandLineScreen(Screen[None]):
         )
 
     def on_mount(self) -> None:
-        self._write_welcome()
         self._show_context()
         self.app.set_focus(self._input())
         self.set_interval(1.0, self._refresh_launch_attach)
@@ -249,7 +260,6 @@ class CommandLineScreen(Screen[None]):
             value="<redacted>" if is_secret else value,
             secret=is_secret,
         )
-        self._write_prompt("••••••••" if is_secret and value else value)
         if self.session.confirmation_prompt is not None:
             command, arguments = _parse_command(value)
             is_allowed = value.startswith("/") and command in {
@@ -311,7 +321,7 @@ class CommandLineScreen(Screen[None]):
                 and pending_command in {"help", "?"}
                 and not pending_arguments
             ):
-                self._write(_help_renderable(self.session.context))
+                self._write_guidance(_help_renderable(self.session.context))
                 self._write_next_step("当前仍在等待参数；输入 /back 取消本步。")
                 return
             pending = argument_prompt.action
@@ -325,6 +335,9 @@ class CommandLineScreen(Screen[None]):
             self._dispatch_kairos(value)
             return
         command, arguments = _parse_command(value)
+        if command == "market":
+            self.session.market_purpose = "search"
+        self._prepare_context_operation(command, arguments)
         self._dispatch(command, arguments)
         self.app.set_focus(self._input())
 
@@ -424,8 +437,8 @@ class CommandLineScreen(Screen[None]):
             else:
                 self._request_argument(
                     "market",
-                    "请输入市场代码或名称",
-                    "例如 AAPL、BTCUSDT；输入 /back 取消。",
+                    "输入代码或名称",
+                    "例如 AAPL、比特币或 BTCUSDT。",
                 )
         elif command in {"confirm", "yes", "y"}:
             self._confirm_pending()
@@ -1539,7 +1552,6 @@ class CommandLineScreen(Screen[None]):
                 return True
             self.workbench_app.state.selected_market = record
             self.session.context = ("market", "selected")
-            self._write(_record_detail_renderable(record, section="market"))
             if self.session.market_purpose in {"download", "replay"}:
                 self.session.market_file_prompt = MarketFilePromptState(
                     self.session.market_purpose, record
@@ -1547,17 +1559,21 @@ class CommandLineScreen(Screen[None]):
                 self._advance_market_file_prompt()
             else:
                 self._show_context()
+                self._set_status(f"已选择 {record_label(record)} · 请选择行情")
             return True
 
-        action = action_id(SECTION_ACTIONS["market"], command)
+        action = action_id(
+            (*SECTION_ACTIONS["market"], *MARKET_ADVANCED_ACTIONS), command
+        )
         if action is None:
             return False
         if action in {"search", "download", "replay", "diagnostics", "advanced"}:
             self.session.market_purpose = action
+            prompt, detail = self._market_prompt_copy()
             self._request_argument(
                 "market",
-                "请输入市场代码、名称或完整 Market ID",
-                "例如 AAPL、BTCUSDT；输入 /back 或按 Esc 取消。",
+                prompt,
+                detail,
             )
         elif action == "datasets":
             self._run(
@@ -1568,6 +1584,33 @@ class CommandLineScreen(Screen[None]):
             self.session.context = ("market", "connected")
             self._show_context()
         return True
+
+    def _market_prompt_copy(self) -> tuple[str, str]:
+        return {
+            "search": (
+                "输入代码或名称",
+                "例如 AAPL、比特币或 BTCUSDT。",
+            ),
+            "download": (
+                "输入要下载的标的",
+                "可输入代码、名称或完整 Market ID。",
+            ),
+            "replay": (
+                "输入要回放的标的",
+                "可输入代码、名称或完整 Market ID。",
+            ),
+            "diagnostics": (
+                "输入要诊断的标的",
+                "可输入代码、名称或完整 Market ID。",
+            ),
+            "advanced": (
+                "输入完整 Market ID",
+                "使用高级市场标识精确定位标的。",
+            ),
+        }.get(
+            self.session.market_purpose,
+            ("输入代码或名称", "例如 AAPL、比特币或 BTCUSDT。"),
+        )
 
     def _dispatch_reference_context(self, command: str) -> bool:
         if self.session.context[1:] == ("instrument-types",):
@@ -1752,20 +1795,54 @@ class CommandLineScreen(Screen[None]):
 
     def _request_argument(self, command: str, prompt: str, detail: str) -> None:
         self.session.ask(command)
-        self._write(
-            Panel(Group(Text(prompt, style="bold"), Text(detail)), title=command)
-        )
-        self._set_status(f"等待输入 · {command}")
+        self._show_prompt_chrome(command, prompt, detail)
+        self._set_status(f"{self._prompt_title(command)} · 等待输入")
         self._input().placeholder = prompt
 
     def _request_secret(self, command: str, prompt: str, detail: str) -> None:
         self.session.ask(command, secret=True)
+        self._show_prompt_chrome(command, prompt, detail)
         self._input().password = True
-        self._write(
-            Panel(Group(Text(prompt, style="bold"), Text(detail)), title=command)
-        )
         self._set_status(f"等待安全输入 · {command}")
         self._input().placeholder = prompt
+
+    def _show_prompt_chrome(self, command: str, prompt: str, detail: str) -> None:
+        """Give an argument step the whole action area and one clear exit path."""
+
+        actions = self.query_one("#guided-actions", GuidedActionList)
+        actions.replace_items(())
+        actions.display = False
+        guided_prompt = self.query_one("#guided-prompt", Static)
+        guided_prompt.update(
+            Group(
+                Text(self._prompt_title(command), style="bold cyan"),
+                Text(prompt, style="bold"),
+                Text(detail, style="dim"),
+            )
+        )
+        guided_prompt.display = True
+        self.query_one("#command-context", Static).update(
+            f"{self._prompt_title(command)}  ›"
+        )
+        verb = (
+            "搜索"
+            if command == "market" and self.session.market_purpose == "search"
+            else "确认"
+        )
+        self.query_one("#command-hints", Static).update(f"Enter {verb}  ·  Esc 返回")
+        self.app.set_focus(self._input())
+        self.call_after_refresh(self.app.set_focus, self._input())
+
+    def _prompt_title(self, command: str) -> str:
+        if command == "market":
+            return {
+                "search": "搜索市场",
+                "download": "选择历史行情标的",
+                "replay": "选择回放标的",
+                "diagnostics": "选择待诊断标的",
+                "advanced": "高级市场标识",
+            }.get(self.session.market_purpose, "搜索市场")
+        return context_label(self.session.context)
 
     def action_clear(self) -> None:
         self._output().clear()
@@ -1773,6 +1850,8 @@ class CommandLineScreen(Screen[None]):
         self._show_context()
 
     def action_cancel_pending(self) -> None:
+        self._reset_operation()
+        self._skip_next_operation_output = False
         argument_prompt = self.session.argument_prompt
         if argument_prompt is not None:
             command = argument_prompt.action
@@ -1866,6 +1945,7 @@ class CommandLineScreen(Screen[None]):
             "当前没有运行中的任务，是否退出 Kairos Workbench？"
             "再次按 Ctrl+C 可强制退出。",
             self.workbench_app.action_quit,
+            show_operation=False,
         )
         self._interrupt_exit_pending = True
 
@@ -1875,10 +1955,14 @@ class CommandLineScreen(Screen[None]):
         action: Callable[[], Any],
         *,
         result_kind: str = "confirmed",
+        show_operation: bool = True,
     ) -> None:
         """Stage a dangerous action in the command stream, without a modal."""
 
         self._interrupt_exit_pending = False
+        if show_operation:
+            self._emit_operation(summary, details=summary)
+        self._skip_next_operation_output = True
         self.session.confirm(summary, action, result_kind)
         self.workbench_app.transcript.record(
             "confirmation_requested", screen=type(self).__name__, summary=summary
@@ -2387,6 +2471,13 @@ class CommandLineScreen(Screen[None]):
         *,
         status: str | None = None,
     ) -> None:
+        if self._skip_next_operation_output:
+            self._skip_next_operation_output = False
+        else:
+            self._emit_operation(
+                self._operation_fallback(kind, status),
+                details=self._operation_details(kind),
+            )
         self.session.busy(kind)
         self._input().disabled = True
         self._set_status(status or _running_status(kind))
@@ -2409,17 +2500,163 @@ class CommandLineScreen(Screen[None]):
         *,
         equivalent_command: tuple[str, ...] | None = None,
     ) -> None:
+        self._pending_action_name = action
+        self._operation_committed = False
+        if equivalent_command is not None:
+            command = (
+                equivalent_command[1:]
+                if equivalent_command[:1] == ("kairos",)
+                else equivalent_command
+            )
+            self._pending_operation = ("command", shlex.join(command))
+        elif action == "market.find":
+            self._pending_operation = (
+                "semantic",
+                "首页 / 市场行情 › 搜索标的并查看行情",
+            )
+        elif self._pending_operation is None:
+            self._pending_operation = ("semantic", action)
+        self._pending_operation_arguments = arguments
+        self._pending_equivalent_command = equivalent_command
+
+    def _prepare_context_operation(
+        self, command: str, arguments: tuple[str, ...]
+    ) -> None:
+        """Remember a selected action until it proves to be navigation or execution."""
+
+        if arguments:
+            return
+        items = context_items(self.session, self.workbench_app.state)
+        selected_id = action_id(items, command)
+        if selected_id is None:
+            return
+        selected = next(item for item in items if item.id == selected_id)
+        self._pending_operation = (
+            "semantic",
+            f"{context_label(self.session.context)} › {selected.label}",
+        )
+        self._operation_committed = False
+        path = ".".join(self.session.context) or "home"
+        self._pending_action_name = f"{path}.{selected.id}"
+        self._pending_operation_arguments = ()
+        self._pending_equivalent_command = None
+
+    def _emit_operation(self, fallback: str, *, details: str | None = None) -> None:
+        """Write one complete, redacted operation at the execution boundary."""
+
+        if self._operation_committed:
+            return
+        had_pending = self._pending_operation is not None
+        operation = self._pending_operation or ("semantic", fallback)
+        style, value = operation
+        arguments = self._pending_operation_arguments
+        if style == "semantic" and arguments:
+            value = f"{value} · {shlex.join(arguments)}"
+        elif style == "semantic" and had_pending and details:
+            value = f"{value} · {details}"
+        value = redact_text(value)
+        if style == "command":
+            rendered = Text("kairos › ", style="bold bright_blue")
+            rendered.append(value)
+        else:
+            rendered = Text(value, style="bold bright_blue")
+        self._output().write(rendered)
         self.workbench_app.transcript.record(
             "action",
             screen=type(self).__name__,
-            action=action,
-            arguments=list(arguments),
+            action=self._pending_action_name or value,
+            display=value,
+            arguments=list(_redact_arguments(arguments)),
             equivalent_command=(
-                shlex.join(equivalent_command)
-                if equivalent_command is not None
+                shlex.join(self._pending_equivalent_command)
+                if self._pending_equivalent_command is not None
                 else None
             ),
         )
+        self._operation_committed = True
+        self._clear_pending_operation()
+
+    def _operation_fallback(self, kind: str, status: str | None) -> str:
+        labels = {
+            "observe": "刷新系统状态",
+            "market": "搜索标的并查看行情",
+            "market-observation": "读取市场行情",
+            "market-routes": "读取行情数据源",
+            "market-file-result": "执行行情文件操作",
+            "workspace-market-result": "执行 Workspace Market 操作",
+            "launch-market-result": "执行 Launch Market 操作",
+            "strategy-launches": "查看 Launch 列表",
+            "strategy-instances": "查看运行实例",
+            "strategy-components": "查看实例组件",
+            "strategy-instance-result": "查看实例概览",
+            "strategy-timeline": "查看实例时间线",
+            "strategy-timeline-export": "导出实例时间线",
+            "strategy-result": "执行 Launch 操作",
+            "strategy-attach": "操作 Launch 运行会话",
+            "strategy-wizard-result": "保存 Launch 配置",
+            "resources-summary": "检查运行资源",
+            "resource-wizard-result": "保存运行资源",
+            "research-result": "执行数据研究操作",
+            "operations-result": "执行系统维护操作",
+            "operations-services": "查看系统服务",
+            "operations-profile-result": "执行 Profile 操作",
+            "operations-project-result": "执行项目操作",
+            "business-result": "执行业务工具",
+            "account-result": "执行账户查询",
+            "order-result": "执行订单操作",
+            "execution-result": "执行 Execution 操作",
+            "kairos-command": "执行 Kairos 命令",
+        }
+        if kind.startswith("reference:"):
+            label = "查找 Reference 记录"
+        elif kind.startswith("resource-action:"):
+            label = "执行运行资源操作"
+        elif kind.startswith("resources-list:"):
+            label = "查看运行资源"
+        elif kind.startswith("market-diagnostic:"):
+            label = "诊断市场定义"
+        else:
+            label = labels.get(kind)
+        if label is None and status:
+            label = status.removeprefix("正在").rstrip("…。")
+        return f"{context_label(self.session.context)} › {label or '执行操作'}"
+
+    def _operation_details(self, kind: str) -> str | None:
+        prompt: Any | None = None
+        if kind == "order-result":
+            prompt = self.session.order_prompt
+        elif kind == "execution-result":
+            prompt = self.session.execution_prompt
+        elif kind == "launch-market-result":
+            prompt = self.session.launch_market_prompt
+        elif kind == "market-file-result":
+            prompt = self.session.market_file_prompt
+        elif kind == "workspace-market-result":
+            prompt = self.session.workspace_market_prompt
+        elif kind == "operations-project-result":
+            prompt = self.session.project_prompt
+        if prompt is not None and callable(getattr(prompt, "summary", None)):
+            summary = prompt.summary()
+            if isinstance(summary, Mapping):
+                return _format_operation_details(summary)
+        if kind == "business-result" and isinstance(
+            self.session.business_prompt, BusinessPromptState
+        ):
+            business = self.session.business_prompt
+            return _format_operation_details(
+                {"tool": business.tool, "action": business.action, **business.values}
+            )
+        return None
+
+    def _clear_pending_operation(self) -> None:
+        self._pending_operation = None
+        self._pending_action_name = None
+        self._pending_operation_arguments = ()
+        self._pending_equivalent_command = None
+
+    def _reset_operation(self) -> None:
+        self._clear_pending_operation()
+        self._operation_committed = False
 
     def _observe_command(self) -> tuple[str, ...]:
         state = self.workbench_app.state
@@ -2538,19 +2775,33 @@ class CommandLineScreen(Screen[None]):
             self._active_worker = None
             self._restore_navigation_input()
             self._render_result(kind, event.worker.result)
+            self._reset_operation()
         elif event.state.name == "ERROR":
             self._write_error(str(event.worker.error))
-            self._set_status("失败 · 可继续输入")
             self._active_worker = None
             self._restore_navigation_input()
             self._clear_terminal_flow(kind)
-            self._write_next_step("操作失败；可重新输入，/back 返回，/help 查看帮助。")
+            if kind == ResultKind.MARKET:
+                prompt, detail = self._market_prompt_copy()
+                self._request_argument("market", prompt, detail)
+                self._set_status(f"{self._prompt_title('market')}失败 · 请重试")
+            else:
+                self._set_status("失败 · 可继续输入")
+                self._write_next_step(
+                    "操作失败；可重新输入，/back 返回，/help 查看帮助。"
+                )
+            self._reset_operation()
         elif event.state.name == "CANCELLED":
             self._set_status("已取消 · 可继续输入")
             self._active_worker = None
             self._restore_navigation_input()
             self._clear_terminal_flow(kind)
-            self._write_next_step("操作已取消；可继续输入。")
+            if kind == ResultKind.MARKET:
+                self.session.enter("market")
+                self._show_context()
+            else:
+                self._write_next_step("操作已取消；可继续输入。")
+            self._reset_operation()
 
     def _clear_terminal_flow(self, kind: ResultKey) -> None:
         if kind is ResultKind.RESOURCE_WIZARD:
@@ -2589,13 +2840,21 @@ class CommandLineScreen(Screen[None]):
         if kind == ResultKind.MARKET:
             records = tuple(result or ())
             self.session.market_records = records
-            self._write(_markets_renderable(records, numbered=True))
-            self._show_record_choices("market", records)
+            if records:
+                self._show_record_choices("market", records)
+            else:
+                self._write(_markets_renderable(records))
+                self.session.enter("market")
+                self._show_context()
         elif kind is not None and kind.startswith("reference:"):
             records = tuple(result or ())
             reference_kind = kind.partition(":")[2]
-            self._write(reference_records_renderable(reference_kind, records))
-            self._show_record_choices("reference", records, kind=reference_kind)
+            if records:
+                self._show_record_choices("reference", records, kind=reference_kind)
+            else:
+                self._write(reference_records_renderable(reference_kind, records))
+                self.session.enter("reference")
+                self._show_context()
         elif kind == "reference-related":
             related_kind, records = result
             self._write(reference_records_renderable(related_kind, tuple(records)))
@@ -2870,32 +3129,26 @@ class CommandLineScreen(Screen[None]):
         else:
             self._write(Panel(str(result), title="完成", border_style="green"))
 
-    def _write_welcome(self) -> None:
-        state = self.workbench_app.state
-        self._write(
-            Group(
-                Text("Kairos Workbench", style="bold cyan"),
-                Text(f"Workspace: {state.workspace_id}", style="dim"),
-                Text("交易，从这里开始", style="bold"),
-                Text("输入 1–6 选择；每一步都继续使用下方输入框。", style="dim"),
-                Text(
-                    "输入 /xxx 控制 Workbench；其他文本按 kairos <输入> 执行。",
-                    style="dim",
-                ),
-            )
-        )
-
     def _show_context(self) -> None:
+        self._reset_operation()
         if self.session.prompt_mode is PromptMode.NAVIGATION:
             self._input().disabled = False
         items = context_items(self.session, self.workbench_app.state)
         actions = self.query_one("#guided-actions", GuidedActionList)
         actions.replace_items(items)
         actions.display = bool(items)
+        self.query_one("#guided-prompt", Static).display = False
         context = context_label(self.session.context)
+        if self.session.context == ("market", "selected"):
+            market = self.workbench_app.state.selected_market
+            if market is not None:
+                context = f"{context} · {record_label(market)}"
         self.query_one("#command-context", Static).update(f"{context}  ›")
         self._input().placeholder = "输入编号或命令；Enter 提交"
-        self._set_status(f"{context} · 等待输入")
+        self.query_one("#command-hints", Static).update(
+            "数字选择  ·  /back 返回  ·  /help 更多操作  ·  /exit 退出"
+        )
+        self._set_status("就绪")
         self.app.set_focus(self._input())
         self.call_after_refresh(self.app.set_focus, self._input())
 
@@ -2920,25 +3173,30 @@ class CommandLineScreen(Screen[None]):
         actions = self.query_one("#guided-actions", GuidedActionList)
         actions.replace_items(items)
         actions.display = bool(items)
+        self.query_one("#guided-prompt", Static).display = False
         context = context_label(self.session.context)
         self.query_one("#command-context", Static).update(f"{context}  ›")
-        self._set_status(f"{context} · 请选择结果")
-        self._write_next_step("输入结果编号查看详情；/back 返回当前菜单。")
+        self.query_one("#command-hints", Static).update(
+            "输入结果编号查看详情  ·  Esc 返回"
+        )
+        self._set_status(f"找到 {len(records)} 个结果 · 请选择")
         self.app.set_focus(self._input())
         self.call_after_refresh(self.app.set_focus, self._input())
 
     def _write_next_step(self, value: str) -> None:
-        self._write(Text(value, style="dim"))
-
-    def _write_prompt(self, value: str) -> None:
-        prompt = Text("kairos › ", style="bold bright_blue")
-        prompt.append(value)
-        self._write(prompt)
+        self._write_guidance(Text(value, style="dim"))
 
     def _write_error(self, value: str) -> None:
-        self._write(Panel(value, title="命令失败", border_style="red"))
+        self._write_guidance(Panel(value, title="命令失败", border_style="red"))
 
     def _write(self, renderable: RenderableType) -> None:
+        if self._pending_operation is not None:
+            self._emit_operation("执行操作")
+        self._output().write(renderable)
+
+    def _write_guidance(self, renderable: RenderableType) -> None:
+        """Write prompting or validation output without committing an operation."""
+
         self._output().write(renderable)
 
     def _output(self) -> RichLog:
@@ -2948,7 +3206,7 @@ class CommandLineScreen(Screen[None]):
         return self.query_one("#command-input", WorkbenchCommandInput)
 
     def _set_status(self, value: str) -> None:
-        self.query_one("#command-status", Static).update(value)
+        self.query_one(WorkspaceHeader).set_status(value)
 
 
 def _parse_command(value: str) -> tuple[str, tuple[str, ...]]:
@@ -2977,6 +3235,11 @@ def _help_renderable(context: tuple[str, ...] = ()) -> RenderableType:
     table.add_row("/exit", "退出 Kairos Workbench")
     table.add_row("/observe", "查看 Workspace 组件和 Launch 状态")
     table.add_row("/market [代码]", "搜索有效市场标的；省略代码时进入引导")
+    if context[:1] == ("market",):
+        table.add_row("/r", "回放本地 JSONL 行情")
+        table.add_row("/c", "连接运行中的行情服务")
+        table.add_row("/d", "诊断市场定义和 Reference 映射")
+        table.add_row("/a", "输入完整 Market ID")
     table.add_row("/clear", "清空当前输出显示")
     table.add_row("/transcript", "显示当前 Agent 可读会话记录的路径")
     table.add_row("/copy", "复制当前页完整输出，可直接粘贴给 Agent")
@@ -3109,3 +3372,57 @@ def _running_status(kind: str) -> str:
         "observe": "正在读取系统状态…",
         "market": "正在搜索市场标的…",
     }.get(kind, "正在执行…")
+
+
+def _redact_arguments(arguments: tuple[str, ...]) -> tuple[str, ...]:
+    """Redact values paired with credential-shaped CLI flags."""
+
+    sensitive_names = {
+        "api-key",
+        "apikey",
+        "authorization",
+        "bearer",
+        "credential",
+        "password",
+        "secret",
+        "token",
+    }
+    redacted: list[str] = []
+    hide_next = False
+    for argument in arguments:
+        if hide_next:
+            redacted.append("<redacted>")
+            hide_next = False
+            continue
+        normalized = argument.lstrip("-").lower().replace("_", "-")
+        name = normalized.partition("=")[0]
+        if name in sensitive_names:
+            if "=" in argument:
+                redacted.append(f"{argument.partition('=')[0]}=<redacted>")
+            else:
+                redacted.append(argument)
+                hide_next = True
+            continue
+        redacted.append(redact_text(argument))
+    return tuple(redacted)
+
+
+def _format_operation_details(values: Mapping[str, Any]) -> str:
+    """Render stable, compact fields for one semantic operation line."""
+
+    parts: list[str] = []
+    for name, value in values.items():
+        if value is None or value == "" or value == () or value == []:
+            continue
+        if isinstance(value, Mapping):
+            rendered = ",".join(
+                f"{key}:{item}"
+                for key, item in value.items()
+                if item is not None and item != ""
+            )
+        elif isinstance(value, (list, tuple)):
+            rendered = ",".join(str(item) for item in value)
+        else:
+            rendered = str(value)
+        parts.append(f"{name}={rendered}")
+    return " · ".join(parts)

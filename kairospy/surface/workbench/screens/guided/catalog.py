@@ -20,6 +20,11 @@ MARKET_ACTIONS = (
     ActionItem("search", "搜索标的并查看行情", "按代码或名称搜索有效标的", "1"),
     ActionItem("download", "下载历史行情", "选择时间范围并保存行情数据", "2"),
     ActionItem("datasets", "查看本地行情数据", "浏览已准备的数据集", "3"),
+)
+
+# These remain available to experienced operators, but do not compete with the
+# three everyday tasks in the visible Market menu.
+MARKET_ADVANCED_ACTIONS = (
     ActionItem("replay", "回放本地行情", "将 JSONL 行情事件送入独立回放", "r"),
     ActionItem("connected", "连接运行中的行情服务", "查看实时服务和订阅状态", "c"),
     ActionItem("diagnostics", "诊断问题", "检查市场定义和 Reference 映射", "d"),
@@ -85,4 +90,9 @@ SECTION_LABELS: dict[str, str] = {
 }
 
 
-__all__ = ["HOME_ACTIONS", "SECTION_ACTIONS", "SECTION_LABELS"]
+__all__ = [
+    "HOME_ACTIONS",
+    "MARKET_ADVANCED_ACTIONS",
+    "SECTION_ACTIONS",
+    "SECTION_LABELS",
+]
