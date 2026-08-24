@@ -41,7 +41,8 @@ for index in "${!schemas[@]}"; do
 done
 
 find "$rust_stage" -type f -name '*.rs' -print0 \
-  | xargs -0 rustup run "$rustfmt_toolchain" rustfmt --edition 2021
+  | xargs -0 rustup run "$rustfmt_toolchain" rustfmt \
+      --edition 2021 --config-path "$repo_root/rustfmt.toml"
 
 mkdir -p "$python_out/kairos" "$rust_out/kairos"
 rsync -a --delete "$python_stage/kairos/" "$python_out/kairos/"

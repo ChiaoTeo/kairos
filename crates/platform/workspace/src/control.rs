@@ -106,7 +106,11 @@ impl JsonRpcControlClient {
         );
         let mut stream = tokio::net::UnixStream::connect(&self.socket_path).await?;
         stream.write_all(request.as_bytes()).await?;
-        stream.shutdown().await?;
+        // Do not half-close the write side after a complete HTTP request.
+        // Hyper treats an early EOF as a connection shutdown and can cancel
+        // the response before jsonrpsee writes its headers and body. The
+        // Content-Length already tells the server where the request ends;
+        // Connection: close makes read_to_end terminate after the response.
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await?;
         let response = String::from_utf8(response)
@@ -155,7 +159,6 @@ impl JsonRpcControlClient {
         );
         let mut stream = std::os::unix::net::UnixStream::connect(&self.socket_path)?;
         stream.write_all(request.as_bytes())?;
-        stream.shutdown(std::net::Shutdown::Write)?;
         let mut response = String::new();
         stream.read_to_string(&mut response)?;
         decode_json_rpc_response(method, &response)

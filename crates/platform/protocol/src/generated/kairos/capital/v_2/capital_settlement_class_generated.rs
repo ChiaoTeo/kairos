@@ -42,7 +42,7 @@ impl CapitalSettlementClass {
             Self::IMMEDIATE_BOOK_TRANSFER => Some("IMMEDIATE_BOOK_TRANSFER"),
             Self::PARTICIPANT_HISTORY_THEN_ACCOUNT_OBSERVATION => {
                 Some("PARTICIPANT_HISTORY_THEN_ACCOUNT_OBSERVATION")
-            }
+            },
             _ => None,
         }
     }

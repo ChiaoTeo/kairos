@@ -390,7 +390,6 @@ mod tests {
             .write_all(request.as_bytes())
             .await
             .expect("write JSON-RPC request");
-        stream.shutdown().await.expect("shutdown write half");
 
         let mut response = String::new();
         stream

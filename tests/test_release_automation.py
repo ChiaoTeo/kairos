@@ -13,6 +13,14 @@ release_plan = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = release_plan
 SPEC.loader.exec_module(release_plan)
 
+SMOKE_SCRIPT = ROOT / "scripts" / "release" / "smoke_distribution.py"
+SMOKE_SPEC = importlib.util.spec_from_file_location(
+    "smoke_distribution", SMOKE_SCRIPT
+)
+assert SMOKE_SPEC is not None and SMOKE_SPEC.loader is not None
+smoke_distribution = importlib.util.module_from_spec(SMOKE_SPEC)
+SMOKE_SPEC.loader.exec_module(smoke_distribution)
+
 
 def test_release_metadata_is_consistent() -> None:
     metadata = release_plan.load_release_metadata(ROOT)
@@ -60,3 +68,12 @@ def test_older_version_is_rejected() -> None:
         assert "older than PyPI" in str(error)
     else:
         raise AssertionError("an older release version must be rejected")
+
+
+def test_distribution_smoke_rejects_deleted_python_modules() -> None:
+    assert smoke_distribution._stale_python_members(
+        ["kairospy/application/account/application.py"]
+    ) == ["kairospy/application/account/application.py"]
+    assert smoke_distribution._stale_python_members(
+        ["kairospy/investment/apps/account/application/application.py"]
+    ) == []
