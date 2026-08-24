@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from kairospy.application.config import ConfigurationMigrationApplication
+from kairospy.surface.cli.interactive.context import print_home_header
 
 from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
 
@@ -68,6 +69,7 @@ def print_menu(context: InteractiveContext) -> None:
             "系统维护：\n  1. 项目工作区\n  2. 系统服务\n  3. 系统诊断\n  4. 高级配置"
         )
         return
+    print_home_header(context)
     migration_notice = ""
     if context.owner is not None:
         count = ConfigurationMigrationApplication(context.owner).preview()[
@@ -75,23 +77,23 @@ def print_menu(context: InteractiveContext) -> None:
         ]
         if count:
             migration_notice = (
-                f"配置升级  {count} 项使用旧格式，现有运行暂不受影响\n"
-                "          输入 migrate 查看迁移预览\n\n"
+                "\n" + "├─ 提示\n"
+                f"│  有 {count} 项配置可升级，不影响当前使用。输入 migrate 查看"
             )
     typer.echo(
-        migration_notice
-        + "\n".join(
+        "\n".join(
             (
-                "你想做什么？",
-                "  1. 查看市场行情    报价、历史数据与回放",
-                "  2. 查找市场标的    资产、市场与期权链",
-                "  3. 配置并运行策略  Launch、就绪检查与运行",
-                "  4. 管理运行资源    交易账户、数据、模型与通知",
-                "  5. 准备数据研究    数据集、计划与研究门禁",
-                "  6. 维护系统        工作区、进程、诊断与高级设置",
-                "  ?. 查看帮助",
+                "├─ 你想做什么？",
+                "│  1  查看市场行情       当前报价、历史行情与行情回放",
+                "│  2  查找市场标的       搜索股票、期货、期权及交易市场",
+                "│  3  配置并运行策略     选择策略、填写参数并启动",
+                "│  4  管理运行资源       配置账户、行情数据、模型与通知",
+                "│  5  准备数据研究       准备研究或回测所需的数据",
+                "│  6  维护系统           管理工作区、后台进程与问题排查",
             )
         )
+        + migration_notice
+        + "\n╰─ 输入 1–6 选择  ·  ? 帮助  ·  q 退出"
     )
 
 

@@ -34,6 +34,31 @@ def test_resource_account_list_exposes_guided_setup(interactive_context) -> None
     assert command.dangerous is True
 
 
+def test_account_list_makes_live_readonly_risk_visible(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    interactive_context.shell_path = ("resources", "accounts")
+    monkeypatch.setattr(
+        account,
+        "records",
+        lambda _context: (
+            {
+                "account_id": "live-readonly",
+                "broker": "binance",
+                "environment": "live",
+                "credential_role": "readonly",
+                "segments": ["spot"],
+            },
+        ),
+    )
+
+    account.print_menu(interactive_context)
+
+    output = capsys.readouterr().out
+    assert "类型/权限" in output
+    assert "实盘 · 只读" in output
+
+
 def test_account_detail_exposes_lifecycle_actions(interactive_context) -> None:
     interactive_context.shell_path = ("resources", "accounts", "paper-main")
     interactive_context.selected_account = "paper-main"

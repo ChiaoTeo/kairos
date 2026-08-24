@@ -94,6 +94,7 @@ impl ResolvedMarket {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_binding(
         market_id: impl Into<String>,
         instrument_id: impl Into<String>,
@@ -158,6 +159,7 @@ impl ResolvedMarket {
 
     /// Resolve a provider route whose observations describe an instrument-wide
     /// or consolidated feed, rather than one canonical exchange market.
+    #[cfg(test)]
     pub(crate) fn consolidated(
         instrument_id: impl Into<String>,
         network_id: Option<String>,

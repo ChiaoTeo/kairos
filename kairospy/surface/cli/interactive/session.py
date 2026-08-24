@@ -45,9 +45,6 @@ def run_interactive(
 ) -> int:
     """Run the interactive Kairos operator shell."""
 
-    typer.echo("Kairos 工作台")
-    typer.echo("告诉我你想做什么，我会带你完成。")
-    typer.echo()
     context = create_context(workspace)
     if dry_run or no_exec:
         return _run_one_shot_preview(context)
@@ -69,13 +66,13 @@ def _run_shell(
     context: InteractiveContext, *, execute: ExecuteCommand, yes: bool
 ) -> int:
     _print_global_context(context)
-    typer.echo("输入序号或命令开始；? 查看帮助；q 退出。")
     while True:
         _print_menu(context)
         if context.shell_path:
             typer.echo("  b. 返回上一级")
         try:
-            line = input(f"{_prompt_label(context)}\n{prompt_path(context)}> ").strip()
+            prompt = f"{prompt_path(context)}> " if context.shell_path else "›"
+            line = input(f"{_prompt_label(context)} {prompt} ").strip()
         except EOFError:
             typer.echo()
             return context.last_status or 0
@@ -288,7 +285,7 @@ def _print_summary(context: InteractiveContext) -> None:
 
 
 def _print_global_context(context: InteractiveContext) -> None:
-    print_context(context, account.records(context))
+    print_context(context)
 
 
 def _section_module(context: InteractiveContext):

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -59,10 +58,14 @@ def go_home(context: InteractiveContext) -> None:
 def go_back(context: InteractiveContext) -> None:
     previous = context.shell_path
     previous_section = next(iter(previous), None)
-    leaving_market = previous_section == "market" or previous == ("system", "market") or (
-        len(previous) >= 6
-        and previous_section == "launch"
-        and previous[-2:] == ("components", "market")
+    leaving_market = (
+        previous_section == "market"
+        or previous == ("system", "market")
+        or (
+            len(previous) >= 6
+            and previous_section == "launch"
+            and previous[-2:] == ("components", "market")
+        )
     )
     context.shell_path = previous[:-1]
     if previous[:2] in {("trade", "accounts"), ("resources", "accounts")}:
@@ -167,96 +170,21 @@ def unique_launches(snapshot: ObserveSnapshot) -> tuple[dict[str, object], ...]:
     return tuple(values)
 
 
-def _launch_readiness(owner: Any) -> tuple[int, int]:
-    """Count launch working copies without conflating them with runtime state."""
+def print_context(context: InteractiveContext) -> None:
+    """Render the quiet, contextual header shown above the product home."""
 
-    try:
-        from kairospy.application.launch.application import (
-            LaunchConfigurationApplication,
-        )
-
-        root = Path(owner.paths.root)
-        launch_root = root / "config" / "launches"
-        selected = {
-            path.stem: path
-            for path in sorted(launch_root.glob("*.toml"))
-            if path.is_file()
-        }
-        draft_root = launch_root / ".drafts"
-        for path in sorted(draft_root.glob("*.toml")) if draft_root.is_dir() else ():
-            selected[path.stem] = path
-        application = LaunchConfigurationApplication()
-        ready = 0
-        for launch_id, path in selected.items():
-            try:
-                report = application.validate(path, workspace_root=root)
-                has_return_point = (
-                    path.parent == draft_root
-                    and application.draft_return(root, launch_id) is not None
-                )
-                ready += bool(report["valid"]) and not has_return_point
-            except (OSError, TypeError, ValueError):
-                # A malformed working copy is a blocked Launch, not a broken home page.
-                continue
-        return ready, len(selected) - ready
-    except (AttributeError, OSError, TypeError, ValueError):
-        return 0, 0
-
-
-def _resource_readiness(
-    owner: Any, accounts: Sequence[dict[str, Any]]
-) -> tuple[int, int]:
-    """Count configured resources by their retained manual-test evidence."""
-
-    resources = list(accounts)
-    try:
-        from kairospy.application.agent import AgentResourceApplication
-        from kairospy.application.notification import NotificationAdminApplication
-        from kairospy.application.reference import (
-            ReferenceProviderConfigurationApplication,
-        )
-
-        resources.extend(ReferenceProviderConfigurationApplication(owner).list())
-        resources.extend(AgentResourceApplication(owner).model_connections())
-        resources.extend(NotificationAdminApplication(owner).list())
-    except (AttributeError, OSError, TypeError, ValueError):
-        # Keep the Account facts already supplied by the interactive session.
-        pass
-    verified = sum(
-        value.get("verification_status") == "verified" for value in resources
-    )
-    return verified, len(resources) - verified
-
-
-def print_context(
-    context: InteractiveContext,
-    accounts: Sequence[dict[str, Any]] = (),
-) -> None:
     owner = context.owner
     snapshot = context.snapshot
     if owner is None:
         return
-    typer.echo(f"工作区  {owner.workspace_id}")
-    typer.echo(f"        {owner.paths.project_root}")
-    ready_launches, blocked_launches = _launch_readiness(owner)
-    verified_resources, pending_resources = _resource_readiness(owner, accounts)
-    typer.echo(
-        f"运行准备  {ready_launches} 个 Launch 可启动 · "
-        f"{blocked_launches} 个需要处理"
-    )
-    typer.echo(
-        f"运行资源  {verified_resources} 个已验证 · {pending_resources} 个待处理"
-    )
+    typer.echo(f"Kairos  ·  {owner.workspace_id}")
+    typer.echo(str(owner.paths.project_root))
     if snapshot is None:
-        typer.echo("正在运行  状态暂不可用")
-        typer.echo("下一步    输入 6 检查系统状态")
+        typer.echo()
+        typer.echo("注意  暂时无法读取运行状态，输入 6 检查系统状态")
         typer.echo()
         return
     launches = unique_launches(snapshot)
-    failed_launches = sum(str(value.get("state")) == "failed" for value in launches)
-    completed_launches = sum(
-        str(value.get("state")).lower() == "completed" for value in launches
-    )
     active_states = {"starting", "running", "degraded", "stopping"}
     running_launches = sum(
         str(value.get("state")).lower() in active_states for value in launches
@@ -270,24 +198,13 @@ def print_context(
         if running_launches
         else 0
     )
-    typer.echo(
-        f"正在运行  {running_launches} 个策略 · "
-        f"{unavailable_services} 个必需服务不可用"
-    )
-    typer.echo(
-        f"最近结果  {failed_launches} 个策略失败 · {completed_launches} 个策略完成"
-    )
-    suggestions: list[str] = []
+    if running_launches:
+        typer.echo()
+        typer.echo(f"运行  {running_launches} 个策略正在运行")
     if unavailable_services:
-        suggestions.append("输入 fix 修复运行依赖")
-    if blocked_launches:
-        suggestions.append("输入 launch 处理 Launch 配置")
-    if pending_resources:
-        suggestions.append("输入 resources 检查运行资源")
-    if failed_launches:
-        suggestions.append("输入 diagnose 排查最近失败")
-    if suggestions:
-        typer.echo(f"下一步    {'；'.join(suggestions)}")
+        typer.echo(
+            f"注意  {unavailable_services} 个运行所需服务当前不可用，输入 fix 检查"
+        )
     if context.selected_account or context.selected_launch:
         typer.echo(
             f"当前：account={context.selected_account or '—'} · "
@@ -299,3 +216,36 @@ def print_context(
             f"{context.last_command}"
         )
     typer.echo()
+
+
+def print_home_header(context: InteractiveContext) -> None:
+    """Render the framed workspace region at the top of the home page."""
+
+    owner = context.owner
+    snapshot = context.snapshot
+    if owner is None:
+        typer.echo("╭─ Kairos")
+        typer.echo("│  未选择工作区")
+        return
+    typer.echo(f"╭─ Kairos  ·  {owner.workspace_id}")
+    typer.echo(f"│  {owner.paths.project_root}")
+    if snapshot is None:
+        typer.echo("│  注意：暂时无法读取运行状态，输入 6 检查系统状态")
+        return
+    launches = unique_launches(snapshot)
+    active_states = {"starting", "running", "degraded", "stopping"}
+    running_launches = sum(
+        str(value.get("state")).lower() in active_states for value in launches
+    )
+    if not running_launches:
+        return
+    unavailable_services = sum(
+        snapshot.components.get(name, {}).get("status")
+        not in {"ok", "ready", "running", "degraded"}
+        for name in ("reference", "market")
+    )
+    typer.echo(f"│  运行：{running_launches} 个策略正在运行")
+    if unavailable_services:
+        typer.echo(
+            f"│  注意：{unavailable_services} 个运行所需服务不可用，输入 fix 检查"
+        )

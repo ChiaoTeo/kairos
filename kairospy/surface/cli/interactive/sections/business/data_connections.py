@@ -169,7 +169,7 @@ def _print_detail(context: InteractiveContext, value: dict[str, object]) -> None
 def _status_label(status: str) -> str:
     return {
         "verified": "已验证",
-        "pending": "待测试",
+        "pending": "未验证（尚未测试）",
         "retest_required": "需重新测试",
         "failed": "测试失败",
     }.get(status, status)

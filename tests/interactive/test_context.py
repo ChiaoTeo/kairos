@@ -13,7 +13,7 @@ from kairospy.surface.cli.interactive.models import InteractiveContext
 from kairospy.surface.console.models import ObserveSnapshot
 
 
-def test_context_turns_health_issues_into_product_actions(capsys) -> None:
+def test_context_keeps_inactive_history_off_the_home_page(capsys) -> None:
     owner = SimpleNamespace(
         workspace_id="trader",
         paths=SimpleNamespace(project_root=Path("/workspace/trader")),
@@ -24,21 +24,19 @@ def test_context_turns_health_issues_into_product_actions(capsys) -> None:
             "reference": {"status": "not_running"},
             "market": {"status": "not_running"},
         },
-        launches=(
-            {"launch_id": "alpha", "mode": "paper", "state": "failed"},
-        ),
+        launches=({"launch_id": "alpha", "mode": "paper", "state": "failed"},),
     )
     context = InteractiveContext(owner=owner, snapshot=snapshot, workspace_arg=None)
 
-    print_context(context, ({"status": "invalid"},))
+    print_context(context)
 
     text = capsys.readouterr().out
-    assert "运行准备  0 个 Launch 可启动 · 0 个需要处理" in text
-    assert "运行资源  0 个已验证 · 1 个待处理" in text
-    assert "正在运行  0 个策略 · 0 个必需服务不可用" in text
-    assert "最近结果  1 个策略失败 · 0 个策略完成" in text
-    assert "输入 diagnose 排查最近失败" in text
-    assert "输入 resources 检查运行资源" in text
+    assert "Kairos  ·  trader" in text
+    assert "/workspace/trader" in text
+    assert "策略配置" not in text
+    assert "资源验证" not in text
+    assert "最近结果" not in text
+    assert "失败" not in text
 
 
 def test_context_reports_stopped_services_only_when_an_active_launch_requires_them(
@@ -57,11 +55,11 @@ def test_context_reports_stopped_services_only_when_an_active_launch_requires_th
         launches=({"launch_id": "alpha", "mode": "paper", "state": "running"},),
     )
 
-    print_context(InteractiveContext(owner, snapshot, None), ())
+    print_context(InteractiveContext(owner, snapshot, None))
 
     text = capsys.readouterr().out
-    assert "正在运行  1 个策略 · 2 个必需服务不可用" in text
-    assert "输入 fix 修复运行依赖" in text
+    assert "运行  1 个策略正在运行" in text
+    assert "注意  2 个运行所需服务当前不可用，输入 fix 检查" in text
 
 
 def test_context_uses_discovered_workspace_for_child_commands(monkeypatch) -> None:

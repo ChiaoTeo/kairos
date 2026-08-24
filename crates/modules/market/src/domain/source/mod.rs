@@ -55,7 +55,7 @@ mod tests {
             Some("stale failure".into())
         ));
         assert_eq!(state.status, SourceStatus::Ready);
-        assert_eq!(state.epoch.get(), 2);
+        assert_eq!(state.epoch, SourceEpoch::new(2));
     }
 
     #[test]

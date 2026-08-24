@@ -20,7 +20,7 @@ def print_menu(context: InteractiveContext) -> None:
         f"  2. 数据连接       {_label(summary['data'])}\n"
         f"  3. 模型连接       {_label(summary['models'])}\n"
         f"  4. 通知渠道       {_label(summary['notifications'])}\n"
-        f"  5. 检查全部资源   {summary['needs_action']} 个待处理"
+        f"  5. 检查全部资源   {summary['needs_action']} 个未验证"
     )
 
 
@@ -102,7 +102,7 @@ def print_readiness(context: InteractiveContext) -> None:
     ):
         typer.echo(f"  {label}：{_label(summary[key])}")
     if summary["needs_action"]:
-        typer.echo("下一步：进入对应资源，完成配置并主动执行手动测试。")
+        typer.echo("推荐操作：进入未验证的资源，按提示完成一次安全测试。")
     else:
         typer.echo("所有已配置运行资源均已验证，可以进入 Launch 装配。")
 
@@ -120,4 +120,4 @@ def _label(value: object) -> str:
         return "尚未配置"
     if not pending:
         return f"{count} 个 · 全部已验证"
-    return f"{count} 个 · {verified} 个已验证 · {pending} 个待处理"
+    return f"{count} 个 · {verified} 个已验证 · {pending} 个未验证"

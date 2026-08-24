@@ -320,7 +320,8 @@ def test_guided_feishu_setup_uses_secret_ref_and_never_prompts_for_secret(
     )
     answers = iter(("feishu-alerts", "feishu-alerts", "1", env_name))
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: False)
+    confirmations = iter((True, False))
+    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: next(confirmations))
 
     result = run_notification_setup(
         workspace, provider="feishu", output=OutputFormat.JSON
@@ -331,6 +332,25 @@ def test_guided_feishu_setup_uses_secret_ref_and_never_prompts_for_secret(
     assert result["next_action"] == ("select this Destination while editing a Launch")
     assert "launch_attachment" not in result
     assert "test-token" not in json.dumps(result)
+
+
+def test_guided_notification_setup_can_cancel_before_persisting(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "project", workspace_id="n"
+    )
+    answers = iter(("feishu-alerts", "feishu-alerts", "1", "FEISHU_WEBHOOK"))
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: False)
+
+    result = run_notification_setup(
+        workspace, provider="feishu", output=OutputFormat.JSON
+    )
+
+    assert result["status"] == "cancelled"
+    with pytest.raises(KeyError):
+        NotificationAdminApplication(workspace).show("feishu-alerts")
 
 
 def test_manual_delivery_evidence_is_invalidated_by_destination_change(

@@ -57,7 +57,36 @@ def test_resource_notification_center_lists_status_and_opens_detail(
     notifications.print_menu(interactive_context)
     detail = capsys.readouterr().out
     assert "最近测试：2026-08-24T00:00:00Z" in detail
-    assert "Launch 引用：无" in detail
+    assert "策略配置引用：无" in detail
+
+
+def test_empty_notification_center_hides_test_action(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    interactive_context.shell_path = ("resources", "notifications")
+    monkeypatch.setattr(notifications, "_destinations", lambda _context: [])
+
+    notifications.print_menu(interactive_context)
+    output = capsys.readouterr().out
+    assert "尚未配置通知渠道" in output
+    assert "发送真实测试消息" not in output
+    assert notifications.handle(interactive_context, ("test",)) is ShellControl.HANDLED
+    assert "请先输入 n 完成添加" in capsys.readouterr().out
+
+
+def test_resource_notification_setup_uses_product_choice_without_outer_warning(
+    interactive_context, monkeypatch
+) -> None:
+    interactive_context.shell_path = ("resources", "notifications")
+    monkeypatch.setattr(notifications, "_destinations", lambda _context: [])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "1")
+
+    command = notifications.handle(interactive_context, ("new",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.argv[-1] == "telegram"
+    assert command.dangerous is False
+    assert command.show_command is False
 
 
 def test_notification_setup_and_management_actions(

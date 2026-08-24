@@ -13,17 +13,16 @@ def test_workspace_is_added_once() -> None:
     workspace = Path("/tmp/demo")
     command = GuidedCommand(("project", "status"), "状态")
     assert with_workspace(command, workspace) == (
-        "project", "status", "--workspace", "/tmp/demo"
+        "project",
+        "status",
+        "--workspace",
+        "/tmp/demo",
     )
-    existing = GuidedCommand(
-        ("project", "status", "--workspace", "/tmp/other"), "状态"
-    )
+    existing = GuidedCommand(("project", "status", "--workspace", "/tmp/other"), "状态")
     assert with_workspace(existing, workspace) == existing.argv
 
 
-def test_dangerous_command_can_be_cancelled(
-    interactive_context, monkeypatch
-) -> None:
+def test_dangerous_command_can_be_cancelled(interactive_context, monkeypatch) -> None:
     called = False
 
     def execute(_argv):
@@ -42,9 +41,27 @@ def test_dangerous_command_can_be_cancelled(
     assert interactive_context.last_status == 0
 
 
-def test_product_command_can_hide_technical_argv(
-    interactive_context, capsys
+def test_dangerous_command_explains_its_specific_effect(
+    interactive_context, monkeypatch, capsys
 ) -> None:
+    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: False)
+
+    execute_guided_command(
+        interactive_context,
+        GuidedCommand(
+            ("notifications", "test", "ops"),
+            "测试通知",
+            dangerous=True,
+            confirmation="将向真实外部渠道发送一条测试消息。",
+        ),
+        execute=lambda _argv: 0,
+        yes=False,
+    )
+
+    assert "将向真实外部渠道发送一条测试消息" in capsys.readouterr().out
+
+
+def test_product_command_can_hide_technical_argv(interactive_context, capsys) -> None:
     execute_guided_command(
         interactive_context,
         GuidedCommand(

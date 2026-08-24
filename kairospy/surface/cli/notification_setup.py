@@ -34,17 +34,31 @@ def run_notification_setup(
     except KeyError:
         existing = None
     if existing is not None:
-        typer.echo(
-            f"已存在 {destination_id}：provider={existing['provider']}，"
-            f"enabled={existing['enabled']}，configured={existing['configured']}"
-        )
-        if not typer.confirm("更新这个 Destination 吗？", default=True):
-            return {**existing, "status": "unchanged"}
+        typer.echo(f"已存在通知渠道 {destination_id}，本次保存将更新它的配置。")
 
     secret_ref = _secret_reference(admin, credential_id, selected)
     chat_id: str | None = None
     if selected == "telegram":
         chat_id = _telegram_chat(admin, secret_ref)
+
+    action = "更新" if existing is not None else "添加"
+    provider_label = "Telegram" if selected == "telegram" else "飞书"
+    typer.echo()
+    typer.echo(f"即将{action}通知渠道：")
+    typer.echo(f"  渠道名称   {destination_id}")
+    typer.echo(f"  渠道类型   {provider_label}")
+    if chat_id is not None:
+        typer.echo(f"  接收目标   {chat_id}")
+    typer.echo(f"  凭据引用   {secret_ref.source}:{secret_ref.id}（不保存凭据值）")
+    typer.echo("  运行影响   不会启动、停止或修改任何策略")
+    if not typer.confirm("确认保存这个通知渠道吗？", default=True):
+        typer.echo("已取消，未修改通知配置。")
+        return {
+            "destination_id": destination_id,
+            "provider": selected,
+            "configured": existing is not None,
+            "status": "cancelled",
+        }
 
     result = admin.configure(
         destination_id,
@@ -53,7 +67,7 @@ def run_notification_setup(
         secret_ref=secret_ref,
         chat_id=chat_id,
     )
-    typer.echo("通知 Destination 已保存。")
+    typer.echo("通知渠道已保存。")
     typer.echo(render(result, output))
     if not result["secret_available"]:
         typer.echo(
@@ -65,11 +79,9 @@ def run_notification_setup(
         **result,
         "next_action": "select this Destination while editing a Launch",
     }
-    typer.echo(
-        "下一步：进入 Launch 向导选择此 Destination，并配置 route 与 required policy。"
-    )
+    typer.echo("下一步：可将此通知渠道绑定到策略配置，并选择要接收的通知类型。")
     if result["secret_available"] and typer.confirm(
-        "立即向真实渠道发送一条测试通知吗？", default=False
+        "现在发送一条真实测试消息以完成验证吗？（推荐）", default=True
     ):
         import asyncio
 
@@ -80,6 +92,7 @@ def run_notification_setup(
             ),
         }
         typer.echo(render(result["test"], output))
+        typer.echo("测试完成；可返回工作台查看最新验证状态。")
     return result
 
 

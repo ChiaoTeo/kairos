@@ -137,7 +137,7 @@ def _status_label(value: str) -> str:
         "verified": "已验证",
         "failed": "测试失败",
         "retest_required": "需重新测试",
-        "pending": "待测试",
+        "pending": "未验证（尚未测试）",
     }.get(value, value)
 
 

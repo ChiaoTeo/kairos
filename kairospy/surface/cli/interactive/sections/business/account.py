@@ -416,10 +416,30 @@ def _connection_availability(status: str) -> str:
 def _verification_label(status: str) -> str:
     return {
         "verified": "已验证",
-        "pending": "待测试",
+        "pending": "未验证（尚未测试）",
         "retest_required": "需重新测试",
         "failed": "测试失败",
     }.get(status, status)
+
+
+def _account_risk_label(account: dict[str, Any]) -> str:
+    environment = str(account.get("environment") or "unknown").lower()
+    environment_label = (
+        "实盘"
+        if environment == "live"
+        else "模拟"
+        if environment in {"paper", "simulated"}
+        else environment
+    )
+    capabilities = _account_capabilities(account)
+    permission_label = (
+        "可划转"
+        if "transfer" in capabilities
+        else "可交易"
+        if "trade" in capabilities
+        else "只读"
+    )
+    return f"{environment_label} · {permission_label}"
 
 
 def _reference_label(references: list[dict[str, str]]) -> str:
@@ -485,9 +505,7 @@ def _print_account_list(
         typer.echo("当前 workspace 没有可用账户。")
         typer.echo("可先运行 kairos account simulate 或 kairos account register。")
         return
-    table = PrettyTable(
-        ["序号", "account", "environment", "broker/custodian", "验证", "segments"]
-    )
+    table = PrettyTable(["序号", "账户", "类型/权限", "服务商", "验证", "市场范围"])
     table.align = "l"
     for index, account in enumerate(values, start=1):
         segments = account.get("segments") or ()
@@ -495,7 +513,7 @@ def _print_account_list(
             [
                 index,
                 account.get("account_id", "-"),
-                account.get("environment", "-"),
+                _account_risk_label(account),
                 account.get("broker", "-"),
                 _verification_label(
                     str(account.get("verification_status") or "pending")

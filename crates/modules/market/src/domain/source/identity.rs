@@ -32,13 +32,4 @@ impl SourceEpoch {
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
     }
-
-    pub(crate) const fn get(self) -> u64 {
-        self.0
-    }
-
-    pub(crate) fn advance(&mut self) -> Self {
-        self.0 = self.0.saturating_add(1);
-        *self
-    }
 }

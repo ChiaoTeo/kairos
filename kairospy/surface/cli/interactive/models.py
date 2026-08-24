@@ -27,6 +27,7 @@ class GuidedCommand:
     argv: tuple[str, ...]
     summary: str
     dangerous: bool = False
+    confirmation: str | None = None
     needs_workspace: bool = True
     streaming: bool = False
     show_command: bool = True

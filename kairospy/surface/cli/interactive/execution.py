@@ -32,8 +32,8 @@ def execute_guided_command(
         typer.echo(f"准备执行：{display}")
         typer.echo(f"用途：{command.summary}")
     if command.dangerous and not yes:
-        typer.echo("这个动作可能改变运行状态。")
-        if not typer.confirm("确认执行这个命令吗？", default=True):
+        typer.echo(command.confirmation or "此操作会修改配置、调用外部服务或影响运行。")
+        if not typer.confirm("确认继续吗？", default=True):
             typer.echo("已取消。")
             typer.echo("── 已取消 ──")
             typer.echo()
@@ -83,9 +83,7 @@ def _execute_with_activity(
     return status
 
 
-def with_workspace(
-    command: GuidedCommand, workspace: Path | None
-) -> tuple[str, ...]:
+def with_workspace(command: GuidedCommand, workspace: Path | None) -> tuple[str, ...]:
     argv = command.argv
     if not command.needs_workspace or workspace is None:
         return argv

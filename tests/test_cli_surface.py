@@ -3100,7 +3100,7 @@ def test_interactive_dry_run_guides_project_creation(monkeypatch) -> None:
 
     assert execute_argv(["interactive", "--dry-run"], output) == 0
     text = output.getvalue()
-    assert "Kairos 工作台" in text
+    assert "Kairos  ·  " in text
     assert "准备执行：kairos project init demo --id demo --template backtest" in text
     assert "只展示命令，不执行" in text
 
@@ -3233,7 +3233,7 @@ def test_interactive_session_keeps_context_between_actions(
     assert executed[0][:4] == ("system", "restart", "--component", "market")
     assert "无法识别这个命令" not in text
     assert "/system/market>" in text
-    assert "运行资源  0 个已验证 · 0 个待处理" in text
+    assert "Kairos  ·  demo" in text
     assert "kairos system restart --component market --format text" in text
     assert "上次：status=0 · kairos system restart --component market" in text
 
@@ -3265,7 +3265,7 @@ def test_interactive_b_returns_to_previous_level(tmp_path, monkeypatch) -> None:
     assert status == 0
     assert "/system/market>" in text
     assert "/system>" in text
-    assert "\n/>" in text
+    assert "首页 › " in text
     assert "无法识别这个命令" not in text
 
 
@@ -3298,7 +3298,7 @@ def test_interactive_launch_has_selected_launch_context(tmp_path, monkeypatch) -
     assert executed[0][:3] == ("launch", "status", "demo-backtest")
     assert "/launch/demo-backtest>" in text
     assert "/launch>" in text
-    assert "\n/>" in text
+    assert "首页 › " in text
     assert "| 序号 | launch        |" in text
     assert "当前 launch：demo-backtest" in text
     assert "无法识别这个命令" not in text
@@ -3345,7 +3345,7 @@ def test_interactive_b_returns_from_selected_account(tmp_path, monkeypatch) -> N
     assert status == 0
     assert "/trade/accounts/paper-account" in text
     assert "/trade/accounts>" in text
-    assert "\n/>" in text
+    assert "首页 › " in text
     assert "  b. 返回上一级" in text
     assert "无法识别这个命令" not in text
 
@@ -3415,7 +3415,7 @@ def test_interactive_account_context_keeps_selected_paper_account(
         "table",
     )
     assert "/trade/accounts/paper-account" in text
-    assert "| 序号 | account       |" in text
+    assert "| 序号 | 账户          |" in text
     assert "broker/custodian" in text
     assert "paper" in text
     assert "environment" in text

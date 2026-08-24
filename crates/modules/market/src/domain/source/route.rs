@@ -22,6 +22,7 @@ pub(crate) struct FeedDescriptor {
 }
 
 impl FeedDescriptor {
+    #[cfg(test)]
     pub(crate) fn new(
         id: MarketFeedId,
         exchange_id: ExchangeId,
