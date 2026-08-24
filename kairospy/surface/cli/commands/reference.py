@@ -7,8 +7,8 @@ from typing import Sequence
 
 import typer
 
-from kairospy.application.reference.cli import ReferenceCliApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.investment.apps.reference.application.cli import ReferenceCliApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 HELP = """Reference standalone commands are owned by kairos-reference-cli.

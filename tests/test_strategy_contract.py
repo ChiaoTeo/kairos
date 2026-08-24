@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.account import (
+from kairospy.investment.apps.account.application import (
     AccountApplication,
     AccountNotEnabledError,
     AccountSegmentSnapshot,
@@ -14,9 +14,9 @@ from kairospy.application.account import (
     DataFreshness,
     SPOT,
 )
-from kairospy.application.execution import ExecutionApplication
-from kairospy.application.market import Bar as ApplicationBar
-from kairospy.application.risk import RiskApplication, RiskStatus
+from kairospy.investment.apps.execution.application import ExecutionApplication
+from kairospy.investment.apps.market.application import Bar as ApplicationBar
+from kairospy.investment.apps.risk.application import RiskApplication, RiskStatus
 from kairospy.strategy import (
     AccountId,
     AggressorSide,
@@ -126,7 +126,9 @@ def test_account_application_owns_concrete_multi_account_current_view_selection(
 
 def test_account_application_has_no_callable_or_object_adapter() -> None:
     root = Path(__file__).parents[1]
-    application = (root / "kairospy/application/account/application.py").read_text(
+    application = (
+        root / "kairospy/investment/apps/account/application/application.py"
+    ).read_text(
         encoding="utf-8"
     )
     assert "Callable" not in application
@@ -137,16 +139,16 @@ def test_account_application_has_no_callable_or_object_adapter() -> None:
 
 def test_risk_application_owns_concrete_current_view_query() -> None:
     class LatestView:
-        def status(self, account_id: AccountId) -> RiskStatus:
-            return RiskStatus(
-                account_id,
-                True,
-                Decimal("1000"),
-                Decimal("0"),
-                Decimal("0"),
-                (),
-                1,
-            )
+        def status(self, account_id: AccountId) -> dict[str, object]:
+            return {
+                "account_id": str(account_id),
+                "trading_allowed": True,
+                "available_notional": "1000",
+                "reserved_notional": "0",
+                "utilization": "0",
+                "violations": [],
+                "generation": 1,
+            }
 
     risk = RiskApplication(LatestView())
 
@@ -163,7 +165,9 @@ def test_unavailable_risk_fails_at_the_application_boundary() -> None:
 
 def test_risk_application_has_no_callable_or_object_adapter() -> None:
     root = Path(__file__).parents[1]
-    application = (root / "kairospy/application/risk/application.py").read_text(
+    application = (
+        root / "kairospy/investment/apps/risk/application/application.py"
+    ).read_text(
         encoding="utf-8"
     )
     assert "Callable" not in application

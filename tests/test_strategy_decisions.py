@@ -6,28 +6,28 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.execution import (
+from kairospy.investment.apps.execution.application import (
     ExecutionIntent,
     Fill,
     FillEvent,
     IntentStatus,
     IntentUpdateEvent,
 )
-from kairospy.application.reference import InstrumentRef
-from kairospy.application.strategy.application.decisions import (
+from kairospy.investment.apps.reference.application import InstrumentRef
+from kairospy.strategy.apps.decisions.application import (
     DecisionHorizon,
     DecisionLifecycle,
     EffectEvidence,
     StrategyDecisionApplication,
 )
-from kairospy.application.strategy.services.decision_journal import (
+from kairospy.strategy.apps.decisions.services.journal import (
     StrategyDecisionJournal,
 )
-from kairospy.application.events import EventMetadata
+from kairospy.investment.application.eventing import EventMetadata
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.execution import FillId, IntentId, OrderId
 from kairospy.primitives.reference import InstrumentId
-from kairospy.strategy.clock import DeterministicTimerQueue, StrategyClock
+from kairospy.strategy.api.clock import DeterministicTimerQueue, StrategyClock
 
 
 class RecordingNotifications:

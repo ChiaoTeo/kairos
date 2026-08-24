@@ -15,9 +15,9 @@ from kairospy import (
     ResearchPeriod,
     ResearchSpec,
 )
-from kairospy.application.launch.application import BacktestApplication
-from kairospy.surface.client import ResearchClient
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.launch.application import BacktestApplication
+from kairospy.client import ResearchClient
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 import pytest
 
 

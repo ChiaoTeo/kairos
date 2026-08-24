@@ -10,8 +10,8 @@ from kairospy import (
     ResearchSpec,
     Kairos,
 )
-from kairospy.application.research import ResearchGateApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.research.apps.experiments.application import ResearchGateApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 import pytest
 
 

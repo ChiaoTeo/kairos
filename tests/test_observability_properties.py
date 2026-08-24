@@ -6,7 +6,7 @@ import pytest
 
 from kairospy.infrastructure.observability import resolve_otlp_endpoint
 from kairospy.infrastructure.observability.telemetry import _trace_sample_ratio
-from kairospy.strategy.logging import StrategyLogger
+from kairospy.strategy.api.logging import StrategyLogger
 
 
 @given(message=st.text(min_size=1, max_size=200))

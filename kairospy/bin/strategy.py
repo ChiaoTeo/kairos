@@ -11,12 +11,12 @@ import time
 from decimal import Decimal
 from typing import Any, Mapping
 
-from kairospy.application.strategy.composition import compose_strategy_process
-from kairospy.infrastructure.observability import (
+from kairospy.system import open_system
+from kairospy.system.apps.components.application.observability import (
     configure_from_environment,
     record_gauge,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.strategy import StrategyOutput
 
 
@@ -358,8 +358,7 @@ async def _run(args: argparse.Namespace) -> None:
     original_stderr = sys.stderr
     composition = None
     try:
-        composition = compose_strategy_process(
-            workspace,
+        composition = open_system(workspace).compose_strategy_process(
             strategy_ref=args.strategy,
             launch_id=args.launch_id,
             instance_id=args.instance_id,

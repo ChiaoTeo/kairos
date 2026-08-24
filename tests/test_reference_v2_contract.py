@@ -3,8 +3,8 @@ from __future__ import annotations
 import flatbuffers
 
 from kairospy.infrastructure.contracts.reference.events import decode_event
-from kairospy.infrastructure.transport.reference import decode_reference_event
-from kairospy.infrastructure.transport.generated.kairos.common.v2.EventMetadata import (
+from kairospy.infrastructure.contracts.reference.source import decode_reference_event
+from kairospy.infrastructure.protocol.generated.kairos.common.v2.EventMetadata import (
     EventMetadataAddEventId,
     EventMetadataAddOccurredAtUnixNanos,
     EventMetadataAddProducerId,
@@ -14,7 +14,7 @@ from kairospy.infrastructure.transport.generated.kairos.common.v2.EventMetadata 
     EventMetadataEnd,
     EventMetadataStart,
 )
-from kairospy.infrastructure.transport.generated.kairos.reference.v2.Market import (
+from kairospy.infrastructure.protocol.generated.kairos.reference.v2.Market import (
     MarketAddExchangeId,
     MarketAddInstrumentId,
     MarketAddListingId,
@@ -24,7 +24,7 @@ from kairospy.infrastructure.transport.generated.kairos.reference.v2.Market impo
     MarketEnd,
     MarketStart,
 )
-from kairospy.infrastructure.transport.generated.kairos.reference.v2.MarketUpserted import (
+from kairospy.infrastructure.protocol.generated.kairos.reference.v2.MarketUpserted import (
     MarketUpsertedAddCatalogRevision,
     MarketUpsertedAddMarket,
     MarketUpsertedAddMetadata,

@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.workspace import WorkspaceApplication
-from kairospy.application.config import ConfigApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.system.apps.configuration.application import ConfigApplication
 
 
 def test_workspace_init_creates_manifest_and_runtime_layout(tmp_path: Path) -> None:
@@ -95,14 +95,14 @@ def test_project_init_backtest_template_creates_complete_offline_starter(
     launch = workspace.paths.launch_config("demo-backtest")
     assert launch.is_file()
 
-    from kairospy.application.launch.application import LaunchConfigurationApplication
+    from kairospy.system.apps.launch.application import LaunchConfigurationApplication
 
     report = LaunchConfigurationApplication().validate(
         launch, workspace_root=workspace.paths.root
     )
     assert report["valid"] is True
 
-    from kairospy.application.strategy.services.loader import load_strategy
+    from kairospy.strategy.apps.runtime.services.loader import load_strategy
 
     entrypoint = load_strategy(
         "kairos_demo.strategy:DemoBacktest", root=project, params={}

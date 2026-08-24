@@ -8,9 +8,8 @@ from pathlib import Path
 import sys
 from typing import Any, cast
 
-from kairospy.application.risk.models import RiskStatus
 from kairospy.primitives.account import AccountId
-from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
+from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 sys.modules.setdefault("kairos", _generated_kairos)
@@ -144,9 +143,7 @@ class RiskLatestViewQueries:
             raise ValueError("Risk latest view state is missing")
         return state
 
-    def status(self, account_id: AccountId) -> RiskStatus:
-        from kairospy.application.risk import RiskStatus, RiskViolation
-
+    def status(self, account_id: AccountId) -> dict[str, object]:
         frame = self.read_frame()
         root = cast(Any, frame.value)
         state = root.State()
@@ -182,38 +179,46 @@ class RiskLatestViewQueries:
             Decimal("0"),
         )
         violations = tuple(
-            RiskViolation(
-                code="budget_unavailable",
-                message=f"Risk policy {_policy_id(value.Policy())} is not available",
-                limit=_decimal64(value.Policy().Limit()),
-                actual=(_decimal64(value.Used()) or Decimal("0"))
-                + (_decimal64(value.Reserved()) or Decimal("0")),
-            )
+            {
+                "code": "budget_unavailable",
+                "message": f"Risk policy {_policy_id(value.Policy())} is not available",
+                "limit": _decimal_text(_decimal64(value.Policy().Limit())),
+                "actual": _decimal_text(
+                    (_decimal64(value.Used()) or Decimal("0"))
+                    + (_decimal64(value.Reserved()) or Decimal("0"))
+                ),
+            }
             for value in limits
             if (_decimal64(value.Available()) or Decimal("0")) < 0
         ) + tuple(
-            RiskViolation(
-                code="circuit_open",
-                message=_text(value.Reason()) or "Risk circuit is open",
-            )
+            {
+                "code": "circuit_open",
+                "message": _text(value.Reason()) or "Risk circuit is open",
+                "limit": None,
+                "actual": None,
+            }
             for value in circuits
             if int(value.Status()) == _CIRCUIT_OPEN
         )
-        return RiskStatus(
-            account_id=account_id,
-            trading_allowed=not violations,
-            available_notional=available if limits else None,
-            reserved_notional=reserved,
-            utilization=None if total == 0 else (total - available) / total,
-            violations=violations,
-            generation=frame.generation,
-        )
+        return {
+            "account_id": str(account_id),
+            "trading_allowed": not violations,
+            "available_notional": _format_decimal(available) if limits else None,
+            "reserved_notional": _format_decimal(reserved),
+            "utilization": _format_decimal(None if total == 0 else (total - available) / total),
+            "violations": list(violations),
+            "generation": frame.generation,
+        }
+
+
+def _format_decimal(value: Decimal | None) -> str | None:
+    return None if value is None else format(value, "f")
 
 
 def decode_view(payload: bytes) -> Any:
     """Decode one Risk v2 current view without copying FlatBuffers tables."""
 
-    from kairospy.infrastructure.transport.generated.kairos.risk.v2.RiskLatestView import (
+    from kairospy.infrastructure.protocol.generated.kairos.risk.v2.RiskLatestView import (
         RiskLatestView,
     )
 
@@ -427,7 +432,7 @@ def _decimal_text(value: object | None) -> str | None:
 
 
 def _optional_int(value: object | None) -> int | None:
-    return None if value is None else int(value)
+    return None if value is None else int(cast(Any, value))
 
 
 def _enum_name(mapping: dict[int, str], value: int) -> str:

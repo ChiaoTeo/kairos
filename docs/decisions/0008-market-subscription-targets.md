@@ -220,8 +220,9 @@ Strategy owns only the intent:
 
 ## Implementation anchors
 
-- Python Market request types: `kairospy/application/market/requests.py`
-- Python Strategy-facing Market facade: `kairospy/application/market/application.py`
+- Python Market request types: `kairospy/investment/apps/market/application/requests.py`
+- Python Strategy-facing Market facade:
+  `kairospy/investment/apps/market/application/application.py`
 - Strategy exports: `kairospy/strategy/__init__.py`
 - Market control contract: `crates/modules/market/contract/src/control/types.rs`
 - Market control handling: `crates/modules/market/src/application/conflux.rs`

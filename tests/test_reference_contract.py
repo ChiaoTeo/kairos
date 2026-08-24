@@ -9,17 +9,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from kairospy.application.reference import (
+from kairospy.investment.apps.reference.application import (
     Asset,
     Instrument,
     Listing,
     ReferenceApplication,
     ReferenceNotFoundError,
+    observe_reference_stream,
     validate_reference_runtime,
 )
 from kairospy.primitives.reference import InstrumentId, ListingId, MarketId
 from kairospy.infrastructure.contracts.reference import ReferenceClient
-from kairospy.surface.cli.commands.reference import _observe_reference_stream
 
 
 def _reference_database(tmp_path: Path) -> Path:
@@ -482,7 +482,7 @@ def test_reference_client_scopes_refresh_and_provider_controls(
         return 200, {"jsonrpc": "2.0", "id": body["id"], "result": {"status": "ok"}}
 
     monkeypatch.setattr(
-        "kairospy.infrastructure.transport.commands.request_sync", request_sync
+        "kairospy.infrastructure.transport.json_rpc.request_sync", request_sync
     )
     client = ReferenceClient(
         socket_path=tmp_path / "reference.sock",
@@ -526,55 +526,23 @@ def test_reference_client_pages_filtered_collections(tmp_path) -> None:
         client.instruments(option_right="unknown")
 
 
-def test_reference_query_cli_exposes_filtered_markets_and_option_chain(
-    tmp_path, monkeypatch
+def test_reference_application_exposes_filtered_markets_and_option_chain(
+    tmp_path,
 ) -> None:
     client = ReferenceClient(database_path=_reference_database(tmp_path))
-    monkeypatch.setattr(
-        "kairospy.surface.cli.commands.reference._client", lambda workspace: client
+    application = ReferenceApplication(client)
+    markets = application.find_markets(
+        market_ids=("market:binance:spot:BTCUSDT",),
+        asset_code="BTC",
+        active_only=True,
+        limit=1,
     )
-    from kairospy.surface.cli.app import execute_argv
-
-    market_output = StringIO()
-    assert (
-        execute_argv(
-            [
-                "reference",
-                "markets",
-                "--market-id",
-                "market:binance:spot:BTCUSDT",
-                "--asset-code",
-                "BTC",
-                "--active-only",
-                "--limit",
-                "1",
-                "--format",
-                "json",
-            ],
-            market_output,
-        )
-        == 0
+    assert markets[0].venue_symbol == "BTCUSDT"
+    chain = application.find_instruments(
+        underlying_instrument_id="instrument:spot:BTC",
+        option_right="call",
     )
-    assert json.loads(market_output.getvalue())[0]["venue_symbol"] == "BTCUSDT"
-
-    chain_output = StringIO()
-    assert (
-        execute_argv(
-            [
-                "reference",
-                "option-chain",
-                "--underlying",
-                "instrument:spot:BTC",
-                "--option-right",
-                "call",
-                "--format",
-                "json",
-            ],
-            chain_output,
-        )
-        == 0
-    )
-    assert json.loads(chain_output.getvalue())[0]["instrumentType"] == "option"
+    assert chain[0].instrument_type == "option"
 
 
 def test_reference_runtime_validation_covers_provider_snapshot_and_event_tail() -> None:
@@ -711,7 +679,7 @@ def test_reference_stream_observer_uses_native_events_and_stops_when_idle() -> N
     )
 
     result = asyncio.run(
-        _observe_reference_stream(
+        observe_reference_stream(
             source,
             timeout_seconds=1,
             idle_timeout_seconds=0.01,
@@ -735,7 +703,7 @@ def test_reference_stream_observer_rejects_an_empty_stream() -> None:
 
     with pytest.raises(RuntimeError, match="before timeout"):
         asyncio.run(
-            _observe_reference_stream(
+            observe_reference_stream(
                 source,
                 timeout_seconds=0.01,
                 idle_timeout_seconds=0.01,

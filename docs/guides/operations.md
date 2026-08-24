@@ -59,9 +59,9 @@ uv run kairos observe --workspace my-project --once
 uv run kairos interactive --workspace my-project
 ```
 
-顶层 `/market` 是独立模式，用于直接读取 provider、校验 Market 描述、回放本地文件或下载
-历史行情，不连接运行中的 Market 服务。workspace 共享行情从 `/system/market` 进入；某次策略运行的行情从
-`/launch/<launch-id>/market` 进入。两者都是连接模式：交互界面先从 Reference 目录列出并
+“查看市场行情”中的独立模式用于直接读取 provider、校验 Market 描述、回放本地文件或下载
+历史行情，不连接运行中的 Market 服务。Workspace 共享行情从“运行中的 Market 服务”进入；某次策略运行的行情从
+Launch Instance 的 Market 组件进入。后两者都是连接模式：交互界面先从 Reference 目录列出并
 选择 Market，再从目标 runtime 列出兼容 Source，不接受手写 Market ID 或 Source ID，也不会
 用固定的 BTCUSDT 或 `binance-spot` 猜测 mmap 文件。脚本调用仍可显式传入 ID，但 owner
 connected CLI 会在读取 view 前验证 Market、Source 与 observation kind 的组合。
@@ -478,7 +478,8 @@ CLI 层级约定：
 - `system` 是内置 system runtime 的顶层产品入口。需要连接正在运行的 system runtime 时使用 `system attach`。
 - system daemon 的健康心跳写入 launch `state.json`；attach 会把状态心跳以 `[system/heartbeat]` 展示出来。普通脚本输出仍保持无状态、可解析。
 
-`kairospy tui` 目前是 `observe` 的兼容入口，项目默认推荐使用普通 CLI。
+人工操作统一进入 `kairos interactive`（短别名 `kairos i`）；实时 Observe、Launch attach
+和交互式配置都复用同一个 Textual 工作台。脚本使用显式 CLI 命令或 `observe --once`。
 
 ## 账户、Scope 与交易锁
 

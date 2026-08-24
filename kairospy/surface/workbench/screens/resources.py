@@ -11,14 +11,22 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Label, OptionList, RichLog
 from textual.worker import Worker
 
-from kairospy.application.account import AccountConfigurationApplication
-from kairospy.application.agent import AgentResourceApplication
-from kairospy.application.notification import NotificationAdminApplication
-from kairospy.application.reference import ReferenceProviderConfigurationApplication
+from kairospy.investment.apps.account.application import AccountConfigurationApplication
+from kairospy.strategy.apps.agent.application import AgentResourceApplication
+from kairospy.system.apps.configuration.application import (
+    ConfigurationReferenceApplication,
+    WorkspaceResourceLifecycleApplication,
+)
+from kairospy.system.apps.launch.application import (
+    LaunchNotificationConfigurationApplication,
+)
+from kairospy.strategy.apps.notification.application import NotificationAdminApplication
+from kairospy.investment.apps.reference.application import ReferenceProviderConfigurationApplication
 
 from ..dialogs import ConfirmDialog, InputDialog
 from ..widgets import ActionItem, ActionList, WorkspaceHeader
 from .resource_setup import ResourceSetupScreen
+from .account import AccountOperationsScreen
 
 
 RESOURCE_ACTIONS = (
@@ -236,6 +244,8 @@ class ResourceDetailScreen(Screen[None]):
         self.kind = kind
         self.record = record
         self.identity = _resource_id(kind, record)
+        self._pending_action = ""
+        self._pending_launch = ""
         self.sub_title = f"首页 › 运行资源 › {_kind_label(kind)} › {self.identity}"
 
     def compose(self) -> ComposeResult:
@@ -266,11 +276,25 @@ class ResourceDetailScreen(Screen[None]):
                 ActionItem(
                     "test", "发送真实测试消息", "验证认证和真实 provider delivery", "1"
                 ),
+                ActionItem("attach", "绑定到 Launch", "添加通知 route", "2"),
+                ActionItem("detach", "从 Launch 解绑", "移除所有相关 route", "3"),
+                ActionItem("validate", "校验通知配置", "检查指定运行模式", "4"),
                 ActionItem(
-                    "advanced", "安全与高级信息", "查看版本、测试范围和引用", "2"
+                    "advanced", "安全与高级信息", "查看版本、测试范围和引用", "5"
                 ),
-                ActionItem("toggle", "启用或停用", "切换通知提醒状态", "3"),
-                ActionItem("delete", "删除提醒", "移除配置和验证记录", "4"),
+                ActionItem("toggle", "启用或停用", "切换通知提醒状态", "6"),
+                ActionItem("delete", "删除提醒", "移除配置和验证记录", "7"),
+            )
+        if self.kind == "accounts":
+            return (
+                ActionItem("operations", "账户运行查询", "余额、持仓、费率与订单", "1"),
+                ActionItem("test", "测试连接", "执行真实、安全的只读连接验证", "2"),
+                ActionItem("edit", "修改配置", "打开安全配置表单", "3"),
+                ActionItem(
+                    "advanced", "安全与高级信息", "查看版本、测试范围和引用", "4"
+                ),
+                ActionItem("toggle", "启用或停用", "切换连接可用状态", "5"),
+                ActionItem("delete", "删除连接", "移除配置和验证记录", "6"),
             )
         return (
             ActionItem("test", "测试连接", "执行真实、安全的只读连接验证", "1"),
@@ -288,19 +312,24 @@ class ResourceDetailScreen(Screen[None]):
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         action = event.option.id
-        if action == "test" and self.kind == "models":
+        if action == "operations" and self.kind == "accounts":
+            self.app.push_screen(AccountOperationsScreen(self.record))
+        elif action == "test" and self.kind == "models":
             self.app.push_screen(
                 InputDialog("输入要测试的模型", placeholder="例如 gpt-5"),
-                lambda value: self._run("test", value) if value else None,
+                lambda value: self._confirm_test(value) if value else None,
             )
         elif action == "test" and self.kind == "notifications":
+            self._confirm_test(None)
+        elif action == "test":
+            self._confirm_test(None)
+        elif action in {"attach", "detach"} and self.kind == "notifications":
+            self._pending_action = action
+            self.app.push_screen(InputDialog("Launch ID"), self._launch_selected)
+        elif action == "validate" and self.kind == "notifications":
             self.app.push_screen(
-                ConfirmDialog(
-                    "发送真实测试消息",
-                    "该操作会向配置的接收位置发送一条真实消息。",
-                    confirm_label="发送",
-                ),
-                lambda confirmed: self._run("test") if confirmed else None,
+                InputDialog("运行模式", value="paper"),
+                lambda value: self._run("validate", value) if value else None,
             )
         elif action == "models":
             self._show({"models": list(self.record.get("models") or ())})
@@ -311,12 +340,60 @@ class ResourceDetailScreen(Screen[None]):
         elif action == "advanced":
             self._run("advanced")
         elif action in {"toggle", "delete"}:
+            if self.app.state.yes:  # type: ignore[attr-defined]
+                self._run(action)
+                return
             self.app.push_screen(
                 ConfirmDialog("确认资源变更", f"确认对 {self.identity} 执行{action}？"),
                 lambda confirmed: self._run(action) if confirmed else None,
             )
         elif action is not None:
             self._run(action)
+
+    def _confirm_test(self, value: str | None) -> None:
+        state = self.app.state  # type: ignore[attr-defined]
+        if state.yes:
+            self._run("test", value)
+            return
+        detail = {
+            "accounts": "将连接真实账户服务并执行安全的只读认证与权限检查。",
+            "data": "将连接真实行情服务并读取固定的低成本样本。",
+            "models": "将向模型服务发送最小请求，云端服务可能产生少量费用。",
+            "notifications": "将向真实外部渠道发送一条测试消息。",
+        }[self.kind]
+        self.app.push_screen(
+            ConfirmDialog("测试运行资源", detail, confirm_label="开始测试"),
+            lambda confirmed: self._run("test", value) if confirmed else None,
+        )
+
+    def _launch_selected(self, value: str | None) -> None:
+        if not value:
+            return
+        self._pending_launch = value
+        if self._pending_action == "attach":
+            self.app.push_screen(
+                InputDialog("通知 Route", value="signals"), self._route_selected
+            )
+            return
+        self._confirm_notification_route("detach", "从 Launch 移除这个通知目标？")
+
+    def _route_selected(self, value: str | None) -> None:
+        if value:
+            self._confirm_notification_route(
+                "attach", f"将 {self.identity} 绑定到 {self._pending_launch}/{value}？", value
+            )
+
+    def _confirm_notification_route(
+        self, action: str, message: str, route: str | None = None
+    ) -> None:
+        state = self.app.state  # type: ignore[attr-defined]
+        if state.yes:
+            self._run(action, route)
+            return
+        self.app.push_screen(
+            ConfirmDialog("通知 Launch 绑定", message, confirm_label="继续"),
+            lambda confirmed: self._run(action, route) if confirmed else None,
+        )
 
     def _edited(self, result: dict[str, Any] | None) -> None:
         if result is not None:
@@ -328,7 +405,9 @@ class ResourceDetailScreen(Screen[None]):
 
     def _run(self, action: str, value: str | None = None) -> None:
         state = self.app.state  # type: ignore[attr-defined]
-        if action in {"toggle", "delete"} and (state.dry_run or state.no_exec):
+        if action in {"test", "toggle", "delete", "attach", "detach"} and (
+            state.dry_run or state.no_exec
+        ):
             self._show(
                 {"status": "preview", "action": action, "resource": self.identity}
             )
@@ -345,12 +424,14 @@ class ResourceDetailScreen(Screen[None]):
 
     def _execute(self, action: str, value: str | None) -> Any:
         owner = self.app.state.owner  # type: ignore[attr-defined]
+        if action == "delete":
+            return WorkspaceResourceLifecycleApplication(owner).delete(
+                _reference_kind(self.kind), self.identity
+            )
         if self.kind == "accounts":
             app = AccountConfigurationApplication(owner)
             if action == "test":
                 return app.test_connection(self.identity)
-            if action == "delete":
-                return app.delete(self.identity)
             if action == "refresh":
                 return app.show(self.identity)
             if action == "toggle":
@@ -365,8 +446,6 @@ class ResourceDetailScreen(Screen[None]):
             app = ReferenceProviderConfigurationApplication(owner)
             if action == "test":
                 return app.test_connection(self.identity)
-            if action == "delete":
-                return app.delete(self.identity)
             if action == "toggle":
                 return app.set_enabled(
                     self.identity,
@@ -379,8 +458,6 @@ class ResourceDetailScreen(Screen[None]):
             app = AgentResourceApplication(owner)
             if action == "test":
                 return app.test_model_connection(self.identity, value or "")
-            if action == "delete":
-                return app.delete_model_connection(self.identity)
             if action == "toggle":
                 return app.set_model_connection_enabled(
                     self.identity, enabled=not bool(self.record.get("enabled", True))
@@ -396,19 +473,31 @@ class ResourceDetailScreen(Screen[None]):
         if action == "test":
             import asyncio
 
-            from kairospy.application.notification.composition import (
-                test_notification_destination,
+            return asyncio.run(
+                NotificationAdminApplication(owner).test_destination(self.identity)
             )
-
-            return asyncio.run(test_notification_destination(owner, self.identity))
-        if action == "delete":
-            return app.delete(self.identity)
         if action == "toggle":
             return app.set_enabled(
                 self.identity, not bool(self.record.get("enabled", True))
             )
         if action == "advanced":
             return _advanced_resource(owner, self.kind, self.identity, self.record)
+        if action == "validate":
+            return NotificationAdminApplication(owner).validate_workspace(
+                mode=value or "paper"
+            )
+        if action == "attach":
+            app.show(self.identity)
+            return LaunchNotificationConfigurationApplication(owner).attach(
+                self._pending_launch,
+                self.identity,
+                route=value or "signals",
+                default=True,
+            )
+        if action == "detach":
+            return LaunchNotificationConfigurationApplication(owner).detach(
+                self._pending_launch, self.identity
+            )
         return app.show(self.identity)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
@@ -449,11 +538,18 @@ def _resource_id(kind: str, record: dict[str, Any]) -> str:
     return str(record.get(key) or "unknown")
 
 
+def _reference_kind(kind: str) -> str:
+    return {
+        "accounts": "account",
+        "data": "market_data",
+        "models": "ai_model",
+        "notifications": "notification",
+    }[kind]
+
+
 def _advanced_resource(
     owner: Any, kind: str, identity: str, record: dict[str, Any]
 ) -> dict[str, Any]:
-    from kairospy.application.config import ConfigurationReferenceApplication
-
     references = ConfigurationReferenceApplication(owner)
     if kind == "accounts":
         uses = references.account_references(identity)
@@ -462,9 +558,7 @@ def _advanced_resource(
     elif kind == "notifications":
         uses = references.destination_references(identity)
     else:
-        uses = references.credential_references(
-            str(record.get("credential_id") or identity)
-        )
+        uses = references.model_connection_references(identity)
     return {
         "identity": identity,
         "credential_id": record.get("credential_id"),

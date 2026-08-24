@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Event
 import time
 
-from kairospy.application.agent import (
+from kairospy.strategy.apps.agent.application import (
     AgentApplication,
     AgentMode,
     DecisionKind,
@@ -18,14 +18,14 @@ from kairospy.application.agent import (
     ReduceTargetQuantity,
     AgentEventStatus,
 )
-from kairospy.application.agent.policy import DecisionPolicy
-from kairospy.application.agent.services import (
+from kairospy.strategy.apps.agent.application.policy import DecisionPolicy
+from kairospy.strategy.apps.agent.services import (
     AgentDecisionWorker,
     DecisionRecordStore,
     DecisionTask,
 )
-from kairospy.application.agent.services.events import AgentEventStream
-from kairospy.application.execution import TargetPositionRequest
+from kairospy.strategy.apps.agent.services.events import AgentEventStream
+from kairospy.investment.apps.execution.application import TargetPositionRequest
 from kairospy.strategy import CommandResult
 
 

@@ -3,18 +3,18 @@ from __future__ import annotations
 import pytest
 
 from kairospy.infrastructure.transport import native_event
-from kairospy.infrastructure.transport.account import AeronAccountEventSource
-from kairospy.infrastructure.transport.capital import AeronCapitalEventSource
-from kairospy.infrastructure.transport.execution import AeronExecutionEventSource
-from kairospy.infrastructure.transport.generated_spec import (
+from kairospy.infrastructure.contracts.account.source import AeronAccountEventSource
+from kairospy.infrastructure.contracts.capital.source import AeronCapitalEventSource
+from kairospy.infrastructure.contracts.execution.source import AeronExecutionEventSource
+from kairospy.infrastructure.protocol.generated_spec import (
     ACCOUNT_EVENTS,
     CAPITAL_EVENTS,
     EXECUTION_EVENTS,
     MARKET_EVENTS,
     RISK_EVENTS,
 )
-from kairospy.infrastructure.transport.market import AeronMarketEventSource
-from kairospy.infrastructure.transport.risk import AeronRiskEventSource
+from kairospy.infrastructure.contracts.market.source import AeronMarketEventSource
+from kairospy.infrastructure.contracts.risk.source import AeronRiskEventSource
 
 
 @pytest.mark.parametrize(

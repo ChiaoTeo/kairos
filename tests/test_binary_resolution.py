@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kairospy.application.system.binaries import resolve_binary
+from kairospy.system.apps.components.application.binaries import resolve_binary
 
 
 def test_binary_resolver_honors_explicit_override(tmp_path: Path) -> None:

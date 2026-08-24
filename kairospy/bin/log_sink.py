@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from kairospy.application.system.process_logging import utc_timestamp
+from kairospy.system.apps.components.application.process_logging import utc_timestamp
 
 
 DEFAULT_MAX_BYTES = 20 * 1024 * 1024

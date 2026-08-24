@@ -4,11 +4,9 @@ import json
 from io import StringIO
 from pathlib import Path
 
-from kairospy.application.config import ConfigurationMigrationApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.configuration.application import ConfigurationMigrationApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
-from kairospy.surface.cli.interactive.models import InteractiveContext
-from kairospy.surface.cli.interactive.sections.getting_started import home
 
 
 def test_migration_preview_finds_legacy_formats_without_exposing_values(
@@ -55,9 +53,7 @@ def test_migration_preview_finds_legacy_formats_without_exposing_values(
     assert "massive-secret-must-not-render" not in encoded
 
 
-def test_migrate_command_and_home_banner_expose_preview_only(
-    tmp_path: Path, capsys
-) -> None:
+def test_migrate_command_exposes_preview_only(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="m")
     credential = workspace.paths.credential_config().parent / "legacy.toml"
     credential.parent.mkdir(parents=True, exist_ok=True)
@@ -83,13 +79,3 @@ def test_migrate_command_and_home_banner_expose_preview_only(
     )
     assert json.loads(output.getvalue())["preview_only"] is True
     assert "hidden" not in output.getvalue()
-
-    context = InteractiveContext(owner=workspace, snapshot=None, workspace_arg=None)
-    home.print_menu(context)
-    text = capsys.readouterr().out
-    assert "提示" in text
-    assert "1 项配置可升级，不影响当前使用" in text
-    assert "migrate 查看" in text
-    command = home.handle(context, ("migrate",))
-    assert command is not None
-    assert command.argv == ("config", "migrate")

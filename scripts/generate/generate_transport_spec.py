@@ -13,7 +13,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "schemas" / "transport.toml"
 RUST_OUTPUT = ROOT / "crates/platform/transport/src/generated_spec.rs"
-PYTHON_OUTPUT = ROOT / "kairospy/infrastructure/transport/generated_spec.py"
+PYTHON_OUTPUT = ROOT / "kairospy/infrastructure/protocol/generated_spec.py"
 
 
 def load() -> tuple[dict[str, object], str]:

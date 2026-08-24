@@ -20,8 +20,6 @@ _EXPORTS = {
     "QuoteView": (".market", "QuoteView"),
     "TradeView": (".market", "TradeView"),
     "UnixMarketEventStream": (".market", "UnixMarketEventStream"),
-    "ExecutionCommandClient": (".commands", "ExecutionCommandClient"),
-    "MarketCommandClient": (".commands", "MarketCommandClient"),
     "UnixJsonCommandClient": (".commands", "UnixJsonCommandClient"),
     "UnixJsonRpcClient": (".commands", "UnixJsonRpcClient"),
     "AeronReferenceEventSource": (".reference", "AeronReferenceEventSource"),

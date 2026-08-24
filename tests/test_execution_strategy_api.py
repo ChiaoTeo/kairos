@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.execution import (
+from kairospy.investment.apps.execution.application import (
     ArbitrageLegRequest,
     ExecutionAccountNotEnabledError,
     ExecutionApplication,
@@ -17,11 +17,11 @@ from kairospy.application.execution import (
     QuoteRefreshRequest,
     SubmissionStatus,
 )
-from kairospy.application.execution.events import (
+from kairospy.investment.apps.execution.application.events import (
     ExecutionChangeRecord,
     ExecutionEventRecord,
 )
-from kairospy.application.execution.services import ExecutionEventCursorCheckpoint
+from kairospy.investment.apps.execution.services import ExecutionEventCursorCheckpoint
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.execution import IntentId, OrderId
 from kairospy.primitives.reference import InstrumentId
@@ -388,6 +388,6 @@ async def _drain(execution: ExecutionApplication) -> None:
 
 
 def _instrument(instrument_id: InstrumentId):
-    from kairospy.application.reference import InstrumentRef
+    from kairospy.investment.apps.reference.application import InstrumentRef
 
     return InstrumentRef(instrument_id, "BTCUSDT")

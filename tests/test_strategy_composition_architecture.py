@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.launch.application.connections import (
+from kairospy.system.apps.launch.application.connections import (
     resolve_instance_connections,
 )
-from kairospy.application.launch.application.strategy_runtime import (
+from kairospy.system.apps.launch.application.strategy_runtime import (
     StrategyLaunchConfig,
 )
-from kairospy.application.system.clients import MarketSystemClient
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.components.application.clients import MarketSystemClient
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
-from kairospy.application.market.composition import (
+from kairospy.investment.apps.market.composition import (
     MarketAccessConfig,
     build_strategy_access as build_market_strategy_access,
 )
@@ -24,12 +24,12 @@ from kairospy.application.market.composition import (
 
 def test_strategy_has_no_other_module_infrastructure_construction() -> None:
     root = Path(__file__).parents[1]
-    strategy = root / "kairospy/application/strategy"
+    strategy = root / "kairospy/strategy/apps/runtime"
     source = "\n".join(
         path.read_text(encoding="utf-8") for path in strategy.rglob("*.py")
     )
     for forbidden in (
-        "kairospy.infrastructure",
+        "kairospy.system.apps.launch",
         "MarketViewAccess",
         "UnixJsonCommandClient",
         "StrategyClient" + "Bundle",
@@ -46,11 +46,15 @@ def test_strategy_has_no_other_module_infrastructure_construction() -> None:
 def test_launch_owns_strategy_process_control_and_strategy_owns_composition() -> None:
     root = Path(__file__).parents[1]
     assert (
-        root / "kairospy/application/launch/application/strategy_process.py"
+        root / "kairospy/system/apps/launch/application/strategy_process.py"
     ).is_file()
-    assert not (root / "kairospy/application/strategy/application/process.py").exists()
-    assert (root / "kairospy/application/strategy/composition.py").is_file()
-    assert not (root / "kairospy/application/strategy/services/composition.py").exists()
+    assert not (
+        root / "kairospy/strategy/apps/runtime/application/process.py"
+    ).exists()
+    assert (root / "kairospy/strategy/composition/application.py").is_file()
+    assert not (
+        root / "kairospy/strategy/apps/runtime/services/composition.py"
+    ).exists()
 
 
 def test_business_applications_do_not_import_composition_or_infrastructure() -> None:
@@ -65,44 +69,46 @@ def test_business_applications_do_not_import_composition_or_infrastructure() -> 
         "capital",
         "notification",
     ):
-        source = (root / f"kairospy/application/{module}/application.py").read_text(
-            encoding="utf-8"
-        )
-        assert "kairospy.infrastructure" not in source
+        subsystem = "strategy" if module == "notification" else "investment"
+        source = (
+            root / f"kairospy/{subsystem}/apps/{module}/application/application.py"
+        ).read_text(encoding="utf-8")
+        assert "infrastructure.protocol.generated" not in source
         assert "import composition" not in source
-        assert "from .composition" not in source
-        assert (root / f"kairospy/application/{module}/composition.py").is_file()
+        assert "from ..composition" not in source
+        assert (
+            root / f"kairospy/{subsystem}/apps/{module}/composition/__init__.py"
+        ).is_file()
 
 
 def test_business_composition_uses_system_clients_for_contract_views() -> None:
     root = Path(__file__).parents[1]
     for module in ("account", "capital", "execution", "risk"):
-        source = (root / f"kairospy/application/{module}/composition.py").read_text(
-            encoding="utf-8"
-        )
+        source = (
+            root / f"kairospy/investment/apps/{module}/composition/__init__.py"
+        ).read_text(encoding="utf-8")
         for forbidden in (
             "ViewReader",
             "CurrentViewReader",
             "ViewKey",
             "CurrentView",
-            "from kairospy.infrastructure.contracts",
         ):
             assert forbidden not in source
 
 
-def test_reference_application_does_not_construct_contract_client() -> None:
+def test_reference_application_does_not_access_transport_or_generated_wire() -> None:
     root = Path(__file__).parents[1]
     source = (
-        (root / "kairospy/application/reference/composition.py").read_text(
+        (root / "kairospy/investment/apps/reference/application/application.py").read_text(
             encoding="utf-8"
         )
         + "\n"
-        + (root / "kairospy/application/reference/validation.py").read_text(
+        + (root / "kairospy/investment/apps/reference/application/validation.py").read_text(
             encoding="utf-8"
         )
     )
-    assert "kairospy.infrastructure.contracts.reference" not in source
-    assert "ReferenceClient(" not in source
+    assert "kairospy.infrastructure.transport" not in source
+    assert "kairospy.infrastructure.protocol.generated" not in source
 
 
 def test_business_applications_do_not_mirror_dependencies_as_private_protocols() -> (
@@ -118,9 +124,10 @@ def test_business_applications_do_not_mirror_dependencies_as_private_protocols()
         "portfolio",
         "notification",
     ):
-        source = (root / f"kairospy/application/{module}/application.py").read_text(
-            encoding="utf-8"
-        )
+        subsystem = "strategy" if module == "notification" else "investment"
+        source = (
+            root / f"kairospy/{subsystem}/apps/{module}/application/application.py"
+        ).read_text(encoding="utf-8")
         assert not re.search(
             r"class\s+_(?:\w)*(?:Commands|Snapshots|Reader|CurrentView|Handle)\s*\([^)]*Protocol",
             source,

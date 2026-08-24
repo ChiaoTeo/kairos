@@ -9,7 +9,7 @@ from kairospy.infrastructure.contracts.execution import (
     decode_event,
     decode_view,
 )
-from kairospy.infrastructure.transport.execution import decode_execution_event
+from kairospy.infrastructure.contracts.execution.source import decode_execution_event
 
 
 def test_execution_view_key_matches_rust_contract_path() -> None:
@@ -44,10 +44,10 @@ def test_execution_root_decoders_reject_unknown_identifiers() -> None:
 
 
 def test_execution_event_decoder_returns_generated_v2_root() -> None:
-    from kairospy.infrastructure.transport.generated.kairos.common.v2 import (
+    from kairospy.infrastructure.protocol.generated.kairos.common.v2 import (
         EventMetadata,
     )
-    from kairospy.infrastructure.transport.generated.kairos.execution.v2 import (
+    from kairospy.infrastructure.protocol.generated.kairos.execution.v2 import (
         IntentAccepted,
     )
 
@@ -81,10 +81,10 @@ def test_execution_event_decoder_returns_generated_v2_root() -> None:
 
 
 def test_intent_lifecycle_changed_is_strategy_scoped_and_decision_correlated() -> None:
-    from kairospy.infrastructure.transport.generated.kairos.common.v2 import (
+    from kairospy.infrastructure.protocol.generated.kairos.common.v2 import (
         EventMetadata,
     )
-    from kairospy.infrastructure.transport.generated.kairos.execution.v2 import (
+    from kairospy.infrastructure.protocol.generated.kairos.execution.v2 import (
         ExecutionIntent,
         IntentLeg,
         IntentLifecycleChanged,

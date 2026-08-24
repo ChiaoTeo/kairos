@@ -6,12 +6,12 @@ from typing import Callable, Mapping, cast
 
 import pytest
 
-from kairospy.application.agent.services.tools import (
+from kairospy.strategy.apps.agent.services.tools import (
     AgentToolScope,
     _optional_mcp_error,
     build_mcp_servers,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 class Server:
@@ -57,7 +57,7 @@ def _sdk(monkeypatch):
         MCPServerStreamableHttp=Server,
     )
     monkeypatch.setattr(
-        "kairospy.application.agent.services.tools.importlib.import_module",
+        "kairospy.strategy.apps.agent.services.tools.importlib.import_module",
         lambda name: sdk,
     )
 

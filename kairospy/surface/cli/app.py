@@ -29,9 +29,8 @@ from .commands.root import (
     project_app,
     system_app,
 )
-from .interactive import run_interactive
-from kairospy.application.workspace import WorkspaceApplication
-from kairospy.application.system import ComponentProcessApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.system.apps.components.application import ComponentProcessApplication
 from kairospy.surface.console.data import SystemObserveReader
 from kairospy.surface.console.models import recommended_action
 from kairospy.surface.workbench import KairosWorkbenchApp, load_workbench_state
@@ -124,7 +123,7 @@ app = typer.Typer(
     ),
     epilog=(
         "[dim]New to Kairos? Run [bold]kairos quickstart[/bold]. "
-        "For a guided menu, run [bold]kairos interactive[/bold].[/dim]"
+        "Open the unified workbench with [bold]kairos interactive[/bold].[/dim]"
     ),
 )
 app.add_typer(
@@ -278,7 +277,7 @@ def observe(
         False, "--once", help="Print one JSON observation and exit"
     ),
 ) -> None:
-    """Open the project, launch, runtime, and market observation console."""
+    """在统一工作台中观测项目；--once 输出一次 JSON。"""
     if once:
         import json
 
@@ -316,25 +315,23 @@ def _interactive_command(
     no_exec: bool,
     yes: bool,
 ) -> None:
-    code = run_interactive(
-        workspace=Path(workspace) if workspace is not None else None,
+    state = load_workbench_state(
+        Path(workspace) if workspace is not None else None,
         dry_run=dry_run,
         no_exec=no_exec,
         yes=yes,
-        execute=lambda argv: execute_argv(argv, sys.stdout),
     )
-    if code:
-        raise typer.Exit(code)
+    KairosWorkbenchApp(state).run()
 
 
 @app.command("interactive", rich_help_panel="Getting started")
 def interactive(
     workspace: str | None = typer.Option(None, "--workspace"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="只展示选中的动作，不执行。"),
-    no_exec: bool = typer.Option(False, "--no-exec", help="只展示选中的动作，不执行。"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="预览变更和外部动作，不执行。"),
+    no_exec: bool = typer.Option(False, "--no-exec", help="不执行变更和外部动作。"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认提示。"),
 ) -> None:
-    """打开 Kairos 交互式操作入口（引导式菜单）。"""
+    """打开统一的 Kairos Textual 工作台。"""
     _interactive_command(workspace, dry_run, no_exec, yes)
 
 
@@ -347,12 +344,6 @@ def interactive_short(
 ) -> None:
     """Short alias for ``interactive``."""
     _interactive_command(workspace, dry_run, no_exec, yes)
-
-
-@app.command("tui", hidden=True)
-def tui(workspace: str | None = typer.Option(None, "--workspace")) -> None:
-    """Compatibility alias for ``observe``."""
-    observe(workspace=workspace)
 
 
 @app.command("browse", rich_help_panel="Advanced tools")

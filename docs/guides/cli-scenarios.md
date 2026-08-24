@@ -228,8 +228,8 @@ format = "json"
 
 ## 交互式 CLI 方向
 
-场景分线解决的是“命令怎么排列”，但仍要求用户知道自己应该敲命令。KairosPy 可以增加
-一个交互式入口，把用户从“记命令”带到“选择我要完成的事”。
+场景分线解决的是“命令怎么排列”，但仍要求用户知道自己应该敲命令。KairosPy 使用
+统一交互式入口，把用户从“记命令”带到“选择我要完成的事”。
 
 推荐形态：
 
@@ -243,86 +243,45 @@ kairos interactive
 kairos i
 ```
 
-持续交互 shell 的根部按产品任务区分市场目录与运行中行情；Reference 只在
-`system/reference` 运维路径中作为组件名出现：
+两个入口打开同一个 Textual 工作台。首页按用户任务组织：
 
 ```text
-1. 市场行情
-2. 市场目录
-3. 策略运行
-4. 交易管理
-5. 数据与研究
-6. 系统与配置
-?. 帮助（随时可用）
+1. 查看市场行情
+2. 查找市场标的
+3. 配置并运行策略
+4. 管理运行资源
+5. 准备数据研究
+6. 维护系统
 ```
 
-`市场目录` 使用 Reference 完成资产、市场参与方和交易品种的分类检索；`行情` 使用
-workspace Market component 读取 quote、bar、greeks 和 freshness。两者不能合并为同一个
-Reference 菜单。
+“查找市场标的”使用 Reference 完成资产、交易所、交易品种、具体市场与期权链检索；
+“查看市场行情”同时提供 Provider 直读、Workspace Market 和 Launch Instance Market 三种
+明确作用域。
 
-`策略运行` 是独立的顶级工作流，包含运行列表与控制、运行观测和运行诊断。
-`交易管理` 分为账户与订单、风险管理和资金管理。`系统与配置` 包含项目工作区、
-系统服务、通知、高级配置和系统诊断。
-帮助不占业务序号，在任意层级通过 `?` 或 `help` 打开；完整场景地图仍可通过 `map`
-进入。
+Header 始终显示 Workspace；页面栈保存当前 Launch、Instance、账户、Market 或 Reference
+选择；Footer 只显示当前页面有效的返回、刷新、帮助和取消操作。`?` 打开上下文帮助，
+`Ctrl+P` 打开命令面板，不再提供需要记忆的 shell path、`home/back` 命令或第二套命令地图。
 
-Reference 在 interactive shell 中是可逐层浏览的市场目录。集合检索最多展示 10 条精简
-候选，选中以后才展示纵向详情；canonical ID 等实现标识只在“技术标识”动作中出现：
-
-```text
-/reference
-  /assets
-  /exchanges
-  /instruments/equities
-  /instruments/spot
-  /instruments/perpetuals
-  /instruments/futures
-  /instruments/options
-  /instruments/indices
-  /markets
-```
+Reference 页面以表格显示检索候选，选中后进入详情；canonical ID 等实现标识只在
+“技术标识”动作中出现。
 
 用户在交易品种目录中先选择股票、现货、永续合约、交割合约、期权或指数，再输入代码或
 名称并选择结果。交易所详情可以继续查看其上市信息；交易品种详情可以继续查看 listing 和
 具体 market。Reference 的 generation、provider 和 publication 状态仍只出现在
-`/system/reference` 运维路径。
+系统服务页面。
 
 交易所、券商和数据提供商数量较少，进入对应目录后直接列出并允许选择详情，不额外要求
 用户先输入检索条件。资产、交易品种和具体市场仍采用“检索后选择”的流程。
 
-交互式入口不应该成为第二套业务 API。它只做三件事：
+交互式入口不是第二套业务 API。它只做三件事：
 
 1. 读取当前 workspace 状态。
 2. 根据场景给出可选动作。
-3. 展示将要执行的普通 CLI 命令，用户确认后调用现有命令。
+3. 收集输入并直接调用所属 application/contract，在统一页面中展示结果。
 
-这能保证普通 CLI、脚本、CI 和交互式入口最终走同一条应用路径。
+普通 CLI、脚本、CI 和交互式入口因此共享应用路径，但不共享终端输出解析。
 
-### 首页菜单
-
-首页菜单应该按用户问题排列，而不是按模块排列：
-
-```text
-What do you want to do?
-
-1. Start from scratch
-2. Run or inspect a strategy
-3. Operate the runtime system
-4. Check account, market, order, or trading-instrument data
-5. Work with data and research
-6. Diagnose what is wrong
-7. Open observe console
-8. Show the command map
-```
-
-每个选项进入下一层时，都应该先展示当前 workspace 摘要：
-
-```text
-Workspace: my-project
-Launches: demo-backtest stopped, btc-sma running
-System: market running, reference stopped
-Next suggested action: kairos launch status btc-sma
-```
+Observe、Launch 编辑与跟随输出、资源配置也都打开这一个 App，不会切换到另一套视觉或输入模型。
 
 ### 新用户路径
 

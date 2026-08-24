@@ -31,7 +31,7 @@ def decode_event(payload: bytes) -> Any:
         if len(payload) < 8 or payload[4:8] != identifier:
             continue
         module = __import__(
-            f"kairospy.infrastructure.transport.generated.kairos.market.v2.{root_name}",
+            f"kairospy.infrastructure.protocol.generated.kairos.market.v2.{root_name}",
             fromlist=[root_name],
         )
         return getattr(module, root_name).GetRootAs(payload, 0)

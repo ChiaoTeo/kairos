@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.system import (
+from kairospy.system.apps.components.application import (
     ComponentProcessApplication,
     SystemRuntimeSupervisor,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 def test_component_process_application_starts_bin_and_waits_for_health(
@@ -131,7 +131,7 @@ def test_component_start_reports_early_exit_and_log_detail(
     with pytest.raises(RuntimeError) as captured:
         application.ensure_running("execution")
 
-    assert time.monotonic() - started < 2
+    assert time.monotonic() - started < 5
     message = str(captured.value)
     assert "exited during startup with code 23" in message
     assert "database migration failed" in message

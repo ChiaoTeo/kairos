@@ -12,15 +12,16 @@ from textual.screen import Screen
 from textual.widgets import Button, Checkbox, Footer, Input, Label, Select
 from textual.worker import Worker
 
-from kairospy.application.account import AccountConfigurationApplication
-from kairospy.application.agent import AgentResourceApplication
-from kairospy.application.workspace.credentials import (
+from kairospy.investment.apps.account.application import AccountConfigurationApplication
+from kairospy.strategy.apps.agent.application import AgentResourceApplication
+from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     SecretRef,
 )
-from kairospy.application.notification import NotificationAdminApplication
-from kairospy.application.reference import ReferenceProviderConfigurationApplication
+from kairospy.strategy.apps.notification.application import NotificationAdminApplication
+from kairospy.investment.apps.reference.application import ReferenceProviderConfigurationApplication
 
+from ..dialogs import ConfirmDialog
 from ..widgets import WorkspaceHeader
 
 
@@ -199,6 +200,25 @@ class ResourceSetupScreen(Screen[dict[str, Any] | None]):
         if event.button.id == "cancel":
             self.action_cancel()
             return
+        state = self.app.state  # type: ignore[attr-defined]
+        if state.dry_run or state.no_exec:
+            self.query_one("#resource-form-error", Label).update(
+                f"预览：保存{_label(self.kind)}；密钥不会显示或写入"
+            )
+            return
+        if not state.yes:
+            self.app.push_screen(
+                ConfirmDialog(
+                    f"保存{_label(self.kind)}",
+                    "配置将写入当前 Workspace；安全凭据不会出现在结果中。",
+                    confirm_label="保存",
+                ),
+                lambda confirmed: self._submit() if confirmed else None,
+            )
+            return
+        self._submit()
+
+    def _submit(self) -> None:
         self.query_one("#resource-form-error", Label).update("正在安全保存配置…")
         self.query_one("#save", Button).disabled = True
         self.run_worker(
@@ -209,6 +229,10 @@ class ResourceSetupScreen(Screen[dict[str, Any] | None]):
             exclusive=True,
             exit_on_error=False,
         )
+
+    def on_mount(self) -> None:
+        if self.record:
+            self.query_one("#resource-id", Input).disabled = True
 
     def _save(self) -> dict[str, Any]:
         if self.kind == "accounts":
@@ -247,6 +271,8 @@ class ResourceSetupScreen(Screen[dict[str, Any] | None]):
         }
         if provider == "okx":
             values["passphrase"] = self._input("secret-tertiary")
+        if any(values.values()) and not all(values.values()):
+            raise ValueError("更新实盘凭据时必须填写完整的认证字段")
         if all(values.values()):
             CredentialConfigurationApplication(owner).configure_secret_values(
                 credential_id,

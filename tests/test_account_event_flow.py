@@ -6,8 +6,8 @@ from dataclasses import replace
 import flatbuffers
 import pytest
 
-from kairospy.application.account.application import AccountApplication
-from kairospy.application.account.events import (
+from kairospy.investment.apps.account.application.application import AccountApplication
+from kairospy.investment.apps.account.application.events import (
     AccountChangeRecord,
     AccountEventRecord,
     AccountStatusChangedEvent,
@@ -15,14 +15,14 @@ from kairospy.application.account.events import (
     EquityChangedEvent,
 )
 from kairospy.primitives.account import AccountId
-from kairospy.infrastructure.transport.account import decode_account_event
-from kairospy.infrastructure.transport.generated.kairos.account.v2 import (
+from kairospy.infrastructure.contracts.account.source import decode_account_event
+from kairospy.infrastructure.protocol.generated.kairos.account.v2 import (
     AccountFactProvenance,
     AccountStatus,
     AccountStatusChanged,
     FreshnessState,
 )
-from kairospy.infrastructure.transport.generated.kairos.common.v2 import EventMetadata
+from kairospy.infrastructure.protocol.generated.kairos.common.v2 import EventMetadata
 
 
 def _status_event_payload() -> bytes:

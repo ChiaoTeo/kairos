@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.capital import (
+from kairospy.investment.apps.capital.application import (
     CapitalApplication,
     CapitalAlertKind,
     CapitalAlertSeverity,
@@ -26,6 +26,7 @@ from kairospy.infrastructure.contracts.capital.view import (
     _recovery_alert,
     decode_view,
 )
+from kairospy.investment.apps.capital.application.mapping import map_capital_alert
 
 
 def _objective(account: str = "account-a") -> FundingObjective:
@@ -77,14 +78,14 @@ def test_strategy_cannot_publish_an_objective_outside_its_group() -> None:
 
 def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
     class Commands:
-        def publish_funding_objective(self, objective, **identity):
-            assert objective == _objective()
-            assert identity["capital_group_id"] == "group-a"
-            assert identity["strategy_id"] == "basis"
-            assert not hasattr(objective, "source")
+        def publish_funding_objective_request(self, request):
+            assert request["objective_id"] == _objective().objective_id
+            assert request["capital_group_id"] == "group-a"
+            assert request["strategy_id"] == "basis"
+            assert "source" not in request
             return FundingObjectiveReceipt(
-                objective.objective_id,
-                objective.version,
+                str(request["objective_id"]),
+                int(request["version"]),
                 FundingObjectiveStatus.ACCEPTED,
             )
 
@@ -118,14 +119,14 @@ def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
 
 
 def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -> None:
-    captured: list[FundingObjective] = []
+    captured: list[dict[str, object]] = []
 
     class Commands:
-        def publish_funding_objective(self, objective, **_identity):
-            captured.append(objective)
+        def publish_funding_objective_request(self, request):
+            captured.append(request)
             return FundingObjectiveReceipt(
-                objective.objective_id,
-                objective.version,
+                str(request["objective_id"]),
+                int(request["version"]),
                 FundingObjectiveStatus.ACCEPTED,
             )
 
@@ -157,12 +158,12 @@ def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -
 
     assert receipt.status is FundingObjectiveStatus.ACCEPTED
     assert forecast.source is FundingForecastSource.HISTORICAL_PEAK
-    assert captured[0].desired_available == Decimal("90")
-    assert captured[0].observed_at == observed_at
-    assert captured[0].strategy_decision_id == (
+    assert captured[0]["desired_available"] == "90"
+    assert captured[0]["observed_at_unix_nanos"] == int(observed_at.timestamp() * 1_000_000_000)
+    assert captured[0]["strategy_decision_id"] == (
         "forecast:historical_peak:session-usdt-peak:3"
     )
-    assert not hasattr(captured[0], "source_account")
+    assert "source_account" not in captured[0]
 
 
 def test_availability_transport_failure_degrades_without_blocking_strategy() -> None:
@@ -201,12 +202,12 @@ def test_funding_objective_requires_a_bounded_time_window() -> None:
 
 
 def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
-    observed: list[tuple[CapitalDemand, dict[str, object]]] = []
+    observed: list[dict[str, object]] = []
 
     class Commands:
-        def observe_capital_demand(self, demand, **identity):
-            observed.append((demand, identity))
-            return {"demand_id": demand.demand_id, "status": "accepted"}
+        def observe_capital_demand_request(self, request):
+            observed.append(request)
+            return {"demand_id": request["demand_id"], "status": "accepted"}
 
     now = datetime(2026, 8, 19, tzinfo=timezone.utc)
     demand = CapitalDemand(
@@ -236,9 +237,9 @@ def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
     receipt = capital.observe_demand(demand)
 
     assert receipt.status is FundingObjectiveStatus.ACCEPTED
-    assert observed[0][0] == demand
-    assert observed[0][1]["capital_group_id"] == "group-a"
-    assert not hasattr(demand, "source")
+    assert observed[0]["demand_id"] == demand.demand_id
+    assert observed[0]["capital_group_id"] == "group-a"
+    assert "source" not in observed[0]
 
     stale = CapitalApplication(
         Commands(),
@@ -297,7 +298,7 @@ def test_capital_recovery_alert_decoder_preserves_operator_evidence() -> None:
         def OpenedAtUnixNanos(self):
             return 1_787_200_000_000_000_000
 
-    alert = _recovery_alert(Row())
+    alert = map_capital_alert(_recovery_alert(Row()))
 
     assert alert.plan_id == "plan-a"
     assert alert.operation_id == "operation-a"

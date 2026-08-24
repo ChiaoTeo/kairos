@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from kairospy.application.system.process_logging import (
+from kairospy.system.apps.components.application.process_logging import (
     current_run_id,
     filter_log_lines,
     parse_since,

@@ -7,8 +7,8 @@ import subprocess
 import sys
 
 from kairospy import Kairos, ResearchPeriod, ResearchSpec
-from kairospy.application.data import DatasetSetRef
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.research.apps.data.application import DatasetSetRef
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 
 
@@ -100,7 +100,7 @@ def test_research_cli_does_not_import_strategy_runtime(tmp_path: Path) -> None:
         f"code=execute_argv(['research','plan','lock',{str(plan_path)!r},"
         f"'--workspace',{str(project)!r},'--output','json'],out); "
         "assert code == 0, out.getvalue(); "
-        "assert 'kairospy.application.strategy' not in sys.modules"
+        "assert 'kairospy.strategy.apps.runtime.application' not in sys.modules"
     )
 
     result = subprocess.run(

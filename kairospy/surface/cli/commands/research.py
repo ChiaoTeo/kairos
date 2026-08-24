@@ -11,8 +11,8 @@ import click
 import typer
 from typer.main import get_command
 
-from kairospy.application.research import ResearchApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.research.apps.experiments.application import ResearchApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.research import ResearchSpec
 from kairospy.surface.cli.options import OutputFormat, render
 

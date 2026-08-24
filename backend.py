@@ -6,6 +6,7 @@ import base64
 import hashlib
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -144,6 +145,10 @@ def _rewrite_wheel(wheel: Path, binaries: Path) -> None:
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+    # setuptools reuses ``build/lib.*`` across invocations. After a package
+    # layout migration that can silently put deleted modules back into a
+    # wheel, so a release build must always begin from a clean staging tree.
+    shutil.rmtree(ROOT / "build", ignore_errors=True)
     with tempfile.TemporaryDirectory(prefix="kairospy-native-") as temporary:
         binaries = Path(temporary)
         _build_binaries(binaries)

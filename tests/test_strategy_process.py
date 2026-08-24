@@ -7,12 +7,12 @@ import json
 from pathlib import Path
 import pytest
 
-from kairospy.application.launch import StrategyProcessController
-from kairospy.application.strategy.composition import compose_strategy_process
-from kairospy.application.launch import LaunchControlApplication
-from kairospy.application.launch.composition import release_strategy_market_owner
-from kairospy.application.system import UnixRestClient
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.launch import StrategyProcessController
+from kairospy.system.apps.launch.composition import compose_strategy_process
+from kairospy.system.apps.launch import LaunchControlApplication
+from kairospy.system.apps.launch.composition import release_strategy_market_owner
+from kairospy.system.apps.components.application import UnixRestClient
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.strategy import StrategyCommand
 from kairospy.strategy import CommandResult
 
@@ -114,7 +114,7 @@ def test_launch_cleanup_releases_subscriptions_for_dead_strategy_process(
             )
 
     monkeypatch.setattr(
-        "kairospy.application.market.composition.MarketCommandClient",
+        "kairospy.investment.apps.market.composition.MarketCommandClient",
         lambda client, launch_id=None: Port(),
     )
     result = release_strategy_market_owner(workspace, instance)
@@ -136,7 +136,7 @@ def test_launch_status_includes_registered_state_when_instance_is_not_running(
         tmp_path / "workspace", workspace_id="sp-registry"
     )
     application = LaunchControlApplication(workspace)
-    from kairospy.application.launch import LaunchRegistryApplication
+    from kairospy.system.apps.launch import LaunchRegistryApplication
 
     LaunchRegistryApplication(workspace).add(
         "launch", instance_id="instance", strategy_ref="user:Strategy"

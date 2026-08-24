@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.agent import AgentResourceApplication
-from kairospy.application.workspace.credentials import SecretRef
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.strategy.apps.agent.application import AgentResourceApplication
+from kairospy.system.apps.credentials.application import SecretRef
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 def test_openai_connection_requires_secret_ref_and_records_manual_test(

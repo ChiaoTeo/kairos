@@ -4,7 +4,7 @@ import sys
 import time
 from pathlib import Path
 
-from kairospy.application.system import (
+from kairospy.system.apps.components.application import (
     ProcessSpec,
     ProcessState,
     ProcessSupervisor,
@@ -12,7 +12,7 @@ from kairospy.application.system import (
     RiskProcessConfig,
     UnixRestClient,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 def test_reference_process_config_builds_business_process_spec(tmp_path: Path) -> None:

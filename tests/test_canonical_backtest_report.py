@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from kairospy import DatasetRef, DatasetSetRef
-from kairospy.application.launch.application import (
+from kairospy.system.apps.launch.application import (
     BacktestCorrelationTrace,
     BacktestReportContext,
     CanonicalBacktestReportApplication,

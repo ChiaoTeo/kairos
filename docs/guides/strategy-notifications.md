@@ -7,7 +7,7 @@ Kairos Strategy 可以通过 `ctx.notifications` 发布逻辑通知。策略只�
 
 ## 交互式配置
 
-推荐运行 `kairos i`，进入“系统与配置 → 通知”。该向导会：
+推荐运行 `kairos i`，进入“管理运行资源 → 通知提醒”。该页面会：
 
 1. 显示现有 Destination、Credential 和 SecretRef 可用状态；
 2. 分渠道引导配置飞书自定义机器人或 Telegram Bot；

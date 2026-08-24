@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.account import (
+from kairospy.investment.apps.account.application import (
     AccountApplication,
     AccountSegmentSnapshot,
     AccountSnapshot,
@@ -22,13 +22,13 @@ from kairospy.application.account import (
     SPOT,
     USD_M_FUTURES,
 )
-from kairospy.application.market import ObservationScope, Quote, QuoteEvent
-from kairospy.application.portfolio import (
+from kairospy.investment.apps.market.application import ObservationScope, Quote, QuoteEvent
+from kairospy.investment.apps.portfolio.application import (
     PortfolioApplication,
     PortfolioFreshness,
 )
-from kairospy.application.reference import InstrumentRef
-from kairospy.application.events import EventMetadata
+from kairospy.investment.apps.reference.application import InstrumentRef
+from kairospy.investment.application.eventing import EventMetadata
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.reference import InstrumentId, MarketId
 

@@ -4,7 +4,7 @@ from decimal import Decimal
 import hashlib
 import json
 
-from kairospy.application.execution import IntentAdmissionEvidence
+from kairospy.investment.apps.execution.application import IntentAdmissionEvidence
 
 from kairospy.strategy import (
     ArbitrageLegRequest,
@@ -24,7 +24,7 @@ from kairospy.strategy import (
     ReplaceOrderRequest,
     TimeInForce,
 )
-from kairospy.application.market import (
+from kairospy.investment.apps.market.application import (
     CanonicalMarketTarget,
     ObservationRequirement,
     OptionsTarget,
@@ -32,10 +32,10 @@ from kairospy.application.market import (
     ProviderPreference,
     SubscriptionRequest as MarketSubscriptionRequest,
 )
-from kairospy.infrastructure.transport import (
+from kairospy.investment.apps.execution.application.commands import (
     ExecutionCommandClient,
-    MarketCommandClient,
 )
+from kairospy.investment.apps.market.application.commands import MarketCommandClient
 from kairospy.infrastructure.contracts.execution import ExecutionControlClient
 from kairospy.infrastructure.contracts.market import MarketControlClient
 
@@ -134,14 +134,14 @@ def test_market_port_preserves_explicit_provider_preference() -> None:
     }
 
 
-def test_market_port_queries_available_data_sources() -> None:
+def test_market_port_queries_available_data_routes() -> None:
     client = RecordingClient()
     port = MarketCommandClient(client)
 
-    port.data_sources({"market_id": "market:sip:equity:US:AAPL"})
+    port.data_routes({"market_id": "market:sip:equity:US:AAPL"})
 
     assert client.calls[0] == (
-        "market_data_sources",
+        "market_data_routes",
         [{"market_id": "market:sip:equity:US:AAPL"}],
     )
 

@@ -10,9 +10,8 @@ from kairospy.surface.console.models import (
     launch_rows,
     recommended_action,
 )
-from kairospy.surface.console import ObserveApp
-from kairospy.application.workspace import WorkspaceApplication
-from kairospy.application.launch.application import LaunchRegistryApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.system.apps.launch.application import LaunchRegistryApplication
 
 
 def test_observe_snapshot_aggregates_component_health_and_freshness() -> None:
@@ -84,7 +83,7 @@ def test_observe_command_is_registered() -> None:
     output = StringIO()
 
     assert execute_argv(["observe", "--help"], output) == 0
-    assert "project, launch, runtime, and market" in output.getvalue()
+    assert "Usage: kairospy observe" in output.getvalue()
     assert "--once" in output.getvalue()
 
 
@@ -114,21 +113,3 @@ def test_observe_once_emits_machine_readable_component_inventory(tmp_path) -> No
     assert value["launches"][0]["state"] == "completed"
     assert value["next_action"] == "kairos launch report demo-backtest"
     assert value["market_snapshot"] is None
-
-
-def test_observe_app_refreshes_in_headless_textual_session() -> None:
-    import asyncio
-
-    class Reader:
-        def read(self):
-            return ObserveSnapshot("demo", {"market": {"status": "ready"}})
-
-    async def run() -> str:
-        async with ObserveApp(Reader(), refresh_seconds=60).run_test() as pilot:
-            await pilot.pause(0.1)
-            summary = str(pilot.app.query_one("#summary").render())
-            status = str(pilot.app.query_one("#status").render())
-            return summary + status
-
-    assert "demo" in asyncio.run(run())
-    assert "kairos project doctor" in asyncio.run(run())

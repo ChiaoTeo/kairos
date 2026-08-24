@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairospy.application.agent.model_connections import (
+from kairospy.strategy.apps.agent.application.model_connections import (
     ModelProviderConnectionApplication,
 )
-from kairospy.application.workspace.credentials import (
+from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     SecretRef,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 def test_hosted_provider_separates_connection_credential_and_model(

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.launch.application import LaunchRegistryApplication
-from kairospy.application.system import NativeCliApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.launch.application import LaunchRegistryApplication
+from kairospy.system.apps.components.application import NativeCliApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 
 

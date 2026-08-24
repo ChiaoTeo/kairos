@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from kairospy.application.agent import (
+from kairospy.strategy.apps.agent.application import (
     AgentApplication,
     DecisionKind,
     DecisionResult,
@@ -15,8 +15,8 @@ from kairospy.application.agent import (
     TightenSplitPolicy,
     TightenLimitPrice,
 )
-from kairospy.application.agent.policy import DecisionPolicy
-from kairospy.application.execution import (
+from kairospy.strategy.apps.agent.application.policy import DecisionPolicy
+from kairospy.investment.apps.execution.application import (
     ArbitrageLegRequest,
     OptionSpreadLegRequest,
     OptionSpreadRequest,

@@ -7,8 +7,8 @@ from typing import Sequence
 
 import typer
 
-from kairospy.application.system import NativeCliApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.components.application import NativeCliApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 HELP = """`kairos capital` runs standalone Capital tools.

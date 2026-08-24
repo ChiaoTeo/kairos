@@ -10,14 +10,14 @@ import threading
 
 import pytest
 
-from kairospy.application.data import (
+from kairospy.research.apps.data.application import (
     DataRequirement,
     DatasetCatalogApplication,
     DatasetReaderApplication,
     DatasetSetRef,
     OptionMarketDataTarget,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy import DataUnavailableError, Kairos
 
 
@@ -59,7 +59,7 @@ def test_data_public_surface_does_not_eagerly_load_strategy_runtime() -> None:
             "-c",
             (
                 "import sys; from kairospy import Kairos; "
-                "assert 'kairospy.application.strategy' not in sys.modules; "
+                "assert 'kairospy.strategy.apps.runtime.application' not in sys.modules; "
                 "assert Kairos.__name__ == 'Kairos'"
             ),
         ],
@@ -930,7 +930,7 @@ def test_reviewed_massive_plan_executes_through_market_application_and_publishes
         )
         return {"event_count": 1, "provider": "massive"}
 
-    monkeypatch.setattr("kairospy.application.market.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
 
     plan = asyncio.run(kairos.data.plan((requirement,)))
     dataset_set = asyncio.run(kairos.data.execute(plan))
@@ -972,7 +972,7 @@ def test_market_acquisition_does_not_publish_empty_validated_coverage(
         target.write_text("", encoding="utf-8")
         return {"event_count": 0, "provider": "massive"}
 
-    monkeypatch.setattr("kairospy.application.market.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
     plan = asyncio.run(kairos.data.plan((requirement,)))
 
     with pytest.raises(ValueError, match="returned no facts"):
@@ -1035,7 +1035,7 @@ def test_failed_acquisition_resumes_by_reusing_completed_steps(
         )
         return {"event_count": 1, "provider": "massive"}
 
-    monkeypatch.setattr("kairospy.application.market.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
     plan = asyncio.run(kairos.data.plan(requirements))
     with pytest.raises(RuntimeError, match="provider interruption"):
         asyncio.run(kairos.data.execute(plan))
@@ -1113,7 +1113,7 @@ def test_acquisition_uses_explicit_bounded_concurrency(
             with lock:
                 active -= 1
 
-    monkeypatch.setattr("kairospy.application.market.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
     plan = asyncio.run(kairos.data.plan(requirements))
 
     result = asyncio.run(kairos.data.execute(plan, max_concurrency=2))
@@ -1183,7 +1183,7 @@ def test_failed_concurrent_acquisition_reuses_successful_sibling_on_retry(
         )
         return {"event_count": 1, "provider": "massive"}
 
-    monkeypatch.setattr("kairospy.application.market.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
     plan = asyncio.run(kairos.data.plan(requirements))
 
     with pytest.raises(RuntimeError, match="temporary A failure"):
@@ -1272,7 +1272,7 @@ def test_reviewed_massive_reference_plan_publishes_point_in_time_snapshot(
         }
 
     monkeypatch.setattr(
-        "kairospy.application.reference.cli.ReferenceCliApplication.run", run
+        "kairospy.investment.apps.reference.application.cli.ReferenceCliApplication.run", run
     )
 
     plan = asyncio.run(kairos.data.plan((requirement,)))
@@ -1349,7 +1349,7 @@ def test_reviewed_massive_dividend_plan_uses_reference_data_path(
         return {"record_count": 1, "source": "massive"}
 
     monkeypatch.setattr(
-        "kairospy.application.reference.cli.ReferenceCliApplication.run", run
+        "kairospy.investment.apps.reference.application.cli.ReferenceCliApplication.run", run
     )
 
     plan = asyncio.run(kairos.data.plan((requirement,)))

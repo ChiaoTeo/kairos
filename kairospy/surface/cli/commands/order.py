@@ -8,9 +8,9 @@ from typing import Sequence
 
 import typer
 
-from kairospy.application.account.cli import AccountCliApplication
-from kairospy.application.system import NativeCliApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.investment.apps.account.application.cli import AccountCliApplication
+from kairospy.system.apps.components.application import NativeCliApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 HELP = """`kairos order` opens a short-lived direct connection to the selected account's provider.
@@ -145,8 +145,11 @@ def order_passthrough(ctx: typer.Context) -> None:
             f"目标：account={account_id} · provider={binding.get('provider', 'unknown')} · "
             "environment=live · scope=direct-provider"
         )
-        if not confirmed and not typer.confirm("确认直接操作 live provider 吗？", default=False):
-            raise typer.Abort()
+        if not confirmed:
+            raise typer.BadParameter(
+                "live provider write requires explicit --yes; "
+                "use `kairos interactive` for guided confirmation"
+            )
 
     result = NativeCliApplication(owner).invoke(
         "execution",

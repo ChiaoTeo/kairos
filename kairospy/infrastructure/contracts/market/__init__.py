@@ -1,25 +1,26 @@
-"""Python implementation of the Market v2 cross-process contract.
+"""Python adapters for the Market v2 cross-process contract."""
 
-Protocol payloads are returned as generated FlatBuffers objects.  This package
-does not duplicate the tables into application-facing dataclasses.
-"""
+from importlib import import_module
+from typing import Any
 
-from .control import MarketControlClient
-from .events import decode_event
-from .view import (
-    MarketViewFrame,
-    MarketViewKey,
-    MarketViewKind,
-    MarketViewReader,
-    decode_view,
-)
+_EXPORTS = {
+    "MarketControlClient": (".control", "MarketControlClient"),
+    "MarketViewFrame": (".view", "MarketViewFrame"),
+    "MarketViewKey": (".view", "MarketViewKey"),
+    "MarketViewKind": (".view", "MarketViewKind"),
+    "MarketViewReader": (".view", "MarketViewReader"),
+    "decode_event": (".events", "decode_event"),
+    "decode_view": (".view", "decode_view"),
+}
 
-__all__ = [
-    "MarketControlClient",
-    "MarketViewFrame",
-    "MarketViewKey",
-    "MarketViewKind",
-    "MarketViewReader",
-    "decode_event",
-    "decode_view",
-]
+
+def __getattr__(name: str) -> Any:
+    target = _EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    value = getattr(import_module(target[0], __name__), target[1])
+    globals()[name] = value
+    return value
+
+
+__all__ = list(_EXPORTS)

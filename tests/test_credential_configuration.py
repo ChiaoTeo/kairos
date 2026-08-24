@@ -4,11 +4,11 @@ import json
 from io import StringIO
 from pathlib import Path
 
-from kairospy.application.workspace.credentials import (
+from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     SecretRef,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 
 
@@ -141,87 +141,3 @@ def test_legacy_plaintext_is_readable_but_never_ready(tmp_path: Path) -> None:
     assert summary["legacy_plaintext"] is True
     assert summary["configured"] is False
     assert "old-secret" not in repr(summary)
-
-
-def test_credential_setup_requires_explicit_secret_ref_replacement_confirmation(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
-    application = CredentialConfigurationApplication(workspace)
-    application.configure(
-        "openai-main",
-        provider="openai",
-        fields={"api_key": SecretRef("env", "OPENAI_OLD")},
-    )
-    prompts = iter(("2", "OPENAI_REPLACEMENT"))
-    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: next(prompts))
-    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: False)
-    output = StringIO()
-
-    assert (
-        execute_argv(
-            [
-                "config",
-                "credential",
-                "setup",
-                "--provider",
-                "openai",
-                "--credential-id",
-                "openai-main",
-                "--workspace",
-                str(workspace.paths.root),
-                "--format",
-                "json",
-            ],
-            output,
-        )
-        == 0
-    )
-    assert json.loads(output.getvalue().splitlines()[-1])["status"] == "unchanged"
-    assert application.show("openai-main")["secret_refs"]["api_key"]["id"] == (
-        "OPENAI_OLD"
-    )
-
-
-def test_credential_setup_accepts_hidden_direct_secret_input(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
-    prompts = iter(("1", "sk-direct-input"))
-    prompt_options: list[dict[str, object]] = []
-
-    def prompt(*_args, **kwargs):
-        prompt_options.append(kwargs)
-        return next(prompts)
-
-    monkeypatch.setattr("typer.prompt", prompt)
-    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: True)
-    output = StringIO()
-
-    assert (
-        execute_argv(
-            [
-                "config",
-                "credential",
-                "setup",
-                "--provider",
-                "openai",
-                "--credential-id",
-                "openai-main",
-                "--workspace",
-                str(workspace.paths.root),
-                "--format",
-                "json",
-            ],
-            output,
-        )
-        == 0
-    )
-    assert "sk-direct-input" not in output.getvalue()
-    assert prompt_options[-1]["hide_input"] is True
-    assert (
-        CredentialConfigurationApplication(workspace).resolve_field(
-            "openai-main", "api_key"
-        )
-        == "sk-direct-input"
-    )

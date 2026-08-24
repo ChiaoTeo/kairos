@@ -52,7 +52,7 @@ class ReferenceControlClient:
     def call(
         self,
         method: str,
-        params: list[object] | Mapping[str, object] | None = None,
+        params: list[object] | None = None,
     ) -> Mapping[str, Any]:
         return self._client.call(method, params)
 

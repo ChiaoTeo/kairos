@@ -689,7 +689,7 @@ Risk/Capital 的预留判断标准：
 
 | 当前命令 | 用户短路径 | 所属层 | 当前定位和处理 |
 | --- | --- | --- | --- |
-| `observe` / `interactive` / `tui` | 是 | 聚合层 | 只读或交互式聚合视图；不能写 owner state。 |
+| `interactive` / `i`、`observe` | 是 | 聚合层 | 人工操作进入同一个 Textual 工作台；`observe --once` 保留机器输出。 |
 | `launch start/status/wait/report/stop/logs/artifacts/instances` | 是 | 工作流层 | 管一次策略运行；可以聚合组件状态，但组件事实写入走 owner component。 |
 | `launch strategy status/decision/...` | 是 | launch-scoped workflow | 策略层状态/动作，不应替代 Account/Market/Risk/Capital owner。 |
 | `launch instance component <name>` | 否 | launch-scoped connected | 对某个 instance 的组件 API 投影。 |
@@ -1437,9 +1437,9 @@ owner contract 或 owner application 产生，并由对应 current view / event 
 
 聚合命令应该按用户工作流命名，而不是按底层模块命名。优先入口包括：
 
-- `kairos interactive`
-- `kairos observe`
-- `kairos launch attach`
+- `kairos interactive`（短别名 `kairos i`）
+- `kairos observe`（交互模式复用 Workbench，`--once` 为机器输出）
+- `kairos launch attach`（复用 Workbench screen stack）
 - 未来可加入 `kairos trade`、`kairos transfer`、`kairos workflow` 等产品入口
 
 如果未来加入 `kairos trade` 或 `kairos transfer`，它们是聚合工作流入口，不是新的

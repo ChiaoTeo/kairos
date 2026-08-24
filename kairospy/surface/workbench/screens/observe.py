@@ -30,6 +30,7 @@ class ObserveScreen(Screen[None]):
     BINDINGS = [
         Binding("escape", "back", "返回"),
         Binding("r", "refresh", "刷新"),
+        Binding("d", "next_step", "打开建议"),
     ]
 
     def __init__(self, *, refresh_seconds: float = 2.0) -> None:
@@ -79,6 +80,37 @@ class ObserveScreen(Screen[None]):
             exit_on_error=False,
         )
 
+    def action_next_step(self) -> None:
+        """Open the owning workbench screen for the current recommendation."""
+
+        snapshot = self._last
+        if snapshot is None or snapshot.error or not snapshot.launches:
+            from .operations import ProjectScreen
+
+            self.app.push_screen(ProjectScreen())
+            return
+        latest = max(
+            enumerate(snapshot.launches),
+            key=lambda item: (
+                str(
+                    item[1].get("updated_at")
+                    or item[1].get("created_at")
+                    or ""
+                ),
+                item[0],
+            ),
+        )[1]
+        launch_id = str(latest.get("launch_id") or "").strip()
+        if not launch_id:
+            from .operations import ProjectScreen
+
+            self.app.push_screen(ProjectScreen())
+            return
+        from .strategy import LaunchDetailScreen
+
+        self.app.state.selected_launch = launch_id  # type: ignore[attr-defined]
+        self.app.push_screen(LaunchDetailScreen(dict(latest)))
+
     def _read(self) -> ObserveSnapshot | None:
         return self.app.state.refresh_snapshot()  # type: ignore[attr-defined,no-any-return]
 
@@ -90,9 +122,9 @@ class ObserveScreen(Screen[None]):
                 f"刷新失败：{event.worker.error}"
             )
         elif event.state.name == "SUCCESS" and event.worker.result is not None:
-            self._render(event.worker.result)
+            self._render_snapshot(event.worker.result)
 
-    def _render(self, snapshot: ObserveSnapshot) -> None:
+    def _render_snapshot(self, snapshot: ObserveSnapshot) -> None:
         self._last = snapshot
         rows = component_rows(snapshot)
         healthy = sum(row[1] in {"ok", "ready", "running"} for row in rows)

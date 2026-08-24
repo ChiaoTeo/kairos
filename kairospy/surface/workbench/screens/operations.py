@@ -12,12 +12,15 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Label, OptionList, RichLog
 from textual.worker import Worker
 
-from kairospy.application.config import (
+from kairospy.system.apps.configuration.application import (
     ConfigApplication,
     ConfigurationMigrationApplication,
 )
-from kairospy.application.system import ComponentProcessApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.launch.application import (
+    WorkspaceComponentDependencyApplication,
+)
+from kairospy.system.apps.components.application import ComponentProcessApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 from ..dialogs import ConfirmDialog, InputDialog, SelectDialog, SelectOption
 from ..widgets import ActionItem, ActionList, WorkspaceHeader
@@ -34,6 +37,7 @@ OPERATIONS_ACTIONS = (
     ActionItem("config", "高级配置", "路径、配置、Profile 与模型连接", "6"),
     ActionItem("migration", "配置升级", "查看旧格式配置及安全迁移要求", "7"),
     ActionItem("workspace", "Workspace 信息", "查看当前工作区路径和身份", "8"),
+    ActionItem("business", "业务工具", "Risk、Capital 与 Provider 集成", "9"),
 )
 
 
@@ -63,7 +67,14 @@ class OperationsScreen(Screen[None]):
             self.app.push_screen(ServicesScreen())
         elif action == "config":
             self.app.push_screen(AdvancedConfigScreen())
+        elif action == "business":
+            from .business_tools import BusinessToolsScreen
+
+            self.app.push_screen(BusinessToolsScreen())
         elif action == "repair":
+            if self.app.state.yes:  # type: ignore[attr-defined]
+                self._run(action)
+                return
             self.app.push_screen(
                 ConfirmDialog(
                     "修复 stale 运行资源",
@@ -165,6 +176,9 @@ class ProjectScreen(Screen[None]):
                 InputDialog("项目目录", placeholder="my-project"), self._set_init_root
             )
         elif action == "scaffold":
+            if self.app.state.yes:  # type: ignore[attr-defined]
+                self._run("scaffold")
+                return
             self.app.push_screen(
                 ConfirmDialog(
                     "安装 backtest 示例模板",
@@ -205,6 +219,9 @@ class ProjectScreen(Screen[None]):
         if template is None:
             return
         template_label = "backtest" if template == "backtest" else "不安装"
+        if self.app.state.yes:  # type: ignore[attr-defined]
+            self._run("init", template=template)
+            return
         self.app.push_screen(
             ConfirmDialog(
                 "创建 Kairos 项目",
@@ -417,11 +434,29 @@ class ProfileScreen(Screen[None]):
     def action_create(self) -> None:
         self.app.push_screen(
             InputDialog("新 Profile 名称", placeholder="paper"),
-            lambda value: self._mutate("create", value) if value else None,
+            self._confirm_create,
+        )
+
+    def _confirm_create(self, name: str | None) -> None:
+        if not name:
+            return
+        if self.app.state.yes:  # type: ignore[attr-defined]
+            self._mutate("create", name)
+            return
+        self.app.push_screen(
+            ConfirmDialog(
+                f"创建 Profile {name}",
+                "将在当前 Workspace 写入新的配置 Profile。",
+                confirm_label="创建",
+            ),
+            lambda confirmed: self._mutate("create", name) if confirmed else None,
         )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         name = str(event.row_key.value)
+        if self.app.state.yes:  # type: ignore[attr-defined]
+            self._mutate("use", name)
+            return
         self.app.push_screen(
             ConfirmDialog(
                 f"切换到 Profile {name}",
@@ -583,6 +618,9 @@ class ServiceDetailScreen(Screen[None]):
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         action = event.option.id
         if action in {"start", "stop", "restart"}:
+            if self.app.state.yes:  # type: ignore[attr-defined]
+                self._run(action)
+                return
             self.app.push_screen(
                 ConfirmDialog(
                     f"{action} {self.component}",
@@ -612,14 +650,21 @@ class ServiceDetailScreen(Screen[None]):
         )
 
     def _execute(self, action: str) -> Any:
-        app = ComponentProcessApplication(self.app.state.owner)  # type: ignore[attr-defined]
+        owner = self.app.state.owner  # type: ignore[attr-defined]
+        app = ComponentProcessApplication(owner)
         if action == "status":
             return app.status(self.component)
         if action == "start":
             return app.ensure_running(self.component).status()
         if action == "stop":
+            WorkspaceComponentDependencyApplication(owner).require_clear(
+                self.component, "stop"
+            )
             return app.stop(self.component)
         if action == "restart":
+            WorkspaceComponentDependencyApplication(owner).require_clear(
+                self.component, "restart"
+            )
             return app.restart(self.component).status()
         if action == "logs":
             return {

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.launch.application import (
+from kairospy.system.apps.launch.application import (
     BacktestSpec,
     LaunchConfigError,
     LaunchConfigurationApplication,
@@ -14,18 +14,16 @@ from kairospy.application.launch.application import (
     OptionBacktestConstraints,
 )
 from kairospy import Kairos
-from kairospy.application.data import DatasetRef, DatasetSetRef
-from kairospy.application.launch.application.wizard import (
+from kairospy.research.apps.data.application import DatasetRef, DatasetSetRef
+from kairospy.system.apps.launch.application.wizard import (
     LaunchDraft,
     build_and_validate,
     draft_preview,
     load_values,
-    prompt_agent_config,
-    prompt_notification_config,
 )
-from kairospy.application.workspace import WorkspaceApplication
-from kairospy.application.account import AccountConfigurationApplication
-from kairospy.application.workspace.credentials import (
+from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.investment.apps.account.application import AccountConfigurationApplication
+from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     SecretRef,
 )
@@ -33,9 +31,7 @@ from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch import (
     _launch_config_path,
     _live_start_confirmation,
-    _prompt_launch_draft,
 )
-from kairospy.application.launch.application.wizard import LaunchWizardExit
 from io import StringIO
 
 
@@ -151,106 +147,10 @@ def test_live_execution_requires_explicit_side_effect_and_notional_bound(
     assert LaunchConfigurationApplication().validate(path)["valid"] is True
 
 
-def test_launch_wizard_q_offers_persistent_draft_exit(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="q")
-    application = LaunchConfigurationApplication()
-    values = {"launch": {"id": "working", "mode": "paper", "strategy": "x:y"}}
-    application.save_draft(workspace.paths.root, "working", values)
-    monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.prompt_draft",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(LaunchWizardExit()),
-    )
-    monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.typer.prompt",
-        lambda *_args, **_kwargs: "1",
-    )
-
-    draft, status = _prompt_launch_draft(
-        values,
-        default_launch_id="working",
-        owner=workspace,
-        application=application,
-    )
-
-    assert draft is None
-    assert status == "draft_saved"
-    assert application.draft_path(workspace.paths.root, "working").is_file()
 
 
-def test_launch_wizard_atomically_persists_each_completed_step_before_q(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init(
-        tmp_path / "workspace", workspace_id="step-draft"
-    )
-    application = LaunchConfigurationApplication()
-    initial = {
-        "launch": {
-            "id": "working",
-            "mode": "paper",
-            "strategy": "builtin:interactive",
-        }
-    }
-    application.save_draft(workspace.paths.root, "working", initial)
-    answers = iter(["paper", "custom:Strategy", "2", "q", "1"])
-    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: next(answers))
-
-    draft, status = _prompt_launch_draft(
-        initial,
-        default_launch_id="working",
-        owner=workspace,
-        application=application,
-    )
-
-    persisted = application.load_draft(workspace.paths.root, "working")
-    assert draft is None
-    assert status == "draft_saved"
-    assert persisted["launch"] == {
-        "id": "working",
-        "mode": "paper",
-        "strategy": "custom:Strategy",
-    }
-    assert persisted["accounts"] == {}
 
 
-def test_launch_wizard_records_account_resource_return_without_changing_intent(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init(
-        tmp_path / "workspace", workspace_id="resource-return"
-    )
-    application = LaunchConfigurationApplication()
-    initial = {
-        "launch": {
-            "id": "working",
-            "mode": "paper",
-            "strategy": "builtin:interactive",
-        }
-    }
-    application.save_draft(workspace.paths.root, "working", initial)
-    answers = iter(["paper", "custom:Strategy", "1"])
-    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: next(answers))
-
-    draft, status = _prompt_launch_draft(
-        initial,
-        default_launch_id="working",
-        owner=workspace,
-        application=application,
-    )
-
-    assert draft is None
-    assert status == "resource_required:accounts"
-    assert application.draft_return(workspace.paths.root, "working") == {
-        "launch_id": "working",
-        "resource": "accounts",
-        "step": "accounts_and_execution_scope",
-    }
-    assert (
-        application.load_draft(workspace.paths.root, "working")["launch"]["strategy"]
-        == "custom:Strategy"
-    )
 
 
 def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
@@ -288,26 +188,6 @@ def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
     ]
 
 
-def test_enabled_agent_and_notification_keep_incomplete_intent_for_resource_fix(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init(
-        tmp_path / "workspace", workspace_id="incomplete-resources"
-    )
-    confirmations = iter([True, False, True])
-    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: next(confirmations))
-    monkeypatch.setattr(
-        "typer.prompt",
-        lambda *_args, **kwargs: str(kwargs.get("default") or ""),
-    )
-
-    agent = prompt_agent_config({}, mode="paper", workspace=workspace)
-    notifications = prompt_notification_config({}, mode="paper", workspace=workspace)
-
-    assert agent["enabled"] is True
-    assert agent["required"] is False
-    assert "model" not in agent
-    assert notifications == {"enabled": True, "required": False, "routes": {}}
 
 
 def _write_config(path: Path, *, mode: str = "paper") -> Path:

@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.account import (
+from kairospy.investment.apps.account.application import (
     CROSS_MARGIN,
     SPOT,
     AccountApplication,
@@ -20,8 +20,8 @@ from kairospy.application.account import (
     PositionSide,
     SegmentSyncLifecycle,
 )
-from kairospy.application.reference import InstrumentRef
-from kairospy.application.account.mapping import map_accounts_snapshot
+from kairospy.investment.apps.reference.application import InstrumentRef
+from kairospy.investment.apps.account.application.mapping import map_accounts_snapshot
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.primitives.reference import InstrumentId
 

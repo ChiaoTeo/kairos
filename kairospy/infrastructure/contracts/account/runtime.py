@@ -7,24 +7,8 @@ from typing import Any, Mapping, cast
 from decimal import Decimal
 import sys
 
-from kairospy.application.account import (
-    AccountSegmentSnapshot,
-    AccountSnapshot,
-    Balance,
-    DataFreshness,
-    EarnHolding,
-    EarnHoldingState,
-    EarnLiquidity,
-    Position,
-    PositionSide,
-    SegmentCompleteness,
-    SegmentSyncLifecycle,
-    SegmentSyncMode,
-)
-from kairospy.application.reference import InstrumentRef
-from kairospy.primitives.account import AccountId, SegmentKey
-from kairospy.primitives.reference import InstrumentId
-from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
+from kairospy.primitives.account import AccountId
+from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
 from .view_contract import (
     AccountViewKey,
     AccountViewKind,
@@ -86,7 +70,7 @@ class AccountCurrentViewReader:
     def path(self) -> Path:
         return self._reader.path
 
-    def snapshot(self, account_id: AccountId) -> AccountSnapshot:
+    def snapshot(self, account_id: AccountId) -> dict[str, object]:
         snapshot = self._reader.read()
         root = cast(Any, decode_view(snapshot.payload, AccountViewKind.CURRENT))
         metadata = root.Metadata()
@@ -106,15 +90,15 @@ class AccountCurrentViewReader:
         event_sequence = metadata.AppliedRevision()
         if event_sequence is None:
             raise ValueError("Account mmap current view is missing applied revision")
-        return AccountSnapshot(
-            account_id=account_id,
-            segments=tuple(
+        return {
+            "account_id": str(account_id),
+            "segments": list(
                 _segment_snapshot(root.Segments(index), account_id, generation)
                 for index in range(root.SegmentsLength())
             ),
-            generation=generation,
-            event_sequence=int(event_sequence),
-        )
+            "generation": generation,
+            "event_sequence": int(event_sequence),
+        }
 
 
 class AccountObservedOrdersViewReader:
@@ -159,110 +143,107 @@ class AccountObservedOrdersViewReader:
 
 def _segment_snapshot(
     account: Any, account_id: AccountId, generation: int
-) -> AccountSegmentSnapshot:
-    segment_key = SegmentKey(_text(account.SegmentKey()) or "")
+) -> dict[str, object]:
+    segment_key = _text(account.SegmentKey()) or ""
     balances = tuple(
-        Balance(
-            account_id=account_id,
-            segment_key=segment_key,
-            asset=_text(value.AssetCode()) or _text(value.AssetId()) or "",
-            total=_decimal64(value.Total()) or Decimal("0"),
-            available=_decimal64(value.Available()) or Decimal("0"),
-            reserved=_decimal64(value.Locked()) or Decimal("0"),
-        )
+        {
+            "asset": _text(value.AssetCode()) or _text(value.AssetId()) or "",
+            "total": _decimal_text(_decimal64(value.Total()) or Decimal("0")),
+            "available": _decimal_text(
+                _decimal64(value.Available()) or Decimal("0")
+            ),
+            "reserved": _decimal_text(_decimal64(value.Locked()) or Decimal("0")),
+        }
         for value in _table_items(account, "Balances")
     )
     positions = tuple(
-        Position(
-            account_id=account_id,
-            segment_key=segment_key,
-            instrument=_instrument(_text(value.InstrumentId()) or ""),
-            quantity=_decimal64(value.Quantity()) or Decimal("0"),
-            position_side=_position_side(int(value.PositionSide())),
-            average_price=_decimal64(value.AveragePrice()),
-            market_value=_market_value(value),
-            unrealized_pnl=_decimal64(value.UnrealizedPnl()),
-        )
+        {
+            "instrument_id": _text(value.InstrumentId()) or "",
+            "quantity": _decimal_text(_decimal64(value.Quantity()) or Decimal("0")),
+            "position_side": _position_side(int(value.PositionSide())),
+            "average_price": _decimal_text(_decimal64(value.AveragePrice())),
+            "market_value": _decimal_text(_market_value(value)),
+            "unrealized_pnl": _decimal_text(_decimal64(value.UnrealizedPnl())),
+        }
         for value in _table_items(account, "Positions")
     )
     earn_holdings = tuple(
-        EarnHolding(
-            account_id=account_id,
-            segment_key=segment_key,
-            holding_key=_text(value.HoldingKey()) or "",
-            participant_position_id=_text(value.ParticipantPositionId()),
-            product_id=_text(value.ProductId()) or "",
-            asset=_text(value.Asset()) or "",
-            principal=_decimal64(value.Principal()) or Decimal("0"),
-            redeemable=_decimal64(value.Redeemable()),
-            state={
-                1: EarnHoldingState.ACTIVE,
-                2: EarnHoldingState.REDEEMING,
-                3: EarnHoldingState.REDEEMED,
-            }.get(int(value.State()), EarnHoldingState.UNKNOWN),
-            participant_state=_text(value.ParticipantState()),
-            liquidity={
-                1: EarnLiquidity.IMMEDIATE,
-                2: EarnLiquidity.NOTICE,
-                3: EarnLiquidity.FIXED_TERM,
-            }.get(int(value.Liquidity()), EarnLiquidity.UNKNOWN),
-            notice_seconds=_optional_watermark(value.NoticeSeconds()),
-            matures_at_unix_nanos=_optional_watermark(value.MaturesAtUnixNanos()),
-            observed_at_unix_nanos=_optional_watermark(value.ObservedAtUnixNanos()),
-        )
+        {
+            "holding_key": _text(value.HoldingKey()) or "",
+            "participant_position_id": _text(value.ParticipantPositionId()),
+            "product_id": _text(value.ProductId()) or "",
+            "asset": _text(value.Asset()) or "",
+            "principal": _decimal_text(
+                _decimal64(value.Principal()) or Decimal("0")
+            ),
+            "redeemable": _decimal_text(_decimal64(value.Redeemable())),
+            "state": {1: "active", 2: "redeeming", 3: "redeemed"}.get(
+                int(value.State()), "unknown"
+            ),
+            "participant_state": _text(value.ParticipantState()),
+            "liquidity": {1: "immediate", 2: "notice", 3: "fixed_term"}.get(
+                int(value.Liquidity()), "unknown"
+            ),
+            "notice_seconds": _optional_watermark(value.NoticeSeconds()),
+            "matures_at_unix_nanos": _optional_watermark(
+                value.MaturesAtUnixNanos()
+            ),
+            "observed_at_unix_nanos": _optional_watermark(
+                value.ObservedAtUnixNanos()
+            ),
+        }
         for value in _table_items(account, "EarnHoldings")
     )
     raw_status = account.Status()
     status = _account_status(int(raw_status))
-    freshness = {
-        1: DataFreshness.FRESH,
-        2: DataFreshness.STALE,
-        4: DataFreshness.RESYNCING,
-        5: DataFreshness.UNAVAILABLE,
-    }.get(int(account.Freshness()), DataFreshness.UNKNOWN)
-    return AccountSegmentSnapshot(
-        account_id=account_id,
-        segment_key=segment_key,
-        broker=_text(account.Broker()) or "",
-        environment=_text(account.Environment()) or "",
-        account_model=_account_model(int(account.ObservedAccountModel())),
-        equity=_decimal64(
+    freshness = {1: "fresh", 2: "stale", 4: "resyncing", 5: "unavailable"}.get(
+        int(account.Freshness()), "unknown"
+    )
+    return {
+        "account_id": str(account_id),
+        "segment_key": segment_key,
+        "broker": _text(account.Broker()) or "",
+        "environment": _text(account.Environment()) or "",
+        "account_model": _account_model(int(account.ObservedAccountModel())),
+        "equity": _decimal_text(_decimal64(
             None if account.Valuation() is None else account.Valuation().Equity()
+        )),
+        "balances": list(balances),
+        "positions": list(positions),
+        "earn_holdings": list(earn_holdings),
+        "earn_watermark_unix_nanos": _optional_watermark(
+            account.EarnWatermarkUnixNanos()
         ),
-        balances=balances,
-        positions=positions,
-        earn_holdings=earn_holdings,
-        earn_watermark_unix_nanos=_optional_watermark(account.EarnWatermarkUnixNanos()),
-        freshness=freshness,
-        generation=generation,
-        sync_mode={
-            1: SegmentSyncMode.SNAPSHOT_THEN_STREAM,
-            2: SegmentSyncMode.SNAPSHOT_ONLY,
-        }.get(int(account.SyncMode()), SegmentSyncMode.UNKNOWN),
-        sync_lifecycle={
-            1: SegmentSyncLifecycle.CONFIGURED,
-            2: SegmentSyncLifecycle.BOOTSTRAPPING,
-            3: SegmentSyncLifecycle.LIVE,
-            4: SegmentSyncLifecycle.SNAPSHOT_CURRENT,
-            5: SegmentSyncLifecycle.DEGRADED,
-            6: SegmentSyncLifecycle.RESYNCING,
-            7: SegmentSyncLifecycle.UNAVAILABLE,
-            8: SegmentSyncLifecycle.STOPPED,
-        }.get(int(account.SyncLifecycle()), SegmentSyncLifecycle.CONFIGURED),
-        completeness={
-            1: SegmentCompleteness.COMPLETE,
-            2: SegmentCompleteness.PARTIAL,
-        }.get(int(account.Completeness()), SegmentCompleteness.UNKNOWN),
-        snapshot_watermark=_optional_watermark(account.SnapshotWatermark()),
-        event_watermark=_optional_watermark(account.EventWatermark()),
-        channel_epoch=_optional_watermark(account.ChannelEpoch()),
-        last_event_at_unix_nanos=_optional_watermark(account.LastEventAtUnixNanos()),
-        last_success_at_unix_nanos=_optional_watermark(
+        "freshness": freshness,
+        "generation": generation,
+        "sync_mode": {1: "snapshot_then_stream", 2: "snapshot_only"}.get(
+            int(account.SyncMode()), "unknown"
+        ),
+        "sync_lifecycle": {
+            1: "configured",
+            2: "bootstrapping",
+            3: "live",
+            4: "snapshot_current",
+            5: "degraded",
+            6: "resyncing",
+            7: "unavailable",
+            8: "stopped",
+        }.get(int(account.SyncLifecycle()), "configured"),
+        "completeness": {1: "complete", 2: "partial"}.get(
+            int(account.Completeness()), "unknown"
+        ),
+        "snapshot_watermark": _optional_watermark(account.SnapshotWatermark()),
+        "event_watermark": _optional_watermark(account.EventWatermark()),
+        "channel_epoch": _optional_watermark(account.ChannelEpoch()),
+        "last_event_at_unix_nanos": _optional_watermark(
+            account.LastEventAtUnixNanos()
+        ),
+        "last_success_at_unix_nanos": _optional_watermark(
             account.LastSuccessAtUnixNanos()
         ),
-        last_error=_text(account.LastError()),
-        recovery_buffer_depth=int(account.RecoveryBufferDepth()),
-    )
+        "last_error": _text(account.LastError()),
+        "recovery_buffer_depth": int(account.RecoveryBufferDepth()),
+    }
 
 
 def _text(value: bytes | None) -> str | None:
@@ -346,18 +327,8 @@ def _decimal64(value: object | None) -> Decimal | None:
     return Decimal(mantissa).scaleb(-scale)
 
 
-def _instrument(value: str) -> InstrumentRef:
-    identifier = InstrumentId(value)
-    return InstrumentRef(identifier, value.rsplit(":", 1)[-1])
-
-
-def _position_side(value: int) -> PositionSide:
-    return {
-        0: PositionSide.NET,
-        1: PositionSide.NET,
-        2: PositionSide.LONG,
-        3: PositionSide.SHORT,
-    }.get(value, PositionSide.NET)
+def _position_side(value: int) -> str:
+    return {0: "net", 1: "net", 2: "long", 3: "short"}.get(value, "net")
 
 
 def _market_value(value: object) -> Decimal | None:
@@ -366,47 +337,8 @@ def _market_value(value: object) -> Decimal | None:
     return None if quantity is None or mark is None else quantity * mark
 
 
-def backtest_mark_to_market_request(
-    event,
-    *,
-    segment_key: str = "spot",
-    quote_asset: str = "USDT",
-) -> dict[str, Any] | None:
-    """Map the latest strategy-visible quote to Account mark-to-market control."""
-    from kairospy.application.market import BarEvent, QuoteEvent
-
-    if isinstance(event, BarEvent):
-        observation = event.data
-        mark = observation.close
-        instrument_id = str(observation.instrument.id)
-        event_time = observation.occurred_at_unix_nanos
-    elif isinstance(event, QuoteEvent):
-        observation = event.data
-        prices = [
-            value
-            for value in (observation.bid_price, observation.ask_price)
-            if value is not None
-        ]
-        if not prices:
-            return None
-        mark = sum(prices, Decimal("0")) / len(prices)
-        instrument_id = str(observation.instrument.id)
-        event_time = observation.occurred_at_unix_nanos
-    else:
-        return None
-    return {
-        "segment_key": segment_key,
-        "instrument_id": instrument_id,
-        "quote_asset": quote_asset,
-        "mark_price": _decimal_wire(mark),
-        "observed_at_unix_nanos": event_time,
-    }
-
-
-def _decimal_wire(value) -> str:
-    if not value.is_finite():
-        raise ValueError("decimal value must be finite")
-    return format(value, "f")
+def _decimal_text(value: Decimal | None) -> str | None:
+    return None if value is None else format(value, "f")
 
 
 __all__ = [
@@ -415,5 +347,4 @@ __all__ = [
     "AccountObservedOrdersViewReader",
     "CommandEnvelope",
     "QueryEnvelope",
-    "backtest_mark_to_market_request",
 ]

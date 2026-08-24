@@ -8,24 +8,13 @@ import json
 
 import typer
 
-from kairospy.application.account.cli import AccountCliApplication
-from kairospy.application.account import (
+from kairospy.investment.apps.account.application.cli import AccountCliApplication
+from kairospy.investment.apps.account.application import (
     AccountConfigurationApplication,
     CredentialApplication,
 )
-from kairospy.application.config import ConfigurationReferenceApplication
-from kairospy.application.workspace.credentials import (
-    CredentialConfigurationApplication,
-)
-from kairospy.application.workspace import WorkspaceApplication
-from kairospy.surface.cli.guided_setup import (
-    cancel_setup,
-    confirm_summary,
-    configure_credential_material,
-    print_step,
-    prompt_choice,
-    prompt_credential_material,
-)
+from kairospy.system.apps.configuration.application import ConfigurationReferenceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 HELP = """Account standalone commands are owned by kairos-account-cli.
@@ -146,8 +135,10 @@ def account_passthrough(ctx: typer.Context) -> None:
             "`kairos launch instance component account ...`"
         )
     if arguments and arguments[0] == "setup":
-        result = _setup_account(owner)
-        typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        from kairospy.surface.workbench import KairosWorkbenchApp, load_workbench_state
+
+        state = load_workbench_state(Path(owner.paths.root))
+        KairosWorkbenchApp(state, initial_section="resources").run()
         return
     if arguments and arguments[0] == "test":
         values = [
@@ -244,138 +235,6 @@ def _option_value(arguments: list[str], name: str) -> str | None:
             return item.split("=", 1)[1]
     return None
 
-
-def _setup_account(owner: object) -> dict[str, object]:
-    """Guide one Account-owned binding without accepting secret values as argv."""
-
-    application = AccountConfigurationApplication(owner)  # type: ignore[arg-type]
-    print_step("交易账户", 1, 6, "选择账户类型")
-    mode = {
-        "1": "paper",
-        "2": "live",
-    }[
-        prompt_choice(
-            "请选择账户类型：",
-            (("1", "模拟账户"), ("2", "实盘账户")),
-            default="1",
-        )
-    ]
-    typer.echo(
-        "模拟账户不连接交易所，适合 paper 策略。"
-        if mode == "paper"
-        else "实盘账户会连接真实交易所；本向导不会自动下单或划转资金。"
-    )
-    total = 6
-    print_step("交易账户", 2, total, "基本信息")
-    account_id = typer.prompt(
-        "账户名称", default="paper-main" if mode == "paper" else "live-main"
-    ).strip()
-    segment = {
-        "1": "spot",
-        "2": "perpetual",
-    }[
-        prompt_choice(
-            "交易产品：",
-            (("1", "现货（spot）"), ("2", "永续合约（perpetual）")),
-            default="1",
-        )
-    ]
-    if mode == "paper":
-        balance = typer.prompt(
-            "初始余额（ASSET=AMOUNT）", default="USDT=100000"
-        ).strip()
-        print_step("交易账户", 3, total, "安全凭据")
-        typer.echo("模拟账户不连接外部交易所，不需要安全凭据。")
-        print_step("交易账户", 4, total, "确认保存")
-        if not confirm_summary(
-            "即将创建模拟账户：",
-            (
-                ("账户", account_id),
-                ("环境", "模拟"),
-                ("产品", segment),
-                ("初始余额", balance or "未设置"),
-            ),
-        ):
-            cancel_setup()
-        account = application.simulate(
-            account_id,
-            segment=segment,
-            initial_balances=(balance,) if balance else (),
-        )
-    else:
-        broker = {
-            "1": "binance",
-            "2": "okx",
-        }[
-            prompt_choice(
-                "交易服务商：",
-                (("1", "Binance"), ("2", "OKX")),
-                default="1",
-            )
-        ]
-        role = {
-            "1": "readonly",
-            "2": "trade",
-        }[
-            prompt_choice(
-                "账户用途：",
-                (("1", "只读（推荐）"), ("2", "允许交易")),
-                default="1",
-            )
-        ]
-        credentials = CredentialConfigurationApplication(owner)  # type: ignore[arg-type]
-        credential_id = f"{account_id}-credential"
-        existing = {str(value["credential_id"]): value for value in credentials.list()}
-        material = None
-        if credential_id not in existing:
-            print_step("交易账户", 3, total, "安全凭据")
-            material = prompt_credential_material(credentials, credential_id, broker)
-        else:
-            typer.echo(f"将使用已有安全凭据：{credential_id}")
-        print_step("交易账户", 4, total, "确认保存")
-        if not confirm_summary(
-            "即将保存实盘账户：",
-            (
-                ("账户", account_id),
-                ("环境", "实盘"),
-                ("服务商", broker),
-                ("产品", segment),
-                ("用途", "只读" if role == "readonly" else "允许交易"),
-                ("安全凭据", "已填写" if material is not None else credential_id),
-                ("当前操作", "只保存连接，不下单、不划转"),
-            ),
-        ):
-            cancel_setup()
-        if material is not None:
-            configure_credential_material(
-                credentials,
-                credential_id,
-                broker,
-                material,
-                role=role,
-            )
-        account = application.connect(
-            account_id,
-            broker=broker,
-            integration_provider=broker,
-            segment=segment,
-            environment="live",
-            credential=credential_id,
-            credential_role=role,
-        )
-    verification: dict[str, object] | None = None
-    print_step("交易账户", 5, total, "连接测试")
-    if typer.confirm(
-        "立即手动测试认证、账户读取与权限（不会下单或划转）", default=True
-    ):
-        verification = application.test_connection(account_id)
-    print_step("交易账户", 6, total, "完成")
-    typer.echo(
-        f"✓ {account_id} 已可用"
-        if verification and verification.get("verification_status") == "verified"
-        else f"{account_id} 已保存，需要测试后才能用于要求已验证账户的运行方案。"
-    )
-    return {"account": account, "verification": verification}
 
 
 __all__ = ["HELP", "account_passthrough"]

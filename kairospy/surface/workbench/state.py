@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kairospy.application.system import ComponentProcessApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.components.application import ComponentProcessApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.console.data import SystemObserveReader
 from kairospy.surface.console.models import ObserveSnapshot
 

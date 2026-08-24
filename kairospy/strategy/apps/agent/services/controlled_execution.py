@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+import hashlib
+from typing import Callable
+
+from kairospy.investment.apps.execution.application.intents import (
+    OptionSpreadRequest,
+    PairArbitrageRequest,
+    PortfolioRebalanceRequest,
+    QuoteProvisioningRequest,
+    TargetPositionRequest,
+)
+from kairospy.investment.apps.execution.application.admission import IntentAdmissionEvidence
+from kairospy.strategy.api.results import CommandResult
+
+from ..application import AgentApplication
+from ..application.models import AgentMode, DecisionReceipt, DecisionStatus, IntentCandidate
+from .worker import AgentDecisionWorker, DecisionTask
+
+
+IntentRequest = (
+    TargetPositionRequest
+    | PairArbitrageRequest
+    | PortfolioRebalanceRequest
+    | QuoteProvisioningRequest
+    | OptionSpreadRequest
+)
+
+
+class AgentControlledExecutionCommands:
+    """Concrete decorator for configured Strategy Intent operations."""
+
+    def __init__(
+        self,
+        commands: object,
+        *,
+        agent: AgentApplication,
+        worker: AgentDecisionWorker,
+        workspace_id: str,
+        launch_id: str,
+        profile_hash: str,
+        runtime: str,
+        model: str | None,
+        tool_profiles: tuple[str, ...],
+        operations: tuple[str, ...],
+        required_contexts: tuple[str, ...],
+        max_decision_age_seconds: float,
+        classify_exposure: Callable[[IntentRequest], str] | None = None,
+    ) -> None:
+        self._commands = commands
+        self._agent = agent
+        self._worker = worker
+        self._workspace_id = workspace_id
+        self._launch_id = launch_id
+        self._profile_hash = profile_hash
+        self._runtime = runtime
+        self._model = model
+        self._tool_profiles = tool_profiles
+        self._operations = frozenset(operations)
+        self._required_contexts = required_contexts
+        self._max_decision_age_seconds = max_decision_age_seconds
+        self._classify_exposure = classify_exposure or (lambda request: "unknown")
+
+    def target_position(
+        self, request: TargetPositionRequest, **identity
+    ) -> CommandResult:
+        return self._control("target_position", request, identity)
+
+    def pair_arbitrage(
+        self, request: PairArbitrageRequest, **identity
+    ) -> CommandResult:
+        return self._control("pair_arbitrage", request, identity)
+
+    def portfolio_rebalance(
+        self, request: PortfolioRebalanceRequest, **identity
+    ) -> CommandResult:
+        return self._control("portfolio_rebalance", request, identity)
+
+    def quote_provisioning(
+        self, request: QuoteProvisioningRequest, **identity
+    ) -> CommandResult:
+        return self._control("quote_provisioning", request, identity)
+
+    def option_spread(self, request: OptionSpreadRequest, **identity) -> CommandResult:
+        return self._control("option_spread", request, identity)
+
+    def __getattr__(self, name: str):
+        return getattr(self._commands, name)
+
+    def _control(
+        self,
+        operation: str,
+        request: IntentRequest,
+        identity: dict[str, str],
+    ) -> CommandResult:
+        submit = getattr(self._commands, operation)
+        if operation not in self._operations:
+            return submit(request, **identity)
+        request_id = identity["request_id"]
+        strategy_id = identity["strategy_id"]
+        instance_id = identity["instance_id"]
+        intent_id = request.intent_id or f"{strategy_id}:intent:{request_id}"
+        original = replace(request, intent_id=intent_id)
+        exposure_effect = self._classify_exposure(original)
+        if exposure_effect not in {"increase", "reduce", "neutral", "unknown"}:
+            raise ValueError("Exposure classifier returned an unsupported value")
+        now = _candidate_time(self._runtime, original)
+        snapshot_error: str | None = None
+        try:
+            snapshot = self._agent._snapshot(
+                "execution.intent_review",
+                now=now,
+                required_contexts=self._required_contexts,
+            )
+        except ValueError as error:
+            snapshot_error = str(error)
+            snapshot = self._agent._snapshot(
+                "execution.intent_review",
+                now=now,
+            )
+        decision_id = _decision_id(strategy_id, instance_id, request_id)
+        candidate = IntentCandidate(
+            decision_id=decision_id,
+            request_id=request_id,
+            intent_id=intent_id,
+            workspace_id=self._workspace_id,
+            strategy_id=strategy_id,
+            launch_id=self._launch_id,
+            instance_id=instance_id,
+            operation=operation,
+            request=original,
+            exposure_effect=exposure_effect,
+            profile_hash=self._profile_hash,
+            snapshot=snapshot,
+            submitted_at=now,
+            deadline=(
+                datetime.max.replace(tzinfo=timezone.utc)
+                if self._runtime == "fixture"
+                else now + timedelta(seconds=self._max_decision_age_seconds)
+            ),
+            runtime=self._runtime,
+            model=self._model,
+            tool_profiles=self._tool_profiles,
+        )
+
+        def submit_direct(effective: object) -> CommandResult:
+            if not isinstance(effective, type(original)):
+                raise TypeError("Agent effective request changed Intent request type")
+            return submit(
+                effective,
+                admission_evidence=None,
+                **identity,
+            )
+
+        def submit_effective(effective: object) -> CommandResult:
+            if not isinstance(effective, type(original)):
+                raise TypeError("Agent effective request changed Intent request type")
+            admission = IntentAdmissionEvidence(
+                decision_id=decision_id,
+                request_id=request_id,
+                intent_id=intent_id,
+                source="decision_agent",
+                outcome="approved" if effective == original else "revised",
+                original_intent=original,
+                effective_intent=effective,
+            )
+            return submit(
+                effective,
+                admission_evidence=admission,
+                **identity,
+            )
+
+        if snapshot.mode is AgentMode.SHADOW:
+            if snapshot_error is not None:
+                return self._worker.submit_shadow_failure(
+                    candidate,
+                    submit_direct,
+                    reason=snapshot_error,
+                )
+            return self._worker.submit_shadow(candidate, submit_direct)
+        if snapshot_error is not None:
+            receipt = self._worker.fail_admission(
+                DecisionTask(candidate, submit_effective, bypass=submit_direct),
+                reason=snapshot_error,
+            )
+            return _command_result(receipt, request_id=request_id, intent_id=intent_id)
+        receipt = self._worker.submit(
+            DecisionTask(candidate, submit_effective, bypass=submit_direct)
+        )
+        return _command_result(receipt, request_id=request_id, intent_id=intent_id)
+
+
+def _command_result(
+    receipt: DecisionReceipt,
+    *,
+    request_id: str,
+    intent_id: str,
+) -> CommandResult:
+    decision_id = receipt.decision_id
+    if receipt.status in {DecisionStatus.PENDING, DecisionStatus.RUNNING}:
+        return CommandResult(
+            request_id,
+            "pending",
+            {"intent_id": intent_id, "decision_id": decision_id},
+        )
+    if receipt.status in {DecisionStatus.APPROVED, DecisionStatus.REVISED}:
+        return CommandResult(
+            request_id,
+            "duplicate",
+            {"intent_id": intent_id, "decision_id": decision_id},
+        )
+    if (
+        receipt.status is DecisionStatus.ABSTAINED
+        and receipt.delivery_certainty == "sent"
+    ):
+        return CommandResult(
+            request_id,
+            receipt.final_submission_status or "accepted",
+            {"intent_id": intent_id, "decision_id": decision_id},
+        )
+    return CommandResult(
+        request_id,
+        "rejected",
+        {"intent_id": intent_id, "decision_id": decision_id},
+        error=receipt.reason or f"Decision admission failed: {receipt.status.value}",
+        error_code="agent_decision_not_sent",
+    )
+
+
+class UnavailableAgentExecutionCommands:
+    """Fail-closed adapter for an enabled Agent whose runtime did not start."""
+
+    def __init__(
+        self,
+        commands: object,
+        *,
+        agent: AgentApplication,
+        operations: tuple[str, ...],
+        classify_exposure: Callable[[IntentRequest], str] | None = None,
+    ) -> None:
+        self._commands = commands
+        self._agent = agent
+        self._operations = frozenset(operations)
+        self._classify_exposure = classify_exposure or (lambda request: "unknown")
+
+    def target_position(
+        self, request: TargetPositionRequest, **identity
+    ) -> CommandResult:
+        return self._control("target_position", request, identity)
+
+    def pair_arbitrage(
+        self, request: PairArbitrageRequest, **identity
+    ) -> CommandResult:
+        return self._control("pair_arbitrage", request, identity)
+
+    def portfolio_rebalance(
+        self, request: PortfolioRebalanceRequest, **identity
+    ) -> CommandResult:
+        return self._control("portfolio_rebalance", request, identity)
+
+    def quote_provisioning(
+        self, request: QuoteProvisioningRequest, **identity
+    ) -> CommandResult:
+        return self._control("quote_provisioning", request, identity)
+
+    def option_spread(self, request: OptionSpreadRequest, **identity) -> CommandResult:
+        return self._control("option_spread", request, identity)
+
+    def __getattr__(self, name: str):
+        return getattr(self._commands, name)
+
+    def _control(
+        self,
+        operation: str,
+        request: IntentRequest,
+        identity: dict[str, str],
+    ) -> CommandResult:
+        submit = getattr(self._commands, operation)
+        if operation not in self._operations:
+            return submit(request, **identity)
+        mode = self._agent._snapshot("execution.intent_review").mode
+        if mode is AgentMode.SHADOW:
+            return submit(request, **identity)
+        exposure_effect = self._classify_exposure(request)
+        if exposure_effect not in {"increase", "reduce", "neutral", "unknown"}:
+            raise ValueError("Exposure classifier returned an unsupported value")
+        if exposure_effect == "reduce":
+            return submit(request, **identity)
+        return CommandResult(
+            identity["request_id"],
+            "rejected",
+            {"intent_id": request.intent_id},
+            error="Decision Agent runtime is unavailable",
+            error_code="agent_runtime_unavailable",
+        )
+
+
+def _decision_id(strategy_id: str, instance_id: str, request_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{strategy_id}\0{instance_id}\0{request_id}".encode("utf-8")
+    ).hexdigest()
+    return f"decision:{digest}"
+
+
+def _candidate_time(runtime: str, request: IntentRequest) -> datetime:
+    if runtime != "fixture":
+        return datetime.now(timezone.utc)
+    source_time = getattr(request, "source_event_time_unix_nanos", None)
+    if source_time is None:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        microseconds=source_time // 1_000
+    )
+
+
+__all__ = [
+    "AgentControlledExecutionCommands",
+    "UnavailableAgentExecutionCommands",
+]

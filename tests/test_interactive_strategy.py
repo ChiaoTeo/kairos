@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from kairospy.strategy.interactive import InteractiveStrategy
+from kairospy.strategy.api.interactive import InteractiveStrategy
 from kairospy.strategy import StrategyCommand
 
 

@@ -11,15 +11,15 @@ from types import SimpleNamespace
 import pytest
 import typer
 
-from kairospy.application.launch.application import (
+from kairospy.system.apps.launch.application import (
     LaunchControlApplication,
     LaunchInstanceTimelineApplication,
     LaunchRegistryApplication,
     LaunchRuntimeApplication,
     LaunchRuntimeError,
 )
-from kairospy.application.launch.application import new_instance_id
-from kairospy.application.workspace import InstanceWorkspace, WorkspaceApplication
+from kairospy.system.apps.launch.application import new_instance_id
+from kairospy.system.apps.workspace.application import InstanceWorkspace, WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch import (
     _decorate_launch_status,
@@ -28,12 +28,12 @@ from kairospy.surface.cli.commands.launch import (
     _requires_reference_runtime,
     _stop_component_safely,
 )
-from kairospy.application.system import (
+from kairospy.system.apps.components.application import (
     ComponentProcessApplication,
     SystemRuntimeSupervisor,
 )
-from kairospy.application.account import AccountAdminApplication
-from kairospy.application.launch import StrategyProcessController
+from kairospy.investment.apps.account.application import AccountAdminApplication
+from kairospy.system.apps.launch import StrategyProcessController
 from kairospy.surface.cli.options import OutputFormat, render
 
 
@@ -180,7 +180,7 @@ def test_launch_instance_component_market_snapshot_uses_manifest_view_root(
         seen["arguments"] = list(arguments)
         return {"status": "view_not_found", "code": "view_not_found"}
 
-    monkeypatch.setattr("kairospy.application.system.NativeCliApplication.run", run)
+    monkeypatch.setattr("kairospy.system.apps.components.application.NativeCliApplication.run", run)
     output = StringIO()
 
     assert (
@@ -403,7 +403,7 @@ def test_launch_instance_component_risk_latest_uses_connected_owner_cli(
 def test_risk_system_client_latest_returns_current_view_business_facts(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system.clients import RiskSystemClient
+    from kairospy.system.apps.components.application.clients import RiskSystemClient
 
     class FakeCurrentView:
         def latest(self):
@@ -623,7 +623,7 @@ def test_launch_instance_component_capital_current_uses_instance_client(
 def test_capital_system_client_current_returns_current_view_business_facts(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system.clients import CapitalSystemClient
+    from kairospy.system.apps.components.application.clients import CapitalSystemClient
 
     class FakeCurrentView:
         def current(self):
@@ -712,7 +712,7 @@ def test_capital_system_client_current_returns_current_view_business_facts(
 def test_launch_instance_component_capital_controls_use_owner_cli_scope(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system import NativeCliApplication
+    from kairospy.system.apps.components.application import NativeCliApplication
 
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="launch-capital-controls"
@@ -916,7 +916,7 @@ def test_system_component_market_routes_requires_running_server(
 def test_system_component_market_replay_control_uses_owner_cli(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system import NativeCliApplication
+    from kairospy.system.apps.components.application import NativeCliApplication
 
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="market-replay-control"
@@ -969,7 +969,7 @@ def test_system_component_market_replay_control_uses_owner_cli(
 def test_system_component_market_subscription_control_uses_owner_cli(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system import NativeCliApplication
+    from kairospy.system.apps.components.application import NativeCliApplication
 
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="market-subscription-control"
@@ -1060,7 +1060,7 @@ def test_system_component_market_subscription_control_uses_owner_cli(
 def test_system_component_market_freshness_uses_owner_cli(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system import NativeCliApplication
+    from kairospy.system.apps.components.application import NativeCliApplication
 
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="market-freshness"
@@ -1662,8 +1662,6 @@ def test_order_live_write_requires_confirmation_or_yes(
         "kairospy.surface.cli.commands.order.AccountCliApplication.run",
         lambda _self, _arguments: binding,
     )
-    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: False)
-
     class Result:
         returncode = 0
         stdout = '{"outcome":{"status":"confirmed"}}'
@@ -1820,7 +1818,7 @@ def test_launch_instance_component_reference_health_uses_manifest_client(
 def test_launch_instance_component_account_balances_uses_manifest_client(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.account import AccountSnapshot
+    from kairospy.investment.apps.account.application import AccountSnapshot
     from kairospy.primitives.account import AccountId
 
     workspace = WorkspaceApplication().init(
@@ -1924,7 +1922,7 @@ def test_launch_account_balances_table_uses_balance_columns() -> None:
 def test_launch_instance_component_account_refresh_uses_owner_cli_scope(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system import NativeCliApplication
+    from kairospy.system.apps.components.application import NativeCliApplication
 
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="launch-account-refresh"
@@ -2158,7 +2156,7 @@ def test_system_component_reference_health_requires_running_server(
 def test_system_component_risk_mutations_use_workspace_contract(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system import NativeCliApplication
+    from kairospy.system.apps.components.application import NativeCliApplication
 
     workspace = WorkspaceApplication().init_project(
         tmp_path / "workspace", workspace_id="risk-component-mutations"
@@ -2387,7 +2385,7 @@ def test_system_component_risk_mutations_use_workspace_contract(
 def test_system_component_capital_controls_use_workspace_contract(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system import NativeCliApplication
+    from kairospy.system.apps.components.application import NativeCliApplication
 
     workspace = WorkspaceApplication().init_project(
         tmp_path / "workspace", workspace_id="capital-component-controls"
@@ -3040,7 +3038,7 @@ def test_cli_registers_legacy_product_groups() -> None:
     assert "Run strategies and inspect" in text
     assert all(mode in text for mode in ("backtest", "paper", "live"))
     assert "New to Kairos?" in text
-    assert "引导式菜单" in text
+    assert "unified workbench" in text
     assert "commands are owned by" not in text
 
 
@@ -3090,572 +3088,54 @@ def test_interactive_is_discoverable_from_top_level_help() -> None:
     assert execute_argv(["--help"], output) == 0
     text = output.getvalue()
     assert "interactive" in text
-    assert "Kairos 交互式操作入口" in text
+    assert "Kairos Textual 工作台" in text
 
 
-def test_interactive_dry_run_guides_project_creation(monkeypatch) -> None:
-    output = StringIO()
-    answers = iter(["1", "demo", "demo", "backtest"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+def test_interactive_opens_workbench_even_before_workspace_exists(monkeypatch) -> None:
+    from kairospy.surface.cli import app as cli_module
 
-    assert execute_argv(["interactive", "--dry-run"], output) == 0
-    text = output.getvalue()
-    assert "Kairos  ·  " in text
-    assert "准备执行：kairos project init demo --id demo --template backtest" in text
-    assert "只展示命令，不执行" in text
-
-
-def test_interactive_dry_run_selects_launch_action(tmp_path, monkeypatch) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo", template="backtest"
-    )
-    output = StringIO()
-    answers = iter(["2", "1", "2"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert (
-        execute_argv(
-            [
-                "interactive",
-                "--workspace",
-                str(workspace.paths.root),
-                "--dry-run",
-            ],
-            output,
-        )
-        == 0
-    )
-    text = output.getvalue()
-    assert "workspace" in text
-    assert "demo" in text
-    assert "系统服务" in text
-    assert "account=not_running" not in text
-    assert "可用 launch" in text
-    assert (
-        "准备执行：kairos launch status demo-backtest --workspace "
-        + shlex.quote(str(workspace.paths.root))
-    ) in text
-
-
-def test_interactive_short_alias_opens_command_map(monkeypatch) -> None:
-    output = StringIO()
-    answers = iter(["8"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert execute_argv(["i", "--dry-run"], output) == 0
-    assert "准备执行：kairos quickstart" in output.getvalue()
-
-
-def test_interactive_system_menu_restarts_market(tmp_path, monkeypatch) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    answers = iter(["3", "2", "4"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert (
-        execute_argv(
-            [
-                "interactive",
-                "--workspace",
-                str(workspace.paths.root),
-                "--dry-run",
-            ],
-            output,
-        )
-        == 0
-    )
-    text = output.getvalue()
-    assert "你想维护哪个系统服务" in text
-    assert "你想对 market 做什么" in text
-    assert "准备执行：kairos system restart --component market --format text" in text
-
-
-def test_interactive_system_menu_does_not_offer_instance_components(
-    tmp_path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    answers = iter(["3", "1", "1"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert (
-        execute_argv(
-            [
-                "interactive",
-                "--workspace",
-                str(workspace.paths.root),
-                "--dry-run",
-            ],
-            output,
-        )
-        == 0
-    )
-    text = output.getvalue()
-    assert "account/risk/execution" not in text
-    assert "准备执行：kairos system status --component reference --format text" in text
-
-
-def test_interactive_session_keeps_context_between_actions(
-    tmp_path, monkeypatch
-) -> None:
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    shell_input = iter(["6", "2", "2", "9", "summary", "exit"])
-    confirmations = iter([True])
-    executed: list[tuple[str, ...]] = []
-
-    def read_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: next(confirmations))
-
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=False,
-            execute=lambda argv: executed.append(tuple(argv)) or 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert executed[0][:4] == ("system", "restart", "--component", "market")
-    assert "无法识别这个命令" not in text
-    assert "/system/market>" in text
-    assert "Kairos  ·  demo" in text
-    assert "kairos system restart --component market --format text" in text
-    assert "上次：status=0 · kairos system restart --component market" in text
-
-
-def test_interactive_b_returns_to_previous_level(tmp_path, monkeypatch) -> None:
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    shell_input = iter(["system", "market", "b", "b", "exit"])
-
-    def read_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    output = StringIO()
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=False,
-            execute=lambda _argv: 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert "/system/market>" in text
-    assert "/system>" in text
-    assert "首页 › " in text
-    assert "无法识别这个命令" not in text
-
-
-def test_interactive_launch_has_selected_launch_context(tmp_path, monkeypatch) -> None:
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo", template="backtest"
-    )
-    shell_input = iter(["launch", "1", "status", "b", "b", "exit"])
-    executed: list[tuple[str, ...]] = []
-
-    def read_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    output = StringIO()
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=False,
-            execute=lambda argv: executed.append(tuple(argv)) or 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert executed[0][:3] == ("launch", "status", "demo-backtest")
-    assert "/launch/demo-backtest>" in text
-    assert "/launch>" in text
-    assert "首页 › " in text
-    assert "| 序号 | launch        |" in text
-    assert "当前 launch：demo-backtest" in text
-    assert "无法识别这个命令" not in text
-
-
-def test_interactive_b_returns_from_selected_account(tmp_path, monkeypatch) -> None:
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
+    state = SimpleNamespace(owner=None, load_error="workspace not found")
+    seen: list[object] = []
+    monkeypatch.setattr(cli_module, "load_workbench_state", lambda *args, **kwargs: state)
     monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.account.AccountConfigurationApplication.list",
-        lambda _self: [
-            {
-                "account_id": "paper-account",
-                "broker": "paper",
-                "environment": "paper",
-                "segments": ["spot"],
-                "status": "configured",
-            }
-        ],
-    )
-    shell_input = iter(["account", "select", "b", "b", "exit"])
-    prompts = iter(["1"])
-
-    def read_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
-    output = StringIO()
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=False,
-            execute=lambda _argv: 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert "/trade/accounts/paper-account" in text
-    assert "/trade/accounts>" in text
-    assert "首页 › " in text
-    assert "  b. 返回上一级" in text
-    assert "无法识别这个命令" not in text
-
-
-def test_interactive_account_context_keeps_selected_paper_account(
-    tmp_path, monkeypatch
-) -> None:
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    accounts = [
-        {
-            "account_id": "paper-account",
-            "alias": "paper-account",
-            "broker": "paper",
-            "exchange": "paper",
-            "integration_provider": "paper",
-            "provider": "paper",
-            "environment": "paper",
-            "account_model": "no_margin",
-            "segments": ["spot"],
-            "credential_id": None,
-            "status": "configured",
-        }
-    ]
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.account.AccountConfigurationApplication.list",
-        lambda _self: accounts,
-    )
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.context.ComponentProcessApplication.status",
-        lambda _self, component, **kwargs: {"status": "ready"},
-    )
-    shell_input = iter(["account", "1", "2", "b", "7", "exit"])
-    executed: list[tuple[str, ...]] = []
-
-    def read_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    monkeypatch.setattr(
-        "typer.prompt",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("输入账户序号后不应再次询问")
-        ),
-    )
-    output = StringIO()
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=True,
-            execute=lambda argv: executed.append(tuple(argv)) or 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert executed[0][:5] == (
-        "account",
-        "assets",
-        "paper-account",
-        "--format",
-        "table",
-    )
-    assert "/trade/accounts/paper-account" in text
-    assert "| 序号 | 账户          |" in text
-    assert "broker/custodian" in text
-    assert "paper" in text
-    assert "environment" in text
-    assert "type" not in text
-    assert "不具备资金划转能力" in text
-    assert "无法识别这个命令" not in text
-
-
-def test_interactive_live_account_uses_standalone_direct_command(
-    tmp_path, monkeypatch
-) -> None:
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    accounts = [
-        {
-            "account_id": "manual-live-readonly",
-            "alias": "manual-live-readonly",
-            "broker": "binance",
-            "exchange": "binance",
-            "integration_provider": "binance",
-            "provider": "binance",
-            "environment": "live",
-            "account_model": "portfolio_margin",
-            "segments": ["spot", "usd_m_futures"],
-            "credential_id": "binance-equity-readonly",
-            "status": "configured",
-        }
-    ]
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.account.AccountConfigurationApplication.list",
-        lambda _self: accounts,
-    )
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.context.ComponentProcessApplication.status",
-        lambda _self, component, **kwargs: {"status": "ready"},
-    )
-    shell_input = iter(["account", "1", "2", "exit"])
-    prompts = iter(["1"])
-    executed: list[tuple[str, ...]] = []
-
-    def read_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
-    output = StringIO()
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=True,
-            execute=lambda argv: executed.append(tuple(argv)) or 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert executed[0][:5] == (
-        "account",
-        "assets",
-        "manual-live-readonly",
-        "--format",
-        "table",
-    )
-    assert "launch current_view" not in text
-    assert "broker/custodian" in text
-    assert "account model" in text
-    assert "portfolio_margin" in text
-    assert "无法识别这个命令" not in text
-
-
-def test_interactive_live_account_never_enters_launch_connected_mode(
-    tmp_path, monkeypatch
-) -> None:
-    from kairospy.surface.cli.interactive.models import (
-        GuidedCommand,
-        InteractiveContext,
-    )
-    from kairospy.surface.cli.interactive.sections.business.account import (
-        account_fact_command,
+        cli_module.KairosWorkbenchApp,
+        "run",
+        lambda self: seen.append(self.state),
     )
 
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.account.AccountConfigurationApplication.list",
-        lambda _self: [
-            {
-                "account_id": "live-main",
-                "provider": "binance",
-                "environment": "live",
-                "segments": ["spot"],
-            }
-        ],
-    )
-    context = InteractiveContext(
-        owner=workspace,
-        snapshot=None,
-        workspace_arg=workspace.paths.root,
-        selected_account="live-main",
-        shell_path=("trade", "accounts", "live-main"),
-    )
+    cli_module._interactive_command(None, False, False, False)
 
-    result = account_fact_command(context, "balances", "查询账户余额")
-
-    assert isinstance(result, GuidedCommand)
-    assert result.argv == (
-        "account",
-        "balances",
-        "live-main",
-        "--format",
-        "table",
-    )
-    assert context.selected_launch is None
-    assert "launch" not in result.argv
+    assert seen == [state]
 
 
-def test_interactive_account_fee_query_uses_one_scoped_prompt(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from kairospy.surface.cli.interactive.models import (
-        GuidedCommand,
-        InteractiveContext,
-    )
-    from kairospy.surface.cli.interactive.sections.business.account import handle
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    prompts = iter(["usd_m_futures:BTCUSDT"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
-    context = InteractiveContext(
-        owner=workspace,
-        snapshot=None,
-        workspace_arg=workspace.paths.root,
-        selected_account="live-main",
-        shell_path=("trade", "accounts", "live-main"),
-    )
-
-    result = handle(context, ("fees",))
-
-    assert isinstance(result, GuidedCommand)
-    assert result.argv == (
-        "account",
-        "fees",
-        "live-main",
-        "--product",
-        "usd_m_futures",
-        "--symbol",
-        "BTCUSDT",
-        "--format",
-        "table",
-    )
 
 
-def test_interactive_readonly_command_executes_without_confirmation(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from kairospy.surface.cli.interactive.execution import execute_guided_command
-    from kairospy.surface.cli.interactive.models import (
-        GuidedCommand,
-        InteractiveContext,
-    )
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    context = InteractiveContext(
-        owner=workspace,
-        snapshot=None,
-        workspace_arg=workspace.paths.root,
-    )
-    executed: list[tuple[str, ...]] = []
-    monkeypatch.setattr(
-        "typer.confirm",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("readonly commands must not ask for confirmation")
-        ),
-    )
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.execution.refresh_context",
-        lambda _context: None,
-    )
-
-    execute_guided_command(
-        context,
-        GuidedCommand(("account", "balances", "live-main"), "查询账户余额"),
-        execute=lambda argv: executed.append(tuple(argv)) or 0,
-        yes=False,
-    )
-
-    assert executed == [
-        (
-            "account",
-            "balances",
-            "live-main",
-            "--workspace",
-            str(workspace.paths.root),
-        )
-    ]
 
 
-def test_interactive_command_output_has_clear_section_boundary(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from kairospy.surface.cli.interactive.execution import execute_guided_command
-    from kairospy.surface.cli.interactive.models import (
-        GuidedCommand,
-        InteractiveContext,
-    )
 
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    context = InteractiveContext(
-        owner=workspace,
-        snapshot=None,
-        workspace_arg=workspace.paths.root,
-    )
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.execution.refresh_context",
-        lambda _context: None,
-    )
-    output = StringIO()
-    with redirect_stdout(output):
-        execute_guided_command(
-            context,
-            GuidedCommand(("launch", "status", "demo"), "查看 launch 状态"),
-            execute=lambda _argv: print("命令输出") or 0,
-            yes=False,
-        )
 
-    text = output.getvalue()
-    assert "── 查看 launch 状态 ──" in text
-    assert "命令输出\n\n── 完成 · status=0 ──" in text
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_account_query_balance_uses_top_level_standalone_mode(
@@ -3747,366 +3227,20 @@ def test_account_positions_uses_top_level_standalone_mode(
     ]
 
 
-def test_interactive_reference_selects_type_searches_and_shows_compact_detail(
-    tmp_path, monkeypatch
-) -> None:
-    from kairospy.application.reference import Instrument
-    from kairospy.primitives.reference import InstrumentId
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    shell_input = iter(["2", "3", "1", "s", "4", "exit"])
-    prompts = iter(["AAPL", "1"])
-    executed: list[tuple[str, ...]] = []
-
-    class ReferenceApplication:
-        def find_instruments(self, **filters):
-            assert filters["query"] == "AAPL"
-            assert filters["instrument_type"] == "equity"
-            return (
-                Instrument(
-                    InstrumentId("instrument:equity:US:AAPL:common"),
-                    "AAPL",
-                    "equity",
-                    name="Apple Inc.",
-                ),
-            )
-
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.reference._application",
-        lambda _context: ReferenceApplication(),
-    )
-
-    def read_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(prompts))
-
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=False,
-            execute=lambda argv: executed.append(tuple(argv)) or 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert "无法识别这个命令" not in text
-    assert "Reference 市场目录：" in text
-    assert "  选择类型后可搜索或浏览" in text
-    assert "  s. 搜索代码或名称" in text
-    assert "  l. 浏览前 10 条" in text
-    assert "  也可以直接输入代码或名称" in text
-    assert "/reference/instruments/equities/AAPL>" in text
-    assert "Apple Inc." in text
-    assert "Instrument ID" in text
-    assert "instrument:equity:US:AAPL:common" in text
-    assert "expiry_unix_nanos" not in text
-    assert executed == []
 
 
-def test_interactive_reference_market_search_does_not_render_raw_wide_table(
-    tmp_path, monkeypatch
-) -> None:
-    from kairospy.application.reference import InstrumentRef, Market
-    from kairospy.primitives.reference import InstrumentId, MarketId
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    shell_input = iter(["2", "4", "BTCUSDT", "exit"])
-
-    class ReferenceApplication:
-        def find_markets(self, **filters):
-            assert filters["query"] == "BTCUSDT"
-            return (
-                Market(
-                    MarketId("market:binance:spot:BTCUSDT"),
-                    InstrumentRef(InstrumentId("instrument:spot:BTC-USDT"), "BTC-USDT"),
-                    None,
-                    "exchange:binance",
-                    "spot",
-                    venue_symbol="BTCUSDT",
-                    base_asset="asset:crypto:BTC",
-                    quote_asset="asset:crypto:USDT",
-                ),
-            )
-
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.reference._application",
-        lambda _context: ReferenceApplication(),
-    )
-    monkeypatch.setattr("builtins.input", lambda _prompt="": next(shell_input))
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "b")
-
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=False,
-            execute=lambda _argv: 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert "计价资产" in text
-    assert "BTCUSDT" in text
-    assert "USDT" in text
-    assert "minimum_notional" not in text
-    assert "effective_from_unix_nanos" not in text
 
 
-def test_interactive_reference_exchanges_list_and_return_to_catalog(
-    tmp_path, monkeypatch
-) -> None:
-    from kairospy.application.reference import Exchange
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    shell_input = iter(["2", "2", "l", "b", "exit"])
-    prompts: list[str] = []
-    exchange_queries: list[dict[str, object]] = []
-
-    class ReferenceApplication:
-        def find_exchanges(self, **filters):
-            exchange_queries.append(filters)
-            assert filters["active_only"] is True
-            assert filters["limit"] == 25
-            return (Exchange("exchange:binance", "Binance"),)
-
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.reference._application",
-        lambda _context: ReferenceApplication(),
-    )
-
-    def read_input(prompt: str = "") -> str:
-        prompts.append(prompt)
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "b")
-
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=False,
-            execute=lambda _argv: 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert "交易所：输入 refresh 重新读取列表" in text
-    assert "Binance" in text
-    assert exchange_queries
-    assert "/reference/exchanges" in "".join(prompts)
 
 
-def test_interactive_convenience_option_chain_uses_current_reference_option(
-    tmp_path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    answers = iter(["4", "7", "instrument:equity:US:AAPL:common"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert (
-        execute_argv(
-            [
-                "interactive",
-                "--workspace",
-                str(workspace.paths.root),
-                "--dry-run",
-            ],
-            output,
-        )
-        == 0
-    )
-    assert "--underlying-instrument-id instrument:equity:US:AAPL:common" in (
-        output.getvalue()
-    )
-    assert "--format table" in output.getvalue()
 
 
-def test_interactive_reference_preview_searches_assets(tmp_path, monkeypatch) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    answers = iter(["4", "6", "1", "BTC"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert (
-        execute_argv(
-            [
-                "interactive",
-                "--workspace",
-                str(workspace.paths.root),
-                "--dry-run",
-            ],
-            output,
-        )
-        == 0
-    )
-    text = output.getvalue()
-    assert "你想查询市场目录中的什么" in text
-    assert (
-        "准备执行：kairos reference assets --query BTC --active-only --limit 10 --format table"
-        in text
-    )
-    assert "reference catalog" not in text
 
 
-def test_interactive_market_separates_standalone_and_connected_scopes(
-    tmp_path, monkeypatch
-) -> None:
-    from kairospy.surface.cli.interactive import run_interactive
-
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    shell_input = iter(["market", "once", "system market", "quote", "exit"])
-    executed: list[tuple[str, ...]] = []
-
-    def read_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(shell_input)
-
-    monkeypatch.setattr("builtins.input", read_input)
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "1")
-    record = SimpleNamespace(
-        id="market:binance:spot:BTCUSDT",
-        venue_symbol="BTCUSDT",
-        exchange_id="exchange:binance",
-        instrument_kind="spot",
-        instrument=SimpleNamespace(
-            id="instrument:crypto:BTCUSDT", display_symbol="BTC/USDT"
-        ),
-    )
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.market.reference.select_market",
-        lambda _context, **_kwargs: record,
-    )
-    monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.market._load_routes",
-        lambda *_args: {
-            "routes": [
-                {
-                    "market_id": "market:binance:spot:BTCUSDT",
-                    "provider": "binance",
-                    "state": "ready",
-                    "selected": True,
-                    "observation_kinds": ["quote"],
-                }
-            ]
-        },
-    )
-
-    with redirect_stdout(output):
-        status = run_interactive(
-            workspace=workspace.paths.root,
-            dry_run=False,
-            no_exec=False,
-            yes=False,
-            execute=lambda argv: executed.append(tuple(argv)) or 0,
-        )
-
-    text = output.getvalue()
-    assert status == 0
-    assert "/market>" in text
-    assert "行情中心" in text
-    assert "/system/market>" in text
-    assert "workspace 共享服务（连接模式）" in text
-    assert executed[0][:2] == ("market", "once")
-    assert "system" not in executed[0]
-    assert executed[1][:13] == (
-        "system",
-        "component",
-        "market",
-        "snapshot",
-        "quote",
-        "--market-id",
-        "market:binance:spot:BTCUSDT",
-        "--provider",
-        "binance",
-        "--format",
-        "table",
-        "--workspace",
-        str(workspace.paths.root),
-    )
 
 
-def test_interactive_reference_menu_searches_market_by_symbol(
-    tmp_path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    answers = iter(["4", "6", "4", "BTCUSDT"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert (
-        execute_argv(
-            [
-                "interactive",
-                "--workspace",
-                str(workspace.paths.root),
-                "--dry-run",
-            ],
-            output,
-        )
-        == 0
-    )
-    assert (
-        "准备执行：kairos reference markets --symbol BTCUSDT --active-only --limit 10 --format table"
-        in output.getvalue()
-    )
 
 
-def test_interactive_reference_preview_selects_instrument_type_before_search(
-    tmp_path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "demo", workspace_id="demo"
-    )
-    output = StringIO()
-    answers = iter(["4", "6", "3", "3", "BTCUSDT"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert (
-        execute_argv(
-            [
-                "interactive",
-                "--workspace",
-                str(workspace.paths.root),
-                "--dry-run",
-            ],
-            output,
-        )
-        == 0
-    )
-    assert (
-        "准备执行：kairos reference markets --instrument-kind perpetual "
-        "--symbol BTCUSDT --active-only --limit 10 --format table" in output.getvalue()
-    )
 
 
 def test_readme_uses_the_current_golden_path_commands() -> None:
@@ -4501,17 +3635,6 @@ def test_project_init_non_interactive_requires_explicit_inputs() -> None:
     assert "project directory is required" in output.getvalue()
 
 
-def test_project_init_prompts_for_project_name_and_directory(
-    tmp_path, monkeypatch
-) -> None:
-    output = StringIO()
-    answers = iter([str(tmp_path / "demo"), "custom-project"])
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-
-    assert execute_argv(["project", "init"], output) == 0
-    manifest = tmp_path / "demo" / ".kairos" / "kairos.toml"
-    assert manifest.exists()
-    assert 'workspace_id = "custom-project"' in manifest.read_text()
 
 
 def test_launch_control_resolves_instance_owned_socket(tmp_path) -> None:
@@ -4796,7 +3919,7 @@ def test_launch_instance_component_risk_and_capital_status_use_instance_scope(
 def test_launch_instance_component_risk_mutations_use_owner_cli_scope(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.application.system import NativeCliApplication
+    from kairospy.system.apps.components.application import NativeCliApplication
 
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="instance-risk-mutations"

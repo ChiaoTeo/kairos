@@ -8,17 +8,18 @@ from typing import Any
 
 import typer
 
-from kairospy.application.agent import AgentResourceApplication
-from kairospy.application.workspace.credentials import (
+from kairospy.strategy.apps.agent.application import AgentResourceApplication
+from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     SecretRef,
 )
-from kairospy.application.launch.application import (
+from kairospy.system.apps.launch.application import (
     LaunchControlApplication,
     LaunchNotificationConfigurationApplication,
     LaunchRegistryApplication,
+    WorkspaceComponentDependencyApplication,
 )
-from kairospy.application.system import (
+from kairospy.system.apps.components.application import (
     CapitalSystemClient,
     ComponentControlApplication,
     ComponentProcessApplication,
@@ -26,37 +27,34 @@ from kairospy.application.system import (
     RiskSystemClient,
     SystemRuntimeSupervisor,
 )
-from kairospy.application.system.process_logging import (
+from kairospy.system.apps.components.application.process_logging import (
     current_run_id,
     decode_log_event,
     filter_log_lines,
     parse_since,
 )
-from kairospy.application.config import (
+from kairospy.system.apps.configuration.application import (
     ConfigApplication,
     ConfigurationMigrationApplication,
     ConfigurationReferenceApplication,
 )
-from kairospy.application.notification.composition import (
-    test_notification_destination,
-    validate_workspace_notifications,
-)
-from kairospy.application.notification import NotificationAdminApplication
-from kairospy.application.reference import ReferenceProviderConfigurationApplication
-from kairospy.application.workspace import WorkspaceApplication
-from kairospy.surface.cli.guided_setup import (
-    cancel_setup,
-    confirm_summary,
-    configure_credential_material,
-    print_step,
-    prompt_choice,
-    prompt_credential_material,
-)
+from kairospy.strategy.apps.notification.application import NotificationAdminApplication
+from kairospy.investment.apps.reference.application import ReferenceProviderConfigurationApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli.options import OutputFormat, effective_output, render
 
 
 def _emit(value: object, output: OutputFormat) -> None:
     typer.echo(render(value, output))
+
+
+def _open_resource_workbench(workspace: Path | None) -> None:
+    from kairospy.surface.workbench import KairosWorkbenchApp, load_workbench_state
+
+    state = load_workbench_state(workspace)
+    if state.owner is None:
+        raise typer.BadParameter(state.load_error or "当前没有可用的 workspace")
+    KairosWorkbenchApp(state, initial_section="resources").run()
 
 
 def _is_active_launch_status(status: Mapping[str, Any]) -> bool:
@@ -69,63 +67,16 @@ def _is_active_launch_status(status: Mapping[str, Any]) -> bool:
 
 
 def _component_dependents(owner: Any, component: str) -> list[dict[str, Any]]:
-    registry = LaunchRegistryApplication(owner)
-    control = LaunchControlApplication(owner)
-    workspace_socket = str(owner.paths.process_socket(component))
-    dependents: list[dict[str, Any]] = []
-    for entry in registry.instances():
-        launch_id = str(entry.get("launch_id") or "")
-        mode = str(entry.get("mode") or "paper")
-        instance_id = str(entry.get("instance_id") or "")
-        if not launch_id or not instance_id:
-            continue
-        instance_workspace = owner.instance(mode, launch_id, instance_id)
-        try:
-            manifest = json.loads(
-                instance_workspace.component_manifest().read_text(encoding="utf-8")
-            )
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
-            continue
-        components = manifest.get("components", {})
-        if not isinstance(components, Mapping):
-            continue
-        connection = components.get(component)
-        if not isinstance(connection, Mapping):
-            continue
-        if str(connection.get("socket") or "") != workspace_socket:
-            continue
-        status = control.status(control.target(launch_id, instance_id, mode=mode))
-        if _is_active_launch_status(status):
-            dependents.append(
-                {
-                    "launch_id": launch_id,
-                    "mode": mode,
-                    "instance_id": instance_id,
-                    "status": status.get("status", "unknown"),
-                    "component": component,
-                    "socket": workspace_socket,
-                }
-            )
-    return dependents
+    return list(WorkspaceComponentDependencyApplication(owner).active(component))
 
 
 def _ensure_no_active_component_dependents(
     owner: Any, component: str, action: str
 ) -> None:
-    dependents = _component_dependents(owner, component)
-    if not dependents:
-        return
-    lines = [
-        f"{action} refused: {component} is used by running launches.",
-        *(
-            f"- {item['launch_id']} / {item['mode']} / {item['instance_id']} "
-            f"({item['status']})"
-            for item in dependents
-        ),
-        f"Stop dependent launches first, then rerun `kairos system {action} "
-        f"--component {component}`.",
-    ]
-    raise typer.BadParameter("\n".join(lines))
+    try:
+        WorkspaceComponentDependencyApplication(owner).require_clear(component, action)
+    except RuntimeError as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 def _run_workspace_market_connected_command(
@@ -159,9 +110,9 @@ def _workspace_reference_client(owner: Any):
             "target server not found: workspace Reference is not running; "
             "use `kairos system up --component reference` first"
         )
-    from kairospy.infrastructure.contracts.reference import ReferenceClient
+    from kairospy.investment.apps.reference.application import ReferenceApplication
 
-    return ReferenceClient(
+    return ReferenceApplication.from_process(
         socket_path=socket,
         database_path=owner.paths.reference_database(),
         timeout=30.0,
@@ -269,12 +220,9 @@ def notifications_setup(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Interactively add or update a Feishu or Telegram destination."""
-
-    from kairospy.surface.cli.notification_setup import run_notification_setup
-
-    owner = WorkspaceApplication().open(workspace)
-    run_notification_setup(owner, provider=provider, output=output)
+    """Open the single notification resource form."""
+    del provider, output
+    _open_resource_workbench(workspace)
 
 
 @notifications_app.command("uses")
@@ -397,7 +345,7 @@ def notifications_validate(
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
-    _emit(validate_workspace_notifications(owner, mode=mode), output)
+    _emit(NotificationAdminApplication(owner).validate_workspace(mode=mode), output)
 
 
 @notifications_app.command("test")
@@ -411,7 +359,9 @@ def notifications_test(
     owner = WorkspaceApplication().open(workspace)
     admin = NotificationAdminApplication(owner)
     try:
-        result = asyncio.run(test_notification_destination(owner, destination_id))
+        result = asyncio.run(
+            NotificationAdminApplication(owner).test_destination(destination_id)
+        )
     except Exception as error:
         admin.record_test(
             destination_id,
@@ -447,19 +397,18 @@ def project_init(
 ) -> None:
     template_name = template.strip().lower() if template is not None else None
     if root is None:
-        if non_interactive:
-            raise typer.BadParameter(
-                "project directory is required with --non-interactive"
-            )
-        root = Path(typer.prompt("项目目录", default="."))
+        raise typer.BadParameter(
+            "project directory is required; use `kairos interactive` for guided setup"
+        )
     else:
         root = Path(root)
 
     default_id = root.expanduser().resolve().name
     if workspace_id is None:
-        if non_interactive:
-            raise typer.BadParameter("--id is required with --non-interactive")
-        workspace_id = typer.prompt("项目名", default=default_id)
+        raise typer.BadParameter(
+            f"--id is required (suggested: {default_id}); "
+            "use `kairos interactive` for guided setup"
+        )
 
     try:
         workspace = WorkspaceApplication().init_project(
@@ -738,67 +687,9 @@ def credential_config_setup(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    owner = WorkspaceApplication().open(workspace)
-    application = CredentialConfigurationApplication(owner)
-    schema = application.schema(provider)
-    print_step("安全凭据", 1, 3, "连接名称")
-    selected_id = (
-        credential_id
-        or typer.prompt("连接名称", default=f"{provider.strip().lower()}-main").strip()
-    )
-    try:
-        existing = application.show(selected_id)
-    except KeyError:
-        existing = None
-    if existing is not None:
-        references = ConfigurationReferenceApplication(owner).credential_references(
-            selected_id
-        )
-        typer.echo(f"将更新现有连接 {selected_id}；直接回车可以沿用当前安全凭据。")
-        typer.echo(
-            "受影响引用："
-            + (
-                "；".join(f"{item['source']}:{item['location']}" for item in references)
-                or "无"
-            )
-        )
-    print_step("安全凭据", 2, 3, "提供凭据")
-    material = prompt_credential_material(
-        application,
-        selected_id,
-        provider,
-        existing=existing,
-    )
-    field_names = ", ".join(str(value) for value in schema["required_fields"])
-    storage = (
-        "Workspace 私有 Secret 文件"
-        if material.values is not None
-        else "外部 Secret 引用"
-    )
-    print_step("安全凭据", 3, 3, "确认保存")
-    if not confirm_summary(
-        "即将保存：",
-        (
-            ("连接名称", selected_id),
-            ("Provider", provider.strip().lower()),
-            ("凭据字段", field_names or "无需凭据"),
-            ("保存方式", storage),
-            ("当前操作", "只保存凭据，不调用外部服务"),
-        ),
-    ):
-        _emit({**(existing or {}), "status": "unchanged"}, output)
-        return
-    _emit(
-        configure_credential_material(
-            application,
-            selected_id,
-            provider,
-            material,
-            overwrite=existing is not None,
-        ),
-        output,
-    )
-
+    """Open the single secure resource form instead of prompting in the CLI."""
+    del provider, credential_id, output
+    _open_resource_workbench(workspace)
 
 @credential_config_app.command("references")
 def credential_config_references(
@@ -860,127 +751,28 @@ def data_config_setup(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    owner = WorkspaceApplication().open(workspace)
-    credentials = CredentialConfigurationApplication(owner)
-    application = ReferenceProviderConfigurationApplication(owner)
-    print_step("市场数据", 1, 5, "选择数据来源")
-    typer.echo("  1. Massive · 美股标的信息和行情")
-    typer.echo("已选择 Massive。")
-    print_step("市场数据", 2, 5, "使用范围")
-    include_options = options
-    if not options:
-        include_options = (
-            prompt_choice(
-                "请选择数据范围：",
-                (
-                    ("1", "股票信息和实时/历史行情（推荐）"),
-                    ("2", "股票、行情和期权数据"),
-                ),
-                default="1",
-            )
-            == "2"
-        )
-    massive_credentials = [
-        str(value["credential_id"])
-        for value in credentials.list()
-        if value.get("provider") == "massive"
-    ]
-    selected = (
-        credential_id
-        or typer.prompt(
-            "连接名称",
-            default=massive_credentials[0]
-            if massive_credentials
-            else "massive-readonly",
-        ).strip()
-    )
-    existing = credentials.show(selected) if selected in massive_credentials else None
-    material = None
-    print_step("市场数据", 3, 5, "安全凭据")
-    if existing is not None:
-        replace = (
-            prompt_choice(
-                f"检测到已有安全凭据 {selected}：",
-                (("1", "沿用现有凭据（推荐）"), ("2", "重新填写凭据")),
-                default="1",
-            )
-            == "2"
-        )
-        if replace:
-            material = prompt_credential_material(
-                credentials, selected, "massive", existing=existing
-            )
-    else:
-        material = prompt_credential_material(credentials, selected, "massive")
-    selected_endpoint = typer.prompt(
-        "API endpoint", default=endpoint, show_default=True
-    ).strip()
-    capabilities = ["reference", "equity_market"]
-    if include_options:
-        capabilities.append("options")
-    if not confirm_summary(
-        "即将保存 Massive 市场数据：",
-        (
-            ("连接名称", selected),
-            ("用途", "股票、行情、期权" if include_options else "股票信息和行情"),
-            ("Endpoint", selected_endpoint),
-            ("安全凭据", "已填写" if material is not None else "沿用现有凭据"),
-            ("当前操作", "只保存配置，不读取外部数据"),
-        ),
-    ):
-        cancel_setup()
-    if material is not None:
-        configure_credential_material(
-            credentials,
-            selected,
-            "massive",
-            material,
-            overwrite=existing is not None,
-        )
-    value = application.configure_massive(
-        credential_id=selected,
-        endpoint=selected_endpoint,
-        capabilities=capabilities,
-    )
-    if value.get("configured") is not True:
-        typer.echo(
-            "Massive SecretRef 已保存但当前进程尚不可解析；若使用环境变量，"
-            "请设置后重新进入 kairos i，再主动执行读取测试。"
-        )
-    print_step("市场数据", 4, 5, "读取测试")
-    verification: dict[str, object] | None = None
-    if value.get("configured") is True and typer.confirm(
-        "现在读取少量股票信息和历史行情进行测试吗？（推荐）",
-        default=True,
-    ):
-        verification = application.test_connection("massive")
-    print_step("市场数据", 5, 5, "完成")
-    typer.echo(
-        "✓ Massive 市场数据已可用"
-        if verification and verification.get("verification_status") == "verified"
-        else "Massive 市场数据已保存，需要测试后才能用于要求已验证数据的运行方案。"
-    )
-    _emit({**value, "test": verification}, output)
-
+    """Open the single Market data resource form."""
+    del credential_id, endpoint, options, output
+    _open_resource_workbench(workspace)
 
 @data_config_app.command("test")
 def data_config_test(
     connection_id: str = typer.Argument("massive"),
+    confirmed: bool = typer.Option(False, "--yes"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Read fixed AAPL Reference and SPY hourly-bar samples; no write occurs."""
-
+    """Read fixed samples after explicit script confirmation."""
+    if not confirmed:
+        raise typer.BadParameter(
+            "manual data test requires explicit --yes; use `kairos interactive` "
+            "for guided confirmation"
+        )
     owner = WorkspaceApplication().open(workspace)
-    typer.echo("将进行认证、AAPL 标的查询和 SPY 小样本小时线读取；不会修改远端数据。")
-    if not typer.confirm("开始手动测试", default=False):
-        _emit({"status": "cancelled", "connection_id": connection_id}, output)
-        return
     _emit(
         ReferenceProviderConfigurationApplication(owner).test_connection(connection_id),
         output,
     )
-
 
 @data_config_app.command("disable")
 def data_config_disable(
@@ -992,21 +784,6 @@ def data_config_disable(
     owner = WorkspaceApplication().open(workspace)
     references = ConfigurationReferenceApplication(owner).data_provider_references(
         connection_id
-    )
-
-
-@data_config_app.command("enable")
-def data_config_enable(
-    connection_id: str = typer.Argument("massive"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    owner = WorkspaceApplication().open(workspace)
-    _emit(
-        ReferenceProviderConfigurationApplication(owner).set_enabled(
-            connection_id, enabled=True
-        ),
-        output,
     )
     if references and not force:
         locations = ", ".join(
@@ -1028,6 +805,19 @@ def data_config_enable(
     )
 
 
+@data_config_app.command("enable")
+def data_config_enable(
+    connection_id: str = typer.Argument("massive"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        ReferenceProviderConfigurationApplication(owner).set_enabled(
+            connection_id, enabled=True
+        ),
+        output,
+    )
 @data_config_app.command("references")
 def data_config_references(
     connection_id: str = typer.Argument("massive"),
@@ -1093,224 +883,9 @@ def agent_config_setup(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Configure one provider connection; Agent behavior remains Launch-owned."""
-    owner = WorkspaceApplication().open(workspace)
-    resources = AgentResourceApplication(owner)
-    catalog = {str(item["provider"]): item for item in resources.provider_catalog()}
-
-    print_step("AI 模型连接", 1, 7, "选择提供商")
-    detected = resources.detect_local_model_providers()
-    if detected:
-        labels = "、".join(
-            f"{item['label']}（{item['model_count']} 个模型）" for item in detected
-        )
-        typer.echo(
-            f"检测到本机服务：{labels}。这里只读取状态，不会下载模型或修改配置。"
-        )
-    provider_routes = {
-        "1": ("openai", None),
-        "2": ("anthropic", None),
-        "3": ("openrouter", None),
-        "4": ("ollama", None),
-        "5": ("lmstudio", None),
-        "6": ("custom", "openai-chat-completions"),
-        "7": ("custom", "anthropic-messages"),
-    }
-    route_by_provider = {
-        "openai": "1",
-        "anthropic": "2",
-        "openrouter": "3",
-        "ollama": "4",
-        "lmstudio": "5",
-        "custom": "6",
-    }
-    requested_provider = (provider or "").strip().lower()
-    if requested_provider and requested_provider not in route_by_provider:
-        raise typer.BadParameter(
-            "provider must be openai, anthropic, openrouter, ollama, lmstudio, or custom"
-        )
-    route = route_by_provider.get(requested_provider) or prompt_choice(
-        "连接哪一种模型服务？",
-        (
-            ("1", "OpenAI"),
-            ("2", "Anthropic"),
-            ("3", "OpenRouter"),
-            ("4", "Ollama（本机）"),
-            ("5", "LM Studio（本机）"),
-            ("6", "其他 OpenAI 兼容服务"),
-            ("7", "其他 Anthropic 兼容服务"),
-        ),
-        default="4" if any(item["provider"] == "ollama" for item in detected) else "1",
-    )
-    selected_provider, route_mode = provider_routes[route]
-    defaults = catalog.get(selected_provider, {})
-    selected_mode = api_mode or route_mode or str(defaults.get("api_mode") or "")
-    provider_label = str(defaults.get("label") or "自定义模型服务")
-
-    print_step("AI 模型连接", 2, 7, "连接名称")
-    default_connection = (
-        f"{selected_provider}-main"
-        if selected_provider != "custom"
-        else "compatible-main"
-    )
-    selected_connection = (
-        connection_id or typer.prompt("连接名称", default=default_connection).strip()
-    )
-    existing_connections = {
-        str(item["connection_id"]): item for item in resources.model_connections()
-    }
-    existing_connection = existing_connections.get(selected_connection)
-    if existing_connection is not None:
-        typer.echo("将更新这个模型连接；保存后需要重新测试。")
-
-    print_step("AI 模型连接", 3, 7, "认证方式")
-    credentials = CredentialConfigurationApplication(owner)
-    auth_required = bool(defaults.get("auth_required", selected_provider == "custom"))
-    selected_credential: str | None = None
-    credential_material = None
-    credential_provider = str(defaults.get("credential_provider") or "custom-model")
-    existing_credential: Mapping[str, object] | None = None
-    if auth_required:
-        selected_credential = (
-            credential_id
-            or typer.prompt("凭据名称", default=f"{selected_connection}-auth").strip()
-        )
-        try:
-            existing_credential = credentials.show(selected_credential)
-        except KeyError:
-            existing_credential = None
-        credential_material = prompt_credential_material(
-            credentials,
-            selected_credential,
-            credential_provider,
-            existing=existing_credential,
-        )
-    else:
-        typer.echo("这个本机连接默认不需要 API Key。")
-
-    print_step("AI 模型连接", 4, 7, "接口地址与模式")
-    default_endpoint = str(defaults.get("base_url") or "http://127.0.0.1:8000/v1")
-    selected_endpoint = (
-        base_url or typer.prompt("接口地址", default=default_endpoint).strip()
-    )
-    if selected_provider == "custom" and api_mode is None and route_mode is None:
-        selected_mode = prompt_choice(
-            "接口模式",
-            (
-                ("1", "OpenAI Responses"),
-                ("2", "OpenAI Chat Completions"),
-                ("3", "Anthropic Messages"),
-                ("4", "Ollama Native"),
-            ),
-            default="2",
-        )
-        selected_mode = {
-            "1": "openai-responses",
-            "2": "openai-chat-completions",
-            "3": "anthropic-messages",
-            "4": "ollama-native",
-        }[selected_mode]
-    typer.echo(f"接口模式：{selected_mode}")
-
-    print_step("AI 模型连接", 5, 7, "选择模型")
-    selected_model = (
-        model
-        or typer.prompt(
-            "模型 ID（保存后可从服务重新发现）",
-            default="gpt-5" if selected_provider == "openai" else "",
-            show_default=selected_provider == "openai",
-        ).strip()
-    )
-    if not selected_model:
-        typer.echo("可以先只保存连接，之后再发现或填写模型。")
-
-    print_step("AI 模型连接", 6, 7, "确认配置")
-    if not confirm_summary(
-        "将保存以下内容（安全凭据不会显示）：",
-        (
-            ("连接名称", selected_connection),
-            ("提供商", provider_label),
-            ("接口模式", selected_mode),
-            ("接口地址", selected_endpoint),
-            ("认证", "已提供安全凭据" if auth_required else "无需认证"),
-            ("模型", selected_model or "稍后选择"),
-        ),
-    ):
-        cancel_setup()
-
-    newly_created_credential = auth_required and existing_credential is None
-    configured_credential: dict[str, object] | None = None
-    try:
-        if auth_required:
-            assert selected_credential is not None
-            assert credential_material is not None
-            configured_credential = configure_credential_material(
-                credentials,
-                selected_credential,
-                credential_provider,
-                credential_material,
-                role="model-inference",
-                overwrite=existing_credential is not None,
-            )
-        configured = resources.configure_model_connection(
-            selected_connection,
-            provider=selected_provider,
-            api_mode=selected_mode,
-            base_url=selected_endpoint,
-            credential_id=selected_credential,
-            models=(selected_model,) if selected_model else (),
-            overwrite=existing_connection is not None,
-        )
-    except Exception:
-        if newly_created_credential and selected_credential is not None:
-            credentials.delete(selected_credential)
-        raise
-
-    verification: dict[str, object] | None = None
-    discovered: tuple[dict[str, object], ...] = ()
-    if typer.confirm("现在从服务读取可用模型？这会连接上面的接口", default=False):
-        try:
-            discovered = resources.discover_models(selected_connection)
-            if discovered:
-                typer.echo(
-                    "发现模型："
-                    + "、".join(str(item["id"]) for item in discovered[:10])
-                )
-            else:
-                typer.echo("服务可访问，但没有返回可用模型。")
-        except Exception as error:
-            typer.echo(f"暂时无法读取模型列表：{type(error).__name__}")
-    if selected_model and typer.confirm(
-        "立即执行一次最小文本调用测试？云端服务可能产生少量费用",
-        default=False,
-    ):
-        verification = resources.test_model_connection(
-            selected_connection, selected_model
-        )
-
-    print_step("AI 模型连接", 7, 7, "完成")
-    state = configured.get("verification_status", "pending")
-    typer.echo(
-        "模型连接已保存。"
-        + ("最小调用测试已完成。" if verification else "使用前请完成一次最小调用测试。")
-    )
-    _emit(
-        {
-            **resources.status(),
-            "connection": configured,
-            "configured_credential": configured_credential,
-            "selected_provider": selected_provider,
-            "selected_connection": selected_connection,
-            "selected_credential": selected_credential,
-            "selected_model": selected_model,
-            "discovered_models": list(discovered),
-            "verification": verification,
-            "verification_status": state,
-            "next_steps": ["完成连接测试", "在 Launch 中选择模型与 Agent 策略"],
-        },
-        output,
-    )
-
+    """Open the single AI model resource form."""
+    del provider, connection_id, credential_id, api_mode, base_url, model, output
+    _open_resource_workbench(workspace)
 
 @agent_config_app.command("test")
 def agent_config_test(
@@ -2209,7 +1784,7 @@ def system_component_reference_validate(
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
     """Run Reference runtime acceptance checks against the selected component."""
-    from kairospy.application.reference import (
+    from kairospy.investment.apps.reference.application import (
         MASSIVE_REFERENCE_SOURCES,
         validate_reference_runtime,
     )

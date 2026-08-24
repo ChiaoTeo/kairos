@@ -1,6 +1,6 @@
 # Decision 0010：Interactive CLI 产品 Section 边界
 
-- Status: Accepted
+- Status: Superseded by [Decision 0014](0014-unified-textual-workbench.md)
 - Date: 2026-08-23
 - Scope: `kairospy.surface.cli.interactive`、交互式 CLI 测试
 

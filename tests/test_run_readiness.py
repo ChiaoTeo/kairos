@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kairospy.application.launch.application.readiness import (
+from kairospy.system.apps.launch.application.readiness import (
     OperationEffect,
     ResourceErrorCategory,
     ResourceKind,
@@ -11,11 +11,11 @@ from kairospy.application.launch.application.readiness import (
     normalize_error_category,
     project_resource_readiness,
 )
-from kairospy.application.workspace import WorkspaceApplication
-from kairospy.application.account import AccountConfigurationApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.investment.apps.account.application import AccountConfigurationApplication
 
 
-def test_resource_projection_has_stable_state_priority_and_next_action() -> None:
+def test_resource_readiness_has_stable_state_priority_and_next_action() -> None:
     missing = project_resource_readiness(
         ResourceKind.AI_MODEL,
         {

@@ -5,14 +5,14 @@ from dataclasses import replace
 
 import pytest
 
-from kairospy.application.risk import (
+from kairospy.investment.apps.risk.application import (
     ReservationChangedEvent,
     RiskApplication,
     RiskCircuitChangedEvent,
     RiskDecisionEvent,
 )
 from kairospy.primitives.account import AccountId
-from kairospy.infrastructure.transport.risk import RiskEventRecord
+from kairospy.infrastructure.contracts.risk.source import RiskEventRecord
 
 
 class FiniteRiskSource:

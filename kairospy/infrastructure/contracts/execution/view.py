@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
+from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 sys.modules.setdefault("kairos", _generated_kairos)
@@ -97,7 +97,7 @@ def decode_view(payload: bytes, kind: ExecutionViewKind) -> Any:
     if len(payload) < 8 or payload[4:8] != identifier:
         raise ValueError(f"invalid Execution {kind.value} view identifier")
     module = __import__(
-        f"kairospy.infrastructure.transport.generated.kairos.execution.v2.{root_name}",
+        f"kairospy.infrastructure.protocol.generated.kairos.execution.v2.{root_name}",
         fromlist=[root_name],
     )
     return getattr(module, root_name).GetRootAs(payload, 0)

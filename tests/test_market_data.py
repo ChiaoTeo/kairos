@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairospy.application.market import (
+from kairospy.investment.apps.market.application import (
     MarketDataApplication,
     materialize_replay_file,
     validate_replay_window,

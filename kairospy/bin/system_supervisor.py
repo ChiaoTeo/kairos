@@ -4,17 +4,17 @@ import argparse
 import json
 from pathlib import Path
 
-from kairospy.infrastructure.observability import (
+from kairospy.system.apps.components.application.observability import (
     configure_from_environment,
     record_counter,
     record_gauge,
     start_span,
 )
-from kairospy.application.system import (
+from kairospy.system.apps.components.application import (
     ComponentProcessApplication,
     SystemRuntimeSupervisor,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 def main() -> int:

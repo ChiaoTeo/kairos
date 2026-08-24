@@ -3,7 +3,7 @@ import re
 
 import pytest
 
-from kairospy.application.events import DataEvent, EventMetadata
+from kairospy.investment.application.eventing import DataEvent, EventMetadata
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.primitives.execution import FillId, IntentId, OrderId
 from kairospy.primitives.reference import (

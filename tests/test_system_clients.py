@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.system import (
+from kairospy.system.apps.components.application import (
     AccountSystemClient,
     CapitalSystemClient,
     ComponentControlApplication,
@@ -15,7 +15,7 @@ from kairospy.application.system import (
     ReferenceSystemClient,
     RiskSystemClient,
 )
-from kairospy.application.launch.application.connections import (
+from kairospy.system.apps.launch.application.connections import (
     ComponentConnection,
     InstanceConnections,
 )
@@ -68,7 +68,7 @@ def test_execution_system_client_owns_intent_connection() -> None:
 
 
 def test_execution_system_client_owns_backtest_market_dispatch(monkeypatch) -> None:
-    import kairospy.infrastructure.contracts.execution as execution_contract
+    import kairospy.investment.apps.execution.application.mapping as execution_mapping
 
     class RecordingExecutionControl:
         def __init__(self) -> None:
@@ -79,7 +79,7 @@ def test_execution_system_client_owns_backtest_market_dispatch(monkeypatch) -> N
             return {"fills": []}
 
     monkeypatch.setattr(
-        execution_contract,
+        execution_mapping,
         "backtest_market_payload",
         lambda event: {"Quote": {"instrument_id": event}},
     )
@@ -94,7 +94,7 @@ def test_execution_system_client_owns_backtest_market_dispatch(monkeypatch) -> N
 
 
 def test_account_system_client_owns_mark_to_market_dispatch(monkeypatch) -> None:
-    import kairospy.infrastructure.contracts.account as account_contract
+    import kairospy.investment.apps.account.application.mapping as account_mapping
 
     class RecordingAccountControl:
         def __init__(self) -> None:
@@ -112,7 +112,7 @@ def test_account_system_client_owns_mark_to_market_dispatch(monkeypatch) -> None
         "observed_at_unix_nanos": 1,
     }
     monkeypatch.setattr(
-        account_contract,
+        account_mapping,
         "backtest_mark_to_market_request",
         lambda event: request if event == "quote" else None,
     )
@@ -128,21 +128,21 @@ def test_account_system_client_owns_mark_to_market_dispatch(monkeypatch) -> None
     assert control.calls == [("mark_to_market", request)]
 
 
-def test_market_system_client_owns_current_data_source_query() -> None:
+def test_market_system_client_owns_current_data_route_query() -> None:
     class RecordingMarketControl:
         def __init__(self) -> None:
             self.calls: list[tuple[str, object]] = []
 
-        def data_sources(self, query):
-            self.calls.append(("data_sources", query))
-            return {"data_sources": []}
+        def data_routes(self, query):
+            self.calls.append(("data_routes", query))
+            return {"data_routes": []}
 
     client = MarketSystemClient(Path("/tmp/market.sock"))
     control = RecordingMarketControl()
     object.__setattr__(client, "control", control)
-    client.data_sources({"market_id": "market:btc", "observation_kind": "quote"})
+    client.data_routes({"market_id": "market:btc", "observation_kind": "quote"})
     assert control.calls == [
-        ("data_sources", {"market_id": "market:btc", "observation_kind": "quote"})
+        ("data_routes", {"market_id": "market:btc", "observation_kind": "quote"})
     ]
 
 

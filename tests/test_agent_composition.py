@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.account import (
+from kairospy.investment.apps.account.application import (
     AccountApplication,
     AccountSegmentSnapshot,
     AccountSnapshot,
@@ -14,18 +14,18 @@ from kairospy.application.account import (
     SegmentCompleteness,
     SPOT,
 )
-from kairospy.application.agent.composition import _exposure_classifier, compose_agent
-from kairospy.application.agent.configuration import AgentLaunchConfig
-from kairospy.application.agent.services.controlled_execution import (
+from kairospy.strategy.apps.agent.composition import _exposure_classifier, compose_agent
+from kairospy.strategy.apps.agent.application.configuration import AgentLaunchConfig
+from kairospy.strategy.apps.agent.services.controlled_execution import (
     AgentControlledExecutionCommands,
     UnavailableAgentExecutionCommands,
 )
-from kairospy.application.agent.services.tools import AgentToolScope
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.strategy.apps.agent.services.tools import AgentToolScope
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.reference import InstrumentId
-from kairospy.application.reference import InstrumentRef
-from kairospy.application.execution import TargetPositionRequest
+from kairospy.investment.apps.reference.application import InstrumentRef
+from kairospy.investment.apps.execution.application import TargetPositionRequest
 
 
 PROFILE = {
@@ -141,7 +141,7 @@ def test_disabled_agent_does_not_import_optional_sdk(
         raise AssertionError(f"disabled Agent imported optional SDK: {name}")
 
     monkeypatch.setattr(
-        "kairospy.application.agent.services.openai_runtime.importlib.import_module",
+        "kairospy.strategy.apps.agent.services.openai_runtime.importlib.import_module",
         unexpected_import,
     )
     composition = compose_agent(

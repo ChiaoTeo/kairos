@@ -14,9 +14,8 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Input, Label, OptionList, RichLog
 from textual.worker import Worker
 
-from kairospy.application.market.cli import MarketCliApplication
-from kairospy.application.reference import ReferenceApplication
-from kairospy.infrastructure.contracts.reference import ReferenceClient
+from kairospy.investment.apps.market.application.cli import MarketCliApplication
+from kairospy.investment.apps.reference.application import ReferenceApplication
 
 from ..dialogs import ConfirmDialog, InputDialog, SelectDialog, SelectOption
 from ..widgets import ActionItem, ActionList, WorkspaceHeader
@@ -155,8 +154,8 @@ class MarketScreen(Screen[None]):
         state = self.app.state  # type: ignore[attr-defined]
         if state.owner is None:
             raise RuntimeError(state.load_error or "当前没有可用的 workspace")
-        application = ReferenceApplication(
-            ReferenceClient(database_path=state.owner.paths.reference_database())
+        application = ReferenceApplication.from_database(
+            state.owner.paths.reference_database()
         )
         return application.find_markets(
             query=query or None,
@@ -517,9 +516,9 @@ class MarketHistoryScreen(Screen[None]):
         if event.option.id != "configure":
             return
         options = (
-            SelectOption("K 线", "bar"),
-            SelectOption("报价", "quote"),
-            SelectOption("成交", "trade"),
+            SelectOption("bar", "K 线"),
+            SelectOption("quote", "报价"),
+            SelectOption("trade", "成交"),
         )
         if self.provider == "massive":
             options = options[:2]
@@ -557,6 +556,9 @@ class MarketHistoryScreen(Screen[None]):
         if value is None:
             return
         self.destination = value
+        if self.app.state.yes:  # type: ignore[attr-defined]
+            self._download()
+            return
         self.app.push_screen(
             ConfirmDialog("下载历史行情", f"保存到 {value}", confirm_label="下载"),
             lambda confirmed: self._download() if confirmed else None,
@@ -647,6 +649,9 @@ class MarketReplayScreen(Screen[None]):
         self.files = tuple(item.strip() for item in value.split(",") if item.strip())
         if not self.files:
             return
+        if self.app.state.yes:  # type: ignore[attr-defined]
+            self._run()
+            return
         self.app.push_screen(
             ConfirmDialog(
                 "开始行情回放",
@@ -735,6 +740,9 @@ class ConnectedMarketScreen(Screen[None]):
             self._select_view(action)
             return
         if action in {"start", "stop", "restart", "pause", "resume"}:
+            if self.app.state.yes:  # type: ignore[attr-defined]
+                self._run(action)
+                return
             self.app.push_screen(
                 ConfirmDialog(
                     f"{action} Market",
@@ -822,7 +830,7 @@ class ConnectedMarketScreen(Screen[None]):
         )
 
     def _execute(self, action: str) -> dict[str, Any]:
-        from kairospy.application.system import ComponentProcessApplication
+        from kairospy.system.apps.components.application import ComponentProcessApplication
 
         state = self.app.state  # type: ignore[attr-defined]
         processes = ComponentProcessApplication(state.owner)
@@ -831,8 +839,22 @@ class ConnectedMarketScreen(Screen[None]):
         if action == "start":
             return processes.ensure_running("market").status()
         if action == "stop":
+            from kairospy.system.apps.launch.application import (
+                WorkspaceComponentDependencyApplication,
+            )
+
+            WorkspaceComponentDependencyApplication(state.owner).require_clear(
+                "market", "stop"
+            )
             return processes.stop("market")
         if action == "restart":
+            from kairospy.system.apps.launch.application import (
+                WorkspaceComponentDependencyApplication,
+            )
+
+            WorkspaceComponentDependencyApplication(state.owner).require_clear(
+                "market", "restart"
+            )
             return processes.restart("market").status()
         if action == "logs":
             return {"component": "market", "lines": list(processes.logs("market"))}

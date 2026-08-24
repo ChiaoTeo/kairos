@@ -132,8 +132,9 @@ Agent event stream 进入 Strategy ingress，worker 不直接调用 Strategy obj
 
 ## Implementation anchors
 
-- Strategy Agent API/runtime：`kairospy/application/agent/`
-- Strategy dispatch/composition：`kairospy/application/strategy/`
-- Launch normalized snapshots：`kairospy/application/launch/application/`
+- Strategy Agent API/runtime：`kairospy/strategy/apps/agent/`
+- Strategy dispatch/composition：`kairospy/strategy/apps/runtime/` 与
+  `kairospy/strategy/composition/`
+- Launch normalized snapshots：`kairospy/system/apps/launch/application/`
 - Execution admission boundary：`crates/modules/execution/`
 - Python behavior tests：`tests/test_agent_*.py`、`tests/test_strategy_ingress.py`、`tests/test_strategy_host.py`

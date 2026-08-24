@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import App
 from textual.binding import Binding
 
+from .dialogs import HelpDialog
 from .screens import (
     HomeScreen,
     MarketScreen,
@@ -45,7 +48,8 @@ Footer {
 }
 
 ActionList {
-    height: 1fr;
+    height: auto;
+    max-height: 1fr;
     margin: 0 1 1 1;
     padding: 0 1;
     border: round $surface-lighten-2;
@@ -112,6 +116,32 @@ ModalScreen {
     height: auto;
 }
 
+#execution-order-form {
+    height: 1fr;
+    padding: 0 2 1 2;
+}
+
+#execution-order-form Label {
+    margin-top: 1;
+}
+
+#execution-order-error {
+    color: $text-muted;
+}
+
+#standalone-order-form {
+    height: 1fr;
+    padding: 0 2 1 2;
+}
+
+#standalone-order-form Label {
+    margin-top: 1;
+}
+
+#standalone-order-error {
+    color: $text-muted;
+}
+
 #resource-form Label {
     margin-top: 1;
 }
@@ -133,6 +163,21 @@ ModalScreen {
 #observe-summary, #observe-status {
     height: 2;
     padding: 0 2;
+}
+
+#attach-result {
+    height: 2fr;
+}
+
+#attach-python {
+    height: 1fr;
+    min-height: 6;
+    margin: 0 1;
+}
+
+#attach-python-run {
+    dock: bottom;
+    margin: 0 2 1 2;
 }
 
 #observe-body {
@@ -169,6 +214,7 @@ class KairosWorkbenchApp(App[int]):
     BINDINGS = [
         Binding("q", "quit", "退出"),
         Binding("question_mark", "help", "帮助"),
+        Binding("ctrl+p", "command_palette", "命令", show=False),
         Binding("ctrl+c", "cancel_operation", "取消操作", show=False),
     ]
 
@@ -177,17 +223,32 @@ class KairosWorkbenchApp(App[int]):
         state: WorkbenchState,
         *,
         initial_section: str | None = None,
+        initial_launch_attach: str | None = None,
+        initial_launch_setup: tuple[str, Path | None] | None = None,
         observe_refresh_seconds: float = 2.0,
     ) -> None:
         super().__init__()
         self.state = state
         self.initial_section = initial_section
+        self.initial_launch_attach = initial_launch_attach
+        self.initial_launch_setup = initial_launch_setup
         self.observe_refresh_seconds = observe_refresh_seconds
 
     def on_mount(self) -> None:
         self.push_screen(HomeScreen())
         if self.initial_section is not None:
             self.open_section(self.initial_section)
+        if self.initial_launch_attach is not None:
+            from .screens.strategy import LaunchAttachScreen
+
+            self.state.selected_launch = self.initial_launch_attach
+            self.push_screen(LaunchAttachScreen(self.initial_launch_attach))
+        if self.initial_launch_setup is not None:
+            from .screens.launch_setup import LaunchSetupScreen
+
+            launch_id, source = self.initial_launch_setup
+            self.state.selected_launch = launch_id
+            self.push_screen(LaunchSetupScreen(launch_id, source))
 
     def open_section(self, section: str) -> None:
         """Open an explicit product screen as it becomes available."""
@@ -221,7 +282,19 @@ class KairosWorkbenchApp(App[int]):
         self.exit(0)
 
     def action_help(self) -> None:
-        self.notify("使用方向键选择，Enter 打开，Esc 返回。", title="当前页面帮助")
+        screen = self.screen
+        bindings = tuple(
+            binding
+            for binding in getattr(screen, "BINDINGS", ())
+            if isinstance(binding, Binding)
+        )
+        self.push_screen(
+            HelpDialog(
+                screen.sub_title or screen.title or "当前页面",
+                bindings,
+                show_product_map=isinstance(screen, HomeScreen),
+            )
+        )
 
     def action_cancel_operation(self) -> None:
         cancelled = self.screen.workers.cancel_node(self.screen)

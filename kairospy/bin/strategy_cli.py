@@ -4,8 +4,8 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from kairospy.application.system import UnixRestClient
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.components.application import UnixRestClient
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 def main() -> int:

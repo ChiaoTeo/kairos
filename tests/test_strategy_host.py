@@ -9,24 +9,24 @@ import os
 from pathlib import Path
 import pytest
 
-from kairospy.application.launch import (
+from kairospy.system.apps.launch import (
     LaunchIdentity,
     LaunchInstance,
     LaunchInstanceApplication,
 )
-from kairospy.application.agent import (
+from kairospy.strategy.apps.agent.application import (
     AgentDecisionNotice,
     AgentEvent,
     AgentEventStatus,
 )
-from kairospy.application.strategy import StrategyApplication, StrategyLifecycle
-from kairospy.application.strategy.services.ingress import StrategyEventIngress
-from kairospy.application.account import AccountSegmentSnapshot, DataFreshness, SPOT
-from kairospy.application.execution import ExecutionBacktestResult
+from kairospy.strategy.apps.runtime.application import StrategyApplication, StrategyLifecycle
+from kairospy.strategy.apps.runtime.services.ingress import StrategyEventIngress
+from kairospy.investment.apps.account.application import AccountSegmentSnapshot, DataFreshness, SPOT
+from kairospy.investment.apps.execution.application import ExecutionBacktestResult
 from kairospy.primitives.account import AccountId
-from kairospy.application.market import MarketSnapshot, ObservationScope, Quote
-from kairospy.application.market.events import MarketEventRecord
-from kairospy.application.market.mapping import map_market_event
+from kairospy.investment.apps.market.application import MarketSnapshot, ObservationScope, Quote
+from kairospy.investment.apps.market.application.events import MarketEventRecord
+from kairospy.investment.apps.market.application.mapping import map_market_event
 from kairospy.strategy import (
     BarEvent,
     ClockAdvance,
@@ -53,7 +53,7 @@ from kairospy.strategy import (
     SystemNotice,
     Timeframe,
 )
-from kairospy.application.strategy.services import (
+from kairospy.strategy.apps.runtime.services import (
     InMemoryApplicationPorts,
     InMemoryMarketEventSource,
     InMemoryLifecycleJournal,
@@ -62,9 +62,9 @@ from kairospy.application.strategy.services import (
     build_in_memory_strategy_applications,
 )
 from kairospy.strategy import StrategyState
-from kairospy.application.market import EventStreamGap
-from kairospy.infrastructure.transport.market import BarView, DecimalValue, QuoteView
-from kairospy.application.system import UnixRestClient
+from kairospy.investment.apps.market.application import EventStreamGap
+from kairospy.infrastructure.contracts.market.source import BarView, DecimalValue, QuoteView
+from kairospy.system.apps.components.application import UnixRestClient
 from kairospy.strategy import StrategyLogger, StrategyOutput
 from kairospy.strategy import CommandResult
 

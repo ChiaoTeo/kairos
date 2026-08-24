@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -9,19 +11,22 @@ from rich.pretty import Pretty
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Label, OptionList, RichLog
+from textual.widgets import Button, DataTable, Footer, Label, OptionList, RichLog, TextArea
 from textual.worker import Worker
 
-from kairospy.application.launch.application import (
+from kairospy.system.apps.launch.application import (
     LaunchConfigurationApplication,
     LaunchInstanceTimelineApplication,
     LaunchRegistryApplication,
     LaunchRuntimeApplication,
 )
-from kairospy.application.launch.application.wizard import load_values
+from kairospy.system.apps.launch.application.wizard import load_values
+from kairospy.system.apps.components.application.supervisor import UnixRestClient
 
 from ..dialogs import ConfirmDialog, InputDialog
 from ..widgets import ActionItem, ActionList, WorkspaceHeader
+from .execution import ExecutionComponentScreen
+from .launch_market import LaunchMarketComponentScreen
 from .launch_setup import LaunchSetupScreen
 
 
@@ -375,6 +380,9 @@ class LaunchAttachScreen(Screen[None]):
         yield Label(f"跟随运行输出 · {self.launch_id}", id="page-title")
         yield Label("正在连接…", id="attach-status")
         yield RichLog(id="attach-result", wrap=True, highlight=False, markup=True)
+        yield Label("Strategy Python（可选）", classes="panel-title")
+        yield TextArea(id="attach-python", language="python", show_line_numbers=True)
+        yield Button("发送到当前 Strategy", id="attach-python-run", variant="primary")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -403,6 +411,44 @@ class LaunchAttachScreen(Screen[None]):
             exit_on_error=False,
         )
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "attach-python-run":
+            return
+        source = self.query_one("#attach-python", TextArea).text.strip()
+        if not source:
+            self.query_one("#attach-status", Label).update("请输入 Python 代码")
+            return
+        self.query_one("#attach-python-run", Button).disabled = True
+        self.run_worker(
+            lambda: asyncio.run(self._send_python(source)),
+            name="launch-attach-python",
+            group="launch-python",
+            thread=True,
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    async def _send_python(self, source: str) -> dict[str, Any]:
+        owner = self.app.state.owner  # type: ignore[attr-defined]
+        active = LaunchRuntimeApplication(owner).running_instance(self.launch_id)
+        if active is None:
+            raise RuntimeError(f"Launch 未在运行：{self.launch_id}")
+        instance_id = str(active["instance_id"])
+        mode = str(active.get("mode") or "paper")
+        socket_path = owner.instance(mode, self.launch_id, instance_id).socket("strategy")
+        return await UnixRestClient(socket_path).request(
+            "POST",
+            "/v1/command",
+            json.dumps(
+                {
+                    "request_id": f"workbench:{instance_id}",
+                    "kind": "interactive.python",
+                    "source": source,
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+
     def _load(self) -> dict[str, Any]:
         application = LaunchRuntimeApplication(self.app.state.owner)  # type: ignore[attr-defined]
         active = application.running_instance(self.launch_id)
@@ -415,6 +461,18 @@ class LaunchAttachScreen(Screen[None]):
         }
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.group == "launch-python":
+            self.query_one("#attach-python-run", Button).disabled = False
+            if event.state.name == "ERROR":
+                self.query_one("#attach-status", Label).update(
+                    f"Python 执行失败：{event.worker.error}"
+                )
+            elif event.state.name == "SUCCESS":
+                result = event.worker.result or {}
+                log = self.query_one("#attach-result", RichLog)
+                log.write(Pretty(result, expand_all=True))
+                self.query_one("#attach-status", Label).update("Python 执行完成")
+            return
         if event.worker.group != "launch-attach":
             return
         status = self.query_one("#attach-status", Label)
@@ -611,6 +669,7 @@ class LaunchComponentsScreen(Screen[None]):
         self.launch_id = launch_id
         self.instance_id = instance_id
         self.mode = mode
+        self._components: dict[str, dict[str, Any]] = {}
         self.sub_title = f"首页 › 策略与运行 › {launch_id} › {instance_id} › 实例组件"
 
     def compose(self) -> ComposeResult:
@@ -656,6 +715,7 @@ class LaunchComponentsScreen(Screen[None]):
         table = self.query_one("#components-table", DataTable)
         table.clear()
         values = event.worker.result or {}
+        self._components = {str(name): dict(value) for name, value in values.items()}
         for component, value in values.items():
             table.add_row(
                 component,
@@ -668,6 +728,53 @@ class LaunchComponentsScreen(Screen[None]):
         status.update("没有实例组件。" if not values else f"共 {len(values)} 个组件")
         if values:
             table.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        component = str(event.row_key.value)
+        if component == "market":
+            self.app.push_screen(
+                LaunchMarketComponentScreen(
+                    self.launch_id, self.instance_id, self.mode
+                )
+            )
+            return
+        if component == "execution":
+            self.app.push_screen(
+                ExecutionComponentScreen(self.launch_id, self.instance_id, self.mode)
+            )
+            return
+        value = self._components.get(component)
+        if value is not None:
+            self.app.push_screen(
+                LaunchComponentResultScreen(
+                    f"{self.launch_id}/{self.instance_id} · {component}", value
+                )
+            )
+
+
+class LaunchComponentResultScreen(Screen[None]):
+    TITLE = "Kairos"
+    BINDINGS = [Binding("escape", "back", "返回")]
+
+    def __init__(self, title: str, value: Any) -> None:
+        super().__init__()
+        self.result_title = title
+        self.value = value
+        self.sub_title = f"首页 › 策略与运行 › {title}"
+
+    def compose(self) -> ComposeResult:
+        yield WorkspaceHeader()
+        yield Label(self.result_title, id="page-title")
+        yield RichLog(id="component-result", wrap=True, highlight=False)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#component-result", RichLog).write(
+            Pretty(self.value, expand_all=True)
+        )
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
 
 
 class LaunchTimelineScreen(Screen[None]):

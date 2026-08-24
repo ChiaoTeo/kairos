@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.agent.model_connections import (
+from kairospy.strategy.apps.agent.application.model_connections import (
     ModelProviderConnectionApplication,
 )
-from kairospy.application.config import (
+from kairospy.system.apps.configuration.application import (
     ConfigurationReferenceApplication,
     WorkspaceResourceLifecycleApplication,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 def test_resource_reference_impact_blocks_delete_and_marks_document_state(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 from pathlib import Path
 from typing import Any
 
@@ -13,13 +14,14 @@ from textual.screen import Screen
 from textual.widgets import Button, Checkbox, Footer, Input, Label, Select
 from textual.worker import Worker
 
-from kairospy.application.launch.application import LaunchConfigurationApplication
-from kairospy.application.launch.application.wizard import (
+from kairospy.system.apps.launch.application import LaunchConfigurationApplication
+from kairospy.system.apps.launch.application.wizard import (
     LaunchDraft,
     build_and_validate,
     load_values,
 )
 
+from ..dialogs import ConfirmDialog
 from ..widgets import WorkspaceHeader
 
 
@@ -50,6 +52,13 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
         market = _mapping(_mapping(self.values.get(mode)).get("market"))
         route = _first_mapping(execution.get("routes"))
         accounts = _account_refs(self.values)
+        account_scopes = _account_scopes(self.values)
+        agent = _mapping(self.values.get("agent"))
+        profile = _mapping(agent.get("profile"))
+        model = _mapping(agent.get("model"))
+        review = _mapping(_mapping(agent.get("capabilities")).get("intent_review"))
+        notifications = _mapping(self.values.get("notifications"))
+        notification_route = _first_route(notifications.get("routes"))
 
         yield WorkspaceHeader()
         yield Label(f"配置 Launch · {self.launch_id}", id="page-title")
@@ -68,6 +77,11 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
             )
             yield Label("交易账户（逗号分隔）")
             yield Input(value=",".join(accounts), id="launch-accounts")
+            yield Label("账户范围 JSON（按账户配置 segments / trade）")
+            yield Input(
+                value=json.dumps(account_scopes, ensure_ascii=False),
+                id="launch-account-scopes",
+            )
 
             with Vertical(id="connected-fields"):
                 yield Label("Market 连接 Profile")
@@ -138,8 +152,129 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
                     id="live-max-notional",
                 )
 
+            yield Label("Agent")
+            yield Checkbox(
+                "启用 Agent",
+                value=bool(agent.get("enabled", False)),
+                id="agent-enabled",
+            )
+            with Vertical(id="agent-fields"):
+                yield Checkbox(
+                    "Agent 不可用时阻止 Launch",
+                    value=bool(agent.get("required", False)),
+                    id="agent-required",
+                )
+                yield Label("Agent goal")
+                yield Input(
+                    value=str(
+                        profile.get("goal")
+                        or "Review execution intents against bounded risk and supplied context"
+                    ),
+                    id="agent-goal",
+                )
+                yield Label("Agent Profile version")
+                yield Input(
+                    value=str(profile.get("version") or "1"),
+                    id="agent-profile-version",
+                )
+                yield Label("Review rubric（逗号分隔）")
+                yield Input(
+                    value=",".join(
+                        _strings(profile.get("rubric"))
+                        or (
+                            "Prefer bounded risk",
+                            "Use fresh evidence",
+                            "Abstain when evidence is insufficient",
+                        )
+                    ),
+                    id="agent-rubric",
+                )
+                yield Label("Invalidation rules（逗号分隔）")
+                yield Input(
+                    value=",".join(
+                        _strings(profile.get("invalidation_rules"))
+                        or ("Abstain when required context is unavailable",)
+                    ),
+                    id="agent-invalidation",
+                )
+                yield Label("Allowed reason codes（逗号分隔，可留空）")
+                yield Input(
+                    value=",".join(_strings(profile.get("reason_codes"))),
+                    id="agent-reason-codes",
+                )
+                yield Label("Allowed risk flags（逗号分隔，可留空）")
+                yield Input(
+                    value=",".join(_strings(profile.get("risk_flags"))),
+                    id="agent-risk-flags",
+                )
+                yield Label("Intent review 初始模式")
+                yield Select(
+                    (("Shadow", "shadow"), ("Gate", "gate"), ("Revise", "revise")),
+                    value=str(review.get("initial_mode") or "shadow"),
+                    allow_blank=False,
+                    id="agent-initial-mode",
+                )
+                yield Label("Strategy 可切换模式（逗号分隔）")
+                yield Input(
+                    value=",".join(
+                        _strings(review.get("strategy_selectable_modes"))
+                        or ("shadow", "gate", "revise")
+                    ),
+                    id="agent-selectable-modes",
+                )
+                yield Label("Agent 审核操作（逗号分隔）")
+                yield Input(
+                    value=",".join(
+                        _strings(review.get("operations"))
+                        or ("target_position",)
+                    ),
+                    id="agent-operations",
+                )
+                yield Label("必需 context keys（逗号分隔，可留空）")
+                yield Input(
+                    value=",".join(_strings(review.get("required_contexts"))),
+                    id="agent-required-contexts",
+                )
+                yield Label("模型连接（paper/live）")
+                yield Input(
+                    value=str(model.get("connection") or ""),
+                    id="agent-model-connection",
+                )
+                yield Label("固定模型 snapshot（paper/live）")
+                yield Input(value=str(model.get("model") or ""), id="agent-model")
+                yield Label("Fixture 文件（backtest）")
+                yield Input(
+                    value=str(agent.get("fixture_path") or "fixtures/agent.jsonl"),
+                    id="agent-fixture",
+                )
+                yield Label("MCP servers JSON 数组")
+                yield Input(
+                    value=json.dumps(agent.get("mcp") or [], ensure_ascii=False),
+                    id="agent-mcp",
+                )
+
+            yield Label("通知")
+            yield Checkbox(
+                "启用通知",
+                value=bool(notifications.get("enabled", False)),
+                id="notifications-enabled",
+            )
+            with Vertical(id="notification-fields"):
+                yield Label("通知目标 ID")
+                yield Input(value=notification_route, id="notification-destination")
+                yield Checkbox(
+                    "通知失败时阻止 Launch",
+                    value=bool(notifications.get("required", False)),
+                    id="notifications-required",
+                )
+                yield Checkbox(
+                    "发送生命周期事件",
+                    value=bool(notifications.get("lifecycle_routes", ["ops"])),
+                    id="notifications-lifecycle",
+                )
+
             yield Label(
-                "未在此表单展示的 Agent、通知、MCP 与高级字段会原样保留。",
+                "其余高级字段会原样保留；资源必须先在“管理运行资源”中完成真实验证。",
                 id="launch-form-help",
             )
             yield Label("", id="launch-form-error")
@@ -152,6 +287,7 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
     def on_mount(self) -> None:
         self._update_mode_fields(self._select("launch-mode"))
         self._update_execution_fields()
+        self._update_optional_fields()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "launch-mode" and event.value is not Select.NULL:
@@ -160,6 +296,8 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "execution-enabled":
             self._update_execution_fields()
+        elif event.checkbox.id in {"agent-enabled", "notifications-enabled"}:
+            self._update_optional_fields()
 
     def _update_mode_fields(self, mode: str) -> None:
         self.query_one("#connected-fields", Vertical).display = mode != "backtest"
@@ -171,11 +309,32 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
             "#execution-enabled", Checkbox
         ).value
 
+    def _update_optional_fields(self) -> None:
+        self.query_one("#agent-fields", Vertical).display = self.query_one(
+            "#agent-enabled", Checkbox
+        ).value
+        self.query_one("#notification-fields", Vertical).display = self.query_one(
+            "#notifications-enabled", Checkbox
+        ).value
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":
             self.action_cancel()
             return
         publish = event.button.id == "publish"
+        if publish and not self.app.state.yes:  # type: ignore[attr-defined]
+            self.app.push_screen(
+                ConfirmDialog(
+                    "发布 Launch 配置",
+                    "将校验并替换这个 Launch 的已发布配置；现有实例不受影响。",
+                    confirm_label="发布",
+                ),
+                lambda confirmed: self._submit(publish=True) if confirmed else None,
+            )
+            return
+        self._submit(publish=publish)
+
+    def _submit(self, *, publish: bool) -> None:
         state = self.app.state  # type: ignore[attr-defined]
         if state.dry_run or state.no_exec:
             self.query_one("#launch-form-error", Label).update(
@@ -202,6 +361,21 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
             for item in self._input("launch-accounts").split(",")
             if item.strip()
         )
+        account_scopes_value = self._input("launch-account-scopes") or "{}"
+        try:
+            raw_account_scopes = json.loads(account_scopes_value)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"账户范围 JSON 无效：{error}") from error
+        if not isinstance(raw_account_scopes, dict) or not all(
+            isinstance(key, str) and isinstance(value, dict)
+            for key, value in raw_account_scopes.items()
+        ):
+            raise ValueError("账户范围必须是 account ID 到 JSON object 的映射")
+        unknown_scopes = sorted(set(raw_account_scopes) - set(accounts))
+        if unknown_scopes:
+            raise ValueError(
+                "账户范围包含未选择账户：" + "、".join(unknown_scopes)
+            )
         enabled = self.query_one("#execution-enabled", Checkbox).value
         draft = LaunchDraft(
             launch_id=self.launch_id,
@@ -209,6 +383,7 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
             strategy=self._required_input("launch-strategy"),
             accounts=accounts,
             execution_enabled=enabled,
+            account_scopes=raw_account_scopes,
             market_profile=(
                 self._input("market-profile") if mode != "backtest" else None
             ),
@@ -237,6 +412,8 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
             ),
         )
         values = draft.apply(self.values)
+        values["agent"] = self._agent_values(mode)
+        values["notifications"] = self._notification_values(mode)
         application = LaunchConfigurationApplication()
         status = application.save_draft(owner.paths.root, self.launch_id, values)
         if not publish:
@@ -247,6 +424,100 @@ class LaunchSetupScreen(Screen[dict[str, Any] | None]):
         report = build_and_validate(destination, values, owner.paths.root)
         application.discard_draft(owner.paths.root, self.launch_id)
         return {"status": "published", "path": str(destination), **report}
+
+    def _agent_values(self, mode: str) -> dict[str, Any]:
+        if not self.query_one("#agent-enabled", Checkbox).value:
+            return {"enabled": False, "required": False}
+        current = dict(_mapping(self.values.get("agent")))
+        profile = dict(_mapping(current.get("profile")))
+        profile.update(
+            {
+                "version": self._required_input("agent-profile-version"),
+                "goal": self._required_input("agent-goal"),
+                "rubric": list(_csv(self._required_input("agent-rubric"))),
+                "invalidation_rules": list(
+                    _csv(self._required_input("agent-invalidation"))
+                ),
+                "reason_codes": list(_csv(self._input("agent-reason-codes"))),
+                "risk_flags": list(_csv(self._input("agent-risk-flags"))),
+            }
+        )
+        try:
+            mcp = json.loads(self._input("agent-mcp") or "[]")
+        except json.JSONDecodeError as error:
+            raise ValueError(f"MCP JSON 无效：{error}") from error
+        if not isinstance(mcp, list) or not all(isinstance(item, dict) for item in mcp):
+            raise ValueError("MCP servers 必须是 JSON object 数组")
+        current.update(
+            {
+                "enabled": True,
+                "required": self.query_one("#agent-required", Checkbox).value,
+                "runtime": "fixture" if mode == "backtest" else "model-agent",
+                "profile": profile,
+                "mcp": mcp,
+            }
+        )
+        capabilities = dict(_mapping(current.get("capabilities")))
+        review = dict(_mapping(capabilities.get("intent_review")))
+        review.update(
+            {
+                "initial_mode": (
+                    "shadow" if mode != "backtest" else self._select("agent-initial-mode")
+                ),
+                "strategy_selectable_modes": list(
+                    _csv(self._required_input("agent-selectable-modes"))
+                ),
+                "operations": list(
+                    _csv(self._required_input("agent-operations"))
+                ),
+                "failure_policy": "reject_new_exposure",
+                "required_contexts": list(
+                    _csv(self._input("agent-required-contexts"))
+                ),
+                "revisions": dict(_mapping(review.get("revisions"))),
+            }
+        )
+        capabilities["intent_review"] = review
+        current["capabilities"] = capabilities
+        if mode == "backtest":
+            current.pop("model", None)
+            current["fixture_path"] = self._required_input("agent-fixture")
+        else:
+            current.pop("fixture_path", None)
+            current["model"] = {
+                **dict(_mapping(current.get("model"))),
+                "connection": self._required_input("agent-model-connection"),
+                "model": self._required_input("agent-model"),
+            }
+        return current
+
+    def _notification_values(self, mode: str) -> dict[str, Any]:
+        if mode == "backtest" or not self.query_one(
+            "#notifications-enabled", Checkbox
+        ).value:
+            return {"enabled": False, "required": False}
+        destination = self._required_input("notification-destination")
+        current = dict(_mapping(self.values.get("notifications")))
+        current.update(
+            {
+                "enabled": True,
+                "required": self.query_one(
+                    "#notifications-required", Checkbox
+                ).value,
+                "routes": {"ops": [destination]},
+                "default_routes": ["ops"],
+                "lifecycle_routes": (
+                    ["ops"]
+                    if self.query_one("#notifications-lifecycle", Checkbox).value
+                    else []
+                ),
+                "queue_capacity": int(current.get("queue_capacity", 256)),
+                "shutdown_grace_seconds": float(
+                    current.get("shutdown_grace_seconds", 5)
+                ),
+            }
+        )
+        return current
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.group != "launch-save":
@@ -299,3 +570,37 @@ def _account_refs(values: Mapping[str, Any]) -> tuple[str, ...]:
         for value in accounts.values()
         if isinstance(value, Mapping) and value.get("ref")
     )
+
+
+def _account_scopes(values: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    accounts = values.get("accounts")
+    if not isinstance(accounts, Mapping):
+        return {}
+    return {
+        str(value["ref"]): {
+            str(key): item
+            for key, item in value.items()
+            if key not in {"ref", "enabled"}
+        }
+        for value in accounts.values()
+        if isinstance(value, Mapping) and value.get("ref")
+    }
+
+
+def _strings(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value if str(item).strip())
+
+
+def _csv(value: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
+
+
+def _first_route(value: object) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    for route in value.values():
+        if isinstance(route, list) and route:
+            return str(route[0])
+    return ""

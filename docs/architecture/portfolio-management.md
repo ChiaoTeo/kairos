@@ -140,7 +140,7 @@ leases are released last.
 ## First implementation boundary
 
 Implement the first vertical slice under
-`kairospy/application/portfolio/`, with domain values and invariants kept in
+`kairospy/investment/apps/portfolio/`, with domain values and invariants kept in
 that package and concrete state/persistence wiring selected by Strategy
 composition. Do not add `crates/modules/portfolio` or a
 `kairos-portfolio-server` merely for symmetry.

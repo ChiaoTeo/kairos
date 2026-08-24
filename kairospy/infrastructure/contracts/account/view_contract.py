@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
+from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 sys.modules.setdefault("kairos", _generated_kairos)
@@ -85,7 +85,7 @@ def decode_view(payload: bytes, kind: AccountViewKind) -> Any:
             f"invalid Account {kind.value} view identifier: expected {identifier!r}"
         )
     module = __import__(
-        f"kairospy.infrastructure.transport.generated.kairos.account.v2.{root_name}",
+        f"kairospy.infrastructure.protocol.generated.kairos.account.v2.{root_name}",
         fromlist=[root_name],
     )
     return getattr(module, root_name).GetRootAs(payload, 0)

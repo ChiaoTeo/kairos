@@ -5,15 +5,15 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.market.events import MarketEventRecord
-from kairospy.application.market import ObservationScope
-from kairospy.application.execution.mapping import (
+from kairospy.investment.apps.market.application.events import MarketEventRecord
+from kairospy.investment.apps.market.application import ObservationScope
+from kairospy.investment.apps.execution.application.mapping import (
     map_execution_fill,
     map_execution_intent,
     map_execution_order,
 )
-from kairospy.application.market.mapping import map_market_event
-from kairospy.infrastructure.transport.market import BarView, DecimalValue, GreeksView
+from kairospy.investment.apps.market.application.mapping import map_market_event
+from kairospy.infrastructure.contracts.market.source import BarView, DecimalValue, GreeksView
 from kairospy.strategy import BarEvent, GreeksEvent, IntentStatus, OrderStatus
 
 

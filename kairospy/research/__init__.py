@@ -1,20 +1,4 @@
-"""Stable contracts for user-authored Research code."""
+"""Stable public API for research authors."""
 
-from __future__ import annotations
-
-from .protocol import (
-    ResearchExperimentPolicy,
-    ResearchPeriod,
-    ResearchSpec,
-)
-from .experiments import BacktestBatchResult, BacktestCase, BacktestCaseResult
-
-
-__all__ = [
-    "BacktestBatchResult",
-    "BacktestCase",
-    "BacktestCaseResult",
-    "ResearchExperimentPolicy",
-    "ResearchPeriod",
-    "ResearchSpec",
-]
+from .api import *  # noqa: F403
+from .api import __all__

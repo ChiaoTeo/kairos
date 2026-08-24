@@ -7,7 +7,7 @@ from typing import Mapping
 
 import pytest
 
-from kairospy.application.agent import (
+from kairospy.strategy.apps.agent.application import (
     AgentApplication,
     AgentContextDocument,
     AgentContextStatus,
@@ -21,9 +21,9 @@ from kairospy.application.agent import (
     IntentCandidate,
     ToolEvidence,
 )
-from kairospy.application.agent.services import DecisionRecordStore
-from kairospy.application.launch.application.configuration import LaunchConfig
-from kairospy.application.launch.application.strategy_runtime import (
+from kairospy.strategy.apps.agent.services import DecisionRecordStore
+from kairospy.system.apps.launch.application.configuration import LaunchConfig
+from kairospy.system.apps.launch.application.strategy_runtime import (
     StrategyLaunchConfig,
 )
 

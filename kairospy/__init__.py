@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .surface.client import DataClient, Kairos, ResearchClient
-from .application.data import (
+from .client import DataClient, Kairos, ResearchClient
+from .research.apps.data.application import (
     DataAcquisitionPlan,
     DataRequirement,
     DataUnavailableError,
@@ -23,7 +23,7 @@ from .research import (
 )
 
 if TYPE_CHECKING:
-    from .surface.client import (
+    from .client import (
         BacktestResult,
         BacktestSpec,
         OptionBacktestConstraints,
@@ -39,7 +39,7 @@ def __getattr__(name: str) -> Any:
         "BacktestSpec",
         "OptionBacktestConstraints",
     }:
-        from .surface.client import (
+        from .client import (
             BacktestResult,
             BacktestSpec,
             OptionBacktestConstraints,

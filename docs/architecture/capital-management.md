@@ -102,7 +102,8 @@ Capital has one business owner but two caller-facing layers:
   reservations, plans, command attempts, and recovery state.
 - `crates/modules/capital/contract` is the minimal cross-process contract for
   commands, queries, snapshots, and events used outside the Rust process.
-- `kairospy.application.capital` is the Strategy-side application facade. It
+- `kairospy.investment.apps.capital.application` is the Strategy-side
+  application facade. It
   publishes or cancels a `FundingObjective`, queries Capital availability and
   health, and maps `capital.enabled = false` to an explicit disabled outcome.
 

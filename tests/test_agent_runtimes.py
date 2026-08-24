@@ -11,28 +11,28 @@ from typing import Mapping, cast
 
 import pytest
 
-from kairospy.application.agent import (
+from kairospy.strategy.apps.agent.application import (
     AgentApplication,
     AgentMode,
     DecisionKind,
     DecisionResult,
     IntentCandidate,
 )
-from kairospy.application.agent.services.fixture_runtime import (
+from kairospy.strategy.apps.agent.services.fixture_runtime import (
     FixtureDecisionRuntime,
     fixture_key,
 )
-from kairospy.application.agent.services.openai_runtime import (
+from kairospy.strategy.apps.agent.services.openai_runtime import (
     ModelDecisionRuntime,
     OpenAIDecisionRuntime,
     _ToolLimitHooks,
     _tool_evidence,
 )
-from kairospy.application.agent.services.tools import (
+from kairospy.strategy.apps.agent.services.tools import (
     MCPServerBinding,
     MCPToolPolicy,
 )
-from kairospy.application.execution import TargetPositionRequest
+from kairospy.investment.apps.execution.application import TargetPositionRequest
 
 
 def _candidate() -> IntentCandidate:
@@ -164,7 +164,7 @@ def test_openai_runtime_uses_structured_output_and_disables_sensitive_trace(
         Runner=Runner,
     )
     monkeypatch.setattr(
-        "kairospy.application.agent.services.openai_runtime.importlib.import_module",
+        "kairospy.strategy.apps.agent.services.openai_runtime.importlib.import_module",
         lambda name: sdk,
     )
     runtime = OpenAIDecisionRuntime(
@@ -229,7 +229,7 @@ def test_model_runtime_routes_openai_compatible_and_native_interfaces(
         return any_llm if name.endswith("any_llm_model") else sdk
 
     monkeypatch.setattr(
-        "kairospy.application.agent.services.openai_runtime.importlib.import_module",
+        "kairospy.strategy.apps.agent.services.openai_runtime.importlib.import_module",
         import_module,
     )
     ModelDecisionRuntime(
@@ -374,7 +374,7 @@ def test_openai_runtime_distinguishes_optional_and_required_mcp_failure(
         Runner=Runner,
     )
     monkeypatch.setattr(
-        "kairospy.application.agent.services.openai_runtime.importlib.import_module",
+        "kairospy.strategy.apps.agent.services.openai_runtime.importlib.import_module",
         lambda name: sdk,
     )
 

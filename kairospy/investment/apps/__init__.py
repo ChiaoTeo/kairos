@@ -1,0 +1,1 @@
+"""Investment subsystem applications."""

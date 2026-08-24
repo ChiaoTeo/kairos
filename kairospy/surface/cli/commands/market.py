@@ -7,8 +7,8 @@ from typing import Sequence
 
 import typer
 
-from kairospy.application.market.cli import MarketCliApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.investment.apps.market.application.cli import MarketCliApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 HELP = """Market standalone commands are owned by kairos-market-cli.

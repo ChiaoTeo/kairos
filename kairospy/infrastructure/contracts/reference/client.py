@@ -497,14 +497,17 @@ class ReferenceClient:
         method: str,
         *,
         timeout: float | None = None,
-        params: list[object] | dict[str, object] | None = None,
+        params: list[object] | None = None,
     ) -> dict[str, Any]:
         try:
             control = self._control()
             if timeout is not None and timeout != self.timeout:
                 from .control import ReferenceControlClient
 
-                control = ReferenceControlClient(self.socket_path, timeout=timeout)
+                socket_path = self.socket_path
+                if socket_path is None:
+                    raise RuntimeError("Reference control socket is not configured")
+                control = ReferenceControlClient(socket_path, timeout=timeout)
             return dict(control.call(method, params))
         except OSError as error:
             raise RuntimeError(f"Reference request failed: {error}") from error

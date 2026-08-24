@@ -12,8 +12,8 @@ import click
 import typer
 from typer.main import get_command
 
-from kairospy.application.data import DataApplication, DataRequirement
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.research.apps.data.application import DataApplication, DataRequirement
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli.options import OutputFormat, render
 
 

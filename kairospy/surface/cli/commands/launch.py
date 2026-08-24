@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import codeop
 from collections.abc import Mapping
 from contextlib import redirect_stdout
 from dataclasses import asdict
@@ -14,9 +13,9 @@ from typing import Any
 import typer
 from prettytable import PrettyTable
 
-from kairospy.application.account import AccountConfigurationApplication
-from kairospy.application.market import read_replay_events
-from kairospy.application.launch.application import (
+from kairospy.investment.apps.account.application import AccountConfigurationApplication
+from kairospy.investment.apps.market.application import read_replay_events
+from kairospy.system.apps.launch.application import (
     LaunchConfigError,
     LaunchConfigurationApplication,
     LaunchControlApplication,
@@ -25,30 +24,22 @@ from kairospy.application.launch.application import (
     LaunchRuntimeApplication,
     LaunchRuntimeError,
 )
-from kairospy.application.launch.application.runtime import (
+from kairospy.system.apps.launch.application.runtime import (
     acquire_launch_leases as _acquire_launch_leases,
     cleanup_instance_components as _cleanup_instance_components,
     release_launch_leases as _release_launch_leases,
     requires_reference_runtime as _requires_reference_runtime,
     stop_component_safely as _stop_component_safely,
 )
-from kairospy.application.launch.application.connections import (
+from kairospy.system.apps.launch.application.connections import (
     resolve_instance_connections,
 )
-from kairospy.application.system import (
+from kairospy.system.apps.components.application import (
     InstanceSystemClients,
     NativeCliApplication,
     UnixRestClient,
 )
-from kairospy.application.launch.application.wizard import (
-    LaunchResourceSetup,
-    LaunchWizardExit,
-    build_and_validate,
-    draft_preview,
-    load_values,
-    prompt_draft,
-)
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli.options import (
     OutputFormat,
     effective_output,
@@ -107,228 +98,38 @@ instance_component_app.add_typer(instance_component_capital_app, name="capital")
 instance_app.add_typer(instance_timeline_app, name="timeline")
 
 
-@launch_app.command(
-    "init", help="Create a launch configuration with an interactive wizard."
-)
+@launch_app.command("init", help="Create a Launch in the unified workbench.")
 def init_launch(
-    launch_id: str | None = typer.Argument(
-        None, help="Launch id (prompted when omitted)."
-    ),
+    launch_id: str = typer.Argument("new-launch"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
+    del output
     owner = WorkspaceApplication().open(workspace)
-    resolved_launch_id = launch_id or typer.prompt("Launch id", default="new-launch")
-    path = owner.paths.launch_config(resolved_launch_id)
+    path = owner.paths.launch_config(launch_id)
     if path.exists():
         raise typer.BadParameter(f"launch config already exists: {path}")
-    application = LaunchConfigurationApplication()
-    initial = {
-        "launch": {
-            "id": resolved_launch_id,
-            "mode": "paper",
-            "strategy": "builtin:interactive",
-        }
-    }
-    application.save_draft(owner.paths.root, resolved_launch_id, initial)
-    draft, exit_status = _prompt_launch_draft(
-        initial,
-        default_launch_id=resolved_launch_id,
-        owner=owner,
-        application=application,
-    )
-    if draft is None:
-        resource = (
-            exit_status.split(":", 1)[1]
-            if isinstance(exit_status, str)
-            and exit_status.startswith("resource_required:")
-            else None
-        )
-        _emit(
-            {
-                "launch_id": resolved_launch_id,
-                "status": exit_status,
-                "path": str(
-                    application.draft_path(owner.paths.root, resolved_launch_id)
-                ),
-                **(
-                    {
-                        "resource": resource,
-                        "next_actions": [
-                            f"open 运行资源/{resource} and complete a manual test",
-                            f"kairos launch edit {resolved_launch_id}",
-                        ],
-                    }
-                    if resource is not None
-                    else {}
-                ),
-            },
-            output,
-        )
-        return
-    values = draft.apply(initial)
-    draft_status = application.save_draft(owner.paths.root, resolved_launch_id, values)
-    typer.echo(draft_preview(values))
-    _print_readiness_result(draft_status)
-    if not draft_status["ready"]:
-        _emit(
-            {
-                **draft_status,
-                "next_actions": [
-                    "configure and manually test the listed Workspace resources",
-                    f"kairos launch edit {resolved_launch_id}",
-                ],
-            },
-            output,
-        )
-        return
-    if not typer.confirm("保存并创建 launch 配置", default=True):
-        if not typer.confirm("保留草稿以便稍后继续", default=True):
-            application.discard_draft(owner.paths.root, resolved_launch_id)
-            _emit({"status": "discarded", "path": str(path)}, output)
-            return
-        _emit({**draft_status, "status": "draft_saved"}, output)
-        return
-    try:
-        report = build_and_validate(path, values, owner.paths.root)
-    except LaunchConfigError as error:
-        raise typer.BadParameter(str(error)) from error
-    application.discard_draft(owner.paths.root, resolved_launch_id)
-    if typer.confirm("保存后立即创建 Instance 并启动", default=False):
-        runtime = _start_saved_launch(owner, path)
-        _emit(
-            {
-                "status": "created_and_started"
-                if runtime.get("status") != "cancelled"
-                else "created_not_started",
-                "path": str(path),
-                "validation": report,
-                "runtime": runtime,
-            },
-            output,
-        )
-        return
-    _emit({"status": "created", "path": str(path), "validation": report}, output)
+    _open_launch_setup(owner, launch_id, None)
 
 
-@launch_app.command(
-    "edit", help="Edit a launch configuration with an interactive wizard."
-)
+@launch_app.command("edit", help="Edit a Launch in the unified workbench.")
 def edit_launch(
     launch_id: str = typer.Argument(..., help="Launch id or launch TOML path."),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
+    del output
     owner = WorkspaceApplication().open(workspace)
-    application = LaunchConfigurationApplication()
-    try:
-        candidate = Path(launch_id).expanduser()
-        if candidate.is_file():
-            path = candidate.resolve()
-        else:
-            pending_path = application.draft_path(owner.paths.root, launch_id)
-            path = (
-                owner.paths.launch_config(launch_id)
-                if pending_path.is_file()
-                else _launch_config_path(owner, launch_id)
-            )
-        resolved_id = path.stem
-        draft_path = application.draft_path(owner.paths.root, resolved_id)
-        values = load_values(draft_path if draft_path.is_file() else path)
-        application.save_draft(owner.paths.root, resolved_id, values)
-        draft, exit_status = _prompt_launch_draft(
-            values,
-            default_launch_id=resolved_id,
-            owner=owner,
-            application=application,
-        )
-        if draft is None:
-            resource = (
-                exit_status.split(":", 1)[1]
-                if isinstance(exit_status, str)
-                and exit_status.startswith("resource_required:")
-                else None
-            )
-            _emit(
-                {
-                    "launch_id": resolved_id,
-                    "status": exit_status,
-                    "published_launch_unchanged": path.is_file(),
-                    "path": str(draft_path),
-                    **(
-                        {
-                            "resource": resource,
-                            "next_actions": [
-                                f"open 运行资源/{resource} and complete a manual test",
-                                f"kairos launch edit {resolved_id}",
-                            ],
-                        }
-                        if resource is not None
-                        else {}
-                    ),
-                },
-                output,
-            )
-            return
-        updated = draft.apply(values)
-        draft_status = application.save_draft(owner.paths.root, resolved_id, updated)
-        typer.echo(draft_preview(updated))
-        _print_readiness_result(draft_status)
-        if not draft_status["ready"]:
-            _emit(
-                {
-                    **draft_status,
-                    "published_launch_unchanged": path.is_file(),
-                    "next_actions": [
-                        "configure and manually test the listed Workspace resources",
-                        f"kairos launch edit {resolved_id}",
-                    ],
-                },
-                output,
-            )
-            return
-        if not typer.confirm("保存 launch 配置", default=True):
-            if not typer.confirm("保留工作草稿以便稍后继续", default=True):
-                application.discard_draft(owner.paths.root, resolved_id)
-                _emit({"status": "discarded", "path": str(path)}, output)
-                return
-            _emit({**draft_status, "status": "draft_saved"}, output)
-            return
-        report = build_and_validate(path, updated, owner.paths.root)
-        application.discard_draft(owner.paths.root, resolved_id)
-    except (FileNotFoundError, LaunchConfigError) as error:
-        raise typer.BadParameter(str(error)) from error
-    existing_instances = LaunchRegistryApplication(owner).instances(resolved_id)
-    if existing_instances:
-        typer.echo(
-            f"已有 {len(existing_instances)} 个 Instance 保留旧资源快照；"
-            "本次配置只会应用到新 Instance。"
-        )
-    if typer.confirm("保存后使用新 Instance 启动", default=False):
-        runtime = _start_saved_launch(owner, path)
-        _emit(
-            {
-                "status": "updated_and_started"
-                if runtime.get("status") != "cancelled"
-                else "updated_not_started",
-                "path": str(path),
-                "validation": report,
-                "runtime": runtime,
-            },
-            output,
-        )
-        return
-    _emit(
-        {
-            "status": "updated",
-            "path": str(path),
-            "validation": report,
-            "existing_instances_unchanged": len(existing_instances),
-            "next_action": "create a new Instance to apply this Launch version",
-        },
-        output,
-    )
-
+    candidate = Path(launch_id).expanduser()
+    if candidate.is_file():
+        source = candidate.resolve()
+        resolved_id = source.stem
+    else:
+        application = LaunchConfigurationApplication()
+        draft = application.draft_path(owner.paths.root, launch_id)
+        source = draft if draft.is_file() else _launch_config_path(owner, launch_id)
+        resolved_id = source.stem
+    _open_launch_setup(owner, resolved_id, source)
 
 @draft_app.command("list")
 def list_launch_drafts(
@@ -350,101 +151,14 @@ def discard_launch_draft(
     _emit({"launch_id": launch_id, "status": "discarded"}, output)
 
 
-def _prompt_launch_draft(
-    values: Mapping[str, Any],
-    *,
-    default_launch_id: str,
-    owner: Any,
-    application: LaunchConfigurationApplication,
-) -> tuple[Any | None, str | None]:
-    """Provide identical q/Ctrl-C semantics for new and existing working copies."""
+def _open_launch_setup(owner: Any, launch_id: str, source: Path | None) -> None:
+    from kairospy.surface.workbench import KairosWorkbenchApp, load_workbench_state
 
-    latest = dict(values)
-
-    def persist_step(_step: str, patched: Mapping[str, Any]) -> None:
-        nonlocal latest
-        latest = dict(patched)
-        application.save_draft(owner.paths.root, default_launch_id, latest)
-
-    while True:
-        try:
-            return (
-                prompt_draft(
-                    latest,
-                    default_launch_id=default_launch_id,
-                    workspace=owner,
-                    on_step=persist_step,
-                ),
-                None,
-            )
-        except LaunchResourceSetup as request:
-            application.record_draft_return(
-                owner.paths.root,
-                default_launch_id,
-                resource=request.resource,
-                step=request.step,
-            )
-            return None, f"resource_required:{request.resource}"
-        except (LaunchWizardExit, typer.Abort, KeyboardInterrupt):
-            choice = typer.prompt(
-                "退出向导：1 保存草稿并退出 / 2 放弃本次未保存修改 / 3 继续编辑",
-                default="1",
-            ).strip()
-            if choice == "1":
-                return None, "draft_saved"
-            if choice == "2":
-                application.discard_draft(owner.paths.root, default_launch_id)
-                return None, "discarded"
-            if choice == "3":
-                continue
-            typer.echo("请输入 1、2 或 3。")
-
-
-def _print_readiness_result(status: Mapping[str, Any]) -> None:
-    issues = list(status.get("issues") or ())
-    warnings = list(status.get("warnings") or ())
-    typer.echo(f"检查结果：{len(issues)} 项阻塞 · {len(warnings)} 项警告")
-    diagnostics = list(status.get("diagnostics") or ())
-    if diagnostics:
-        for diagnostic in diagnostics:
-            if not isinstance(diagnostic, Mapping):
-                continue
-            marker = "✗" if diagnostic.get("severity") == "blocker" else "!"
-            typer.echo(
-                f"  {marker} [{diagnostic.get('owner') or 'Launch'}] "
-                f"{diagnostic.get('reason') or '-'}"
-            )
-            typer.echo(f"    修复：{diagnostic.get('action') or '编辑 Launch 草稿'}")
-        return
-    for issue in issues:
-        typer.echo(f"  ✗ {issue}")
-    for warning in warnings:
-        typer.echo(f"  ! {warning}")
-
-
-def _start_saved_launch(owner: Any, path: Path) -> dict[str, Any]:
-    """Create a new Instance only after the ready Launch has been atomically saved."""
-
-    application = LaunchConfigurationApplication()
-    config = application.load(path, workspace_root=owner.paths.root)
-    config.require_valid()
-    if config.mode == "live":
-        typer.echo(_live_start_confirmation(owner, config))
-        if not typer.confirm(
-            "确认以上真实账户、LIVE 环境和最大风险范围，并立即启动",
-            default=False,
-        ):
-            return {
-                "launch_id": config.launch_id,
-                "mode": "live",
-                "status": "cancelled",
-                "reason": "live_start_not_confirmed",
-            }
-    try:
-        return LaunchRuntimeApplication(owner).start(config)
-    except LaunchRuntimeError as error:
-        raise typer.BadParameter(str(error)) from error
-
+    state = load_workbench_state(Path(owner.paths.root))
+    KairosWorkbenchApp(
+        state,
+        initial_launch_setup=(launch_id, source),
+    ).run()
 
 def _group(name: str, commands: tuple[str, ...]) -> typer.Typer:
     descriptions = {
@@ -624,20 +338,11 @@ def start(
     if launch_config.mode == "live":
         confirmation = _live_start_confirmation(owner, launch_config)
         typer.echo(confirmation)
-        if not confirm_live and not typer.confirm(
-            "确认以上真实账户、LIVE 环境和最大风险范围，并立即启动",
-            default=False,
-        ):
-            _emit(
-                {
-                    "launch_id": launch_config.launch_id,
-                    "mode": "live",
-                    "status": "cancelled",
-                    "reason": "live_start_not_confirmed",
-                },
-                output,
+        if not confirm_live:
+            raise typer.BadParameter(
+                "live Launch requires explicit --confirm-live; "
+                "use `kairos interactive` for guided confirmation"
             )
-            return
     overrides: dict[str, Any] = {}
     if params:
         try:
@@ -2739,7 +2444,10 @@ def attach(
     if python:
         if effective_output(output) is not OutputFormat.TEXT:
             raise typer.BadParameter("--python requires text output")
-        _interactive_python(target.socket_path, log_path)
+        from kairospy.surface.workbench import KairosWorkbenchApp, load_workbench_state
+
+        state = load_workbench_state(Path(owner.paths.root))
+        KairosWorkbenchApp(state, initial_launch_attach=launch_id).run()
         return
     value = _decorate_launch_status(
         owner,
@@ -2772,177 +2480,6 @@ def attach(
         }
     )
     _emit(value, output)
-
-
-def _interactive_python(socket_path: Path, log_path: Path) -> None:
-    """Run a split terminal frontend for Strategy ``on_command``."""
-    import asyncio
-
-    from prompt_toolkit.application import Application, get_app
-    from prompt_toolkit.buffer import Buffer
-    from prompt_toolkit.document import Document
-    from prompt_toolkit.filters import Condition
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.layout import HSplit, Layout, Window
-    from prompt_toolkit.layout.controls import FormattedTextControl
-    from prompt_toolkit.widgets import Frame, TextArea
-
-    class PythonConsole:
-        def __init__(self) -> None:
-            self.request_number = 0
-            self.log_offset = 0
-            self.log_lines: list[str] = []
-            self.status = "connecting"
-            self.busy = False
-
-    console = PythonConsole()
-    output = TextArea(
-        text="Waiting for strategy events...\n",
-        read_only=True,
-        scrollbar=True,
-        wrap_lines=False,
-        focusable=False,
-        height=None,
-    )
-    source = TextArea(
-        multiline=True,
-        wrap_lines=False,
-        scrollbar=True,
-        prompt=lambda: "... " if "\n" in source.text else ">>> ",
-        height=8,
-    )
-    footer = Window(
-        content=FormattedTextControl(
-            lambda: (
-                f" {console.status}   Enter: run/next line   blank line: submit   "
-                "Ctrl-D: exit"
-            )
-        ),
-        height=1,
-    )
-    bindings = KeyBindings()
-    input_focused = Condition(lambda: get_app().layout.has_focus(source))
-
-    def append_output(text: str) -> None:
-        if not text:
-            return
-        current = output.text
-        output.text = (current + text)[-120_000:]
-        output.buffer.cursor_position = len(output.text)
-
-    def submit_source() -> None:
-        text = source.text.strip("\n")
-        if not text or console.busy:
-            return
-        source.buffer.set_document(Document("", 0))
-        console.busy = True
-        console.status = "running command"
-        get_app().create_background_task(send_source(text))
-
-    async def send_source(text: str) -> None:
-        console.request_number += 1
-        request_id = f"interactive:{console.request_number}"
-        try:
-            result = await UnixRestClient(socket_path).request(
-                "POST",
-                "/v1/command",
-                json.dumps(
-                    {
-                        "request_id": request_id,
-                        "kind": "interactive.python",
-                        "source": text,
-                    },
-                    separators=(",", ":"),
-                ).encode("utf-8"),
-            )
-        except Exception as error:
-            append_output(f"\n[{request_id}] error: {error}\n")
-        else:
-            if result.get("error"):
-                append_output(
-                    f"\n[{request_id}] {result.get('error_code') or 'error'}: "
-                    f"{result['error']}\n"
-                )
-            else:
-                append_output(f"\n[{request_id}] ok\n")
-                if result.get("stdout"):
-                    append_output(result["stdout"])
-                if result.get("stderr"):
-                    append_output(result["stderr"])
-                value = result.get("result", {}).get("value")
-                if value is not None:
-                    append_output(repr(value) if not isinstance(value, str) else value)
-                    append_output("\n")
-        finally:
-            console.busy = False
-            console.status = "connected"
-            get_app().invalidate()
-
-    @bindings.add("enter", filter=input_focused)
-    def _enter(event) -> None:
-        buffer: Buffer = event.current_buffer
-        line = buffer.document.current_line
-        if not line.strip() and buffer.text.strip():
-            submit_source()
-            return
-        try:
-            complete = codeop.compile_command(buffer.text, symbol="exec")
-        except (SyntaxError, OverflowError, ValueError) as error:
-            # The remote evaluator supports top-level await, which codeop does
-            # not recognize in all supported Python versions.
-            if not line.lstrip().startswith("await "):
-                append_output(f"\nsyntax error: {error}\n")
-                buffer.reset()
-                return
-            complete = True
-        if complete is not None and not line.rstrip().endswith(":"):
-            submit_source()
-        else:
-            buffer.insert_text("\n")
-
-    @bindings.add("c-d")
-    def _exit(event) -> None:
-        event.app.exit()
-
-    app = Application(
-        layout=Layout(
-            HSplit(
-                [
-                    Frame(output, title="Strategy events"),
-                    Frame(source, title="Python input"),
-                    footer,
-                ]
-            ),
-            focused_element=source,
-        ),
-        key_bindings=bindings,
-        full_screen=True,
-        mouse_support=False,
-    )
-
-    async def follow_logs() -> None:
-        while True:
-            try:
-                if log_path.is_file():
-                    with log_path.open(encoding="utf-8", errors="replace") as handle:
-                        handle.seek(console.log_offset)
-                        chunk = handle.read()
-                        console.log_offset = handle.tell()
-                    if chunk:
-                        console.log_lines.extend(chunk.splitlines(keepends=True))
-                        append_output("".join(console.log_lines[-2000:]))
-                        console.log_lines.clear()
-                    console.status = "connected"
-            except OSError as error:
-                console.status = f"log error: {error}"
-            app.invalidate()
-            await asyncio.sleep(0.5)
-
-    async def run_console() -> None:
-        app.create_background_task(follow_logs())
-        await app.run_async()
-
-    asyncio.run(run_console())
 
 
 @launch_app.command("logs", help="Read or follow strategy logs for a launch.")

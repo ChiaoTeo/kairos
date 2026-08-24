@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from kairospy.application.market import (
+from kairospy.investment.apps.market.application import (
     MarketAnalyticalApplication,
     ObservationScope,
     OptionGreeksCalculationRequest,
@@ -37,6 +37,7 @@ def test_market_derives_reproducible_put_iv_and_greeks_with_lineage() -> None:
         observed_at_unix_nanos=observed,
         available_at_unix_nanos=observed + 1,
         risk_free_rate=0.05,
+        provider="opra",
         price_basis="mid",
         reference_snapshot_id="reference.option-contract/SPY/test",
     )
@@ -71,6 +72,7 @@ def test_market_rejects_future_or_no_arbitrage_invalid_current_view_inputs() -> 
             observed_at_unix_nanos=observed,
             available_at_unix_nanos=observed - 1,
             risk_free_rate=0.05,
+            provider="test",
         )
     invalid_price = OptionGreeksCalculationRequest(
         scope=ObservationScope.market("market"),
@@ -83,6 +85,7 @@ def test_market_rejects_future_or_no_arbitrage_invalid_current_view_inputs() -> 
         observed_at_unix_nanos=observed,
         available_at_unix_nanos=observed,
         risk_free_rate=0.05,
+        provider="test",
     )
     with pytest.raises(ValueError, match="no-arbitrage"):
         MarketAnalyticalApplication().option_greeks(invalid_price)

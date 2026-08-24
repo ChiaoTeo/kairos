@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.workspace.credentials import (
+from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
 )
-from kairospy.application.notification import (
+from kairospy.strategy.apps.notification.application import (
     NotificationDestinationDraftApplication,
 )
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 def _workspace(tmp_path: Path):

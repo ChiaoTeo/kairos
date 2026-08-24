@@ -13,6 +13,8 @@ import zipfile
 from pathlib import Path
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
 NATIVE_BINARIES = (
     "kairos-aeron-driver",
     "kairos-aeron-bridge",
@@ -35,6 +37,18 @@ def _metadata_version(data: bytes) -> str:
     if not version:
         raise RuntimeError("distribution metadata does not contain Version")
     return version
+
+
+def _stale_python_members(names: list[str]) -> list[str]:
+    stale: list[str] = []
+    for name in names:
+        marker = name.find("kairospy/")
+        if marker < 0 or not name.endswith(".py"):
+            continue
+        package_path = name[marker:]
+        if not (ROOT / package_path).is_file():
+            stale.append(name)
+    return stale
 
 
 def inspect_wheel(wheel: Path, expected_version: str) -> None:
@@ -64,14 +78,22 @@ def inspect_wheel(wheel: Path, expected_version: str) -> None:
             raise RuntimeError(
                 f"wheel is missing native binaries: {', '.join(missing)}"
             )
+        stale = _stale_python_members(names)
+        if stale:
+            raise RuntimeError(
+                "wheel contains Python modules deleted from the source tree: "
+                + ", ".join(stale)
+            )
 
 
 def inspect_sdist(sdist: Path, expected_version: str) -> None:
     with tarfile.open(sdist, "r:gz") as archive:
+        names = archive.getnames()
         metadata = [
             member
             for member in archive.getmembers()
             if member.name.endswith("/PKG-INFO")
+            and len(Path(member.name).parts) == 2
         ]
         if len(metadata) != 1:
             raise RuntimeError(f"expected one PKG-INFO file in {sdist.name}")
@@ -82,6 +104,12 @@ def inspect_sdist(sdist: Path, expected_version: str) -> None:
         if actual_version != expected_version:
             raise RuntimeError(
                 f"sdist version {actual_version!r} != {expected_version!r}"
+            )
+        stale = _stale_python_members(names)
+        if stale:
+            raise RuntimeError(
+                "sdist contains Python modules deleted from the source tree: "
+                + ", ".join(stale)
             )
 
 

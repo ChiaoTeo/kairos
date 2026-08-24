@@ -145,8 +145,8 @@ Rust 的两个同名文件职责可见
 [`observations/access.rs`](../../crates/modules/market/src/application/observations/access.rs)
 和
 [`order_book/snapshot.rs`](../../crates/modules/market/src/application/observations/order_book/snapshot.rs)。
-Python mmap adapter 位于
-[`infrastructure/transport/market.py`](../../kairospy/infrastructure/transport/market.py)。
+Python Market contract adapter 位于
+[`infrastructure/contracts/market/source.py`](../../kairospy/infrastructure/contracts/market/source.py)。
 
 ### Account：segment view 和 mmap reader 被混称
 
@@ -195,9 +195,9 @@ Actor 已经公开准确的 `current_view()`，因此 `projection()` 没有提�
 | 旧通知 journal record | 通知已经调用 publisher 后记录的投递受理结果 | 全量迁移为 `notification_submission_recorded`，不保留旧 discriminator |
 
 Greeks 计算没有把权威事件流投成读模型，也不是未来价格预测，见
-[`market/analytics.py`](../../kairospy/application/market/analytics.py)。通知路径实际先调用
+[`market/analytics.py`](../../kairospy/investment/apps/market/application/analytics.py)。通知路径实际先调用
 `publish()` 再写 journal，因此旧 discriminator 没有描述已发生的动作，见
-[`strategy/application/decisions.py`](../../kairospy/application/strategy/application/decisions.py)。
+[`strategy/apps/decisions/application/application.py`](../../kairospy/strategy/apps/decisions/application/application.py)。
 
 ### Platform Integration：同步 API、规范化 DTO 和共享 client 被混称
 
@@ -244,7 +244,7 @@ Decision 0003、0007、0008、0011 曾使用旧术语，其中有些还引用了
 
 ### 可以保留的精确用法
 
-[`DatasetAnalyticalView`](../../kairospy/application/data/readers.py) 中的 “bounded column
+[`DatasetAnalyticalView`](../../kairospy/research/apps/data/application/readers.py) 中的 “bounded column
 projection” 表示从 tabular dataset 选择列，是关系代数/数据帧里的精确局部术语。它不会被
 当成进程 contract、mmap reader 或状态所有者，可以保留。
 

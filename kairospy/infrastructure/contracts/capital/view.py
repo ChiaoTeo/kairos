@@ -2,25 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 import sys
 from typing import Any, cast
 
-from kairospy.application.capital.models import (
-    CapitalAlertKind,
-    CapitalAlertSeverity,
-    CapitalAvailability,
-    CapitalFundingHorizon,
-    CapitalReadiness,
-    CapitalRecoveryAction,
-    CapitalRecoveryAlert,
-    FundingLocation,
-)
-from kairospy.primitives.account import AccountId, SegmentKey
-from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
+from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 sys.modules.setdefault("kairos", _generated_kairos)
@@ -140,24 +128,24 @@ class CapitalCurrentViewQueries:
                 "ready_availability_count": sum(
                     1
                     for value in availabilities
-                    if value.readiness is CapitalReadiness.READY
+                    if value["readiness"] == "ready"
                 ),
                 "degraded_availability_count": sum(
                     1
                     for value in availabilities
-                    if value.readiness is CapitalReadiness.DEGRADED
+                    if value["readiness"] == "degraded"
                 ),
                 "critical_alert_count": sum(
                     1
                     for value in alerts
-                    if value.severity is CapitalAlertSeverity.CRITICAL
+                    if value["severity"] == "critical"
                 ),
             },
-            "availabilities": [asdict(value) for value in availabilities],
-            "alerts": [asdict(value) for value in alerts],
+            "availabilities": list(availabilities),
+            "alerts": list(alerts),
         }
 
-    def availabilities(self) -> tuple[CapitalAvailability, ...]:
+    def availabilities(self) -> tuple[dict[str, Any], ...]:
         frame = self.read_frame()
         state = cast(Any, frame.value.State())
         return tuple(
@@ -211,7 +199,7 @@ class CapitalCurrentViewQueries:
             for index in range(int(state.OperationsLength()))
         )
 
-    def alerts(self) -> tuple[CapitalRecoveryAlert, ...]:
+    def alerts(self) -> tuple[dict[str, Any], ...]:
         frame = self.read_frame()
         state = cast(Any, frame.value.State())
         return tuple(
@@ -223,8 +211,8 @@ class CapitalCurrentViewQueries:
         self,
         *,
         capital_group_id: str | None,
-        location: FundingLocation | None,
-    ) -> CapitalAvailability:
+        location: object | None,
+    ) -> dict[str, Any]:
         if capital_group_id != self._reader.key.capital_group_id:
             raise ValueError("Capital current view belongs to another capital group")
         values = self.availabilities()
@@ -234,14 +222,15 @@ class CapitalCurrentViewQueries:
                     "Capital location is required when the group has multiple locations"
                 )
             return values[0]
+        expected_location = _location_query(location)
         for value in values:
-            if value.location == location:
+            if value["location"] == expected_location:
                 return value
         raise LookupError("Capital location has not been evaluated")
 
 
 def decode_view(payload: bytes) -> Any:
-    from kairospy.infrastructure.transport.generated.kairos.capital.v2.CapitalCurrentView import (
+    from kairospy.infrastructure.protocol.generated.kairos.capital.v2.CapitalCurrentView import (
         CapitalCurrentView,
     )
 
@@ -250,7 +239,7 @@ def decode_view(payload: bytes) -> Any:
     return CapitalCurrentView.GetRootAs(payload, 0)
 
 
-def _availability(value: object | None, capital_group_id: str) -> CapitalAvailability:
+def _availability(value: object | None, capital_group_id: str) -> dict[str, Any]:
     if value is None:
         raise ValueError("Capital view contains an empty availability entry")
     row = cast(Any, value)
@@ -258,53 +247,45 @@ def _availability(value: object | None, capital_group_id: str) -> CapitalAvailab
     if location is None:
         raise ValueError("Capital availability destination is missing")
     readiness = {
-        0: CapitalReadiness.WAITING_FOR_FACTS,
-        1: CapitalReadiness.DEGRADED,
-        2: CapitalReadiness.READY,
-        3: CapitalReadiness.WAITING_FOR_ACCOUNTS,
+        0: "waiting_for_facts",
+        1: "degraded",
+        2: "ready",
+        3: "waiting_for_accounts",
     }.get(int(row.Readiness()))
     if readiness is None:
         raise ValueError(f"unknown Capital readiness: {row.Readiness()}")
-    return CapitalAvailability(
-        capital_group_id=capital_group_id,
-        readiness=readiness,
-        location=FundingLocation(
-            broker=_required_text(location.Broker(), "broker"),
-            account_id=AccountId(_required_text(location.AccountId(), "account_id")),
-            segment=SegmentKey(_required_text(location.Segment(), "segment")),
-            asset=_required_text(location.Asset(), "asset"),
-        ),
-        policy_version=int(row.PolicyVersion()),
-        active_objective_ids=_strings(row, "ActiveObjectiveIds"),
-        active_demand_ids=_strings(row, "ActiveDemandIds"),
-        funding_horizons=tuple(
+    return {
+        "capital_group_id": capital_group_id,
+        "readiness": readiness,
+        "location": _location(location),
+        "policy_version": int(row.PolicyVersion()),
+        "active_objective_ids": list(_strings(row, "ActiveObjectiveIds")),
+        "active_demand_ids": list(_strings(row, "ActiveDemandIds")),
+        "funding_horizons": list(
             _funding_horizon(row.FundingHorizons(index))
             for index in range(int(row.FundingHorizonsLength()))
         ),
-        desired_target=_decimal(row.DesiredTarget()),
-        observed_available=_decimal(row.ObservedAvailable()),
-        effective_target=_decimal(row.EffectiveTarget()),
-        deficit=_decimal(row.Deficit()),
-        account_watermark=int(row.AccountWatermark()),
-        risk_policy_version=int(row.RiskPolicyVersion()),
-        risk_watermark=int(row.RiskWatermark()),
-        reason=_text(row.Reason()),
-    )
+        "desired_target": str(_decimal(row.DesiredTarget())),
+        "observed_available": str(_decimal(row.ObservedAvailable())),
+        "effective_target": str(_decimal(row.EffectiveTarget())),
+        "deficit": str(_decimal(row.Deficit())),
+        "account_watermark": int(row.AccountWatermark()),
+        "risk_policy_version": int(row.RiskPolicyVersion()),
+        "risk_watermark": int(row.RiskWatermark()),
+        "reason": _text(row.Reason()),
+    }
 
 
-def _funding_horizon(value: object | None) -> CapitalFundingHorizon:
+def _funding_horizon(value: object | None) -> dict[str, Any]:
     if value is None:
         raise ValueError("Capital view contains an empty funding horizon")
     row = cast(Any, value)
-    return CapitalFundingHorizon(
-        required_by=datetime.fromtimestamp(
-            int(row.RequiredByUnixNanos()) / 1_000_000_000,
-            tz=timezone.utc,
-        ),
-        objective_ids=_strings(row, "ObjectiveIds"),
-        demand_ids=_strings(row, "DemandIds"),
-        desired_available=_decimal(row.DesiredAvailable()),
-    )
+    return {
+        "required_by_unix_nanos": int(row.RequiredByUnixNanos()),
+        "objective_ids": list(_strings(row, "ObjectiveIds")),
+        "demand_ids": list(_strings(row, "DemandIds")),
+        "desired_available": str(_decimal(row.DesiredAvailable())),
+    }
 
 
 def _objective(value: object | None) -> dict[str, Any]:
@@ -589,37 +570,43 @@ def _operation(value: object | None) -> dict[str, Any]:
     }
 
 
-def _recovery_alert(value: object | None) -> CapitalRecoveryAlert:
+def _recovery_alert(value: object | None) -> dict[str, Any]:
     if value is None:
         raise ValueError("Capital view contains an empty recovery alert")
     row = cast(Any, value)
     kind = {
-        0: CapitalAlertKind.RECONCILIATION_REQUIRED,
-        1: CapitalAlertKind.MANUAL_REVIEW,
+        0: "reconciliation_required",
+        1: "manual_review",
     }.get(int(row.Kind()))
     severity = {
-        0: CapitalAlertSeverity.WARNING,
-        1: CapitalAlertSeverity.CRITICAL,
+        0: "warning",
+        1: "critical",
     }.get(int(row.Severity()))
     recovery_action = {
-        2: CapitalRecoveryAction.RECONCILE_ORIGINAL_OPERATION,
-        3: CapitalRecoveryAction.HOLD_AND_REVIEW,
+        2: "reconcile_original_operation",
+        3: "hold_and_review",
     }.get(int(row.RecoveryAction()))
     if kind is None or severity is None or recovery_action is None:
         raise ValueError("Capital recovery alert contains an unknown enum value")
-    return CapitalRecoveryAlert(
-        alert_id=_required_text(row.AlertId(), "alert_id"),
-        plan_id=_required_text(row.PlanId(), "plan_id"),
-        operation_id=_text(row.OperationId()),
-        kind=kind,
-        severity=severity,
-        recovery_action=recovery_action,
-        message=_required_text(row.Message(), "message"),
-        opened_at=datetime.fromtimestamp(
-            int(row.OpenedAtUnixNanos()) / 1_000_000_000,
-            tz=timezone.utc,
-        ),
-    )
+    return {
+        "alert_id": _required_text(row.AlertId(), "alert_id"),
+        "plan_id": _required_text(row.PlanId(), "plan_id"),
+        "operation_id": _text(row.OperationId()),
+        "kind": kind,
+        "severity": severity,
+        "recovery_action": recovery_action,
+        "message": _required_text(row.Message(), "message"),
+        "opened_at_unix_nanos": int(row.OpenedAtUnixNanos()),
+    }
+
+
+def _location_query(value: object) -> dict[str, str]:
+    return {
+        "broker": str(getattr(value, "broker")),
+        "account_id": str(getattr(value, "account_id")),
+        "segment": str(getattr(value, "segment")),
+        "asset": str(getattr(value, "asset")),
+    }
 
 
 def _location(value: Any) -> dict[str, str]:

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from kairospy.infrastructure.transport import native as native_facade
-from kairospy.infrastructure.transport.generated_spec import TRANSPORT_FINGERPRINT
+from kairospy.infrastructure.protocol.generated_spec import TRANSPORT_FINGERPRINT
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 

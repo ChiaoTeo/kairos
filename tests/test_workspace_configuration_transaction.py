@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.workspace import (
+from kairospy.system.apps.workspace.application import (
     WorkspaceApplication,
     WorkspaceConfigurationTransaction,
     recover_configuration_transactions,
@@ -46,7 +46,7 @@ def test_configuration_transaction_rolls_back_every_target_on_failure(
     transaction = WorkspaceConfigurationTransaction(workspace, "failure")
     transaction.stage_text(first, "new-a\n")
     transaction.stage_text(second, "new-b\n")
-    from kairospy.application.workspace import transaction as module
+    from kairospy.system.apps.configuration.services import transactions as module
 
     original = module._replace_file
     failed = False
@@ -114,7 +114,7 @@ def test_transaction_journal_never_contains_staged_content_or_label(
         workspace, "label-must-not-be-persisted"
     )
     transaction.stage_text(target, 'value = "plaintext-must-not-enter-journal"\n')
-    from kairospy.application.workspace import transaction as module
+    from kairospy.system.apps.configuration.services import transactions as module
 
     journals: list[str] = []
     original = module._write_journal
@@ -142,7 +142,7 @@ def test_transaction_preparation_failure_cleans_unreferenced_secret(
     transaction.stage_text(workspace.paths.child("config", "a.toml"), "a = 1\n")
     transaction.stage_text(workspace.paths.child("config", "b.toml"), "b = 2\n")
     transaction.cleanup_on_rollback(secret)
-    from kairospy.application.workspace import transaction as module
+    from kairospy.system.apps.configuration.services import transactions as module
 
     original = module._write_private
     staged_writes = 0

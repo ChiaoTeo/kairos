@@ -1,35 +1,30 @@
-"""Python implementation of the Account v2 cross-process contract.
+"""Python adapters for the Account v2 cross-process contract."""
 
-Account follows the same contract-module boundary as Market: control, event,
-and current-view contracts are imported from one business-owned package.
-Protocol payloads remain generated FlatBuffers roots; application models are
-kept outside this package.
-"""
+from importlib import import_module
+from typing import Any
 
-from .runtime import backtest_mark_to_market_request
-from .control import AccountContractClient
-from .events import decode_event
-from .view import (
-    AccountCurrentViewReader,
-    AccountObservedOrdersViewReader,
-    AccountViewFrame,
-    AccountViewKey,
-    AccountViewKind,
-    AccountViewReader,
-    account_view_path,
-    decode_view,
-)
+_EXPORTS = {
+    "AccountContractClient": (".control", "AccountContractClient"),
+    "AccountCurrentViewReader": (".view", "AccountCurrentViewReader"),
+    "AccountObservedOrdersViewReader": (".view", "AccountObservedOrdersViewReader"),
+    "AccountViewFrame": (".view", "AccountViewFrame"),
+    "AccountViewKey": (".view", "AccountViewKey"),
+    "AccountViewKind": (".view", "AccountViewKind"),
+    "AccountViewReader": (".view", "AccountViewReader"),
+    "account_view_path": (".view", "account_view_path"),
+    "backtest_mark_to_market_request": (".runtime", "backtest_mark_to_market_request"),
+    "decode_event": (".events", "decode_event"),
+    "decode_view": (".view", "decode_view"),
+}
 
-__all__ = [
-    "AccountContractClient",
-    "AccountCurrentViewReader",
-    "AccountObservedOrdersViewReader",
-    "AccountViewFrame",
-    "AccountViewKey",
-    "AccountViewKind",
-    "AccountViewReader",
-    "account_view_path",
-    "backtest_mark_to_market_request",
-    "decode_event",
-    "decode_view",
-]
+
+def __getattr__(name: str) -> Any:
+    target = _EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    value = getattr(import_module(target[0], __name__), target[1])
+    globals()[name] = value
+    return value
+
+
+__all__ = list(_EXPORTS)

@@ -54,5 +54,5 @@ def _action_prompt(item: ActionItem) -> Text:
     if item.shortcut:
         prompt.append(f"{item.shortcut}  ", style="bold")
     prompt.append(item.label, style="bold")
-    prompt.append(f"\n   {item.description}", style="dim")
+    prompt.append(f"  ·  {item.description}", style="dim")
     return prompt

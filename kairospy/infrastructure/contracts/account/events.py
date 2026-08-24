@@ -1,6 +1,6 @@
 """Account v2 event contract."""
 
-from kairospy.infrastructure.transport.account import decode_account_event
+from .source import decode_account_event
 
 
 def decode_event(payload: bytes):

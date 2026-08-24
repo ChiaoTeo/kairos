@@ -15,8 +15,8 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Label, OptionList, RichLog
 from textual.worker import Worker
 
-from kairospy.application.data import DataApplication, DataRequirement
-from kairospy.application.research import ResearchApplication
+from kairospy.research.apps.data.application import DataApplication, DataRequirement
+from kairospy.research.apps.experiments.application import ResearchApplication
 from kairospy.research import ResearchSpec
 
 from ..dialogs import ConfirmDialog, InputDialog
@@ -111,11 +111,33 @@ class ResearchScreen(Screen[None]):
         if action != "execute-data":
             self._run(action, value)
             return
+        self._pending_path = value
+        self.app.push_screen(
+            InputDialog(
+                "已审阅的 plan hash（可留空）",
+                placeholder="用于防止需求文件在审阅后发生变化",
+            ),
+            self._data_plan_hash_selected,
+        )
+
+    def _data_plan_hash_selected(self, value: str | None) -> None:
+        if value is None:
+            return
+        if self.app.state.yes:  # type: ignore[attr-defined]
+            self._run("execute-data", self._pending_path, value)
+            return
         self.app.push_screen(
             ConfirmDialog(
-                "执行数据计划", f"确认执行 {value} 中的数据需求？", confirm_label="执行"
+                "执行数据计划",
+                f"确认执行 {self._pending_path} 中的数据需求？"
+                + (f"\n预期 plan hash：{value}" if value else ""),
+                confirm_label="执行",
             ),
-            lambda confirmed: self._run(action, value) if confirmed else None,
+            lambda confirmed: (
+                self._run("execute-data", self._pending_path, value)
+                if confirmed
+                else None
+            ),
         )
 
     def _publish_plan_selected(self, value: str | None) -> None:
@@ -129,6 +151,9 @@ class ResearchScreen(Screen[None]):
 
     def _publish_evidence_selected(self, value: str | None) -> None:
         if value is None:
+            return
+        if self.app.state.yes:  # type: ignore[attr-defined]
+            self._run("publish-gate", self._pending_path, value)
             return
         self.app.push_screen(
             ConfirmDialog(
@@ -176,6 +201,11 @@ class ResearchScreen(Screen[None]):
             plan = asyncio.run(data.plan(requirements))
             if action == "plan-data":
                 return plan.as_dict()
+            if extra and plan.plan_hash != extra:
+                raise ValueError(
+                    "data plan hash mismatch: "
+                    f"expected={extra}, actual={plan.plan_hash}"
+                )
             result = asyncio.run(data.execute(plan))
             return {
                 "plan_hash": plan.plan_hash,

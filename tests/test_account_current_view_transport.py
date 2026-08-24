@@ -8,14 +8,14 @@ import flatbuffers
 from kairospy.primitives.account import AccountId
 from kairospy.infrastructure.contracts.account import AccountCurrentViewReader
 from kairospy.infrastructure.transport.native import native
-from kairospy.infrastructure.transport.generated.kairos.account.v2 import (
+from kairospy.infrastructure.protocol.generated.kairos.account.v2 import (
     AccountCurrentView,
     AccountModel,
     AccountSegmentState,
     AccountStatus,
     FreshnessState,
 )
-from kairospy.infrastructure.transport.generated.kairos.common.v2 import (
+from kairospy.infrastructure.protocol.generated.kairos.common.v2 import (
     ViewCompleteness,
     ViewMetadata,
 )
@@ -115,13 +115,15 @@ def test_one_account_mmap_decodes_every_segment_at_one_generation(
         tmp_path, account_id=AccountId("main")
     ).snapshot(AccountId("main"))
 
-    assert snapshot.generation == 7
-    assert [str(value.segment_key) for value in snapshot.segments] == [
+    assert snapshot["generation"] == 7
+    segments = snapshot["segments"]
+    assert isinstance(segments, list)
+    assert [str(value["segment_key"]) for value in segments] == [
         "spot",
         "usd_m_futures",
     ]
-    assert {value.generation for value in snapshot.segments} == {7}
-    assert snapshot.event_sequence == 11
+    assert {value["generation"] for value in segments} == {7}
+    assert snapshot["event_sequence"] == 11
 
 
 def test_account_current_view_rejects_frame_metadata_generation_mismatch(

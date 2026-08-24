@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Generic, TypeVar
 
-from .generated_spec import DEFAULT_MAX_PAYLOAD_LEN
+from kairospy.infrastructure.protocol.generated_spec import DEFAULT_MAX_PAYLOAD_LEN
 from .native import native
 
 

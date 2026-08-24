@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
+from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 sys.modules.setdefault("kairos", _generated_kairos)
@@ -159,7 +159,7 @@ def decode_view(payload: bytes, kind: MarketViewKind) -> Any:
             f"invalid Market {kind.value} view identifier: expected {identifier!r}"
         )
     module = __import__(
-        f"kairospy.infrastructure.transport.generated.kairos.market.v2.{module_name}",
+        f"kairospy.infrastructure.protocol.generated.kairos.market.v2.{module_name}",
         fromlist=[root_name],
     )
     root_type = getattr(module, root_name)

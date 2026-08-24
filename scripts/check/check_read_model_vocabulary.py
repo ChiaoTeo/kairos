@@ -14,7 +14,7 @@ SCANNED_SUFFIXES = {".md", ".py", ".rs", ".sql", ".toml", ".fbs"}
 IGNORED_PARTS = {".git", ".agent-work", "target", "generated", "__pycache__"}
 TERM = re.compile("pro" + r"jection|pro" + "jected", re.IGNORECASE)
 NAMING_GUIDE = Path("docs/architecture/read-model-and-query-naming.md")
-COLUMN_SELECTION = Path("kairospy/application/data/readers.py")
+COLUMN_SELECTION = Path("kairospy/research/apps/data/application/readers.py")
 VOCABULARY_CHECK = Path("scripts/check/check_read_model_vocabulary.py")
 
 

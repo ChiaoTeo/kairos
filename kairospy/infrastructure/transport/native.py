@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from .generated_spec import TRANSPORT_FINGERPRINT
+from kairospy.infrastructure.protocol.generated_spec import TRANSPORT_FINGERPRINT
 
 
 native: Any = import_module("kairospy._native_transport")

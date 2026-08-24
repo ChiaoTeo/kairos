@@ -77,5 +77,5 @@ operational binding identity alongside the shared Market `Provider`.
 - Market control contract: `crates/modules/market/contract/src/control/types.rs`
 - Resolved route and private attachment: `crates/modules/market/src/domain/market/data_route.rs`
 - Provider binding capabilities: `crates/modules/market/src/composition/sources/routing.rs`
-- Python intent model: `kairospy/application/market/requests.py`
-- Dataset legacy mapping: `kairospy/application/data/readers.py`
+- Python intent model: `kairospy/investment/apps/market/application/requests.py`
+- Dataset mapping: `kairospy/research/apps/data/application/readers.py`

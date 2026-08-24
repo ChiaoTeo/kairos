@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from kairospy.infrastructure.unix_http import _request_bytes, request_sync
-from kairospy.strategy.logging import StrategyLogger
+from kairospy.strategy.api.logging import StrategyLogger
 
 
 def test_request_sync_supports_unix_domain_socket(tmp_path: Path) -> None:

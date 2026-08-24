@@ -4,13 +4,13 @@ import asyncio
 
 import pytest
 
-from kairospy.application.agent import (
+from kairospy.strategy.apps.agent.application import (
     AgentDecisionNotice,
     AgentEvent,
     AgentEventStatus,
 )
-from kairospy.application.strategy.services.ingress import StrategyEventIngress
-from kairospy.application.events import EventMetadata
+from kairospy.strategy.apps.runtime.services.ingress import StrategyEventIngress
+from kairospy.investment.application.eventing import EventMetadata
 from kairospy.strategy import SystemEvent, SystemNotice
 
 

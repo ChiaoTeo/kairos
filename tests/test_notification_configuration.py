@@ -7,20 +7,20 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.launch.application.configuration import (
+from kairospy.system.apps.launch.application.configuration import (
     LaunchConfigError,
     LaunchConfigurationApplication,
 )
-from kairospy.application.notification.composition import (
+from kairospy.strategy.apps.notification.composition import (
     NotificationConfigError,
     compose_notifications,
     notification_config_hash,
     test_notification_destination as _test_notification_destination,
     validate_notification_resources,
 )
-from kairospy.application.notification import NotificationAdminApplication
-from kairospy.application.strategy.composition import compose_strategy_process
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.strategy.apps.notification.application import NotificationAdminApplication
+from kairospy.system.apps.launch.composition import compose_strategy_process
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.strategy import StrategyIdentity, StrategyLogger
 from kairospy.strategy import InstrumentId
 
@@ -100,7 +100,7 @@ def test_real_notification_test_is_unambiguously_labeled(
             return {"status": "ready"}
 
     monkeypatch.setattr(
-        "kairospy.application.notification.composition.compose_notifications",
+        "kairospy.strategy.apps.notification.composition.compose_notifications",
         lambda **_kwargs: type(
             "Composition", (), {"runtime": Runtime(), "application": Application()}
         )(),

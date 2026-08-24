@@ -8,23 +8,22 @@ import tomllib
 
 import pytest
 
-from kairospy.application.launch.application import (
+from kairospy.system.apps.launch.application import (
     LaunchConfigurationApplication,
     LaunchNotificationConfigurationApplication,
 )
-from kairospy.application.notification import (
+from kairospy.strategy.apps.notification.application import (
     NotificationAdminApplication,
     NotificationSecretRef,
 )
-from kairospy.application.notification.composition import (
+from kairospy.strategy.apps.notification.composition import (
     NotificationConfigError,
     compose_notifications,
     notification_config_hash,
     validate_notification_resources,
 )
-from kairospy.application.notification.services.setup import TelegramSetupClient
-from kairospy.application.workspace import WorkspaceApplication
-from kairospy.surface.cli.notification_setup import run_notification_setup
+from kairospy.strategy.apps.notification.services.setup import TelegramSetupClient
+from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.strategy import StrategyIdentity, StrategyLogger
@@ -128,7 +127,9 @@ def test_destination_write_failure_rolls_back_credential(
     previous = credential.read_text(encoding="utf-8")
     application = NotificationAdminApplication(workspace)
 
-    from kairospy.application.workspace import transaction as transaction_module
+    from kairospy.system.apps.configuration.services import (
+        transactions as transaction_module,
+    )
 
     original_replace = transaction_module._replace_file
     destination_config = workspace.paths.notification_config()
@@ -207,6 +208,7 @@ enabled = false
         {
             "source": "config/launches/signals.toml",
             "location": "notifications.routes.signals",
+            "document_state": "published",
         }
     ]
 
@@ -305,7 +307,7 @@ def test_telegram_setup_client_validates_bot_and_discovers_unique_chats(
         )
 
     monkeypatch.setattr(
-        "kairospy.application.notification.services.setup.urlopen", open_request
+        "kairospy.strategy.apps.notification.services.setup.urlopen", open_request
     )
     client = TelegramSetupClient("123456:test-token")
     assert client.identity().username == "kairos_bot"
@@ -315,49 +317,8 @@ def test_telegram_setup_client_validates_bot_and_discovers_unique_chats(
     ]
 
 
-def test_guided_feishu_setup_can_use_environment_secret_reference(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "project", workspace_id="n"
-    )
-    env_name = "KAIROS_CREDENTIAL_FEISHU_ALERTS_WEBHOOK_URL"
-    monkeypatch.setenv(
-        env_name, "https://open.feishu.cn/open-apis/bot/v2/hook/test-token"
-    )
-    answers = iter(("feishu-alerts", "2", env_name))
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-    confirmations = iter((True, False))
-    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: next(confirmations))
-
-    result = run_notification_setup(
-        workspace, provider="feishu", output=OutputFormat.JSON
-    )
-
-    assert result["configured"] is True
-    assert result["secret_ref"] == {"source": "env", "id": env_name}
-    assert result["next_action"] == ("select this Destination while editing a Launch")
-    assert "launch_attachment" not in result
-    assert "test-token" not in json.dumps(result)
 
 
-def test_guided_notification_setup_can_cancel_before_persisting(
-    tmp_path: Path, monkeypatch
-) -> None:
-    workspace = WorkspaceApplication().init_project(
-        tmp_path / "project", workspace_id="n"
-    )
-    answers = iter(("feishu-alerts", "2", "FEISHU_WEBHOOK"))
-    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
-    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: False)
-
-    result = run_notification_setup(
-        workspace, provider="feishu", output=OutputFormat.JSON
-    )
-
-    assert result["status"] == "cancelled"
-    with pytest.raises(KeyError):
-        NotificationAdminApplication(workspace).show("feishu-alerts")
 
 
 def test_manual_delivery_evidence_is_invalidated_by_destination_change(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 import sys
 
-from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
+from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
 
 sys.modules.setdefault("kairos", _generated_kairos)
 
@@ -31,7 +31,7 @@ def decode_event(payload: bytes) -> Any:
         if len(payload) < 8 or payload[4:8] != identifier:
             continue
         module = __import__(
-            f"kairospy.infrastructure.transport.generated.kairos.reference.v2.{root_name}",
+            f"kairospy.infrastructure.protocol.generated.kairos.reference.v2.{root_name}",
             fromlist=[root_name],
         )
         return getattr(module, root_name).GetRootAs(payload, 0)

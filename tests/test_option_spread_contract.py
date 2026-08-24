@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 
 from kairospy.strategy import CommandHandle, OptionSpreadLegRequest, OptionSpreadRequest
-from kairospy.application.execution.application import ExecutionApplication
+from kairospy.investment.apps.execution.application.application import ExecutionApplication
 
 
 def _leg(leg_id: str, instrument: str, side: str, quantity: str = "1"):

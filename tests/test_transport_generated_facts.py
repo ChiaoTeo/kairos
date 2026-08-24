@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kairospy.infrastructure.transport import generated_spec
+from kairospy.infrastructure.protocol import generated_spec
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +43,7 @@ def test_every_schema_root_matches_its_generated_python_identifier() -> None:
         identifier = identifier_match.group(1).encode()
         namespace = namespace_match.group(1)
         module = importlib.import_module(
-            "kairospy.infrastructure.transport.generated." + namespace + "." + root
+            "kairospy.infrastructure.protocol.generated." + namespace + "." + root
         )
         generated_root = getattr(module, root)
         has_identifier = getattr(generated_root, f"{root}BufferHasIdentifier")

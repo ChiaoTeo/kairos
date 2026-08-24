@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
-from kairospy.application.system import ComponentProcessApplication
-from kairospy.application.launch.application import LaunchRegistryApplication
+from kairospy.system.apps.components.application import ComponentProcessApplication
+from kairospy.system.apps.launch.application import LaunchRegistryApplication
 from kairospy.surface.console.models import ObserveSnapshot
 
 

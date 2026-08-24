@@ -7,17 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.notification import (
+from kairospy.strategy.apps.notification.application import (
     NotificationApplication,
     NotificationRequest,
 )
-from kairospy.application.notification.models import (
+from kairospy.strategy.apps.notification.application.models import (
     NotificationDestination,
     RenderedNotification,
     SenderResult,
 )
-from kairospy.application.notification.services import NotificationDeliveryRuntime
-from kairospy.application.notification.services.senders import (
+from kairospy.strategy.apps.notification.services import NotificationDeliveryRuntime
+from kairospy.strategy.apps.notification.services.senders import (
     AppriseSender,
 )
 from kairospy.strategy import StrategyLogger
@@ -381,7 +381,7 @@ def test_apprise_sender_delegates_feishu_and_telegram_protocols(monkeypatch) -> 
             return True
 
     monkeypatch.setattr(
-        "kairospy.application.notification.services.senders.apprise.Apprise", _Apprise
+        "kairospy.strategy.apps.notification.services.senders.apprise.Apprise", _Apprise
     )
     feishu = NotificationDestination(
         "feishu",
@@ -442,7 +442,7 @@ def test_apprise_sender_maps_non_success_to_one_sanitized_failure(
             return outcome
 
     monkeypatch.setattr(
-        "kairospy.application.notification.services.senders.apprise.Apprise", _Apprise
+        "kairospy.strategy.apps.notification.services.senders.apprise.Apprise", _Apprise
     )
     destination = NotificationDestination(
         "telegram",

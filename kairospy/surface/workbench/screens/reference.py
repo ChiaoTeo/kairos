@@ -13,8 +13,7 @@ from rich.pretty import Pretty
 from textual.widgets import DataTable, Footer, Input, Label, OptionList, RichLog, Static
 from textual.worker import Worker
 
-from kairospy.application.reference import ReferenceApplication
-from kairospy.infrastructure.contracts.reference import ReferenceClient
+from kairospy.investment.apps.reference.application import ReferenceApplication
 
 from ..dialogs import SelectDialog, SelectOption
 from ..widgets import ActionItem, ActionList, WorkspaceHeader
@@ -29,13 +28,13 @@ REFERENCE_ACTIONS = (
 )
 
 INSTRUMENT_TYPES = (
-    SelectOption("全部类型", ""),
-    SelectOption("股票", "equity"),
-    SelectOption("现货", "spot"),
-    SelectOption("永续合约", "perpetual"),
-    SelectOption("期货", "future"),
-    SelectOption("期权", "option"),
-    SelectOption("指数", "index"),
+    SelectOption("", "全部类型"),
+    SelectOption("equity", "股票"),
+    SelectOption("spot", "现货"),
+    SelectOption("perpetual", "永续合约"),
+    SelectOption("future", "期货"),
+    SelectOption("option", "期权"),
+    SelectOption("index", "指数"),
 )
 
 
@@ -160,9 +159,7 @@ class ReferenceScreen(Screen[None]):
         state = self.app.state  # type: ignore[attr-defined]
         if state.owner is None:
             raise RuntimeError(state.load_error or "当前没有可用的 workspace")
-        return ReferenceApplication(
-            ReferenceClient(database_path=state.owner.paths.reference_database())
-        )
+        return ReferenceApplication.from_database(state.owner.paths.reference_database())
 
     def _find_records(self, query: str) -> tuple[Any, ...]:
         application = self._application()
@@ -317,9 +314,7 @@ class ReferenceDetailScreen(Screen[None]):
 
     def _application(self) -> ReferenceApplication:
         state = self.app.state  # type: ignore[attr-defined]
-        return ReferenceApplication(
-            ReferenceClient(database_path=state.owner.paths.reference_database())
-        )
+        return ReferenceApplication.from_database(state.owner.paths.reference_database())
 
     def _load_related(self, action: str) -> tuple[Any, ...]:
         application = self._application()
