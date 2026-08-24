@@ -57,7 +57,7 @@ def test_command_help(snap_compare: Any) -> None:
     async def show_help(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
-        screen.submit("help")
+        screen.submit("/help")
         await pilot.pause()
 
     assert snap_compare(
@@ -71,7 +71,7 @@ def test_command_market_argument_guide(snap_compare: Any) -> None:
     async def request_query(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
-        screen.submit("market")
+        screen.submit("/market")
         await pilot.pause()
 
     assert snap_compare(
@@ -85,7 +85,7 @@ def test_command_market_results(snap_compare: Any) -> None:
     async def show_results(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
-        screen._write_prompt("market AAPL")
+        screen._write_prompt("/market AAPL")
         screen._render_result("market", (_market(),))
         await pilot.pause()
 

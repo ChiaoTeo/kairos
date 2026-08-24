@@ -35,3 +35,6 @@ Workbench screen 直接调用所属 application 或 contract client。它不得�
 - `observe --once` 和显式 CLI 命令保留机器可读输出；其交互版本复用同一 Workbench。
 - 删除旧交互代码前必须以功能矩阵和端到端测试证明 Account、Order、Market、Reference、
   Launch/Instance、资源、Data/Research、System、Risk、Capital 与 Integration 均有对应路径。
+
+Workbench 的信息架构、单输入状态机、内容记录、安全和验收规范见
+[Kairos Workbench 产品设计](../architecture/workbench-product-design.md)。

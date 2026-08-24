@@ -5,6 +5,7 @@ README；跨进程字段和编码规则应放在 `schemas/`。
 
 - [Capital management boundary](capital-management.md)
 - [CLI boundary](cli-boundary.md)
+- [Kairos Workbench 产品设计](workbench-product-design.md)
 - [Cargo 依赖管理规范](cargo-dependency-management.md)
 - [Conflux JSON-RPC control boundary](conflux-jsonrpc-control.md)
 - [查询、当前视图与派生数据命名](read-model-and-query-naming.md)

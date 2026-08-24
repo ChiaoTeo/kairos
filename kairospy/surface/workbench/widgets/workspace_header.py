@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from textual.widgets import Header
+
+if TYPE_CHECKING:
+    from ..app import KairosWorkbenchApp
 
 
 class WorkspaceHeader(Header):
@@ -12,5 +17,6 @@ class WorkspaceHeader(Header):
         super().__init__(icon="")
 
     def on_mount(self) -> None:
-        state = self.app.state  # type: ignore[attr-defined]
+        app = cast("KairosWorkbenchApp", self.app)
+        state = app.state
         self.screen.title = f"Kairos · {state.workspace_id}"

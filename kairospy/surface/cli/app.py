@@ -314,6 +314,8 @@ def _interactive_command(
     dry_run: bool,
     no_exec: bool,
     yes: bool,
+    no_alt_screen: bool = False,
+    transcript: str | None = None,
 ) -> None:
     state = load_workbench_state(
         Path(workspace) if workspace is not None else None,
@@ -321,21 +323,47 @@ def _interactive_command(
         no_exec=no_exec,
         yes=yes,
     )
-    KairosWorkbenchApp(
+    workbench = KairosWorkbenchApp(
         state,
         watch_css=os.environ.get("KAIROS_TEXTUAL_DEV") == "1",
-    ).run()
+        transcript_path=Path(transcript) if transcript is not None else None,
+    )
+    if no_alt_screen:
+        workbench.run(inline=True, inline_no_clear=True)
+    else:
+        workbench.run()
+    if workbench.transcript.path is not None:
+        typer.echo(f"Workbench transcript: {workbench.transcript.path}")
 
 
 @app.command("interactive", rich_help_panel="Getting started")
 def interactive(
     workspace: str | None = typer.Option(None, "--workspace"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="预览变更和外部动作，不执行。"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="预览变更和外部动作，不执行。"
+    ),
     no_exec: bool = typer.Option(False, "--no-exec", help="不执行变更和外部动作。"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认提示。"),
+    no_alt_screen: bool = typer.Option(
+        False,
+        "--no-alt-screen",
+        help="在当前终端内运行并保留退出时的最后画面。",
+    ),
+    transcript: str | None = typer.Option(
+        None,
+        "--transcript",
+        help="将 Agent 可读的 Workbench JSONL 记录写入指定路径。",
+    ),
 ) -> None:
     """打开统一的 Kairos Textual 工作台。"""
-    _interactive_command(workspace, dry_run, no_exec, yes)
+    _interactive_command(
+        workspace,
+        dry_run,
+        no_exec,
+        yes,
+        no_alt_screen=no_alt_screen,
+        transcript=transcript,
+    )
 
 
 @app.command("i", hidden=True)
@@ -344,9 +372,18 @@ def interactive_short(
     dry_run: bool = typer.Option(False, "--dry-run"),
     no_exec: bool = typer.Option(False, "--no-exec"),
     yes: bool = typer.Option(False, "--yes", "-y"),
+    no_alt_screen: bool = typer.Option(False, "--no-alt-screen"),
+    transcript: str | None = typer.Option(None, "--transcript"),
 ) -> None:
     """Short alias for ``interactive``."""
-    _interactive_command(workspace, dry_run, no_exec, yes)
+    _interactive_command(
+        workspace,
+        dry_run,
+        no_exec,
+        yes,
+        no_alt_screen=no_alt_screen,
+        transcript=transcript,
+    )
 
 
 @app.command("browse", rich_help_panel="Advanced tools")

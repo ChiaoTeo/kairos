@@ -3129,34 +3129,23 @@ def test_interactive_enables_css_watching_only_in_textual_dev_mode(
     assert watched == [False, True]
 
 
+def test_interactive_can_preserve_the_terminal_screen(monkeypatch) -> None:
+    from kairospy.surface.cli import app as cli_module
 
+    state = SimpleNamespace(owner=None, load_error="workspace not found")
+    runs: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli_module, "load_workbench_state", lambda *args, **kwargs: state
+    )
+    monkeypatch.setattr(
+        cli_module.KairosWorkbenchApp,
+        "run",
+        lambda self, **kwargs: runs.append(kwargs),
+    )
 
+    cli_module._interactive_command(None, False, False, False, no_alt_screen=True)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    assert runs == [{"inline": True, "inline_no_clear": True}]
 
 
 def test_account_query_balance_uses_top_level_standalone_mode(
@@ -3246,22 +3235,6 @@ def test_account_positions_uses_top_level_standalone_mode(
             "usd_m_futures",
         ]
     ]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_readme_uses_the_current_golden_path_commands() -> None:
@@ -3654,8 +3627,6 @@ def test_project_init_non_interactive_requires_explicit_inputs() -> None:
 
     assert execute_argv(["project", "init", "--non-interactive"], output) != 0
     assert "project directory is required" in output.getvalue()
-
-
 
 
 def test_launch_control_resolves_instance_owned_socket(tmp_path) -> None:

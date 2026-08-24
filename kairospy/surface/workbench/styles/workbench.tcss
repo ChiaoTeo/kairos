@@ -20,16 +20,46 @@ Screen {
     color: $text-muted;
 }
 
-#command-input {
-    height: 3;
+#guided-actions {
+    height: auto;
+    min-height: 3;
+    max-height: 9;
     margin: 0 2;
     padding: 0 1;
+}
+
+#guided-actions > .option-list--option {
+    padding: 0 1;
+}
+
+#command-bar {
+    height: 3;
+    margin: 0 2;
     border: round $primary-muted;
     background: $surface;
 }
 
-#command-input:focus {
+#command-bar:focus-within {
     border: round $primary;
+}
+
+#command-context {
+    width: auto;
+    height: 1fr;
+    padding: 0 1;
+    content-align: center middle;
+    color: $accent;
+    text-style: bold;
+    background: $surface;
+}
+
+#command-input {
+    width: 1fr;
+    height: 1fr;
+    margin: 0;
+    padding: 0 1;
+    border: none;
+    background: $surface;
 }
 
 #command-hints {
@@ -39,9 +69,7 @@ Screen {
 }
 
 Header {
-    dock: top;
-    background: $primary-darken-2;
-    color: $text;
+    display: none;
 }
 
 Footer {

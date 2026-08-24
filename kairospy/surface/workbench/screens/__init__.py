@@ -1,25 +1,5 @@
-"""Workbench screens."""
+"""The Workbench product exposes one command screen."""
 
-from .home import HomeScreen
 from .command_line import CommandLineScreen
-from .business_tools import BusinessToolsScreen
-from .market import MarketScreen
-from .observe import ObserveScreen
-from .operations import OperationsScreen
-from .reference import ReferenceScreen
-from .research import ResearchScreen
-from .resources import ResourcesScreen
-from .strategy import StrategyScreen
 
-__all__ = [
-    "HomeScreen",
-    "CommandLineScreen",
-    "BusinessToolsScreen",
-    "MarketScreen",
-    "ObserveScreen",
-    "OperationsScreen",
-    "ReferenceScreen",
-    "ResearchScreen",
-    "ResourcesScreen",
-    "StrategyScreen",
-]
+__all__ = ["CommandLineScreen"]

@@ -18,6 +18,7 @@
 - [架构文档索引](architecture/README.md)
 - [Capital management boundary](architecture/capital-management.md)
 - [CLI boundary](architecture/cli-boundary.md)
+- [Kairos Workbench 产品设计](architecture/workbench-product-design.md)
 - [Cargo 依赖管理规范](architecture/cargo-dependency-management.md)
 
 业务模块的专属边界优先记录在所属 crate 的 README，例如

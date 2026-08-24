@@ -436,7 +436,7 @@ developer can attach to the same named session with `monitor`.
 Run the fast UI layers with:
 
 ```text
-uv run pytest -q tests/workbench/test_app.py
+uv run pytest -q tests/workbench/test_app_*.py
 uv run pytest -q tests/workbench/test_snapshots.py
 uv run pytest -q tests/workbench/test_binary.py
 ```

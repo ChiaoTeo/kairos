@@ -40,6 +40,22 @@ def test_workbench_does_not_route_actions_through_typer_or_cli_executor() -> Non
             assert token not in source, f"{token} leaked into {path}"
 
 
+def test_guided_command_modules_do_not_own_process_or_terminal_boundaries() -> None:
+    guided = WORKBENCH / "screens" / "guided"
+    forbidden = (
+        "subprocess",
+        "prompt_toolkit",
+        "typer",
+        "surface.cli",
+        "execute_argv",
+        "redirect_stdout",
+    )
+    for path in _python_files(guided):
+        source = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            assert token not in source, f"{token} leaked into {path}"
+
+
 def test_product_source_has_no_terminal_prompt_calls() -> None:
     for path in _python_files(PACKAGE):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -77,6 +93,60 @@ def test_only_one_textual_application_shell_exists() -> None:
     assert app_subclasses == [
         (Path("kairospy/surface/workbench/app.py"), "KairosWorkbenchApp")
     ]
+
+
+def test_application_shell_only_routes_through_command_line_screen() -> None:
+    path = WORKBENCH / "app.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    pushed_screens = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "push_screen"
+    ]
+
+    assert len(pushed_screens) == 1
+    assert "from .screens import CommandLineScreen" in source
+    for legacy in (
+        "HomeScreen",
+        "MarketScreen",
+        "ReferenceScreen",
+        "StrategyScreen",
+        "ResourcesScreen",
+        "ResearchScreen",
+        "OperationsScreen",
+        "ConfirmDialog",
+    ):
+        assert legacy not in source
+
+
+def test_workbench_has_one_product_screen_and_no_dialog_package() -> None:
+    screen_subclasses: list[tuple[Path, str]] = []
+    for path in _python_files(WORKBENCH):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if any(
+                (isinstance(base, ast.Name) and base.id in {"Screen", "ModalScreen"})
+                or (
+                    isinstance(base, ast.Subscript)
+                    and isinstance(base.value, ast.Name)
+                    and base.value.id in {"Screen", "ModalScreen"}
+                )
+                for base in node.bases
+            ):
+                screen_subclasses.append((path.relative_to(ROOT), node.name))
+
+    assert screen_subclasses == [
+        (
+            Path("kairospy/surface/workbench/screens/command_line.py"),
+            "CommandLineScreen",
+        )
+    ]
+    assert not tuple((WORKBENCH / "dialogs").glob("*.py"))
 
 
 def test_removed_prompt_toolkit_is_not_a_direct_dependency() -> None:
