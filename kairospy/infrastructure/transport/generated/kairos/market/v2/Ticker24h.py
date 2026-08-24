@@ -43,7 +43,7 @@ class Ticker24h(object):
         return None
 
     # Ticker24h
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -235,11 +235,11 @@ def Ticker24hAddInstrumentId(builder, instrumentId):
 def AddInstrumentId(builder, instrumentId):
     Ticker24hAddInstrumentId(builder, instrumentId)
 
-def Ticker24hAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def Ticker24hAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    Ticker24hAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    Ticker24hAddProvider(builder, provider)
 
 def Ticker24hAddLastPrice(builder, lastPrice):
     builder.PrependStructSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(lastPrice), 0)

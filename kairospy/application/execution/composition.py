@@ -25,7 +25,7 @@ def build_strategy_access(
     account_ids: tuple[AccountId, ...] = (),
     decorate_commands: Callable[[object], object] | None = None,
 ) -> ExecutionApplication:
-    """Build Execution commands and projections for one Strategy identity."""
+    """Build Execution commands and current views for one Strategy identity."""
 
     cursor_checkpoint = ExecutionEventCursorCheckpoint(
         instance.state("strategy", "execution-event-cursor.json"),
@@ -51,10 +51,10 @@ def build_strategy_access(
     )
     if decorate_commands is not None:
         commands = decorate_commands(commands)  # type: ignore[assignment]
-    projection = client.projection(instance)
+    current_views = client.current_view(instance)
     return ExecutionApplication(
         commands,
-        projection,
+        current_views,
         AeronExecutionEventSource(
             aeron_dir=instance.workspace.paths.aeron_dir(),
         ),

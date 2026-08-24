@@ -4,22 +4,7 @@ use crate::DomainTypeError;
 use crate::text::text_type;
 
 text_type!(ParticipantSymbol);
-text_type!(ParticipantId);
-text_type!(ProviderId);
-text_type!(ProviderProductCode);
 text_type!(RemoteOrderId);
-
-impl Default for ProviderId {
-    fn default() -> Self {
-        Self::new("provider:unknown").expect("canonical default provider is valid")
-    }
-}
-
-impl Default for ProviderProductCode {
-    fn default() -> Self {
-        Self::new("unknown").expect("canonical default provider product is valid")
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

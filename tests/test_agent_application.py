@@ -122,38 +122,6 @@ def test_mode_changes_are_authorized_and_snapshot_pinned() -> None:
 
 
 def test_launch_normalizes_agent_without_secret_material(tmp_path: Path) -> None:
-    profile = tmp_path / "config" / "agents" / "profiles"
-    profile.mkdir(parents=True)
-    (profile / "mean-reversion-v1.toml").write_text(
-        """[profile]
-id = "mean-reversion-v1"
-version = "1"
-goal = "Review mean-reversion intents"
-rubric = ["Prefer bounded exposure"]
-invalidation_rules = ["Abstain without fresh evidence"]
-reason_codes = ["safe"]
-risk_flags = ["concentration"]
-""",
-        encoding="utf-8",
-    )
-    (profile.parent / "mcp.toml").write_text(
-        """[servers.kairos-context]
-transport = "stdio"
-command = "kairos-context-mcp"
-args = ["--readonly"]
-timeout_seconds = 2
-
-[profiles.intent-review-readonly]
-server = "kairos-context"
-allowed_tools = ["market.get_latest_quote"]
-scope_enforced = true
-max_result_bytes = 4096
-max_rows = 10
-freshness_required_tools = ["market.get_latest_quote"]
-max_age_seconds = 30
-""",
-        encoding="utf-8",
-    )
     config = LaunchConfig.from_values(
         {
             "launch": {
@@ -166,7 +134,14 @@ max_age_seconds = 30
                 "enabled": True,
                 "required": False,
                 "runtime": "openai-agents",
-                "profile": "mean-reversion-v1",
+                "profile": {
+                    "version": "1",
+                    "goal": "Review mean-reversion intents",
+                    "rubric": ["Prefer bounded exposure"],
+                    "invalidation_rules": ["Abstain without fresh evidence"],
+                    "reason_codes": ["safe"],
+                    "risk_flags": ["concentration"],
+                },
                 "max_queue_size": 64,
                 "model": {
                     "provider": "openai",
@@ -183,8 +158,17 @@ max_age_seconds = 30
                 },
                 "mcp": [
                     {
-                        "server": "kairos-context",
-                        "profile": "intent-review-readonly",
+                        "id": "kairos-context",
+                        "transport": "stdio",
+                        "command": "kairos-context-mcp",
+                        "args": ["--readonly"],
+                        "timeout_seconds": 2,
+                        "allowed_tools": ["market.get_latest_quote"],
+                        "scope_enforced": True,
+                        "max_result_bytes": 4096,
+                        "max_rows": 10,
+                        "freshness_required_tools": ["market.get_latest_quote"],
+                        "max_age_seconds": 30,
                         "required": True,
                     }
                 ],
@@ -203,7 +187,7 @@ max_age_seconds = 30
     ]
     assert agent["model"]["credential"] == "openai-agent"
     assert "secret" not in repr(agent).lower()
-    assert normalized["agent_profile"]["id"] == "mean-reversion-v1"
+    assert normalized["agent_profile"]["goal"] == "Review mean-reversion intents"
     assert len(normalized["agent_profile"]["content_hash"]) == 64
     assert len(normalized["agent_mcp"]["content_hash"]) == 64
 
@@ -216,11 +200,10 @@ max_age_seconds = 30
     assert runtime.agent.profile_snapshot is not None
     assert runtime.agent.profile_snapshot["goal"] == "Review mean-reversion intents"
     assert runtime.agent.mcp_snapshot is not None
-    profiles = runtime.agent.mcp_snapshot["profiles"]
-    assert isinstance(profiles, Mapping)
-    review_profile = profiles["intent-review-readonly"]
-    assert isinstance(review_profile, Mapping)
-    assert review_profile["scope_enforced"] is True
+    entries = runtime.agent.mcp_snapshot["entries"]
+    assert isinstance(entries, list)
+    assert entries[0]["id"] == "kairos-context"
+    assert entries[0]["scope_enforced"] is True
 
 
 def test_launch_rejects_agent_secrets_and_remote_backtest_runtime(
@@ -239,7 +222,7 @@ def test_launch_rejects_agent_secrets_and_remote_backtest_runtime(
         | {
             "agent": {
                 "enabled": True,
-                "profile": "profile",
+                "profile": {},
                 "api_key": "forbidden",
             }
         },
@@ -264,7 +247,7 @@ def test_launch_rejects_agent_secrets_and_remote_backtest_runtime(
             "agent": {
                 "enabled": True,
                 "runtime": "openai-agents",
-                "profile": "profile",
+                "profile": {},
             },
         },
         root=tmp_path,
@@ -289,7 +272,12 @@ def test_agent_config_rejects_unpublishable_required_context_key() -> None:
             {
                 "enabled": True,
                 "runtime": "fixture",
-                "profile": "profile-v1",
+                "profile": {
+                    "version": "1",
+                    "goal": "Review intents",
+                    "rubric": ["bounded"],
+                    "invalidation_rules": ["missing context"],
+                },
                 "fixture_path": "fixtures/agent.jsonl",
                 "capabilities": {
                     "intent_review": {

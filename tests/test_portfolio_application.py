@@ -36,7 +36,7 @@ from kairospy.domain_types import (
 )
 
 
-class _Projection:
+class _CurrentView:
     def __init__(self, snapshot: AccountSnapshot) -> None:
         self.value = snapshot
 
@@ -126,8 +126,8 @@ def test_portfolio_rebuilds_one_record_across_accounts_and_segments() -> None:
         "paper:strategy-a",
         AccountApplication(
             {
-                main.account_id: _Projection(main),
-                hedge.account_id: _Projection(hedge),
+                main.account_id: _CurrentView(main),
+                hedge.account_id: _CurrentView(hedge),
             }
         ),
         valuation_asset="USDT",
@@ -163,7 +163,7 @@ def test_portfolio_preserves_staleness_instead_of_inventing_global_freshness() -
     )
     portfolio = PortfolioApplication(
         "live:strategy-a",
-        AccountApplication({stale.account_id: _Projection(stale)}),
+        AccountApplication({stale.account_id: _CurrentView(stale)}),
     )
 
     snapshot = portfolio.rebuild()
@@ -210,7 +210,7 @@ def test_portfolio_records_earn_holdings_without_treating_them_as_positions() ->
     )
     portfolio = PortfolioApplication(
         "paper:strategy-a",
-        AccountApplication({account.account_id: _Projection(account)}),
+        AccountApplication({account.account_id: _CurrentView(account)}),
     )
 
     snapshot = portfolio.rebuild()
@@ -232,7 +232,7 @@ def test_market_observation_advances_portfolio_valuation_watermark() -> None:
     )
     portfolio = PortfolioApplication(
         "paper:strategy-a",
-        AccountApplication({account.account_id: _Projection(account)}),
+        AccountApplication({account.account_id: _CurrentView(account)}),
     )
     occurred_at = datetime(2026, 8, 19, tzinfo=timezone.utc)
     event = QuoteEvent(

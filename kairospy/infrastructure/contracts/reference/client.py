@@ -12,7 +12,7 @@ from typing import Any
 
 
 _COLLECTIONS = {
-    "entities": ("reference_entities_current", "entity_id"),
+    "exchanges": ("reference_exchanges_current", "exchange_id"),
     "assets": ("reference_assets_current", "asset_id"),
     "instruments": ("reference_instruments_current", "instrument_id"),
     "listings": ("reference_listings_current", "listing_id"),
@@ -22,7 +22,7 @@ _MAX_QUERY_LIMIT = 10_000
 
 @dataclass(frozen=True, slots=True)
 class ReferenceReadSession:
-    """One generation-pinned, read-only view of the Reference projection."""
+    """One generation-pinned, read-only view of the Reference catalog."""
 
     _connection: sqlite3.Connection
     generation: int
@@ -30,7 +30,7 @@ class ReferenceReadSession:
 
     def catalog(self) -> dict[str, Any]:
         tables = {
-            "entity_count": "reference_entities_current",
+            "exchange_count": "reference_exchanges_current",
             "asset_count": "reference_assets_current",
             "instrument_count": "reference_instruments_current",
             "listing_count": "reference_listings_current",
@@ -133,21 +133,20 @@ class ReferenceReadSession:
             "underlyings": [str(row["underlying"]) for row in rows],
         }
 
-    def entities(
+    def exchanges(
         self,
         *,
-        entity_ids: Sequence[str] | None = None,
+        exchange_ids: Sequence[str] | None = None,
         query: str | None = None,
-        entity_type: str | None = None,
         status: str | None = None,
         active_only: bool = False,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         return self._records(
-            "entities",
-            filters={"entity_type": entity_type, "status": status},
-            ids=entity_ids,
+            "exchanges",
+            filters={"status": status},
+            ids=exchange_ids,
             query=query,
             active_only=active_only,
             limit=limit,
@@ -581,9 +580,9 @@ class ReferenceClient:
         with self.snapshot() as snapshot:
             return snapshot.option_coverage()
 
-    def entities(self, **filters: Any) -> list[dict[str, Any]]:
+    def exchanges(self, **filters: Any) -> list[dict[str, Any]]:
         with self.snapshot() as snapshot:
-            return snapshot.entities(**filters)
+            return snapshot.exchanges(**filters)
 
     def assets(self, **filters: Any) -> list[dict[str, Any]]:
         with self.snapshot() as snapshot:
@@ -655,7 +654,7 @@ def _market(value: dict[str, Any]) -> dict[str, Any]:
 
 def _public_record(name: str, value: dict[str, Any]) -> dict[str, Any]:
     mappings = {
-        "entities": {"entity_id": "entityId", "entity_type": "entityType"},
+        "exchanges": {"exchange_id": "exchangeId"},
         "assets": {"asset_id": "assetId", "asset_class": "assetClass"},
         "instruments": {
             "instrument_id": "instrumentId",

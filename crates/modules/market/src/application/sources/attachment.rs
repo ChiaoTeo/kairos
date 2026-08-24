@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::super::{MarketApplication, MarketError};
-use crate::domain::source::{SourceId, SourceStatus};
+use crate::domain::source::{MarketFeedId, SourceStatus};
 use crate::services::actor::{AttachedSource, MarketActor};
 use crate::services::source::SourceHandle;
 use crate::services::source::messages::SourceInput;
@@ -80,7 +80,7 @@ impl MarketApplication {
     /// the migration without transferring a production connection to a task.
     pub(crate) fn attach_managed_source(
         &mut self,
-        descriptor: crate::domain::source::SourceDescriptor,
+        descriptor: crate::domain::source::FeedDescriptor,
     ) -> Result<(), String> {
         self.actor.register_source(descriptor.clone())?;
         let id = descriptor.id.clone();
@@ -146,7 +146,7 @@ impl MarketApplication {
 
     pub(crate) fn take_source_inputs(
         &mut self,
-    ) -> Vec<(SourceId, tokio::sync::mpsc::Receiver<SourceInput>)> {
+    ) -> Vec<(MarketFeedId, tokio::sync::mpsc::Receiver<SourceInput>)> {
         self.actor
             .attached_sources
             .iter_mut()
@@ -157,9 +157,8 @@ impl MarketApplication {
     pub fn sources_complete(&self) -> bool {
         if !self.actor.attached_sources.is_empty() {
             return self
-                .current_view()
-                .sources
-                .values()
+                .actor
+                .source_states()
                 .all(|source| source.status == SourceStatus::Stopped);
         }
         false

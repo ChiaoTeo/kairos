@@ -43,7 +43,7 @@ class IndexPrice(object):
         return None
 
     # IndexPrice
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -125,11 +125,11 @@ def IndexPriceAddInstrumentId(builder, instrumentId):
 def AddInstrumentId(builder, instrumentId):
     IndexPriceAddInstrumentId(builder, instrumentId)
 
-def IndexPriceAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def IndexPriceAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    IndexPriceAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    IndexPriceAddProvider(builder, provider)
 
 def IndexPriceAddSpotIndexPrice(builder, spotIndexPrice):
     builder.PrependStructSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(spotIndexPrice), 0)

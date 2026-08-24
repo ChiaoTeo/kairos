@@ -8,19 +8,21 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use kairos_primitives::integration::ProviderId;
-use kairos_primitives::reference::{AssetId, Exchange, InstrumentId, ListingId, Symbol};
+use kairos_primitives::reference::{
+    AssetId, ExchangeId, InstrumentId, ListingId, ReferenceSourceId, Symbol,
+};
 use kairos_primitives::time::UnixNanos;
 use kairos_reference::application::{
-    CliReferenceApplication, ConnectedReferenceApplication, ReferenceCatalogCollection,
-    ReferenceCatalogListRequest, ReferenceKind, ReferenceMarketCatalogRequest,
-    ReferenceOptionChainRequest, ReferenceQuery,
+    CliReferenceApplication, ConnectedReferenceApplication, ConnectedReferenceOutput,
+    ReferenceCatalogCollection, ReferenceCatalogListRequest, ReferenceCliOutput, ReferenceKind,
+    ReferenceMarketCatalogRequest, ReferenceOptionChainRequest, ReferenceQuery,
 };
 use kairos_reference_contract::{
-    ReferenceProviderProduct, ReferenceSourceControlRequest, ReferenceSourceDefinitionRequest,
+    BinanceReferenceSource, HyperliquidReferenceSource, MassiveReferenceSource, OkxReferenceSource,
+    ReferenceSourceBinding, ReferenceSourceControlRequest, ReferenceSourceDefinitionRequest,
     ReferenceSourceDesiredState, ReferenceSourceScope, ReferenceSourceScopeKind,
-    ReferenceSourceSyncPolicy, ReferenceUpsertConflictPolicy, ReferenceUpsertProvenance,
-    UpsertAssetRequest, UpsertInstrumentRequest, UpsertListingRequest,
+    ReferenceUpsertConflictPolicy, ReferenceUpsertProvenance, UpsertAssetRequest,
+    UpsertInstrumentRequest, UpsertListingRequest,
 };
 use kairos_workspace::JsonRpcControlClient;
 use kairos_workspace::cli::{OutputFormat, render};
@@ -87,12 +89,12 @@ async fn execute_connected_cli(
 fn execute_standalone_read(
     app: &CliReferenceApplication,
     command: StandaloneCommand,
-) -> Result<Value, Box<dyn std::error::Error>> {
+) -> Result<ReferenceCliOutput, Box<dyn std::error::Error>> {
     let value = match command {
         StandaloneCommand::Snapshot => app.catalog_status()?,
         StandaloneCommand::Catalog { command } => match command {
-            CatalogCommand::Entities(args) => app.catalog_collection(
-                ReferenceCatalogCollection::Entities,
+            CatalogCommand::Exchanges(args) => app.catalog_collection(
+                ReferenceCatalogCollection::Exchanges,
                 catalog_list_request(args),
             )?,
             CatalogCommand::Assets(args) => app.catalog_collection(
@@ -113,9 +115,6 @@ fn execute_standalone_read(
         StandaloneCommand::Assets { command } => match command {
             StandaloneAssetCommand::List(args) => app.list_assets(asset_list_request(args))?,
             StandaloneAssetCommand::Show { asset_id } => app.show_asset(&asset_id)?,
-        },
-        StandaloneCommand::Participants { command } => {
-            app.participant_entities(participant_entity_type(command))?
         },
         StandaloneCommand::Markets { command } => {
             let (args, resolve) = match command {
@@ -176,50 +175,51 @@ fn option_chain_request(args: OptionChainArgs) -> ReferenceOptionChainRequest {
     }
 }
 
-fn participant_entity_type(command: ParticipantCommand) -> &'static str {
-    match command {
-        ParticipantCommand::Brokers => "broker",
-        ParticipantCommand::Exchanges => "exchange",
-        ParticipantCommand::Providers => "data_provider",
-    }
-}
-
 async fn execute_connected_read(
     workspace: &Workspace,
     server: &ConnectedReferenceApplication<JsonRpcControlClient>,
     app: &CliReferenceApplication,
     command: ConnectedCommand,
-) -> Result<Value, Box<dyn std::error::Error>> {
+) -> Result<ConnectedReferenceOutput, Box<dyn std::error::Error>> {
     match command {
         ConnectedCommand::Status(args) => {
             if args.catalog {
-                return app.catalog_status();
+                return Ok(ConnectedReferenceOutput::LocalCatalog(
+                    app.catalog_status()?,
+                ));
             }
-            server.status().await
+            Ok(ConnectedReferenceOutput::Status(server.status().await?))
         },
         ConnectedCommand::Providers(args) => {
             let source_filter = args.source_filter()?;
             let show = args.is_show();
             let status = server.runtime_status().await?;
-            ConnectedReferenceApplication::<JsonRpcControlClient>::summarize_providers(
-                status,
-                source_filter,
-                show,
-            )
+            Ok(ConnectedReferenceOutput::Providers(
+                ConnectedReferenceApplication::<JsonRpcControlClient>::summarize_providers(
+                    status,
+                    source_filter,
+                    show,
+                )?,
+            ))
         },
         ConnectedCommand::Doctor => {
             let status = server.runtime_status().await?;
-            ConnectedReferenceApplication::<JsonRpcControlClient>::summarize_doctor(status)
+            Ok(ConnectedReferenceOutput::Doctor(
+                ConnectedReferenceApplication::<JsonRpcControlClient>::summarize_doctor(status)?,
+            ))
         },
-        ConnectedCommand::Logs(args) => {
-            read_logs(&workspace.logs_root().join("reference/process.log"), args)
-        },
+        ConnectedCommand::Logs(args) => Ok(ConnectedReferenceOutput::Diagnostic(read_logs(
+            &workspace.logs_root().join("reference/process.log"),
+            args,
+        )?)),
         ConnectedCommand::Coverage(args) => {
             if args.command.is_some() {
                 unreachable!("coverage mutation routed to runtime control");
             }
             let status = server.runtime_status().await?;
-            Ok(ConnectedReferenceApplication::<JsonRpcControlClient>::summarize_coverage(status))
+            Ok(ConnectedReferenceOutput::Coverage(
+                ConnectedReferenceApplication::<JsonRpcControlClient>::summarize_coverage(status),
+            ))
         },
         _ => unreachable!("runtime control command routed before connected read"),
     }
@@ -249,61 +249,69 @@ fn connected_requires_runtime_control(command: &ConnectedCommand) -> bool {
 async fn execute_connected_runtime_control(
     workspace: &Workspace,
     command: ConnectedCommand,
-) -> Result<Value, Box<dyn std::error::Error>> {
+) -> Result<ConnectedReferenceOutput, Box<dyn std::error::Error>> {
     let server = connected_reference_app(workspace)?;
     let value = match command {
         ConnectedCommand::Refresh(args) | ConnectedCommand::Sync(args) => {
             let source_id = args
                 .source
-                .map(ProviderId::new)
+                .map(ReferenceSourceId::new)
                 .transpose()
                 .map_err(|error| format!("invalid source id: {error}"))?;
-            server.refresh(source_id).await?
+            ConnectedReferenceOutput::Refresh(server.refresh(source_id).await?)
         },
-        ConnectedCommand::Publish => server.publish().await?,
+        ConnectedCommand::Publish => ConnectedReferenceOutput::Publish(server.publish().await?),
         ConnectedCommand::Coverage(args) => match args.command {
-            Some(CoverageCommand::Add { underlying }) => {
+            Some(CoverageCommand::Add { underlying }) => ConnectedReferenceOutput::OptionCoverage(
                 server
                     .add_option_coverage(InstrumentId::try_from(underlying)?)
-                    .await?
-            },
+                    .await?,
+            ),
             Some(CoverageCommand::Remove { underlying }) => {
-                server
-                    .remove_option_coverage(InstrumentId::try_from(underlying)?)
-                    .await?
+                ConnectedReferenceOutput::OptionCoverage(
+                    server
+                        .remove_option_coverage(InstrumentId::try_from(underlying)?)
+                        .await?,
+                )
             },
             None => unreachable!("read-only coverage command routed before runtime control"),
         },
         ConnectedCommand::Providers(args) if args.is_control() => match args.control_command()? {
-            ProviderControlCommand::Add => {
+            ProviderControlCommand::Add => ConnectedReferenceOutput::SourceStatus(
                 server
                     .upsert_source_definition(args.source_definition_request()?)
-                    .await?
-            },
+                    .await?,
+            ),
             command => {
-                let source_id = ProviderId::new(args.control_source_id()?)
+                let source_id = ReferenceSourceId::new(args.control_source_id()?)
                     .map_err(|error| format!("invalid source id: {error}"))?;
-                server
-                    .set_source_desired_state(ReferenceSourceControlRequest {
-                        source_id,
-                        desired_state: command.desired_state(),
-                    })
-                    .await?
+                ConnectedReferenceOutput::SourceStatus(
+                    server
+                        .set_source_desired_state(ReferenceSourceControlRequest {
+                            source_id,
+                            desired_state: command.desired_state(),
+                        })
+                        .await?,
+                )
             },
         },
         ConnectedCommand::Assets {
             command: ConnectedAssetCommand::Add(args),
-        } => server.upsert_asset(upsert_asset_request(args)?).await?,
+        } => ConnectedReferenceOutput::Mutation(
+            server.upsert_asset(upsert_asset_request(args)?).await?,
+        ),
         ConnectedCommand::Instruments {
             command: InstrumentCommand::Add(args),
-        } => {
+        } => ConnectedReferenceOutput::Mutation(
             server
                 .upsert_instrument(upsert_instrument_request(args)?)
-                .await?
-        },
+                .await?,
+        ),
         ConnectedCommand::Listings {
             command: ListingCommand::Add(args),
-        } => server.upsert_listing(upsert_listing_request(args)?).await?,
+        } => ConnectedReferenceOutput::Mutation(
+            server.upsert_listing(upsert_listing_request(args)?).await?,
+        ),
         _ => unreachable!("runtime control command checked by caller"),
     };
     Ok(value)
@@ -353,7 +361,7 @@ fn upsert_listing_request(
     Ok(UpsertListingRequest {
         listing_id: ListingId::try_from(args.listing_id)?,
         instrument_id: InstrumentId::try_from(args.instrument_id)?,
-        exchange_id: Exchange::new(args.exchange_id)?,
+        exchange_id: ExchangeId::new(args.exchange_id)?,
         exchange_symbol: Symbol::new(args.exchange_symbol)?,
         status: args.status.into(),
         effective_from_unix_nanos: args.effective_from_unix_nanos.into(),
@@ -589,7 +597,7 @@ fn event_layers<'a>(value: &'a Value, raw_event: &'a str) -> (&'a str, &'a str, 
         "process_spawned" => ("startup", "stage", "started"),
         "logger_initialized" | "reference_state_loaded" => ("startup", "stage", "completed"),
         "reference_startup_integrity_repair" => ("startup", "stage", "degraded"),
-        "reference_provider_projection_reset" => ("source", "work", "started"),
+        "reference_provider_scan_reset" => ("source", "work", "started"),
         "reference_refresh_started" => ("app", "tick", "started"),
         "reference_refresh_completed" => ("app", "tick", "completed"),
         "reference_reconcile_completed" => ("reconcile", "apply", "completed"),
@@ -663,7 +671,7 @@ impl QueryArgs {
             text: self.text,
             exchange_id: self
                 .exchange_id
-                .map(|value| Exchange::new(value).expect("valid exchange id")),
+                .map(|value| ExchangeId::new(value).expect("valid exchange id")),
             instrument_kind: self.instrument_kind.as_deref().map(|value| {
                 value
                     .parse()
@@ -783,41 +791,60 @@ impl AddProviderArgs {
         &self,
     ) -> Result<ReferenceSourceDefinitionRequest, Box<dyn std::error::Error>> {
         Ok(ReferenceSourceDefinitionRequest {
-            source_id: ProviderId::new(self.source_id.clone())
-                .map_err(|error| format!("invalid source id: {error}"))?,
-            provider_id: ProviderId::new(self.provider_id.clone())
-                .map_err(|error| format!("invalid provider id: {error}"))?,
-            provider_product: self
-                .provider_product
-                .as_deref()
-                .map(parse_provider_product)
-                .transpose()?,
+            binding: parse_source_binding(&self.provider, &self.source)?,
             scope: ReferenceSourceScope {
                 kind: parse_source_scope_kind(&self.scope_kind)?,
                 id: self.scope_id.clone(),
             },
             desired_state: parse_source_desired_state(&self.desired_state)?,
             credential_binding: self.credential_binding.clone(),
-            sync_policy: parse_source_sync_policy(&self.sync_policy)?,
         })
     }
 }
 
-fn parse_provider_product(
-    value: &str,
-) -> Result<ReferenceProviderProduct, Box<dyn std::error::Error>> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "spot" => Ok(ReferenceProviderProduct::Spot),
-        "equity" => Ok(ReferenceProviderProduct::Equity),
-        "options" | "option" => Ok(ReferenceProviderProduct::Options),
-        "usdm" | "usd-m" | "usd_m" => Ok(ReferenceProviderProduct::Usdm),
-        "coinm" | "coin-m" | "coin_m" => Ok(ReferenceProviderProduct::Coinm),
-        "margin" => Ok(ReferenceProviderProduct::Margin),
-        "swap" => Ok(ReferenceProviderProduct::Swap),
-        "futures" => Ok(ReferenceProviderProduct::Futures),
-        "perpetual" => Ok(ReferenceProviderProduct::Perpetual),
-        "unknown" => Ok(ReferenceProviderProduct::Unknown),
-        other => Err(format!("unsupported provider product: {other}").into()),
+fn parse_source_binding(
+    provider: &str,
+    source: &str,
+) -> Result<ReferenceSourceBinding, Box<dyn std::error::Error>> {
+    let provider = provider.trim().to_ascii_lowercase();
+    let source = source.trim().to_ascii_lowercase();
+    match (provider.as_str(), source.as_str()) {
+        ("binance", "spot") => Ok(ReferenceSourceBinding::Binance(
+            BinanceReferenceSource::Spot,
+        )),
+        ("binance", "usd-m-futures" | "usdm-futures") => Ok(ReferenceSourceBinding::Binance(
+            BinanceReferenceSource::UsdMFutures,
+        )),
+        ("binance", "coin-m-futures" | "coinm-futures") => Ok(ReferenceSourceBinding::Binance(
+            BinanceReferenceSource::CoinMFutures,
+        )),
+        ("binance", "options") => Ok(ReferenceSourceBinding::Binance(
+            BinanceReferenceSource::Options,
+        )),
+        ("binance", "equity") => Ok(ReferenceSourceBinding::Binance(
+            BinanceReferenceSource::Equity,
+        )),
+        ("okx", "spot") => Ok(ReferenceSourceBinding::Okx(OkxReferenceSource::Spot)),
+        ("okx", "margin") => Ok(ReferenceSourceBinding::Okx(OkxReferenceSource::Margin)),
+        ("okx", "swap") => Ok(ReferenceSourceBinding::Okx(OkxReferenceSource::Swap)),
+        ("okx", "futures") => Ok(ReferenceSourceBinding::Okx(OkxReferenceSource::Futures)),
+        ("okx", "options") => Ok(ReferenceSourceBinding::Okx(OkxReferenceSource::Options)),
+        ("hyperliquid", "spot") => Ok(ReferenceSourceBinding::Hyperliquid(
+            HyperliquidReferenceSource::Spot,
+        )),
+        ("hyperliquid", "perpetual") => Ok(ReferenceSourceBinding::Hyperliquid(
+            HyperliquidReferenceSource::Perpetual,
+        )),
+        ("massive", "equity") => Ok(ReferenceSourceBinding::Massive(
+            MassiveReferenceSource::Equity,
+        )),
+        ("massive", "options") => Ok(ReferenceSourceBinding::Massive(
+            MassiveReferenceSource::Options,
+        )),
+        _ => Err(format!(
+            "unsupported Reference source binding: provider={provider} source={source}"
+        )
+        .into()),
     }
 }
 
@@ -830,19 +857,6 @@ fn parse_source_desired_state(
         "paused" => Ok(ReferenceSourceDesiredState::Paused),
         "removed" => Ok(ReferenceSourceDesiredState::Removed),
         other => Err(format!("unsupported source desired state: {other}").into()),
-    }
-}
-
-fn parse_source_sync_policy(
-    value: &str,
-) -> Result<ReferenceSourceSyncPolicy, Box<dyn std::error::Error>> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "full_snapshot" => Ok(ReferenceSourceSyncPolicy::FullSnapshot),
-        "paged_snapshot" => Ok(ReferenceSourceSyncPolicy::PagedSnapshot),
-        "scoped_snapshot" => Ok(ReferenceSourceSyncPolicy::ScopedSnapshot),
-        "incremental_delta" => Ok(ReferenceSourceSyncPolicy::IncrementalDelta),
-        "manual_curated" => Ok(ReferenceSourceSyncPolicy::ManualCurated),
-        other => Err(format!("unsupported source sync policy: {other}").into()),
     }
 }
 
@@ -887,10 +901,6 @@ enum StandaloneCommand {
     Assets {
         #[command(subcommand)]
         command: StandaloneAssetCommand,
-    },
-    Participants {
-        #[command(subcommand)]
-        command: ParticipantCommand,
     },
     Catalog {
         #[command(subcommand)]
@@ -949,7 +959,7 @@ enum ConnectedAssetCommand {
 struct StatusArgs {
     #[arg(
         long,
-        help = "Read the catalog projection directly instead of asking the Reference server"
+        help = "Read the catalog directly instead of asking the Reference server"
     )]
     catalog: bool,
 }
@@ -974,15 +984,12 @@ enum ProviderCommand {
 
 #[derive(Debug, Args)]
 struct AddProviderArgs {
-    source_id: String,
-    #[arg(long)]
-    provider_id: String,
-    #[arg(long)]
-    provider_product: Option<String>,
+    /// Provider owning the advanced Reference source, for example `massive`.
+    provider: String,
+    /// Provider-scoped Reference source, for example `options`.
+    source: String,
     #[arg(long, default_value = "enabled")]
     desired_state: String,
-    #[arg(long, default_value = "full_snapshot")]
-    sync_policy: String,
     #[arg(long, default_value = "global")]
     scope_kind: String,
     #[arg(long)]
@@ -1117,7 +1124,7 @@ struct AssetListArgs {
 
 #[derive(Debug, Subcommand)]
 enum CatalogCommand {
-    Entities(CatalogListArgs),
+    Exchanges(CatalogListArgs),
     Assets(CatalogListArgs),
     Instruments(CatalogListArgs),
     Listings(CatalogListArgs),
@@ -1135,13 +1142,6 @@ struct CatalogListArgs {
     active_only: bool,
     #[arg(long, default_value_t = 256)]
     limit: usize,
-}
-
-#[derive(Debug, Subcommand)]
-enum ParticipantCommand {
-    Brokers,
-    Exchanges,
-    Providers,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1239,7 +1239,7 @@ struct SearchArgs {
 impl QueryArgs {
     fn kind(&self) -> ReferenceKind {
         match self.kind.to_ascii_lowercase().as_str() {
-            "entity" => ReferenceKind::Entity,
+            "exchange" => ReferenceKind::Exchange,
             "asset" => ReferenceKind::Asset,
             "instrument" => ReferenceKind::Instrument,
             "listing" => ReferenceKind::Listing,
@@ -1254,14 +1254,17 @@ impl QueryArgs {
 mod tests {
     use clap::Parser;
     use kairos_reference::application::ConnectedReferenceApplication;
+    use kairos_reference_contract::{
+        MassiveReferenceSource, ReferenceSourceBinding, ReferenceSourceSyncPolicy,
+    };
     use kairos_workspace::JsonRpcControlClient;
     use serde_json::json;
 
     use super::{
         AddAssetArgs, AddInstrumentArgs, AddListingArgs, CatalogCommand, Cli, Command,
         ConnectedCommand, CoverageCommand, ProviderCommand, ProvidersArgs,
-        ReferenceProviderProduct, ReferenceSourceScopeKind, ReferenceSourceSyncPolicy,
-        StandaloneCommand, connected_requires_runtime_control, summarize_log_entry,
+        ReferenceSourceDesiredState, ReferenceSourceScopeKind, StandaloneCommand,
+        connected_requires_runtime_control, parse_source_binding, summarize_log_entry,
         upsert_asset_request, upsert_instrument_request, upsert_listing_request,
     };
 
@@ -1536,13 +1539,8 @@ mod tests {
             "connected",
             "providers",
             "add",
-            "massive-options",
-            "--provider-id",
             "massive",
-            "--provider-product",
             "options",
-            "--sync-policy",
-            "scoped_snapshot",
             "--scope-kind",
             "underlying_instrument",
             "--scope-id",
@@ -1557,12 +1555,11 @@ mod tests {
             panic!("expected providers command");
         };
         let request = args.source_definition_request().unwrap();
-        assert_eq!(request.source_id.as_str(), "massive-options");
-        assert_eq!(request.provider_id.as_str(), "massive");
         assert_eq!(
-            request.provider_product,
-            Some(ReferenceProviderProduct::Options)
+            request.binding,
+            ReferenceSourceBinding::Massive(MassiveReferenceSource::Options)
         );
+        assert!(parse_source_binding("massive-options", "options").is_err());
         assert_eq!(
             request.scope.kind,
             ReferenceSourceScopeKind::UnderlyingInstrument
@@ -1574,10 +1571,6 @@ mod tests {
         assert_eq!(
             request.credential_binding.as_deref(),
             Some("massive.default")
-        );
-        assert_eq!(
-            request.sync_policy,
-            ReferenceSourceSyncPolicy::ScopedSnapshot
         );
     }
 
@@ -1667,7 +1660,6 @@ mod tests {
                 {
                     "source_id": "massive-equity",
                     "provider_id": "massive",
-                    "provider_product": "equity",
                     "desired_state": "enabled",
                     "sync_policy": "paged_snapshot",
                     "phase": "ready",
@@ -1681,7 +1673,6 @@ mod tests {
                 {
                     "source_id": "massive-options",
                     "provider_id": "massive",
-                    "provider_product": "options",
                     "desired_state": "enabled",
                     "sync_policy": "scoped_snapshot",
                     "phase": "syncing",
@@ -1716,23 +1707,38 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(value.as_array().unwrap().len(), 1);
-        assert_eq!(value[0]["source_id"], "massive-options");
-        assert_eq!(value[0]["provider_id"], "massive");
-        assert_eq!(value[0]["provider_product"], "options");
-        assert_eq!(value[0]["desired_state"], "enabled");
-        assert_eq!(value[0]["sync_policy"], "scoped_snapshot");
-        assert_eq!(value[0]["phase"], "syncing");
-        assert_eq!(value[0]["progress"], "paged");
-        assert_eq!(value[0]["pages_done"], 3);
-        assert_eq!(value[0]["pages_total"], 8);
-        assert_eq!(value[0]["records_seen"], 300);
-        assert_eq!(value[0]["records_changed"], 12);
-        assert_eq!(value[0]["retry_backoff_seconds"], 10);
-        assert_eq!(value[0]["work_item_id"], "massive-options:SPY");
-        assert_eq!(value[0]["scope_id"], "instrument:equity:US:SPY:common");
-        assert_eq!(value[0]["scope_kind"], "underlying_instrument");
-        assert_eq!(value[0]["cursor_present"], true);
+        let kairos_reference::application::ReferenceProvidersResult::Many(values) = value else {
+            panic!("provider list must return many result");
+        };
+        assert_eq!(values.len(), 1);
+        let value = &values[0];
+        assert_eq!(value.source_id, "massive-options");
+        assert_eq!(
+            value.provider_id.as_ref().map(|id| id.as_str()),
+            Some("massive")
+        );
+        assert_eq!(
+            value.desired_state,
+            Some(ReferenceSourceDesiredState::Enabled)
+        );
+        assert_eq!(
+            value.sync_policy,
+            Some(ReferenceSourceSyncPolicy::ScopedSnapshot)
+        );
+        assert_eq!(value.phase, "syncing");
+        assert_eq!(value.progress, "paged");
+        assert_eq!(value.pages_done, Some(3));
+        assert_eq!(value.pages_total, Some(8));
+        assert_eq!(value.records_seen, Some(300));
+        assert_eq!(value.records_changed, Some(12));
+        assert_eq!(value.retry_backoff_seconds, Some(10));
+        assert_eq!(value.work_item_id.as_deref(), Some("massive-options:SPY"));
+        assert_eq!(
+            value.scope_id.as_deref(),
+            Some("instrument:equity:US:SPY:common")
+        );
+        assert_eq!(value.scope_kind.as_deref(), Some("underlying_instrument"));
+        assert_eq!(value.cursor_present, Some(true));
     }
 
     #[test]
@@ -1755,7 +1761,6 @@ mod tests {
                 {
                     "source_id": "massive-equity",
                     "provider_id": "massive",
-                    "provider_product": "equity",
                     "desired_state": "enabled",
                     "sync_policy": "paged_snapshot",
                     "phase": "ready",
@@ -1769,7 +1774,6 @@ mod tests {
                 {
                     "source_id": "massive-options",
                     "provider_id": "massive",
-                    "provider_product": "options",
                     "desired_state": "enabled",
                     "sync_policy": "scoped_snapshot",
                     "phase": "syncing",
@@ -1800,17 +1804,28 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(value["source_id"], "massive-options");
-        assert_eq!(value["provider_id"], "massive");
-        assert_eq!(value["provider_product"], "options");
-        assert_eq!(value["desired_state"], "enabled");
-        assert_eq!(value["sync_policy"], "scoped_snapshot");
-        assert_eq!(value["phase"], "syncing");
-        assert_eq!(value["pages_done"], 3);
-        assert_eq!(value["pages_total"], 8);
-        assert_eq!(value["records_seen"], 300);
-        assert_eq!(value["records_changed"], 12);
-        assert_eq!(value["retry_backoff_seconds"], 10);
+        let kairos_reference::application::ReferenceProvidersResult::One(value) = value else {
+            panic!("provider show must return one result");
+        };
+        assert_eq!(value.source_id, "massive-options");
+        assert_eq!(
+            value.provider_id.as_ref().map(|id| id.as_str()),
+            Some("massive")
+        );
+        assert_eq!(
+            value.desired_state,
+            Some(ReferenceSourceDesiredState::Enabled)
+        );
+        assert_eq!(
+            value.sync_policy,
+            Some(ReferenceSourceSyncPolicy::ScopedSnapshot)
+        );
+        assert_eq!(value.phase, "syncing");
+        assert_eq!(value.pages_done, Some(3));
+        assert_eq!(value.pages_total, Some(8));
+        assert_eq!(value.records_seen, Some(300));
+        assert_eq!(value.records_changed, Some(12));
+        assert_eq!(value.retry_backoff_seconds, Some(10));
     }
 
     #[test]
@@ -1841,9 +1856,9 @@ mod tests {
         let value =
             ConnectedReferenceApplication::<JsonRpcControlClient>::summarize_coverage(status);
 
-        assert_eq!(value["kind"], "massive_options");
+        assert_eq!(value.kind, "massive_options");
         assert_eq!(
-            value["option_underlyings"][0],
+            value.option_underlyings[0].as_str(),
             "instrument:equity:US:SPY:common"
         );
     }
@@ -1921,11 +1936,11 @@ mod tests {
         let value = ConnectedReferenceApplication::<JsonRpcControlClient>::summarize_doctor(status)
             .unwrap();
 
-        assert_eq!(value["status"], "degraded");
-        assert_eq!(value["catalog_readiness"], "degraded");
-        assert_eq!(value["degraded_source_count"], 1);
-        assert_eq!(value["pending_publication_count"], 5);
-        assert_eq!(value["diagnostics"][0]["code"], "reference.source.degraded");
+        assert_eq!(value.status, "degraded");
+        assert_eq!(value.catalog_readiness, "degraded");
+        assert_eq!(value.degraded_source_count, 1);
+        assert_eq!(value.pending_publication_count, 5);
+        assert_eq!(value.diagnostics[0].code, "reference.source.degraded");
     }
 
     #[test]

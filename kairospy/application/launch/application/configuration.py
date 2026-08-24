@@ -291,8 +291,8 @@ class LaunchConfig:
             self.agent,
             launch_mode=mode,
         ).normalized()
-        agent_profile = _agent_profile_snapshot(self.root, agent)
-        agent_mcp = _agent_mcp_snapshot(self.root, agent)
+        agent_profile = _agent_profile_snapshot(agent)
+        agent_mcp = _agent_mcp_snapshot(agent)
         if (
             mode in {"backtest", "paper"}
             and execution.get("enabled", True)
@@ -304,8 +304,8 @@ class LaunchConfig:
                     "route_id": f"{account_id}-simulated-spot",
                     "account_id": account_id,
                     "segment_key": "spot",
-                    "participant_id": "simulated",
-                    "product": "spot",
+                    "broker_id": "simulated",
+                    "execution_channel": "spot",
                 }
                 for account_id in account_ids
             ]
@@ -534,6 +534,20 @@ class LaunchConfig:
                         issues.append(
                             "live.safety.max_order_notional must be decimal-compatible"
                         )
+                execution = self.values.get("execution")
+                if isinstance(execution, Mapping) and execution.get("enabled", True):
+                    if not isinstance(safety, Mapping) or not safety.get(
+                        "trading_enabled", False
+                    ):
+                        issues.append(
+                            "live.safety.trading_enabled must be explicitly true when Execution is enabled"
+                        )
+                    if not isinstance(safety, Mapping) or not safety.get(
+                        "max_order_notional"
+                    ):
+                        issues.append(
+                            "live.safety.max_order_notional is required when Execution is enabled"
+                        )
             account = _optional_table(self.values.get("account"), "account")
             if account.get("environment") is not None and account.get(
                 "environment"
@@ -629,7 +643,9 @@ class LaunchConfig:
                 for field in ("capital_group_id", "strategy_id"):
                     value = capital.get(field)
                     if not isinstance(value, str) or not value.strip():
-                        issues.append(f"capital.{field} is required when Capital is enabled")
+                        issues.append(
+                            f"capital.{field} is required when Capital is enabled"
+                        )
                 member_readiness = capital.get("member_readiness", {})
                 if not isinstance(member_readiness, Mapping):
                     issues.append("capital.member_readiness must be a table")
@@ -663,7 +679,9 @@ class LaunchConfig:
                             for field in ("broker", "account_id", "segment", "asset"):
                                 value = destination.get(field)
                                 if not isinstance(value, str) or not value.strip():
-                                    issues.append(f"{prefix}.destination.{field} is required")
+                                    issues.append(
+                                        f"{prefix}.destination.{field} is required"
+                                    )
                         amounts: dict[str, Decimal] = {}
                         for field in (
                             "minimum",
@@ -677,7 +695,9 @@ class LaunchConfig:
                             try:
                                 amount = Decimal(str(raw))
                             except Exception:
-                                issues.append(f"{prefix}.{field} must be an exact decimal")
+                                issues.append(
+                                    f"{prefix}.{field} must be an exact decimal"
+                                )
                                 continue
                             if not amount.is_finite() or amount < 0:
                                 issues.append(f"{prefix}.{field} cannot be negative")
@@ -730,14 +750,21 @@ class LaunchConfig:
                                 issues.append(f"{prefix}.{endpoint} must be a table")
                             else:
                                 endpoints[endpoint] = value
-                                for field in ("broker", "account_id", "segment", "asset"):
+                                for field in (
+                                    "broker",
+                                    "account_id",
+                                    "segment",
+                                    "asset",
+                                ):
                                     part = value.get(field)
                                     if not isinstance(part, str) or not part.strip():
                                         issues.append(
                                             f"{prefix}.{endpoint}.{field} is required"
                                         )
                         if "source" in endpoints and "destination" in endpoints:
-                            same_endpoint = endpoints["source"] == endpoints["destination"]
+                            same_endpoint = (
+                                endpoints["source"] == endpoints["destination"]
+                            )
                             if kind == "earn_subscription" and not same_endpoint:
                                 issues.append(
                                     f"{prefix} Earn subscription must remain at one balance location"
@@ -748,7 +775,10 @@ class LaunchConfig:
                                 )
                         product_id = route.get("earn_product_id")
                         if kind == "earn_subscription":
-                            if not isinstance(product_id, str) or not product_id.strip():
+                            if (
+                                not isinstance(product_id, str)
+                                or not product_id.strip()
+                            ):
                                 issues.append(
                                     f"{prefix}.earn_product_id is required for Earn subscription"
                                 )
@@ -772,7 +802,9 @@ class LaunchConfig:
                             try:
                                 amount = Decimal(str(route.get(field)))
                             except Exception:
-                                issues.append(f"{prefix}.{field} must be an exact decimal")
+                                issues.append(
+                                    f"{prefix}.{field} must be an exact decimal"
+                                )
                                 continue
                             if not amount.is_finite() or amount <= 0:
                                 issues.append(f"{prefix}.{field} must be positive")
@@ -829,8 +861,8 @@ class LaunchConfig:
                         "route_id",
                         "account_id",
                         "segment_key",
-                        "participant_id",
-                        "product",
+                        "broker_id",
+                        "execution_channel",
                     ):
                         value = route.get(field)
                         if not isinstance(value, str) or not value.strip():
@@ -1001,9 +1033,14 @@ class LaunchEnvironment:
     ) -> "LaunchEnvironment":
         config.require_valid()
         root = Path(workspace_root).expanduser().resolve()
-        notification_issues = _workspace_notification_issues(config, root)
-        if notification_issues:
-            raise LaunchConfigError("; ".join(notification_issues))
+        resource_diagnostics = _workspace_resource_diagnostics(config, root)
+        resource_blockers = [
+            item for item in resource_diagnostics if item["severity"] == "blocker"
+        ]
+        if resource_blockers:
+            raise LaunchConfigError(
+                "; ".join(str(item["reason"]) for item in resource_blockers)
+            )
         if not instance_id.strip():
             raise LaunchConfigError("launch instance id is required")
         group = root / "launches" / config.mode / config.launch_id
@@ -1011,8 +1048,48 @@ class LaunchEnvironment:
         paths = ResourceScopePaths(instance)
         normalized_path = paths.config / "normalized.json"
         normalized_path.parent.mkdir(parents=True, exist_ok=True)
+        prior_drift: dict[str, Any] | None = None
+        if normalized_path.is_file():
+            prior_drift = LaunchConfigurationApplication().instance_resource_drift(
+                normalized_path, workspace_root=root
+            )
+            blockers = [
+                issue
+                for issue in prior_drift["issues"]
+                if issue.get("severity") == "blocker"
+            ]
+            if blockers:
+                raise LaunchConfigError(
+                    "Instance resource configuration drifted; create a new Instance: "
+                    + "; ".join(str(issue["resource"]) for issue in blockers)
+                )
+        normalized = config.plan().normalized()
+        normalized["snapshot_schema_version"] = 1
+        normalized["readiness_diagnostics"] = resource_diagnostics
+        snapshots = _workspace_resource_snapshots(config, root)
+        normalized["resource_snapshots"] = snapshots
+        normalized["resource_hashes"] = {
+            f"{kind}:{resource_id}": str(snapshot["resource_hash"])
+            for kind, resources in snapshots.items()
+            if isinstance(resources, Mapping)
+            for resource_id, snapshot in resources.items()
+            if isinstance(snapshot, Mapping) and snapshot.get("resource_hash")
+        }
+        if prior_drift and prior_drift["issues"]:
+            normalized["replaced_instance_drift"] = prior_drift["issues"]
+        notifications = normalized.get("notifications")
+        if isinstance(notifications, dict) and notifications.get("enabled", False):
+            from kairospy.application.notification.composition import (
+                notification_config_hash,
+            )
+            from kairospy.application.workspace import WorkspaceApplication
+
+            workspace = WorkspaceApplication().open(root)
+            notifications["workspace_config_hash"] = notification_config_hash(
+                workspace, mode=config.mode
+            )
         normalized_path.write_text(
-            json.dumps(config.plan().normalized(), indent=2, sort_keys=True) + "\n",
+            json.dumps(normalized, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         return cls(
@@ -1051,16 +1128,26 @@ class LaunchConfigurationApplication:
         config = self.load(path, workspace_root=workspace_root)
         report = config.report()
         issues = list(report.issues)
+        diagnostics: list[dict[str, str]] = [
+            _structural_diagnostic(issue) for issue in issues
+        ]
         if not issues and workspace_root is not None:
-            issues.extend(
-                _workspace_notification_issues(
+            diagnostics.extend(
+                _workspace_resource_diagnostics(
                     config, Path(workspace_root).expanduser().resolve()
                 )
+            )
+            issues.extend(
+                item["reason"] for item in diagnostics if item["severity"] == "blocker"
             )
         return {
             "path": str(report.path),
             "valid": not issues,
             "issues": issues,
+            "warnings": [
+                item["reason"] for item in diagnostics if item["severity"] == "warning"
+            ],
+            "diagnostics": diagnostics,
         }
 
     def explain(
@@ -1099,6 +1186,179 @@ class LaunchConfigurationApplication:
         return LaunchEnvironment.create(
             config, workspace_root=workspace_root, instance_id=instance_id
         )
+
+    def instance_resource_drift(
+        self, normalized_path: str | Path, *, workspace_root: str | Path
+    ) -> dict[str, Any]:
+        path = Path(normalized_path)
+        try:
+            normalized = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise LaunchConfigError(
+                f"invalid Instance normalized snapshot: {error}"
+            ) from error
+        snapshots = normalized.get("resource_snapshots")
+        if not isinstance(snapshots, Mapping):
+            return {
+                "valid": False,
+                "issues": [
+                    {
+                        "resource": "snapshot",
+                        "severity": "blocker",
+                        "reason": "Instance snapshot has no typed resource hashes",
+                    }
+                ],
+            }
+        current = _current_resource_hashes(
+            snapshots, Path(workspace_root).expanduser().resolve()
+        )
+        required = {
+            "accounts": True,
+            "data_providers": True,
+            "models": bool(
+                isinstance(normalized.get("agent"), Mapping)
+                and normalized["agent"].get("required", False)
+            ),
+            "notifications": bool(
+                isinstance(normalized.get("notifications"), Mapping)
+                and normalized["notifications"].get("required", False)
+            ),
+            "mcp_credentials": False,
+        }
+        issues: list[dict[str, str]] = []
+        for kind, resources in snapshots.items():
+            if not isinstance(resources, Mapping):
+                continue
+            for resource_id, snapshot in resources.items():
+                if not isinstance(snapshot, Mapping):
+                    continue
+                expected = snapshot.get("resource_hash")
+                actual = current.get(f"{kind}:{resource_id}")
+                if expected != actual:
+                    is_required = bool(
+                        snapshot.get("required", required.get(str(kind), True))
+                    )
+                    issues.append(
+                        {
+                            "resource": f"{kind}:{resource_id}",
+                            "severity": "blocker" if is_required else "warning",
+                            "reason": "configuration hash changed"
+                            if actual
+                            else "resource missing",
+                        }
+                    )
+        return {
+            "valid": not any(issue["severity"] == "blocker" for issue in issues),
+            "issues": issues,
+        }
+
+    def draft_path(self, workspace_root: str | Path, launch_id: str) -> Path:
+        launch_id = launch_id.strip()
+        if not _safe_agent_resource_id(launch_id):
+            raise ValueError("launch id must be a path-safe identifier")
+        root = Path(workspace_root).expanduser().resolve()
+        return root / "config" / "launches" / ".drafts" / f"{launch_id}.toml"
+
+    def save_draft(
+        self,
+        workspace_root: str | Path,
+        launch_id: str,
+        values: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        from .wizard import write_atomic
+
+        path = self.draft_path(workspace_root, launch_id)
+        write_atomic(path, values)
+        report = self.validate(path, workspace_root=workspace_root)
+        return {
+            "launch_id": launch_id,
+            "status": "ready_draft" if report["valid"] else "draft",
+            "path": str(path),
+            "ready": bool(report["valid"]),
+            "issues": list(report["issues"]),
+            "warnings": list(report.get("warnings") or ()),
+            "diagnostics": list(report.get("diagnostics") or ()),
+        }
+
+    def load_draft(self, workspace_root: str | Path, launch_id: str) -> dict[str, Any]:
+        path = self.draft_path(workspace_root, launch_id)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        value = tomllib.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise LaunchConfigError("Launch draft root must be a TOML table")
+        return value
+
+    def list_drafts(self, workspace_root: str | Path) -> list[dict[str, Any]]:
+        root = (
+            Path(workspace_root).expanduser().resolve()
+            / "config"
+            / "launches"
+            / ".drafts"
+        )
+        if not root.is_dir():
+            return []
+        result: list[dict[str, Any]] = []
+        for path in sorted(root.glob("*.toml")):
+            report = self.validate(path, workspace_root=workspace_root)
+            result.append(
+                {
+                    "launch_id": path.stem,
+                    "status": "ready_draft" if report["valid"] else "draft",
+                    "ready": bool(report["valid"]),
+                    "issues": list(report["issues"]),
+                    "warnings": list(report.get("warnings") or ()),
+                    "diagnostics": list(report.get("diagnostics") or ()),
+                    "path": str(path),
+                }
+            )
+        return result
+
+    def discard_draft(self, workspace_root: str | Path, launch_id: str) -> None:
+        self.draft_path(workspace_root, launch_id).unlink(missing_ok=True)
+        self._draft_return_path(workspace_root, launch_id).unlink(missing_ok=True)
+
+    def record_draft_return(
+        self,
+        workspace_root: str | Path,
+        launch_id: str,
+        *,
+        resource: str,
+        step: str,
+    ) -> dict[str, str]:
+        if resource not in {"accounts", "data", "models", "notifications"}:
+            raise ValueError("unsupported Launch resource return target")
+        path = self._draft_return_path(workspace_root, launch_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"launch_id": launch_id, "resource": resource, "step": step}
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        temporary.replace(path)
+        return payload
+
+    def draft_return(
+        self, workspace_root: str | Path, launch_id: str
+    ) -> dict[str, str] | None:
+        path = self._draft_return_path(workspace_root, launch_id)
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return None
+        return (
+            {str(key): str(item) for key, item in value.items()}
+            if isinstance(value, Mapping)
+            else None
+        )
+
+    def clear_draft_return(self, workspace_root: str | Path, launch_id: str) -> None:
+        self._draft_return_path(workspace_root, launch_id).unlink(missing_ok=True)
+
+    @staticmethod
+    def _draft_return_path(workspace_root: str | Path, launch_id: str) -> Path:
+        root = Path(workspace_root).expanduser().resolve()
+        return root / "state" / "configuration" / "launch-drafts" / f"{launch_id}.json"
 
 
 def _table(value: object, name: str) -> Mapping[str, Any]:
@@ -1156,79 +1416,64 @@ def _jsonable(value: object) -> object:
     return value
 
 
-def _agent_profile_snapshot(
-    workspace_root: Path, agent: Mapping[str, Any]
-) -> Mapping[str, Any] | None:
+def _agent_profile_snapshot(agent: Mapping[str, Any]) -> Mapping[str, Any] | None:
     if not agent.get("enabled", False):
         return None
-    profile_id = agent.get("profile")
-    if (
-        not isinstance(profile_id, str)
-        or not profile_id
-        or any(
-            character
-            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
-            for character in profile_id
-        )
-    ):
-        raise LaunchConfigError("agent.profile must be a safe resource id")
-    path = workspace_root / "config" / "agents" / "profiles" / f"{profile_id}.toml"
-    try:
-        raw = path.read_bytes()
-        values = tomllib.loads(raw.decode("utf-8"))
-    except FileNotFoundError as error:
-        raise LaunchConfigError(f"Agent Profile does not exist: {path}") from error
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        raise LaunchConfigError(f"Invalid Agent Profile: {path}") from error
-    value = values.get("profile", values)
+    value = agent.get("profile")
     if not isinstance(value, Mapping):
-        raise LaunchConfigError("Agent Profile must be a TOML table")
-    allowed = {
-        "id",
-        "version",
-        "goal",
-        "rubric",
-        "invalidation_rules",
-        "reason_codes",
-        "risk_flags",
-    }
-    unknown = sorted(str(key) for key in value if str(key) not in allowed)
-    if unknown:
-        raise LaunchConfigError(
-            f"Agent Profile contains unsupported field: {unknown[0]}"
-        )
-    actual_id = value.get("id", profile_id)
-    if actual_id != profile_id:
-        raise LaunchConfigError("Agent Profile identity mismatch")
-    version = value.get("version")
-    goal = value.get("goal")
-    if not isinstance(version, str) or not version.strip():
-        raise LaunchConfigError("Agent Profile version is required")
-    if not isinstance(goal, str) or not goal.strip():
-        raise LaunchConfigError("Agent Profile goal is required")
-    snapshot: dict[str, Any] = {
-        "id": profile_id,
-        "version": version.strip(),
-        "goal": goal.strip(),
-        "content_hash": hashlib.sha256(raw).hexdigest(),
-    }
-    for field in ("rubric", "invalidation_rules", "reason_codes", "risk_flags"):
-        items = value.get(field, [])
-        if not isinstance(items, list) or any(
-            not isinstance(item, str) or not item.strip() for item in items
-        ):
-            raise LaunchConfigError(
-                f"Agent Profile {field} must be an array of strings"
-            )
-        snapshot[field] = [item.strip() for item in items]
-    if not snapshot["rubric"] or not snapshot["invalidation_rules"]:
-        raise LaunchConfigError("Agent Profile rubric/invalidation_rules are required")
+        raise LaunchConfigError("agent.profile must be an inline table")
+    snapshot = dict(value)
+    snapshot["content_hash"] = hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     return snapshot
 
 
-def _agent_mcp_snapshot(
-    workspace_root: Path, agent: Mapping[str, Any]
-) -> Mapping[str, Any] | None:
+def _workspace_agent_resource_issues(
+    config: LaunchConfig, workspace_root: Path
+) -> list[str]:
+    try:
+        agent = AgentLaunchConfig.from_mapping(config.agent, launch_mode=config.mode)
+    except (LaunchConfigError, ValueError) as error:
+        return [str(error)]
+    if not agent.enabled:
+        return []
+    issues: list[str] = []
+    if agent.model is not None:
+        credential_id = agent.model.credential
+        if not _safe_agent_resource_id(credential_id):
+            issues.append("Agent credential id is invalid")
+        else:
+            try:
+                from kairospy.application.agent import AgentResourceApplication
+                from kairospy.application.credential import (
+                    CredentialConfigurationApplication,
+                )
+                from kairospy.application.workspace import WorkspaceApplication
+
+                workspace = WorkspaceApplication().open(workspace_root)
+                credential = CredentialConfigurationApplication(workspace).show(
+                    credential_id
+                )
+                if credential.get("provider") != "openai":
+                    issues.append("Agent credential provider must be openai")
+                elif credential.get("configured") is not True:
+                    issues.append(
+                        "Agent credential api_key SecretRef is unavailable or requires migration"
+                    )
+                verification = AgentResourceApplication(workspace).model_verification(
+                    credential_id, model=agent.model.model
+                )
+                if verification.get("verification_status") != "verified":
+                    issues.append(
+                        "Agent model connection test is missing, failed, or stale"
+                    )
+            except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
+                issues.append(f"Agent credential does not exist: {credential_id}")
+    return issues
+
+
+def _agent_mcp_snapshot(agent: Mapping[str, Any]) -> Mapping[str, Any] | None:
     if not agent.get("enabled", False):
         return None
     selections = agent.get("mcp", [])
@@ -1236,70 +1481,7 @@ def _agent_mcp_snapshot(
         raise LaunchConfigError("normalized agent.mcp must be an array")
     if not selections:
         return None
-    path = workspace_root / "config" / "agents" / "mcp.toml"
-    try:
-        values = tomllib.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as error:
-        raise LaunchConfigError(f"Agent MCP config does not exist: {path}") from error
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        raise LaunchConfigError(f"Invalid Agent MCP config: {path}") from error
-    servers = values.get("servers")
-    profiles = values.get("profiles")
-    if not isinstance(servers, Mapping) or not isinstance(profiles, Mapping):
-        raise LaunchConfigError("Agent MCP config requires servers and profiles")
-    selected_servers: dict[str, Any] = {}
-    selected_profiles: dict[str, Any] = {}
-    server_fields = {
-        "transport",
-        "command",
-        "args",
-        "cwd",
-        "timeout_seconds",
-        "url",
-        "credential",
-    }
-    profile_fields = {
-        "server",
-        "allowed_tools",
-        "scope_enforced",
-        "max_result_bytes",
-        "max_rows",
-        "freshness_required_tools",
-        "max_age_seconds",
-    }
-    for index, selection in enumerate(selections):
-        if not isinstance(selection, Mapping):
-            raise LaunchConfigError(f"agent.mcp[{index}] must be an object")
-        server_id = selection.get("server")
-        profile_id = selection.get("profile")
-        if not _safe_agent_resource_id(server_id) or not _safe_agent_resource_id(
-            profile_id
-        ):
-            raise LaunchConfigError("Agent MCP server/profile id is invalid")
-        server = servers.get(server_id)
-        profile = profiles.get(profile_id)
-        if not isinstance(server, Mapping) or not isinstance(profile, Mapping):
-            raise LaunchConfigError(
-                f"Agent MCP selection does not exist: {server_id}/{profile_id}"
-            )
-        unknown_server = sorted(str(key) for key in server if key not in server_fields)
-        unknown_profile = sorted(
-            str(key) for key in profile if key not in profile_fields
-        )
-        if unknown_server:
-            raise LaunchConfigError(
-                f"Agent MCP server contains unsupported field: {unknown_server[0]}"
-            )
-        if unknown_profile:
-            raise LaunchConfigError(
-                f"Agent MCP profile contains unsupported field: {unknown_profile[0]}"
-            )
-        selected_servers[str(server_id)] = dict(server)
-        selected_profiles[str(profile_id)] = dict(profile)
-    payload: dict[str, Any] = {
-        "servers": selected_servers,
-        "profiles": selected_profiles,
-    }
+    payload: dict[str, Any] = {"entries": [dict(item) for item in selections]}
     payload["content_hash"] = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -1453,6 +1635,172 @@ def _notification_config_issues(value: Mapping[str, Any]) -> list[str]:
     return issues
 
 
+def _workspace_resource_diagnostics(
+    config: LaunchConfig, workspace_root: Path
+) -> list[dict[str, str]]:
+    """Classify owner-specific readiness without turning optional failures into blockers."""
+
+    diagnostics: list[dict[str, str]] = []
+
+    def extend(
+        owner: str,
+        resource: str,
+        reasons: tuple[str, ...],
+        *,
+        severity: str,
+        action: str,
+    ) -> None:
+        diagnostics.extend(
+            {
+                "owner": owner,
+                "resource": resource,
+                "severity": severity,
+                "reason": reason,
+                "action": action,
+            }
+            for reason in reasons
+        )
+
+    extend(
+        "Account",
+        "accounts",
+        _workspace_account_issues(config, workspace_root),
+        severity="blocker",
+        action="configure and manually test the referenced Account",
+    )
+    extend(
+        "Reference/Market",
+        "data_provider",
+        _workspace_data_provider_issues(config, workspace_root),
+        severity="blocker",
+        action="configure and manually test the selected data connection",
+    )
+    notifications = config.notifications
+    extend(
+        "Notification",
+        "destinations",
+        _workspace_notification_issues(config, workspace_root),
+        severity="blocker" if notifications.get("required", False) else "warning",
+        action=(
+            "test the destination or disable Notification; optional failure degrades to no delivery"
+        ),
+    )
+    agent = config.agent
+    extend(
+        "Agent",
+        "model_connection",
+        tuple(_workspace_agent_resource_issues(config, workspace_root)),
+        severity="blocker" if agent.get("required", False) else "warning",
+        action=(
+            "test the model connection or disable Agent; optional failure degrades to no Agent review"
+        ),
+    )
+    for credential_id, required, reason in _workspace_mcp_credential_issues(
+        config, workspace_root
+    ):
+        extend(
+            "Agent",
+            f"mcp_credential:{credential_id}",
+            (reason,),
+            severity="blocker" if required else "warning",
+            action=(
+                "configure the MCP credential SecretRef; optional failure disables that MCP server"
+            ),
+        )
+    return diagnostics
+
+
+def _structural_diagnostic(reason: str) -> dict[str, str]:
+    text = reason.lower()
+    if "agent" in text or "mcp" in text:
+        owner, resource, action = (
+            "Agent/Launch",
+            "agent",
+            "edit the Launch Agent step or configure and test its model connection",
+        )
+    elif "notification" in text:
+        owner, resource, action = (
+            "Notification/Launch",
+            "notifications",
+            "edit the Launch notification step or test the selected Destination",
+        )
+    elif "risk" in text or "live.safety" in text:
+        owner, resource, action = (
+            "Risk/Launch",
+            "risk",
+            "edit the live risk profile and explicit side-effect bounds",
+        )
+    elif "account" in text or "execution" in text:
+        owner, resource, action = (
+            "Account/Execution/Launch",
+            "accounts",
+            "edit Account selection, segment/trade scope, and Execution routes",
+        )
+    elif "backtest" in text or "market" in text or "data" in text:
+        owner, resource, action = (
+            "Market/Launch",
+            "market",
+            "edit the Launch market/data step",
+        )
+    else:
+        owner, resource, action = (
+            "Launch",
+            "launch",
+            "edit the Launch working draft",
+        )
+    return {
+        "owner": owner,
+        "resource": resource,
+        "severity": "blocker",
+        "reason": reason,
+        "action": action,
+    }
+
+
+def _workspace_mcp_credential_issues(
+    config: LaunchConfig, workspace_root: Path
+) -> tuple[tuple[str, bool, str], ...]:
+    if config.mode == "backtest":
+        return ()
+    try:
+        agent = AgentLaunchConfig.from_mapping(config.agent, launch_mode=config.mode)
+    except (LaunchConfigError, ValueError):
+        return ()
+    if not agent.enabled:
+        return ()
+    from kairospy.application.credential import CredentialConfigurationApplication
+    from kairospy.application.workspace import WorkspaceApplication
+
+    workspace = WorkspaceApplication().open(workspace_root)
+    credentials = CredentialConfigurationApplication(workspace)
+    result: list[tuple[str, bool, str]] = []
+    for server in agent.mcp:
+        credential_id = server.get("credential")
+        if not isinstance(credential_id, str) or not credential_id:
+            continue
+        required = bool(server.get("required", False))
+        try:
+            summary = credentials.show(credential_id)
+        except (KeyError, OSError, ValueError):
+            result.append(
+                (
+                    credential_id,
+                    required,
+                    f"MCP credential does not exist: {credential_id}",
+                )
+            )
+            continue
+        if summary.get("configured") is not True:
+            result.append(
+                (
+                    credential_id,
+                    required,
+                    f"MCP credential SecretRef is unavailable or requires migration: {credential_id}",
+                )
+            )
+    return tuple(result)
+
+
 def _workspace_notification_issues(
     config: LaunchConfig, workspace_root: Path
 ) -> tuple[str, ...]:
@@ -1462,18 +1810,248 @@ def _workspace_notification_issues(
     from kairospy.application.notification.composition import (
         validate_notification_resources,
     )
+    from kairospy.application.notification import NotificationAdminApplication
     from kairospy.application.workspace import WorkspaceApplication
 
     try:
         workspace = WorkspaceApplication().open(workspace_root)
     except (FileNotFoundError, ValueError) as error:
         return (f"cannot validate notification resources: {error}",)
-    return validate_notification_resources(
-        workspace,
-        _normalized_notifications(notifications),
-        mode=config.mode,
-        resolve_secrets=False,
+    issues = list(
+        validate_notification_resources(
+            workspace,
+            _normalized_notifications(notifications),
+            mode=config.mode,
+            resolve_secrets=False,
+        )
     )
+    if config.mode != "backtest":
+        routes = notifications.get("routes", {})
+        destination_ids = {
+            str(destination_id)
+            for destinations in (routes.values() if isinstance(routes, Mapping) else ())
+            if isinstance(destinations, list)
+            for destination_id in destinations
+        }
+        admin = NotificationAdminApplication(workspace)
+        for destination_id in sorted(destination_ids):
+            try:
+                destination = admin.show(destination_id)
+            except KeyError:
+                continue
+            if destination.get("verification_status") != "verified":
+                issues.append(
+                    f"notification destination requires a successful manual test: {destination_id}"
+                )
+    return tuple(issues)
+
+
+def _workspace_account_issues(
+    config: LaunchConfig, workspace_root: Path
+) -> tuple[str, ...]:
+    if config.mode == "backtest" or not config.account_refs:
+        return ()
+    from kairospy.application.account import AccountConfigurationApplication
+    from kairospy.application.workspace import WorkspaceApplication
+
+    try:
+        workspace = WorkspaceApplication().open(workspace_root)
+    except (FileNotFoundError, ValueError) as error:
+        return (f"cannot validate Account resources: {error}",)
+    application = AccountConfigurationApplication(workspace)
+    issues: list[str] = []
+    trade_accounts = {
+        str(route.get("account_id"))
+        for route in config.execution.get("routes", ())
+        if isinstance(route, Mapping) and route.get("account_id")
+    }
+    for account_id in config.account_refs:
+        try:
+            account = application.show(account_id)
+        except (KeyError, OSError, RuntimeError, ValueError):
+            issues.append(f"Account resource does not exist: {account_id}")
+            continue
+        if account.get("verification_status") != "verified":
+            issues.append(
+                f"Account requires a successful manual connection test: {account_id}"
+            )
+            continue
+        environment = str(account.get("environment") or "").lower()
+        if config.mode == "live" and environment not in {"live", "testnet"}:
+            issues.append(
+                f"Account environment is not live-compatible: {account_id} "
+                f"({environment or 'unknown'})"
+            )
+        if config.mode == "paper" and environment == "live":
+            issues.append(f"Paper Launch cannot select a live Account: {account_id}")
+        capabilities = {str(value) for value in account.get("capabilities") or ()}
+        if account_id in trade_accounts and "trade" not in capabilities:
+            issues.append(
+                f"Account manual test did not verify trade permission: {account_id}"
+            )
+    return tuple(issues)
+
+
+def _workspace_data_provider_issues(
+    config: LaunchConfig, workspace_root: Path
+) -> tuple[str, ...]:
+    if config.mode == "backtest":
+        return ()
+    mode_value = config.values.get(config.mode)
+    market = mode_value.get("market") if isinstance(mode_value, Mapping) else None
+    profile = market.get("profile") if isinstance(market, Mapping) else None
+    if profile is None:
+        return ()
+    if profile != "massive":
+        return (f"Workspace data connection is not supported or verified: {profile}",)
+    from kairospy.application.reference import ReferenceProviderConfigurationApplication
+    from kairospy.application.workspace import WorkspaceApplication
+
+    try:
+        workspace = WorkspaceApplication().open(workspace_root)
+        connection = ReferenceProviderConfigurationApplication(workspace).show(
+            "massive"
+        )
+    except (KeyError, FileNotFoundError, OSError, ValueError) as error:
+        return (f"Massive data connection is unavailable: {error}",)
+    if connection.get("verification_status") != "verified":
+        return ("Massive data connection requires a successful manual read test",)
+    return ()
+
+
+def _workspace_resource_snapshots(
+    config: LaunchConfig, workspace_root: Path
+) -> dict[str, dict[str, Any]]:
+    """Resolve secret-free, owner-produced resource snapshots for one Instance."""
+
+    if config.mode == "backtest":
+        return {
+            "accounts": {},
+            "data_providers": {},
+            "models": {},
+            "notifications": {},
+            "mcp_credentials": {},
+        }
+    from kairospy.application.account import AccountConfigurationApplication
+    from kairospy.application.agent import AgentResourceApplication
+    from kairospy.application.notification import NotificationAdminApplication
+    from kairospy.application.reference import ReferenceProviderConfigurationApplication
+    from kairospy.application.workspace import WorkspaceApplication
+
+    workspace = WorkspaceApplication().open(workspace_root)
+    accounts = AccountConfigurationApplication(workspace)
+    account_snapshots = {
+        account_id: accounts.resource_snapshot(account_id)
+        for account_id in config.account_refs
+    }
+
+    data_snapshots: dict[str, Any] = {}
+    mode_value = config.values.get(config.mode)
+    market = mode_value.get("market") if isinstance(mode_value, Mapping) else None
+    if isinstance(market, Mapping) and market.get("profile") == "massive":
+        data_snapshots["massive"] = ReferenceProviderConfigurationApplication(
+            workspace
+        ).resource_snapshot("massive")
+
+    model_snapshots: dict[str, Any] = {}
+    agent = AgentLaunchConfig.from_mapping(config.agent, launch_mode=config.mode)
+    if agent.enabled and agent.model is not None:
+        try:
+            model_snapshots[agent.model.credential] = AgentResourceApplication(
+                workspace
+            ).resource_snapshot(agent.model.credential, model=agent.model.model)
+        except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
+            if agent.required:
+                raise
+
+    from kairospy.application.credential import CredentialConfigurationApplication
+
+    credential_owner = CredentialConfigurationApplication(workspace)
+    mcp_credential_snapshots: dict[str, Any] = {}
+    for server in agent.mcp:
+        credential_id = server.get("credential")
+        if not isinstance(credential_id, str) or not credential_id:
+            continue
+        required = bool(server.get("required", False))
+        try:
+            snapshot = credential_owner.resource_snapshot(credential_id)
+        except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
+            if required:
+                raise
+            continue
+        snapshot["required"] = required
+        mcp_credential_snapshots[credential_id] = snapshot
+
+    notification_snapshots: dict[str, Any] = {}
+    notifications = config.notifications
+    if notifications.get("enabled", False):
+        routes = notifications.get("routes", {})
+        destination_ids = {
+            str(destination_id)
+            for destinations in (routes.values() if isinstance(routes, Mapping) else ())
+            if isinstance(destinations, list)
+            for destination_id in destinations
+        }
+        notification_owner = NotificationAdminApplication(workspace)
+        for destination_id in sorted(destination_ids):
+            try:
+                notification_snapshots[destination_id] = (
+                    notification_owner.resource_snapshot(destination_id)
+                )
+            except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
+                if notifications.get("required", False):
+                    raise
+    return {
+        "accounts": account_snapshots,
+        "data_providers": data_snapshots,
+        "models": model_snapshots,
+        "notifications": notification_snapshots,
+        "mcp_credentials": mcp_credential_snapshots,
+    }
+
+
+def _current_resource_hashes(
+    snapshots: Mapping[str, Any], workspace_root: Path
+) -> dict[str, str]:
+    from kairospy.application.account import AccountConfigurationApplication
+    from kairospy.application.agent import AgentResourceApplication
+    from kairospy.application.notification import NotificationAdminApplication
+    from kairospy.application.reference import ReferenceProviderConfigurationApplication
+    from kairospy.application.credential import CredentialConfigurationApplication
+    from kairospy.application.workspace import WorkspaceApplication
+
+    workspace = WorkspaceApplication().open(workspace_root)
+    owners = {
+        "accounts": AccountConfigurationApplication(workspace),
+        "data_providers": ReferenceProviderConfigurationApplication(workspace),
+        "models": AgentResourceApplication(workspace),
+        "notifications": NotificationAdminApplication(workspace),
+        "mcp_credentials": CredentialConfigurationApplication(workspace),
+    }
+    result: dict[str, str] = {}
+    for kind, resources in snapshots.items():
+        if not isinstance(resources, Mapping) or kind not in owners:
+            continue
+        for resource_id, prior in resources.items():
+            if not isinstance(prior, Mapping):
+                continue
+            try:
+                if kind == "accounts":
+                    current = owners[kind].resource_snapshot(str(resource_id))
+                elif kind == "data_providers":
+                    current = owners[kind].resource_snapshot(str(resource_id))
+                elif kind == "models":
+                    current = owners[kind].resource_snapshot(
+                        str(resource_id), model=str(prior.get("model") or "")
+                    )
+                else:
+                    current = owners[kind].resource_snapshot(str(resource_id))
+            except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
+                continue
+            resource_hash = current.get("resource_hash")
+            if isinstance(resource_hash, str):
+                result[f"{kind}:{resource_id}"] = resource_hash
+    return result
 
 
 __all__ = [

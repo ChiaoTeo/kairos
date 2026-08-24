@@ -4,9 +4,9 @@ mod types;
 pub use service::{MarketControlRpcClient, MarketControlRpcServer};
 pub use types::{
     MarketCommandEnvelope, MarketCommandOutcome, MarketCommandStatus, MarketControlError,
-    MarketDataSource, MarketDataSourcesQuery, MarketDataSourcesResponse, MarketFeedStatus,
-    MarketHealthResponse, MarketHealthStatus, MarketOperation, MarketReleaseOwnerPayload,
-    MarketReleaseOwnerResponse, MarketSourceStatus, MarketSubscribePayload,
-    MarketSubscriptionResponse, MarketSubscriptionStatus, MarketUnsubscribePayload,
-    SubscriptionOwnerKey,
+    MarketDataRoute, MarketDataRouteState, MarketDataRoutesQuery, MarketDataRoutesResponse,
+    MarketFeedStatus, MarketHealthResponse, MarketHealthStatus, MarketOperation,
+    MarketReleaseOwnerPayload, MarketReleaseOwnerResponse, MarketSubscribePayload,
+    MarketSubscriptionResponse, MarketSubscriptionState, MarketTarget, MarketUnsubscribePayload,
+    ObservationRequirement, ProviderPreference, SubscriptionOwnerKey, SubscriptionPendingReason,
 };

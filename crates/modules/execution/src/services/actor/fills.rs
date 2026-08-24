@@ -18,8 +18,8 @@ impl ExecutionActor {
                 && existing.fee == request.fee
                 && existing.fee_currency == request.fee_currency
                 && existing.execution_market_id == request.execution_market_id
-                && existing.reported_provider_id == request.reported_provider_id
-                && existing.provider_product == request.provider_product
+                && existing.reported_broker_id == request.reported_broker_id
+                && existing.execution_channel == request.execution_channel
                 && existing.order_entry_symbol == request.order_entry_symbol
                 && request
                     .remote_order_id
@@ -73,8 +73,8 @@ impl ExecutionActor {
             intent_id: order.intent_id.clone(),
             instrument_id: order.instrument_id.clone(),
             execution_market_id: request.execution_market_id.clone(),
-            reported_provider_id: request.reported_provider_id.clone(),
-            provider_product: request.provider_product.clone(),
+            reported_broker_id: request.reported_broker_id.clone(),
+            execution_channel: request.execution_channel.clone(),
             order_entry_symbol: request.order_entry_symbol.clone(),
             remote_order_id: request
                 .remote_order_id

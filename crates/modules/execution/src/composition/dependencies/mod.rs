@@ -8,7 +8,7 @@ pub fn configure_execution_dependencies(
     application: &mut crate::application::ExecutionApplication,
     system: &mut kairos_conflux::ConfluxSystem,
     manifest: impl AsRef<std::path::Path>,
-    reference_snapshot: Option<kairos_reference_contract::ReferenceProjectionSnapshot>,
+    reference_snapshot: Option<kairos_reference_contract::ExecutionReferenceSnapshot>,
     backtest: bool,
     capacity: usize,
 ) -> Result<(), String> {
@@ -33,8 +33,8 @@ pub fn configure_execution_dependencies(
         order_admission = order_admission
             .without_market_snapshot()
             .with_backtest_reservation_window()
-            .with_backtest_reference_without_projection(true)
-            .with_backtest_balance_without_projection(true);
+            .allow_backtest_without_reference_state(true)
+            .allow_backtest_without_account_state(true);
     }
     let risk_reservations = order_admission.risk_reservations_adapter()?;
     application.attach_intent_planner(QueuedExecutionIntentPlanner::start(

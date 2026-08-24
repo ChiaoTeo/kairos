@@ -1,4 +1,4 @@
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::time::{Sequence, UnixNanos};
 
@@ -6,7 +6,7 @@ use super::PriceLevel;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderBookDelta {
-    pub source_id: SourceId,
+    pub provider: Provider,
     pub market_id: MarketId,
     pub instrument_id: InstrumentId,
     pub first_sequence: Sequence,

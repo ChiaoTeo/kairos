@@ -1096,7 +1096,7 @@ impl ConfluxSystem {
     pub fn reference_market_snapshot(
         &mut self,
         key: &str,
-    ) -> Result<kairos_reference_contract::ReferenceProjectionSnapshot, String> {
+    ) -> Result<kairos_reference_contract::MarketReferenceSnapshot, String> {
         self.reference_client_mut(key)
             .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
             .market_snapshot()
@@ -1106,7 +1106,7 @@ impl ConfluxSystem {
     pub fn reference_execution_snapshot(
         &mut self,
         key: &str,
-    ) -> Result<kairos_reference_contract::ReferenceProjectionSnapshot, String> {
+    ) -> Result<kairos_reference_contract::ExecutionReferenceSnapshot, String> {
         self.reference_client_mut(key)
             .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
             .execution_snapshot()
@@ -1116,7 +1116,7 @@ impl ConfluxSystem {
     pub fn reference_account_snapshot(
         &mut self,
         key: &str,
-    ) -> Result<kairos_reference_contract::ReferenceProjectionSnapshot, String> {
+    ) -> Result<kairos_reference_contract::AccountReferenceSnapshot, String> {
         self.reference_client_mut(key)
             .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
             .account_snapshot()

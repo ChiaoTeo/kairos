@@ -50,7 +50,7 @@ class Quote(object):
         return None
 
     # Quote
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -159,11 +159,11 @@ def QuoteAddInstrumentId(builder, instrumentId):
 def AddInstrumentId(builder, instrumentId):
     QuoteAddInstrumentId(builder, instrumentId)
 
-def QuoteAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def QuoteAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    QuoteAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    QuoteAddProvider(builder, provider)
 
 def QuoteAddBidPrice(builder, bidPrice):
     builder.PrependStructSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(bidPrice), 0)

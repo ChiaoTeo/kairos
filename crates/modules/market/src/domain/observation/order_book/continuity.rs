@@ -7,7 +7,7 @@ impl OrderBook {
         if !self.synchronized {
             return Err("order book is not synchronized; snapshot is required".into());
         }
-        if delta.source_id != self.source_id
+        if delta.provider != self.provider
             || delta.market_id != self.market_id
             || delta.instrument_id != self.instrument_id
         {
@@ -73,7 +73,7 @@ mod tests {
             };
             let mut book = OrderBook::snapshot("BTC-USD", "BTC-USD", 10_u64, 1_u64, vec![initial], vec![]).unwrap();
             let delta = OrderBookDelta {
-                source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+                provider: kairos_primitives::market::Provider::new("market").unwrap(),
                 market_id: kairos_primitives::reference::MarketId::new("BTC-USD").unwrap(),
                 instrument_id: kairos_primitives::reference::InstrumentId::new("BTC-USD").unwrap(),
                 first_sequence: 11_u64.into(),

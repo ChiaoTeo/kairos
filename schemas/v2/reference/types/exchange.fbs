@@ -1,0 +1,9 @@
+include "common.fbs";
+
+namespace kairos.reference.v2;
+
+table Exchange {
+  exchange_id:string (required);
+  name:string (required);
+  status:ReferenceLifecycleStatus = UNSPECIFIED;
+}

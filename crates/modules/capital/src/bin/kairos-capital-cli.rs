@@ -2,14 +2,24 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
-use kairos_capital::{CapitalCliRequestKind, CliCapitalApplication, ConnectedCapitalApplication};
+use kairos_capital::{
+    CapitalCliRequestKind, CapitalStandaloneOutput, CliCapitalApplication,
+    ConnectedCapitalApplication, ConnectedCapitalOutput,
+};
 use kairos_capital_contract::{
     CancelFundingObjectiveRequest, CapitalClient, CapitalConnection, ObserveCapitalDemandRequest,
     PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest, ReconcileCapitalPlanRequest,
 };
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};
-use serde_json::Value;
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum CapitalCliOutput {
+    Standalone(CapitalStandaloneOutput),
+    Connected(ConnectedCapitalOutput),
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "kairos-capital-cli", about = "One-shot Capital commands")]
@@ -147,8 +157,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("workspace output format validated")
     });
     let value = match args.command {
-        Command::Standalone(command) => run_standalone(command, &workspace)?,
-        Command::Connected(command) => run_connected(command, &workspace).await?,
+        Command::Standalone(command) => {
+            CapitalCliOutput::Standalone(run_standalone(command, &workspace)?)
+        },
+        Command::Connected(command) => {
+            CapitalCliOutput::Connected(run_connected(command, &workspace).await?)
+        },
     };
     println!("{}", render(&value, output));
     Ok(())
@@ -157,71 +171,100 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_connected(
     command: ConnectedCommand,
     workspace: &Workspace,
-) -> Result<Value, Box<dyn std::error::Error>> {
+) -> Result<ConnectedCapitalOutput, Box<dyn std::error::Error>> {
     match command {
-        ConnectedCommand::Health(target) => {
-            connected_capital_app(target, workspace)?.health().await
-        },
+        ConnectedCommand::Health(target) => Ok(ConnectedCapitalOutput::Health(
+            connected_capital_app(target, workspace)?.health().await?,
+        )),
         ConnectedCommand::Current(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.current(capital_group_id)
+            Ok(ConnectedCapitalOutput::Current(
+                connected_capital_app(command.target, workspace)?.current(capital_group_id)?,
+            ))
         },
         ConnectedCommand::Objectives(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.objectives(capital_group_id)
+            Ok(ConnectedCapitalOutput::Objectives(
+                connected_capital_app(command.target, workspace)?.objectives(capital_group_id)?,
+            ))
         },
         ConnectedCommand::Demands(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.demands(capital_group_id)
+            Ok(ConnectedCapitalOutput::Demands(
+                connected_capital_app(command.target, workspace)?.demands(capital_group_id)?,
+            ))
         },
         ConnectedCommand::Availabilities(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.availabilities(capital_group_id)
+            Ok(ConnectedCapitalOutput::Availabilities(
+                connected_capital_app(command.target, workspace)?
+                    .availabilities(capital_group_id)?,
+            ))
         },
         ConnectedCommand::Availability(command) => {
             let application = connected_capital_app(command.target, workspace)?;
             let request: QueryCapitalAvailabilityRequest = read_json_file(&command.file)?;
-            application.query_capital_availability(request).await
+            Ok(ConnectedCapitalOutput::Availability(
+                application.query_capital_availability(request).await?,
+            ))
         },
         ConnectedCommand::Routes(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.routes(capital_group_id)
+            Ok(ConnectedCapitalOutput::Routes(
+                connected_capital_app(command.target, workspace)?.routes(capital_group_id)?,
+            ))
         },
         ConnectedCommand::Plans(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.plans(capital_group_id)
+            Ok(ConnectedCapitalOutput::Plans(
+                connected_capital_app(command.target, workspace)?.plans(capital_group_id)?,
+            ))
         },
         ConnectedCommand::Reservations(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.reservations(capital_group_id)
+            Ok(ConnectedCapitalOutput::Reservations(
+                connected_capital_app(command.target, workspace)?.reservations(capital_group_id)?,
+            ))
         },
         ConnectedCommand::Operations(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.operations(capital_group_id)
+            Ok(ConnectedCapitalOutput::Operations(
+                connected_capital_app(command.target, workspace)?.operations(capital_group_id)?,
+            ))
         },
         ConnectedCommand::Alerts(command) => {
             let capital_group_id = command.capital_group_id.clone();
-            connected_capital_app(command.target, workspace)?.alerts(capital_group_id)
+            Ok(ConnectedCapitalOutput::Alerts(
+                connected_capital_app(command.target, workspace)?.alerts(capital_group_id)?,
+            ))
         },
         ConnectedCommand::PublishFundingObjective(command) => {
             let application = connected_capital_app(command.target, workspace)?;
             let request: PublishFundingObjectiveRequest = read_json_file(&command.file)?;
-            application.publish_funding_objective(request).await
+            Ok(ConnectedCapitalOutput::Control(
+                application.publish_funding_objective(request).await?,
+            ))
         },
         ConnectedCommand::ObserveDemand(command) => {
             let application = connected_capital_app(command.target, workspace)?;
             let request: ObserveCapitalDemandRequest = read_json_file(&command.file)?;
-            application.observe_capital_demand(request).await
+            Ok(ConnectedCapitalOutput::Demand(
+                application.observe_capital_demand(request).await?,
+            ))
         },
         ConnectedCommand::CancelFundingObjective(command) => {
             let application = connected_capital_app(command.target, workspace)?;
             let request: CancelFundingObjectiveRequest = read_json_file(&command.file)?;
-            application.cancel_funding_objective(request).await
+            Ok(ConnectedCapitalOutput::Control(
+                application.cancel_funding_objective(request).await?,
+            ))
         },
         ConnectedCommand::ReconcilePlan(command) => {
             let application = connected_capital_app(command.target, workspace)?;
             let request: ReconcileCapitalPlanRequest = read_json_file(&command.file)?;
-            application.reconcile_capital_plan(request).await
+            Ok(ConnectedCapitalOutput::Reconcile(
+                application.reconcile_capital_plan(request).await?,
+            ))
         },
     }
 }
@@ -236,21 +279,25 @@ fn read_json_file<T: serde::de::DeserializeOwned>(
 fn run_standalone(
     command: StandaloneCommand,
     workspace: &Workspace,
-) -> Result<Value, Box<dyn std::error::Error>> {
+) -> Result<CapitalStandaloneOutput, Box<dyn std::error::Error>> {
     let application = CliCapitalApplication::open(workspace);
     match command {
-        StandaloneCommand::Schema(command) => Ok(application.schema(command.kind.map(Into::into))),
-        StandaloneCommand::Doctor(command) => {
-            application.doctor(command.kind.into(), &command.file)
-        },
-        StandaloneCommand::Preview(command) => {
-            application.preview(command.kind.into(), &command.file)
-        },
-        StandaloneCommand::Plan(command) => application.plan(
-            &command.objective_files,
-            &command.demand_files,
-            &command.availability_files,
-        ),
+        StandaloneCommand::Schema(command) => Ok(CapitalStandaloneOutput::Schema(
+            application.schema(command.kind.map(Into::into)),
+        )),
+        StandaloneCommand::Doctor(command) => application
+            .doctor(command.kind.into(), &command.file)
+            .map(CapitalStandaloneOutput::Validation),
+        StandaloneCommand::Preview(command) => application
+            .preview(command.kind.into(), &command.file)
+            .map(CapitalStandaloneOutput::Preview),
+        StandaloneCommand::Plan(command) => application
+            .plan(
+                &command.objective_files,
+                &command.demand_files,
+                &command.availability_files,
+            )
+            .map(CapitalStandaloneOutput::Plan),
     }
 }
 

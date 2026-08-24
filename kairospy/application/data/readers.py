@@ -18,6 +18,39 @@ from .catalog import (
 from .models import DatasetReadPlan, DatasetSetRef
 
 
+_LEGACY_MARKET_SOURCE_PROVIDERS = {
+    "binance": "binance",
+    "binance-spot": "binance",
+    "binance-spot-fixture": "binance",
+    "binance-equity": "binance",
+    "massive": "massive",
+    "massive-equity": "massive",
+    "massive-spy-fixture": "massive",
+}
+
+
+def _normalize_market_provider(event: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Read the retired Market source field only through an explicit map."""
+
+    for envelope in ("Quote", "Trade", "Bar", "Greeks"):
+        raw = event.get(envelope)
+        if not isinstance(raw, Mapping) or "provider" in raw or "source_id" not in raw:
+            continue
+        legacy = str(raw["source_id"])
+        provider = _LEGACY_MARKET_SOURCE_PROVIDERS.get(legacy)
+        if provider is None:
+            raise ValueError(
+                f"legacy Market source_id {legacy!r} has no explicit provider mapping"
+            )
+        payload = dict(raw)
+        payload.pop("source_id", None)
+        payload["provider"] = provider
+        normalized = dict(event)
+        normalized[envelope] = payload
+        return normalized
+    return event
+
+
 @dataclass(frozen=True, slots=True)
 class _Fact:
     event: Mapping[str, Any]
@@ -35,7 +68,7 @@ class _Fact:
             event_time(self.event) or 0,
             self.owner,
             self.dataset_kind,
-            str(payload.get("source_id", self.source)),
+            str(payload.get("provider", self.source)),
             json.dumps(payload.get("scope", {}), sort_keys=True, separators=(",", ":")),
             str(payload.get("instrument_id", "")),
             self.dataset_identity,
@@ -285,7 +318,7 @@ class DatasetReaderApplication:
                         ordinal += 1
                         if not line.strip():
                             continue
-                        event = json.loads(line)
+                        event = _normalize_market_provider(json.loads(line))
                         if not isinstance(event, Mapping):
                             raise ValueError(
                                 "dataset event is not an object: "

@@ -7,11 +7,12 @@ from .application import (
     ReferenceApplication,
     ReferenceNotFoundError,
 )
+from .configuration import ReferenceProviderConfigurationApplication
 from .cli import ReferenceCliApplication
 from .events import ReferenceEventRecord
 from .models import (
     Asset,
-    Entity,
+    Exchange,
     Instrument,
     InstrumentRef,
     Listing,
@@ -28,6 +29,7 @@ from .validation import (
 
 
 __all__ = [
+    "ReferenceProviderConfigurationApplication",
     "MASSIVE_REFERENCE_SOURCES",
     "PUBLIC_REFERENCE_SOURCES",
     "ReferenceCliApplication",
@@ -36,7 +38,7 @@ __all__ = [
     "ReferenceNotFoundError",
     "AmbiguousReferenceError",
     "Asset",
-    "Entity",
+    "Exchange",
     "Instrument",
     "InstrumentRef",
     "Listing",

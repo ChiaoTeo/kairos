@@ -8,7 +8,7 @@ pub trait ReferenceControlRpc {
 
     async fn refresh(
         &self,
-        source_id: Option<kairos_primitives::integration::ProviderId>,
+        source_id: Option<kairos_primitives::reference::ReferenceSourceId>,
     ) -> RpcResult<kairos_reference_contract::ReferenceRefreshResponse>;
 
     async fn publish(&self) -> RpcResult<kairos_reference_contract::ReferencePublishResponse>;
@@ -30,22 +30,22 @@ pub trait ReferenceControlRpc {
 
     async fn pause_source(
         &self,
-        source_id: kairos_primitives::integration::ProviderId,
+        source_id: kairos_primitives::reference::ReferenceSourceId,
     ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
 
     async fn resume_source(
         &self,
-        source_id: kairos_primitives::integration::ProviderId,
+        source_id: kairos_primitives::reference::ReferenceSourceId,
     ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
 
     async fn disable_source(
         &self,
-        source_id: kairos_primitives::integration::ProviderId,
+        source_id: kairos_primitives::reference::ReferenceSourceId,
     ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
 
     async fn enable_source(
         &self,
-        source_id: kairos_primitives::integration::ProviderId,
+        source_id: kairos_primitives::reference::ReferenceSourceId,
     ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
 
     async fn add_option_coverage(

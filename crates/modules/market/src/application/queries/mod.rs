@@ -2,11 +2,12 @@
 
 use std::str::FromStr;
 
+use kairos_primitives::market::Provider;
 use rust_decimal::Decimal;
 
 use super::MarketApplication;
 use super::model::{
-    ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery,
+    ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketDataRouteState,
     MarketObservationResult, MarketQueryResult, OrderBookSide,
 };
 use crate::domain::observation::order_book::OrderBook;
@@ -33,51 +34,35 @@ impl MarketApplication {
                     .instrument_id
                     .as_ref()
                     .is_some_and(|value| value != &market.instrument_id)
-                || query.provider_id.as_deref().is_some_and(|value| {
-                    !value.eq_ignore_ascii_case(market.route.provider_id.as_str())
-                })
             {
                 continue;
             }
-            let matching_sources = self
-                .actor
-                .source_states()
-                .filter(|source| crate::application::source_accepts(&source.descriptor, &market))
-                .collect::<Vec<_>>();
-            if matching_sources.is_empty() {
-                if !query.configured_only && !query.ready_only {
-                    let source_id = market.source_id.clone().unwrap_or_else(|| {
-                        crate::SourceId::new(market.route.provider_id.as_str())
-                            .expect("provider identity is a valid fallback source identity")
-                    });
-                    result.push(MarketDataAvailability {
-                        market_id: market_id.clone(),
-                        instrument_id: market.instrument_id.clone(),
-                        source_id,
-                        provider_id: market.route.provider_id.to_string(),
-                        provider_product: market.route.provider_product.to_string(),
-                        subscription_symbol: market.route.subscription_symbol.to_string(),
-                        observation_capabilities: market
-                            .route
-                            .observation_capabilities
-                            .iter()
-                            .copied()
-                            .collect(),
-                        supported_by_adapter: query.observation_kind.is_none_or(|kind| {
-                            market.route.observation_capabilities.contains(&kind)
-                        }),
-                        configured_in_workspace: false,
-                        runtime_status: None,
-                        freshness: std::collections::BTreeMap::new(),
-                    });
+            for route in &market.data_routes {
+                if query
+                    .provider
+                    .as_ref()
+                    .is_some_and(|value| value != &route.provider)
+                    || query
+                        .observation_kind
+                        .is_some_and(|kind| !route.observation_kinds.contains(&kind))
+                {
+                    continue;
                 }
-                continue;
-            }
-            for source in matching_sources {
+                let matching_sources = self
+                    .actor
+                    .source_states()
+                    .filter(|source| source.descriptor.provider.as_ref() == Some(&route.provider))
+                    .collect::<Vec<_>>();
+                let configured = !matching_sources.is_empty();
+                if query.configured_only && !configured {
+                    continue;
+                }
                 let supported = query
                     .observation_kind
-                    .is_none_or(|kind| source.descriptor.observation_capabilities.contains(&kind));
-                let ready = source.status == crate::domain::source::SourceStatus::Ready;
+                    .is_none_or(|kind| route.observation_kinds.contains(&kind));
+                let ready = matching_sources
+                    .iter()
+                    .any(|source| source.status == crate::domain::source::SourceStatus::Ready);
                 if query.ready_only && !ready {
                     continue;
                 }
@@ -85,9 +70,7 @@ impl MarketApplication {
                     .freshness
                     .values()
                     .filter(|value| {
-                        value
-                            .source_id
-                            .eq_ignore_ascii_case(source.descriptor.id.as_str())
+                        value.provider == route.provider
                             && value.scope.market_id() == Some(market_id)
                             && query
                                 .observation_kind
@@ -98,19 +81,30 @@ impl MarketApplication {
                 result.push(MarketDataAvailability {
                     market_id: market_id.clone(),
                     instrument_id: market.instrument_id.clone(),
-                    source_id: source.descriptor.id.clone(),
-                    provider_id: market.route.provider_id.to_string(),
-                    provider_product: market.route.provider_product.to_string(),
-                    subscription_symbol: market.route.subscription_symbol.to_string(),
-                    observation_capabilities: source
-                        .descriptor
-                        .observation_capabilities
-                        .iter()
-                        .copied()
-                        .collect(),
+                    provider: route.provider.clone(),
+                    observation_capabilities: route.observation_kinds.iter().copied().collect(),
                     supported_by_adapter: supported,
-                    configured_in_workspace: true,
-                    runtime_status: Some(source.status),
+                    configured_in_workspace: configured,
+                    state: if ready {
+                        MarketDataRouteState::Ready
+                    } else if matching_sources.iter().any(|source| {
+                        source.status == crate::domain::source::SourceStatus::Degraded
+                    }) {
+                        MarketDataRouteState::Degraded
+                    } else if configured {
+                        MarketDataRouteState::Stopped
+                    } else {
+                        MarketDataRouteState::Supported
+                    },
+                    selected: market.selected_provider.as_ref() == Some(&route.provider),
+                    pending_reason: (!ready).then(|| {
+                        if configured {
+                            "provider feed is not ready"
+                        } else {
+                            "provider is not configured"
+                        }
+                        .to_string()
+                    }),
                     freshness,
                 });
             }
@@ -118,7 +112,7 @@ impl MarketApplication {
         result.sort_by(|left, right| {
             left.market_id
                 .cmp(&right.market_id)
-                .then_with(|| left.source_id.cmp(&right.source_id))
+                .then_with(|| left.provider.cmp(&right.provider))
         });
         result
     }
@@ -268,14 +262,14 @@ impl MarketQueryResult {
         matches.next().is_none().then_some(first)
     }
 
-    pub fn order_book_from_source(
+    pub fn order_book_from_provider(
         &self,
-        source_id: &crate::SourceId,
+        provider: &Provider,
         market_id: &str,
     ) -> Option<&OrderBook> {
         self.view
             .order_books
-            .get(&format!("{source_id}:{market_id}"))
+            .get(&format!("{provider}:{market_id}"))
     }
 
     pub fn subscriptions(&self) -> &[SubscriptionState] {
@@ -323,7 +317,7 @@ impl MarketQueryResult {
     /// introduces floating-point price or quantity errors.
     pub fn estimate_execution(
         &self,
-        source_id: &crate::SourceId,
+        provider: &Provider,
         market_id: &str,
         side: OrderBookSide,
         requested_quantity: &str,
@@ -332,7 +326,7 @@ impl MarketQueryResult {
         if requested <= Decimal::ZERO {
             return None;
         }
-        let book = self.order_book_from_source(source_id, market_id)?;
+        let book = self.order_book_from_provider(provider, market_id)?;
         if !book.synchronized {
             return None;
         }
@@ -396,7 +390,7 @@ impl MarketQueryResult {
         qualifier: Option<&str>,
     ) -> Option<&MarketObservation> {
         // View keys include source identity. A typed query therefore scans
-        // the stable projection rather than guessing the provider source.
+        // the stable current view rather than guessing the provider source.
         let mut matches = self.view.views.values().filter(|value| {
             value.market_id().map(|value| value.as_str()) == Some(market_id)
                 && value.kind() == kind
@@ -412,18 +406,16 @@ impl MarketQueryResult {
 #[cfg(test)]
 mod availability_tests {
     use super::*;
-    use crate::{
-        MarketDataRoute, ObservationKind, ReconcileMarketUniverse, ResolvedMarket,
-        SourceDescriptor, SourceId,
-    };
+    use crate::domain::source::{FeedDescriptor, MarketFeedId};
+    use crate::{ObservationKind, ProviderRouteBinding, ReconcileMarketUniverse, ResolvedMarket};
 
     fn market() -> ResolvedMarket {
-        ResolvedMarket::new(
+        ResolvedMarket::new_with_binding(
             "market:binance:spot:BTCUSDT",
             "instrument:spot:BTC",
             kairos_primitives::reference::InstrumentKind::Spot,
             "binance",
-            MarketDataRoute::new("route:binance:spot:BTCUSDT", "binance", "spot", "BTCUSDT")
+            ProviderRouteBinding::new("binance", "spot", "BTCUSDT")
                 .unwrap()
                 .with_observation_capabilities([ObservationKind::Quote, ObservationKind::Trade]),
         )
@@ -431,7 +423,7 @@ mod availability_tests {
     }
 
     #[test]
-    fn availability_distinguishes_unconfigured_and_runtime_state() {
+    fn availability_never_fabricates_a_runtime_feed_identity() {
         let mut application = MarketApplication::new("market", 8).unwrap();
         application
             .reconcile_market_universe(ReconcileMarketUniverse {
@@ -442,16 +434,16 @@ mod availability_tests {
             .unwrap();
         let unavailable = application.available_market_data(&Default::default());
         assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0].state, MarketDataRouteState::Supported);
         assert!(!unavailable[0].configured_in_workspace);
-        assert!(unavailable[0].supported_by_adapter);
-        assert_eq!(unavailable[0].runtime_status, None);
 
         application
             .actor
             .register_source(
-                SourceDescriptor::new(
-                    SourceId::new("binance-primary").unwrap(),
-                    kairos_primitives::reference::Exchange::new("binance").unwrap(),
+                FeedDescriptor::for_provider(
+                    MarketFeedId::new("binance-primary").unwrap(),
+                    "binance",
+                    kairos_primitives::reference::ExchangeId::new("binance").unwrap(),
                     "spot",
                     None,
                 )
@@ -466,7 +458,7 @@ mod availability_tests {
         });
         assert_eq!(quote.len(), 1);
         assert!(quote[0].supported_by_adapter);
-        assert_eq!(quote[0].runtime_status, Some(crate::SourceStatus::Starting));
+        assert_eq!(quote[0].state, MarketDataRouteState::Stopped);
 
         let trade = application.available_market_data(&MarketDataAvailabilityQuery {
             observation_kind: Some(ObservationKind::Trade),
@@ -474,6 +466,6 @@ mod availability_tests {
             ..Default::default()
         });
         assert_eq!(trade.len(), 1);
-        assert!(!trade[0].supported_by_adapter);
+        assert!(trade[0].supported_by_adapter);
     }
 }

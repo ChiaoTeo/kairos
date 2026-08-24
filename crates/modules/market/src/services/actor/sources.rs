@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use super::MarketActor;
 use crate::domain::freshness::FeedStatus;
 use crate::domain::source::{
-    MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceState,
+    FeedDescriptor, MarketFeedId, MarketReadiness, SourceEpoch, SourceFailureKind, SourceState,
     SourceStatus, derive_readiness,
 };
 use crate::domain::subscription::SubscriptionId;
@@ -14,7 +14,7 @@ use crate::services::source::messages::{ProviderSubscriptionId, SourceCommand, S
 pub(crate) type BusinessSubscriptionKey = (SubscriptionId, String);
 
 pub(crate) struct AttachedSource {
-    pub(crate) descriptor: SourceDescriptor,
+    pub(crate) descriptor: FeedDescriptor,
     pub(crate) commands: mpsc::Sender<SourceCommand>,
     pub(crate) inputs: Option<mpsc::Receiver<SourceInput>>,
     pub(crate) task: Option<tokio::task::JoinHandle<()>>,
@@ -23,21 +23,21 @@ pub(crate) struct AttachedSource {
 
 pub(crate) enum PendingSourceRequest {
     Subscribe {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         key: BusinessSubscriptionKey,
     },
     Unsubscribe {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         key: BusinessSubscriptionKey,
     },
     ResyncOrderBook {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         market_id: kairos_primitives::reference::MarketId,
     },
 }
 
 impl PendingSourceRequest {
-    pub(crate) fn source_id(&self) -> &SourceId {
+    pub(crate) fn source_id(&self) -> &MarketFeedId {
         match self {
             Self::Subscribe { source_id, .. }
             | Self::Unsubscribe { source_id, .. }
@@ -51,7 +51,11 @@ impl MarketActor {
         self.sources.values()
     }
 
-    pub(crate) fn register_source(&mut self, descriptor: SourceDescriptor) -> Result<(), String> {
+    pub(crate) fn source_state(&self, source_id: &MarketFeedId) -> Option<&SourceState> {
+        self.sources.get(source_id)
+    }
+
+    pub(crate) fn register_source(&mut self, descriptor: FeedDescriptor) -> Result<(), String> {
         if self.sources.contains_key(&descriptor.id) {
             return Err(format!("market source already exists: {}", descriptor.id));
         }
@@ -61,13 +65,13 @@ impl MarketActor {
         Ok(())
     }
 
-    pub(crate) fn source_is_stopped(&self, source_id: &SourceId) -> bool {
+    pub(crate) fn source_is_stopped(&self, source_id: &MarketFeedId) -> bool {
         self.sources
             .get(source_id)
             .is_some_and(|source| source.status == SourceStatus::Stopped)
     }
 
-    pub(crate) fn source_command_closed(&self, source_id: &SourceId) -> bool {
+    pub(crate) fn source_command_closed(&self, source_id: &MarketFeedId) -> bool {
         self.attached_sources.get(source_id).is_some_and(|source| {
             (source.inputs.is_some() || source.task.is_some()) && source.commands.is_closed()
         })
@@ -75,7 +79,7 @@ impl MarketActor {
 
     pub(crate) fn apply_source_status(
         &mut self,
-        source_id: &SourceId,
+        source_id: &MarketFeedId,
         epoch: SourceEpoch,
         status: SourceStatus,
         error: Option<String>,
@@ -93,7 +97,7 @@ impl MarketActor {
 
     pub(crate) fn apply_source_failure(
         &mut self,
-        source_id: &SourceId,
+        source_id: &MarketFeedId,
         epoch: SourceEpoch,
         kind: SourceFailureKind,
         error: String,

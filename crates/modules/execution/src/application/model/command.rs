@@ -102,9 +102,9 @@ pub struct ExecutionFillReport {
     #[serde(default)]
     pub execution_market_id: Option<MarketId>,
     #[serde(default)]
-    pub reported_provider_id: Option<String>,
+    pub reported_broker_id: Option<kairos_primitives::account::BrokerId>,
     #[serde(default)]
-    pub provider_product: Option<kairos_primitives::integration::ProviderProductCode>,
+    pub execution_channel: Option<kairos_primitives::execution::ExecutionChannelCode>,
     #[serde(default, alias = "provider_symbol")]
     pub order_entry_symbol: Option<kairos_primitives::execution::OrderEntrySymbol>,
     #[serde(default)]

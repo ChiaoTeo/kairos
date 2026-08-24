@@ -17,11 +17,11 @@ def build_strategy_access(
     account_ids: tuple[AccountId, ...],
     strategy_id: str,
 ) -> RiskApplication:
-    """Build Risk projection access, or the module-owned unavailable behavior."""
+    """Build Risk latest-view access, or the module-owned unavailable behavior."""
 
     enabled = client is not None
     return RiskApplication(
-        client.latest_projection(actor_id=f"risk:{instance.instance_id}")
+        client.latest_view(actor_id=f"risk:{instance.instance_id}")
         if enabled
         else None,
         AeronRiskEventSource(

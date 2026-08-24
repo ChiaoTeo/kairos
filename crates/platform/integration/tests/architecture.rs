@@ -95,7 +95,7 @@ fn capability_and_blocking_surfaces_have_distinct_ownership() {
             let source = std::fs::read_to_string(&path).expect("read capability source");
             assert!(
                 !source.contains("Blocking"),
-                "async capability owns a blocking projection: {}",
+                "async capability owns a blocking facade: {}",
                 path.display()
             );
             assert!(

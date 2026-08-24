@@ -1,6 +1,6 @@
 mod cli;
 pub(crate) mod conflux;
-pub(crate) use conflux::ReferenceProjectionConfig;
+pub(crate) use conflux::ReferenceUniverseSyncConfig;
 mod connected;
 mod model;
 mod observations;
@@ -10,38 +10,39 @@ mod sources;
 mod subscriptions;
 mod universe;
 pub use cli::{
-    CliMarketApplication, CliMarketDiagnosticProvider, CliMarketHistoricalDataKind,
-    CliMarketHistoricalDownloadRequest, CliMarketHistoricalMarketType, CliMarketHistoricalProvider,
+    CliDirectObservationResult, CliMarketApplication, CliMarketBarResult,
+    CliMarketDatasetCatalogEntry, CliMarketDatasetManifest, CliMarketDatasetsResult,
+    CliMarketHistoricalDataKind, CliMarketHistoricalDownloadRequest, CliMarketHistoricalMarketType,
+    CliMarketHistoricalProvider, CliMarketOnceProvider, CliMarketOnceRequest, CliMarketQuoteResult,
+    CliMarketReplayResult, CliMarketReplaySnapshot, CliMarketRoute, CliMarketRouteResult,
+    CliMarketRoutesResult, CliMarketValidationResult,
 };
 pub use connected::{
-    ConnectedMarketApplication, ConnectedMarketSourceQuery, ConnectedSourceAvailability,
+    ConnectedMarketApplication, ConnectedMarketOutput, ConnectedMarketRouteQuery,
+    ConnectedRouteAvailability,
 };
 pub use model::{
-    ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketError,
-    MarketObservationResult, MarketQueryResult, OrderBookSide,
+    ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketDataRouteState,
+    MarketError, MarketObservationResult, MarketQueryResult, OrderBookSide,
 };
 pub use replay::{load_replay_events, load_replay_events_many};
 pub(crate) use sources::source_accepts;
-pub(crate) use subscriptions::{
-    OptionSelectionFilter, resolve_market, resolve_market_by_id, resolve_option_markets,
-};
 pub use universe::ReconcileMarketUniverse;
+pub(crate) use universe::{MarketProviderCapability, MarketUniverseResolver};
 
 pub use crate::domain::events::{
     MarketChange, MarketEvent, MarketViewUpdate, OrderBookResyncRequired,
 };
 pub use crate::domain::freshness::{DataFreshnessStatus, FeedStatus, MarketFreshness};
-pub use crate::domain::market::{MarketDataRoute, MarketSelectionQuery, ResolvedMarket};
+pub(crate) use crate::domain::market::ProviderRouteBinding;
+pub use crate::domain::market::{MarketSelectionQuery, ResolvedMarket, ResolvedMarketDataRoute};
 pub use crate::domain::observation::order_book::{OrderBook, OrderBookDelta, PriceLevel};
 pub use crate::domain::observation::{
     Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, MarketViewKey, ObservationKind,
     ObservationQualifier, ObservationScope, OpenInterest, OptionGreeks, Quote, QuoteBar, Rate,
     Ticker24h, Trade, TradeBar,
 };
-pub use crate::domain::source::{
-    MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey,
-    SourceState, SourceStatus,
-};
+pub use crate::domain::source::MarketReadiness;
 pub use crate::domain::subscription::{
     ObservationSelector, ReconcileResult, SubscriptionId, SubscriptionMemberRequirement,
     SubscriptionMemberStatus, SubscriptionMode, SubscriptionState, SubscriptionStatus,

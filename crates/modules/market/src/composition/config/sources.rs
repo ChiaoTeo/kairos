@@ -1,10 +1,13 @@
-use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
+
+use serde::{Deserialize, Deserializer};
 
 use super::defaults::*;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
-pub enum MarketSourceBinding {
+pub enum MarketProviderBinding {
     BinanceSpot {
         #[serde(default = "enabled_by_default")]
         enabled: bool,
@@ -72,7 +75,64 @@ pub enum MarketSourceBinding {
     },
 }
 
-impl MarketSourceBinding {
+/// Provider configuration without user-defined runtime feed names.
+/// Stable operational keys are derived privately from provider configuration.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MarketProviderBindings(BTreeMap<String, MarketProviderBinding>);
+
+impl<'de> Deserialize<'de> for MarketProviderBindings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bindings = Vec::<MarketProviderBinding>::deserialize(deserializer)?;
+        let mut resolved = BTreeMap::new();
+        for binding in bindings {
+            let base = binding.feed_base_id();
+            let mut key = base.clone();
+            let mut ordinal = 2_u32;
+            while resolved.contains_key(&key) {
+                key = format!("{base}-{ordinal}");
+                ordinal = ordinal.saturating_add(1);
+            }
+            resolved.insert(key, binding);
+        }
+        Ok(Self(resolved))
+    }
+}
+
+impl Deref for MarketProviderBindings {
+    type Target = BTreeMap<String, MarketProviderBinding>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for MarketProviderBindings {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl MarketProviderBindings {
+    pub fn into_values(
+        self,
+    ) -> std::collections::btree_map::IntoValues<String, MarketProviderBinding> {
+        self.0.into_values()
+    }
+}
+
+impl<'a> IntoIterator for &'a MarketProviderBindings {
+    type Item = (&'a String, &'a MarketProviderBinding);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, MarketProviderBinding>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl MarketProviderBinding {
     pub fn enabled(&self) -> bool {
         match self {
             Self::BinanceSpot { enabled, .. }
@@ -83,6 +143,48 @@ impl MarketSourceBinding {
             | Self::Hyperliquid { enabled, .. }
             | Self::Ibkr { enabled, .. } => *enabled,
         }
+    }
+
+    fn feed_base_id(&self) -> String {
+        let (provider, segment) = match self {
+            Self::BinanceSpot { .. } => ("binance", "spot"),
+            Self::BinanceEquity { .. } => ("binance", "equity"),
+            Self::BinanceDerivatives { product, .. } => (
+                "binance",
+                match product {
+                    BinanceDerivativeProduct::UsdMFutures => "usd-m-futures",
+                    BinanceDerivativeProduct::CoinMFutures => "coin-m-futures",
+                    BinanceDerivativeProduct::Options => "options",
+                },
+            ),
+            Self::Massive { product, .. } => (
+                "massive",
+                match product {
+                    MassiveMarketProduct::Equity => "equity",
+                    MassiveMarketProduct::Options => "options",
+                },
+            ),
+            Self::Okx {
+                instrument_type, ..
+            } => (
+                "okx",
+                match instrument_type {
+                    OkxInstrumentType::Spot => "spot",
+                    OkxInstrumentType::Swap => "swap",
+                    OkxInstrumentType::Futures => "futures",
+                    OkxInstrumentType::Options => "options",
+                },
+            ),
+            Self::Hyperliquid { market_type, .. } => (
+                "hyperliquid",
+                match market_type {
+                    HyperliquidMarketType::Spot => "spot",
+                    HyperliquidMarketType::Perpetual => "perpetual",
+                },
+            ),
+            Self::Ibkr { .. } => ("ibkr", "equity"),
+        };
+        format!("{provider}-{segment}")
     }
 }
 

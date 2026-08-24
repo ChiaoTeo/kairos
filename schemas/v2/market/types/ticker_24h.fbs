@@ -6,7 +6,7 @@ namespace kairos.market.v2;
 table Ticker24h {
   scope:ObservationScope (required);
   instrument_id:string (required);
-  source_id:string (required);
+  provider:string (required);
   last_price:kairos.common.v2.Decimal64;
   bid_price:kairos.common.v2.Decimal64;
   bid_quantity:kairos.common.v2.Decimal64;

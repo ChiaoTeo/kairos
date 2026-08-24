@@ -50,6 +50,16 @@ pub(crate) struct MassiveHistoricalTrade {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MassiveStockSnapshot {
+    pub(crate) ticker: String,
+    pub(crate) quote: Option<MassiveHistoricalQuote>,
+    pub(crate) trade: Option<MassiveHistoricalTrade>,
+    pub(crate) minute_bar: Option<MassiveHistoricalBar>,
+    pub(crate) day_bar: Option<MassiveHistoricalBar>,
+    pub(crate) previous_day_bar: Option<MassiveHistoricalBar>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MassiveCashDividendRow {
     pub(crate) id: String,
     pub(crate) ticker: String,
@@ -440,6 +450,31 @@ impl RestService {
         massive_option_snapshot(&payload).map_err(ExchangeError::InvalidRequest)
     }
 
+    pub(crate) async fn stock_snapshot(
+        &self,
+        ticker: &str,
+    ) -> Result<MassiveStockSnapshot, ExchangeError> {
+        if ticker.trim().is_empty() {
+            return Err(ExchangeError::InvalidRequest(
+                "Massive stock snapshot requires a ticker".into(),
+            ));
+        }
+        let endpoint = format!(
+            "{}/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
+            self.base_url
+        );
+        let payload = self
+            .http
+            .get_json_response_with_headers_and_query(
+                &endpoint,
+                &[],
+                &[("Authorization", format!("Bearer {}", self.api_key))],
+            )
+            .await?
+            .body;
+        massive_stock_snapshot(&payload).map_err(ExchangeError::InvalidRequest)
+    }
+
     async fn historical_ticks(
         &self,
         resource: &str,
@@ -542,6 +577,82 @@ fn massive_option_snapshot(payload: &Value) -> Result<MassiveOptionSnapshotRow, 
             .and_then(Value::as_str)
             .map(str::to_owned),
         observed_at_unix_nanos: timestamp,
+    })
+}
+
+fn massive_stock_snapshot(payload: &Value) -> Result<MassiveStockSnapshot, String> {
+    let value = payload
+        .get("ticker")
+        .ok_or_else(|| "Massive stock snapshot response has no ticker object".to_string())?;
+    let ticker = value
+        .get("ticker")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Massive stock snapshot has no ticker".to_string())?;
+    Ok(MassiveStockSnapshot {
+        ticker: ticker.into(),
+        quote: value
+            .get("lastQuote")
+            .map(massive_snapshot_quote)
+            .transpose()?,
+        trade: value
+            .get("lastTrade")
+            .map(massive_snapshot_trade)
+            .transpose()?,
+        minute_bar: value.get("min").map(massive_snapshot_bar).transpose()?,
+        day_bar: value.get("day").map(massive_snapshot_bar).transpose()?,
+        previous_day_bar: value.get("prevDay").map(massive_snapshot_bar).transpose()?,
+    })
+}
+
+fn massive_snapshot_quote(value: &Value) -> Result<MassiveHistoricalQuote, String> {
+    Ok(MassiveHistoricalQuote {
+        sip_timestamp_unix_nanos: value
+            .get("t")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "Massive stock snapshot quote has no timestamp".to_string())?,
+        participant_timestamp_unix_nanos: None,
+        bid_price: value_text(value, "p"),
+        bid_size: value_text(value, "s"),
+        bid_exchange: value_text(value, "x"),
+        ask_price: value_text(value, "P"),
+        ask_size: value_text(value, "S"),
+        ask_exchange: value_text(value, "X"),
+        tape: None,
+        sequence_number: None,
+    })
+}
+
+fn massive_snapshot_trade(value: &Value) -> Result<MassiveHistoricalTrade, String> {
+    Ok(MassiveHistoricalTrade {
+        sip_timestamp_unix_nanos: value
+            .get("t")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "Massive stock snapshot trade has no timestamp".to_string())?,
+        participant_timestamp_unix_nanos: None,
+        trf_timestamp_unix_nanos: None,
+        price: value_text(value, "p")
+            .ok_or_else(|| "Massive stock snapshot trade has no price".to_string())?,
+        size: value_text(value, "s")
+            .ok_or_else(|| "Massive stock snapshot trade has no size".to_string())?,
+        exchange: value_text(value, "x"),
+        tape: None,
+        trf_id: None,
+        sequence_number: None,
+    })
+}
+
+fn massive_snapshot_bar(value: &Value) -> Result<MassiveHistoricalBar, String> {
+    Ok(MassiveHistoricalBar {
+        open_time_unix_millis: value.get("t").and_then(Value::as_i64).unwrap_or_default(),
+        open: value_text(value, "o")
+            .ok_or_else(|| "Massive stock snapshot bar has no open".to_string())?,
+        high: value_text(value, "h")
+            .ok_or_else(|| "Massive stock snapshot bar has no high".to_string())?,
+        low: value_text(value, "l")
+            .ok_or_else(|| "Massive stock snapshot bar has no low".to_string())?,
+        close: value_text(value, "c")
+            .ok_or_else(|| "Massive stock snapshot bar has no close".to_string())?,
+        volume: value_text(value, "v"),
     })
 }
 

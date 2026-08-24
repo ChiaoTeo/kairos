@@ -19,7 +19,7 @@ The UDS control surface is not a FlatBuffers root. It is specified by the
 Market Rust JSON-RPC contract trait and uses typed command, status, error, and
 idempotency semantics over the workspace Unix socket.
 Runtime and owner isolation are defined by [`isolation.md`](./isolation.md);
-`ObservationScope` and `source_id` are business/provenance identities, not
+`ObservationScope` and `provider` are business/provenance identities, not
 process isolation boundaries. Venue observations use a canonical `market_id`;
 consolidated observations use `instrument_id` plus an optional network.
 

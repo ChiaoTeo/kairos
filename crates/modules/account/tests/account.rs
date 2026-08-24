@@ -118,9 +118,9 @@ fn simulated_capital_mutation_is_idempotent_persistent_and_updates_earn() {
         application
             .apply_simulated_capital_mutation(mutation)
             .unwrap();
-        let projection = account_projection(&application);
-        assert_eq!(projection.balances[0].total.mantissa(), 70);
-        assert_eq!(projection.earn_holdings[0].principal.mantissa(), 30);
+        let segment_view = account_segment_view(&application);
+        assert_eq!(segment_view.balances[0].total.mantissa(), 70);
+        assert_eq!(segment_view.earn_holdings[0].principal.mantissa(), 30);
     }
 
     let mut recovered =
@@ -143,9 +143,9 @@ fn simulated_capital_mutation_is_idempotent_persistent_and_updates_earn() {
             occurred_at_unix_nanos: nanos(120),
         })
         .unwrap();
-    let projection = account_projection(&recovered);
-    assert_eq!(projection.balances[0].total.mantissa(), 80);
-    assert_eq!(projection.earn_holdings[0].principal.mantissa(), 20);
+    let segment_view = account_segment_view(&recovered);
+    assert_eq!(segment_view.balances[0].total.mantissa(), 80);
+    assert_eq!(segment_view.earn_holdings[0].principal.mantissa(), 20);
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn account_snapshot(app: &AccountApplication) -> AccountCurrentView {
     publisher.0.expect("Account published a current snapshot")
 }
 
-fn account_projection(app: &AccountApplication) -> AccountSegmentView {
+fn account_segment_view(app: &AccountApplication) -> AccountSegmentView {
     account_snapshot(app)
         .segments
         .into_iter()
@@ -544,9 +544,9 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
             .iter()
             .any(|value| value.field == "position.quantity" && value.key == "instrument:btc:net")
     );
-    let projection = account_projection(&app);
-    assert_eq!(projection.balances[0].asset_code, "USDT");
-    assert_eq!(projection.positions.len(), 1);
+    let segment_view = account_segment_view(&app);
+    assert_eq!(segment_view.balances[0].asset_code, "USDT");
+    assert_eq!(segment_view.positions.len(), 1);
 }
 
 #[test]
@@ -575,7 +575,7 @@ fn fill_event_updates_account_position_owned_by_actor() {
     })
     .unwrap();
     assert_eq!(
-        account_projection(&app)
+        account_segment_view(&app)
             .positions
             .iter()
             .find(|value| value.instrument_id == "instrument:btc")
@@ -616,7 +616,7 @@ fn fill_settles_balance_and_fee_in_account_application() {
         occurred_at_unix_nanos: nanos(10),
     })
     .unwrap();
-    let view = account_projection(&app);
+    let view = account_segment_view(&app);
     assert_eq!(
         view.positions
             .iter()
@@ -678,7 +678,7 @@ fn simulated_settlement_tracks_average_cost_and_realized_pnl() {
         .unwrap();
     }
 
-    let view = account_projection(&app);
+    let view = account_segment_view(&app);
     let position = &view.positions[0];
     assert_eq!(position.quantity, signed(3, 0));
     assert_eq!(position.average_price, Some(price(110, 0)));
@@ -722,7 +722,7 @@ fn mark_to_market_updates_equity_and_unrealized_pnl() {
         observed_at_unix_nanos: nanos(20),
     })
     .unwrap();
-    let view = account_projection(&app);
+    let view = account_segment_view(&app);
     assert_eq!(view.equity, Some(money(10_040, 0)));
     assert_eq!(view.net_profit, Some(money(40, 0)));
     assert_eq!(view.positions[0].unrealized_pnl, Some(money(40, 0)));

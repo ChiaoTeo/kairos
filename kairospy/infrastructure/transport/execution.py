@@ -253,9 +253,9 @@ def _v2_selected_route(value: Any) -> dict[str, object]:
     return {
         "route_id": _required_text(value.RouteId(), "route_id"),
         "selection_kind": int(value.SelectionKind()),
-        "participant_id": _required_text(value.ParticipantId(), "participant_id"),
+        "broker_id": _required_text(value.BrokerId(), "broker_id"),
         "destination_market_id": _text(value.DestinationMarketId()),
-        "provider_product": _required_text(value.ProviderProduct(), "provider_product"),
+        "execution_channel": _required_text(value.ExecutionChannel(), "execution_channel"),
         "order_entry_symbol": _required_text(
             value.ProviderSymbol(), "order_entry_symbol"
         ),
@@ -308,8 +308,8 @@ def _v2_fill(value: Any) -> dict[str, object]:
             value.ExecutionRouteId(), "execution_route_id"
         ),
         "remote_order_id": _text(value.RemoteOrderId()),
-        "reported_provider_id": _text(value.ReportedProviderId()),
-        "provider_product": _text(value.ProviderProduct()),
+        "reported_broker_id": _text(value.ReportedBrokerId()),
+        "execution_channel": _text(value.ExecutionChannel()),
         "order_entry_symbol": _text(value.ProviderSymbol()),
         "quantity": _decimal(value.Quantity()),
         "price": _decimal(value.Price()),

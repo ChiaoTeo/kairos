@@ -7,7 +7,7 @@ table Quote {
   quote_id:string;
   scope:ObservationScope (required);
   instrument_id:string (required);
-  source_id:string (required);
+  provider:string (required);
   bid_price:kairos.common.v2.Decimal64;
   bid_quantity:kairos.common.v2.Decimal64;
   ask_price:kairos.common.v2.Decimal64;

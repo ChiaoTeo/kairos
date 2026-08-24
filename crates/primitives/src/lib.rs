@@ -24,12 +24,12 @@ pub use error::DomainTypeError;
 mod tests {
     use crate::account::BrokerId;
     use crate::execution::OrderId;
-    use crate::integration::ProviderId;
-    use crate::reference::{Exchange, InstrumentId, InstrumentKind, ListingId, MarketId};
+    use crate::market::Provider;
+    use crate::reference::{ExchangeId, InstrumentId, InstrumentKind, ListingId, MarketId};
 
     #[test]
     fn spot_identity_keeps_asset_and_market_context_separate() {
-        let exchange = Exchange::new("exchange:binance").unwrap();
+        let exchange = ExchangeId::new("exchange:binance").unwrap();
 
         assert_eq!(
             InstrumentId::spot("btc").unwrap().as_str(),
@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn venue_identities_use_exchange_key_and_keep_listing_out_of_quote_context() {
-        let exchange = Exchange::new("exchange:nasdaq").unwrap();
+        let exchange = ExchangeId::new("exchange:nasdaq").unwrap();
 
         assert_eq!(
             ListingId::venue(&exchange, InstrumentKind::Equity, "aapl")
@@ -76,11 +76,12 @@ mod tests {
         assert!(serde_json::from_str::<BrokerId>("\" broker\"").is_err());
         assert!(serde_json::from_str::<OrderId>("\"order-1 \"").is_err());
         assert_eq!(
-            serde_json::from_str::<ProviderId>("\"provider:binance\"")
+            serde_json::from_str::<Provider>("\"binance\"")
                 .unwrap()
                 .as_str(),
-            "provider:binance"
+            "binance"
         );
+        assert!(serde_json::from_str::<Provider>("\"Binance\"").is_err());
     }
 
     #[test]
@@ -104,7 +105,7 @@ mod more_tests {
     #[test]
     fn text_types_reject_ambiguous_whitespace() {
         assert!(Symbol::new(" BTC").is_err());
-        assert!(Exchange::new("").is_err());
+        assert!(ExchangeId::new("").is_err());
         assert_eq!(Currency::new("USD").unwrap().as_str(), "USD");
     }
 

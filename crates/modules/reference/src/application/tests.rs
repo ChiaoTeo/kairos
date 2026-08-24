@@ -1,8 +1,12 @@
-use kairos_primitives::reference::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
+use kairos_primitives::reference::{
+    AssetId, ExchangeId, InstrumentId, ListingId, MarketId, Symbol,
+};
 use kairos_reference_contract::{ReferenceUpsertConflictPolicy, ReferenceUpsertProvenance};
 
 use crate::composition::{ReferenceCompositionConfig, build_application};
-use crate::domain::{Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceResult};
+use crate::domain::{
+    Asset, Exchange, Instrument, Listing, Market, ProviderCatalog, ReferenceResult,
+};
 use crate::services::sources::ReferenceSource;
 use crate::services::storage::catalog_store::SqlxCatalogStore;
 use crate::{
@@ -118,9 +122,8 @@ async fn application() -> ReferenceApplication {
 
 fn provider_catalog() -> ProviderCatalog {
     ProviderCatalog {
-        entities: vec![Entity {
-            entity_id: "exchange:binance".into(),
-            entity_type: "exchange".into(),
+        exchanges: vec![Exchange {
+            exchange_id: ExchangeId::new("exchange:binance").unwrap(),
             name: "Binance".into(),
             status: "active".into(),
             ..Default::default()
@@ -153,7 +156,7 @@ fn provider_catalog() -> ProviderCatalog {
         listings: vec![Listing {
             listing_id: listing_id("listing:binance:spot:BTC:USDT"),
             instrument_id: instrument_id("instrument:spot:BTC"),
-            exchange_id: Exchange::new("exchange:binance").unwrap(),
+            exchange_id: ExchangeId::new("exchange:binance").unwrap(),
             exchange_symbol: Symbol::new("BTCUSDT").unwrap(),
             status: "active".into(),
             effective_from_unix_nanos: 1.into(),
@@ -163,7 +166,7 @@ fn provider_catalog() -> ProviderCatalog {
             market_id: market_id("market:binance:spot:BTCUSDT"),
             instrument_id: instrument_id("instrument:spot:BTC"),
             listing_id: Some(listing_id("listing:binance:spot:BTC:USDT")),
-            exchange_id: Exchange::new("exchange:binance").unwrap(),
+            exchange_id: ExchangeId::new("exchange:binance").unwrap(),
             instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
             asset_type: Some(kairos_primitives::reference::AssetClass::Crypto),
             venue_symbol: Some(symbol("BTCUSDT")),
@@ -182,16 +185,15 @@ fn provider_catalog() -> ProviderCatalog {
 #[test]
 fn one_listing_can_back_multiple_markets_on_different_exchanges() {
     let mut catalog = provider_catalog();
-    catalog.entities.push(Entity {
-        entity_id: "exchange:iex".into(),
-        entity_type: "exchange".into(),
+    catalog.exchanges.push(Exchange {
+        exchange_id: ExchangeId::new("exchange:iex").unwrap(),
         name: "IEX".into(),
         status: "active".into(),
         ..Default::default()
     });
     let mut iex_market = catalog.markets[0].clone();
     iex_market.market_id = market_id("market:iex:spot:BTCUSDT");
-    iex_market.exchange_id = Exchange::new("exchange:iex").unwrap();
+    iex_market.exchange_id = ExchangeId::new("exchange:iex").unwrap();
     catalog.markets.push(iex_market);
 
     catalog
@@ -215,7 +217,7 @@ async fn application_runtime_status_exposes_tick_timing() {
 
     let status = application.contract_runtime_status().await;
     assert!(status.catalog.committed_at_unix_nanos.get() > 0);
-    assert_eq!(status.catalog.entity_count, 1);
+    assert_eq!(status.catalog.exchange_count, 1);
     assert_eq!(status.catalog.asset_count, 2);
     assert_eq!(status.catalog.instrument_count, 1);
     assert_eq!(status.catalog.listing_count, 1);
@@ -330,7 +332,7 @@ async fn application_exposes_read_only_market_queries() {
     application.refresh().await.unwrap();
 
     let query = MarketQuery {
-        exchange_id: Some(Exchange::new("exchange:binance").unwrap()),
+        exchange_id: Some(ExchangeId::new("exchange:binance").unwrap()),
         instrument_kind: Some(kairos_primitives::reference::InstrumentKind::Spot),
         asset_type: Some("crypto".into()),
         venue_symbol: Some(kairos_primitives::reference::Symbol::new("btcusdt").unwrap()),
@@ -511,7 +513,7 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
         .upsert_listing(UpsertListingCommand {
             listing_id: listing_id("listing:binance:spot:ETH:USDT"),
             instrument_id: instrument_id("instrument:spot:ETH"),
-            exchange_id: Exchange::new("exchange:binance").unwrap(),
+            exchange_id: ExchangeId::new("exchange:binance").unwrap(),
             exchange_symbol: Symbol::new("ETHUSDT").unwrap(),
             status: "active".into(),
             effective_from_unix_nanos: 1.into(),
@@ -551,7 +553,7 @@ async fn administrative_listing_upsert_rejects_provider_owned_records_by_default
         .upsert_listing(UpsertListingCommand {
             listing_id: listing_id("listing:binance:spot:BTC:USDT"),
             instrument_id: instrument_id("instrument:spot:BTC-USDT"),
-            exchange_id: Exchange::new("exchange:binance").unwrap(),
+            exchange_id: ExchangeId::new("exchange:binance").unwrap(),
             exchange_symbol: Symbol::new("BTC-USDT").unwrap(),
             status: "active".into(),
             effective_from_unix_nanos: 1.into(),
@@ -586,7 +588,7 @@ async fn application_query_covers_each_reference_record_kind() {
     });
     assert!(
         all.iter()
-            .any(|record| matches!(record, ReferenceRecord::Entity(_)))
+            .any(|record| matches!(record, ReferenceRecord::Exchange(_)))
     );
     let asset_events = application.query(&ReferenceQuery {
         kind: ReferenceKind::Event,

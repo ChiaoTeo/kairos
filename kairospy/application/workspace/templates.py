@@ -112,7 +112,7 @@ def _events() -> tuple[dict[str, object], ...]:
                 "close": format(close, "f"),
                 "volume": "10",
                 "observed_at_unix_nanos": base + index * 60_000_000_000,
-                "source_id": "kairos-demo",
+                "provider": "binance",
                 "derivation": "provider",
             }
         }
@@ -188,8 +188,8 @@ dry_run = true
 route_id = "demo-paper-spot"
 account_id = "demo-paper"
 segment_key = "spot"
-participant_id = "simulated"
-product = "spot"
+broker_id = "simulated"
+execution_channel = "spot"
 
 [backtest]
 data_root = "data"

@@ -8,7 +8,7 @@ table Trade {
   trade_id:string;
   scope:ObservationScope (required);
   instrument_id:string (required);
-  source_id:string (required);
+  provider:string (required);
   price:kairos.common.v2.Decimal64 (required);
   quantity:kairos.common.v2.Decimal64 (required);
   aggressor_side:kairos.common.v2.Side = UNSPECIFIED;

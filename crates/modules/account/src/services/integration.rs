@@ -28,13 +28,13 @@ use crate::domain::{
 
 #[derive(Clone, Default)]
 pub(crate) struct AccountInstrumentResolver {
-    snapshot: Arc<Mutex<Option<kairos_reference_contract::ReferenceProjectionSnapshot>>>,
+    snapshot: Arc<Mutex<Option<kairos_reference_contract::AccountReferenceSnapshot>>>,
     cache: Arc<
         Mutex<BTreeMap<String, (InstrumentId, Option<kairos_primitives::reference::MarketId>)>>,
     >,
     cache_generation: Arc<Mutex<Option<kairos_primitives::time::Generation>>>,
     #[cfg(test)]
-    fixture_markets: Arc<Vec<kairos_reference_contract::ReferenceMarket>>,
+    fixture_markets: Arc<Vec<kairos_reference_contract::Market>>,
     #[cfg(test)]
     fixture_instruments: Arc<Vec<kairos_reference_contract::Instrument>>,
 }
@@ -42,7 +42,7 @@ pub(crate) struct AccountInstrumentResolver {
 impl AccountInstrumentResolver {
     pub(crate) fn update_reference_snapshot(
         &self,
-        snapshot: kairos_reference_contract::ReferenceProjectionSnapshot,
+        snapshot: kairos_reference_contract::AccountReferenceSnapshot,
     ) -> Result<(), String> {
         let generation = snapshot.generation;
         *self
@@ -133,7 +133,7 @@ impl AccountInstrumentResolver {
         let matches = markets
             .iter()
             .filter(|value| {
-                provider_id_from_exchange(&value.exchange_id)
+                participant_id_from_exchange(&value.exchange_id)
                     .is_some_and(|source| source.eq_ignore_ascii_case(&provider.participant.id))
                     && value
                         .venue_symbol
@@ -157,7 +157,7 @@ impl AccountInstrumentResolver {
         &self,
     ) -> Result<
         (
-            Vec<kairos_reference_contract::ReferenceMarket>,
+            Vec<kairos_reference_contract::Market>,
             Vec<kairos_reference_contract::Instrument>,
         ),
         String,
@@ -185,7 +185,7 @@ impl AccountInstrumentResolver {
 
     #[cfg(test)]
     fn fixture(
-        markets: Vec<kairos_reference_contract::ReferenceMarket>,
+        markets: Vec<kairos_reference_contract::Market>,
         instruments: Vec<kairos_reference_contract::Instrument>,
     ) -> Self {
         Self {
@@ -230,7 +230,7 @@ fn identity_resolution_error(provider: &ParticipantInstrumentRef, matches: usize
     )
 }
 
-fn provider_id_from_exchange(exchange_id: &str) -> Option<&str> {
+fn participant_id_from_exchange(exchange_id: &str) -> Option<&str> {
     ["binance", "okx", "hyperliquid", "ibkr"]
         .into_iter()
         .find(|provider| {
@@ -748,7 +748,7 @@ mod identity_tests {
     #[test]
     fn resolves_exchange_symbol_only_through_reference_market() {
         let resolver = AccountInstrumentResolver::fixture(
-            vec![kairos_reference_contract::ReferenceMarket {
+            vec![kairos_reference_contract::Market {
                 market_id: kairos_primitives::reference::MarketId::new(
                     "market:binance:spot:BTCUSDT",
                 )
@@ -761,7 +761,7 @@ mod identity_tests {
                     kairos_primitives::reference::ListingId::new("listing:binance:spot:BTCUSDT")
                         .unwrap(),
                 ),
-                exchange_id: kairos_primitives::reference::Exchange::new("exchange:binance")
+                exchange_id: kairos_primitives::reference::ExchangeId::new("exchange:binance")
                     .unwrap(),
                 instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
                 venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),

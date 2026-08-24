@@ -56,7 +56,7 @@ pub struct AccountOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccountSegmentBinding {
     pub segment_key: String,
-    pub provider_product: String,
+    pub provider_segment: String,
     pub trading_mode: Option<String>,
 }
 
@@ -67,10 +67,10 @@ pub struct ObservedAccountProfile {
 }
 
 impl AccountSegmentBinding {
-    pub fn new(segment_key: impl Into<String>, provider_product: impl Into<String>) -> Self {
+    pub fn new(segment_key: impl Into<String>, provider_segment: impl Into<String>) -> Self {
         Self {
             segment_key: segment_key.into(),
-            provider_product: provider_product.into(),
+            provider_segment: provider_segment.into(),
             trading_mode: None,
         }
     }
@@ -215,7 +215,7 @@ fn binance_rest_base_url(options: &AccountOptions, family: &str) -> String {
     }
 }
 
-/// Perform one provider query without creating a process, projection, or
+/// Perform one provider query without creating a process, current view, or
 /// Conflux runtime. Top-level Account commands use this path; connected reads
 /// remain scoped to a launch component.
 pub async fn query_direct_account_snapshot(
@@ -223,7 +223,7 @@ pub async fn query_direct_account_snapshot(
     binding: &AccountSegmentBinding,
 ) -> Result<ExternalAccountSnapshot, String> {
     let provider = normalized_provider(&options.provider);
-    let product = normalized_segment(&binding.provider_product);
+    let product = normalized_segment(&binding.provider_segment);
     let segment_key =
         SegmentKey::new(binding.segment_key.clone()).map_err(|error| error.to_string())?;
     let segment = ExternalAccountSegment {
@@ -437,7 +437,7 @@ pub async fn query_direct_open_orders(
     symbol: Option<&str>,
 ) -> Result<Vec<ExternalOrder>, String> {
     let provider = normalized_provider(&options.provider);
-    let product = normalized_segment(&binding.provider_product);
+    let product = normalized_segment(&binding.provider_segment);
     let query = ExternalOrderQuery {
         symbol: symbol.map(Symbol::new).transpose()?,
         instrument_type: order_instrument_type(&product)
@@ -712,7 +712,7 @@ async fn query_binance_portfolio_snapshot(
 /// Compose one Binance REST endpoint family from one principal connection.
 /// All readers share signer, clock, HTTP scheduling and quota. Spot projects
 /// a private event channel; the remaining products currently use async
-/// snapshot recovery while their Account private-stream projections migrate.
+/// snapshot recovery while their Account private-stream ingestion migrates.
 pub fn compose_binance_async_account_application(
     options: &AccountOptions,
     segments: &[AccountSegmentBinding],
@@ -728,7 +728,7 @@ pub fn compose_binance_async_account_application(
         return Err("Binance async composition requires at least one segment".into());
     }
     for segment in segments {
-        binance_endpoint_family(&segment.provider_product)?;
+        binance_endpoint_family(&segment.provider_segment)?;
     }
     let identity = ExternalAccountIdentity::new("binance", options.account_id.clone())
         .map_err(|error| error.to_string())?;
@@ -737,9 +737,9 @@ pub fn compose_binance_async_account_application(
     let mut streams = Vec::new();
     for configured_segment in segments {
         let segment_key = configured_segment.segment_key.clone();
-        let provider_product = normalized_segment(&configured_segment.provider_product);
-        let account_model = match binance_endpoint_family(&provider_product)? {
-            "spot" if provider_product == "spot" || provider_product == "funding" => "no_margin",
+        let provider_segment = normalized_segment(&configured_segment.provider_segment);
+        let account_model = match binance_endpoint_family(&provider_segment)? {
+            "spot" if provider_segment == "spot" || provider_segment == "funding" => "no_margin",
             "spot" => "margin",
             _ => "contract",
         };
@@ -754,7 +754,7 @@ pub fn compose_binance_async_account_application(
                     .unwrap_or_else(|| account_model.into()),
             ),
         });
-        let read = match provider_product.as_str() {
+        let read = match provider_segment.as_str() {
             "spot" => {
                 let rest_endpoint = binance_rest_base_url(options, "spot");
                 streams.push(AccountAsyncEventSource::BinanceSpot {
@@ -911,7 +911,7 @@ pub fn compose_binance_async_account_application(
 
 /// Compose all configured OKX trading-account segments from one provider and
 /// principal context. `InstrumentType` remains an OKX request filter; every
-/// projected capability belongs to `okx::ConnectionDomain::Trading`.
+/// capability belongs to `okx::ConnectionDomain::Trading`.
 pub fn compose_okx_async_account_application(
     options: &AccountOptions,
     segments: &[AccountSegmentBinding],
@@ -927,7 +927,7 @@ pub fn compose_okx_async_account_application(
         return Err("OKX async composition requires at least one segment".into());
     }
     for segment in segments {
-        let product = normalized_segment(&segment.provider_product);
+        let product = normalized_segment(&segment.provider_segment);
         let mode = segment.trading_mode.as_deref().map(normalized_segment);
         match (product.as_str(), mode.as_deref()) {
             ("spot", None | Some("cash")) => {},
@@ -1016,7 +1016,7 @@ pub fn compose_ibkr_async_account_application(
     if segments.is_empty()
         || segments.iter().any(|segment| {
             !matches!(
-                normalized_segment(&segment.provider_product).as_str(),
+                normalized_segment(&segment.provider_segment).as_str(),
                 "equity" | "spot"
             )
         })
@@ -1393,7 +1393,7 @@ mod secret_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn account_segment_key_is_not_parsed_as_provider_product() {
+    async fn account_segment_key_is_not_parsed_as_provider_segment() {
         let mut composition = compose_binance_async_account_application(
             &options(),
             &[AccountSegmentBinding::new("cash-main", "spot")],
@@ -1467,7 +1467,7 @@ mod secret_tests {
     }
 
     #[test]
-    fn provider_product_vocabulary_is_not_cross_normalized() {
+    fn provider_segment_vocabulary_is_not_cross_normalized() {
         assert!(binance_endpoint_family("swap").is_err());
         assert!(binance_endpoint_family("futures").is_err());
 

@@ -87,7 +87,7 @@ def map_market_view(
             volume=None if raw.volume is None else Decimal(raw.volume.value),
             occurred_at=occurred_at,
             occurred_at_unix_nanos=raw.event_time_unix_nanos,
-            source_id=raw.source_id,
+            provider=raw.provider,
         )
     if kind == "quote" or (kind is None and hasattr(value, "bid_price")):
         _require_attributes(
@@ -108,7 +108,7 @@ def map_market_view(
             ask_quantity=_decimal(raw.ask_quantity),
             occurred_at=occurred_at,
             occurred_at_unix_nanos=raw.event_time_unix_nanos,
-            source_id=raw.source_id,
+            provider=raw.provider,
             bid_venue_code=getattr(raw, "bid_venue_code", None),
             ask_venue_code=getattr(raw, "ask_venue_code", None),
             tape=getattr(raw, "tape", None),
@@ -133,7 +133,7 @@ def map_market_view(
             aggressor_side=None,
             occurred_at=occurred_at,
             occurred_at_unix_nanos=raw.event_time_unix_nanos,
-            source_id=raw.source_id,
+            provider=raw.provider,
             venue_code=getattr(raw, "venue_code", None),
             tape=getattr(raw, "tape", None),
             trf_id=getattr(raw, "trf_id", None),
@@ -169,7 +169,7 @@ def map_market_view(
             implied_volatility=_decimal(raw.implied_volatility),
             occurred_at=occurred_at,
             occurred_at_unix_nanos=raw.event_time_unix_nanos,
-            source_id=raw.source_id,
+            provider=raw.provider,
             derivation=raw.derivation,
         )
     raise TypeError(f"unsupported Market payload: {type(value).__name__}")

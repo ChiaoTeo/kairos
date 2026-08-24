@@ -10,8 +10,8 @@ from .runtime import backtest_mark_to_market_request
 from .control import AccountContractClient
 from .events import decode_event
 from .view import (
-    AccountCurrentProjection,
-    AccountObservedOrdersProjection,
+    AccountCurrentViewReader,
+    AccountObservedOrdersViewReader,
     AccountViewFrame,
     AccountViewKey,
     AccountViewKind,
@@ -22,8 +22,8 @@ from .view import (
 
 __all__ = [
     "AccountContractClient",
-    "AccountCurrentProjection",
-    "AccountObservedOrdersProjection",
+    "AccountCurrentViewReader",
+    "AccountObservedOrdersViewReader",
     "AccountViewFrame",
     "AccountViewKey",
     "AccountViewKind",

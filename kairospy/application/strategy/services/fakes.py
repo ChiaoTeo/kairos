@@ -70,7 +70,7 @@ class InMemoryApplicationPorts:
             status="pending",
         )
 
-    def data_sources(self, query: Mapping[str, object] | None = None) -> dict[str, object]:
+    def data_routes(self, query: Mapping[str, object] | None = None) -> dict[str, object]:
         del query
         return {"sources": []}
 

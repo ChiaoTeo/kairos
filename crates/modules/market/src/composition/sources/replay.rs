@@ -2,7 +2,7 @@
 
 use super::super::config::MarketReplayClock;
 use crate::MarketApplication;
-use crate::domain::source::{SourceDescriptor, SourceId};
+use crate::domain::source::{FeedDescriptor, MarketFeedId};
 use crate::services::source::{ReplayClock, ReplaySource, spawn_replay};
 
 /// Attach deterministic replay to the same wake-driven Actor input path used
@@ -55,7 +55,7 @@ pub fn attach_replay_source_with_policy(
 }
 
 fn attach_replay(runtime: &mut MarketApplication, source: ReplaySource) -> Result<(), String> {
-    let descriptor = SourceDescriptor::all_routes(SourceId::new("replay")?);
+    let descriptor = FeedDescriptor::all_routes(MarketFeedId::new("replay")?);
     let handle = spawn_replay(descriptor, source, runtime.source_input_capacity());
     runtime.attach_source(handle)
 }

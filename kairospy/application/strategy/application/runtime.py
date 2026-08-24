@@ -981,27 +981,27 @@ class StrategyApplication:
     def _observe_subscription(self, status: object) -> None:
         request_id = getattr(status, "request_id")
         request = getattr(status, "request")
+        target = getattr(request, "target")
+        observations = getattr(request, "observations", ())
+        provider_preference = getattr(request, "provider_preference")
+        target_value = target.wire()
+        observation_values = [value.selector for value in observations]
+        preference_value = provider_preference.wire()
         self._subscription_requests.add(request_id)
         self._log(
             f"market subscription requested request_id={request_id}",
             event="market_subscription_requested",
             request_id=request_id,
-            subject=getattr(request, "subject", None),
-            exchange=getattr(request, "exchange", None),
-            market_type=getattr(request, "market_type", None),
-            asset_type=getattr(request, "asset_type", None),
-            selectors=list(getattr(request, "selectors", ())),
-            params=dict(getattr(request, "params", {})),
+            target=target_value,
+            observations=observation_values,
+            provider_preference=preference_value,
         )
         self._subscriptions[request_id] = {
             "request_id": request_id,
             "status": getattr(status, "status", "unknown"),
-            "subject": getattr(request, "subject", None),
-            "exchange": getattr(request, "exchange", None),
-            "market_type": getattr(request, "market_type", None),
-            "asset_type": getattr(request, "asset_type", None),
-            "selectors": list(getattr(request, "selectors", ())),
-            "params": dict(getattr(request, "params", {})),
+            "target": target_value,
+            "observations": observation_values,
+            "provider_preference": preference_value,
         }
 
     def _log(self, message: str, **data: object) -> None:

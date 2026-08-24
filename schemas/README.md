@@ -13,7 +13,7 @@ not an implementation detail of a particular runtime.
 
 Namespaces are business-oriented: `reference`, `market`, `account`,
 `execution`, `risk`, `intent`, and `system`. The publication files remain
-grouped under `projection/` for now, but `projection` is a delivery shape,
+grouped under `views/` for now, but `view` is a contract shape,
 not part of the wire vocabulary.
 
 Business types live in the owning domain namespace and are reusable. Published

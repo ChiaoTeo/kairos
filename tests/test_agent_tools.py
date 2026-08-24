@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import tomllib
 from types import SimpleNamespace
 from typing import Callable, Mapping, cast
 
@@ -21,29 +20,30 @@ class Server:
         self.options = options
 
 
-def _workspace(tmp_path: Path, allowed_tools: list[str]):
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ws")
-    tools = ", ".join(f'"{tool}"' for tool in allowed_tools)
-    workspace.paths.agent_mcp_config().write_text(
-        f"""[servers.context]
-transport = "stdio"
-command = "kairos-context-mcp"
-args = ["--readonly"]
-cwd = "config"
-timeout_seconds = 2
+def _workspace(tmp_path: Path):
+    return WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ws")
 
-[profiles.review]
-server = "context"
-allowed_tools = [{tools}]
-scope_enforced = true
-max_result_bytes = 4096
-max_rows = 20
-freshness_required_tools = ["market.get_latest_quote"]
-max_age_seconds = 30
-""",
-        encoding="utf-8",
+
+def _selection(
+    allowed_tools: list[str], *, required: bool
+) -> tuple[Mapping[str, object], ...]:
+    return (
+        {
+            "id": "context",
+            "transport": "stdio",
+            "command": "kairos-context-mcp",
+            "args": ["--readonly"],
+            "cwd": "config",
+            "timeout_seconds": 2,
+            "allowed_tools": allowed_tools,
+            "scope_enforced": True,
+            "max_result_bytes": 4096,
+            "max_rows": 20,
+            "freshness_required_tools": ["market.get_latest_quote"],
+            "max_age_seconds": 30,
+            "required": required,
+        },
     )
-    return workspace
 
 
 def _scope() -> AgentToolScope:
@@ -66,14 +66,11 @@ def test_mcp_composition_applies_read_only_static_filter_and_bounds(
     tmp_path: Path, monkeypatch
 ) -> None:
     _sdk(monkeypatch)
-    workspace = _workspace(
-        tmp_path,
-        ["market.get_latest_quote", "account.get_position"],
-    )
+    workspace = _workspace(tmp_path)
 
     bindings = build_mcp_servers(
         workspace,
-        ({"server": "context", "profile": "review", "required": True},),
+        _selection(["market.get_latest_quote", "account.get_position"], required=True),
         scope=_scope(),
     )
 
@@ -103,11 +100,11 @@ def test_optional_mcp_failure_is_sanitized_for_model_and_evidence(
     tmp_path: Path, monkeypatch
 ) -> None:
     _sdk(monkeypatch)
-    workspace = _workspace(tmp_path, ["market.get_latest_quote"])
+    workspace = _workspace(tmp_path)
 
     bindings = build_mcp_servers(
         workspace,
-        ({"server": "context", "profile": "review", "required": False},),
+        _selection(["market.get_latest_quote"], required=False),
         scope=_scope(),
     )
 
@@ -124,43 +121,27 @@ def test_optional_mcp_failure_is_sanitized_for_model_and_evidence(
 
 def test_mcp_profile_rejects_write_capability(tmp_path: Path, monkeypatch) -> None:
     _sdk(monkeypatch)
-    workspace = _workspace(tmp_path, ["execution.submit_intent"])
+    workspace = _workspace(tmp_path)
 
     with pytest.raises(ValueError, match="non-approved tool"):
         build_mcp_servers(
             workspace,
-            ({"server": "context", "profile": "review", "required": True},),
+            _selection(["execution.submit_intent"], required=True),
             scope=_scope(),
         )
 
 
-def test_mcp_composition_uses_launch_snapshot_after_source_changes(
+def test_mcp_composition_uses_launch_inline_configuration_without_workspace_catalog(
     tmp_path: Path, monkeypatch
 ) -> None:
     _sdk(monkeypatch)
-    workspace = _workspace(tmp_path, ["market.get_latest_quote"])
-    snapshot = tomllib.loads(
-        workspace.paths.agent_mcp_config().read_text(encoding="utf-8")
-    )
-    snapshot["content_hash"] = "a" * 64
-    workspace.paths.agent_mcp_config().write_text(
-        """[servers.context]
-transport = "stdio"
-command = "changed"
-
-[profiles.review]
-server = "context"
-allowed_tools = ["execution.submit_intent"]
-scope_enforced = true
-""",
-        encoding="utf-8",
-    )
+    workspace = _workspace(tmp_path)
+    selections = _selection(["market.get_latest_quote"], required=True)
 
     bindings = build_mcp_servers(
         workspace,
-        ({"server": "context", "profile": "review", "required": True},),
+        selections,
         scope=_scope(),
-        snapshot=snapshot,
     )
 
     server = cast(Server, bindings[0].server)

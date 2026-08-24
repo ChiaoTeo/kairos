@@ -1,7 +1,7 @@
 //! Exchange, broker, and data-provider integration boundary.
 //!
 //! Participant-neutral capabilities live under [`capabilities`]. Participant-native
-//! construction lives under [`participants`]. Explicit synchronous projections
+//! construction lives under [`participants`]. Explicit synchronous facades
 //! live under [`blocking`].
 
 pub mod blocking;

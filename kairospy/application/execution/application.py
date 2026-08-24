@@ -46,12 +46,12 @@ from .services import ExecutionEventCursorCheckpoint
 
 
 class ExecutionApplication:
-    """Concrete strategy-facing Execution use cases and projections."""
+    """Concrete strategy-facing Execution use cases and current views."""
 
     def __init__(
         self,
         commands: Any | None,
-        projection: Any | None,
+        current_views: Any | None,
         event_source: Any | None = None,
         *,
         strategy_id: str,
@@ -64,7 +64,7 @@ class ExecutionApplication:
         if not strategy_id.strip() or not instance_id.strip():
             raise ValueError("strategy_id and instance_id are required")
         self._commands = commands
-        self._projection = projection
+        self._current_views = current_views
         self._event_source = event_source
         self._strategy_id = strategy_id
         self._instance_id = instance_id
@@ -105,22 +105,22 @@ class ExecutionApplication:
 
     def commitments(self) -> tuple[OrderCommitment, ...]:
         """Read Execution-owned capacity commitments from the typed mmap view."""
-        if self._projection is None:
+        if self._current_views is None:
             return ()
-        return tuple(self._projection.commitments())
+        return tuple(self._current_views.commitments())
 
     def risk_reservations(self) -> tuple[RiskReservationSaga, ...]:
         """Read the persisted Risk reservation saga from the typed mmap view."""
-        if self._projection is None:
+        if self._current_views is None:
             return ()
-        return tuple(self._projection.risk_reservations())
+        return tuple(self._current_views.risk_reservations())
 
     def diagnostic_intent(self, intent_id: IntentId | str) -> dict[str, object] | None:
         """Read one authoritative Execution trace from the current v2 view."""
 
-        if self._projection is None:
+        if self._current_views is None:
             return None
-        query = getattr(self._projection, "diagnostic_intent", None)
+        query = getattr(self._current_views, "diagnostic_intent", None)
         if not callable(query):
             return None
         value = query(str(intent_id))
@@ -214,9 +214,9 @@ class ExecutionApplication:
         self._durable_event_cursor = sequence
 
     def _recover_from_current_view(self) -> None:
-        if self._projection is None:
+        if self._current_views is None:
             return
-        recovery_snapshot = getattr(self._projection, "recovery_snapshot", None)
+        recovery_snapshot = getattr(self._current_views, "recovery_snapshot", None)
         if not callable(recovery_snapshot):
             return
         try:
@@ -657,9 +657,9 @@ class ExecutionApplication:
         return _bulk_receipt(result)
 
     def intent(self, intent_id: IntentId) -> ExecutionIntent | None:
-        if self._projection is None:
+        if self._current_views is None:
             return None
-        intent = self._projection.get_intent(str(intent_id))
+        intent = self._current_views.get_intent(str(intent_id))
         if intent is None:
             return None
         return (
@@ -676,9 +676,9 @@ class ExecutionApplication:
         return value
 
     def order(self, order_id: OrderId) -> Order | None:
-        if self._projection is None:
+        if self._current_views is None:
             return None
-        order = self._projection.get_order(str(order_id))
+        order = self._current_views.get_order(str(order_id))
         if (
             order is None
             or order.strategy_id != self._strategy_id
@@ -699,9 +699,9 @@ class ExecutionApplication:
         instrument: InstrumentRef | InstrumentId | None = None,
         account: AccountId | str | None = None,
     ) -> tuple[Order, ...]:
-        if self._projection is None:
+        if self._current_views is None:
             return ()
-        orders = self._projection.open_orders(
+        orders = self._current_views.open_orders(
             account_id=None if account is None else str(account)
         )
         orders = tuple(

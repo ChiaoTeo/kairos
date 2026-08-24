@@ -117,7 +117,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         && segment_bindings.iter().all(|segment| {
             matches!(
                 segment
-                    .provider_product
+                    .provider_segment
                     .trim()
                     .to_ascii_lowercase()
                     .replace('_', "-")

@@ -1,4 +1,4 @@
-"""Capital v2 current-view contract and application projection."""
+"""Capital v2 current-view contract and application current-view queries."""
 
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ class CapitalViewReader:
         )
 
 
-class CapitalProjection:
+class CapitalCurrentViewQueries:
     """Read Capital availability without using its JSON control plane."""
 
     def __init__(
@@ -226,7 +226,7 @@ class CapitalProjection:
         location: FundingLocation | None,
     ) -> CapitalAvailability:
         if capital_group_id != self._reader.key.capital_group_id:
-            raise ValueError("Capital projection belongs to another capital group")
+            raise ValueError("Capital current view belongs to another capital group")
         values = self.availabilities()
         if location is None:
             if len(values) != 1:
@@ -675,7 +675,7 @@ def _component(value: str) -> str:
 
 
 __all__ = [
-    "CapitalProjection",
+    "CapitalCurrentViewQueries",
     "CapitalViewFrame",
     "CapitalViewKey",
     "CapitalViewReader",

@@ -6,7 +6,7 @@ namespace kairos.market.v2;
 table Greeks {
   scope:ObservationScope (required);
   instrument_id:string (required);
-  source_id:string (required);
+  provider:string (required);
   expiry_unix_nanos:ulong = null;
   strike:kairos.common.v2.Decimal64;
   delta:kairos.common.v2.Decimal64;

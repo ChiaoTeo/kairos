@@ -14,8 +14,8 @@ from kairospy.application.workspace import WorkspaceApplication
 HELP = """Reference standalone commands are owned by kairos-reference-cli.
 
 Canonical commands include:
-  snapshot, catalog, assets, entities, instruments, listings
-  participants, markets, events, query, search, show
+  snapshot, catalog, assets, exchanges, instruments, listings
+  markets, events, query, search, show
 
 Current runtime reference facts and controls are connected through scoped
 component commands:
@@ -88,7 +88,7 @@ def _standalone_arguments(arguments: Sequence[str]) -> list[str]:
         if rest and rest[0] in {"list", "show"}:
             return ["standalone", "assets", *rest]
         return ["standalone", "assets", "list", *rest]
-    if command in {"entities", "instruments", "listings"}:
+    if command in {"exchanges", "instruments", "listings"}:
         return ["standalone", "catalog", command, *rest]
     if command == "catalog" and not rest:
         return ["standalone", "snapshot"]

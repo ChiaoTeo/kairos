@@ -9,10 +9,8 @@ use super::{
     OkxProduct, OkxSource, ProviderFanInSource, ReferenceCredentialResolver, binance_config,
     provider_error,
 };
-use crate::domain::{Entity, ReferenceResult};
-use crate::services::sources::{
-    ConfiguredProviderSource, ConfiguredReferenceSource, ParticipantAugmentedSource,
-};
+use crate::domain::ReferenceResult;
+use crate::services::sources::{ConfiguredProviderSource, ConfiguredReferenceSource};
 use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
 pub(crate) enum ReferenceProviderPlan {
@@ -64,7 +62,6 @@ pub(crate) enum ReferenceProviderPlan {
 
 pub(crate) struct ReferenceSourcePlan {
     providers: Vec<ReferenceProviderPlan>,
-    participants: Vec<Entity>,
     sync_store: SqlxProviderSyncStore,
     credential_resolver: ReferenceCredentialResolver,
 }
@@ -72,13 +69,11 @@ pub(crate) struct ReferenceSourcePlan {
 impl ReferenceSourcePlan {
     pub(crate) fn new_with_credential_resolver(
         providers: Vec<ReferenceProviderPlan>,
-        participants: Vec<Entity>,
         sync_store: SqlxProviderSyncStore,
         credential_resolver: ReferenceCredentialResolver,
     ) -> Self {
         Self {
             providers,
-            participants,
             sync_store,
             credential_resolver,
         }
@@ -304,8 +299,6 @@ impl ReferenceSourcePlan {
             self.credential_resolver,
         )
         .await?;
-        Ok(ConfiguredReferenceSource::new(
-            ParticipantAugmentedSource::wrap(fan_in, self.participants),
-        ))
+        Ok(ConfiguredReferenceSource::new(fan_in))
     }
 }

@@ -1,14 +1,13 @@
 //! Private messages between the single Market Actor and Integration I/O
 //! drivers. These are Market runtime mechanics, not application API types.
 
-use kairos_primitives::market::SourceId;
 use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::time::{Sequence, UnixNanos};
 
 use crate::domain::market::ResolvedMarket;
 use crate::domain::observation::MarketObservation;
 use crate::domain::observation::order_book::PriceLevel;
-use crate::domain::source::{SourceEpoch, SourceFailureKind, SourceStatus};
+use crate::domain::source::{MarketFeedId, SourceEpoch, SourceFailureKind, SourceStatus};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SourceRequestId(u64);
@@ -59,54 +58,54 @@ pub(crate) enum SourceCommand {
 #[derive(Debug)]
 pub enum SourceInput {
     StatusChanged {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         status: SourceStatus,
         error: Option<String>,
     },
     SubscriptionConfirmed {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         request_id: SourceRequestId,
         handle: ProviderSubscriptionId,
     },
     Unsubscribed {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         request_id: SourceRequestId,
     },
     Observation {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         observation: MarketObservation,
     },
     ReplayObservation {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         observation: MarketObservation,
         accepted:
             tokio::sync::oneshot::Sender<Result<crate::services::actor::ReplayCheckpoint, String>>,
     },
     OrderBook {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         update: SourceOrderBookUpdate,
     },
     ResyncRejected {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         request_id: SourceRequestId,
         market_id: MarketId,
         error: String,
     },
     Failed {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         kind: SourceFailureKind,
         error: String,
     },
     Completed {
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
     },
 }
@@ -114,7 +113,6 @@ pub enum SourceInput {
 #[derive(Debug)]
 pub struct SourceOrderBookUpdate {
     pub(crate) market: Box<ResolvedMarket>,
-    pub(crate) source_id: SourceId,
     pub(crate) market_id: MarketId,
     pub(crate) instrument_id: InstrumentId,
     pub(crate) first_sequence: Sequence,

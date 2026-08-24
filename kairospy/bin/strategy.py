@@ -174,7 +174,7 @@ def _deterministic_result_sha256(report: Mapping[str, Any]) -> str:
                 "observation_types",
                 "timeframes",
                 "derivations",
-                "source_ids",
+                "providers",
             )
         }
         if isinstance(dataset, Mapping)
@@ -260,7 +260,7 @@ def _replay_dataset_identity(path: Path) -> dict[str, Any]:
     observation_types: set[str] = set()
     timeframes: set[str] = set()
     derivations: set[str] = set()
-    source_ids: set[str] = set()
+    providers: set[str] = set()
     for line in raw.splitlines():
         if not line.strip():
             continue
@@ -288,9 +288,9 @@ def _replay_dataset_identity(path: Path) -> dict[str, Any]:
                     if last_event_time is None
                     else max(last_event_time, event_time)
                 )
-            source_id = payload.get("source_id")
-            if isinstance(source_id, str) and source_id:
-                source_ids.add(source_id)
+            provider = payload.get("provider")
+            if isinstance(provider, str) and provider:
+                providers.add(provider)
             timeframe = payload.get("timeframe")
             if isinstance(timeframe, str) and timeframe:
                 timeframes.add(timeframe)
@@ -306,7 +306,7 @@ def _replay_dataset_identity(path: Path) -> dict[str, Any]:
             "observation_types": sorted(observation_types),
             "timeframes": sorted(timeframes),
             "derivations": sorted(derivations),
-            "source_ids": sorted(source_ids),
+            "providers": sorted(providers),
         }
     )
     return identity

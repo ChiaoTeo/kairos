@@ -186,7 +186,7 @@ mod tests {
     fn reader_and_publisher_resolve_the_same_safe_path() {
         let key = MarketViewKey::new(
             "scope/../一",
-            "source%/main",
+            "provider%/main",
             MarketViewKind::Quote,
             Some("bid/ask"),
         )
@@ -203,7 +203,7 @@ mod tests {
     fn publisher_output_is_readable_through_the_contract_reader() {
         let root = tempfile::tempdir().unwrap();
         let key =
-            MarketViewKey::new("scope", "source", MarketViewKind::Quote, None::<String>).unwrap();
+            MarketViewKey::new("scope", "provider", MarketViewKind::Quote, None::<String>).unwrap();
         let mut publisher = MarketViewPublisher::create(root.path(), key.clone(), 4096).unwrap();
         publisher.publish(test_metadata(), b"market-view").unwrap();
         let frame = MarketViewReader::open(root.path(), key)

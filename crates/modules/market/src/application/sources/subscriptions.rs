@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{MarketApplication, MarketError};
 use crate::domain::market::ResolvedMarket;
-use crate::domain::source::{SourceDescriptor, SourceId};
+use crate::domain::source::{FeedDescriptor, MarketFeedId};
 use crate::services::actor::{BusinessSubscriptionKey, PendingSourceRequest};
 use crate::services::source::messages::SourceCommand;
 
@@ -16,7 +16,7 @@ impl MarketApplication {
     async fn reconcile_source_commands(&mut self) -> Result<(), String> {
         let subscriptions = self.current_view().subscriptions;
         let mut desired =
-            BTreeMap::<SourceId, BTreeMap<BusinessSubscriptionKey, ResolvedMarket>>::new();
+            BTreeMap::<MarketFeedId, BTreeMap<BusinessSubscriptionKey, ResolvedMarket>>::new();
         for subscription in subscriptions {
             let selectors = subscription.selectors.clone();
             for (market_id, market) in subscription.members {
@@ -26,26 +26,30 @@ impl MarketApplication {
                     .values()
                     .filter(|source| source_accepts(&source.descriptor, &market))
                     .collect::<Vec<_>>();
-                let matches = route_matches
-                    .iter()
+                let has_route_match = !route_matches.is_empty();
+                let mut matches = route_matches
+                    .into_iter()
                     .filter(|source| source_supports_selectors(&source.descriptor, &selectors))
-                    .map(|source| source.descriptor.id.clone())
                     .collect::<Vec<_>>();
-                if matches.is_empty() && !route_matches.is_empty() {
+                if matches.is_empty() && has_route_match {
                     return Err(format!(
                         "configured source for market {} does not support the requested observation",
                         market.scope.key()
                     ));
                 }
-                let source_id = match matches.as_slice() {
-                    [source_id] => source_id.clone(),
-                    [] => continue,
-                    _ => {
-                        return Err(format!(
-                            "market {} matches multiple configured sources; select source_id",
-                            market.scope.key()
-                        ));
-                    },
+                matches.sort_by_key(|source| {
+                    (
+                        self.actor
+                            .source_state(&source.descriptor.id)
+                            .is_none_or(|state| {
+                                state.status != crate::domain::source::SourceStatus::Ready
+                            }),
+                        source.descriptor.id.clone(),
+                    )
+                });
+                let Some(source_id) = matches.first().map(|source| source.descriptor.id.clone())
+                else {
+                    continue;
                 };
                 desired
                     .entry(source_id)
@@ -139,45 +143,28 @@ impl MarketApplication {
     }
 }
 
-pub(crate) fn source_accepts(source: &SourceDescriptor, market: &ResolvedMarket) -> bool {
-    let source_id_matches = market
-        .source_id
+pub(crate) fn source_accepts(source: &FeedDescriptor, market: &ResolvedMarket) -> bool {
+    let Some(provider) = source.provider.as_ref() else {
+        // Replay and derived feeds are intentionally providerless. Their
+        // eligibility comes from the already-selected canonical Market, not
+        // from a live provider attachment.
+        return true;
+    };
+    let Some(attachment) = market.attach_route(&source.id, provider) else {
+        return false;
+    };
+    source
+        .provider
         .as_ref()
-        .is_none_or(|id| id.as_str().eq_ignore_ascii_case(source.id.as_str()));
-    source_id_matches
-        && source.exchange_id.as_ref().is_none_or(|exchange| {
-            provider_scoped_exchange(exchange.as_str())
-                || market.exchange_id.as_ref().is_some_and(|market_exchange| {
-                    exchange
-                        .as_str()
-                        .strip_prefix("exchange:")
-                        .unwrap_or(exchange.as_str())
-                        .eq_ignore_ascii_case(
-                            market_exchange
-                                .as_str()
-                                .strip_prefix("exchange:")
-                                .unwrap_or(market_exchange.as_str()),
-                        )
-                })
-        })
+        .is_none_or(|provider| provider == &attachment.route.provider)
         && source
             .market_type
             .as_ref()
-            .is_none_or(|market_type| market_type == &market.route.provider_product)
-        && source.asset_type.as_ref().is_none_or(|asset_type| {
-            market
-                .asset_type
-                .as_ref()
-                .is_none_or(|market_asset| market_asset == asset_type)
-        })
-}
-
-fn provider_scoped_exchange(exchange: &str) -> bool {
-    exchange.starts_with("data_provider:") || exchange.starts_with("broker:")
+            .is_none_or(|market_type| market_type == &attachment.provider_segment)
 }
 
 pub(crate) fn source_supports_selectors(
-    source: &SourceDescriptor,
+    source: &FeedDescriptor,
     selectors: &[crate::domain::subscription::ObservationSelector],
 ) -> bool {
     source.observation_capabilities.is_empty()
@@ -193,18 +180,16 @@ mod tests {
     use kairos_primitives::reference::InstrumentKind;
 
     use super::*;
-    use crate::domain::market::MarketDataRoute;
+    use crate::domain::market::ProviderRouteBinding;
 
     fn equity_market() -> ResolvedMarket {
-        let mut market = ResolvedMarket::new(
+        let mut market = ResolvedMarket::new_with_binding(
             "market:exchange:nasdaq:equity:AAPL",
             "instrument:equity:US:AAPL:common",
             InstrumentKind::Equity,
             "exchange:nasdaq",
-            MarketDataRoute::new("route:aapl", "massive", "equity", "AAPL").unwrap(),
+            ProviderRouteBinding::new("massive", "equity", "AAPL").unwrap(),
         )
-        .unwrap()
-        .with_source("massive-equity")
         .unwrap();
         market.asset_type = Some(kairos_primitives::reference::AssetClass::Equity);
         market
@@ -212,9 +197,10 @@ mod tests {
 
     #[test]
     fn provider_scoped_source_accepts_canonical_exchange_market() {
-        let source = SourceDescriptor::new(
-            SourceId::new("massive-equity").unwrap(),
-            kairos_primitives::reference::Exchange::new("data_provider:massive").unwrap(),
+        let source = FeedDescriptor::for_provider(
+            MarketFeedId::new("massive-equity").unwrap(),
+            "massive",
+            kairos_primitives::reference::ExchangeId::new("data_provider:massive").unwrap(),
             "equity",
             Some("equity".into()),
         )
@@ -224,10 +210,11 @@ mod tests {
     }
 
     #[test]
-    fn exchange_scoped_source_still_requires_matching_exchange() {
-        let source = SourceDescriptor::new(
-            SourceId::new("nasdaq-equity").unwrap(),
-            kairos_primitives::reference::Exchange::new("exchange:nyse").unwrap(),
+    fn feed_for_another_provider_does_not_match_the_route() {
+        let source = FeedDescriptor::for_provider(
+            MarketFeedId::new("nasdaq-equity").unwrap(),
+            "other-provider",
+            kairos_primitives::reference::ExchangeId::new("exchange:nyse").unwrap(),
             "equity",
             Some("equity".into()),
         )

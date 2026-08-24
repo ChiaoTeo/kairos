@@ -1,7 +1,7 @@
 //! Execution connected/runtime application facade.
 //!
 //! Connected CLI entry points use this facade to query the running Execution
-//! projection or call typed Execution runtime control. Standalone order CLI
+//! current or call typed Execution runtime control. Standalone order CLI
 //! commands must use `CliExecutionApplication`.
 
 use std::path::PathBuf;
@@ -13,7 +13,144 @@ use kairos_execution_contract::{
 };
 use kairos_primitives::execution::OrderId;
 use kairos_primitives::runtime::InstanceIdentity;
-use serde_json::Value;
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionSnapshotResult {
+    pub generation: u64,
+    pub event_sequence: u64,
+    pub orders: Vec<ExecutionOrderResult>,
+    pub intents: Vec<ExecutionIntentResult>,
+    pub fills: Vec<ExecutionFillResult>,
+    pub events: Vec<ExecutionOrderEventResult>,
+    pub unknown_remote_orders: Vec<UnknownRemoteOrderResult>,
+    pub commitment_count: usize,
+    pub risk_reservation_count: usize,
+    pub exchange_event_watermark_unix_nanos: i64,
+    pub fill_history_truncated: bool,
+    pub order_event_history_truncated: bool,
+    pub intent_event_history_truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionOrdersResult {
+    pub orders: Vec<ExecutionOrderResult>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionEventsResult {
+    pub events: Vec<ExecutionOrderEventResult>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionFillsResult {
+    pub fills: Vec<ExecutionFillResult>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnknownRemoteOrdersResult {
+    pub orders: Vec<UnknownRemoteOrderResult>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionOrderResult {
+    pub order_id: String,
+    pub intent_id: String,
+    pub plan_id: String,
+    pub leg_id: String,
+    pub strategy_id: String,
+    pub account_id: String,
+    pub segment_key: String,
+    pub instrument_id: String,
+    pub market_id: String,
+    pub execution_route_id: String,
+    pub remote_order_id: Option<String>,
+    pub side: String,
+    pub order_type: String,
+    pub quantity: String,
+    pub filled_quantity: String,
+    pub limit_price: Option<String>,
+    pub status: String,
+    pub terminal: bool,
+    pub submitted_at_unix_nanos: Option<u64>,
+    pub updated_at_unix_nanos: u64,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionIntentResult {
+    pub intent_id: String,
+    pub strategy_id: String,
+    pub launch_id: String,
+    pub instance_id: String,
+    pub intent_type: String,
+    pub status: String,
+    pub updated_at_unix_nanos: u64,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionFillResult {
+    pub fill_id: String,
+    pub order_id: String,
+    pub intent_id: String,
+    pub strategy_id: String,
+    pub account_id: String,
+    pub segment_key: String,
+    pub instrument_id: String,
+    pub market_id: String,
+    pub remote_order_id: Option<String>,
+    pub side: String,
+    pub quantity: String,
+    pub price: String,
+    pub fee: Option<String>,
+    pub fee_currency: Option<String>,
+    pub occurred_at_unix_nanos: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecutionOrderEventResult {
+    pub order_id: String,
+    pub intent_id: Option<String>,
+    pub plan_id: Option<String>,
+    pub leg_id: Option<String>,
+    pub status: String,
+    pub remote_order_id: Option<String>,
+    pub occurred_at_unix_nanos: u64,
+    pub reason: Option<String>,
+    pub fill_id: Option<String>,
+    pub filled_quantity: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnknownRemoteOrderResult {
+    pub remote_order_id: String,
+    pub symbol: String,
+    pub status: String,
+    pub execution_id: Option<String>,
+    pub fill_quantity: Option<String>,
+    pub fill_price: Option<String>,
+    pub fee_currency: Option<String>,
+    pub fee_amount: Option<String>,
+    pub first_seen_at_unix_nanos: u64,
+    pub last_seen_at_unix_nanos: u64,
+    pub resolution: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ConnectedExecutionOutput {
+    Snapshot(ExecutionSnapshotResult),
+    Orders(ExecutionOrdersResult),
+    UnknownRemoteOrders(UnknownRemoteOrdersResult),
+    Order(ExecutionOrderResult),
+    Events(ExecutionEventsResult),
+    Fills(ExecutionFillsResult),
+    Routes(ExecutionRoutesResponse),
+    Reconcile(ExecutionReconcileResponse),
+    Command(ExecutionCommandStatus),
+}
 
 pub struct ConnectedExecutionApplication {
     client: ExecutionClient,
@@ -67,77 +204,79 @@ impl ConnectedExecutionApplication {
         })
     }
 
-    pub fn snapshot(&self) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "generation": projection.generation,
-            "event_sequence": projection.event_sequence,
-            "orders": projection.orders,
-            "intents": projection.intents,
-            "fills": projection.fills,
-            "events": projection.events,
-            "unknown_remote_orders": projection.unknown_remote_orders,
-            "commitment_count": projection.commitment_count,
-            "risk_reservation_count": projection.risk_reservation_count,
-            "exchange_event_watermark_unix_nanos": projection.exchange_event_watermark_unix_nanos,
-            "fill_history_truncated": projection.fill_history_truncated,
-            "order_event_history_truncated": projection.order_event_history_truncated,
-            "intent_event_history_truncated": projection.intent_event_history_truncated,
-        }))
+    pub fn snapshot(&self) -> Result<ExecutionSnapshotResult, Box<dyn std::error::Error>> {
+        self.read_current()
     }
 
-    pub fn orders(&self, account_id: Option<&str>) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "orders": filter_orders(projection.orders, account_id, None)
-        }))
+    pub fn orders(
+        &self,
+        account_id: Option<&str>,
+    ) -> Result<ExecutionOrdersResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        Ok(ExecutionOrdersResult {
+            orders: filter_orders(current.orders, account_id, None),
+        })
     }
 
     pub fn open_orders(
         &self,
         account_id: Option<&str>,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "orders": filter_orders(projection.orders, account_id, Some(false))
-        }))
+    ) -> Result<ExecutionOrdersResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        Ok(ExecutionOrdersResult {
+            orders: filter_orders(current.orders, account_id, Some(false)),
+        })
     }
 
-    pub fn history(&self, account_id: Option<&str>) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "orders": filter_orders(projection.orders, account_id, Some(true))
-        }))
+    pub fn history(
+        &self,
+        account_id: Option<&str>,
+    ) -> Result<ExecutionOrdersResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        Ok(ExecutionOrdersResult {
+            orders: filter_orders(current.orders, account_id, Some(true)),
+        })
     }
 
-    pub fn unknown_remote_orders(&self) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "orders": projection.unknown_remote_orders
-        }))
+    pub fn unknown_remote_orders(
+        &self,
+    ) -> Result<UnknownRemoteOrdersResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        Ok(UnknownRemoteOrdersResult {
+            orders: current.unknown_remote_orders,
+        })
     }
 
-    pub fn order_status(&self, order_id: &str) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        projection
+    pub fn order_status(
+        &self,
+        order_id: &str,
+    ) -> Result<ExecutionOrderResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        current
             .orders
             .into_iter()
-            .find(|value| value["order_id"] == order_id)
+            .find(|value| value.order_id == order_id)
             .ok_or_else(|| format!("unknown order: {order_id}").into())
     }
 
-    pub fn events(&self, order_id: Option<&str>) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "events": filter_events(projection.events, order_id, None, None, None)
-        }))
+    pub fn events(
+        &self,
+        order_id: Option<&str>,
+    ) -> Result<ExecutionEventsResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        Ok(ExecutionEventsResult {
+            events: filter_events(current.events, order_id, None, None, None),
+        })
     }
 
-    pub fn trace(&self, order_id: &str) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "events": filter_events(projection.events, Some(order_id), None, None, None)
-        }))
+    pub fn trace(
+        &self,
+        order_id: &str,
+    ) -> Result<ExecutionEventsResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        Ok(ExecutionEventsResult {
+            events: filter_events(current.events, Some(order_id), None, None, None),
+        })
     }
 
     pub fn audit(
@@ -146,72 +285,77 @@ impl ConnectedExecutionApplication {
         remote_order_id: Option<&str>,
         status: Option<&str>,
         limit: Option<u32>,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "events": filter_events(projection.events, order_id, remote_order_id, status, limit)
-        }))
+    ) -> Result<ExecutionEventsResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        Ok(ExecutionEventsResult {
+            events: filter_events(current.events, order_id, remote_order_id, status, limit),
+        })
     }
 
-    pub fn fills(&self, order_id: Option<&str>) -> Result<Value, Box<dyn std::error::Error>> {
-        let projection = self.current_projection()?;
-        Ok(serde_json::json!({
-            "fills": projection.fills.into_iter().filter(|value| {
-                order_id.is_none_or(|expected| value["order_id"] == expected)
-            }).collect::<Vec<_>>()
-        }))
+    pub fn fills(
+        &self,
+        order_id: Option<&str>,
+    ) -> Result<ExecutionFillsResult, Box<dyn std::error::Error>> {
+        let current = self.read_current()?;
+        Ok(ExecutionFillsResult {
+            fills: current
+                .fills
+                .into_iter()
+                .filter(|value| order_id.is_none_or(|expected| value.order_id == expected))
+                .collect(),
+        })
     }
 
     pub async fn routes(
         &self,
         query: ExecutionRoutesQuery,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<ExecutionRoutesResponse, Box<dyn std::error::Error>> {
         let response: ExecutionRoutesResponse =
             ExecutionControlRpcClient::routes(&self.client.control(), query).await?;
-        Ok(serde_json::to_value(response)?)
+        Ok(response)
     }
 
     pub async fn reconcile(
         &self,
         request: ReconcileExecutionRequest,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<ExecutionReconcileResponse, Box<dyn std::error::Error>> {
         let response: ExecutionReconcileResponse =
             ExecutionControlRpcClient::reconcile(&self.client.control(), request).await?;
-        Ok(serde_json::to_value(response)?)
+        Ok(response)
     }
 
     pub async fn submit_intent(
         &self,
         request: SubmitIntentRequest,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<ExecutionCommandStatus, Box<dyn std::error::Error>> {
         let response: ExecutionCommandStatus =
             ExecutionControlRpcClient::submit_intent(&self.client.control(), request).await?;
-        Ok(serde_json::to_value(response)?)
+        Ok(response)
     }
 
     pub async fn cancel_order(
         &self,
         order_id: OrderId,
         request: CancelOrderRequest,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<ExecutionCommandStatus, Box<dyn std::error::Error>> {
         let response: ExecutionCommandStatus =
             ExecutionControlRpcClient::cancel_order(&self.client.control(), order_id, request)
                 .await?;
-        Ok(serde_json::to_value(response)?)
+        Ok(response)
     }
 
     pub async fn replace_order(
         &self,
         order_id: OrderId,
         request: ReplaceOrderRequest,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<ExecutionCommandStatus, Box<dyn std::error::Error>> {
         let response: ExecutionCommandStatus =
             ExecutionControlRpcClient::replace_order(&self.client.control(), order_id, request)
                 .await?;
-        Ok(serde_json::to_value(response)?)
+        Ok(response)
     }
 
-    fn current_projection(&self) -> Result<ExecutionProjectionJson, Box<dyn std::error::Error>> {
+    fn read_current(&self) -> Result<ExecutionSnapshotResult, Box<dyn std::error::Error>> {
         use kairos_protocol::generated::kairos::common::v_2 as common;
         use kairos_protocol::generated::kairos::execution::v_2 as fb;
 
@@ -232,17 +376,17 @@ impl ConnectedExecutionApplication {
             return Err("Execution mmap is partial or its watermarks differ".into());
         }
 
-        let projection = ExecutionProjectionJson {
+        let current = ExecutionSnapshotResult {
             generation: metadata.generation(),
             event_sequence: metadata.applied_revision().unwrap_or_default(),
-            orders: view.orders().iter().map(order_json).collect(),
-            intents: view.intents().iter().map(intent_json).collect(),
-            fills: view.fills().iter().map(fill_json).collect(),
-            events: view.order_events().iter().map(order_event_json).collect(),
+            orders: view.orders().iter().map(order_result).collect(),
+            intents: view.intents().iter().map(intent_result).collect(),
+            fills: view.fills().iter().map(fill_result).collect(),
+            events: view.order_events().iter().map(order_event_result).collect(),
             unknown_remote_orders: view
                 .unknown_remote_orders()
                 .iter()
-                .map(unknown_remote_json)
+                .map(unknown_remote_result)
                 .collect(),
             commitment_count: view.commitments().len(),
             risk_reservation_count: view.risk_reservations().len(),
@@ -252,99 +396,110 @@ impl ConnectedExecutionApplication {
             intent_event_history_truncated: view.intent_event_history_truncated(),
         };
 
-        fn order_json(value: fb::OrderState<'_>) -> Value {
-            serde_json::json!({
-                "order_id": value.order_id(),
-                "intent_id": value.intent_id(),
-                "plan_id": value.plan_id(),
-                "leg_id": value.leg_id(),
-                "strategy_id": value.strategy_id(),
-                "account_id": value.account_id(),
-                "segment_key": value.segment_key(),
-                "instrument_id": value.instrument_id(),
-                "market_id": value.market_id(),
-                "execution_route_id": value.execution_route_id(),
-                "remote_order_id": value.remote_order_id(),
-                "side": value.side().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                "order_type": value.order_type().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                "quantity": decimal_json(value.quantity()),
-                "filled_quantity": decimal_json(value.filled_quantity()),
-                "limit_price": value.limit_price().map(decimal_json),
-                "status": value.lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                "terminal": matches!(value.lifecycle(), fb::OrderLifecycle::FILLED | fb::OrderLifecycle::CANCELED | fb::OrderLifecycle::REJECTED | fb::OrderLifecycle::EXPIRED | fb::OrderLifecycle::FAILED),
-                "submitted_at_unix_nanos": value.submitted_at_unix_nanos(),
-                "updated_at_unix_nanos": value.updated_at_unix_nanos(),
-                "reason": value.reason(),
-            })
+        fn order_result(value: fb::OrderState<'_>) -> ExecutionOrderResult {
+            ExecutionOrderResult {
+                order_id: value.order_id().to_owned(),
+                intent_id: value.intent_id().to_owned(),
+                plan_id: value.plan_id().to_owned(),
+                leg_id: value.leg_id().to_owned(),
+                strategy_id: value.strategy_id().to_owned(),
+                account_id: value.account_id().to_owned(),
+                segment_key: value.segment_key().to_owned(),
+                instrument_id: value.instrument_id().to_owned(),
+                market_id: value.market_id().to_owned(),
+                execution_route_id: value.execution_route_id().to_owned(),
+                remote_order_id: value.remote_order_id().map(str::to_owned),
+                side: enum_name(value.side().variant_name()),
+                order_type: enum_name(value.order_type().variant_name()),
+                quantity: decimal_string(value.quantity()),
+                filled_quantity: decimal_string(value.filled_quantity()),
+                limit_price: value.limit_price().map(decimal_string),
+                status: enum_name(value.lifecycle().variant_name()),
+                terminal: matches!(
+                    value.lifecycle(),
+                    fb::OrderLifecycle::FILLED
+                        | fb::OrderLifecycle::CANCELED
+                        | fb::OrderLifecycle::REJECTED
+                        | fb::OrderLifecycle::EXPIRED
+                        | fb::OrderLifecycle::FAILED
+                ),
+                submitted_at_unix_nanos: value.submitted_at_unix_nanos(),
+                updated_at_unix_nanos: value.updated_at_unix_nanos(),
+                reason: value.reason().map(str::to_owned),
+            }
         }
 
-        fn intent_json(value: fb::IntentState<'_>) -> Value {
+        fn intent_result(value: fb::IntentState<'_>) -> ExecutionIntentResult {
             let intent = value.intent();
-            serde_json::json!({
-                "intent_id": intent.intent_id(),
-                "strategy_id": intent.strategy_id(),
-                "launch_id": intent.launch_id(),
-                "instance_id": intent.instance_id(),
-                "intent_type": intent.intent_type().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                "status": value.lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                "updated_at_unix_nanos": value.updated_at_unix_nanos(),
-                "reason": value.reason(),
-            })
+            ExecutionIntentResult {
+                intent_id: intent.intent_id().to_owned(),
+                strategy_id: intent.strategy_id().to_owned(),
+                launch_id: intent.launch_id().to_owned(),
+                instance_id: intent.instance_id().to_owned(),
+                intent_type: enum_name(intent.intent_type().variant_name()),
+                status: enum_name(value.lifecycle().variant_name()),
+                updated_at_unix_nanos: value.updated_at_unix_nanos(),
+                reason: value.reason().map(str::to_owned),
+            }
         }
 
-        fn fill_json(value: fb::Fill<'_>) -> Value {
-            serde_json::json!({
-                "fill_id": value.fill_id(),
-                "order_id": value.order_id(),
-                "intent_id": value.intent_id(),
-                "strategy_id": value.strategy_id(),
-                "account_id": value.account_id(),
-                "segment_key": value.segment_key(),
-                "instrument_id": value.instrument_id(),
-                "market_id": value.market_id(),
-                "remote_order_id": value.remote_order_id(),
-                "side": value.side().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                "quantity": decimal_json(value.quantity()),
-                "price": decimal_json(value.price()),
-                "fee": value.fee().map(decimal_json),
-                "fee_currency": value.fee_asset_id(),
-                "occurred_at_unix_nanos": value.source_filled_at_unix_nanos(),
-            })
+        fn fill_result(value: fb::Fill<'_>) -> ExecutionFillResult {
+            ExecutionFillResult {
+                fill_id: value.fill_id().to_owned(),
+                order_id: value.order_id().to_owned(),
+                intent_id: value.intent_id().to_owned(),
+                strategy_id: value.strategy_id().to_owned(),
+                account_id: value.account_id().to_owned(),
+                segment_key: value.segment_key().to_owned(),
+                instrument_id: value.instrument_id().to_owned(),
+                market_id: value.market_id().to_owned(),
+                remote_order_id: value.remote_order_id().map(str::to_owned),
+                side: enum_name(value.side().variant_name()),
+                quantity: decimal_string(value.quantity()),
+                price: decimal_string(value.price()),
+                fee: value.fee().map(decimal_string),
+                fee_currency: value.fee_asset_id().map(str::to_owned),
+                occurred_at_unix_nanos: value.source_filled_at_unix_nanos(),
+            }
         }
 
-        fn order_event_json(value: fb::OrderLifecycleEventState<'_>) -> Value {
-            serde_json::json!({
-                "order_id": value.order_id(),
-                "intent_id": value.intent_id(),
-                "plan_id": value.plan_id(),
-                "leg_id": value.leg_id(),
-                "status": value.lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                "remote_order_id": value.remote_order_id(),
-                "occurred_at_unix_nanos": value.occurred_at_unix_nanos(),
-                "reason": value.reason(),
-                "fill_id": value.fill_id(),
-                "filled_quantity": value.filled_quantity().map(decimal_json),
-            })
+        fn order_event_result(
+            value: fb::OrderLifecycleEventState<'_>,
+        ) -> ExecutionOrderEventResult {
+            ExecutionOrderEventResult {
+                order_id: value.order_id().to_owned(),
+                intent_id: value.intent_id().map(str::to_owned),
+                plan_id: value.plan_id().map(str::to_owned),
+                leg_id: value.leg_id().map(str::to_owned),
+                status: enum_name(value.lifecycle().variant_name()),
+                remote_order_id: value.remote_order_id().map(str::to_owned),
+                occurred_at_unix_nanos: value.occurred_at_unix_nanos(),
+                reason: value.reason().map(str::to_owned),
+                fill_id: value.fill_id().map(str::to_owned),
+                filled_quantity: value.filled_quantity().map(decimal_string),
+            }
         }
 
-        fn unknown_remote_json(value: fb::UnknownRemoteOrderState<'_>) -> Value {
-            serde_json::json!({
-                "remote_order_id": value.remote_order_id(),
-                "symbol": value.symbol(),
-                "status": value.lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
-                "execution_id": value.execution_id(),
-                "fill_quantity": value.fill_quantity().map(decimal_json),
-                "fill_price": value.fill_price().map(decimal_json),
-                "fee_currency": value.fee_currency(),
-                "fee_amount": value.fee_amount().map(decimal_json),
-                "first_seen_at_unix_nanos": value.first_seen_at_unix_nanos(),
-                "last_seen_at_unix_nanos": value.last_seen_at_unix_nanos(),
-                "resolution": value.resolution(),
-                "reason": value.reason(),
-            })
+        fn unknown_remote_result(
+            value: fb::UnknownRemoteOrderState<'_>,
+        ) -> UnknownRemoteOrderResult {
+            UnknownRemoteOrderResult {
+                remote_order_id: value.remote_order_id().to_owned(),
+                symbol: value.symbol().to_owned(),
+                status: enum_name(value.lifecycle().variant_name()),
+                execution_id: value.execution_id().map(str::to_owned),
+                fill_quantity: value.fill_quantity().map(decimal_string),
+                fill_price: value.fill_price().map(decimal_string),
+                fee_currency: value.fee_currency().map(str::to_owned),
+                fee_amount: value.fee_amount().map(decimal_string),
+                first_seen_at_unix_nanos: value.first_seen_at_unix_nanos(),
+                last_seen_at_unix_nanos: value.last_seen_at_unix_nanos(),
+                resolution: value.resolution().to_owned(),
+                reason: value.reason().map(str::to_owned),
+            }
         }
 
-        fn decimal_json(value: &common::Decimal64) -> String {
+        fn decimal_string(value: &common::Decimal64) -> String {
             let scale = value.scale() as usize;
             let negative = value.mantissa() < 0;
             let digits = i128::from(value.mantissa()).abs().to_string();
@@ -361,53 +516,42 @@ impl ConnectedExecutionApplication {
             )
         }
 
-        Ok(projection)
+        fn enum_name(value: Option<&str>) -> String {
+            value.unwrap_or("UNSPECIFIED").to_ascii_lowercase()
+        }
+
+        Ok(current)
     }
 }
 
-struct ExecutionProjectionJson {
-    generation: u64,
-    event_sequence: u64,
-    orders: Vec<Value>,
-    intents: Vec<Value>,
-    fills: Vec<Value>,
-    events: Vec<Value>,
-    unknown_remote_orders: Vec<Value>,
-    commitment_count: usize,
-    risk_reservation_count: usize,
-    exchange_event_watermark_unix_nanos: i64,
-    fill_history_truncated: bool,
-    order_event_history_truncated: bool,
-    intent_event_history_truncated: bool,
-}
-
 fn filter_orders(
-    values: Vec<Value>,
+    values: Vec<ExecutionOrderResult>,
     account_id: Option<&str>,
     terminal: Option<bool>,
-) -> Vec<Value> {
+) -> Vec<ExecutionOrderResult> {
     values
         .into_iter()
         .filter(|value| {
-            account_id.is_none_or(|expected| value["account_id"] == expected)
-                && terminal.is_none_or(|expected| value["terminal"] == expected)
+            account_id.is_none_or(|expected| value.account_id == expected)
+                && terminal.is_none_or(|expected| value.terminal == expected)
         })
         .collect()
 }
 
 fn filter_events(
-    values: Vec<Value>,
+    values: Vec<ExecutionOrderEventResult>,
     order_id: Option<&str>,
     remote_order_id: Option<&str>,
     status: Option<&str>,
     limit: Option<u32>,
-) -> Vec<Value> {
+) -> Vec<ExecutionOrderEventResult> {
     let mut values = values
         .into_iter()
         .filter(|value| {
-            order_id.is_none_or(|expected| value["order_id"] == expected)
-                && remote_order_id.is_none_or(|expected| value["remote_order_id"] == expected)
-                && status.is_none_or(|expected| value["status"] == expected)
+            order_id.is_none_or(|expected| value.order_id == expected)
+                && remote_order_id
+                    .is_none_or(|expected| value.remote_order_id.as_deref() == Some(expected))
+                && status.is_none_or(|expected| value.status == expected)
         })
         .collect::<Vec<_>>();
     if let Some(limit) = limit {

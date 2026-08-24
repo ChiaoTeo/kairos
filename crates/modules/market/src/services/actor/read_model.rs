@@ -18,7 +18,7 @@ impl MarketActor {
                     (
                         key.clone(),
                         crate::domain::view::MarketViewFreshness {
-                            source_id: value.source_id.clone(),
+                            provider: value.provider.clone(),
                             scope: value.scope.clone(),
                             data_kind: value.data_kind.clone(),
                             last_event_time_unix_nanos: value.last_event_time_unix_nanos,
@@ -29,7 +29,6 @@ impl MarketActor {
                 })
                 .collect(),
             subscriptions: self.subscription_states(),
-            sources: self.sources.clone(),
             readiness: derive_readiness(self.sources.values()),
             feed_status: self.feed_status,
         }

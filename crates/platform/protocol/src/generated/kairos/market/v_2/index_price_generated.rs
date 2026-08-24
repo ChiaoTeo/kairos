@@ -22,7 +22,7 @@ impl<'a> ::flatbuffers::Follow<'a> for IndexPrice<'a> {
 impl<'a> IndexPrice<'a> {
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 8;
     pub const VT_SPOT_INDEX_PRICE: ::flatbuffers::VOffsetT = 10;
     pub const VT_CONTRACT_INDEX_PRICE: ::flatbuffers::VOffsetT = 12;
     pub const VT_INDEX_PRICE: ::flatbuffers::VOffsetT = 14;
@@ -59,8 +59,8 @@ impl<'a> IndexPrice<'a> {
         if let Some(x) = args.spot_index_price {
             builder.add_spot_index_price(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -94,13 +94,13 @@ impl<'a> IndexPrice<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(IndexPrice::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(IndexPrice::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -188,8 +188,8 @@ impl ::flatbuffers::Verifiable for IndexPrice<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<super::super::common::v_2::Decimal64>(
@@ -229,7 +229,7 @@ impl ::flatbuffers::Verifiable for IndexPrice<'_> {
 pub struct IndexPriceArgs<'a> {
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub spot_index_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub contract_index_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub index_price: Option<&'a super::super::common::v_2::Decimal64>,
@@ -243,7 +243,7 @@ impl<'a> Default for IndexPriceArgs<'a> {
         IndexPriceArgs {
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             spot_index_price: None,
             contract_index_price: None,
             index_price: None,
@@ -275,9 +275,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IndexPriceBuilder<'a, 'b, A> 
         );
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(IndexPrice::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(IndexPrice::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_spot_index_price(
@@ -349,7 +349,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IndexPriceBuilder<'a, 'b, A> 
         self.fbb_.required(o, IndexPrice::VT_SCOPE, "scope");
         self.fbb_
             .required(o, IndexPrice::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, IndexPrice::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, IndexPrice::VT_PROVIDER, "provider");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -359,7 +359,7 @@ impl ::core::fmt::Debug for IndexPrice<'_> {
         let mut ds = f.debug_struct("IndexPrice");
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("spot_index_price", &self.spot_index_price());
         ds.field("contract_index_price", &self.contract_index_price());
         ds.field("index_price", &self.index_price());

@@ -4,27 +4,12 @@ from dataclasses import dataclass
 import importlib
 import json
 from pathlib import Path
-import re
-import tomllib
 from typing import Any, AsyncContextManager, Mapping, cast
 
+from kairospy.application.credential import CredentialConfigurationApplication
 from kairospy.application.workspace import Workspace
 
-
-_READ_ONLY_TOOLS = frozenset(
-    {
-        "reference.get_instrument",
-        "market.get_latest_quote",
-        "market.get_recent_bars",
-        "market.get_freshness",
-        "account.get_position",
-        "account.get_equity",
-        "account.get_available_margin",
-        "risk.get_effective_limits",
-        "execution.get_active_intents",
-        "execution.get_recent_failures",
-    }
-)
+from ..configuration import READ_ONLY_AGENT_TOOLS
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,53 +55,39 @@ def build_mcp_servers(
     scope: AgentToolScope,
     snapshot: Mapping[str, object] | None = None,
 ) -> tuple[MCPServerBinding, ...]:
+    del snapshot
     if not selections:
         return ()
-    values = (
-        snapshot
-        if snapshot is not None
-        else _load_toml(workspace.paths.agent_mcp_config(), "Agent MCP config")
-    )
-    servers = _mapping(values.get("servers"), "Agent MCP servers")
-    profiles = _mapping(values.get("profiles"), "Agent MCP profiles")
     sdk = importlib.import_module("agents.mcp")
     bindings: list[MCPServerBinding] = []
-    for selection in selections:
-        server_id = _text(selection.get("server"), "agent.mcp.server")
-        profile_id = _text(selection.get("profile"), "agent.mcp.profile")
-        server = _mapping(servers.get(server_id), f"MCP server {server_id}")
-        profile = _mapping(profiles.get(profile_id), f"MCP profile {profile_id}")
-        if (
-            _text(profile.get("server"), f"MCP profile {profile_id}.server")
-            != server_id
-        ):
-            raise ValueError(f"MCP profile {profile_id} does not select {server_id}")
+    for server in selections:
+        server_id = _text(server.get("id"), "agent.mcp.id")
         allowed = _strings(
-            profile.get("allowed_tools"), f"MCP profile {profile_id}.allowed_tools"
+            server.get("allowed_tools"), f"MCP server {server_id}.allowed_tools"
         )
-        forbidden = set(allowed) - _READ_ONLY_TOOLS
+        forbidden = set(allowed) - READ_ONLY_AGENT_TOOLS
         if forbidden:
             raise ValueError(
                 "MCP profile contains a non-approved tool: " + sorted(forbidden)[0]
             )
-        if profile.get("scope_enforced") is not True:
-            raise ValueError(f"MCP profile {profile_id} must enforce Strategy scope")
+        if server.get("scope_enforced") is not True:
+            raise ValueError(f"MCP server {server_id} must enforce Strategy scope")
         max_result_bytes = _integer(
-            profile.get("max_result_bytes", 65_536),
-            f"MCP profile {profile_id}.max_result_bytes",
+            server.get("max_result_bytes", 65_536),
+            f"MCP server {server_id}.max_result_bytes",
             minimum=1,
             maximum=65_536,
         )
         max_rows = _integer(
-            profile.get("max_rows", 200),
-            f"MCP profile {profile_id}.max_rows",
+            server.get("max_rows", 200),
+            f"MCP server {server_id}.max_rows",
             minimum=1,
             maximum=10_000,
         )
         freshness_required = frozenset(
             _strings(
-                profile.get("freshness_required_tools", ()),
-                f"MCP profile {profile_id}.freshness_required_tools",
+                server.get("freshness_required_tools", ()),
+                f"MCP server {server_id}.freshness_required_tools",
             )
         )
         if not freshness_required.issubset(allowed):
@@ -125,8 +96,8 @@ def build_mcp_servers(
             )
         max_age_seconds = (
             _number(
-                profile.get("max_age_seconds"),
-                f"MCP profile {profile_id}.max_age_seconds",
+                server.get("max_age_seconds"),
+                f"MCP server {server_id}.max_age_seconds",
             )
             if freshness_required
             else None
@@ -154,7 +125,7 @@ def build_mcp_servers(
             "max_retry_attempts": 0,
             "require_approval": "never",
             "failure_error_function": (
-                None if bool(selection.get("required", False)) else _optional_mcp_error
+                None if bool(server.get("required", False)) else _optional_mcp_error
             ),
         }
         if transport == "stdio":
@@ -176,8 +147,12 @@ def build_mcp_servers(
             params = {"url": url, "headers": _scope_headers(scope)}
             credential = server.get("credential")
             if credential is not None:
-                secret = _load_credential(workspace, str(credential))
-                token = _text(secret.get("token"), f"MCP credential {credential}.token")
+                token = _text(
+                    CredentialConfigurationApplication(workspace).resolve_field(
+                        str(credential), "token"
+                    ),
+                    f"MCP credential {credential}.token",
+                )
                 params["headers"] = {
                     **cast(dict[str, str], params["headers"]),
                     "Authorization": f"Bearer {token}",
@@ -188,34 +163,12 @@ def build_mcp_servers(
         bindings.append(
             MCPServerBinding(
                 instance,
-                bool(selection.get("required", False)),
-                f"{server_id}/{profile_id}",
+                bool(server.get("required", False)),
+                server_id,
                 policies,
             )
         )
     return tuple(bindings)
-
-
-def _load_credential(workspace: Workspace, credential_id: str) -> Mapping[str, object]:
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", credential_id) or "unnamed"
-    path = workspace.paths.credential_config().parent / f"{safe}.toml"
-    value = _load_toml(path, f"Agent credential {credential_id}")
-    credential = _mapping(value.get("credential", value), "Agent credential")
-    actual_id = str(credential.get("id", credential_id))
-    if actual_id != credential_id:
-        raise ValueError("Agent credential identity mismatch")
-    return credential
-
-
-def _load_toml(path: Path, name: str) -> Mapping[str, object]:
-    try:
-        return cast(
-            Mapping[str, object], tomllib.loads(path.read_text(encoding="utf-8"))
-        )
-    except FileNotFoundError as error:
-        raise FileNotFoundError(f"{name} does not exist: {path}") from error
-    except tomllib.TOMLDecodeError as error:
-        raise ValueError(f"Invalid {name}: {path}") from error
 
 
 def _workspace_path(workspace: Workspace, value: str) -> Path:
@@ -223,12 +176,6 @@ def _workspace_path(workspace: Workspace, value: str) -> Path:
     if path.is_absolute():
         raise ValueError("MCP cwd must be relative to the Workspace")
     return workspace.paths.child(*path.parts)
-
-
-def _mapping(value: object, name: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{name} must be a table")
-    return value
 
 
 def _text(value: object, name: str) -> str:

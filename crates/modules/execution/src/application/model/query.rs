@@ -37,8 +37,8 @@ pub struct ExecutionRouteCandidate {
     /// any instrument resolved by its provider address mapping.
     pub instrument_id: Option<InstrumentId>,
     pub market_id: Option<MarketId>,
-    pub participant_id: String,
-    pub provider_product: kairos_primitives::integration::ProviderProductCode,
+    pub broker_id: kairos_primitives::account::BrokerId,
+    pub execution_channel: kairos_primitives::execution::ExecutionChannelCode,
     pub order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol,
     /// Order forms that the configured adapter currently advertises.
     pub supported_order_types: Vec<OrderType>,

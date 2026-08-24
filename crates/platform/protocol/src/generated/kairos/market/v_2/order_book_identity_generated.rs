@@ -20,7 +20,7 @@ impl<'a> ::flatbuffers::Follow<'a> for OrderBookIdentity<'a> {
 }
 
 impl<'a> OrderBookIdentity<'a> {
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 4;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 4;
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 6;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
 
@@ -45,20 +45,20 @@ impl<'a> OrderBookIdentity<'a> {
         if let Some(x) = args.market_id {
             builder.add_market_id(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         builder.finish()
     }
 
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(OrderBookIdentity::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(OrderBookIdentity::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -97,8 +97,8 @@ impl ::flatbuffers::Verifiable for OrderBookIdentity<'_> {
     ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
         v.visit_table(pos)?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -116,7 +116,7 @@ impl ::flatbuffers::Verifiable for OrderBookIdentity<'_> {
     }
 }
 pub struct OrderBookIdentityArgs<'a> {
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
@@ -124,7 +124,7 @@ impl<'a> Default for OrderBookIdentityArgs<'a> {
     #[inline]
     fn default() -> Self {
         OrderBookIdentityArgs {
-            source_id: None,     // required field
+            provider: None,      // required field
             market_id: None,     // required field
             instrument_id: None, // required field
         }
@@ -137,10 +137,10 @@ pub struct OrderBookIdentityBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a
 }
 impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderBookIdentityBuilder<'a, 'b, A> {
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            OrderBookIdentity::VT_SOURCE_ID,
-            source_id,
+            OrderBookIdentity::VT_PROVIDER,
+            provider,
         );
     }
     #[inline]
@@ -171,7 +171,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderBookIdentityBuilder<'a, 
     pub fn finish(self) -> ::flatbuffers::WIPOffset<OrderBookIdentity<'a>> {
         let o = self.fbb_.end_table(self.start_);
         self.fbb_
-            .required(o, OrderBookIdentity::VT_SOURCE_ID, "source_id");
+            .required(o, OrderBookIdentity::VT_PROVIDER, "provider");
         self.fbb_
             .required(o, OrderBookIdentity::VT_MARKET_ID, "market_id");
         self.fbb_
@@ -183,7 +183,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderBookIdentityBuilder<'a, 
 impl ::core::fmt::Debug for OrderBookIdentity<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("OrderBookIdentity");
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("market_id", &self.market_id());
         ds.field("instrument_id", &self.instrument_id());
         ds.finish()

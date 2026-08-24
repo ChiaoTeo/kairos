@@ -1,5 +1,6 @@
 use kairos_capital_contract as contract;
-use kairos_primitives::integration::{ProviderId, ProviderProductCode, RemoteOrderId};
+use kairos_primitives::capital::{CapitalSourceAuthority, EarnProductId};
+use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::runtime::{EventId, InstanceId, LaunchId, StrategyDecisionId};
 
 use crate::{
@@ -269,7 +270,7 @@ fn facts(value: &CapitalFacts) -> contract::CapitalFacts {
             .earn_holdings
             .iter()
             .map(|holding| contract::CapitalEarnHolding {
-                product_id: ProviderProductCode::new(holding.product_id.clone())
+                product_id: EarnProductId::new(holding.product_id.clone())
                     .expect("capital product identity is validated"),
                 principal: holding.principal,
                 redeemable_amount: holding.redeemable_amount,
@@ -296,8 +297,10 @@ fn route(value: &CapitalTransferRoute) -> contract::CapitalRoute {
         },
         per_operation_limit: value.per_operation_limit,
         daily_limit: value.daily_limit,
-        required_source_authority: ProviderId::new(value.required_source_authority.clone())
-            .expect("capital source authority is validated"),
+        required_source_authority: CapitalSourceAuthority::new(
+            value.required_source_authority.clone(),
+        )
+        .expect("capital source authority is validated"),
         settlement_class: match value.settlement_class {
             CapitalSettlementClass::ImmediateBookTransfer => {
                 contract::CapitalSettlementClass::ImmediateBookTransfer
@@ -310,7 +313,7 @@ fn route(value: &CapitalTransferRoute) -> contract::CapitalRoute {
         earn_product_id: value
             .earn_product_id
             .clone()
-            .map(|value| ProviderProductCode::new(value).expect("capital product identity")),
+            .map(|value| EarnProductId::new(value).expect("capital earn product identity")),
         demand_guard_nanos: value.demand_guard_nanos.into(),
         allow_unknown_redemption_quota: value.allow_unknown_redemption_quota,
     }

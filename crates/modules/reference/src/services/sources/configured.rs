@@ -8,13 +8,13 @@ use crate::services::providers::{
     ProviderFanInSource, ReferenceCredentialResolver, activate_runtime_source_definition,
     deactivate_runtime_source_definition,
 };
-use crate::services::sources::{ParticipantAugmentedSource, ReferenceSource, SourceUpdate};
+use crate::services::sources::{ReferenceSource, SourceUpdate};
 use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
 type ProductionProviderFanIn = ProviderFanInSource<ConfiguredProviderSource>;
 
 pub(crate) struct ConfiguredReferenceSource {
-    inner: ParticipantAugmentedSource<ProductionProviderFanIn>,
+    inner: ProductionProviderFanIn,
 }
 
 pub(crate) enum ConfiguredProviderSource {
@@ -434,7 +434,7 @@ impl ReferenceSource for ConfiguredReferenceSource {
 }
 
 impl ConfiguredReferenceSource {
-    pub(crate) fn new(inner: ParticipantAugmentedSource<ProductionProviderFanIn>) -> Self {
+    pub(crate) fn new(inner: ProductionProviderFanIn) -> Self {
         Self { inner }
     }
 

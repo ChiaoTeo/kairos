@@ -12,6 +12,9 @@ text_type!(LegId);
 text_type!(FillId);
 text_type!(OrderOptionCode);
 text_type!(OrderEntrySymbol);
+// Provider-native execution endpoint/channel recorded for audit.
+// This is not a Market product and is governed by Execution.
+text_type!(ExecutionChannelCode);
 
 impl Default for ExecutionRouteId {
     fn default() -> Self {

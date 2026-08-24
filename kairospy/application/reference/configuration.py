@@ -1,0 +1,521 @@
+"""Reference-owned configuration and verification for shared data providers."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+import tomllib
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from ..credential import CredentialConfigurationApplication
+from ..workspace import Workspace
+
+
+_MASSIVE_DEFAULT_ENDPOINT = "https://api.massive.com"
+_CAPABILITIES = frozenset({"reference", "equity_market", "options"})
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceProviderConfigurationApplication:
+    """Own the shared Reference/Market Massive connection lifecycle."""
+
+    workspace: Workspace
+
+    def list(self) -> list[dict[str, Any]]:
+        value = self._massive_config()
+        if not value:
+            return []
+        return [self.show("massive")]
+
+    def show(self, connection_id: str = "massive") -> dict[str, Any]:
+        _require_massive_id(connection_id)
+        value = self._massive_config()
+        if not value:
+            raise KeyError("Massive data connection is not configured")
+        credential_id = str(value.get("credential_id") or "")
+        issues: list[str] = []
+        credential: Mapping[str, Any] = {}
+        try:
+            credential = CredentialConfigurationApplication(self.workspace).show(
+                credential_id
+            )
+        except (KeyError, OSError, ValueError):
+            issues.append(f"credential does not exist: {credential_id}")
+        if credential and credential.get("provider") != "massive":
+            issues.append("credential provider must be massive")
+        if credential and not credential.get("configured", False):
+            issues.extend(str(item) for item in credential.get("issues") or ())
+        result = {
+            "connection_id": "massive",
+            "provider": "massive",
+            "enabled": bool(value.get("enabled", False)),
+            "credential_id": credential_id,
+            "endpoint": str(value.get("endpoint") or _MASSIVE_DEFAULT_ENDPOINT),
+            "capabilities": list(self._configured_capabilities()),
+            "configured": bool(value.get("enabled", False)) and not issues,
+            "issues": issues,
+            "shared_by": ["Reference", "Market"],
+        }
+        return {**result, **self.verification("massive", configuration=result)}
+
+    def configure_massive(
+        self,
+        *,
+        credential_id: str,
+        endpoint: str = _MASSIVE_DEFAULT_ENDPOINT,
+        capabilities: Sequence[str] = ("reference", "equity_market"),
+    ) -> dict[str, Any]:
+        credential_id = credential_id.strip()
+        endpoint = endpoint.strip().rstrip("/")
+        selected = tuple(dict.fromkeys(str(value).strip() for value in capabilities))
+        unknown = sorted(set(selected) - _CAPABILITIES)
+        if not credential_id:
+            raise ValueError("credential_id is required")
+        if not endpoint.startswith("https://"):
+            raise ValueError("Massive endpoint must use HTTPS")
+        if unknown:
+            raise ValueError(f"unsupported Massive capabilities: {', '.join(unknown)}")
+        if "reference" not in selected:
+            raise ValueError("Massive connection must enable Reference catalog access")
+        credential = CredentialConfigurationApplication(self.workspace).show(
+            credential_id
+        )
+        if credential.get("provider") != "massive":
+            raise ValueError("Massive connection requires a massive credential")
+        secret_refs = credential.get("secret_refs")
+        if (
+            credential.get("legacy_plaintext", False)
+            or not isinstance(secret_refs, Mapping)
+            or "api_key" not in secret_refs
+        ):
+            raise ValueError("Massive credential requires an api_key SecretRef")
+
+        document = self.workspace.paths.manifest.read_text(encoding="utf-8")
+        common = {
+            "enabled": True,
+            "credential_id": credential_id,
+            "endpoint": endpoint,
+        }
+        document = _set_section(document, "reference.providers.massive", common)
+        document = _set_section(
+            document, "market.profiles.massive", {"scope": "shared"}
+        )
+        # Remove the superseded named-source form when this owner rewrites the
+        # connection; Market now consumes the typed [[market.providers]] list.
+        document = _set_section(document, "market.sources.massive-equity", None)
+        document = _set_section(document, "market.sources.massive-options", None)
+        market_providers: list[Mapping[str, object]] = []
+        if "equity_market" in selected:
+            market_providers.append(
+                {
+                    "type": "massive",
+                    "product": "equity",
+                    "enabled": True,
+                    "credential_id": credential_id,
+                    "endpoint": endpoint,
+                }
+            )
+        if "options" in selected:
+            market_providers.append(
+                {
+                    "type": "massive",
+                    "product": "options",
+                    "enabled": True,
+                    "credential_id": credential_id,
+                    "endpoint": endpoint,
+                }
+            )
+        document = _replace_massive_market_providers(document, market_providers)
+        _write_atomic(self.workspace.paths.manifest, document)
+        return self.show("massive")
+
+    def test_connection(
+        self,
+        connection_id: str = "massive",
+        *,
+        probe: Callable[[str, str], Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        _require_massive_id(connection_id)
+        connection = self.show(connection_id)
+        if not connection["configured"]:
+            raise ValueError(
+                "Massive connection must pass static validation before testing"
+            )
+        credential_id = str(connection["credential_id"])
+        api_key = CredentialConfigurationApplication(self.workspace).resolve_field(
+            credential_id, "api_key"
+        )
+        if not api_key:
+            raise ValueError("Massive API key SecretRef is unavailable")
+        tested_at = datetime.now(timezone.utc).isoformat()
+        try:
+            facts = dict(
+                (probe or _probe_massive)(str(connection["endpoint"]), api_key)
+            )
+            evidence = {
+                "schema_version": 1,
+                "connection_id": connection_id,
+                "configuration_hash": self._configuration_fingerprint(connection),
+                "result": "verified",
+                "tested_at": tested_at,
+                "tested": [
+                    "API authentication",
+                    "AAPL Reference lookup",
+                    "SPY hourly bar read",
+                ],
+                "not_tested": (
+                    []
+                    if "options" in connection["capabilities"]
+                    else ["Options catalog and market data"]
+                ),
+                "capabilities": list(connection["capabilities"]),
+                "samples": {
+                    "reference_symbol": str(facts.get("reference_symbol") or "AAPL"),
+                    "market_symbol": str(facts.get("market_symbol") or "SPY"),
+                    "bar_count": int(facts.get("bar_count") or 1),
+                },
+            }
+        except Exception as error:
+            evidence = {
+                "schema_version": 1,
+                "connection_id": connection_id,
+                "configuration_hash": self._configuration_fingerprint(connection),
+                "result": "failed",
+                "tested_at": tested_at,
+                "tested": [
+                    "API authentication",
+                    "AAPL Reference lookup",
+                    "SPY hourly bar read",
+                ],
+                "not_tested": ["Options catalog and market data"],
+                "capabilities": [],
+                "error_category": _probe_error_category(error),
+            }
+        _write_json_atomic(self._evidence_path(connection_id), evidence)
+        return self.verification(connection_id)
+
+    def set_enabled(
+        self, connection_id: str = "massive", *, enabled: bool
+    ) -> dict[str, Any]:
+        """Enable or disable the shared connection without changing its SecretRef."""
+
+        _require_massive_id(connection_id)
+        current = dict(self._massive_config())
+        if not current:
+            raise KeyError("Massive data connection is not configured")
+        current["enabled"] = enabled
+        document = self.workspace.paths.manifest.read_text(encoding="utf-8")
+        document = _set_section(document, "reference.providers.massive", current)
+        value = tomllib.loads(document)
+        market = value.get("market")
+        providers = market.get("providers") if isinstance(market, Mapping) else None
+        massive_providers = [
+            {**dict(item), "enabled": enabled}
+            for item in (providers if isinstance(providers, list) else ())
+            if isinstance(item, Mapping) and item.get("type") == "massive"
+        ]
+        document = _replace_massive_market_providers(document, massive_providers)
+        _write_atomic(self.workspace.paths.manifest, document)
+        return self.show(connection_id)
+
+    def delete(self, connection_id: str = "massive") -> dict[str, str]:
+        """Remove owner configuration and evidence, retaining the credential."""
+
+        _require_massive_id(connection_id)
+        if not self._massive_config():
+            raise KeyError("Massive data connection is not configured")
+        document = self.workspace.paths.manifest.read_text(encoding="utf-8")
+        document = _set_section(document, "reference.providers.massive", None)
+        document = _set_section(document, "market.profiles.massive", None)
+        document = _set_section(document, "market.sources.massive-equity", None)
+        document = _set_section(document, "market.sources.massive-options", None)
+        document = _replace_massive_market_providers(document, [])
+        _write_atomic(self.workspace.paths.manifest, document)
+        self._evidence_path(connection_id).unlink(missing_ok=True)
+        return {"connection_id": connection_id, "status": "deleted"}
+
+    def verification(
+        self,
+        connection_id: str = "massive",
+        *,
+        configuration: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _require_massive_id(connection_id)
+        path = self._evidence_path(connection_id)
+        if not path.is_file():
+            current = configuration or self._base_configuration()
+            return {
+                "verification_status": "pending",
+                "last_tested_at": None,
+                "tested": [],
+                "not_tested": [],
+                "tested_configuration_hash": None,
+                "current_configuration_hash": self._configuration_fingerprint(current),
+            }
+        try:
+            evidence = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            current = configuration or self._base_configuration()
+            return {
+                "verification_status": "pending",
+                "last_tested_at": None,
+                "tested": [],
+                "not_tested": [],
+                "tested_configuration_hash": None,
+                "current_configuration_hash": self._configuration_fingerprint(current),
+            }
+        current = configuration or self._base_configuration()
+        status = str(evidence.get("result") or "failed")
+        if evidence.get("configuration_hash") != self._configuration_fingerprint(
+            current
+        ):
+            status = "retest_required"
+        return {
+            "verification_status": status,
+            "last_tested_at": evidence.get("tested_at"),
+            "tested": list(evidence.get("tested") or ()),
+            "not_tested": list(evidence.get("not_tested") or ()),
+            "capabilities_verified": list(evidence.get("capabilities") or ()),
+            "samples": dict(evidence.get("samples") or {}),
+            "error_category": evidence.get("error_category"),
+            "tested_configuration_hash": evidence.get("configuration_hash"),
+            "current_configuration_hash": self._configuration_fingerprint(current),
+        }
+
+    def resource_snapshot(self, connection_id: str = "massive") -> dict[str, Any]:
+        connection = self.show(connection_id)
+        credential = CredentialConfigurationApplication(self.workspace).show(
+            str(connection["credential_id"])
+        )
+        safe = {
+            key: connection.get(key)
+            for key in (
+                "connection_id",
+                "provider",
+                "enabled",
+                "credential_id",
+                "endpoint",
+                "capabilities",
+                "shared_by",
+                "verification_status",
+                "last_tested_at",
+                "tested",
+                "not_tested",
+            )
+        }
+        safe["credential_identity"] = {
+            "provider": credential.get("provider"),
+            "role": credential.get("role"),
+            "secret_refs": credential.get("secret_refs", {}),
+        }
+        safe["resource_hash"] = self._configuration_fingerprint(connection)
+        return safe
+
+    def _base_configuration(self) -> dict[str, Any]:
+        value = self._massive_config()
+        return {
+            "connection_id": "massive",
+            "provider": "massive",
+            "enabled": bool(value.get("enabled", False)),
+            "credential_id": str(value.get("credential_id") or ""),
+            "endpoint": str(value.get("endpoint") or _MASSIVE_DEFAULT_ENDPOINT),
+            "capabilities": list(self._configured_capabilities()),
+        }
+
+    def _configuration_fingerprint(self, value: Mapping[str, Any]) -> str:
+        credential_id = str(value.get("credential_id") or "")
+        try:
+            credential = CredentialConfigurationApplication(self.workspace).show(
+                credential_id
+            )
+        except (KeyError, OSError, ValueError):
+            credential = {"credential_id": credential_id, "missing": True}
+        payload = {
+            "connection_id": value.get("connection_id"),
+            "provider": "massive",
+            "enabled": value.get("enabled"),
+            "credential_id": credential_id,
+            "endpoint": value.get("endpoint"),
+            "capabilities": sorted(
+                str(item) for item in value.get("capabilities") or ()
+            ),
+            "credential": {
+                "provider": credential.get("provider"),
+                "role": credential.get("role"),
+                "secret_refs": credential.get("secret_refs", {}),
+                "legacy_plaintext": credential.get("legacy_plaintext", False),
+            },
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _massive_config(self) -> Mapping[str, Any]:
+        value = tomllib.loads(self.workspace.paths.manifest.read_text(encoding="utf-8"))
+        reference = value.get("reference")
+        providers = (
+            reference.get("providers") if isinstance(reference, Mapping) else None
+        )
+        massive = providers.get("massive") if isinstance(providers, Mapping) else None
+        return massive if isinstance(massive, Mapping) else {}
+
+    def _configured_capabilities(self) -> tuple[str, ...]:
+        value = tomllib.loads(self.workspace.paths.manifest.read_text(encoding="utf-8"))
+        result = ["reference"]
+        market = value.get("market")
+        providers = market.get("providers") if isinstance(market, Mapping) else None
+        if isinstance(providers, list):
+            products = {
+                str(item.get("product"))
+                for item in providers
+                if isinstance(item, Mapping)
+                and item.get("type") == "massive"
+                and item.get("enabled", True)
+            }
+            if "equity" in products:
+                result.append("equity_market")
+            if "options" in products:
+                result.append("options")
+        return tuple(result)
+
+    def _evidence_path(self, connection_id: str) -> Path:
+        return self.workspace.paths.child(
+            "state", "configuration", "data-providers", f"{connection_id}.json"
+        )
+
+
+def _probe_massive(endpoint: str, api_key: str) -> Mapping[str, Any]:
+    reference = _get_json(
+        f"{endpoint}/v3/reference/tickers/AAPL",
+        api_key,
+    )
+    result = reference.get("results")
+    if not isinstance(result, Mapping) or str(result.get("ticker") or "") != "AAPL":
+        raise ValueError("Massive Reference response did not contain AAPL")
+    now = datetime.now(timezone.utc)
+    start = int((now - timedelta(days=7)).timestamp() * 1000)
+    end = int(now.timestamp() * 1000)
+    query = urlencode({"adjusted": "true", "sort": "desc", "limit": "1"})
+    bars = _get_json(
+        f"{endpoint}/v2/aggs/ticker/SPY/range/1/hour/{start}/{end}?{query}",
+        api_key,
+    )
+    rows = bars.get("results")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Massive Market response did not contain a SPY hourly bar")
+    return {"reference_symbol": "AAPL", "market_symbol": "SPY", "bar_count": len(rows)}
+
+
+def _get_json(url: str, api_key: str) -> Mapping[str, Any]:
+    request = Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "kairos-data-provider-probe/1",
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(request, timeout=10) as response:  # noqa: S310 - configured HTTPS only
+        value = json.loads(response.read(2_000_000).decode("utf-8"))
+    if not isinstance(value, Mapping):
+        raise ValueError("Massive response root was not an object")
+    return value
+
+
+def _set_section(
+    document: str, section: str, values: Mapping[str, object] | None
+) -> str:
+    header = f"[{section}]"
+    pattern = re.compile(rf"(?ms)^\[{re.escape(section)}\]\s*\n.*?(?=^\[|\Z)")
+    replacement = ""
+    if values is not None:
+        lines = [header]
+        for key, value in values.items():
+            lines.append(f"{key} = {_toml_value(value)}")
+        replacement = "\n".join(lines) + "\n\n"
+    if pattern.search(document):
+        return pattern.sub(replacement, document, count=1)
+    if not replacement:
+        return document
+    return document.rstrip() + "\n\n" + replacement
+
+
+def _replace_massive_market_providers(
+    document: str, providers: Sequence[Mapping[str, object]]
+) -> str:
+    block_pattern = re.compile(r"(?ms)^\[\[market\.providers\]\]\s*\n.*?(?=^\[|\Z)")
+    retained: list[str] = []
+    position = 0
+    for match in block_pattern.finditer(document):
+        retained.append(document[position : match.start()])
+        block = match.group(0)
+        if not re.search(r'(?m)^type\s*=\s*["\']massive["\']\s*$', block):
+            retained.append(block)
+        position = match.end()
+    retained.append(document[position:])
+    result = "".join(retained).rstrip()
+    for provider in providers:
+        result += "\n\n[[market.providers]]\n"
+        for key, value in provider.items():
+            result += f"{key} = {_toml_value(value)}\n"
+    return result + "\n"
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    raise TypeError(f"unsupported manifest value: {type(value).__name__}")
+
+
+def _write_atomic(path: Path, content: str) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_atomic(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def _probe_error_category(error: Exception) -> str:
+    if isinstance(error, HTTPError):
+        if error.code in {401, 403}:
+            return "authentication_or_entitlement"
+        if error.code == 429:
+            return "rate_limited"
+        return "provider_http"
+    if isinstance(error, (URLError, TimeoutError)):
+        return "network"
+    return "invalid_response"
+
+
+def _require_massive_id(value: str) -> None:
+    if value.strip() != "massive":
+        raise ValueError(
+            "the first release supports the shared Massive connection only"
+        )
+
+
+__all__ = ["ReferenceProviderConfigurationApplication"]

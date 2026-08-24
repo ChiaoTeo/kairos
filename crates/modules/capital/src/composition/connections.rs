@@ -88,7 +88,7 @@ impl CapitalIntegrationConnections {
             .clone();
         require_simulated_segment(&source, &request.source.segment_key)?;
         require_simulated_segment(&destination, &request.destination.segment_key)?;
-        let participant_request_id = simulated_participant_id(&request.idempotency_key);
+        let remote_request_id = simulated_remote_request_id(&request.idempotency_key);
         let debit_id = simulated_mutation_id(&request.idempotency_key, "source-debit")?;
         let credit_id = simulated_mutation_id(&request.idempotency_key, "destination-credit")?;
         let debit = SimulatedCapitalMutation {
@@ -101,11 +101,7 @@ impl CapitalIntegrationConnections {
             occurred_at_unix_nanos: request.requested_at_unix_nanos,
         };
         if let Err(error) = apply_simulated_mutation(source.client, debit).await? {
-            return Ok(simulated_command_failure(
-                error,
-                participant_request_id,
-                true,
-            ));
+            return Ok(simulated_command_failure(error, remote_request_id, true));
         }
         let credit = SimulatedCapitalMutation {
             mutation_id: credit_id,
@@ -118,12 +114,12 @@ impl CapitalIntegrationConnections {
         };
         if let Err(error) = apply_simulated_mutation(destination.client, credit).await? {
             let mut failure = IndeterminateCommand::may_have_been_sent(error.to_string());
-            failure.participant_request_id = Some(participant_request_id);
+            failure.participant_request_id = Some(remote_request_id);
             return Ok(kairos_conflux::CommandOutcome::Indeterminate(failure));
         }
         Ok(kairos_conflux::CommandOutcome::Confirmed(
             AssetTransferSubmission {
-                participant_transfer_id: Some(participant_request_id),
+                participant_transfer_id: Some(remote_request_id),
                 acknowledged_at_unix_nanos: Some(request.requested_at_unix_nanos),
             },
         ))
@@ -172,7 +168,7 @@ impl CapitalIntegrationConnections {
             participant_transfer_id: query
                 .participant_transfer_id
                 .clone()
-                .or_else(|| Some(simulated_participant_id(&query.request.idempotency_key))),
+                .or_else(|| Some(simulated_remote_request_id(&query.request.idempotency_key))),
             source: query.request.source.clone(),
             destination: query.request.destination.clone(),
             asset: query.request.asset.clone(),
@@ -219,7 +215,7 @@ impl CapitalIntegrationConnections {
                 ));
             },
         };
-        let participant_request_id = simulated_participant_id(idempotency_key);
+        let remote_request_id = simulated_remote_request_id(idempotency_key);
         let mutation = SimulatedCapitalMutation {
             mutation_id: simulated_mutation_id(idempotency_key, suffix)?,
             segment_key: segment_key.clone(),
@@ -230,14 +226,10 @@ impl CapitalIntegrationConnections {
             occurred_at_unix_nanos,
         };
         if let Err(error) = apply_simulated_mutation(account.client, mutation).await? {
-            return Ok(simulated_command_failure(
-                error,
-                participant_request_id,
-                true,
-            ));
+            return Ok(simulated_command_failure(error, remote_request_id, true));
         }
         Ok(kairos_conflux::CommandOutcome::Confirmed(EarnSubmission {
-            participant_action_id: Some(participant_request_id),
+            participant_action_id: Some(remote_request_id),
             acknowledged_at_unix_nanos: Some(occurred_at_unix_nanos),
         }))
     }
@@ -267,7 +259,7 @@ impl CapitalIntegrationConnections {
                 participant_action_id: query
                     .participant_action_id
                     .clone()
-                    .or_else(|| Some(simulated_participant_id(&query.idempotency_key))),
+                    .or_else(|| Some(simulated_remote_request_id(&query.idempotency_key))),
                 action: query.action,
                 state: EarnActionState::Succeeded,
                 participant_state: Some("applied".into()),
@@ -280,7 +272,7 @@ impl CapitalIntegrationConnections {
             participant_action_id: query
                 .participant_action_id
                 .clone()
-                .or_else(|| Some(simulated_participant_id(&query.idempotency_key))),
+                .or_else(|| Some(simulated_remote_request_id(&query.idempotency_key))),
             action: query.action,
             state: EarnActionState::Unknown,
             participant_state: Some("not_found".into()),
@@ -831,7 +823,7 @@ fn simulated_mutation_id(
         .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))
 }
 
-fn simulated_participant_id(idempotency_key: &IdempotencyKey) -> String {
+fn simulated_remote_request_id(idempotency_key: &IdempotencyKey) -> String {
     format!("simulation:{}", idempotency_key.as_str())
 }
 
@@ -884,7 +876,7 @@ async fn simulated_mutation_status(
 
 fn simulated_command_failure<T>(
     error: String,
-    participant_request_id: String,
+    remote_request_id: String,
     no_prior_effect: bool,
 ) -> kairos_conflux::CommandOutcome<T> {
     let is_definite = false;
@@ -892,11 +884,11 @@ fn simulated_command_failure<T>(
         kairos_conflux::CommandOutcome::Rejected(ParticipantRejection {
             code: None,
             message: error.to_string(),
-            participant_request_id: Some(participant_request_id),
+            participant_request_id: Some(remote_request_id),
         })
     } else {
         let mut failure = IndeterminateCommand::may_have_been_sent(error.to_string());
-        failure.participant_request_id = Some(participant_request_id);
+        failure.participant_request_id = Some(remote_request_id);
         kairos_conflux::CommandOutcome::Indeterminate(failure)
     }
 }

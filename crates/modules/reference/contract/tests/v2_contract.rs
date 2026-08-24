@@ -82,7 +82,7 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
         listing_id: Some(
             kairos_primitives::reference::ListingId::new("listing:binance:spot:BTCUSDT").unwrap(),
         ),
-        exchange_id: kairos_primitives::reference::Exchange::new("exchange:binance").unwrap(),
+        exchange_id: kairos_primitives::reference::ExchangeId::new("exchange:binance").unwrap(),
         instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
         venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
         status: kairos_primitives::reference::ReferenceStatus::Active,
@@ -113,7 +113,7 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
 }
 
 #[test]
-fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
+fn consumer_snapshots_are_active_bounded_and_keep_one_watermark() {
     let active_market = Market {
         market_id: kairos_primitives::reference::MarketId::new("market:active").unwrap(),
         instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:active")
@@ -128,7 +128,7 @@ fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
         status: kairos_primitives::reference::ReferenceStatus::Inactive,
         ..Default::default()
     };
-    let snapshot = kairos_reference_contract::ReferenceProjectionSnapshot {
+    let snapshot = kairos_reference_contract::ReferenceCatalogSnapshot {
         actor_id: kairos_primitives::runtime::ActorId::new("reference-actor").unwrap(),
         generation: 9.into(),
         event_sequence: 14.into(),
@@ -149,27 +149,28 @@ fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
             },
         ],
         markets: vec![active_market, inactive_market],
-        provider_health: vec![kairos_reference_contract::ProviderHealthState::default()],
+        provider_health: vec![kairos_reference_contract::ProviderHealthState {
+            provider_id: kairos_primitives::market::Provider::new("test").unwrap(),
+            status: String::new(),
+            message: None,
+            updated_at_unix_nanos: 0_u64.into(),
+        }],
         option_underlyings: vec![kairos_primitives::reference::InstrumentId::new("SPY").unwrap()],
         lifecycle_events: vec![kairos_reference_contract::LifecycleEntry::default()],
         ..Default::default()
     };
 
-    let market = snapshot.market_projection();
+    let market = snapshot.for_market();
     assert_eq!(
         (market.generation, market.event_sequence),
         (9.into(), 14.into())
     );
     assert_eq!(market.markets.len(), 1);
     assert_eq!(market.instruments.len(), 1);
-    assert!(market.provider_health.is_empty());
-    assert!(market.option_underlyings.is_empty());
-    assert!(market.lifecycle_events.is_empty());
-
-    let execution = snapshot.execution_projection();
+    let execution = snapshot.for_execution();
     assert_eq!(execution.markets.len(), 1);
 
-    let account = snapshot.account_projection();
+    let account = snapshot.for_account();
     assert_eq!(account.markets.len(), 1);
     assert_eq!(account.instruments.len(), 1);
 }

@@ -25,6 +25,53 @@ fn reference_src_files() -> Vec<PathBuf> {
 }
 
 #[test]
+fn reference_application_layout_separates_use_cases_cli_and_process_facades() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let application = source("src/application/mod.rs");
+    let services = source("src/services/mod.rs");
+
+    assert!(application.contains("mod cli;"));
+    assert!(application.contains("mod process;"));
+    assert!(application.contains("mod commands;"));
+    assert!(application.contains("mod queries;"));
+    assert!(root.join("src/application/cli/local.rs").is_file());
+    assert!(root.join("src/application/cli/remote.rs").is_file());
+    assert!(
+        root.join("src/application/process/control/conflux.rs")
+            .is_file()
+    );
+    assert!(
+        root.join("src/application/process/runtime/tick.rs")
+            .is_file()
+    );
+    assert!(
+        root.join("src/application/process/control/status.rs")
+            .is_file()
+    );
+    assert!(root.join("src/application/queries/model.rs").is_file());
+    assert!(services.contains("pub(crate) mod diagnostics;"));
+
+    for obsolete in [
+        "src/application/app.rs",
+        "src/application/cli.rs",
+        "src/application/connected.rs",
+        "src/application/conflux.rs",
+        "src/application/diagnostics.rs",
+        "src/application/runtime.rs",
+        "src/application/runtime_status.rs",
+        "src/application/read_model.rs",
+        "src/application/source_control.rs",
+        "src/application/startup.rs",
+        "src/application/tick.rs",
+    ] {
+        assert!(
+            !root.join(obsolete).exists(),
+            "obsolete flat application file remains: {obsolete}"
+        );
+    }
+}
+
+#[test]
 fn reference_control_transport_is_framework_owned() {
     let manifest = source("Cargo.toml");
     let server = source("src/bin/kairos-reference-server.rs");
@@ -50,10 +97,10 @@ fn reference_control_transport_is_framework_owned() {
 #[test]
 fn reference_application_enters_sources_through_workflow_language() {
     for path in [
-        "src/application/app.rs",
-        "src/application/tick.rs",
-        "src/application/conflux.rs",
-        "src/application/source_control.rs",
+        "src/application/mod.rs",
+        "src/application/process/runtime/tick.rs",
+        "src/application/process/control/conflux.rs",
+        "src/application/process/control/source.rs",
         "src/services/actor.rs",
     ] {
         let text = source(path);
@@ -144,8 +191,8 @@ fn reference_connections_enter_through_exact_conflux_collections() {
     assert!(!plan.contains("ConfluxSystem"));
 
     for path in [
-        "src/application/app.rs",
-        "src/application/conflux.rs",
+        "src/application/mod.rs",
+        "src/application/process/control/conflux.rs",
         "src/services/actor.rs",
         "src/services/sources/mod.rs",
         "src/services/providers/fan_in.rs",
@@ -245,7 +292,7 @@ fn reference_domain_classification_is_not_unconstrained_text() {
         "asset_class: String",
         "instrument_type: String",
         "pub product_family: Option<String>",
-        "pub provider_product: Option<String>",
+        "pub provider_segment: Option<String>",
         "market_type: String",
         "asset_type: Option<String>",
         "pub provider_id: String",
@@ -259,17 +306,21 @@ fn reference_domain_classification_is_not_unconstrained_text() {
     assert!(entities.contains("asset_class: AssetClass"));
     assert!(entities.contains("instrument_type: InstrumentKind"));
     assert!(entities.contains("instrument_kind: InstrumentKind"));
+    assert!(entities.contains("pub exchange_id: ExchangeId"));
+    assert!(!entities.contains("pub struct Entity"));
+    assert!(!entities.contains("EntityKind"));
+    assert!(!entities.contains("exchange_type"));
     let source_definition = entities
         .split("pub struct ReferenceSourceDefinition")
         .nth(1)
         .expect("Reference source definition")
-        .split("impl ReferenceSourceDefinition")
+        .split("}\n")
         .next()
         .expect("Reference source definition body");
     assert!(!source_definition.contains("pub source_id: String"));
-    assert!(source_definition.contains("pub source_id: ProviderId"));
-    assert!(source_definition.contains("pub provider_id: ProviderId"));
-    assert!(source_definition.contains("pub provider_product: Option<ProviderProductCode>"));
+    assert!(source_definition.contains("pub source_id: ReferenceSourceId"));
+    assert!(source_definition.contains("pub provider_id: Provider"));
+    assert!(!source_definition.contains("provider_segment"));
     assert!(source_definition.contains("pub credential_binding: Option<SourceCredentialBinding>"));
     assert!(!source_definition.contains("pub credential_binding: Option<String>"));
 }
@@ -278,7 +329,7 @@ fn reference_domain_classification_is_not_unconstrained_text() {
 fn reference_control_is_jsonrpc_service_first() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let server = source("src/bin/kairos-reference-server.rs");
-    let actor = source("src/application/conflux.rs");
+    let actor = source("src/application/process/control/conflux.rs");
     let application = source("src/application/mod.rs");
     let service = source("contract/src/control/service.rs");
     let contract_manifest = source("contract/Cargo.toml");
@@ -339,8 +390,8 @@ fn reference_control_is_jsonrpc_service_first() {
 
 #[test]
 fn conflux_adapter_does_not_own_publication_loop_details() {
-    let conflux = source("src/application/conflux.rs");
-    let publication = source("src/application/publication.rs");
+    let conflux = source("src/application/process/control/conflux.rs");
+    let publication = source("src/application/process/runtime/delivery.rs");
     assert!(conflux.contains("self.publish_pending_to_outputs(context).await"));
     for forbidden in [
         "DEFAULT_PUBLICATION_BATCH_LIMIT",
@@ -365,8 +416,8 @@ fn conflux_adapter_does_not_own_publication_loop_details() {
 
 #[test]
 fn conflux_adapter_does_not_own_startup_sequence_details() {
-    let conflux = source("src/application/conflux.rs");
-    let startup = source("src/application/startup.rs");
+    let conflux = source("src/application/process/control/conflux.rs");
+    let startup = source("src/application/process/runtime/startup.rs");
     assert!(conflux.contains("self.start_runtime(context).await"));
     for (forbidden, required) in [
         ("activate_sources", "activate_sources"),
@@ -402,8 +453,8 @@ fn conflux_adapter_does_not_own_startup_sequence_details() {
 
 #[test]
 fn conflux_adapter_does_not_own_timer_tick_sequence_details() {
-    let conflux = source("src/application/conflux.rs");
-    let tick = source("src/application/tick.rs");
+    let conflux = source("src/application/process/control/conflux.rs");
+    let tick = source("src/application/process/runtime/tick.rs");
     assert!(conflux.contains("self.advance_timer_tick(context)"));
     assert!(conflux.contains("ConfluxEvent::System(SystemEvent::Timer"));
     for forbidden in [
@@ -425,17 +476,14 @@ fn conflux_adapter_does_not_own_timer_tick_sequence_details() {
 
 #[test]
 fn conflux_adapter_does_not_own_source_control_mapping_details() {
-    let conflux = source("src/application/conflux.rs");
-    let source_control = source("src/application/source_control.rs");
+    let conflux = source("src/application/process/control/conflux.rs");
+    let source_control = source("src/application/process/control/source.rs");
     for forbidden in [
         "domain_source_desired_state",
         "domain_source_definition",
         "domain_source_scope",
-        "domain_source_sync_policy",
-        "contract_provider_product_name",
         "source_scope_subject",
         "ReferenceSourceDesiredState",
-        "ReferenceSourceSyncPolicy",
         "SourceCredentialBinding",
         "MassiveOptionsCoverageSource",
     ] {
@@ -451,9 +499,62 @@ fn conflux_adapter_does_not_own_source_control_mapping_details() {
 }
 
 #[test]
-fn conflux_adapter_does_not_own_health_projection_details() {
-    let conflux = source("src/application/conflux.rs");
-    let runtime_status = source("src/application/runtime_status.rs");
+fn workspace_configuration_is_provider_first_and_hides_source_bindings() {
+    let config = source("src/composition/config.rs");
+    assert!(config.contains("pub struct ReferenceProviders"));
+    assert!(config.contains("pub massive: CredentialedReferenceProvider"));
+    assert!(config.contains("pub refresh_interval_seconds: Option<u64>"));
+    for forbidden in [
+        "BTreeMap",
+        "ReferenceSourceBinding",
+        "source_id",
+        "sync_policy",
+        "provider_product",
+        "provider_segment",
+    ] {
+        assert!(
+            !config.contains(forbidden),
+            "workspace config must not expose advanced source detail: {forbidden}"
+        );
+    }
+
+    let binding = source("src/services/providers/binding.rs");
+    assert!(binding.contains("pub(crate) enum ReferenceSourceBinding"));
+    assert!(!binding.contains("pub enum ReferenceSourceBinding"));
+    for hierarchy in [
+        "Binance(BinanceReferenceSource)",
+        "Okx(OkxProduct)",
+        "Hyperliquid(HyperliquidProduct)",
+        "Massive(MassiveReferenceSource)",
+        "pub(crate) enum BinanceReferenceSource",
+        "pub(crate) enum MassiveReferenceSource",
+    ] {
+        assert!(
+            binding.contains(hierarchy),
+            "production source binding must preserve provider hierarchy: {hierarchy}"
+        );
+    }
+
+    let contract = source("contract/src/control/types.rs");
+    assert!(contract.contains("tag = \"provider\", content = \"source\""));
+    assert!(!contract.contains("MassiveOptions,"));
+
+    let cli = source("src/bin/kairos-reference-cli.rs");
+    let parser = cli
+        .split("fn parse_source_binding")
+        .nth(1)
+        .expect("advanced source binding parser")
+        .split("fn parse_source_desired_state")
+        .next()
+        .expect("advanced source binding parser body");
+    assert!(parser.contains("(\"massive\", \"options\")"));
+    assert!(!parser.contains("\"massive-options\" =>"));
+}
+
+#[test]
+fn conflux_adapter_does_not_own_health_response_mapping_details() {
+    let conflux = source("src/application/process/control/conflux.rs");
+    let runtime_status = source("src/application/process/control/status.rs");
     assert!(conflux.contains("Ok(self.contract_health().await)"));
     for forbidden in [
         "ReferenceProviderHealth",
@@ -464,11 +565,11 @@ fn conflux_adapter_does_not_own_health_projection_details() {
     ] {
         assert!(
             !conflux.contains(forbidden),
-            "Conflux health RPC must delegate health projection to application/runtime_status.rs: {forbidden}"
+            "Conflux health RPC must delegate health response mapping to application/runtime_status.rs: {forbidden}"
         );
         assert!(
             runtime_status.contains(forbidden),
-            "health projection detail should live in application/runtime_status.rs: {forbidden}"
+            "health response mapping detail should live in application/runtime_status.rs: {forbidden}"
         );
     }
 }
@@ -479,7 +580,7 @@ fn reference_uses_sqlite_as_its_only_current_fact_store() {
     let composition = source("src/composition/mod.rs");
     let server = source("src/bin/kairos-reference-server.rs");
     let actor = source("src/services/actor.rs");
-    assert!(!composition.contains("MmapReferenceProjectionPublisher"));
+    assert!(!composition.contains("MmapReferenceViewPublisher"));
     assert!(!composition.contains("ReferenceViewKey"));
     assert!(!server.contains("ReferenceCurrentViewPublisher"));
     assert!(!server.contains("current_view_publisher"));
@@ -490,16 +591,17 @@ fn reference_uses_sqlite_as_its_only_current_fact_store() {
 
     let schemas = root.join("../../../schemas/v2/reference");
     assert!(!schemas.join("views/reference_latest.fbs").exists());
-    assert!(!schemas.join("views/reference_projection.fbs").exists());
+    assert!(!schemas.join("views/reference_current_view.fbs").exists());
     assert!(!schemas.join("types/financial_product.fbs").exists());
     assert!(!schemas.join("types/provider.fbs").exists());
     assert!(!schemas.join("types/broker.fbs").exists());
-    assert!(!schemas.join("types/exchange.fbs").exists());
+    assert!(schemas.join("types/exchange.fbs").exists());
+    assert!(!schemas.join("types/entity.fbs").exists());
 }
 
 #[test]
 fn administrative_writes_enter_through_application_commands() {
-    let application = source("src/application/app.rs");
+    let application = source("src/application/mod.rs");
     let commands = source("src/application/commands.rs");
     let contract = source("contract/src/control/types.rs");
     let server = source("src/bin/kairos-reference-server.rs");
@@ -520,7 +622,7 @@ fn administrative_writes_enter_through_application_commands() {
     ] {
         assert!(
             !server.contains(domain_payload),
-            "transport must not deserialize a domain entity: {domain_payload}"
+            "transport must not deserialize a domain exchange: {domain_payload}"
         );
     }
 }

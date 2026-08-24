@@ -29,6 +29,7 @@ class GuidedCommand:
     dangerous: bool = False
     needs_workspace: bool = True
     streaming: bool = False
+    show_command: bool = True
 
 
 ShellAction = GuidedCommand | ShellControl | None
@@ -52,7 +53,7 @@ class InteractiveContext:
     selected_order_symbol: str | None = None
     selected_service: str | None = None
     selected_market: Any | None = None
-    selected_market_source: dict[str, Any] | None = None
+    selected_market_provider: dict[str, Any] | None = None
     selected_reference: Any | None = None
     selected_reference_kind: str | None = None
     last_command: str | None = None

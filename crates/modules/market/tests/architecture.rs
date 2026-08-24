@@ -29,7 +29,7 @@ fn production_market_runtime_never_bridges_provider_io_through_blocking_threads(
 
 #[test]
 fn historical_download_uses_async_provider_capabilities() {
-    let source = source("src/bin/kairos-market-cli.rs");
+    let source = source("src/application/cli.rs");
     assert!(source.contains("HistoricalBarQuery"));
     assert!(source.contains("HistoricalQuoteQuery"));
     assert!(source.contains("HistoricalTradeQuery"));
@@ -39,38 +39,41 @@ fn historical_download_uses_async_provider_capabilities() {
     assert!(source.contains(".await?"));
     assert!(!source.contains(concat!("kairos_", "integration::blocking")));
     assert!(!source.contains("blocking_historical_market"));
-    assert!(source.contains("ConfluxSystem::new()"));
-    assert!(source.contains("connections.massive_rest.get(&key)"));
-    assert!(source.contains("connections.binance_spot_rest.get(&key)"));
-    assert!(!source.contains("MassiveRestConnection::new("));
-    assert!(!source.contains("BinanceSpotRestConnection::new("));
+    assert!(!source.contains("ConfluxSystem::new()"));
+    assert!(source.contains("MassiveRestConnection::new("));
+    assert!(source.contains("BinanceSpotRestConnection::new("));
 }
 
 #[test]
-fn diagnostic_provider_io_uses_the_normal_conflux_owner() {
-    let diagnostic = source("src/composition/launch/diagnostic.rs");
-    assert!(diagnostic.contains("ConfluxSystem::new()"));
-    assert!(diagnostic.contains("Conflux::new("));
-    assert!(diagnostic.contains(".binance_spot_rest"));
-    assert!(diagnostic.contains(".binance_spot_websocket"));
-    assert!(diagnostic.contains(".binance_options_rest"));
-    for forbidden in [
-        "Connection::new(",
-        "spawn_stream(",
-        "spawn_snapshot(",
-        "attach_source(",
-    ] {
-        assert!(
-            !diagnostic.contains(forbidden),
-            "diagnostic path bypasses Conflux with {forbidden}"
-        );
-    }
-    let activation = source("src/composition/sources/activation.rs");
-    assert!(!activation.contains("spawn_stream("));
-    assert!(!activation.contains("spawn_snapshot("));
-    let services = source("src/services/source/mod.rs");
-    assert!(!services.contains("spawn_stream"));
-    assert!(!services.contains("spawn_snapshot"));
+fn standalone_snapshot_is_bounded_and_does_not_start_a_market_runtime() {
+    let cli = source("src/application/cli.rs");
+    let composition = source("src/composition/direct/mod.rs");
+    let service = source("src/services/direct/mod.rs");
+    let once = cli
+        .split("pub async fn once")
+        .nth(1)
+        .unwrap()
+        .split("pub async fn replay")
+        .next()
+        .unwrap();
+    assert!(once.contains("direct_connection"));
+    assert!(once.contains(".snapshot("));
+    assert!(composition.contains("BinanceSpotRestConnection::new("));
+    assert!(composition.contains("BinanceOptionsRestConnection::new("));
+    assert!(composition.contains("MassiveRestConnection::new("));
+    assert!(service.contains("fetch_quotes"));
+    assert!(service.contains("fetch_trades"));
+    assert!(service.contains("fetch_bars"));
+    assert!(!composition.contains("ConfluxSystem::new()"));
+    assert!(!once.contains("ConfluxSystem::new()"));
+    assert!(!once.contains("MarketApplication::new("));
+    assert!(!once.contains("subscribe_static"));
+    assert!(!once.contains("WebSocket"));
+    assert!(
+        !crate_root()
+            .join("src/composition/launch/diagnostic.rs")
+            .exists()
+    );
 }
 
 #[test]
@@ -187,9 +190,12 @@ fn reference_aeron_is_polled_by_conflux_without_a_watcher_task() {
             .exists()
     );
     assert!(!crate_root().join("src/domain/reference").exists());
-    let composition = source("src/composition/reference/projection.rs");
-    assert!(composition.contains("ReferenceProjectionSnapshot"));
-    assert!(composition.contains("ReconcileMarketUniverse"));
+    let resolution = source("src/application/universe/resolution.rs");
+    assert!(resolution.contains("MarketReferenceSnapshot"));
+    assert!(resolution.contains("ReconcileMarketUniverse"));
+    let composition = source("src/composition/reference/universe.rs");
+    assert!(composition.contains("MarketProviderBinding"));
+    assert!(composition.contains("MarketProviderCapability"));
     assert!(assembly.contains("reference_market_snapshot"));
     assert!(actor.contains(".market_snapshot()"));
 }
@@ -230,7 +236,7 @@ fn market_json_rpc_keeps_only_bounded_capability_queries_off_mmap() {
     assert!(!host.contains("axum::"));
     assert!(actor.contains("impl MarketRpcActor for MarketApplication"));
     assert!(actor.contains("async fn health"));
-    assert!(actor.contains("async fn data_sources"));
+    assert!(actor.contains("async fn data_routes"));
     assert!(actor.contains("outputs()"));
     assert!(actor.contains("MmapOutputDeclaration"));
     assert!(actor.contains("MarketViewPublisher::resolved_path"));
@@ -253,13 +259,17 @@ fn market_transport_hosts_are_framework_owned() {
 #[test]
 fn application_root_contains_only_its_module_boundary() {
     let root = crate_root().join("src/application");
-    let files = std::fs::read_dir(root)
+    let mut files = std::fs::read_dir(root)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.is_file())
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    assert_eq!(files, vec!["mod.rs", "conflux.rs"]);
+    files.sort();
+    assert_eq!(
+        files,
+        vec!["cli.rs", "conflux.rs", "connected.rs", "mod.rs"]
+    );
 }
 
 #[test]
@@ -362,9 +372,9 @@ fn view_checkpoint_and_change_have_distinct_boundaries() {
     assert!(!root.contains("ReplayCheckpoint"));
     assert!(!root.contains("MarketSnapshot"));
     assert!(!root.contains("MarketSnapshotPublisher"));
-    let projection = source("src/application/observations/projection.rs");
-    assert!(!projection.contains("pub fn snapshot"));
-    assert!(projection.contains("pub fn current_view"));
+    let access = source("src/application/observations/access.rs");
+    assert!(!access.contains("pub fn snapshot"));
+    assert!(access.contains("pub fn current_view"));
     assert!(!crate_root().join("src/application/process").exists());
     let publication = source("src/services/publication/contract/mmap.rs");
     assert!(publication.contains("fn encode_change_view"));
@@ -393,7 +403,7 @@ fn observation_identity_and_order_book_behavior_live_in_their_owned_modules() {
                 .is_file()
         );
     }
-    for file in ["projection.rs", "continuity.rs", "resync.rs"] {
+    for file in ["snapshot.rs", "continuity.rs", "resync.rs"] {
         assert!(
             crate_root()
                 .join(format!("src/application/observations/order_book/{file}"))
@@ -440,7 +450,6 @@ fn subscription_and_universe_slices_have_owned_vertical_modules() {
         "static_subscription.rs",
         "dynamic_subscription.rs",
         "lifecycle.rs",
-        "resolution.rs",
     ] {
         assert!(
             crate_root()
@@ -448,7 +457,7 @@ fn subscription_and_universe_slices_have_owned_vertical_modules() {
                 .is_file()
         );
     }
-    for file in ["reconciliation.rs", "recovery.rs"] {
+    for file in ["reconciliation.rs", "resolution.rs", "recovery.rs"] {
         assert!(
             crate_root()
                 .join(format!("src/application/universe/{file}"))
@@ -465,12 +474,6 @@ fn subscription_and_universe_slices_have_owned_vertical_modules() {
             .join("src/services/actor/universe/mod.rs")
             .is_file()
     );
-    assert!(
-        !crate_root()
-            .join("src/application/universe/resolution.rs")
-            .exists()
-    );
-
     let actor_state = source("src/services/actor/state.rs");
     for migrated in [
         "fn subscribe_static",
@@ -662,7 +665,7 @@ fn publication_history_and_replay_implementations_have_final_owners() {
 
 #[test]
 fn composition_uses_symmetric_launch_config_and_reference_modules() {
-    for file in ["mod.rs", "assembly.rs", "diagnostic.rs"] {
+    for file in ["mod.rs", "assembly.rs"] {
         assert!(
             crate_root()
                 .join(format!("src/composition/launch/{file}"))
@@ -676,7 +679,7 @@ fn composition_uses_symmetric_launch_config_and_reference_modules() {
                 .is_file()
         );
     }
-    for file in ["mod.rs", "projection.rs"] {
+    for file in ["mod.rs", "universe.rs"] {
         assert!(
             crate_root()
                 .join(format!("src/composition/reference/{file}"))

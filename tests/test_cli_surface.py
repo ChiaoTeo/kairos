@@ -61,8 +61,9 @@ def test_notifications_cli_exposes_validation_and_explicit_test() -> None:
     output = StringIO()
 
     assert execute_argv(["notifications", "--help"], output) == 0
-    assert "validate" in output.getvalue()
-    assert "test" in output.getvalue()
+    text = output.getvalue()
+    for command in ("setup", "list", "attach", "validate", "test", "disable", "delete"):
+        assert command in text
 
 
 def test_market_business_surface_rejects_connected_component_commands() -> None:
@@ -73,12 +74,6 @@ def test_market_business_surface_rejects_connected_component_commands() -> None:
     assert "connected runtime command" in text
     assert "kairos system component market" in text
     assert "kairos launch instance component market" in text
-
-    output = StringIO()
-    assert execute_argv(["market", "sources"], output) != 0
-    text = output.getvalue()
-    assert "connected runtime command" in text
-    assert "kairos system component market" in text
 
 
 def test_system_component_status_inspects_workspace_component(tmp_path: Path) -> None:
@@ -200,8 +195,8 @@ def test_launch_instance_component_market_snapshot_uses_manifest_view_root(
                 "quote",
                 "--market-id",
                 "market:binance:spot:BTCUSDT",
-                "--source-id",
-                "binance-spot",
+                "--provider",
+                "binance",
                 "--workspace",
                 str(workspace.paths.root),
                 "--format",
@@ -228,8 +223,8 @@ def test_launch_instance_component_market_snapshot_uses_manifest_view_root(
             "quote",
             "--market-id",
             "market:binance:spot:BTCUSDT",
-            "--source-id",
-            "binance-spot",
+            "--provider",
+            "binance",
         ],
     }
 
@@ -405,12 +400,12 @@ def test_launch_instance_component_risk_latest_uses_connected_owner_cli(
     }
 
 
-def test_risk_system_client_latest_returns_projection_business_facts(
+def test_risk_system_client_latest_returns_current_view_business_facts(
     tmp_path: Path, monkeypatch
 ) -> None:
     from kairospy.application.system.clients import RiskSystemClient
 
-    class FakeProjection:
+    class FakeCurrentView:
         def latest(self):
             return {
                 "kind": "latest",
@@ -436,11 +431,11 @@ def test_risk_system_client_latest_returns_projection_business_facts(
 
     seen: dict[str, object] = {}
 
-    def latest_projection(self, *, actor_id):
+    def latest_view(self, *, actor_id):
         seen["actor_id"] = actor_id
-        return FakeProjection()
+        return FakeCurrentView()
 
-    monkeypatch.setattr(RiskSystemClient, "latest_projection", latest_projection)
+    monkeypatch.setattr(RiskSystemClient, "latest_view", latest_view)
 
     client = RiskSystemClient(tmp_path / "risk.sock", view_root=tmp_path / "snapshots")
     assert client.latest(actor_id="risk:run-1") == {
@@ -625,12 +620,12 @@ def test_launch_instance_component_capital_current_uses_instance_client(
     assert seen["routes_group_id"] == "group-1"
 
 
-def test_capital_system_client_current_returns_projection_business_facts(
+def test_capital_system_client_current_returns_current_view_business_facts(
     tmp_path: Path, monkeypatch
 ) -> None:
     from kairospy.application.system.clients import CapitalSystemClient
 
-    class FakeProjection:
+    class FakeCurrentView:
         def current(self):
             return {
                 "capital_group_id": "group-1",
@@ -665,11 +660,11 @@ def test_capital_system_client_current_returns_projection_business_facts(
 
     seen: dict[str, object] = {}
 
-    def current_projection(self, capital_group_id):
+    def current_view(self, capital_group_id):
         seen["capital_group_id"] = capital_group_id
-        return FakeProjection()
+        return FakeCurrentView()
 
-    monkeypatch.setattr(CapitalSystemClient, "current_projection", current_projection)
+    monkeypatch.setattr(CapitalSystemClient, "current_view", current_view)
 
     client = CapitalSystemClient(
         tmp_path / "capital.sock", view_root=tmp_path / "snapshots"
@@ -890,11 +885,11 @@ def test_system_component_market_dependents_reads_launch_manifest(
     ]
 
 
-def test_system_component_market_sources_requires_running_server(
+def test_system_component_market_routes_requires_running_server(
     tmp_path: Path,
 ) -> None:
     workspace = WorkspaceApplication().init(
-        tmp_path / "workspace", workspace_id="market-sources"
+        tmp_path / "workspace", workspace_id="market-routes"
     )
     output = StringIO()
 
@@ -904,7 +899,7 @@ def test_system_component_market_sources_requires_running_server(
                 "system",
                 "component",
                 "market",
-                "sources",
+                "routes",
                 "--workspace",
                 str(workspace.paths.root),
             ],
@@ -1000,27 +995,16 @@ def test_system_component_market_subscription_control_uses_owner_cli(
                 str(workspace.paths.root),
                 "--subscription-id",
                 "sub-1",
-                "--subject",
-                "btc-options",
-                "--source-id",
-                "binance-options",
+                "--market-id",
+                "market:binance:option:BTCUSDT",
                 "--strategy-id",
                 "strategy-1",
                 "--instance-id",
                 "instance-1",
-                "--selector",
+                "--data",
                 "quote",
-                "--exchange",
-                "exchange:binance",
-                "--market-type",
-                "option",
-                "--asset-type",
-                "crypto",
-                "--identity",
-                "btc",
-                "--param",
-                "depth=10",
-                "--chain",
+                "--require-provider",
+                "binance",
                 "--format",
                 "json",
             ],
@@ -1035,29 +1019,16 @@ def test_system_component_market_subscription_control_uses_owner_cli(
     assert arguments[arguments.index("--subscription-id") :] == [
         "--subscription-id",
         "sub-1",
-        "--subject",
-        "btc-options",
+        "--market-id",
+        "market:binance:option:BTCUSDT",
         "--strategy-id",
         "strategy-1",
         "--instance-id",
         "instance-1",
-        "--source-id",
-        "binance-options",
-        "--exchange",
-        "exchange:binance",
-        "--market-type",
-        "option",
-        "--asset-type",
-        "crypto",
-        "--dynamic",
-        "--selector",
+        "--data",
         "quote",
-        "--param",
-        "depth=10",
-        "--param",
-        'mode="chain"',
-        "--param",
-        'identity="btc"',
+        "--require-provider",
+        "binance",
     ]
     assert calls[-1][2] == workspace.paths.root
 
@@ -1115,9 +1086,9 @@ def test_system_component_market_freshness_uses_owner_cli(
                 str(workspace.paths.root),
                 "--market-id",
                 "market:binance:spot:BTCUSDT",
-                "--source-id",
+                "--provider",
                 "binance",
-                "--qualifier",
+                "--observation",
                 "quote",
                 "--format",
                 "json",
@@ -1134,10 +1105,10 @@ def test_system_component_market_freshness_uses_owner_cli(
     assert arguments[arguments.index("--market-id") :] == [
         "--market-id",
         "market:binance:spot:BTCUSDT",
-        "--source-id",
-        "binance",
-        "--qualifier",
+        "--observation",
         "quote",
+        "--provider",
+        "binance",
     ]
     assert calls[-1][2] == workspace.paths.root
 
@@ -1596,7 +1567,7 @@ def test_order_direct_query_resolves_account_binding_before_execution(
         "provider": "binance",
         "environment": "testnet",
         "segment_key": "spot",
-        "provider_product": "spot",
+        "provider_segment": "spot",
         "trading_mode": None,
         "credential_id": "credential-main",
         "credential_role": "readonly",
@@ -1676,7 +1647,7 @@ def test_order_live_write_requires_confirmation_or_yes(
         "provider": "binance",
         "environment": "live",
         "segment_key": "spot",
-        "provider_product": "spot",
+        "provider_segment": "spot",
         "trading_mode": None,
         "credential_id": "credential-main",
         "credential_role": "trade",
@@ -1865,7 +1836,7 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
     )
     seen: dict[str, object] = {}
 
-    class Projection:
+    class CurrentView:
         def snapshot(self, account_id):
             seen["snapshot_account_id"] = str(account_id)
             return AccountSnapshot(
@@ -1876,9 +1847,9 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
             )
 
     class AccountClient:
-        def current_projection(self, account_id):
-            seen["projection_account_id"] = str(account_id)
-            return Projection()
+        def current_view(self, account_id):
+            seen["current_view_account_id"] = str(account_id)
+            return CurrentView()
 
     class Clients:
         accounts = {AccountId("main"): AccountClient()}
@@ -1916,7 +1887,7 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
     assert value["scope"] == "launch-instance"
     assert value["launch_id"] == "btc"
     assert value["instance_id"] == "run-1"
-    assert seen == {"projection_account_id": "main", "snapshot_account_id": "main"}
+    assert seen == {"current_view_account_id": "main", "snapshot_account_id": "main"}
 
 
 def test_launch_account_balances_table_uses_balance_columns() -> None:
@@ -2042,7 +2013,7 @@ def test_launch_instance_component_account_open_orders_is_scoped_component_resul
 
     seen: dict[str, object] = {}
 
-    class ObservedOrdersProjection:
+    class ObservedOrdersView:
         def open_orders(self, account_id):
             seen["open_orders_account_id"] = str(account_id)
             return {
@@ -2051,9 +2022,9 @@ def test_launch_instance_component_account_open_orders_is_scoped_component_resul
             }
 
     class AccountClient:
-        def observed_orders_projection(self, account_id):
-            seen["projection_account_id"] = str(account_id)
-            return ObservedOrdersProjection()
+        def observed_orders_view(self, account_id):
+            seen["current_view_account_id"] = str(account_id)
+            return ObservedOrdersView()
 
     class Clients:
         accounts = {AccountId("main"): AccountClient()}
@@ -2093,7 +2064,7 @@ def test_launch_instance_component_account_open_orders_is_scoped_component_resul
         "scope": "launch-instance",
     }
     assert seen == {
-        "projection_account_id": "main",
+        "current_view_account_id": "main",
         "open_orders_account_id": "main",
     }
 
@@ -2870,9 +2841,9 @@ def test_generated_paper_account_loads_through_canonical_account_cli(tmp_path) -
         == 0
     )
     balances = output.getvalue()
-    assert "SEGMENT" in balances
-    assert "ASSET" in balances
-    assert "TOTAL" in balances
+    assert "分区" in balances
+    assert "资产" in balances
+    assert "总额" in balances
     assert "USDT" in balances
     assert "100000" in balances
     assert "balances" not in balances
@@ -3129,7 +3100,7 @@ def test_interactive_dry_run_guides_project_creation(monkeypatch) -> None:
 
     assert execute_argv(["interactive", "--dry-run"], output) == 0
     text = output.getvalue()
-    assert "Kairos 交互式操作" in text
+    assert "Kairos 工作台" in text
     assert "准备执行：kairos project init demo --id demo --template backtest" in text
     assert "只展示命令，不执行" in text
 
@@ -3237,7 +3208,7 @@ def test_interactive_session_keeps_context_between_actions(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["5", "1", "2", "9", "summary", "exit"])
+    shell_input = iter(["6", "2", "2", "9", "summary", "exit"])
     confirmations = iter([True])
     executed: list[tuple[str, ...]] = []
 
@@ -3262,7 +3233,7 @@ def test_interactive_session_keeps_context_between_actions(
     assert executed[0][:4] == ("system", "restart", "--component", "market")
     assert "无法识别这个命令" not in text
     assert "/system/market>" in text
-    assert "0 个账户" in text
+    assert "运行资源  0 个已验证 · 0 个待处理" in text
     assert "kairos system restart --component market --format text" in text
     assert "上次：status=0 · kairos system restart --component market" in text
 
@@ -3340,18 +3311,16 @@ def test_interactive_b_returns_from_selected_account(tmp_path, monkeypatch) -> N
         tmp_path / "demo", workspace_id="demo"
     )
     monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.account.AccountCliApplication.run",
-        lambda _self, _arguments: {
-            "accounts": [
-                {
-                    "account_id": "paper-account",
-                    "broker": "paper",
-                    "environment": "paper",
-                    "segments": ["spot"],
-                    "status": "configured",
-                }
-            ]
-        },
+        "kairospy.surface.cli.interactive.sections.business.account.AccountConfigurationApplication.list",
+        lambda _self: [
+            {
+                "account_id": "paper-account",
+                "broker": "paper",
+                "environment": "paper",
+                "segments": ["spot"],
+                "status": "configured",
+            }
+        ],
     )
     shell_input = iter(["account", "select", "b", "b", "exit"])
     prompts = iter(["1"])
@@ -3389,27 +3358,24 @@ def test_interactive_account_context_keeps_selected_paper_account(
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
-    accounts = {
-        "accounts": [
-            {
-                "account_id": "paper-account",
-                "alias": "paper-account",
-                "broker": "paper",
-                "exchange": "paper",
-                "integration_provider": "paper",
-                "provider": "paper",
-                "environment": "paper",
-                "account_model": "no_margin",
-                "segments": ["spot"],
-                "credential_id": None,
-                "status": "configured",
-            }
-        ],
-        "count": 1,
-    }
+    accounts = [
+        {
+            "account_id": "paper-account",
+            "alias": "paper-account",
+            "broker": "paper",
+            "exchange": "paper",
+            "integration_provider": "paper",
+            "provider": "paper",
+            "environment": "paper",
+            "account_model": "no_margin",
+            "segments": ["spot"],
+            "credential_id": None,
+            "status": "configured",
+        }
+    ]
     monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.account.AccountCliApplication.run",
-        lambda _self, arguments: accounts,
+        "kairospy.surface.cli.interactive.sections.business.account.AccountConfigurationApplication.list",
+        lambda _self: accounts,
     )
     monkeypatch.setattr(
         "kairospy.surface.cli.interactive.context.ComponentProcessApplication.status",
@@ -3466,27 +3432,24 @@ def test_interactive_live_account_uses_standalone_direct_command(
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
-    accounts = {
-        "accounts": [
-            {
-                "account_id": "manual-live-readonly",
-                "alias": "manual-live-readonly",
-                "broker": "binance",
-                "exchange": "binance",
-                "integration_provider": "binance",
-                "provider": "binance",
-                "environment": "live",
-                "account_model": "portfolio_margin",
-                "segments": ["spot", "usd_m_futures"],
-                "credential_id": "binance-equity-readonly",
-                "status": "configured",
-            }
-        ],
-        "count": 1,
-    }
+    accounts = [
+        {
+            "account_id": "manual-live-readonly",
+            "alias": "manual-live-readonly",
+            "broker": "binance",
+            "exchange": "binance",
+            "integration_provider": "binance",
+            "provider": "binance",
+            "environment": "live",
+            "account_model": "portfolio_margin",
+            "segments": ["spot", "usd_m_futures"],
+            "credential_id": "binance-equity-readonly",
+            "status": "configured",
+        }
+    ]
     monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.account.AccountCliApplication.run",
-        lambda _self, arguments: accounts,
+        "kairospy.surface.cli.interactive.sections.business.account.AccountConfigurationApplication.list",
+        lambda _self: accounts,
     )
     monkeypatch.setattr(
         "kairospy.surface.cli.interactive.context.ComponentProcessApplication.status",
@@ -3521,7 +3484,7 @@ def test_interactive_live_account_uses_standalone_direct_command(
         "--format",
         "table",
     )
-    assert "launch projection" not in text
+    assert "launch current_view" not in text
     assert "broker/custodian" in text
     assert "account model" in text
     assert "portfolio_margin" in text
@@ -3543,18 +3506,15 @@ def test_interactive_live_account_never_enters_launch_connected_mode(
         tmp_path / "demo", workspace_id="demo"
     )
     monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.account.AccountCliApplication.run",
-        lambda _self, arguments: {
-            "accounts": [
-                {
-                    "account_id": "live-main",
-                    "provider": "binance",
-                    "environment": "live",
-                    "segments": ["spot"],
-                }
-            ],
-            "count": 1,
-        },
+        "kairospy.surface.cli.interactive.sections.business.account.AccountConfigurationApplication.list",
+        lambda _self: [
+            {
+                "account_id": "live-main",
+                "provider": "binance",
+                "environment": "live",
+                "segments": ["spot"],
+            }
+        ],
     )
     context = InteractiveContext(
         owner=workspace,
@@ -3798,7 +3758,7 @@ def test_interactive_reference_selects_type_searches_and_shows_compact_detail(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["3", "5", "1", "s", "4", "exit"])
+    shell_input = iter(["2", "3", "1", "s", "4", "exit"])
     prompts = iter(["AAPL", "1"])
     executed: list[tuple[str, ...]] = []
 
@@ -3863,7 +3823,7 @@ def test_interactive_reference_market_search_does_not_render_raw_wide_table(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["3", "6", "BTCUSDT", "exit"])
+    shell_input = iter(["2", "4", "BTCUSDT", "exit"])
 
     class ReferenceApplication:
         def find_markets(self, **filters):
@@ -3906,35 +3866,26 @@ def test_interactive_reference_market_search_does_not_render_raw_wide_table(
     assert "effective_from_unix_nanos" not in text
 
 
-def test_interactive_reference_participants_list_and_return_to_catalog_in_one_step(
+def test_interactive_reference_exchanges_list_and_return_to_catalog(
     tmp_path, monkeypatch
 ) -> None:
-    from kairospy.application.reference import Entity
+    from kairospy.application.reference import Exchange
     from kairospy.surface.cli.interactive import run_interactive
 
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    shell_input = iter(["3", "2", "4", "exit"])
+    shell_input = iter(["2", "2", "l", "b", "exit"])
     prompts: list[str] = []
-    requested_entity_types: list[str] = []
+    exchange_queries: list[dict[str, object]] = []
 
     class ReferenceApplication:
-        def find_entities(self, **filters):
-            requested_entity_types.append(filters["entity_type"])
-            assert filters["query"] is None
+        def find_exchanges(self, **filters):
+            exchange_queries.append(filters)
             assert filters["active_only"] is True
             assert filters["limit"] == 25
-            if filters["entity_type"] == "exchange":
-                return (Entity("exchange:binance", "exchange", "Binance"),)
-            return (
-                Entity(
-                    "data_provider:massive",
-                    "data_provider",
-                    "Massive",
-                ),
-            )
+            return (Exchange("exchange:binance", "Binance"),)
 
     monkeypatch.setattr(
         "kairospy.surface.cli.interactive.sections.business.reference._application",
@@ -3961,11 +3912,8 @@ def test_interactive_reference_participants_list_and_return_to_catalog_in_one_st
     assert status == 0
     assert "交易所：输入 refresh 重新读取列表" in text
     assert "Binance" in text
-    assert "Massive" in text
-    assert "输入代码或名称" not in text
-    assert requested_entity_types == ["exchange", "data_provider"]
-    assert "/reference/participants" not in "".join(prompts)
-    assert prompts.count("/reference> ") == 3
+    assert exchange_queries
+    assert "/reference/exchanges" in "".join(prompts)
 
 
 def test_interactive_convenience_option_chain_uses_current_reference_option(
@@ -4057,16 +4005,15 @@ def test_interactive_market_separates_standalone_and_connected_scopes(
         lambda _context, **_kwargs: record,
     )
     monkeypatch.setattr(
-        "kairospy.surface.cli.interactive.sections.business.market._load_sources",
+        "kairospy.surface.cli.interactive.sections.business.market._load_routes",
         lambda *_args: {
-            "sources": [
+            "routes": [
                 {
-                    "source_id": "binance-spot",
-                    "provider_id": "binance",
-                    "configured": True,
-                    "ready": True,
-                    "status": "ready",
-                    "observation_capabilities": ["quote"],
+                    "market_id": "market:binance:spot:BTCUSDT",
+                    "provider": "binance",
+                    "state": "ready",
+                    "selected": True,
+                    "observation_kinds": ["quote"],
                 }
             ]
         },
@@ -4097,8 +4044,8 @@ def test_interactive_market_separates_standalone_and_connected_scopes(
         "quote",
         "--market-id",
         "market:binance:spot:BTCUSDT",
-        "--source-id",
-        "binance-spot",
+        "--provider",
+        "binance",
         "--format",
         "table",
         "--workspace",
@@ -4113,7 +4060,7 @@ def test_interactive_reference_menu_searches_market_by_symbol(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    answers = iter(["4", "6", "6", "BTCUSDT"])
+    answers = iter(["4", "6", "4", "BTCUSDT"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
 
     assert (
@@ -4141,7 +4088,7 @@ def test_interactive_reference_preview_selects_instrument_type_before_search(
         tmp_path / "demo", workspace_id="demo"
     )
     output = StringIO()
-    answers = iter(["4", "6", "5", "3", "BTCUSDT"])
+    answers = iter(["4", "6", "3", "3", "BTCUSDT"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
 
     assert (

@@ -23,7 +23,7 @@ impl<'a> Quote<'a> {
     pub const VT_QUOTE_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 10;
     pub const VT_BID_PRICE: ::flatbuffers::VOffsetT = 12;
     pub const VT_BID_QUANTITY: ::flatbuffers::VOffsetT = 14;
     pub const VT_ASK_PRICE: ::flatbuffers::VOffsetT = 16;
@@ -70,8 +70,8 @@ impl<'a> Quote<'a> {
         if let Some(x) = args.bid_price {
             builder.add_bid_price(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -118,13 +118,13 @@ impl<'a> Quote<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Quote::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Quote::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -242,8 +242,8 @@ impl ::flatbuffers::Verifiable for Quote<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<super::super::common::v_2::Decimal64>(
@@ -295,7 +295,7 @@ pub struct QuoteArgs<'a> {
     pub quote_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub bid_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub bid_quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub ask_price: Option<&'a super::super::common::v_2::Decimal64>,
@@ -313,7 +313,7 @@ impl<'a> Default for QuoteArgs<'a> {
             quote_id: None,
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             bid_price: None,
             bid_quantity: None,
             ask_price: None,
@@ -350,9 +350,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> QuoteBuilder<'a, 'b, A> {
         );
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Quote::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Quote::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_bid_price(&mut self, bid_price: &super::super::common::v_2::Decimal64) {
@@ -431,7 +431,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> QuoteBuilder<'a, 'b, A> {
         self.fbb_.required(o, Quote::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Quote::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, Quote::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, Quote::VT_PROVIDER, "provider");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -442,7 +442,7 @@ impl ::core::fmt::Debug for Quote<'_> {
         ds.field("quote_id", &self.quote_id());
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("bid_price", &self.bid_price());
         ds.field("bid_quantity", &self.bid_quantity());
         ds.field("ask_price", &self.ask_price());

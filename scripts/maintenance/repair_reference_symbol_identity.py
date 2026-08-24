@@ -2,7 +2,7 @@
 """Repair legacy Reference market/listing identities in SQLite.
 
 This is a controlled maintenance script for the Market/Symbol identity
-refactor. It updates provider records and current projection rows together so
+refactor. It updates provider records and current catalog rows together so
 indexed IDs and JSON payloads stay consistent. Lifecycle history is left
 unchanged.
 """

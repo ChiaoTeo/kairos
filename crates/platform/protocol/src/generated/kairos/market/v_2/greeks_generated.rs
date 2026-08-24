@@ -22,7 +22,7 @@ impl<'a> ::flatbuffers::Follow<'a> for Greeks<'a> {
 impl<'a> Greeks<'a> {
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 8;
     pub const VT_EXPIRY_UNIX_NANOS: ::flatbuffers::VOffsetT = 10;
     pub const VT_STRIKE: ::flatbuffers::VOffsetT = 12;
     pub const VT_DELTA: ::flatbuffers::VOffsetT = 14;
@@ -75,8 +75,8 @@ impl<'a> Greeks<'a> {
         if let Some(x) = args.strike {
             builder.add_strike(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -110,13 +110,13 @@ impl<'a> Greeks<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Greeks::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Greeks::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -239,8 +239,8 @@ impl ::flatbuffers::Verifiable for Greeks<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<u64>("expiry_unix_nanos", Self::VT_EXPIRY_UNIX_NANOS, false)?
@@ -276,7 +276,7 @@ impl ::flatbuffers::Verifiable for Greeks<'_> {
 pub struct GreeksArgs<'a> {
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub expiry_unix_nanos: Option<u64>,
     pub strike: Option<&'a super::super::common::v_2::Decimal64>,
     pub delta: Option<&'a super::super::common::v_2::Decimal64>,
@@ -294,7 +294,7 @@ impl<'a> Default for GreeksArgs<'a> {
         GreeksArgs {
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             expiry_unix_nanos: None,
             strike: None,
             delta: None,
@@ -330,9 +330,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> GreeksBuilder<'a, 'b, A> {
         );
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Greeks::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Greeks::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_expiry_unix_nanos(&mut self, expiry_unix_nanos: u64) {
@@ -409,7 +409,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> GreeksBuilder<'a, 'b, A> {
         self.fbb_.required(o, Greeks::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Greeks::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, Greeks::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, Greeks::VT_PROVIDER, "provider");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -419,7 +419,7 @@ impl ::core::fmt::Debug for Greeks<'_> {
         let mut ds = f.debug_struct("Greeks");
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("expiry_unix_nanos", &self.expiry_unix_nanos());
         ds.field("strike", &self.strike());
         ds.field("delta", &self.delta());

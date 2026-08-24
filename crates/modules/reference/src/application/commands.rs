@@ -1,16 +1,15 @@
 //! Contract-owned administrative commands and application mappings.
 
 use kairos_primitives::time::Generation;
+pub use kairos_reference_contract::{
+    UpsertAssetRequest as UpsertAssetCommand, UpsertInstrumentRequest as UpsertInstrumentCommand,
+    UpsertListingRequest as UpsertListingCommand,
+};
 use tracing::info;
 
 use crate::application::ReferenceApplication;
 use crate::domain::{ManualUpsertPolicy, ReferenceResult};
 use crate::logging::events as log_events;
-
-pub use kairos_reference_contract::{
-    UpsertAssetRequest as UpsertAssetCommand, UpsertInstrumentRequest as UpsertInstrumentCommand,
-    UpsertListingRequest as UpsertListingCommand,
-};
 
 impl From<UpsertAssetCommand> for crate::domain::Asset {
     fn from(value: UpsertAssetCommand) -> Self {

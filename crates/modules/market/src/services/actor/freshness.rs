@@ -45,7 +45,7 @@ mod tests {
         actor.freshness.insert(
             "aapl".into(),
             MarketFreshness {
-                source_id: kairos_primitives::market::SourceId::new("source").unwrap(),
+                provider: kairos_primitives::market::Provider::new("provider").unwrap(),
                 scope: crate::ObservationScope::market("market:exchange:nasdaq:equity:AAPL")
                     .unwrap(),
                 data_kind: ObservationKind::Quote,

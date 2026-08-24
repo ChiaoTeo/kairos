@@ -19,7 +19,7 @@ impl MarketActor {
         }
         let book_key = book.key();
         if let Some(current) = self.order_books.get(&book_key) {
-            if current.source_id != book.source_id {
+            if current.provider != book.provider {
                 return Err("order book snapshot source does not match existing book".into());
             }
             if current.instrument_id != book.instrument_id {
@@ -29,14 +29,14 @@ impl MarketActor {
                 return Err("stale order book snapshot".into());
             }
         }
-        let source_id = book.source_id.clone();
+        let provider = book.provider.clone();
         let market_id = book.market_id.clone();
         let event_time = book.event_time_unix_nanos;
         let synchronized = book.synchronized;
         self.order_books.insert(book_key, book.clone());
         self.event_sequence += 1;
         self.record_order_book_freshness(
-            &source_id,
+            &provider,
             &market_id,
             event_time.get(),
             self.event_sequence.get(),
@@ -62,7 +62,7 @@ impl MarketActor {
         }
         let book = self
             .order_books
-            .get_mut(&format!("{}:{}", delta.source_id, delta.market_id))
+            .get_mut(&format!("{}:{}", delta.provider, delta.market_id))
             .ok_or_else(|| "order book snapshot is required before delta".to_string())?;
         if delta.last_sequence <= book.sequence {
             return Ok(self.event_sequence.get());
@@ -70,7 +70,7 @@ impl MarketActor {
         let delta_for_event = delta.clone();
         book.apply_delta(delta)?;
         let freshness = (
-            book.source_id.clone(),
+            book.provider.clone(),
             book.market_id.clone(),
             book.event_time_unix_nanos,
             book.sequence,
@@ -103,16 +103,16 @@ impl MarketActor {
 
     fn record_order_book_freshness(
         &mut self,
-        source_id: &crate::SourceId,
+        provider: &kairos_primitives::market::Provider,
         market_id: &str,
         event_time_unix_nanos: u64,
         sequence: u64,
         synchronized: bool,
     ) {
         self.freshness.insert(
-            format!("{source_id}:{market_id}:order_book"),
+            format!("{provider}:{market_id}:order_book"),
             MarketFreshness {
-                source_id: source_id.clone(),
+                provider: provider.clone(),
                 scope: crate::ObservationScope::market(market_id.to_owned())
                     .expect("validated order book market id"),
                 data_kind: crate::ObservationKind::OrderBook,

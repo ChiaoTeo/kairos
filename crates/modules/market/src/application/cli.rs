@@ -1,40 +1,215 @@
 use std::path::{Path, PathBuf};
 
 use kairos_conflux::{
-    BinanceRestConfig, ConfluxSystem, ConnectionKey, HistoricalBarQuery, HistoricalBarRequest,
-    HistoricalQuoteQuery, HistoricalTradeQuery, HistoricalWindow, MarketEvent, MarketEventKind,
-    MassiveInstrumentQuery as InstrumentQuery, MassiveRestConfig, load_workspace_credential,
+    BinanceRestConfig, BinanceSpotRestConnection, ConnectionKey, HistoricalBarQuery,
+    HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery, HistoricalWindow, MarketBar,
+    MarketEvent, MarketEventKind, MarketGreeks, MarketOrderBook, MarketQuote, MarketTrade,
+    MassiveInstrumentQuery as InstrumentQuery, MassiveRestConfig, MassiveRestConnection,
+    load_workspace_credential,
 };
-use kairos_primitives::market::SourceId;
-use kairos_primitives::reference::{InstrumentId, InstrumentKind, ReferenceStatus};
-use kairos_reference_contract::{
-    ReferenceProjectionSnapshot, ReferenceSqliteReader, SqliteMarketQuery,
-};
+use kairos_primitives::decimal::{Price, Quantity, Rate};
+use kairos_primitives::market::{ObservationKind, Provider};
+use kairos_primitives::reference::InstrumentId;
+use kairos_primitives::time::UnixNanos;
 use kairos_workspace::Workspace;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
 
 use crate::application::{
     MarketApplication, ResolvedMarket, SubscriptionId, load_replay_events_many,
 };
-use crate::composition::{
-    DiagnosticProvider, MarketCompositionConfig, attach_replay_source,
-    project_reference_market_universe, run_diagnostic_once,
-};
+use crate::domain::source::MarketFeedId;
 
-/// Standalone Market CLI facade.
+/// Standalone, bounded Market CLI facade.
 ///
-/// This facade owns one direct/local Market CLI invocation. It may create
-/// provider connections for one-shot diagnostics, but it must not connect to
-/// or operate the running Market server.
+/// Snapshot queries own only a short-lived provider REST connection. They do
+/// not construct the stateful Market application, Actor, subscriptions, or a
+/// Conflux process. Replay remains stateful because it projects an event log.
 pub struct CliMarketApplication {
     workspace_root: Option<PathBuf>,
+    direct_connection: Option<crate::services::direct::DirectMarketConnection>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum CliMarketDiagnosticProvider {
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketReplayResult {
+    pub events_applied: usize,
+    pub snapshot: CliMarketReplaySnapshot,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketReplaySnapshot {
+    pub event_sequence: kairos_primitives::time::Sequence,
+    #[serde(flatten)]
+    view: crate::domain::view::MarketView,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketRoutesResult {
+    pub routes: Vec<CliMarketRouteResult>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketRouteResult {
+    pub provider: Provider,
+    pub observation_kinds: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketValidationResult {
+    pub valid: bool,
+    pub market: ResolvedMarket,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum CliDirectObservationResult {
+    Quote(CliMarketQuoteResult),
+    Trade(CliMarketTradeResult),
+    Bar(CliMarketBarResult),
+    OrderBook(CliMarketOrderBookResult),
+    Greeks(CliMarketGreeksResult),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketQuoteResult {
+    pub symbol: String,
+    pub data_type: &'static str,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bid_price: Option<Price>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bid_quantity: Option<Quantity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_price: Option<Price>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_quantity: Option<Quantity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_price: Option<Price>,
+    pub observed_at_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketTradeResult {
+    pub symbol: String,
+    pub data_type: &'static str,
+    pub provider: String,
+    pub price: Price,
+    pub quantity: Quantity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_buyer_maker: Option<bool>,
+    pub event_at_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketBarResult {
+    pub symbol: String,
+    pub data_type: &'static str,
+    pub provider: String,
+    pub interval: String,
+    pub open: Price,
+    pub high: Price,
+    pub low: Price,
+    pub close: Price,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<Quantity>,
+    pub opened_at_unix_nanos: UnixNanos,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_at_unix_nanos: Option<UnixNanos>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketOrderBookResult {
+    pub symbol: String,
+    pub data_type: &'static str,
+    pub provider: String,
+    pub bids: Vec<(Price, Quantity)>,
+    pub asks: Vec<(Price, Quantity)>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliMarketGreeksResult {
+    pub symbol: String,
+    pub data_type: &'static str,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expiry_unix_nanos: Option<UnixNanos>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strike: Option<Price>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta: Option<Rate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gamma: Option<Rate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vega: Option<Rate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theta: Option<Rate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implied_volatility: Option<Rate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CliMarketDatasetManifest {
+    pub dataset_id: String,
+    pub version: u32,
+    pub providers: std::collections::BTreeSet<Provider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivation: Option<String>,
+    pub symbol: String,
+    pub scope_key: String,
+    pub market_id: Option<String>,
+    pub instrument_id: String,
+    pub data_kind: String,
+    pub observation_type: String,
+    pub market_type: String,
+    pub interval: String,
+    pub timeframe: String,
+    pub adjusted: bool,
+    pub start_time_unix_millis: i64,
+    pub end_time_unix_millis: i64,
+    pub event_count: usize,
+    pub path: PathBuf,
+    pub format: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CliMarketDatasetCatalogEntry {
+    #[serde(flatten)]
+    pub manifest: CliMarketDatasetManifest,
+    pub name: String,
+    pub manifest_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct CliMarketDatasetsResult {
+    pub datasets: Vec<CliMarketDatasetCatalogEntry>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub aliases: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CliMarketOnceProvider {
     BinanceSpotRest,
-    BinanceSpotWebsocket,
+    BinanceEquityRest,
     BinanceOptionsRest,
+    MassiveRest,
+}
+
+#[derive(Clone, Debug)]
+pub struct CliMarketRoute {
+    pub provider: Provider,
+    pub connection: CliMarketOnceProvider,
+    pub observation_kinds: Vec<ObservationKind>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CliMarketOnceRequest {
+    pub provider: Provider,
+    pub connection: CliMarketOnceProvider,
+    pub symbol: String,
+    pub observation_kind: ObservationKind,
+    pub endpoint: Option<String>,
+    pub interval: String,
+    pub depth: u32,
+    pub credential_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -106,103 +281,88 @@ pub struct CliMarketHistoricalDownloadRequest {
     pub file: PathBuf,
 }
 
-impl CliMarketDiagnosticProvider {
-    const fn into_diagnostic(self) -> DiagnosticProvider {
-        match self {
-            Self::BinanceSpotRest => DiagnosticProvider::BinanceSpotRest,
-            Self::BinanceSpotWebsocket => DiagnosticProvider::BinanceSpotWebsocket,
-            Self::BinanceOptionsRest => DiagnosticProvider::BinanceOptionsRest,
+impl CliMarketApplication {
+    pub fn direct_routes(&self, routes: Vec<CliMarketRoute>) -> CliMarketRoutesResult {
+        let _ = self;
+        CliMarketRoutesResult {
+            routes: routes
+                .into_iter()
+                .map(|route| CliMarketRouteResult {
+                    provider: route.provider,
+                    observation_kinds: route
+                        .observation_kinds
+                        .into_iter()
+                        .map(|kind| kind.as_str())
+                        .collect::<Vec<_>>(),
+                })
+                .collect::<Vec<_>>(),
         }
     }
-}
 
-impl CliMarketApplication {
     pub fn open(workspace_root: Option<&Path>) -> Self {
         Self {
             workspace_root: workspace_root.map(Path::to_path_buf),
+            direct_connection: None,
+        }
+    }
+
+    pub(crate) fn with_direct_connection(
+        workspace_root: Option<&Path>,
+        direct_connection: crate::services::direct::DirectMarketConnection,
+    ) -> Self {
+        Self {
+            workspace_root: workspace_root.map(Path::to_path_buf),
+            direct_connection: Some(direct_connection),
         }
     }
 
     pub fn validate_market(
         &self,
         market: ResolvedMarket,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<CliMarketValidationResult, Box<dyn std::error::Error>> {
         let _ = self;
         market.validate()?;
-        Ok(json!({
-            "valid": true,
-            "market": market,
-        }))
-    }
-
-    pub fn reference_universe(
-        &self,
-        instrument_kind: InstrumentKind,
-        limit: u64,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let workspace_root = self
-            .workspace_root
-            .as_ref()
-            .ok_or("reference-universe requires --workspace")?;
-        let workspace = Workspace::open(workspace_root)?;
-        let database = workspace.child(&["state", "reference", "reference.sqlite"])?;
-        let reader = ReferenceSqliteReader::open(&database)?;
-        let projection = reader.projection(&SqliteMarketQuery {
-            instrument_kind: Some(instrument_kind),
-            statuses: vec![ReferenceStatus::Active, ReferenceStatus::Trading],
-            limit,
-            ..SqliteMarketQuery::default()
-        })?;
-        let snapshot = ReferenceProjectionSnapshot {
-            generation: projection.watermark.generation,
-            event_sequence: projection.watermark.event_sequence,
-            instruments: projection.instruments.into_values().collect(),
-            markets: projection.markets,
-            ..ReferenceProjectionSnapshot::default()
-        };
-        let config = MarketCompositionConfig::load(&workspace)?;
-        let update = project_reference_market_universe(&snapshot, &config.sources)?;
-        let massive_option_routes = update
-            .markets
-            .iter()
-            .filter(|market| {
-                market.route.provider_id == "massive"
-                    && market.route.provider_product == "options"
-                    && market.instrument_kind == InstrumentKind::Option
-            })
-            .count();
-        let sample = update
-            .markets
-            .iter()
-            .find(|market| {
-                market.route.provider_id == "massive"
-                    && market.route.provider_product == "options"
-                    && market.instrument_kind == InstrumentKind::Option
-            })
-            .map(serde_json::to_value)
-            .transpose()?;
-        Ok(json!({
-            "generation": update.generation,
-            "event_sequence": update.event_sequence,
-            "reference_markets": snapshot.markets.len(),
-            "projected_markets": update.markets.len(),
-            "massive_option_routes": massive_option_routes,
-            "sample": sample,
-        }))
+        Ok(CliMarketValidationResult {
+            valid: true,
+            market,
+        })
     }
 
     pub async fn once(
-        &self,
-        market: ResolvedMarket,
-        provider: CliMarketDiagnosticProvider,
-        endpoint: String,
-        actor_id: String,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let _ = self;
-        let mut runtime = MarketApplication::new(actor_id, 10_000)?;
-        runtime.subscribe_static(SubscriptionId::new("cli-once")?, "cli", market)?;
-        let runtime = run_diagnostic_once(runtime, provider.into_diagnostic(), endpoint).await?;
-        Ok(serde_json::to_value(runtime.current_view())?)
+        &mut self,
+        request: CliMarketOnceRequest,
+    ) -> Result<CliDirectObservationResult, Box<dyn std::error::Error>> {
+        let symbol = kairos_primitives::integration::ParticipantSymbol::new(&request.symbol)
+            .map_err(|error| error.to_string())?;
+        let value = self
+            .direct_connection
+            .as_mut()
+            .ok_or("standalone Market query was not composed with a provider connection")?
+            .snapshot(
+                &symbol,
+                request.observation_kind,
+                &request.interval,
+                request.depth,
+            )
+            .await?;
+        let provider = request.provider.as_str();
+        Ok(match value {
+            crate::services::direct::DirectMarketSnapshot::Quote(value) => {
+                CliDirectObservationResult::Quote(quote_snapshot(value, provider))
+            },
+            crate::services::direct::DirectMarketSnapshot::Trade(value) => {
+                CliDirectObservationResult::Trade(trade_snapshot(value, provider))
+            },
+            crate::services::direct::DirectMarketSnapshot::Bar(value) => {
+                CliDirectObservationResult::Bar(bar_snapshot(value, provider))
+            },
+            crate::services::direct::DirectMarketSnapshot::OrderBook(value) => {
+                CliDirectObservationResult::OrderBook(order_book_snapshot(value, provider))
+            },
+            crate::services::direct::DirectMarketSnapshot::Greeks(value) => {
+                CliDirectObservationResult::Greeks(greeks_snapshot(value, provider))
+            },
+        })
     }
 
     pub async fn replay(
@@ -210,31 +370,38 @@ impl CliMarketApplication {
         market: ResolvedMarket,
         files: Vec<PathBuf>,
         actor_id: String,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<CliMarketReplayResult, Box<dyn std::error::Error>> {
         let _ = self;
         let events = load_replay_events_many(files)?;
         let mut runtime = MarketApplication::new(actor_id, 10_000)?;
-        attach_replay_source(&mut runtime, events)?;
+        let source = crate::services::source::ReplaySource::new(events);
+        let descriptor =
+            crate::domain::source::FeedDescriptor::all_routes(MarketFeedId::new("replay")?);
+        let handle = crate::services::source::spawn_replay(
+            descriptor,
+            source,
+            runtime.source_input_capacity(),
+        );
+        runtime.attach_source(handle)?;
         runtime.subscribe_static(SubscriptionId::new("cli-replay")?, "cli", market)?;
         runtime.sync_source_subscriptions().await?;
         let mut count = 0;
         while !runtime.sources_complete() {
             count += runtime.drive_next_source_input().await?;
         }
-        let mut snapshot = serde_json::to_value(runtime.current_view())?;
-        if let Some(object) = snapshot.as_object_mut() {
-            object.insert(
-                "event_sequence".into(),
-                serde_json::json!(runtime.event_sequence()),
-            );
-        }
-        Ok(json!({"events_applied": count, "snapshot": snapshot}))
+        Ok(CliMarketReplayResult {
+            events_applied: count,
+            snapshot: CliMarketReplaySnapshot {
+                event_sequence: runtime.event_sequence().into(),
+                view: runtime.current_view(),
+            },
+        })
     }
 
     pub async fn download_historical(
         &self,
         request: CliMarketHistoricalDownloadRequest,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<CliMarketDatasetManifest, Box<dyn std::error::Error>> {
         match (request.provider, request.market_type) {
             (CliMarketHistoricalProvider::Binance, CliMarketHistoricalMarketType::Spot)
             | (
@@ -250,24 +417,9 @@ impl CliMarketApplication {
                 .into());
             },
         }
-        let workspace = self
-            .workspace_root
-            .as_ref()
-            .map(Workspace::open)
-            .transpose()?;
-        let configured_endpoint = workspace.as_ref().and_then(|workspace| {
-            let reference: toml::Value = workspace.read_section("reference").ok()?;
-            reference
-                .get("providers")?
-                .get(request.provider.as_str())?
-                .get("endpoint")?
-                .as_str()
-                .map(str::to_owned)
-        });
         let endpoint = request
             .endpoint
             .clone()
-            .or(configured_endpoint)
             .unwrap_or_else(|| match request.provider {
                 CliMarketHistoricalProvider::Massive => "https://api.massive.com".into(),
                 CliMarketHistoricalProvider::Binance => "https://data-api.binance.vision".into(),
@@ -290,12 +442,10 @@ impl CliMarketApplication {
                 let api_key = if let Some(value) = request.api_key.clone() {
                     value
                 } else {
-                    let _workspace_root = self.workspace_root.as_ref().ok_or(
+                    let workspace_root = self.workspace_root.as_ref().ok_or(
                         "Massive download requires --workspace or the deprecated --api-key",
                     )?;
-                    let workspace = workspace
-                        .as_ref()
-                        .ok_or("Massive download workspace could not be opened")?;
+                    let workspace = Workspace::open(workspace_root)?;
                     let credentials_root =
                         workspace.existing_path(&["config", "credentials"], &["credentials"])?;
                     load_workspace_credential(
@@ -307,9 +457,8 @@ impl CliMarketApplication {
                     .api_key
                 };
                 let key = ConnectionKey::new("market-history")?;
-                let mut system = ConfluxSystem::new();
-                system.connections().massive_rest.create(
-                    key.clone(),
+                let mut provider = MassiveRestConnection::new(
+                    key,
                     MassiveRestConfig {
                         environment: "public".into(),
                         endpoint,
@@ -323,24 +472,19 @@ impl CliMarketApplication {
                         },
                     },
                 )?;
-                let mut connections = system.connections();
-                let provider = connections.massive_rest.get(&key)?;
-                fetch_historical(provider, request.data_kind, &window, &bar_request).await?
+                fetch_historical(&mut provider, request.data_kind, &window, &bar_request).await?
             },
             CliMarketHistoricalProvider::Binance => {
                 let key = ConnectionKey::new("market-history")?;
-                let mut system = ConfluxSystem::new();
-                system.connections().binance_spot_rest.create(
-                    key.clone(),
+                let mut provider = BinanceSpotRestConnection::new(
+                    key,
                     BinanceRestConfig {
                         environment: "public".into(),
                         endpoint,
                         credential: None,
                     },
                 )?;
-                let mut connections = system.connections();
-                let provider = connections.binance_spot_rest.get(&key)?;
-                fetch_historical(provider, request.data_kind, &window, &bar_request).await?
+                fetch_historical(&mut provider, request.data_kind, &window, &bar_request).await?
             },
         };
         let instrument_id = request
@@ -381,7 +525,7 @@ impl CliMarketApplication {
                         close: bar.close,
                         volume: bar.volume,
                         observed_at_unix_nanos: event.observed_at_unix_nanos,
-                        source_id: SourceId::new(request.provider.as_str())?,
+                        provider: Provider::new(request.provider.as_str())?,
                         derivation: bar.derivation,
                     })
                 },
@@ -396,7 +540,7 @@ impl CliMarketApplication {
                     ask_venue_code: event.venue.ask_exchange,
                     tape: event.venue.tape,
                     observed_at_unix_nanos: event.observed_at_unix_nanos,
-                    source_id: SourceId::new(request.provider.as_str())?,
+                    provider: Provider::new(request.provider.as_str())?,
                 }),
                 MarketEventKind::Trade => {
                     if matches!(request.provider, CliMarketHistoricalProvider::Massive) {
@@ -425,7 +569,7 @@ impl CliMarketApplication {
                             .participant_timestamp_unix_nanos,
                         trf_timestamp_unix_nanos: event.venue.trf_timestamp_unix_nanos,
                         observed_at_unix_nanos: event.observed_at_unix_nanos,
-                        source_id: SourceId::new(request.provider.as_str())?,
+                        provider: Provider::new(request.provider.as_str())?,
                     })
                 },
                 _ => continue,
@@ -435,26 +579,29 @@ impl CliMarketApplication {
             count += 1;
         }
         std::fs::write(&output, body)?;
-        let manifest = serde_json::json!({
-            "dataset_id": request.dataset_id,
-            "provider": request.provider.as_str(),
-            "source": request.provider.as_str(),
-            "symbol": request.symbol,
-            "scope_key": aggregate_scope.key(),
-            "market_id": aggregate_scope.market_id().map(ToString::to_string),
-            "instrument_id": instrument_id,
-            "data_kind": request.data_kind.as_str(),
-            "observation_type": request.data_kind.as_str(),
-            "market_type": request.market_type.as_str(),
-            "interval": request.interval,
-            "timeframe": request.interval,
-            "adjusted": request.adjusted,
-            "start_time_unix_millis": request.start_unix_millis,
-            "end_time_unix_millis": request.end_unix_millis,
-            "event_count": count,
-            "path": output,
-            "format": "jsonl",
-        });
+        let manifest = CliMarketDatasetManifest {
+            dataset_id: request.dataset_id,
+            version: 1,
+            providers: std::collections::BTreeSet::from([Provider::new(
+                request.provider.as_str(),
+            )?]),
+            derivation: None,
+            symbol: request.symbol,
+            scope_key: aggregate_scope.key().to_owned(),
+            market_id: aggregate_scope.market_id().map(ToString::to_string),
+            instrument_id,
+            data_kind: request.data_kind.as_str().to_owned(),
+            observation_type: request.data_kind.as_str().to_owned(),
+            market_type: request.market_type.as_str().to_owned(),
+            interval: request.interval.clone(),
+            timeframe: request.interval,
+            adjusted: request.adjusted,
+            start_time_unix_millis: request.start_unix_millis,
+            end_time_unix_millis: request.end_unix_millis,
+            event_count: count,
+            path: output.clone(),
+            format: "jsonl".into(),
+        };
         let manifest_path = output.with_extension("manifest.json");
         std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
         if let Some(workspace_root) = self.workspace_root.as_ref() {
@@ -463,7 +610,9 @@ impl CliMarketApplication {
         Ok(manifest)
     }
 
-    pub fn historical_datasets(&self) -> Result<Value, Box<dyn std::error::Error>> {
+    pub fn historical_datasets(
+        &self,
+    ) -> Result<CliMarketDatasetsResult, Box<dyn std::error::Error>> {
         let workspace_root = self
             .workspace_root
             .as_ref()
@@ -471,14 +620,76 @@ impl CliMarketApplication {
         let workspace = Workspace::open(workspace_root)?;
         let catalog_path = workspace.state_root().join("market").join("datasets.json");
         if !catalog_path.is_file() {
-            return Ok(json!({"datasets": []}));
+            return Ok(CliMarketDatasetsResult::default());
         }
-        let catalog: Value = serde_json::from_slice(&std::fs::read(catalog_path)?)?;
-        let datasets = catalog
-            .get("datasets")
-            .and_then(Value::as_array)
-            .ok_or("market dataset catalog has no datasets array")?;
-        Ok(json!({"datasets": datasets}))
+        Ok(serde_json::from_slice(&std::fs::read(catalog_path)?)?)
+    }
+}
+
+fn quote_snapshot(value: MarketQuote, provider: &str) -> CliMarketQuoteResult {
+    CliMarketQuoteResult {
+        symbol: value.symbol.to_string(),
+        data_type: "quote",
+        provider: provider.to_owned(),
+        bid_price: value.bid_price,
+        bid_quantity: value.bid_quantity,
+        ask_price: value.ask_price,
+        ask_quantity: value.ask_quantity,
+        last_price: value.last_price,
+        observed_at_unix_nanos: value.observed_at_unix_nanos,
+    }
+}
+
+fn trade_snapshot(value: MarketTrade, provider: &str) -> CliMarketTradeResult {
+    CliMarketTradeResult {
+        symbol: value.symbol.to_string(),
+        data_type: "trade",
+        provider: provider.to_owned(),
+        price: value.price,
+        quantity: value.quantity,
+        is_buyer_maker: value.is_buyer_maker,
+        event_at_unix_nanos: value.event_at_unix_nanos,
+    }
+}
+
+fn bar_snapshot(value: MarketBar, provider: &str) -> CliMarketBarResult {
+    CliMarketBarResult {
+        symbol: value.symbol.to_string(),
+        data_type: "bar",
+        provider: provider.to_owned(),
+        interval: value.interval,
+        open: value.open,
+        high: value.high,
+        low: value.low,
+        close: value.close,
+        volume: value.volume,
+        opened_at_unix_nanos: value.opened_at_unix_nanos,
+        closed_at_unix_nanos: value.closed_at_unix_nanos,
+    }
+}
+
+fn order_book_snapshot(value: MarketOrderBook, provider: &str) -> CliMarketOrderBookResult {
+    CliMarketOrderBookResult {
+        symbol: value.symbol.to_string(),
+        data_type: "order_book",
+        provider: provider.to_owned(),
+        bids: value.bids,
+        asks: value.asks,
+    }
+}
+
+fn greeks_snapshot(value: MarketGreeks, provider: &str) -> CliMarketGreeksResult {
+    CliMarketGreeksResult {
+        symbol: value.symbol.to_string(),
+        data_type: "option_greeks",
+        provider: provider.to_owned(),
+        expiry_unix_nanos: value.values.expiry_unix_nanos,
+        strike: value.values.strike,
+        delta: value.values.delta,
+        gamma: value.values.gamma,
+        vega: value.values.vega,
+        theta: value.values.theta,
+        implied_volatility: value.values.implied_volatility,
     }
 }
 
@@ -587,14 +798,11 @@ fn millis_to_nanos(value: i64) -> Result<kairos_primitives::time::UnixNanos, Str
 
 fn register_dataset(
     workspace_root: &Path,
-    manifest: &Value,
+    manifest: &CliMarketDatasetManifest,
     output: &Path,
     manifest_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let dataset_id = manifest
-        .get("dataset_id")
-        .and_then(Value::as_str)
-        .ok_or("dataset manifest has no dataset_id")?;
+    let dataset_id = manifest.dataset_id.as_str();
     if dataset_id.is_empty()
         || dataset_id == "."
         || dataset_id == ".."
@@ -610,33 +818,23 @@ fn register_dataset(
     };
     std::fs::create_dir_all(parent)?;
     let mut catalog = if catalog_path.is_file() {
-        serde_json::from_slice::<Value>(&std::fs::read(&catalog_path)?)?
+        serde_json::from_slice::<CliMarketDatasetsResult>(&std::fs::read(&catalog_path)?)?
     } else {
-        json!({"datasets": [], "aliases": {}})
+        CliMarketDatasetsResult::default()
     };
-    if !catalog.is_object() {
-        return Err("dataset catalog must contain a JSON object".into());
-    }
-    let datasets = catalog
-        .get_mut("datasets")
-        .and_then(Value::as_array_mut)
-        .ok_or("dataset catalog has no datasets array")?;
-    datasets.retain(|item| item.get("name").and_then(Value::as_str) != Some(dataset_id));
+    catalog.datasets.retain(|item| item.name != dataset_id);
     let output = output.canonicalize()?;
     let manifest_path = manifest_path.canonicalize()?;
-    let mut entry = manifest.clone();
-    let object = entry
-        .as_object_mut()
-        .ok_or("dataset manifest must be an object")?;
-    object.insert("name".into(), json!(dataset_id));
-    object.insert("path".into(), json!(output));
-    object.insert("manifest_path".into(), json!(manifest_path));
-    datasets.push(entry);
-    datasets.sort_by(|left, right| {
-        left.get("name")
-            .and_then(Value::as_str)
-            .cmp(&right.get("name").and_then(Value::as_str))
+    let mut stored_manifest = manifest.clone();
+    stored_manifest.path = output;
+    catalog.datasets.push(CliMarketDatasetCatalogEntry {
+        manifest: stored_manifest,
+        name: dataset_id.to_owned(),
+        manifest_path,
     });
+    catalog
+        .datasets
+        .sort_by(|left, right| left.name.cmp(&right.name));
     let temporary = catalog_path.with_extension("json.tmp");
     std::fs::write(&temporary, serde_json::to_vec_pretty(&catalog)?)?;
     std::fs::rename(temporary, catalog_path)?;

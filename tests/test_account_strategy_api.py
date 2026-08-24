@@ -64,7 +64,7 @@ def _segment(
     )
 
 
-class _Projection:
+class _CurrentView:
     def __init__(
         self, account_id: AccountId, generation: int, segments: tuple[SegmentKey, ...]
     ) -> None:
@@ -92,8 +92,8 @@ class _Projection:
 
 
 def test_accounts_chain_reads_each_account_mmap_once_and_preserves_order() -> None:
-    main = _Projection(AccountId("main"), 7, (SPOT, CROSS_MARGIN))
-    secondary = _Projection(AccountId("secondary"), 12, (SPOT,))
+    main = _CurrentView(AccountId("main"), 7, (SPOT, CROSS_MARGIN))
+    secondary = _CurrentView(AccountId("secondary"), 12, (SPOT,))
     application = AccountApplication(
         {
             AccountId("main"): main,
@@ -115,7 +115,7 @@ def test_accounts_chain_reads_each_account_mmap_once_and_preserves_order() -> No
 def test_required_segment_readiness_is_checked_from_account_current_view() -> None:
     account_id = AccountId("main")
 
-    class Projection:
+    class CurrentView:
         lifecycle = SegmentSyncLifecycle.BOOTSTRAPPING
 
         def snapshot(self, requested: AccountId) -> AccountSnapshot:
@@ -126,21 +126,21 @@ def test_required_segment_readiness_is_checked_from_account_current_view() -> No
             )
             return AccountSnapshot(account_id, (segment,), 1)
 
-    projection = Projection()
+    current_view = CurrentView()
     application = AccountApplication(
-        {account_id: projection}, required_segments={account_id: ("spot",)}
+        {account_id: current_view}, required_segments={account_id: ("spot",)}
     )
 
     with pytest.raises(RuntimeError, match="required segment spot is not ready"):
         application._check_event_source_ready()
 
-    projection.lifecycle = SegmentSyncLifecycle.LIVE
+    current_view.lifecycle = SegmentSyncLifecycle.LIVE
     application._check_event_source_ready()
 
 
 def test_account_reads_only_selected_account_and_segments_share_generation() -> None:
-    main = _Projection(AccountId("main"), 7, (SPOT, CROSS_MARGIN))
-    secondary = _Projection(AccountId("secondary"), 12, (SPOT,))
+    main = _CurrentView(AccountId("main"), 7, (SPOT, CROSS_MARGIN))
+    secondary = _CurrentView(AccountId("secondary"), 12, (SPOT,))
     application = AccountApplication(
         {
             AccountId("main"): main,
@@ -187,7 +187,7 @@ def test_custom_segment_keys_remain_open_ended() -> None:
     assert account.segment("provider_custom").segment_key == custom
 
 
-def test_projection_mapper_groups_every_segment_without_cross_account_leakage() -> None:
+def test_current_view_mapper_groups_every_segment_without_cross_account_leakage() -> None:
     snapshot = map_accounts_snapshot(
         {
             "generation": 9,

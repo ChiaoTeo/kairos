@@ -17,7 +17,7 @@ def build_strategy_access(
     account_lease_fences: dict[AccountId, str] | None = None,
     client: CapitalSystemClient | None = None,
     commands: Any | None = None,
-    projection: Any | None = None,
+    current_view: Any | None = None,
 ) -> CapitalApplication:
     """Build one Strategy facade; transport adapters are injected by composition."""
 
@@ -25,10 +25,10 @@ def build_strategy_access(
         commands = client.control
     if (
         client is not None
-        and projection is None
+        and current_view is None
         and capital_group_id is not None
     ):
-        projection = client.current_projection(capital_group_id)
+        current_view = client.current_view(capital_group_id)
     if client is None:
         return CapitalApplication.disabled(
             strategy_id=identity.strategy_id,
@@ -38,7 +38,7 @@ def build_strategy_access(
         )
     return CapitalApplication(
         commands,
-        projection,
+        current_view,
         strategy_id=identity.strategy_id,
         launch_id=identity.launch_id,
         instance_id=identity.instance_id,

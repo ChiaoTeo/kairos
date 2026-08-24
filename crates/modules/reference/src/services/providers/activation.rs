@@ -4,9 +4,10 @@ use kairos_conflux::{
 };
 
 use super::{
-    BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource,
-    HyperliquidProduct, HyperliquidSource, MassiveEquitySource, MassiveOptionsCoverageSource,
-    OkxProduct, OkxSource, ReferenceCredentialResolver, binance_config, default_endpoint,
+    BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceReferenceSource,
+    BinanceSpotSource, HyperliquidProduct, HyperliquidSource, MassiveEquitySource,
+    MassiveOptionsCoverageSource, MassiveReferenceSource, OkxProduct, OkxSource,
+    ReferenceCredentialResolver, ReferenceSourceBinding, binance_config, default_endpoint,
     massive_options_underlying_from_scope, provider_error,
 };
 use crate::domain::{
@@ -21,39 +22,24 @@ pub(crate) async fn activate_runtime_source_definition(
     credentials: &ReferenceCredentialResolver,
     sync_store: Option<SqlxProviderSyncStore>,
 ) -> ReferenceResult<Option<ConfiguredProviderSource>> {
-    let scoped_massive_options = is_scoped_massive_options_definition(definition);
-    if !scoped_massive_options
-        && (definition.scope.kind != SourceScopeKind::Global
-            || definition.sync_policy != SourceSyncPolicy::FullSnapshot)
-    {
-        return Ok(None);
-    }
-    let source_id = definition.source_id.as_str();
-    let product = definition.provider_product.as_deref();
-    let Some(key) = runtime_source_connection_key(definition)? else {
+    let Some(binding) = ReferenceSourceBinding::from_source_id(definition.source_id.as_str())
+    else {
         return Ok(None);
     };
-    let credentialed_binance_equity = matches!(
-        (definition.provider_id.as_str(), product, source_id),
-        (
-            "binance",
-            Some("equity"),
-            "binance-equity" | "binance-stocks"
-        )
-    );
-    let credentialed_massive_equity = matches!(
-        (definition.provider_id.as_str(), product, source_id),
-        ("massive", Some("equity"), "massive-equity")
-    );
-    if definition.credential_binding.is_some()
-        && !credentialed_binance_equity
-        && !credentialed_massive_equity
-        && !scoped_massive_options
+    if definition.provider_id.as_str() != binding.provider()
+        || definition.sync_policy != binding.sync_policy()
     {
         return Ok(None);
     }
-    match (definition.provider_id.as_str(), product, source_id) {
-        ("massive", Some("options"), "massive-options") if scoped_massive_options => {
+    let scoped_massive_options = is_scoped_massive_options_definition(definition);
+    if !scoped_massive_options && definition.scope.kind != SourceScopeKind::Global {
+        return Ok(None);
+    }
+    let key = runtime_source_connection_key(binding, definition)?;
+    match binding {
+        ReferenceSourceBinding::Massive(MassiveReferenceSource::Options)
+            if scoped_massive_options =>
+        {
             let Some(api_key) = credentials.massive(definition.credential_binding.as_deref())?
             else {
                 return Ok(None);
@@ -86,7 +72,7 @@ pub(crate) async fn activate_runtime_source_definition(
                 .await?,
             )))
         },
-        ("binance", Some("spot"), "binance-spot") => {
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Spot) => {
             connections
                 .binance_spot_rest
                 .create(
@@ -98,7 +84,7 @@ pub(crate) async fn activate_runtime_source_definition(
                 BinanceSpotSource::from_key(key),
             )))
         },
-        ("binance", Some("usdm"), "binance-usdm-futures") => {
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::UsdMFutures) => {
             connections
                 .binance_usdm_rest
                 .create(
@@ -110,7 +96,7 @@ pub(crate) async fn activate_runtime_source_definition(
                 BinanceDerivativesSource::from_usdm_key(key),
             )))
         },
-        ("binance", Some("coinm"), "binance-coinm-futures") => {
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::CoinMFutures) => {
             connections
                 .binance_coinm_rest
                 .create(
@@ -122,7 +108,7 @@ pub(crate) async fn activate_runtime_source_definition(
                 BinanceDerivativesSource::from_coinm_key(key),
             )))
         },
-        ("binance", Some("options"), "binance-options") => {
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Options) => {
             connections
                 .binance_options_rest
                 .create(
@@ -134,7 +120,7 @@ pub(crate) async fn activate_runtime_source_definition(
                 BinanceOptionsSource::from_key(key),
             )))
         },
-        ("binance", Some("equity"), "binance-equity" | "binance-stocks") => {
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Equity) => {
             let Some(credential) = credentials.binance(definition.credential_binding.as_deref())?
             else {
                 return Ok(None);
@@ -150,7 +136,7 @@ pub(crate) async fn activate_runtime_source_definition(
                 BinanceEquitySource::from_key(key),
             )))
         },
-        ("massive", Some("equity"), "massive-equity") => {
+        ReferenceSourceBinding::Massive(MassiveReferenceSource::Equity) => {
             let Some(api_key) = credentials.massive(definition.credential_binding.as_deref())?
             else {
                 return Ok(None);
@@ -176,32 +162,24 @@ pub(crate) async fn activate_runtime_source_definition(
                 MassiveEquitySource::from_key(key, sync_store).await?,
             )))
         },
-        ("okx", Some(product), source_id)
-            if matches!(product, "spot" | "margin" | "swap" | "futures" | "options") =>
-        {
-            let product = match product {
-                "spot" => OkxProduct::Spot,
-                "margin" => OkxProduct::Margin,
-                "swap" => OkxProduct::Swap,
-                "futures" => OkxProduct::Futures,
-                "options" => OkxProduct::Option,
-                _ => unreachable!("product was matched"),
-            };
+        ReferenceSourceBinding::Okx(product) => {
             connections
                 .okx_public_rest
                 .create(
                     key.clone(),
                     OkxRestConfig {
                         environment: "public".into(),
-                        endpoint: default_endpoint(source_id).into(),
+                        endpoint: default_endpoint(binding.source_id()).into(),
                     },
                 )
                 .map_err(provider_error)?;
             Ok(Some(ConfiguredProviderSource::Okx(OkxSource::from_key(
-                source_id, product, key,
+                binding.source_id(),
+                product,
+                key,
             ))))
         },
-        ("hyperliquid", Some("perpetual"), "hyperliquid-perpetual") => {
+        ReferenceSourceBinding::Hyperliquid(HyperliquidProduct::Perpetual) => {
             connections
                 .hyperliquid_info_rest
                 .create(
@@ -216,7 +194,7 @@ pub(crate) async fn activate_runtime_source_definition(
                 HyperliquidSource::from_key(HyperliquidProduct::Perpetual, key),
             )))
         },
-        ("hyperliquid", Some("spot"), "hyperliquid-spot") => {
+        ReferenceSourceBinding::Hyperliquid(HyperliquidProduct::Spot) => {
             connections
                 .hyperliquid_info_rest
                 .create(
@@ -231,7 +209,7 @@ pub(crate) async fn activate_runtime_source_definition(
                 HyperliquidSource::from_key(HyperliquidProduct::Spot, key),
             )))
         },
-        _ => Ok(None),
+        ReferenceSourceBinding::Massive(MassiveReferenceSource::Options) => Ok(None),
     }
 }
 
@@ -239,63 +217,85 @@ pub(crate) fn deactivate_runtime_source_definition(
     definition: &ReferenceSourceDefinition,
     connections: &mut ConnectionCollections<'_>,
 ) -> ReferenceResult<bool> {
-    let Some(key) = runtime_source_connection_key(definition)? else {
+    let Some(binding) = ReferenceSourceBinding::from_source_id(definition.source_id.as_str())
+    else {
         return Ok(false);
     };
-    match definition.source_id.as_str() {
-        "binance-spot" => connections.binance_spot_rest.remove(&key).map(drop),
-        "binance-usdm-futures" => connections.binance_usdm_rest.remove(&key).map(drop),
-        "binance-coinm-futures" => connections.binance_coinm_rest.remove(&key).map(drop),
-        "binance-options" => connections.binance_options_rest.remove(&key).map(drop),
-        "binance-equity" | "binance-stocks" => {
+    let key = runtime_source_connection_key(binding, definition)?;
+    match binding {
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Spot) => {
+            connections.binance_spot_rest.remove(&key).map(drop)
+        },
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::UsdMFutures) => {
+            connections.binance_usdm_rest.remove(&key).map(drop)
+        },
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::CoinMFutures) => {
+            connections.binance_coinm_rest.remove(&key).map(drop)
+        },
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Options) => {
+            connections.binance_options_rest.remove(&key).map(drop)
+        },
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Equity) => {
             connections.binance_stocks_rest.remove(&key).map(drop)
         },
-        "massive-equity" => connections.massive_rest.remove(&key).map(drop),
-        "massive-options" => connections.massive_rest.remove(&key).map(drop),
-        "okx-spot" | "okx-margin" | "okx-swap" | "okx-futures" | "okx-options" => {
-            connections.okx_public_rest.remove(&key).map(drop)
-        },
-        "hyperliquid-spot" | "hyperliquid-perpetual" => {
+        ReferenceSourceBinding::Massive(_) => connections.massive_rest.remove(&key).map(drop),
+        ReferenceSourceBinding::Okx(_) => connections.okx_public_rest.remove(&key).map(drop),
+        ReferenceSourceBinding::Hyperliquid(_) => {
             connections.hyperliquid_info_rest.remove(&key).map(drop)
         },
-        _ => return Ok(false),
     }
     .map_err(provider_error)?;
     Ok(true)
 }
 
 fn runtime_source_connection_key(
+    binding: ReferenceSourceBinding,
     definition: &ReferenceSourceDefinition,
-) -> ReferenceResult<Option<ConnectionKey>> {
-    let key = match definition.source_id.as_str() {
-        "binance-spot" => "reference-binance-spot",
-        "binance-usdm-futures" => "reference-binance-usdm",
-        "binance-coinm-futures" => "reference-binance-coinm",
-        "binance-options" => "reference-binance-options",
-        "binance-equity" | "binance-stocks" => "reference-binance-stocks",
-        "massive-equity" => "reference-massive-equity",
-        "massive-options" => {
+) -> ReferenceResult<ConnectionKey> {
+    let key = match binding {
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Spot) => "reference-binance-spot",
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::UsdMFutures) => {
+            "reference-binance-usdm"
+        },
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::CoinMFutures) => {
+            "reference-binance-coinm"
+        },
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Options) => {
+            "reference-binance-options"
+        },
+        ReferenceSourceBinding::Binance(BinanceReferenceSource::Equity) => {
+            "reference-binance-stocks"
+        },
+        ReferenceSourceBinding::Massive(MassiveReferenceSource::Equity) => {
+            "reference-massive-equity"
+        },
+        ReferenceSourceBinding::Massive(MassiveReferenceSource::Options) => {
             let underlying = massive_options_underlying_from_scope(definition.scope.clone())?;
             return ConnectionKey::new(MassiveOptionsCoverageSource::connection_key(&underlying)?)
-                .map(Some)
                 .map_err(provider_error);
         },
-        "okx-spot" => "reference-okx-spot",
-        "okx-margin" => "reference-okx-margin",
-        "okx-swap" => "reference-okx-swap",
-        "okx-futures" => "reference-okx-futures",
-        "okx-options" => "reference-okx-options",
-        "hyperliquid-spot" => "reference-hyperliquid-spot",
-        "hyperliquid-perpetual" => "reference-hyperliquid-perpetual",
-        _ => return Ok(None),
+        ReferenceSourceBinding::Okx(OkxProduct::Spot) => "reference-okx-spot",
+        ReferenceSourceBinding::Okx(OkxProduct::Margin) => "reference-okx-margin",
+        ReferenceSourceBinding::Okx(OkxProduct::Swap) => "reference-okx-swap",
+        ReferenceSourceBinding::Okx(OkxProduct::Futures) => "reference-okx-futures",
+        ReferenceSourceBinding::Okx(OkxProduct::Option) => "reference-okx-options",
+        ReferenceSourceBinding::Hyperliquid(HyperliquidProduct::Spot) => {
+            "reference-hyperliquid-spot"
+        },
+        ReferenceSourceBinding::Hyperliquid(HyperliquidProduct::Perpetual) => {
+            "reference-hyperliquid-perpetual"
+        },
     };
-    ConnectionKey::new(key).map(Some).map_err(provider_error)
+    ConnectionKey::new(key).map_err(provider_error)
 }
 
 pub(crate) fn is_scoped_massive_options_definition(definition: &ReferenceSourceDefinition) -> bool {
-    definition.source_id.as_str() == "massive-options"
-        && definition.provider_id.as_str() == "massive"
-        && definition.provider_product.as_deref() == Some("options")
+    ReferenceSourceBinding::from_source_id(definition.source_id.as_str())
+        == Some(ReferenceSourceBinding::Massive(
+            MassiveReferenceSource::Options,
+        ))
+        && definition.provider_id.as_str()
+            == ReferenceSourceBinding::Massive(MassiveReferenceSource::Options).provider()
         && definition.sync_policy == SourceSyncPolicy::ScopedSnapshot
         && matches!(
             definition.scope.kind,

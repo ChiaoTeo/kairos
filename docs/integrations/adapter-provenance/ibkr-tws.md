@@ -111,7 +111,7 @@ Account server and CLI acquire the same normalized `host:port:client_id`
 cannot overwrite authoritative total cash; the complete account snapshot is
 the reconnect/recovery baseline.
 Production and CLI Account composition use the native async snapshot and
-account-update stream, and the old blocking Account synchronization projection
+account-update stream, and the old blocking Account synchronization view
 has been removed. Account owns per-segment bootstrap, recovery/resync,
 freshness, current view, and publication.
 
@@ -125,7 +125,7 @@ The execution slice is complete only when:
 4. submit/cancel delivery certainty is fault-tested before/after socket write;
 5. query and event capabilities reconcile order status, executions and fills
    with bounded queues, epochs and resync behavior;
-6. ~~Execution production composition uses only the async IBKR projections~~; and
+6. ~~Execution production composition uses only the async IBKR adapters~~; and
 7. ~~the migrated IBKR blocking execution path and per-command reconnect model
    are deleted~~.
 

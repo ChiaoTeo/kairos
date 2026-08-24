@@ -136,17 +136,17 @@ class AccountSystemClient(SystemRpcClient):
         result = self.control.mark_to_market(request)
         return {"result": result, "segment_key": request["segment_key"]}
 
-    def current_projection(self, account_id: AccountId):
-        from kairospy.infrastructure.contracts.account import AccountCurrentProjection
+    def current_view(self, account_id: AccountId):
+        from kairospy.infrastructure.contracts.account import AccountCurrentViewReader
 
-        return AccountCurrentProjection(self.require_view_root(), account_id=account_id)
+        return AccountCurrentViewReader(self.require_view_root(), account_id=account_id)
 
-    def observed_orders_projection(self, account_id: AccountId):
+    def observed_orders_view(self, account_id: AccountId):
         from kairospy.infrastructure.contracts.account import (
-            AccountObservedOrdersProjection,
+            AccountObservedOrdersViewReader,
         )
 
-        return AccountObservedOrdersProjection(
+        return AccountObservedOrdersViewReader(
             self.require_view_root(),
             account_id=account_id,
         )
@@ -203,10 +203,10 @@ class ExecutionSystemClient(SystemRpcClient):
             return {"fills": []}
         return dict(self.control.backtest_market(payload))
 
-    def projection(self, instance: InstanceWorkspace):
-        from kairospy.infrastructure.contracts.execution import ExecutionProjection
+    def current_view(self, instance: InstanceWorkspace):
+        from kairospy.infrastructure.contracts.execution import ExecutionCurrentViews
 
-        return ExecutionProjection(instance)
+        return ExecutionCurrentViews(instance)
 
 
 class MarketSystemClient(SystemRpcClient):
@@ -222,8 +222,8 @@ class MarketSystemClient(SystemRpcClient):
             MarketControlClient(self.socket_path, timeout=self.timeout),
         )
 
-    def data_sources(self, query: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        return dict(self.control.data_sources(query or {}))
+    def data_routes(self, query: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return dict(self.control.data_routes(query or {}))
 
     def subscribe(self, request: Mapping[str, Any]) -> dict[str, Any]:
         return dict(self.control.subscribe(request))
@@ -290,34 +290,34 @@ class RiskSystemClient(SystemRpcClient):
         return self.latest(actor_id=actor_id)
 
     def latest(self, *, actor_id: str) -> dict[str, Any]:
-        projection = self.latest_projection(actor_id=actor_id)
-        return projection.latest()
+        current_view = self.latest_view(actor_id=actor_id)
+        return current_view.latest()
 
     def latest_limits(self, *, actor_id: str) -> dict[str, Any]:
-        projection = self.latest_projection(actor_id=actor_id)
+        current_view = self.latest_view(actor_id=actor_id)
         return {
             "actor_id": actor_id,
-            "limits": list(projection.limits()),
+            "limits": list(current_view.limits()),
         }
 
     def latest_reservations(self, *, actor_id: str) -> dict[str, Any]:
-        projection = self.latest_projection(actor_id=actor_id)
+        current_view = self.latest_view(actor_id=actor_id)
         return {
             "actor_id": actor_id,
-            "active_reservations": list(projection.active_reservations()),
+            "active_reservations": list(current_view.active_reservations()),
         }
 
     def latest_circuits(self, *, actor_id: str) -> dict[str, Any]:
-        projection = self.latest_projection(actor_id=actor_id)
+        current_view = self.latest_view(actor_id=actor_id)
         return {
             "actor_id": actor_id,
-            "circuits": list(projection.circuits()),
+            "circuits": list(current_view.circuits()),
         }
 
-    def latest_projection(self, *, actor_id: str):
-        from kairospy.infrastructure.contracts.risk import RiskProjection, RiskViewKey
+    def latest_view(self, *, actor_id: str):
+        from kairospy.infrastructure.contracts.risk import RiskLatestViewQueries, RiskViewKey
 
-        return RiskProjection(self.require_view_root(), RiskViewKey(actor_id=actor_id))
+        return RiskLatestViewQueries(self.require_view_root(), RiskViewKey(actor_id=actor_id))
 
 
 class CapitalSystemClient(SystemRpcClient):
@@ -390,74 +390,74 @@ class CapitalSystemClient(SystemRpcClient):
     def reconcile_plan_request(self, request: Mapping[str, Any]) -> dict[str, Any]:
         return dict(self.control.reconcile_plan_request(dict(request)))
 
-    def current_projection(self, capital_group_id: str):
-        from kairospy.infrastructure.contracts.capital import CapitalProjection
+    def current_view(self, capital_group_id: str):
+        from kairospy.infrastructure.contracts.capital import CapitalCurrentViewQueries
 
-        return CapitalProjection(self.require_view_root(), capital_group_id)
+        return CapitalCurrentViewQueries(self.require_view_root(), capital_group_id)
 
     def current_metadata(self, capital_group_id: str) -> dict[str, Any]:
         return self.current(capital_group_id)
 
     def current(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
-        return projection.current()
+        current_view = self.current_view(capital_group_id)
+        return current_view.current()
 
     def current_availabilities(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
+        current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
             "availabilities": [
-                asdict(value) for value in projection.availabilities()
+                asdict(value) for value in current_view.availabilities()
             ],
         }
 
     def current_objectives(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
+        current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "objectives": list(projection.objectives()),
+            "objectives": list(current_view.objectives()),
         }
 
     def current_demands(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
+        current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "demands": list(projection.demands()),
+            "demands": list(current_view.demands()),
         }
 
     def current_plans(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
+        current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "plans": list(projection.plans()),
+            "plans": list(current_view.plans()),
         }
 
     def current_routes(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
+        current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "routes": list(projection.routes()),
+            "routes": list(current_view.routes()),
         }
 
     def current_reservations(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
+        current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "reservations": list(projection.reservations()),
+            "reservations": list(current_view.reservations()),
         }
 
     def current_operations(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
+        current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "operations": list(projection.operations()),
+            "operations": list(current_view.operations()),
         }
 
     def current_alerts(self, capital_group_id: str) -> dict[str, Any]:
-        projection = self.current_projection(capital_group_id)
+        current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "alerts": [asdict(value) for value in projection.alerts()],
+            "alerts": [asdict(value) for value in current_view.alerts()],
         }
 
 

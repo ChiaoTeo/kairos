@@ -24,6 +24,7 @@ CLI 的第一层应该先回答“我现在想完成什么”，再暴露内部�
 kairos quickstart
 kairos project init my-project --id my-project --template backtest
 kairos project doctor
+kairos config agent setup
 kairos launch init my-launch
 kairos launch diagnose validate my-launch
 kairos launch start my-launch
@@ -37,6 +38,8 @@ kairos observe
 用户心智：
 
 - `project` 管工作区：项目目录、`.kairos/`、模板和 readiness。
+- `config agent setup` 准备 Workspace 级 Agent credential、Profile 和只读 MCP 资源；
+  API Key 不进入 launch 配置。
 - `launch` 管一次策略运行：配置、实例、日志、报告、生命周期。
 - `observe` 是运行中的总览，不替代 `launch` 或 `system`。
 - `quickstart` 是不知道从哪开始时的入口。
@@ -84,7 +87,7 @@ kairos order open-orders --account-id main --workspace my-project
 kairos order history --account-id main --symbol BTCUSDT --workspace my-project
 kairos order fills --account-id main --symbol BTCUSDT --workspace my-project
 kairos market validate
-kairos system component market snapshot quote --market-id market:binance:spot:BTCUSDT --source-id binance-spot
+kairos system component market snapshot quote --market-id market:binance:spot:BTCUSDT --provider binance
 kairos launch instance component execution status <launch-id> --instance <instance-id> --mode <mode> --workspace my-project
 kairos reference markets --active-only --workspace my-project
 kairos reference markets --asset-code AAPL --active-only --workspace my-project
@@ -269,9 +272,7 @@ Reference 在 interactive shell 中是可逐层浏览的市场目录。集合检
 ```text
 /reference
   /assets
-  /participants/exchanges
-  /participants/brokers
-  /participants/providers
+  /exchanges
   /instruments/equities
   /instruments/spot
   /instruments/perpetuals

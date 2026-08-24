@@ -36,17 +36,17 @@ class MarketViewKind(str, Enum):
 @dataclass(frozen=True, slots=True)
 class MarketViewKey:
     scope_key: str
-    source_id: str
+    provider: str
     kind: MarketViewKind
     qualifier: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.scope_key.strip() or not self.source_id.strip():
+        if not self.scope_key.strip() or not self.provider.strip():
             raise ValueError("view identity is incomplete")
 
     def canonical_key(self) -> str:
         return (
-            f"scope={self.scope_key};source={self.source_id};"
+            f"scope={self.scope_key};provider={self.provider};"
             f"view={self.kind.value};qualifier={self.qualifier or ''}"
         )
 
@@ -57,7 +57,7 @@ class MarketViewKey:
         qualifier = self.qualifier or "none"
         return "scope-{}-{}-{}-{}".format(
             _component(self.scope_key),
-            _component(self.source_id),
+            _component(self.provider),
             self.kind.value,
             _component(qualifier),
         )

@@ -4,8 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from enum import StrEnum
-from types import MappingProxyType
-from typing import ClassVar, Mapping
+from typing import ClassVar, Literal, TypeAlias
 
 
 class Timeframe(StrEnum):
@@ -45,15 +44,9 @@ MarketData.ORDER_BOOK = MarketData("order_book")
 MarketData.GREEKS = MarketData("greeks")
 
 
-class Source(StrEnum):
-    MASSIVE_EQUITY = "massive-equity"
-    MASSIVE_OPTIONS = "massive-options"
-    BINANCE_EQUITY = "binance-equity"
-    BINANCE_SPOT = "binance-spot"
-    BINANCE_OPTIONS = "binance-options"
+class Provider(StrEnum):
+    """A user-selectable Market data provider, not a runtime feed."""
 
-
-class Participant(StrEnum):
     MASSIVE = "massive"
     BINANCE = "binance"
     OKX = "okx"
@@ -248,92 +241,137 @@ class Options:
 
 
 @dataclass(frozen=True, slots=True)
-class SourceSet:
-    """Selection of Market data source routes for one subscription intent."""
+class ProviderPreference:
+    """How Market should select eligible provider routes."""
 
-    ALL: ClassVar[SourceSet]
-
-    source_ids: tuple[str, ...] | None = None
-    all: bool = False
+    mode: Literal["automatic", "prefer", "require", "all_eligible"]
+    providers: tuple[Provider | str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.all and self.source_ids:
-            raise ValueError("SourceSet.ALL cannot include explicit source ids")
-        if self.source_ids is not None:
-            source_ids = tuple(_wire_value(value) for value in self.source_ids)
-            if not source_ids:
-                raise ValueError("source set must not be empty")
-            if any(not value.strip() for value in source_ids):
-                raise ValueError("source ids must be non-empty strings")
-            object.__setattr__(self, "source_ids", source_ids)
+        providers = tuple(_provider_value(value) for value in self.providers)
+        if self.mode in {"automatic", "all_eligible"} and providers:
+            raise ValueError(f"{self.mode} provider preference cannot list providers")
+        if self.mode in {"prefer", "require"} and not providers:
+            raise ValueError(f"{self.mode} provider preference requires providers")
+        object.__setattr__(self, "providers", providers)
 
     @classmethod
-    def only(cls, *sources: Source | str) -> SourceSet:
-        return cls(tuple(_wire_value(source) for source in sources))
+    def automatic(cls) -> ProviderPreference:
+        return cls("automatic")
 
+    @classmethod
+    def prefer(cls, *providers: Provider | str) -> ProviderPreference:
+        return cls("prefer", providers)
 
-SourceSet.ALL = SourceSet(all=True)
+    @classmethod
+    def require(cls, *providers: Provider | str) -> ProviderPreference:
+        return cls("require", providers)
+
+    @classmethod
+    def all_eligible(cls) -> ProviderPreference:
+        return cls("all_eligible")
+
+    def wire(self) -> dict[str, object]:
+        value: dict[str, object] = {"mode": self.mode}
+        if self.providers:
+            value["providers"] = list(self.providers)
+        return value
 
 
 @dataclass(frozen=True, slots=True)
-class ParticipantSet:
-    """Selection of market-data participants for one subscription intent."""
-
-    ALL: ClassVar[ParticipantSet]
-
-    participant_ids: tuple[str, ...] | None = None
-    all: bool = False
+class ObservationRequirement:
+    kind: str
+    qualifier: str | None = None
 
     def __post_init__(self) -> None:
-        if self.all and self.participant_ids:
-            raise ValueError("ParticipantSet.ALL cannot include explicit participants")
-        if self.participant_ids is not None:
-            participant_ids = tuple(
-                _participant_wire_value(value) for value in self.participant_ids
-            )
-            if not participant_ids:
-                raise ValueError("participant set must not be empty")
-            if any(not value.strip() for value in participant_ids):
-                raise ValueError("participant ids must be non-empty strings")
-            object.__setattr__(self, "participant_ids", participant_ids)
+        if not self.kind.strip():
+            raise ValueError("observation kind is required")
+        if self.qualifier is not None and not self.qualifier.strip():
+            raise ValueError("observation qualifier must be non-empty")
 
     @classmethod
-    def only(cls, *participants: Participant | str) -> ParticipantSet:
-        return cls(tuple(_participant_wire_value(participant) for participant in participants))
+    def from_selector(cls, value: MarketData | str) -> ObservationRequirement:
+        selector = value.selector if isinstance(value, MarketData) else str(value)
+        kind, separator, qualifier = selector.partition(":")
+        return cls(kind, qualifier if separator else None)
+
+    @property
+    def selector(self) -> str:
+        return self.kind if self.qualifier is None else f"{self.kind}:{self.qualifier}"
+
+    def wire(self) -> dict[str, object]:
+        return {"kind": self.kind, "qualifier": self.qualifier}
 
 
-ParticipantSet.ALL = ParticipantSet(all=True)
+@dataclass(frozen=True, slots=True)
+class CanonicalMarketTarget:
+    market_id: str
+
+    def wire(self) -> dict[str, object]:
+        return {"type": "market", "market_id": self.market_id}
+
+
+@dataclass(frozen=True, slots=True)
+class ConsolidatedInstrumentTarget:
+    instrument_id: str
+    network_id: str | None = None
+
+    def wire(self) -> dict[str, object]:
+        return {
+            "type": "consolidated_instrument",
+            "instrument_id": self.instrument_id,
+            "network_id": self.network_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class OptionsTarget:
+    underlying_market_id: str | None = None
+    underlying_instrument_id: str | None = None
+    expiry_from_unix_nanos: int | None = None
+    expiry_to_unix_nanos: int | None = None
+    strike_lower: str | None = None
+    strike_upper: str | None = None
+    option_right: str | None = None
+    limit: int | None = None
+    progressive: bool = False
+
+    def __post_init__(self) -> None:
+        if (self.underlying_market_id is None) == (self.underlying_instrument_id is None):
+            raise ValueError("options target requires exactly one underlying identity")
+
+    def wire(self) -> dict[str, object]:
+        return {
+            "type": "options",
+            "underlying_market_id": self.underlying_market_id,
+            "underlying_instrument_id": self.underlying_instrument_id,
+            "expiry_from_unix_nanos": self.expiry_from_unix_nanos,
+            "expiry_to_unix_nanos": self.expiry_to_unix_nanos,
+            "strike_lower": self.strike_lower,
+            "strike_upper": self.strike_upper,
+            "option_right": self.option_right,
+            "limit": self.limit,
+            "progressive": self.progressive,
+        }
+
+
+MarketTarget: TypeAlias = CanonicalMarketTarget | ConsolidatedInstrumentTarget | OptionsTarget
 
 
 @dataclass(frozen=True, slots=True)
 class SubscriptionRequest:
     """Market-owned strategy subscription request used at the process boundary."""
 
-    subject: str
-    selectors: tuple[str, ...] = ()
-    source_id: str | None = None
-    source_ids: tuple[str, ...] = ()
-    exchange: str | None = None
-    market_type: str | None = None
-    asset_type: str | None = None
-    identity: str | None = None
-    params: Mapping[str, object] = field(default_factory=dict)
-    dynamic: bool = False
+    target: MarketTarget
+    observations: tuple[ObservationRequirement, ...]
+    provider_preference: ProviderPreference = field(
+        default_factory=ProviderPreference.automatic
+    )
 
     def __post_init__(self) -> None:
-        if not self.subject.strip():
-            raise ValueError("subscription subject is required")
-        if any(not selector.strip() for selector in self.selectors):
-            raise ValueError("subscription selectors must be non-empty strings")
-        if self.source_id is not None and not self.source_id.strip():
-            raise ValueError("subscription source_id must be a non-empty string")
-        if self.source_id is not None and self.source_ids:
-            raise ValueError("use either source_id or source_ids, not both")
-        if any(not source_id.strip() for source_id in self.source_ids):
-            raise ValueError("subscription source_ids must be non-empty strings")
-        object.__setattr__(self, "selectors", tuple(self.selectors))
-        object.__setattr__(self, "source_ids", tuple(self.source_ids))
-        object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
+        if not self.observations:
+            raise ValueError("subscription observations are required")
+        object.__setattr__(self, "observations", tuple(self.observations))
 
 
 def _wire_value(value: object) -> str:
@@ -341,12 +379,10 @@ def _wire_value(value: object) -> str:
     return enum_value if isinstance(enum_value, str) else str(value)
 
 
-def _participant_wire_value(value: object) -> str:
+def _provider_value(value: object) -> str:
     text = _wire_value(value).strip().lower()
-    if text.startswith("data_provider:"):
-        return text.removeprefix("data_provider:")
-    if text.startswith("provider:"):
-        return text.removeprefix("provider:")
+    if not text or any(character.isspace() for character in text):
+        raise ValueError("provider must be a non-empty canonical identifier")
     return text
 
 

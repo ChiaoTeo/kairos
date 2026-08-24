@@ -2,12 +2,11 @@
 
 use std::collections::BTreeSet;
 
+use super::SourceRuntimeRegistry;
 use crate::domain::{
     SourceDesiredState, SourceHealth, SourceRuntimePhase, SourceRuntimeProgress,
     SourceRuntimeWorkItem,
 };
-
-use super::SourceRuntimeRegistry;
 
 impl SourceRuntimeRegistry {
     pub(crate) fn source_health_for_active_sources<'a>(

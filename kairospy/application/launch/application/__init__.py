@@ -16,6 +16,7 @@ _EXPORT_MODULE = {
     "LaunchConfigReport": "configuration",
     "LaunchConfigurationApplication": "configuration",
     "LaunchEnvironment": "configuration",
+    "LaunchNotificationConfigurationApplication": "notifications",
     "LaunchPlan": "configuration",
     "new_instance_id": "identity",
     "BacktestResult": "specs",

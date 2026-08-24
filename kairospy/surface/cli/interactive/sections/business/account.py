@@ -7,12 +7,24 @@ from typing import Any
 from prettytable import PrettyTable
 import typer
 
-from kairospy.application.account.cli import AccountCliApplication
+from kairospy.application.account import AccountConfigurationApplication
+from kairospy.application.config import ConfigurationReferenceApplication
 
 from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
 
 
 ACCOUNT_LIST_PATH = ("trade", "accounts")
+RESOURCE_ACCOUNT_LIST_PATH = ("resources", "accounts")
+ACCOUNT_LIST_PATHS = {ACCOUNT_LIST_PATH, RESOURCE_ACCOUNT_LIST_PATH}
+
+
+def _list_path(context: InteractiveContext) -> tuple[str, str]:
+    return (
+        RESOURCE_ACCOUNT_LIST_PATH
+        if context.shell_path[:2] == RESOURCE_ACCOUNT_LIST_PATH
+        else ACCOUNT_LIST_PATH
+    )
+
 
 _VIEW_ACTIONS = {
     "overview": ("overview", "查询账户概览"),
@@ -23,10 +35,10 @@ _VIEW_ACTIONS = {
 
 
 def print_menu(context: InteractiveContext) -> None:
-    if context.shell_path == ACCOUNT_LIST_PATH:
-        typer.echo("交易：请选择账户")
+    if context.shell_path in ACCOUNT_LIST_PATHS:
+        typer.echo("交易账户：")
         _print_account_list(context)
-        typer.echo("输入序号选择并进入账户；refresh 刷新列表。")
+        typer.echo("n. 添加 paper/live 账户；输入序号选择；refresh 刷新列表。")
         return
     account_id = context.selected_account or context.shell_path[2]
     if len(context.shell_path) == 4:
@@ -51,16 +63,36 @@ def print_menu(context: InteractiveContext) -> None:
     )
     environment = account.get("environment") or "-"
     status = str(account.get("status") or "unknown")
-    availability = _connection_availability(status)
+    verification_status = str(account.get("verification_status") or "pending")
+    availability = (
+        "可用"
+        if verification_status == "verified"
+        else "需重新测试"
+        if verification_status == "retest_required"
+        else "不可用"
+        if verification_status == "failed"
+        else _connection_availability(status)
+    )
     products = ", ".join(str(value) for value in account.get("products") or ()) or "-"
     segments = ", ".join(str(value) for value in account.get("segments") or ()) or "-"
     alias = str(account.get("alias") or "-")
+    references = (
+        ConfigurationReferenceApplication(context.owner).account_references(account_id)
+        if context.owner is not None
+        else []
+    )
     typer.echo(
         "\n".join(
             (
                 f"当前账户：{account_id} · 名称：{alias}",
                 f"Provider：{provider} · 产品：{products} · 分区：{segments} · 环境：{environment}",
                 f"连接可用性：{availability}（账户状态：{status}）",
+                f"手动验证：{_verification_label(verification_status)}",
+                f"最近测试：{account.get('last_tested_at') or '-'}",
+                f"已测试：{', '.join(str(item) for item in account.get('tested') or ()) or '-'}",
+                f"未测试：{', '.join(str(item) for item in account.get('not_tested') or ()) or '-'}",
+                f"当前配置版本：{_hash_label(account.get('current_configuration_hash'))} · 测试版本：{_hash_label(account.get('tested_configuration_hash'))}",
+                f"Launch 引用：{_reference_label(references)}",
                 "  1. 账户概览",
                 "  2. 资产与余额",
                 "  3. 交易仓位",
@@ -69,6 +101,10 @@ def print_menu(context: InteractiveContext) -> None:
                 "  6. 费率与账户等级",
                 "  7. 资金划转",
                 "  8. 配置与凭据",
+                "  t. 手动测试连接与权限（不提交订单）",
+                "  e. 启用账户（配置变化后需重新测试）",
+                "  d. 停用账户",
+                "  x. 删除账户（有 Launch 引用时拒绝）",
                 "  s. 切换账户",
             )
         )
@@ -76,14 +112,15 @@ def print_menu(context: InteractiveContext) -> None:
 
 
 def print_help(context: InteractiveContext) -> None:
-    if context.shell_path == ACCOUNT_LIST_PATH:
+    if context.shell_path in ACCOUNT_LIST_PATHS:
         typer.echo("可用命令：<序号>/select/list/back/home/exit")
         return
     if len(context.shell_path) == 4:
         typer.echo("可用命令：refresh/back/home/exit")
         return
     typer.echo(
-        "可用命令：summary/assets/positions/orders/earn/fees/transfer/settings/switch"
+        "可用命令：summary/assets/positions/orders/earn/fees/transfer/"
+        "settings/test/enable/disable/delete/switch"
     )
 
 
@@ -117,8 +154,14 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
     if len(parts) != 1:
         return None
     key = parts[0]
-    if context.shell_path == ACCOUNT_LIST_PATH:
+    if context.shell_path in ACCOUNT_LIST_PATHS:
         accounts = records(context)
+        if key in {"n", "new", "setup"}:
+            return GuidedCommand(
+                ("account", "setup"),
+                "配置 Workspace 交易账户并可选择执行安全的手动读取测试",
+                dangerous=True,
+            )
         if key.isdigit():
             index = int(key)
             if not 1 <= index <= len(accounts):
@@ -162,20 +205,68 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
         context.selected_order = None
         context.selected_order_symbol = None
         context.selected_market = None
-        context.selected_market_source = None
-        context.shell_path = (*ACCOUNT_LIST_PATH, account_id, "orders")
+        context.selected_market_provider = None
+        context.shell_path = (*_list_path(context), account_id, "orders")
         return ShellControl.HANDLED
     if key in {"5", "earn", "earn-holdings"}:
         return _enter_fact_view(context, "earn")
     if key in {"6", "fees"}:
-        context.shell_path = (*ACCOUNT_LIST_PATH, account_id, "fees")
+        context.shell_path = (*_list_path(context), account_id, "fees")
         return _fees_command(account_id)
     if key in {"7", "transfer"}:
-        context.shell_path = (*ACCOUNT_LIST_PATH, account_id, "transfer")
+        context.shell_path = (*_list_path(context), account_id, "transfer")
         return _transfer_action(context)
     if key in {"8", "settings", "configuration"}:
-        context.shell_path = (*ACCOUNT_LIST_PATH, account_id, "settings")
+        context.shell_path = (*_list_path(context), account_id, "settings")
         return _account_settings_command(context)
+    if key in {"t", "test", "verify"}:
+        return GuidedCommand(
+            ("account", "test", account_id, "--format", "text"),
+            "手动验证账户认证、读取与权限；不会提交订单或划转资金",
+            dangerous=True,
+        )
+    if key in {"e", "enable"}:
+        return GuidedCommand(
+            (
+                "account",
+                "modify",
+                "--account-id",
+                account_id,
+                "--status",
+                "configured",
+                "--format",
+                "text",
+            ),
+            "启用账户；配置版本变化后必须重新执行手动测试",
+        )
+    if key in {"d", "disable"}:
+        return GuidedCommand(
+            (
+                "account",
+                "modify",
+                "--account-id",
+                account_id,
+                "--status",
+                "disabled",
+                "--format",
+                "text",
+            ),
+            "停用 Workspace 交易账户",
+            dangerous=True,
+        )
+    if key in {"x", "delete", "remove"}:
+        return GuidedCommand(
+            (
+                "account",
+                "remove",
+                "--account-id",
+                account_id,
+                "--format",
+                "text",
+            ),
+            "删除 Workspace 交易账户；存在 Launch 引用时会拒绝",
+            dangerous=True,
+        )
     if key in {"s", "switch", "select"}:
         context.selected_account = None
         context.selected_account_provider = None
@@ -184,8 +275,8 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
         context.selected_order = None
         context.selected_order_symbol = None
         context.selected_market = None
-        context.selected_market_source = None
-        context.shell_path = ACCOUNT_LIST_PATH
+        context.selected_market_provider = None
+        context.shell_path = _list_path(context)
         return ShellControl.HANDLED
     return None
 
@@ -206,7 +297,7 @@ def build_fact_command(account_id: str, command: str, summary: str) -> GuidedCom
 
 def _enter_fact_view(context: InteractiveContext, view: str) -> GuidedCommand:
     account_id = context.selected_account or ""
-    context.shell_path = (*ACCOUNT_LIST_PATH, account_id, view)
+    context.shell_path = (*_list_path(context), account_id, view)
     command, summary = _VIEW_ACTIONS[view]
     result = account_fact_command(context, command, summary)
     assert isinstance(result, GuidedCommand)
@@ -254,17 +345,47 @@ def _account_settings_command(context: InteractiveContext) -> GuidedCommand:
         "账户配置与凭据：",
         (
             ("1", "查看账户配置"),
-            ("2", "运行账户诊断"),
-            ("3", "查看凭据列表"),
+            ("2", "修改名称、环境与 segment"),
+            ("3", "运行账户诊断"),
+            ("4", "查看凭据列表"),
         ),
     )
+    if action == "2":
+        account = _selected_account_record(context)
+        alias = typer.prompt(
+            "账户名称", default=str(account.get("alias") or account_id)
+        ).strip()
+        environment = typer.prompt(
+            "环境", default=str(account.get("environment") or "paper")
+        ).strip()
+        current_segments = account.get("segments") or ("spot",)
+        segment = typer.prompt(
+            "segment", default=str(next(iter(current_segments), "spot"))
+        ).strip()
+        return GuidedCommand(
+            (
+                "account",
+                "modify",
+                "--account-id",
+                account_id,
+                "--alias",
+                alias,
+                "--environment",
+                environment,
+                "--segment",
+                segment,
+                "--format",
+                "text",
+            ),
+            "修改账户基础配置；保存后需重新执行手动测试",
+        )
     mapping = {
         "1": (("account", "show", "--account-id", account_id), "查看账户配置"),
-        "2": (
+        "3": (
             ("account", "doctor", "--account-id", account_id),
             "运行账户诊断",
         ),
-        "3": (("account", "credential-list"), "查看凭据列表"),
+        "4": (("account", "credential-list"), "查看凭据列表"),
     }
     argv, summary = mapping[action]
     return GuidedCommand((*argv, "--format", "text"), summary)
@@ -292,18 +413,33 @@ def _connection_availability(status: str) -> str:
     return "不可用"
 
 
+def _verification_label(status: str) -> str:
+    return {
+        "verified": "已验证",
+        "pending": "待测试",
+        "retest_required": "需重新测试",
+        "failed": "测试失败",
+    }.get(status, status)
+
+
+def _reference_label(references: list[dict[str, str]]) -> str:
+    if not references:
+        return "无"
+    return "；".join(f"{item['source']}:{item['location']}" for item in references)
+
+
+def _hash_label(value: object) -> str:
+    return str(value)[:12] if isinstance(value, str) and value else "-"
+
+
 def records(context: InteractiveContext) -> tuple[dict[str, Any], ...]:
     if context.owner is None:
         return ()
     try:
-        value = AccountCliApplication(context.owner).run(["standalone", "list"])
+        return tuple(AccountConfigurationApplication(context.owner).list())
     except (OSError, RuntimeError, ValueError) as error:
         typer.echo(f"读取账户列表失败：{error}")
         return ()
-    accounts = value.get("accounts", ()) if isinstance(value, dict) else value
-    if not isinstance(accounts, (list, tuple)):
-        return ()
-    return tuple(dict(account) for account in accounts if isinstance(account, dict))
 
 
 def _select_account(context: InteractiveContext) -> None:
@@ -350,7 +486,7 @@ def _print_account_list(
         typer.echo("可先运行 kairos account simulate 或 kairos account register。")
         return
     table = PrettyTable(
-        ["序号", "account", "environment", "broker/custodian", "status", "segments"]
+        ["序号", "account", "environment", "broker/custodian", "验证", "segments"]
     )
     table.align = "l"
     for index, account in enumerate(values, start=1):
@@ -361,7 +497,9 @@ def _print_account_list(
                 account.get("account_id", "-"),
                 account.get("environment", "-"),
                 account.get("broker", "-"),
-                account.get("status", "unknown"),
+                _verification_label(
+                    str(account.get("verification_status") or "pending")
+                ),
                 ", ".join(str(value) for value in segments),
             ]
         )
@@ -394,8 +532,8 @@ def _enter_account_context(
     context.selected_order = None
     context.selected_order_symbol = None
     context.selected_market = None
-    context.selected_market_source = None
-    context.shell_path = (*ACCOUNT_LIST_PATH, account_id)
+    context.selected_market_provider = None
+    context.shell_path = (*_list_path(context), account_id)
     print_summary(context, accounts=accounts)
 
 
@@ -453,6 +591,25 @@ def print_summary(
     table.add_row(["environment", account.get("environment", "-")])
     table.add_row(["account model", account.get("account_model") or "unknown"])
     table.add_row(["status", account.get("status", "unknown")])
+    table.add_row(
+        [
+            "verification",
+            _verification_label(str(account.get("verification_status") or "pending")),
+        ]
+    )
+    table.add_row(["last tested", account.get("last_tested_at") or "-"])
+    table.add_row(
+        [
+            "tested",
+            ", ".join(str(value) for value in account.get("tested") or ()) or "-",
+        ]
+    )
+    table.add_row(
+        [
+            "not tested",
+            ", ".join(str(value) for value in account.get("not_tested") or ()) or "-",
+        ]
+    )
     table.add_row(
         ["segments", ", ".join(str(value) for value in account.get("segments") or ())]
     )

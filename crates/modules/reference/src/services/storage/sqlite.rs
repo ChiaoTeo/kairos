@@ -51,27 +51,11 @@ pub(crate) async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
                 .fetch_optional(&pool)
                 .await?
                 .unwrap_or_default();
-        if version < i64::from(kairos_reference_contract::REFERENCE_SQLITE_SCHEMA_VERSION) {
-            // v4 changes canonical market identity. Old provider payloads and
-            // projections cannot be renamed safely because provider markets
-            // may now collapse into one venue market or no market at all.
-            // Invalidate derived state and let configured providers rebuild it.
-            sqlx::raw_sql(
-                "DROP TABLE IF EXISTS reference_entities_current;
-                 DROP TABLE IF EXISTS reference_assets_current;
-                 DROP TABLE IF EXISTS reference_instruments_current;
-                 DROP TABLE IF EXISTS reference_listings_current;
-                 DROP TABLE IF EXISTS reference_markets_current;
-                 DELETE FROM reference_provider_records;
-                 DELETE FROM reference_provider_staging;
-                 DELETE FROM reference_provider_pending_promotion;
-                 DELETE FROM reference_lifecycle;
-                 DELETE FROM reference_publication_outbox;
-                 UPDATE reference_publication_state SET published_sequence=0 WHERE id=1;
-                 UPDATE reference_meta SET schema_version=4,generation=0,event_sequence=0,committed_at_unix_nanos=0 WHERE id=1;",
-            )
-            .execute(&pool)
-            .await?;
+        let expected = i64::from(kairos_reference_contract::REFERENCE_SQLITE_SCHEMA_VERSION);
+        if version != expected {
+            return Err(sqlx::Error::Protocol(format!(
+                "unsupported Reference SQLite schema version {version}; expected {expected}"
+            )));
         }
     }
     sqlx::raw_sql(include_str!("../../../schema.sql"))

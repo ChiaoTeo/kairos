@@ -5,6 +5,9 @@ from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli.interactive.models import GuidedCommand, ShellControl
 from kairospy.surface.cli.interactive.sections.business import execution_component
 from kairospy.surface.cli.interactive.sections.strategy import launch
+from kairospy.surface.cli.interactive import session
+from kairospy.application.launch.application import LaunchConfigurationApplication
+from kairospy.application.account import AccountConfigurationApplication
 
 
 def test_launch_shell_and_preview_share_command_builder(
@@ -26,6 +29,60 @@ def test_launch_shell_and_preview_share_command_builder(
 def test_launch_dangerous_and_streaming_attributes() -> None:
     assert launch.build_command("demo", "stop").dangerous is True
     assert launch.build_command("demo", "attach").streaming is True
+
+
+def test_new_launch_keeps_identity_for_resource_setup_return(
+    interactive_context, monkeypatch
+) -> None:
+    interactive_context.shell_path = ("launch",)
+    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: "paper-signals")
+
+    command = launch.handle(interactive_context, ("n",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.argv == ("launch", "init", "paper-signals")
+    assert interactive_context.selected_launch == "paper-signals"
+
+
+def test_fix_saves_working_draft_and_continue_returns_to_same_launch(
+    interactive_context, tmp_path, capsys
+) -> None:
+    owner = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
+    config = owner.paths.launch_config("needs-account")
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        '[launch]\nid = "needs-account"\nmode = "paper"\n'
+        'strategy = "builtin:interactive"\n\n'
+        '[accounts.main]\nref = "missing-account"\ntrade = false\n\n'
+        "[execution]\nenabled = false\n",
+        encoding="utf-8",
+    )
+    interactive_context.owner = owner
+    interactive_context.shell_path = ("launch", "needs-account")
+    interactive_context.selected_launch = "needs-account"
+
+    assert launch.handle(interactive_context, ("fix",)) is ShellControl.HANDLED
+    assert interactive_context.shell_path == ("resources", "accounts")
+    application = LaunchConfigurationApplication()
+    assert application.draft_path(owner.paths.root, "needs-account").is_file()
+    assert application.draft_return(owner.paths.root, "needs-account") == {
+        "launch_id": "needs-account",
+        "resource": "accounts",
+        "step": "accounts",
+    }
+
+    assert session._resume_launch_draft(interactive_context) is True
+    assert interactive_context.shell_path == ("resources", "accounts")
+    assert application.draft_return(owner.paths.root, "needs-account") is not None
+    accounts = AccountConfigurationApplication(owner)
+    accounts.simulate("missing-account")
+    accounts.test_connection("missing-account")
+    assert session._resume_launch_draft(interactive_context) is True
+    assert interactive_context.shell_path == ("launch", "needs-account")
+    assert application.draft_return(owner.paths.root, "needs-account") is None
+    text = capsys.readouterr().out
+    assert "完成资源配置和手动测试后输入 continue 返回" in text
+    assert "继续编辑 Launch needs-account" in text
 
 
 def test_launch_selects_instance_before_components(

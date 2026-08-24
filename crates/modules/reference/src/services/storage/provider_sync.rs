@@ -1,17 +1,17 @@
+use sqlx::{Row, Sqlite, SqlitePool};
+
 use crate::domain::{
-    Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceError, ReferenceResult,
+    Asset, Exchange, Instrument, Listing, Market, ProviderCatalog, ReferenceError, ReferenceResult,
 };
 use crate::services::time::unix_nanos;
 
-use sqlx::{Row, Sqlite, SqlitePool};
-
-pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 6;
+pub(crate) const PROVIDER_SCAN_FORMAT_VERSION: i64 = 7;
 
 pub(crate) type ProviderRecord = (&'static str, String, String);
 
 pub(crate) fn provider_records(catalog: &ProviderCatalog) -> ReferenceResult<Vec<ProviderRecord>> {
     let mut records = Vec::with_capacity(
-        catalog.entities.len()
+        catalog.exchanges.len()
             + catalog.assets.len()
             + catalog.instruments.len()
             + catalog.listings.len()
@@ -28,9 +28,9 @@ pub(crate) fn provider_records(catalog: &ProviderCatalog) -> ReferenceResult<Vec
             }
         };
     }
-    push_records!("entity", &catalog.entities, |value: &Entity| value
-        .entity_id
-        .clone());
+    push_records!("exchange", &catalog.exchanges, |value: &Exchange| value
+        .exchange_id
+        .to_string());
     push_records!("asset", &catalog.assets, |value: &Asset| value
         .asset_id
         .to_string());
@@ -52,7 +52,7 @@ pub(crate) fn push_provider_record(
     payload: String,
 ) -> ReferenceResult<()> {
     match kind {
-        "entity" => catalog.entities.push(decode(payload)?),
+        "exchange" => catalog.exchanges.push(decode(payload)?),
         "asset" => catalog.assets.push(decode(payload)?),
         "instrument" => catalog.instruments.push(decode(payload)?),
         "listing" => catalog.listings.push(decode(payload)?),
@@ -62,19 +62,19 @@ pub(crate) fn push_provider_record(
     Ok(())
 }
 
-/// Prepare an incremental provider scan for the current canonical projection.
+/// Prepare an incremental provider scan for the current canonical catalog.
 /// A version change discards only unfinished normalized pages and their cursor;
 /// committed records remain authoritative until the new scan is complete and
 /// atomically promoted.
-pub(crate) async fn prepare_projection(pool: &SqlitePool, provider: &str) -> sqlx::Result<bool> {
+pub(crate) async fn prepare_scan(pool: &SqlitePool, provider: &str) -> sqlx::Result<bool> {
     let mut tx = pool.begin().await?;
     let previous = sqlx::query_scalar::<_, i64>(
-        "SELECT version FROM reference_provider_projection_version WHERE provider = ?",
+        "SELECT version FROM reference_provider_scan_format WHERE provider = ?",
     )
     .bind(provider)
     .fetch_optional(&mut *tx)
     .await?;
-    let reset = previous != Some(PROVIDER_PROJECTION_VERSION);
+    let reset = previous != Some(PROVIDER_SCAN_FORMAT_VERSION);
     if reset {
         sqlx::query("DELETE FROM reference_provider_staging WHERE provider = ?")
             .bind(provider)
@@ -89,9 +89,9 @@ pub(crate) async fn prepare_projection(pool: &SqlitePool, provider: &str) -> sql
             .bind(provider)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("INSERT INTO reference_provider_projection_version(provider,version) VALUES (?,?) ON CONFLICT(provider) DO UPDATE SET version=excluded.version")
+        sqlx::query("INSERT INTO reference_provider_scan_format(provider,version) VALUES (?,?) ON CONFLICT(provider) DO UPDATE SET version=excluded.version")
             .bind(provider)
-            .bind(PROVIDER_PROJECTION_VERSION)
+            .bind(PROVIDER_SCAN_FORMAT_VERSION)
             .execute(&mut *tx)
             .await?;
     }
@@ -467,9 +467,9 @@ pub(crate) async fn reset_provider_scan_tx(
         .bind(unix_nanos().get() as i64)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("INSERT INTO reference_provider_projection_version(provider,version) VALUES (?,?) ON CONFLICT(provider) DO UPDATE SET version=excluded.version")
+    sqlx::query("INSERT INTO reference_provider_scan_format(provider,version) VALUES (?,?) ON CONFLICT(provider) DO UPDATE SET version=excluded.version")
         .bind(provider)
-        .bind(PROVIDER_PROJECTION_VERSION)
+        .bind(PROVIDER_SCAN_FORMAT_VERSION)
         .execute(&mut **tx)
         .await?;
     Ok(())
@@ -513,7 +513,6 @@ pub(crate) async fn upsert_source_definition(
         "INSERT INTO reference_source_registry(
             source_id,
             provider_id,
-            provider_product,
             scope_kind,
             scope_id,
             desired_state,
@@ -521,10 +520,9 @@ pub(crate) async fn upsert_source_definition(
             sync_policy,
             payload,
             updated_at_unix_nanos
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id) DO UPDATE SET
             provider_id = excluded.provider_id,
-            provider_product = excluded.provider_product,
             scope_kind = excluded.scope_kind,
             scope_id = excluded.scope_id,
             desired_state = excluded.desired_state,
@@ -535,7 +533,6 @@ pub(crate) async fn upsert_source_definition(
     )
     .bind(definition.source_id.as_str())
     .bind(definition.provider_id.as_str())
-    .bind(definition.provider_product.as_deref())
     .bind(definition.scope.kind.as_str())
     .bind(&definition.scope.id)
     .bind(definition.desired_state.as_str())

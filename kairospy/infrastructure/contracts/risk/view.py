@@ -80,8 +80,8 @@ class RiskViewReader:
         )
 
 
-class RiskProjection:
-    """Application projection backed by one v2 Risk latest view."""
+class RiskLatestViewQueries:
+    """Application current-view queries backed by one v2 Risk latest view."""
 
     def __init__(self, root: str | Path, key: RiskViewKey, *, retries: int = 8) -> None:
         self._reader = RiskViewReader(root, key, retries=retries)
@@ -435,7 +435,7 @@ def _enum_name(mapping: dict[int, str], value: int) -> str:
 
 
 __all__ = [
-    "RiskProjection",
+    "RiskLatestViewQueries",
     "RiskViewFrame",
     "RiskViewKey",
     "RiskViewReader",

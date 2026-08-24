@@ -22,7 +22,7 @@ impl<'a> ::flatbuffers::Follow<'a> for MarkPrice<'a> {
 impl<'a> MarkPrice<'a> {
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 8;
     pub const VT_MARK_PRICE: ::flatbuffers::VOffsetT = 10;
     pub const VT_INDEX_PRICE: ::flatbuffers::VOffsetT = 12;
     pub const VT_ESTIMATED_SETTLEMENT_PRICE: ::flatbuffers::VOffsetT = 14;
@@ -61,8 +61,8 @@ impl<'a> MarkPrice<'a> {
         if let Some(x) = args.mark_price {
             builder.add_mark_price(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -96,13 +96,13 @@ impl<'a> MarkPrice<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(MarkPrice::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(MarkPrice::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -202,8 +202,8 @@ impl ::flatbuffers::Verifiable for MarkPrice<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<super::super::common::v_2::Decimal64>(
@@ -248,7 +248,7 @@ impl ::flatbuffers::Verifiable for MarkPrice<'_> {
 pub struct MarkPriceArgs<'a> {
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub mark_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub index_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub estimated_settlement_price: Option<&'a super::super::common::v_2::Decimal64>,
@@ -263,7 +263,7 @@ impl<'a> Default for MarkPriceArgs<'a> {
         MarkPriceArgs {
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             mark_price: None,    // required field
             index_price: None,
             estimated_settlement_price: None,
@@ -296,9 +296,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MarkPriceBuilder<'a, 'b, A> {
         );
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(MarkPrice::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(MarkPrice::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_mark_price(&mut self, mark_price: &super::super::common::v_2::Decimal64) {
@@ -375,7 +375,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MarkPriceBuilder<'a, 'b, A> {
         self.fbb_.required(o, MarkPrice::VT_SCOPE, "scope");
         self.fbb_
             .required(o, MarkPrice::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, MarkPrice::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, MarkPrice::VT_PROVIDER, "provider");
         self.fbb_
             .required(o, MarkPrice::VT_MARK_PRICE, "mark_price");
         ::flatbuffers::WIPOffset::new(o.value())
@@ -387,7 +387,7 @@ impl ::core::fmt::Debug for MarkPrice<'_> {
         let mut ds = f.debug_struct("MarkPrice");
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("mark_price", &self.mark_price());
         ds.field("index_price", &self.index_price());
         ds.field(

@@ -6,7 +6,7 @@ class ApplicationUnavailableError(StrategySdkError):
     pass
 
 
-class StaleProjectionError(StrategySdkError):
+class StaleCurrentViewError(StrategySdkError):
     pass
 
 

@@ -1,4 +1,4 @@
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 
 use super::freshness::MarketFreshness;
 use super::observation::MarketObservation;
@@ -18,7 +18,7 @@ pub enum MarketEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderBookResyncRequired {
-    pub source_id: SourceId,
+    pub provider: Provider,
     pub market_id: kairos_primitives::reference::MarketId,
     pub instrument_id: kairos_primitives::reference::InstrumentId,
     pub expected_sequence: kairos_primitives::time::Sequence,

@@ -3,7 +3,7 @@ use super::*;
 pub fn compose_order_entry(
     options: &ExecutionConnectionOptions,
 ) -> Result<Box<dyn BlockingOrderCommand>, String> {
-    let provider = options.participant_id.trim().to_ascii_lowercase();
+    let provider = options.broker_id.trim().to_ascii_lowercase();
     if matches!(provider.as_str(), "simulated" | "paper") {
         return Ok(Box::new(SimulatedOrderEntry::default()));
     }

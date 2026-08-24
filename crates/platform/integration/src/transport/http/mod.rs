@@ -125,7 +125,7 @@ impl HttpRequestSemantics {
 
 /// Default async HTTP client. It creates no runtime or worker thread; request
 /// futures are polled by the caller's runtime. Clone and reuse it so provider
-/// capability projections share reqwest's connection pool.
+/// capability clients share reqwest's connection pool.
 #[derive(Clone)]
 pub struct HttpClient {
     client: reqwest::Client,

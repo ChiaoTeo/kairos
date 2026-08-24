@@ -1,4 +1,4 @@
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::time::{Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ pub enum DataFreshnessStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketFreshness {
-    pub source_id: SourceId,
+    pub provider: Provider,
     pub scope: ObservationScope,
     pub data_kind: ObservationKind,
     pub last_event_time_unix_nanos: UnixNanos,

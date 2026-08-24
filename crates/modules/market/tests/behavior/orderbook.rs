@@ -1,6 +1,6 @@
 use kairos_market::{
-    MarketApplication, MarketDataRoute, OrderBook, OrderBookDelta, OrderBookSide, PriceLevel,
-    ResolvedMarket, SubscriptionId,
+    MarketApplication, OrderBook, OrderBookDelta, OrderBookSide, PriceLevel, ResolvedMarket,
+    SubscriptionId,
 };
 
 #[test]
@@ -18,7 +18,7 @@ fn orderbook_applies_contiguous_deltas() {
     )
     .unwrap();
     book.apply_delta(OrderBookDelta {
-        source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+        provider: kairos_primitives::market::Provider::new("market").unwrap(),
         market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
         instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc").unwrap(),
         first_sequence: 11.into(),
@@ -43,7 +43,7 @@ fn query_estimates_execution_with_decimal_vwap_and_slippage() {
         "instrument:btc",
         kairos_primitives::reference::InstrumentKind::Spot,
         "binance",
-        MarketDataRoute::new("test:btc", "binance", "spot", "BTCUSDT").unwrap(),
+        "binance",
     )
     .unwrap();
     let mut application = MarketApplication::new("market-1", 10).unwrap();
@@ -56,8 +56,8 @@ fn query_estimates_execution_with_decimal_vwap_and_slippage() {
         .unwrap();
     application
         .ingest_orderbook_snapshot(
-            OrderBook::snapshot_with_source(
-                kairos_primitives::market::SourceId::new("binance.spot").unwrap(),
+            OrderBook::snapshot_with_provider(
+                kairos_primitives::market::Provider::new("binance").unwrap(),
                 "market:btc",
                 "instrument:btc",
                 1,
@@ -84,7 +84,7 @@ fn query_estimates_execution_with_decimal_vwap_and_slippage() {
     let estimate = application
         .query()
         .estimate_execution(
-            &kairos_primitives::market::SourceId::new("binance.spot").unwrap(),
+            &kairos_primitives::market::Provider::new("binance").unwrap(),
             "market:btc",
             OrderBookSide::Buy,
             "3",
@@ -100,7 +100,7 @@ fn orderbook_accepts_overlapping_provider_delta_ranges() {
     let mut book =
         OrderBook::snapshot("market:btc", "instrument:btc", 10, 1, vec![], vec![]).unwrap();
     book.apply_delta(OrderBookDelta {
-        source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+        provider: kairos_primitives::market::Provider::new("market").unwrap(),
         market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
         instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc").unwrap(),
         first_sequence: 9.into(),
@@ -120,7 +120,7 @@ fn orderbook_gap_marks_book_unsynchronized_until_snapshot() {
         OrderBook::snapshot("market:btc", "instrument:btc", 10, 1, vec![], vec![]).unwrap();
     assert!(
         book.apply_delta(OrderBookDelta {
-            source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+            provider: kairos_primitives::market::Provider::new("market").unwrap(),
             market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
             instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
                 .unwrap(),
@@ -136,7 +136,7 @@ fn orderbook_gap_marks_book_unsynchronized_until_snapshot() {
     assert!(!book.synchronized);
     assert!(
         book.apply_delta(OrderBookDelta {
-            source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+            provider: kairos_primitives::market::Provider::new("market").unwrap(),
             market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
             instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
                 .unwrap(),

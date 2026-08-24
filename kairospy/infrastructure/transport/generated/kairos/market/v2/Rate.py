@@ -50,7 +50,7 @@ class Rate(object):
         return None
 
     # Rate
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -123,11 +123,11 @@ def RateAddInstrumentId(builder, instrumentId):
 def AddInstrumentId(builder, instrumentId):
     RateAddInstrumentId(builder, instrumentId)
 
-def RateAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def RateAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    RateAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    RateAddProvider(builder, provider)
 
 def RateAddBasis(builder, basis):
     builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(basis), 0)

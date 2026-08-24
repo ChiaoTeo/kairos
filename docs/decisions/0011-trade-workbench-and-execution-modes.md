@@ -9,7 +9,7 @@
 Interactive CLI 当前从首页进入“交易管理”后，继续并列展示 Account、Execution、Risk 和 Capital。
 进入 Execution 后，独立命令、Launch Instance 连接命令、evidence 文件读取和请求 preview 又被平铺在
 同一个菜单中。用户必须理解内部模块和运行方式，才能判断一个动作实际操作哪个账户、是否连接正在
-运行的 Execution server，以及数据来自交易所还是 runtime projection。
+运行的 Execution server，以及数据来自交易所还是 runtime current view。
 
 这个结构还存在三项导航问题：
 
@@ -94,7 +94,7 @@ Interactive CLI
   -> exchange
 ```
 
-独立模式不启动、不发现也不连接 Execution server，不读取 Launch Instance 的 projection，也不借用
+独立模式不启动、不发现也不连接 Execution server，不读取 Launch Instance 的 current view，也不借用
 Launch Context。命令完成后，本次命令拥有的交易所连接随进程结束。
 
 订单管理菜单提供：
@@ -127,7 +127,7 @@ Order ID。下单、撤单和修改订单必须显式携带当前 `AccountId`，
 显式携带该 segment，不得默认取账户配置中的第一项。
 
 独立查询返回交易所直接查询结果。输出必须标记 `scope=direct-provider`，不得表现为 Execution server
-的 projection、journal 或审计状态。Provider 不支持某个动作时，应报告明确的 capability error，
+的 current view、journal 或审计状态。Provider 不支持某个动作时，应报告明确的 capability error，
 不得回退到 Launch Instance、缓存文件或其他运行时状态。
 
 Execution 不定义“本地工具”或第三种产品模式。Evidence 文件读取和请求 preview 不出现在账户订单
@@ -193,7 +193,7 @@ Interactive Context 在进入组件前保存经过 Launch Registry 验证的 `La
 | 动作 | `/trade/accounts/<account-id>/orders` | Launch Instance Execution |
 | --- | --- | --- |
 | 提交、撤销、修改 | CLI 直接调用交易所 | 调用 Execution server control API |
-| 单笔、未完成、历史订单 | 直接查询交易所 | 读取 server API 或权威 projection |
+| 单笔、未完成、历史订单 | 直接查询交易所 | 读取 server API 或权威 current view |
 | 成交记录 | 直接查询交易所 | 读取 server 管理的成交事实 |
 | snapshot、route、event、audit、journal | 不提供 | Execution server runtime 能力 |
 

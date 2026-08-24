@@ -4,12 +4,12 @@ use kairos_workspace::Workspace;
 use serde::Deserialize;
 
 use super::defaults::*;
-use super::sources::MarketSourceBinding;
+use super::sources::MarketProviderBindings;
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct MarketConfig {
     #[serde(default)]
-    pub sources: BTreeMap<String, MarketSourceBinding>,
+    pub providers: MarketProviderBindings,
     #[serde(default)]
     pub profiles: BTreeMap<String, MarketProfileConfig>,
     #[serde(default)]
@@ -29,7 +29,6 @@ impl MarketConfig {
 pub struct MarketCollectionConfig {
     #[serde(default = "enabled_by_default")]
     pub enabled: bool,
-    pub subject: String,
     #[serde(default)]
     pub market_id: Option<String>,
     #[serde(default)]
@@ -38,7 +37,7 @@ pub struct MarketCollectionConfig {
     #[serde(default)]
     pub network_id: Option<String>,
     #[serde(default)]
-    pub selectors: Vec<String>,
+    pub observations: Vec<String>,
     #[serde(default)]
     pub exchange: Option<String>,
     #[serde(default)]
@@ -46,7 +45,7 @@ pub struct MarketCollectionConfig {
     #[serde(default)]
     pub asset_type: Option<String>,
     #[serde(default)]
-    pub source_id: Option<String>,
+    pub provider: Option<kairos_primitives::market::Provider>,
     #[serde(default = "default_collection_queue_capacity")]
     pub queue_capacity: usize,
 }

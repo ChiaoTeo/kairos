@@ -5,7 +5,7 @@ use kairos_protocol::generated::kairos::common::v_2::{Decimal64, EventMetadata};
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
 
 use crate::ContractResult;
-use crate::transport::{Asset, Entity, Instrument, Listing, Market};
+use crate::catalog::{Asset, Exchange, Instrument, Listing, Market};
 
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
@@ -52,19 +52,19 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
 pub struct ReferenceEncoder;
 
 impl ReferenceEncoder {
-    pub fn entity_upserted(
-        record: &Entity,
+    pub fn exchange_upserted(
+        record: &Exchange,
         context: &EncodeContext,
         occurred_at_unix_nanos: u64,
     ) -> ContractResult<Vec<u8>> {
-        encode_entity(record, context, occurred_at_unix_nanos, false)
+        encode_exchange(record, context, occurred_at_unix_nanos, false)
     }
-    pub fn entity_updated(
-        record: &Entity,
+    pub fn exchange_updated(
+        record: &Exchange,
         context: &EncodeContext,
         occurred_at_unix_nanos: u64,
     ) -> ContractResult<Vec<u8>> {
-        encode_entity(record, context, occurred_at_unix_nanos, true)
+        encode_exchange(record, context, occurred_at_unix_nanos, true)
     }
     pub fn asset_upserted(
         record: &Asset,
@@ -131,41 +131,40 @@ impl ReferenceEncoder {
     }
 }
 
-fn encode_entity(
-    record: &Entity,
+fn encode_exchange(
+    record: &Exchange,
     context: &EncodeContext,
     occurred_at_unix_nanos: u64,
     updated: bool,
 ) -> ContractResult<Vec<u8>> {
     let mut builder = FlatBufferBuilder::new();
     let metadata = event_metadata(&mut builder, context, occurred_at_unix_nanos);
-    let args = fb::EntityArgs {
-        entity_id: Some(builder.create_string(&record.entity_id)),
-        entity_type: Some(builder.create_string(&record.entity_type)),
+    let args = fb::ExchangeArgs {
+        exchange_id: Some(builder.create_string(record.exchange_id.as_str())),
         name: Some(builder.create_string(&record.name)),
         status: status(record.status),
     };
-    let entity = fb::Entity::create(&mut builder, &args);
+    let exchange = fb::Exchange::create(&mut builder, &args);
     if updated {
-        let root = fb::EntityUpdated::create(
+        let root = fb::ExchangeUpdated::create(
             &mut builder,
-            &fb::EntityUpdatedArgs {
+            &fb::ExchangeUpdatedArgs {
                 metadata: Some(metadata),
                 catalog_revision: context.catalog_revision.get(),
-                entity: Some(entity),
+                exchange: Some(exchange),
             },
         );
-        fb::finish_entity_updated_buffer(&mut builder, root);
+        fb::finish_exchange_updated_buffer(&mut builder, root);
     } else {
-        let root = fb::EntityUpserted::create(
+        let root = fb::ExchangeUpserted::create(
             &mut builder,
-            &fb::EntityUpsertedArgs {
+            &fb::ExchangeUpsertedArgs {
                 metadata: Some(metadata),
                 catalog_revision: context.catalog_revision.get(),
-                entity: Some(entity),
+                exchange: Some(exchange),
             },
         );
-        fb::finish_entity_upserted_buffer(&mut builder, root);
+        fb::finish_exchange_upserted_buffer(&mut builder, root);
     }
     Ok(builder.finished_data().to_vec())
 }

@@ -266,12 +266,12 @@ pub(super) fn encode_current_fill<'a>(
         .remote_order_id
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
-    let reported_provider_id = fill
-        .reported_provider_id
+    let reported_broker_id = fill
+        .reported_broker_id
         .as_ref()
         .map(|value| builder.create_string(value));
-    let provider_product = fill
-        .provider_product
+    let execution_channel = fill
+        .execution_channel
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
     let order_entry_symbol = fill
@@ -301,8 +301,8 @@ pub(super) fn encode_current_fill<'a>(
             market_id: Some(market_id),
             execution_route_id: Some(execution_route_id),
             remote_order_id,
-            reported_provider_id,
-            provider_product,
+            reported_broker_id,
+            execution_channel,
             provider_symbol: order_entry_symbol,
             side: match fill.side {
                 OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,
@@ -631,12 +631,12 @@ fn encode_selected_route<'a>(
     route: &crate::domain::SelectedExecutionRoute,
 ) -> flatbuffers::WIPOffset<fb::SelectedExecutionRoute<'a>> {
     let route_id = builder.create_string(route.route_id.as_str());
-    let participant_id = builder.create_string(&route.participant_id);
+    let broker_id = builder.create_string(&route.broker_id);
     let destination_market_id = route
         .destination_market_id
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
-    let provider_product = builder.create_string(route.provider_product.as_str());
+    let execution_channel = builder.create_string(route.execution_channel.as_str());
     let order_entry_symbol = builder.create_string(route.order_entry_symbol.as_str());
     fb::SelectedExecutionRoute::create(
         builder,
@@ -648,9 +648,9 @@ fn encode_selected_route<'a>(
                     fb::RouteSelectionKind::UNIQUE_CANDIDATE
                 },
             },
-            participant_id: Some(participant_id),
+            broker_id: Some(broker_id),
             destination_market_id,
-            provider_product: Some(provider_product),
+            execution_channel: Some(execution_channel),
             provider_symbol: Some(order_entry_symbol),
             selected_at_unix_nanos: route.selected_at_unix_nanos.get(),
         },

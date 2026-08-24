@@ -17,19 +17,19 @@ pub struct ExecutionConnectionOptions {
     /// exchange such as `binance` or a broker such as `ibkr`).  This is not
     /// an Account-owned broker identity and must not be used as a generic
     /// vendor/provider bucket.
-    pub participant_id: String,
-    /// Provider venue product. For OKX this remains independent from the
+    pub broker_id: String,
+    /// Execution channel. For OKX this remains independent from the
     /// order/account trading mode below.
-    pub product: String,
+    pub execution_channel: String,
     pub trading_mode: Option<String>,
     pub api_key: SecretString,
     pub secret: SecretString,
     pub passphrase: SecretString,
     pub base_url: String,
     pub websocket_url: String,
-    /// Provider symbol required by Binance isolated-margin listen-key scope.
+    /// Order-entry symbol required by Binance isolated-margin listen-key scope.
     pub isolated_symbol: Option<String>,
-    /// Execution-owned provider addresses. Broker and smart-routed products
+    /// Execution-owned participant addresses. Broker and smart-routed products
     /// may target an Instrument without claiming a canonical destination.
     pub instruments: Vec<ExecutionInstrumentRoute>,
     pub request_weight_per_minute: u32,
@@ -55,10 +55,10 @@ pub struct ExecutionInstrumentRoute {
 }
 
 /// Resolve Execution-owned route candidates from configured connections and
-/// canonical Reference identity. Provider product and symbol remain owned by
+/// canonical Reference identity. The execution channel and order-entry symbol remain owned by
 /// the configured Execution route; Reference never supplies broker coverage.
 pub fn load_execution_routes_from_reference_markets(
-    snapshot: &kairos_reference_contract::ReferenceProjectionSnapshot,
+    snapshot: &kairos_reference_contract::ExecutionReferenceSnapshot,
     configured_routes: &[ExecutionConnectionOptions],
 ) -> Result<
     Vec<(
@@ -109,12 +109,9 @@ pub fn load_execution_routes_from_reference_markets(
         }
         for market in snapshot.markets.iter().filter(|market| {
             matches!(market.status.as_str(), "active" | "trading")
-                && canonical_venue_matches_participant(
-                    &market.exchange_id,
-                    &configured.participant_id,
-                )
+                && canonical_venue_matches_participant(&market.exchange_id, &configured.broker_id)
                 && route_product_supports_instrument_kind(
-                    &configured.product,
+                    &configured.execution_channel,
                     market.instrument_kind,
                 )
                 && market.venue_symbol.is_some()
@@ -124,8 +121,8 @@ pub fn load_execution_routes_from_reference_markets(
                 .as_deref()
                 .expect("filtered venue symbol");
             let participant_instrument = participant_instrument_for_route(
-                &configured.participant_id,
-                &configured.product,
+                &configured.broker_id,
+                &configured.execution_channel,
                 order_entry_symbol,
             )?;
             let route_id = kairos_primitives::execution::ExecutionRouteId::new(format!(
@@ -146,9 +143,10 @@ pub fn load_execution_routes_from_reference_markets(
                     ),
                     instrument_id: Some(market.instrument_id.clone()),
                     market_id: Some(market.market_id.clone()),
-                    participant_id: configured.participant_id.clone(),
-                    provider_product: kairos_primitives::integration::ProviderProductCode::new(
-                        &configured.product,
+                    broker_id: kairos_primitives::account::BrokerId::new(&configured.broker_id)
+                        .map_err(|error| error.to_string())?,
+                    execution_channel: kairos_primitives::execution::ExecutionChannelCode::new(
+                        &configured.execution_channel,
                     )
                     .map_err(|error| error.to_string())?,
                     order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new(
@@ -160,8 +158,8 @@ pub fn load_execution_routes_from_reference_markets(
                         crate::application::OrderType::Limit,
                     ],
                     supported_options: supported_order_options(
-                        &configured.participant_id,
-                        &configured.product,
+                        &configured.broker_id,
+                        &configured.execution_channel,
                     ),
                     ready: true,
                     initial_margin_rate_bps: margin_rule(configured).map(|value| value.0),
@@ -187,8 +185,8 @@ pub(super) fn candidate_for_address(
     String,
 > {
     let participant_instrument = participant_instrument_for_route(
-        &configured.participant_id,
-        &configured.product,
+        &configured.broker_id,
+        &configured.execution_channel,
         order_entry_symbol,
     )?;
     let route_id = kairos_primitives::execution::ExecutionRouteId::new(format!(
@@ -215,9 +213,10 @@ pub(super) fn candidate_for_address(
                 .map(kairos_primitives::reference::MarketId::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
-            participant_id: configured.participant_id.clone(),
-            provider_product: kairos_primitives::integration::ProviderProductCode::new(
-                &configured.product,
+            broker_id: kairos_primitives::account::BrokerId::new(&configured.broker_id)
+                .map_err(|error| error.to_string())?,
+            execution_channel: kairos_primitives::execution::ExecutionChannelCode::new(
+                &configured.execution_channel,
             )
             .map_err(|error| error.to_string())?,
             order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new(
@@ -229,8 +228,8 @@ pub(super) fn candidate_for_address(
                 crate::application::OrderType::Limit,
             ],
             supported_options: supported_order_options(
-                &configured.participant_id,
-                &configured.product,
+                &configured.broker_id,
+                &configured.execution_channel,
             ),
             ready: true,
             initial_margin_rate_bps: margin_rule(configured).map(|value| value.0),
@@ -248,7 +247,7 @@ fn margin_rule(configured: &ExecutionConnectionOptions) -> Option<(u32, String)>
         (Some(rate), Some(id)) if rate > 0 && rate <= 10_000 && !id.trim().is_empty() => {
             Some((rate, id.clone()))
         },
-        (None, None) if configured.product.eq_ignore_ascii_case("spot") => Some((
+        (None, None) if configured.execution_channel.eq_ignore_ascii_case("spot") => Some((
             10_000,
             format!("route:{}:fully-funded", configured.route_id),
         )),
@@ -256,18 +255,18 @@ fn margin_rule(configured: &ExecutionConnectionOptions) -> Option<(u32, String)>
     }
 }
 
-fn canonical_venue_matches_participant(exchange_id: &str, participant_id: &str) -> bool {
+fn canonical_venue_matches_participant(exchange_id: &str, broker_id: &str) -> bool {
     let venue = exchange_id.strip_prefix("exchange:").unwrap_or(exchange_id);
-    venue.eq_ignore_ascii_case(participant_id)
-        || (participant_id.eq_ignore_ascii_case("okex") && venue.eq_ignore_ascii_case("okx"))
+    venue.eq_ignore_ascii_case(broker_id)
+        || (broker_id.eq_ignore_ascii_case("okex") && venue.eq_ignore_ascii_case("okx"))
 }
 
 fn route_product_supports_instrument_kind(
-    product: &str,
+    execution_channel: &str,
     kind: kairos_primitives::reference::InstrumentKind,
 ) -> bool {
     use kairos_primitives::reference::InstrumentKind::{Future, Option, Perpetual, Spot};
-    match product.trim().to_ascii_lowercase().as_str() {
+    match execution_channel.trim().to_ascii_lowercase().as_str() {
         "spot" | "margin" => kind == Spot,
         "swap" | "perpetual" | "usd-m-futures" | "coin-m-futures" => {
             matches!(kind, Perpetual | Future)
@@ -278,9 +277,9 @@ fn route_product_supports_instrument_kind(
     }
 }
 
-fn supported_order_options(participant_id: &str, product: &str) -> Vec<String> {
-    let values: &[&str] = match participant_id.trim().to_ascii_lowercase().as_str() {
-        "binance" if product.eq_ignore_ascii_case("spot") => {
+fn supported_order_options(broker_id: &str, execution_channel: &str) -> Vec<String> {
+    let values: &[&str] = match broker_id.trim().to_ascii_lowercase().as_str() {
+        "binance" if execution_channel.eq_ignore_ascii_case("spot") => {
             &["time_in_force", "post_only", "quote_asset"]
         },
         "binance" => &["time_in_force", "reduce_only", "post_only", "position_side"],
@@ -302,11 +301,11 @@ fn supported_order_options(participant_id: &str, product: &str) -> Vec<String> {
 }
 
 pub(super) fn participant_instrument_for_route(
-    provider_id: &str,
-    provider_product: &str,
+    broker_id: &str,
+    execution_channel: &str,
     order_entry_symbol: &str,
 ) -> Result<ParticipantInstrumentRef, String> {
-    let participant_kind = match (provider_id, provider_product) {
+    let participant_kind = match (broker_id, execution_channel) {
         ("binance", "equity") => ParticipantKind::Broker,
         ("binance" | "okx" | "hyperliquid", _) => ParticipantKind::Exchange,
         ("ibkr", _) => ParticipantKind::Broker,
@@ -317,9 +316,9 @@ pub(super) fn participant_instrument_for_route(
         },
     };
     ParticipantInstrumentRef::new(
-        ParticipantRef::new(participant_kind, provider_id).map_err(|error| error.to_string())?,
+        ParticipantRef::new(participant_kind, broker_id).map_err(|error| error.to_string())?,
         Some(
-            ParticipantInstrumentTypeRef::new(provider_product)
+            ParticipantInstrumentTypeRef::new(execution_channel)
                 .map_err(|error| error.to_string())?,
         ),
         order_entry_symbol,

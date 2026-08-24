@@ -3168,6 +3168,7 @@ dependencies = [
 name = "kairos-market"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "clap",
  "criterion",
  "flatbuffers",

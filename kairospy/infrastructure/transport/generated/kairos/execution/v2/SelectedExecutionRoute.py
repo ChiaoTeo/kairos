@@ -39,7 +39,7 @@ class SelectedExecutionRoute(object):
         return 0
 
     # SelectedExecutionRoute
-    def ParticipantId(self):
+    def BrokerId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -53,7 +53,7 @@ class SelectedExecutionRoute(object):
         return None
 
     # SelectedExecutionRoute
-    def ProviderProduct(self):
+    def ExecutionChannel(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -91,11 +91,11 @@ def SelectedExecutionRouteAddSelectionKind(builder, selectionKind):
 def AddSelectionKind(builder, selectionKind):
     SelectedExecutionRouteAddSelectionKind(builder, selectionKind)
 
-def SelectedExecutionRouteAddParticipantId(builder, participantId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(participantId), 0)
+def SelectedExecutionRouteAddBrokerId(builder, brokerId):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(brokerId), 0)
 
-def AddParticipantId(builder, participantId):
-    SelectedExecutionRouteAddParticipantId(builder, participantId)
+def AddBrokerId(builder, brokerId):
+    SelectedExecutionRouteAddBrokerId(builder, brokerId)
 
 def SelectedExecutionRouteAddDestinationMarketId(builder, destinationMarketId):
     builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(destinationMarketId), 0)
@@ -103,11 +103,11 @@ def SelectedExecutionRouteAddDestinationMarketId(builder, destinationMarketId):
 def AddDestinationMarketId(builder, destinationMarketId):
     SelectedExecutionRouteAddDestinationMarketId(builder, destinationMarketId)
 
-def SelectedExecutionRouteAddProviderProduct(builder, providerProduct):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(providerProduct), 0)
+def SelectedExecutionRouteAddExecutionChannel(builder, executionChannel):
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(executionChannel), 0)
 
-def AddProviderProduct(builder, providerProduct):
-    SelectedExecutionRouteAddProviderProduct(builder, providerProduct)
+def AddExecutionChannel(builder, executionChannel):
+    SelectedExecutionRouteAddExecutionChannel(builder, executionChannel)
 
 def SelectedExecutionRouteAddProviderSymbol(builder, providerSymbol):
     builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(providerSymbol), 0)

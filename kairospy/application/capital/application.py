@@ -24,7 +24,7 @@ class CapitalApplication:
     def __init__(
         self,
         commands: Any | None,
-        projection: Any | None,
+        current_view: Any | None,
         *,
         strategy_id: str,
         launch_id: str,
@@ -39,7 +39,7 @@ class CapitalApplication:
         if commands is not None and not (capital_group_id or "").strip():
             raise ValueError("enabled Capital requires capital_group_id")
         self._commands = commands
-        self._projection = projection
+        self._current_view = current_view
         self._strategy_id = strategy_id
         self._launch_id = launch_id
         self._instance_id = instance_id
@@ -179,7 +179,7 @@ class CapitalApplication:
                     location=location,
                     reason=scope_error,
                 )
-        if self._projection is None:
+        if self._current_view is None:
             return CapitalAvailability(
                 self._capital_group_id,
                 (
@@ -191,11 +191,11 @@ class CapitalApplication:
                 reason=(
                     self._disabled_reason
                     if self._commands is None
-                    else "Capital availability projection is unavailable"
+                    else "Capital availability current_view is unavailable"
                 ),
             )
         try:
-            return self._projection.availability(
+            return self._current_view.availability(
                 capital_group_id=self._capital_group_id,
                 location=location,
             )
@@ -208,9 +208,9 @@ class CapitalApplication:
             )
 
     def recovery_alerts(self) -> tuple[CapitalRecoveryAlert, ...]:
-        if self._projection is None:
+        if self._current_view is None:
             return ()
-        return tuple(self._projection.alerts())
+        return tuple(self._current_view.alerts())
 
     def _scope_error(self, location: FundingLocation) -> str | None:
         if self._account_ids and location.account_id not in self._account_ids:

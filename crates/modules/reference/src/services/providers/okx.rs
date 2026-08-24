@@ -63,9 +63,8 @@ pub(super) fn okx_provider_catalog(
         )));
     }
     let mut catalog = ProviderCatalog {
-        entities: vec![Entity {
-            entity_id: "exchange:okx".into(),
-            entity_type: "exchange".into(),
+        exchanges: vec![Exchange {
+            exchange_id: ExchangeId::new("exchange:okx")?,
             name: "OKX".into(),
             status: "active".into(),
             source_id: None,
@@ -191,7 +190,7 @@ fn append_okx_instrument(
     } else {
         format!("listing:okx:{canonical_family}:{source_symbol}")
     })?;
-    let exchange_id = kairos_primitives::reference::Exchange::new("exchange:okx")?;
+    let exchange_id = kairos_primitives::reference::ExchangeId::new("exchange:okx")?;
     let market_id = kairos_primitives::reference::MarketId::new(format!(
         "market:okx:{canonical_family}:{source_symbol}"
     ))?;

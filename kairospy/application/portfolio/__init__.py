@@ -1,4 +1,4 @@
-"""Strategy-instance Portfolio record and projection."""
+"""Strategy-instance Portfolio state and current snapshots."""
 
 from .application import PortfolioApplication
 from .events import (

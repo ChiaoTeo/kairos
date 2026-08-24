@@ -95,6 +95,19 @@ kairos launch edit manual-trading
 `launch diagnose validate` 和安全检查确认。脚本和 CI 继续使用直接编辑 TOML 与
 `launch start` 的非交互路径。
 
+Agent 使用两层配置。先在 Workspace 中准备可复用的模型凭证、Agent Profile 和可选的
+只读 MCP profile，再在 launch 向导中选择这些资源并设置本次运行的 Agent 策略：
+
+```bash
+kairos config agent setup --workspace my-project
+kairos config agent status --workspace my-project
+kairos launch init agent-paper --workspace my-project
+```
+
+API Key 仅由第一条命令通过隐藏输入采集，保存在 Workspace credential 文件中；launch
+配置只记录 credential/Profile/MCP 引用。Agent 可访问的交易账户从该 launch 的账户连接
+派生，不能在 Agent 配置中另行扩大范围。
+
 项目代码保留在项目目录，Kairos 的 manifest、配置、状态、运行时文件和数据统一放在
 `<project>/.kairos/` 下。
 
@@ -212,12 +225,12 @@ launch 配置。`--config` 仅用于显式指定其他配置文件。
 uv run kairospy launch status btc-sma --workspace my-project
 uv run kairospy launch logs btc-sma --lines 100 --workspace my-project
 uv run kairospy launch attach btc-sma --workspace my-project --lines 100
-uv run kairospy launch instance component market sources btc-sma --instance <instance-id> --workspace my-project \
+uv run kairospy launch instance component market routes btc-sma --instance <instance-id> --workspace my-project \
   --market-id market:binance:spot:BTCUSDT --observation-kind quote --configured-only
 uv run kairospy launch instance component market snapshot btc-sma quote --instance <instance-id> --workspace my-project \
-  --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot
+  --market-id market:binance:spot:BTCUSDT --provider binance
 uv run kairospy launch instance component market freshness btc-sma --instance <instance-id> --workspace my-project \
-  --market-id market:binance:spot:BTCUSDT --source-id binance-spot --qualifier quote
+  --market-id market:binance:spot:BTCUSDT --provider binance --observation quote
 uv run kairospy launch instance component execution status btc-sma \
   --instance <instance-id> --mode <mode> --workspace my-project
 ```
@@ -255,15 +268,15 @@ enabled = true
 route_id = "main-spot"
 account_id = "main"
 segment_key = "spot"
-participant_id = "simulated"
-product = "spot"
+broker_id = "simulated"
+execution_channel = "spot"
 
 [[execution.routes]]
 route_id = "secondary-spot"
 account_id = "secondary"
 segment_key = "spot"
-participant_id = "simulated"
-product = "spot"
+broker_id = "simulated"
+execution_channel = "spot"
 ```
 
 使用内置交互策略时，可以把 Python 代码直接发送到当前 Strategy instance：
@@ -348,17 +361,16 @@ uv run kairospy system logs --component market --lines 100 --workspace my-projec
 uv run kairospy system logs --component market --follow --workspace my-project
 uv run kairospy system up --component market --workspace my-project
 uv run kairospy system component market status --workspace my-project --format json
-uv run kairospy system component market sources --workspace my-project --format json \
+uv run kairospy system component market routes --workspace my-project --format json \
   --market-id market:binance:spot:BTCUSDT --observation-kind quote --configured-only
-uv run kairospy system component market snapshot quote --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot
-uv run kairospy system component market snapshot bar --symbol BTCUSDT --source-id binance-spot --exchange binance --market-type spot --timeframe 1m
-uv run kairospy system component market snapshot greeks --symbol BTC-260814-70000-C --source-id binance-options --exchange binance --market-type options
+uv run kairospy system component market snapshot quote --market-id market:binance:spot:BTCUSDT --provider binance
+uv run kairospy system component market snapshot bar --market-id market:binance:spot:BTCUSDT --provider binance --timeframe 1m
+uv run kairospy system component market snapshot greeks --market-id market:binance:options:BTC-260814-70000-C --provider binance
 uv run kairospy system component market subscribe --workspace my-project \
-  --subscription-id btc-quotes --subject BTCUSDT \
-  --exchange binance --market-type spot --selector quote
+  --subscription-id btc-quotes --market-id market:binance:spot:BTCUSDT --data quote
 uv run kairospy system component market subscribe --workspace my-project \
-  --subscription-id btc-option-greeks --subject BTC-260814-70000-C \
-  --exchange binance --market-type options --asset-type crypto --selector greeks
+  --subscription-id btc-option-greeks --market-id market:binance:options:BTC-260814-70000-C \
+  --data greeks --require-provider binance
 uv run kairospy system component market unsubscribe --workspace my-project \
   --subscription-id btc-quotes
 uv run kairospy account trade-lock list --workspace my-project
@@ -398,8 +410,8 @@ uv run kairospy launch instance timeline export \
 Reference 验证 CLI
 
 Reference 顶层 CLI 查询目录事实，所有结构化结果写入 stdout。`markets`、`assets`、
-`entities`、`instruments`、`listings`、`events` 和 `catalog` 通过 contract-owned
-read-only client 查询 Reference SQLite projection。运行时 health、provider 验收和刷新
+`exchanges`、`instruments`、`listings`、`events` 和 `catalog` 通过 contract-owned
+read-only client 查询 Reference SQLite catalog。运行时 health、provider 验收和刷新
 属于 workspace component 连接模式：
 
 ```bash
@@ -416,7 +428,7 @@ uv run kairospy reference option-chain --underlying instrument:equity:US:AAPL:co
 uv run kairospy reference catalog --workspace my-project --format json
 ```
 
-`markets`、`assets`、`entities`、`instruments`、`listings`、`execution-accesses`
+`markets`、`assets`、`exchanges`、`instruments`、`listings`、`execution-accesses`
 和 `market-data-accesses` 都支持服务端 SQLite 过滤以及 `--limit/--offset` 分页；ID
 选项可以重复传入完成批量查询。查询只通过 contract-owned read-only client 访问投影，不向
 策略或 CLI 暴露表结构和可写 SQL。
@@ -522,7 +534,7 @@ ref = "binance_trade"
 ### 独立订单操作与运行中 Execution
 
 独立人工订单先选择账户，再由短生命周期的 Execution CLI 使用该账户的 provider binding 直接连接
-交易所。它不连接运行中的 Execution server，也不读取其 projection、journal 或 audit：
+交易所。它不连接运行中的 Execution server，也不读取其 current view、journal 或 audit：
 
 ```bash
 uv run kairospy order open-orders --account-id main
@@ -624,7 +636,7 @@ crates/
       contract/       # 可单独依赖的跨进程 contract crate
   platform/           # Integration、Network、Protocol、Transport、Workspace
   primitives/         # 多模块真正共享、且与基础设施无关的值对象
-schemas/              # FlatBuffers contract 与 projection schema
+schemas/              # FlatBuffers contract 与 view schema
 tests/                # pytest 测试
 ```
 

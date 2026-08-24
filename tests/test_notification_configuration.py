@@ -14,8 +14,11 @@ from kairospy.application.launch.application.configuration import (
 from kairospy.application.notification.composition import (
     NotificationConfigError,
     compose_notifications,
+    notification_config_hash,
+    test_notification_destination as _test_notification_destination,
     validate_notification_resources,
 )
+from kairospy.application.notification import NotificationAdminApplication
 from kairospy.application.strategy.composition import compose_strategy_process
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.strategy import StrategyIdentity, StrategyLogger
@@ -68,6 +71,47 @@ def _config() -> dict[str, object]:
             "signals": ["feishu-options", "telegram-personal"],
         },
     }
+
+
+def test_real_notification_test_is_unambiguously_labeled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ws")
+    published: dict[str, object] = {}
+
+    class Runtime:
+        async def start(self) -> None:
+            pass
+
+        async def flush(self, *, timeout: float) -> None:
+            assert timeout == 10
+
+        async def close(self) -> None:
+            pass
+
+    class Application:
+        def publish(self, **values):
+            published.update(values)
+            return type(
+                "Receipt", (), {"notification_id": "test", "status": "queued"}
+            )()
+
+        def health(self):
+            return {"status": "ready"}
+
+    monkeypatch.setattr(
+        "kairospy.application.notification.composition.compose_notifications",
+        lambda **_kwargs: type(
+            "Composition", (), {"runtime": Runtime(), "application": Application()}
+        )(),
+    )
+
+    asyncio.run(_test_notification_destination(workspace, "telegram-ops"))
+
+    assert published["title"] == "Kairos 测试通知"
+    assert "Kairos 测试" in str(published["body"])
+    assert "Workspace ws" in str(published["body"])
+    assert "发送时间" in str(published["body"])
 
 
 def test_workspace_resources_resolve_without_exposing_secrets(tmp_path: Path) -> None:
@@ -169,6 +213,9 @@ def test_launch_normalizes_notifications_and_validates_workspace(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
+    notifications = NotificationAdminApplication(workspace)
+    notifications.record_test("feishu-options", succeeded=True)
+    notifications.record_test("telegram-personal", succeeded=True)
     launch = workspace.paths.config / "launches" / "signals.toml"
     launch.write_text(
         """[launch]
@@ -192,7 +239,13 @@ signals = ["feishu-options", "telegram-personal"]
     )
     application = LaunchConfigurationApplication()
     report = application.validate(launch, workspace_root=workspace.paths.root)
-    assert report == {"path": str(launch.resolve()), "valid": True, "issues": []}
+    assert report == {
+        "path": str(launch.resolve()),
+        "valid": True,
+        "issues": [],
+        "warnings": [],
+        "diagnostics": [],
+    }
 
     environment = application.environment(
         launch, workspace_root=workspace.paths.root, instance_id="one"
@@ -207,8 +260,43 @@ signals = ["feishu-options", "telegram-personal"]
         "routes": {
             "signals": ["feishu-options", "telegram-personal"],
         },
+        "workspace_config_hash": notification_config_hash(workspace),
     }
     assert "test-token" not in environment.normalized_config_path.read_text()
+
+
+def test_optional_notification_failure_is_warning_with_explicit_degradation(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="n")
+    launch = workspace.paths.launch_config("optional-notification")
+    launch.parent.mkdir(parents=True, exist_ok=True)
+    launch.write_text(
+        '[launch]\nid = "optional-notification"\nmode = "paper"\n'
+        'strategy = "builtin:interactive"\n\n'
+        "[execution]\nenabled = false\n\n"
+        "[notifications]\nenabled = true\nrequired = false\n"
+        'default_routes = ["signals"]\n\n'
+        '[notifications.routes]\nsignals = ["missing-destination"]\n',
+        encoding="utf-8",
+    )
+    application = LaunchConfigurationApplication()
+
+    report = application.validate(launch, workspace_root=workspace.paths.root)
+
+    assert report["valid"] is True
+    assert report["issues"] == []
+    assert any("missing-destination" in warning for warning in report["warnings"])
+    assert report["diagnostics"][0]["severity"] == "warning"
+    assert "no delivery" in report["diagnostics"][0]["action"]
+    environment = application.environment(
+        launch, workspace_root=workspace.paths.root, instance_id="run-1"
+    )
+    normalized = json.loads(
+        environment.normalized_config_path.read_text(encoding="utf-8")
+    )
+    assert normalized["resource_snapshots"]["notifications"] == {}
+    assert normalized["readiness_diagnostics"][0]["severity"] == "warning"
 
 
 def test_launch_rejects_inline_notification_secret(tmp_path: Path) -> None:
@@ -340,7 +428,15 @@ signals = ["feishu-options", "telegram-personal"]
         )
         instance = workspace.instance("backtest", "signal-backtest", "one")
         instance.component_manifest().write_text(
-            '{"schema_version":1,"components":{},"accounts":{}}',
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "components": {
+                        "market": {"socket": str(instance.socket("market"))}
+                    },
+                    "accounts": {},
+                }
+            ),
             encoding="utf-8",
         )
         composition = compose_strategy_process(

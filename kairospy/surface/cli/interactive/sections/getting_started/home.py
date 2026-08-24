@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import typer
 
+from kairospy.application.config import ConfigurationMigrationApplication
+
 from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
 
 
@@ -12,6 +14,9 @@ _DIRECT_ROUTES = {
     "market": "market",
     "quotes": "market",
     "launch": "launch",
+    "4": "resources",
+    "resources": "resources",
+    "connections": "resources",
     "2": "reference",
     "target": "reference",
     "targets": "reference",
@@ -22,14 +27,12 @@ _DIRECT_ROUTES = {
     "research": "research",
     "risk": "risk",
     "capital": "capital",
-    "notifications": "notifications",
     "config": "config",
 }
 
 _GROUP_ROUTES = {
     "3": "strategy",
     "strategy": "strategy",
-    "4": "trade",
     "trade": "trade",
     "5": "data-research",
     "data-research": "data-research",
@@ -62,25 +65,31 @@ def print_menu(context: InteractiveContext) -> None:
         return
     if context.shell_path == ("operations",):
         typer.echo(
-            "系统与配置：\n"
-            "  1. 项目工作区\n"
-            "  2. 系统服务\n"
-            "  3. 通知\n"
-            "  4. 高级配置\n"
-            "  5. 系统诊断"
+            "系统维护：\n  1. 项目工作区\n  2. 系统服务\n  3. 系统诊断\n  4. 高级配置"
         )
         return
+    migration_notice = ""
+    if context.owner is not None:
+        count = ConfigurationMigrationApplication(context.owner).preview()[
+            "migration_count"
+        ]
+        if count:
+            migration_notice = (
+                f"配置升级  {count} 项使用旧格式，现有运行暂不受影响\n"
+                "          输入 migrate 查看迁移预览\n\n"
+            )
     typer.echo(
-        "\n".join(
+        migration_notice
+        + "\n".join(
             (
-                "产品入口：",
-                "  1. 市场行情",
-                "  2. 市场目录",
-                "  3. 策略运行",
-                "  4. 交易管理",
-                "  5. 数据与研究",
-                "  6. 系统与配置",
-                "  ?. 帮助（随时可用）",
+                "你想做什么？",
+                "  1. 查看市场行情    报价、历史数据与回放",
+                "  2. 查找市场标的    资产、市场与期权链",
+                "  3. 配置并运行策略  Launch、就绪检查与运行",
+                "  4. 管理运行资源    交易账户、数据、模型与通知",
+                "  5. 准备数据研究    数据集、计划与研究门禁",
+                "  6. 维护系统        工作区、进程、诊断与高级设置",
+                "  ?. 查看帮助",
             )
         )
     )
@@ -101,7 +110,7 @@ def print_help(context: InteractiveContext) -> None:
         return
     typer.echo(
         "输入 1-6 选择产品入口，输入 ? 或 help 查看帮助。也可直接输入命令："
-        "account/launch/reference/"
+        "resources/account/launch/reference/"
         "market/data/research/risk/capital/system/notifications/config；"
         "market 是直连 provider 的独立模式；system/market 和 "
         "launch/<id>/instances/<instance-id>/components/market 是连接模式；"
@@ -141,7 +150,7 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
             {"1": "data", "data": "data", "2": "research", "research": "research"},
         )
     if context.shell_path == ("operations",):
-        if parts in {("5",), ("doctor",), ("diagnose",)}:
+        if parts in {("3",), ("doctor",), ("diagnose",)}:
             return GuidedCommand(("system", "doctor"), "诊断 socket、健康文件和锁")
         return _navigate_group(
             context,
@@ -152,14 +161,15 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
                 "workspace": "project",
                 "2": "system",
                 "system": "system",
-                "3": "notifications",
-                "notifications": "notifications",
                 "4": "config",
                 "config": "config",
             },
         )
     if parts in {("account",), ("accounts",)}:
         context.shell_path = ("trade", "accounts")
+        return ShellControl.HANDLED
+    if parts in {("notification",), ("notifications",)}:
+        context.shell_path = ("resources", "notifications")
         return ShellControl.HANDLED
     if len(parts) == 1 and parts[0] in _DIRECT_ROUTES:
         context.shell_path = (_DIRECT_ROUTES[parts[0]],)
@@ -175,9 +185,13 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
         context.shell_path = ("system", "market")
         context.selected_service = "market"
         return ShellControl.HANDLED
-    if parts in {("doctor",), ("observe",)}:
+    if parts in {("doctor",), ("diagnose",), ("observe",)}:
         context.shell_path = ("observe",)
         return ShellControl.HANDLED
+    if parts == ("migrate",):
+        return GuidedCommand(("config", "migrate"), "查看旧配置迁移预览")
+    if parts == ("fix",):
+        return GuidedCommand(("system", "doctor"), "诊断当前运行依赖")
     if parts in {("quickstart",), ("map",)}:
         return GuidedCommand(
             ("quickstart",), "查看 CLI 场景地图", needs_workspace=False

@@ -212,7 +212,7 @@ fn account_composition_owns_its_binding_registry() {
 }
 
 #[test]
-fn account_segment_identity_is_independent_from_provider_product() {
+fn account_segment_identity_is_independent_from_provider_segment() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let composition = fs::read_to_string(root.join("src/composition/account.rs"))
         .expect("read account composition");
@@ -220,7 +220,7 @@ fn account_segment_identity_is_independent_from_provider_product() {
         .expect("read account registry");
 
     assert!(composition.contains("pub struct AccountSegmentBinding"));
-    assert!(composition.contains("normalized_segment(&configured_segment.provider_product)"));
+    assert!(composition.contains("normalized_segment(&configured_segment.provider_segment)"));
     assert!(composition.contains("pub trading_mode: Option<String>"));
     assert!(!composition.contains("segment_options.product = segment_key"));
     assert!(registry.contains("pub segment_products: BTreeMap<String, String>"));
@@ -452,7 +452,7 @@ fn reference_is_the_only_owner_of_account_canonical_instrument_identity() {
 
     let adapter = fs::read_to_string(account_root.join("src/services/integration.rs"))
         .expect("read Account Integration adapter");
-    assert!(adapter.contains("ReferenceProjectionSnapshot"));
+    assert!(adapter.contains("AccountReferenceSnapshot"));
     assert!(adapter.contains("update_reference_snapshot"));
     assert!(!adapter.contains("ReferenceClient"));
     assert!(!adapter.contains("ReferenceViewReader"));

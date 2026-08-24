@@ -63,7 +63,7 @@ class QuoteView:
     ask_price: DecimalValue | None
     ask_quantity: DecimalValue | None
     event_time_unix_nanos: int
-    source_id: str | None
+    provider: str | None
     bid_venue_code: str | None = None
     ask_venue_code: str | None = None
     tape: int | None = None
@@ -77,7 +77,7 @@ class TradeView:
     price: DecimalValue | None
     quantity: DecimalValue | None
     event_time_unix_nanos: int
-    source_id: str | None
+    provider: str | None
     venue_code: str | None = None
     tape: int | None = None
     trf_id: int | None = None
@@ -95,7 +95,7 @@ class PriceLevelView:
 class OrderBookView:
     market_id: str
     instrument_id: str
-    source_id: str | None
+    provider: str | None
     sequence: int
     first_sequence: int
     last_sequence: int
@@ -118,7 +118,7 @@ class BarView:
     close: DecimalValue
     volume: DecimalValue | None
     event_time_unix_nanos: int
-    source_id: str | None
+    provider: str | None
     derivation: str | None
 
 
@@ -134,7 +134,7 @@ class GreeksView:
     theta: DecimalValue | None
     implied_volatility: DecimalValue | None
     event_time_unix_nanos: int
-    source_id: str | None
+    provider: str | None
     derivation: str | None
 
 
@@ -152,8 +152,8 @@ class MarketDataView:
         )
 
 
-class MarketProjection:
-    """Read Market v2 current views from Rust double-slot snapshots.
+class MarketViewAccess:
+    """Access Market v2 current views from Rust double-slot snapshots.
 
     The v2 path is a publisher root. Each requested view is an independent
     ``MarketViewKey`` resource; no aggregate snapshot is read or produced.
@@ -165,28 +165,28 @@ class MarketProjection:
     def read_view(
         self,
         key: MarketViewKey | str,
-        source_id: str | None = None,
+        provider: str | None = None,
         kind: MarketViewKind | None = None,
         qualifier: str | None = None,
     ):
         """Read one typed v2 current-view resource."""
 
         if isinstance(key, str):
-            if source_id is None or kind is None:
+            if provider is None or kind is None:
                 raise ValueError("Market v2 view source and kind are required")
-            key = MarketViewKey(key, source_id, kind, qualifier)
+            key = MarketViewKey(key, provider, kind, qualifier)
         return MarketViewReader(self.path, key).read()
 
-    def read_quote(self, market_id: str, source_id: str) -> Quote | None:
+    def read_quote(self, market_id: str, provider: str) -> Quote | None:
         frame = self.read_view(
-            MarketViewKey(market_id, source_id, MarketViewKind.QUOTE)
+            MarketViewKey(market_id, provider, MarketViewKind.QUOTE)
         )
         wrapper = cast(Any, frame.value.Quote())
         return None if wrapper is None else _quote_model(_decode_quote(wrapper.Value()))
 
-    def read_bar(self, market_id: str, source_id: str, timeframe: str) -> Bar | None:
+    def read_bar(self, market_id: str, provider: str, timeframe: str) -> Bar | None:
         frame = self.read_view(
-            MarketViewKey(market_id, source_id, MarketViewKind.BAR, timeframe)
+            MarketViewKey(market_id, provider, MarketViewKind.BAR, timeframe)
         )
         value = cast(Any, frame.value)
         for index in range(value.BarsLength()):
@@ -198,9 +198,9 @@ class MarketProjection:
                 return _bar_model(_decode_bar(bar))
         return None
 
-    def read_greeks(self, market_id: str, source_id: str) -> OptionGreeks | None:
+    def read_greeks(self, market_id: str, provider: str) -> OptionGreeks | None:
         frame = self.read_view(
-            MarketViewKey(market_id, source_id, MarketViewKind.GREEKS)
+            MarketViewKey(market_id, provider, MarketViewKind.GREEKS)
         )
         wrapper = cast(Any, frame.value.Greeks())
         return (
@@ -250,7 +250,7 @@ def _quote_model(value: QuoteView) -> Quote:
         ask_quantity=_decimal(value.ask_quantity),
         occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
         occurred_at_unix_nanos=value.event_time_unix_nanos,
-        source_id=value.source_id,
+        provider=value.provider,
         bid_venue_code=value.bid_venue_code,
         ask_venue_code=value.ask_venue_code,
         tape=value.tape,
@@ -268,7 +268,7 @@ def _trade_model(value: TradeView) -> Trade:
         aggressor_side=None,
         occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
         occurred_at_unix_nanos=value.event_time_unix_nanos,
-        source_id=value.source_id,
+        provider=value.provider,
         venue_code=value.venue_code,
         tape=value.tape,
         trf_id=value.trf_id,
@@ -289,7 +289,7 @@ def _bar_model(value: BarView) -> Bar:
         volume=_decimal(value.volume),
         occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
         occurred_at_unix_nanos=value.event_time_unix_nanos,
-        source_id=value.source_id,
+        provider=value.provider,
     )
 
 
@@ -306,7 +306,7 @@ def _greeks_model(value: GreeksView) -> OptionGreeks:
         implied_volatility=_decimal(value.implied_volatility),
         occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
         occurred_at_unix_nanos=value.event_time_unix_nanos,
-        source_id=value.source_id,
+        provider=value.provider,
         derivation=value.derivation,
     )
 
@@ -333,7 +333,7 @@ def _decode_quote(value: object) -> QuoteView:
         ask_price=decimal("AskPrice"),
         ask_quantity=decimal("AskQuantity"),
         event_time_unix_nanos=event_time(),
-        source_id=text("SourceId"),
+        provider=text("Provider"),
         bid_venue_code=text("BidVenueCode"),
         ask_venue_code=text("AskVenueCode"),
         tape=getattr(value, "Tape")() or None,
@@ -358,7 +358,7 @@ def _decode_trade(value: object) -> TradeView:
         price=decimal("Price"),
         quantity=decimal("Quantity"),
         event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
-        source_id=text("SourceId"),
+        provider=text("Provider"),
         venue_code=text("VenueCode"),
         tape=getattr(value, "Tape")() or None,
         trf_id=getattr(value, "TrfId")() or None,
@@ -394,7 +394,7 @@ def _decode_bar(value: object) -> BarView:
         close=decimal("Close"),
         volume=optional_decimal("Volume"),
         event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
-        source_id=text("SourceId"),
+        provider=text("Provider"),
         derivation=text("Derivation"),
     )
 
@@ -421,7 +421,7 @@ def _decode_greeks(value: object) -> GreeksView:
         theta=decimal("Theta"),
         implied_volatility=decimal("ImpliedVolatility"),
         event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
-        source_id=text("SourceId"),
+        provider=text("Provider"),
         derivation=text("Derivation"),
     )
 

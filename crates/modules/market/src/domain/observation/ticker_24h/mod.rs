@@ -1,5 +1,5 @@
 use kairos_primitives::decimal::{Money, Price, Quantity, Rate};
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::InstrumentId;
 use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
@@ -23,5 +23,5 @@ pub struct Ticker24h {
     pub vwap: Option<Price>,
     pub mark_price: Option<Price>,
     pub observed_at_unix_nanos: UnixNanos,
-    pub source_id: SourceId,
+    pub provider: Provider,
 }

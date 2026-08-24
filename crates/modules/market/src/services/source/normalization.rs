@@ -10,7 +10,7 @@ use crate::domain::observation::{
     Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, OpenInterest, OptionGreeks, Quote,
     QuoteBar, Rate, Ticker24h, Trade, TradeBar,
 };
-use crate::domain::source::{SourceEpoch, SourceId};
+use crate::domain::source::{MarketFeedId, SourceEpoch};
 
 pub(crate) enum Normalized {
     Observation(MarketObservation),
@@ -19,7 +19,7 @@ pub(crate) enum Normalized {
 
 pub(crate) fn with_epoch(
     value: Normalized,
-    source_id: SourceId,
+    source_id: MarketFeedId,
     epoch: SourceEpoch,
 ) -> SourceInput {
     match value {
@@ -37,14 +37,16 @@ pub(crate) fn with_epoch(
 }
 
 pub(crate) fn normalize(
-    source_id: &SourceId,
     market: &ResolvedMarket,
     event: MarketEvent,
 ) -> Result<Option<Normalized>, String> {
-    let source_id = source_id.clone();
+    let binding = market
+        .runtime_route()
+        .ok_or_else(|| "resolved Market has no runtime provider binding".to_string())?;
+    let provider = binding.provider.clone();
     let venue = event.venue.clone();
     let aggregate_scope = || {
-        if market.route.provider_id.eq_ignore_ascii_case("massive") {
+        if binding.provider.as_str() == "massive" {
             match &market.scope {
                 crate::ObservationScope::Consolidated { .. } => market.scope.clone(),
                 crate::ObservationScope::Market { .. } => {
@@ -68,10 +70,10 @@ pub(crate) fn normalize(
             ask_venue_code: venue.ask_exchange.clone(),
             tape: venue.tape,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id,
+            provider: provider.clone(),
         }),
         MarketEventKind::Trade => MarketObservation::Trade(Trade {
-            scope: trade_scope(market, &venue)?,
+            scope: trade_scope(market, &provider, &venue)?,
             instrument_id: market.instrument_id.clone(),
             trade_id: None,
             price: event.price.ok_or("trade event has no price")?,
@@ -84,7 +86,7 @@ pub(crate) fn normalize(
             participant_timestamp_unix_nanos: venue.participant_timestamp_unix_nanos,
             trf_timestamp_unix_nanos: venue.trf_timestamp_unix_nanos,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id,
+            provider: provider.clone(),
         }),
         MarketEventKind::Bar | MarketEventKind::TradeBar | MarketEventKind::QuoteBar => {
             let value = event.bar.ok_or("bar event has no bar payload")?;
@@ -98,7 +100,7 @@ pub(crate) fn normalize(
                 close: value.close,
                 volume: value.volume,
                 observed_at_unix_nanos: event.observed_at_unix_nanos,
-                source_id,
+                provider: provider.clone(),
                 derivation: value.derivation,
             };
             match event.kind {
@@ -120,7 +122,7 @@ pub(crate) fn normalize(
                 theta: value.theta,
                 implied_volatility: value.implied_volatility,
                 observed_at_unix_nanos: event.observed_at_unix_nanos,
-                source_id,
+                provider: provider.clone(),
                 derivation: value.derivation,
             })
         },
@@ -132,7 +134,7 @@ pub(crate) fn normalize(
             value: event.rate.ok_or("rate event has no value")?,
             mark_price: event.ask_price,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id,
+            provider: provider.clone(),
         }),
         MarketEventKind::Ticker24h => MarketObservation::Ticker24h(Ticker24h {
             scope: aggregate_scope(),
@@ -152,7 +154,7 @@ pub(crate) fn normalize(
             vwap: None,
             mark_price: None,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id,
+            provider: provider.clone(),
         }),
         MarketEventKind::MarkPrice => MarketObservation::MarkPrice(MarkPrice {
             scope: aggregate_scope(),
@@ -163,7 +165,7 @@ pub(crate) fn normalize(
             funding_rate: None,
             next_funding_time_unix_nanos: None,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id,
+            provider: provider.clone(),
         }),
         MarketEventKind::IndexPrice => MarketObservation::IndexPrice(IndexPrice {
             scope: aggregate_scope(),
@@ -173,7 +175,7 @@ pub(crate) fn normalize(
             index_price: event.price,
             funding_rate: None,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id,
+            provider: provider.clone(),
         }),
         MarketEventKind::FundingRate => MarketObservation::FundingRate(FundingRate {
             scope: aggregate_scope(),
@@ -182,7 +184,7 @@ pub(crate) fn normalize(
             funding_period_seconds: None,
             next_funding_time_unix_nanos: None,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id,
+            provider: provider.clone(),
         }),
         MarketEventKind::OpenInterest => MarketObservation::OpenInterest(OpenInterest {
             scope: aggregate_scope(),
@@ -198,7 +200,7 @@ pub(crate) fn normalize(
             change_24h: None,
             change_pct_24h: None,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id,
+            provider: provider.clone(),
         }),
         MarketEventKind::InstrumentStatus => {
             return Err("InstrumentStatus is not part of Market v2".into());
@@ -210,7 +212,6 @@ pub(crate) fn normalize(
                 .ok_or("order book observations require a canonical market scope")?;
             let update = SourceOrderBookUpdate {
                 market: Box::new(market.clone()),
-                source_id,
                 market_id,
                 instrument_id: market.instrument_id.clone(),
                 first_sequence: event
@@ -242,9 +243,10 @@ pub(crate) fn normalize(
 
 fn trade_scope(
     market: &ResolvedMarket,
+    provider: &kairos_primitives::market::Provider,
     evidence: &kairos_conflux::MarketVenueEvidence,
 ) -> Result<crate::ObservationScope, String> {
-    if !market.route.provider_id.eq_ignore_ascii_case("massive") {
+    if provider.as_str() != "massive" {
         return Ok(market.scope.clone());
     }
     let code = evidence
@@ -289,15 +291,15 @@ mod tests {
     };
 
     use super::{Normalized, normalize};
-    use crate::{MarketDataRoute, ObservationScope, ResolvedMarket, SourceId};
+    use crate::{ObservationScope, ProviderRouteBinding, ResolvedMarket};
 
     fn massive_market() -> ResolvedMarket {
-        ResolvedMarket::new(
+        ResolvedMarket::new_with_binding(
             "market:cboe-bzx:equity:AAPL",
             "instrument:equity:US:AAPL:common",
             kairos_primitives::reference::InstrumentKind::Equity,
             "exchange:cboe-bzx",
-            MarketDataRoute::new("route:massive:AAPL", "massive", "equity", "AAPL").unwrap(),
+            ProviderRouteBinding::new("massive", "equity", "AAPL").unwrap(),
         )
         .unwrap()
     }
@@ -307,7 +309,7 @@ mod tests {
             "instrument:equity:US:AAPL:common",
             Some("sip".into()),
             kairos_primitives::reference::InstrumentKind::Equity,
-            MarketDataRoute::new("route:massive:AAPL", "massive", "equity", "AAPL").unwrap(),
+            ProviderRouteBinding::new("massive", "equity", "AAPL").unwrap(),
         )
         .unwrap()
     }
@@ -339,13 +341,9 @@ mod tests {
         event.venue.bid_exchange = Some("19".into());
         event.venue.ask_exchange = Some("11".into());
         event.venue.tape = Some(3);
-        let Normalized::Observation(crate::MarketObservation::Quote(quote)) = normalize(
-            &SourceId::new("massive-equity").unwrap(),
-            &massive_market(),
-            event,
-        )
-        .unwrap()
-        .unwrap() else {
+        let Normalized::Observation(crate::MarketObservation::Quote(quote)) =
+            normalize(&massive_market(), event).unwrap().unwrap()
+        else {
             panic!("expected quote");
         };
         assert!(matches!(quote.scope, ObservationScope::Consolidated { .. }));
@@ -366,13 +364,9 @@ mod tests {
             volume: Some("10".parse().unwrap()),
             derivation: "provider".into(),
         });
-        let Normalized::Observation(crate::MarketObservation::Bar(bar)) = normalize(
-            &SourceId::new("massive-equity").unwrap(),
-            &massive_consolidated(),
-            event,
-        )
-        .unwrap()
-        .unwrap() else {
+        let Normalized::Observation(crate::MarketObservation::Bar(bar)) =
+            normalize(&massive_consolidated(), event).unwrap().unwrap()
+        else {
             panic!("expected bar");
         };
         assert_eq!(
@@ -387,13 +381,9 @@ mod tests {
     fn massive_trade_uses_actual_venue_and_quarantines_reporting_facility() {
         let mut venue_trade = event(MarketEventKind::Trade);
         venue_trade.venue.trade_exchange = Some("19".into());
-        let Normalized::Observation(crate::MarketObservation::Trade(trade)) = normalize(
-            &SourceId::new("massive-equity").unwrap(),
-            &massive_market(),
-            venue_trade,
-        )
-        .unwrap()
-        .unwrap() else {
+        let Normalized::Observation(crate::MarketObservation::Trade(trade)) =
+            normalize(&massive_market(), venue_trade).unwrap().unwrap()
+        else {
             panic!("expected trade");
         };
         assert_eq!(
@@ -404,13 +394,9 @@ mod tests {
         let mut trf_trade = event(MarketEventKind::Trade);
         trf_trade.venue.trade_exchange = Some("4".into());
         trf_trade.venue.trf_id = Some(201);
-        let error = normalize(
-            &SourceId::new("massive-equity").unwrap(),
-            &massive_market(),
-            trf_trade,
-        )
-        .err()
-        .expect("TRF trade must be quarantined");
+        let error = normalize(&massive_market(), trf_trade)
+            .err()
+            .expect("TRF trade must be quarantined");
         assert!(error.contains("reporting facility"));
     }
 }

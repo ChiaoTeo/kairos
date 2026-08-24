@@ -19,20 +19,20 @@ from .models import (
 class AccountApplication:
     """Typed read-only Account access scoped to one Strategy launch.
 
-    Each configured AccountId owns a distinct projection reader and mmap. A
+    Each configured AccountId owns a distinct current_view reader and mmap. A
     reader returns every segment for that logical account in one generation.
     """
 
     def __init__(
         self,
-        projections: Mapping[AccountId, Any],
+        current_views: Mapping[AccountId, Any],
         event_source: Any | None = None,
         *,
         launch_id: str | None = None,
         instance_id: str | None = None,
         required_segments: Mapping[AccountId, tuple[str, ...]] | None = None,
     ) -> None:
-        self._projections = dict(projections)
+        self._current_views = dict(current_views)
         self._event_source = event_source
         self._launch_id = launch_id
         self._instance_id = instance_id
@@ -44,7 +44,7 @@ class AccountApplication:
     def account_ids(self) -> tuple[AccountId, ...]:
         """Account identities in launch configuration order."""
 
-        return tuple(self._projections)
+        return tuple(self._current_views)
 
     @property
     def accounts(self) -> tuple[AccountSnapshot, ...]:
@@ -61,8 +61,8 @@ class AccountApplication:
 
         return AccountsSnapshot(
             tuple(
-                projection.snapshot(account_id)
-                for account_id, projection in self._projections.items()
+                current_view.snapshot(account_id)
+                for account_id, current_view in self._current_views.items()
             )
         )
 
@@ -71,10 +71,10 @@ class AccountApplication:
 
         account_id = _account_id(account)
         try:
-            projection = self._projections[account_id]
+            current_view = self._current_views[account_id]
         except KeyError as error:
             raise AccountNotEnabledError(account_id) from error
-        return projection.snapshot(account_id)
+        return current_view.snapshot(account_id)
 
     def _check_event_source_ready(self) -> None:
         if not self._event_source_ready:
@@ -104,7 +104,7 @@ class AccountApplication:
         if self._event_source is None:
             return
         async for record in self._event_source.subscribe_live():
-            if AccountId(record.account_id) not in self._projections:
+            if AccountId(record.account_id) not in self._current_views:
                 continue
             expected_stream_id = f"account.events/account:{record.account_id}"
             if record.stream_id != expected_stream_id:

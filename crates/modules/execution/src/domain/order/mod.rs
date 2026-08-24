@@ -1,4 +1,4 @@
-pub use kairos_primitives::account::{AccountId, PositionSide, SegmentKey};
+pub use kairos_primitives::account::{AccountId, BrokerId, PositionSide, SegmentKey};
 pub use kairos_primitives::decimal::{Money, Price, Quantity};
 pub use kairos_primitives::execution::{
     ExecutionRouteId, FillId, IntentId, LegId, OrderId, OrderSide, OrderType, PlanId,

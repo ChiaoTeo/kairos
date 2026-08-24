@@ -20,3 +20,20 @@ def test_profile_use_is_dangerous(interactive_context, monkeypatch) -> None:
     command = config.handle(interactive_context, ("use",))
     assert isinstance(command, GuidedCommand)
     assert command.dangerous is True
+
+
+def test_agent_resource_commands_are_exposed_from_system_config_menu(
+    interactive_context,
+) -> None:
+    status = config.handle(interactive_context, ("agent",))
+    setup = config.handle(interactive_context, ("agent-setup",))
+
+    assert status == GuidedCommand(
+        ("config", "agent", "status", "--format", "text"),
+        "查看 Workspace OpenAI 模型连接",
+    )
+    assert setup == GuidedCommand(
+        ("config", "agent", "setup"),
+        "配置 Workspace OpenAI 模型连接；Profile/MCP 归具体 Launch",
+        dangerous=True,
+    )

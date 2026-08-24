@@ -22,6 +22,9 @@ def print_menu(context: InteractiveContext) -> None:
                 "  7. 列出 profiles",
                 "  8. 创建 profile",
                 "  9. 切换 profile",
+                "  10. 查看 OpenAI 模型连接",
+                "  11. 配置 OpenAI 模型连接",
+                "      Agent Profile、MCP 与工具策略请在具体 Launch 中配置",
             )
         )
     )
@@ -29,12 +32,13 @@ def print_menu(context: InteractiveContext) -> None:
 
 def print_help(context: InteractiveContext) -> None:
     del context
-    typer.echo("可用命令：paths/manifest/show/doctor/explain/operations/profiles/create/use")
+    typer.echo(
+        "可用命令：paths/manifest/show/doctor/explain/operations/"
+        "profiles/create/use/agent/agent-setup"
+    )
 
 
-def handle(
-    context: InteractiveContext, parts: tuple[str, ...]
-) -> GuidedCommand | None:
+def handle(context: InteractiveContext, parts: tuple[str, ...]) -> GuidedCommand | None:
     del context
     if len(parts) != 1:
         return None
@@ -57,13 +61,30 @@ def handle(
         command, summary = direct
         return GuidedCommand(("config", command, "--format", "text"), summary)
     if key in {"7", "profiles"}:
-        return GuidedCommand(("config", "profile", "list", "--format", "text"), "列出配置 profiles")
+        return GuidedCommand(
+            ("config", "profile", "list", "--format", "text"), "列出配置 profiles"
+        )
     if key in {"8", "create"}:
         name = typer.prompt("profile name").strip()
-        return GuidedCommand(("config", "profile", "create", name), "创建配置 profile", dangerous=True)
+        return GuidedCommand(
+            ("config", "profile", "create", name), "创建配置 profile", dangerous=True
+        )
     if key in {"9", "use"}:
         name = typer.prompt("profile name").strip()
-        return GuidedCommand(("config", "profile", "use", name), "切换配置 profile", dangerous=True)
+        return GuidedCommand(
+            ("config", "profile", "use", name), "切换配置 profile", dangerous=True
+        )
+    if key in {"10", "agent"}:
+        return GuidedCommand(
+            ("config", "agent", "status", "--format", "text"),
+            "查看 Workspace OpenAI 模型连接",
+        )
+    if key in {"11", "agent-setup"}:
+        return GuidedCommand(
+            ("config", "agent", "setup"),
+            "配置 Workspace OpenAI 模型连接；Profile/MCP 归具体 Launch",
+            dangerous=True,
+        )
     return None
 
 

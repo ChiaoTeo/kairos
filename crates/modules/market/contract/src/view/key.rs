@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 
 use crate::{ContractError, ContractResult};
 
@@ -40,7 +40,7 @@ impl MarketViewKind {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MarketViewKey {
     pub scope_key: String,
-    pub source_id: SourceId,
+    pub provider: Provider,
     pub kind: MarketViewKind,
     pub qualifier: Option<String>,
 }
@@ -48,12 +48,12 @@ pub struct MarketViewKey {
 impl MarketViewKey {
     pub fn new(
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         kind: MarketViewKind,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<Self> {
         let scope_key = scope_key.into();
-        let source_id = SourceId::new(source_id.as_ref())
+        let provider = Provider::new(provider.as_ref())
             .map_err(|error| ContractError::Invalid(error.to_string()))?;
         let qualifier = qualifier.map(Into::into);
         if scope_key.trim().is_empty() {
@@ -61,7 +61,7 @@ impl MarketViewKey {
         }
         Ok(Self {
             scope_key,
-            source_id,
+            provider,
             kind,
             qualifier,
         })
@@ -69,9 +69,9 @@ impl MarketViewKey {
 
     pub fn canonical_key(&self) -> String {
         format!(
-            "scope={};source={};view={};qualifier={}",
+            "scope={};provider={};view={};qualifier={}",
             self.scope_key,
-            self.source_id,
+            self.provider,
             self.kind.as_str(),
             self.qualifier.as_deref().unwrap_or("")
         )
@@ -87,7 +87,7 @@ impl MarketViewKey {
         format!(
             "scope-{}-{}-{}-{}",
             component(&self.scope_key),
-            component(&self.source_id),
+            component(&self.provider),
             self.kind.as_str(),
             component(qualifier)
         )

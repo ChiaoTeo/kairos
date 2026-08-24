@@ -48,7 +48,7 @@ pub enum MarketObservation {
 
 impl MarketObservation {
     pub fn validate(&self) -> Result<(), String> {
-        if self.instrument_id().trim().is_empty() || self.source_id().trim().is_empty() {
+        if self.instrument_id().trim().is_empty() || self.provider().trim().is_empty() {
             return Err("observation scope, instrument and source identities are required".into());
         }
         match self {
@@ -159,29 +159,29 @@ impl MarketObservation {
     pub fn view_key(&self) -> Result<crate::MarketViewKey, String> {
         match self.qualifier() {
             Some(qualifier) => crate::MarketViewKey::with_qualifier(
-                self.source_id(),
+                self.provider(),
                 self.scope().key(),
                 self.kind(),
                 qualifier,
             ),
-            None => crate::MarketViewKey::new(self.source_id(), self.scope().key(), self.kind()),
+            None => crate::MarketViewKey::new(self.provider(), self.scope().key(), self.kind()),
         }
     }
 
-    pub fn source_id(&self) -> &kairos_primitives::market::SourceId {
+    pub fn provider(&self) -> &kairos_primitives::market::Provider {
         match self {
-            Self::Quote(value) => &value.source_id,
-            Self::Trade(value) => &value.source_id,
-            Self::Bar(value) => &value.source_id,
-            Self::TradeBar(value) => &value.bar.source_id,
-            Self::QuoteBar(value) => &value.bar.source_id,
-            Self::OptionGreeks(value) => &value.source_id,
-            Self::Rate(value) => &value.source_id,
-            Self::Ticker24h(value) => &value.source_id,
-            Self::MarkPrice(value) => &value.source_id,
-            Self::IndexPrice(value) => &value.source_id,
-            Self::FundingRate(value) => &value.source_id,
-            Self::OpenInterest(value) => &value.source_id,
+            Self::Quote(value) => &value.provider,
+            Self::Trade(value) => &value.provider,
+            Self::Bar(value) => &value.provider,
+            Self::TradeBar(value) => &value.bar.provider,
+            Self::QuoteBar(value) => &value.bar.provider,
+            Self::OptionGreeks(value) => &value.provider,
+            Self::Rate(value) => &value.provider,
+            Self::Ticker24h(value) => &value.provider,
+            Self::MarkPrice(value) => &value.provider,
+            Self::IndexPrice(value) => &value.provider,
+            Self::FundingRate(value) => &value.provider,
+            Self::OpenInterest(value) => &value.provider,
         }
     }
 }

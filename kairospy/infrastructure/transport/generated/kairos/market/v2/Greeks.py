@@ -43,7 +43,7 @@ class Greeks(object):
         return None
 
     # Greeks
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -161,11 +161,11 @@ def GreeksAddInstrumentId(builder, instrumentId):
 def AddInstrumentId(builder, instrumentId):
     GreeksAddInstrumentId(builder, instrumentId)
 
-def GreeksAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def GreeksAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    GreeksAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    GreeksAddProvider(builder, provider)
 
 def GreeksAddExpiryUnixNanos(builder, expiryUnixNanos):
     builder.PrependUint64Slot(3, expiryUnixNanos, None)

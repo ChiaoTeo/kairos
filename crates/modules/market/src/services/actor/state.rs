@@ -9,7 +9,7 @@ use crate::domain::freshness::{FeedStatus, MarketFreshness};
 use crate::domain::market::ResolvedMarket;
 use crate::domain::observation::MarketObservation;
 use crate::domain::observation::order_book::OrderBook;
-use crate::domain::source::{SourceId, SourceState};
+use crate::domain::source::{MarketFeedId, SourceState};
 use crate::domain::subscription::{SubscriptionId, SubscriptionMode, SubscriptionState};
 use crate::services::source::messages::SourceRequestId;
 #[path = "freshness.rs"]
@@ -41,11 +41,11 @@ pub struct MarketActor {
     market_universe_generation: Generation,
     market_universe_event_sequence: Sequence,
     pub(super) feed_status: FeedStatus,
-    pub(super) sources: BTreeMap<SourceId, SourceState>,
+    pub(super) sources: BTreeMap<MarketFeedId, SourceState>,
     /// Operational source state is owned by the same Actor as subscription
     /// intent and market state. The public application remains a facade and
     /// cannot become a second runtime/state owner.
-    pub(crate) attached_sources: BTreeMap<SourceId, AttachedSource>,
+    pub(crate) attached_sources: BTreeMap<MarketFeedId, AttachedSource>,
     pub(crate) source_input_capacity: usize,
     pub(crate) next_source_input_index: usize,
     pub(crate) pending_source_requests: BTreeMap<SourceRequestId, PendingSourceRequest>,

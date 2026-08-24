@@ -15,16 +15,16 @@ JSON-RPC. FlatBuffers is reserved for business events and mmap views.
 
 | Status | Owner | Shape | Semantic root | File identifier | Publisher/caller | Consumer | Transport/profile |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| DRAFT | Reference | event | `InstrumentUpserted` | `RIU2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
-| DRAFT | Reference | event | `InstrumentUpdated` | `RID2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
-| DRAFT | Reference | event | `ListingUpserted` | `RLU2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
-| DRAFT | Reference | event | `ListingUpdated` | `RLD2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
-| DRAFT | Reference | event | `MarketUpserted` | `RMU2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
-| DRAFT | Reference | event | `MarketUpdated` | `RMD2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `InstrumentUpserted` | `RIU2` | Reference Actor | Market Reference catalog consumer, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `InstrumentUpdated` | `RID2` | Reference Actor | Market Reference catalog consumer, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `ListingUpserted` | `RLU2` | Reference Actor | Market Reference catalog consumer, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `ListingUpdated` | `RLD2` | Reference Actor | Market Reference catalog consumer, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `MarketUpserted` | `RMU2` | Reference Actor | Market Reference catalog consumer, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `MarketUpdated` | `RMD2` | Reference Actor | Market Reference catalog consumer, operations | owner event stream / retained target |
 | DRAFT | Reference | event | `AssetUpserted` | `RAU2` | Reference Actor | Reference consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `AssetUpdated` | `RAD2` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `EntityUpserted` | `RENU` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `EntityUpdated` | `REND` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `ExchangeUpserted` | `RENU` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `ExchangeUpdated` | `REND` | Reference Actor | Reference consumers | owner event stream / retained target |
 | DRAFT | Market | event | `QuoteUpdated` | `MQU2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
 | DRAFT | Market | event | `TradeOccurred` | `MTO2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
 | DRAFT | Market | event | `BarCompleted` | `MBV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |

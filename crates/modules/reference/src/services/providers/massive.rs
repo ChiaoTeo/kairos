@@ -1,8 +1,7 @@
 //! Massive Reference sources, scoped discovery, and canonical mapping.
 
-use crate::logging::events as log_events;
-
 use super::*;
+use crate::logging::events as log_events;
 
 /// Massive stock-options discovery limited to explicitly managed underlyings.
 ///
@@ -150,7 +149,7 @@ impl MassiveOptionsCoverageSource {
             )));
         }
         let scope_key = Self::scope_key(&underlying);
-        if self.sync_store.prepare_projection(&scope_key).await? {
+        if self.sync_store.prepare_scan(&scope_key).await? {
             let log_event = log_events::SOURCE_WORK_STARTED;
             tracing::info!(
                 event = log_event.event,
@@ -158,10 +157,10 @@ impl MassiveOptionsCoverageSource {
                 area = log_event.area,
                 action = log_event.action,
                 outcome = log_event.outcome,
-                legacy_event = "reference_provider_projection_reset",
+                legacy_event = "reference_provider_scan_reset",
                 source_id = %scope_key,
-                projection_version = PROVIDER_PROJECTION_VERSION,
-                "unfinished provider scan was reset for the current canonical projection"
+                scan_format_version = PROVIDER_SCAN_FORMAT_VERSION,
+                "unfinished provider scan was reset for the current canonical catalog"
             );
         }
         let (cursor, legacy_accumulated) = self
@@ -452,7 +451,7 @@ impl MassiveEquitySource {
         key: kairos_conflux::ConnectionKey,
         mut sync_store: SqlxProviderSyncStore,
     ) -> ReferenceResult<Self> {
-        if sync_store.prepare_projection("massive-equity").await? {
+        if sync_store.prepare_scan("massive-equity").await? {
             let log_event = log_events::SOURCE_WORK_STARTED;
             tracing::info!(
                 event = log_event.event,
@@ -460,10 +459,10 @@ impl MassiveEquitySource {
                 area = log_event.area,
                 action = log_event.action,
                 outcome = log_event.outcome,
-                legacy_event = "reference_provider_projection_reset",
+                legacy_event = "reference_provider_scan_reset",
                 source_id = "massive-equity",
-                projection_version = PROVIDER_PROJECTION_VERSION,
-                "unfinished provider scan was reset for the current canonical projection"
+                scan_format_version = PROVIDER_SCAN_FORMAT_VERSION,
+                "unfinished provider scan was reset for the current canonical catalog"
             );
         }
         let (cursor, accumulated) = sync_store
@@ -519,7 +518,7 @@ impl MassiveEquitySource {
         base_url: impl Into<String>,
         mut sync_store: SqlxProviderSyncStore,
     ) -> ReferenceResult<(Self, kairos_conflux::ConfluxSystem)> {
-        if sync_store.prepare_projection("massive-equity").await? {
+        if sync_store.prepare_scan("massive-equity").await? {
             let log_event = log_events::SOURCE_WORK_STARTED;
             tracing::info!(
                 event = log_event.event,
@@ -527,10 +526,10 @@ impl MassiveEquitySource {
                 area = log_event.area,
                 action = log_event.action,
                 outcome = log_event.outcome,
-                legacy_event = "reference_provider_projection_reset",
+                legacy_event = "reference_provider_scan_reset",
                 source_id = "massive-equity",
-                projection_version = PROVIDER_PROJECTION_VERSION,
-                "unfinished provider scan was reset for the current canonical projection"
+                scan_format_version = PROVIDER_SCAN_FORMAT_VERSION,
+                "unfinished provider scan was reset for the current canonical catalog"
             );
         }
         let (cursor, accumulated) = sync_store
@@ -863,25 +862,16 @@ pub(super) fn massive_provider_catalog(
             facts.participant.id
         )));
     }
-    let mut catalog = ProviderCatalog {
-        entities: vec![Entity {
-            entity_id: "data_provider:massive".into(),
-            entity_type: "data_provider".into(),
-            name: "Massive".into(),
-            status: "active".into(),
-            source_id: None,
-        }],
-        ..Default::default()
-    };
+    let mut catalog = ProviderCatalog::default();
     for value in facts.instruments {
         append_massive_instrument(&mut catalog, value)?;
     }
     catalog
-        .entities
-        .sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+        .exchanges
+        .sort_by(|left, right| left.exchange_id.cmp(&right.exchange_id));
     catalog
-        .entities
-        .dedup_by(|left, right| left.entity_id == right.entity_id);
+        .exchanges
+        .dedup_by(|left, right| left.exchange_id == right.exchange_id);
     catalog
         .assets
         .sort_by(|left, right| left.asset_id.cmp(&right.asset_id));
@@ -912,9 +902,8 @@ fn append_massive_instrument(
     let source_symbol = value.source_symbol.as_str().to_ascii_uppercase();
     let exchange_id = massive_exchange_id(value.source_venue.as_deref());
     if let Some(exchange_id) = exchange_id.as_deref() {
-        catalog.entities.push(Entity {
-            entity_id: exchange_id.into(),
-            entity_type: "exchange".into(),
+        catalog.exchanges.push(Exchange {
+            exchange_id: ExchangeId::new(exchange_id)?,
             name: massive_exchange_name(exchange_id).into(),
             status: "active".into(),
             source_id: None,
@@ -1007,7 +996,7 @@ fn append_massive_instrument(
         ..Instrument::default()
     });
     if let Some(exchange_id) = exchange_id {
-        let exchange = kairos_primitives::reference::Exchange::new(exchange_id.clone())?;
+        let exchange = kairos_primitives::reference::ExchangeId::new(exchange_id.clone())?;
         let listing_id = kairos_primitives::reference::ListingId::venue(
             &exchange,
             canonical_instrument_kind(value.kind)?,
@@ -1181,5 +1170,5 @@ fn massive_exchange_id(source_venue: Option<&str>) -> Option<String> {
 }
 
 fn massive_exchange_name(exchange_id: &str) -> &str {
-    crate::domain::canonical_entity_name(exchange_id).unwrap_or("Exchange")
+    crate::domain::canonical_exchange_name(exchange_id).unwrap_or("Exchange")
 }

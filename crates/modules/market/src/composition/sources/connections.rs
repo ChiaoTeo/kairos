@@ -8,39 +8,22 @@ use kairos_conflux::{
 
 use super::super::config::{
     BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
-    HyperliquidMarketType, MarketSourceBinding, MassiveMarketProduct, OkxInstrumentType,
+    HyperliquidMarketType, MarketProviderBinding, MassiveMarketProduct, OkxInstrumentType,
     PublicMarketTransport,
 };
-use super::{default_endpoint, positive_interval};
+use super::{binding_observation_capabilities, default_endpoint, positive_interval};
 use crate::ObservationKind;
 use crate::application::conflux::{MarketSourceMode, MarketSourcePlan};
-use crate::domain::source::{SourceDescriptor, SourceId};
+use crate::domain::source::{FeedDescriptor, MarketFeedId};
 
 pub(crate) fn install(
     system: &mut ConfluxSystem,
     credentials_root: &Path,
-    sources: &std::collections::BTreeMap<String, MarketSourceBinding>,
+    sources: &std::collections::BTreeMap<String, MarketProviderBinding>,
 ) -> Result<Vec<MarketSourcePlan>, String> {
     let mut plans = Vec::new();
     for (source_id, binding) in sources.iter().filter(|(_, binding)| binding.enabled()) {
         install_one(system, credentials_root, source_id, binding, &mut plans)?;
-    }
-    if !sources
-        .values()
-        .any(|binding| matches!(binding, MarketSourceBinding::BinanceSpot { .. }))
-    {
-        install_one(
-            system,
-            credentials_root,
-            "binance-spot",
-            &MarketSourceBinding::BinanceSpot {
-                enabled: true,
-                transport: BinanceSpotTransport::Websocket,
-                endpoint: None,
-                snapshot_interval_ms: 1_000,
-            },
-            &mut plans,
-        )?;
     }
     Ok(plans)
 }
@@ -49,18 +32,20 @@ fn install_one(
     system: &mut ConfluxSystem,
     credentials_root: &Path,
     source_id: &str,
-    binding: &MarketSourceBinding,
+    binding: &MarketProviderBinding,
     plans: &mut Vec<MarketSourcePlan>,
 ) -> Result<(), String> {
     let key = source_id.to_owned();
+    let capabilities = binding_observation_capabilities(binding);
     match binding {
-        MarketSourceBinding::BinanceSpot {
+        MarketProviderBinding::BinanceSpot {
             transport,
             endpoint,
             snapshot_interval_ms,
             ..
         } => {
-            let descriptor = descriptor(source_id, "binance", "spot", "crypto", stream_kinds())?;
+            let descriptor =
+                descriptor(source_id, "binance", "spot", "crypto", capabilities.clone())?;
             match transport {
                 BinanceSpotTransport::Rest => {
                     system
@@ -78,8 +63,7 @@ fn install_one(
                         )
                         .map_err(|error| error.to_string())?;
                     plans.push(MarketSourcePlan {
-                        descriptor: descriptor
-                            .with_observation_capabilities([ObservationKind::Quote]),
+                        descriptor,
                         mode: MarketSourceMode::Snapshot(positive_interval(
                             source_id,
                             *snapshot_interval_ms,
@@ -109,7 +93,7 @@ fn install_one(
                 },
             }
         },
-        MarketSourceBinding::BinanceEquity {
+        MarketProviderBinding::BinanceEquity {
             credential_id,
             endpoint,
             snapshot_interval_ms,
@@ -144,7 +128,7 @@ fn install_one(
                     "binance",
                     "equity",
                     "equity",
-                    [ObservationKind::Quote],
+                    capabilities.clone(),
                 )?,
                 mode: MarketSourceMode::Snapshot(positive_interval(
                     source_id,
@@ -152,7 +136,7 @@ fn install_one(
                 )?),
             });
         },
-        MarketSourceBinding::BinanceDerivatives {
+        MarketProviderBinding::BinanceDerivatives {
             product,
             transport,
             endpoint,
@@ -176,8 +160,13 @@ fn install_one(
                     "binance-options-websocket",
                 ),
             };
-            let descriptor =
-                descriptor(source_id, "binance", product_name, "crypto", stream_kinds())?;
+            let descriptor = descriptor(
+                source_id,
+                "binance",
+                product_name,
+                "crypto",
+                capabilities.clone(),
+            )?;
             match transport {
                 BinanceDerivativeTransport::Rest => {
                     let config = BinanceRestConfig {
@@ -202,13 +191,8 @@ fn install_one(
                             .create(ConnectionKey::new(key.clone())?, config),
                     }
                     .map_err(|error| error.to_string())?;
-                    let kinds = if matches!(product, BinanceDerivativeProduct::Options) {
-                        vec![ObservationKind::Quote, ObservationKind::OptionGreeks]
-                    } else {
-                        vec![ObservationKind::Quote]
-                    };
                     plans.push(MarketSourcePlan {
-                        descriptor: descriptor.with_observation_capabilities(kinds),
+                        descriptor,
                         mode: MarketSourceMode::Snapshot(positive_interval(
                             source_id,
                             *snapshot_interval_ms,
@@ -246,7 +230,7 @@ fn install_one(
                 },
             }
         },
-        MarketSourceBinding::Okx {
+        MarketProviderBinding::Okx {
             instrument_type,
             transport,
             endpoint,
@@ -280,7 +264,7 @@ fn install_one(
                             "okx",
                             product,
                             "crypto",
-                            [ObservationKind::Quote],
+                            capabilities.clone(),
                         )?,
                         mode: MarketSourceMode::Snapshot(positive_interval(
                             source_id,
@@ -309,14 +293,14 @@ fn install_one(
                             "okx",
                             product,
                             "crypto",
-                            [ObservationKind::Trade, ObservationKind::OrderBook],
+                            capabilities.clone(),
                         )?,
                         mode: MarketSourceMode::Stream,
                     });
                 },
             }
         },
-        MarketSourceBinding::Hyperliquid {
+        MarketProviderBinding::Hyperliquid {
             market_type,
             transport,
             endpoint,
@@ -348,7 +332,7 @@ fn install_one(
                             "hyperliquid",
                             product,
                             "crypto",
-                            [ObservationKind::Quote],
+                            capabilities.clone(),
                         )?,
                         mode: MarketSourceMode::Snapshot(positive_interval(
                             source_id,
@@ -378,14 +362,14 @@ fn install_one(
                             "hyperliquid",
                             product,
                             "crypto",
-                            [ObservationKind::Trade, ObservationKind::OrderBook],
+                            capabilities.clone(),
                         )?,
                         mode: MarketSourceMode::Stream,
                     });
                 },
             }
         },
-        MarketSourceBinding::Massive {
+        MarketProviderBinding::Massive {
             product,
             credential_id,
             endpoint,
@@ -420,25 +404,25 @@ fn install_one(
                     .create(connection_key, config),
             }
             .map_err(|error| error.to_string())?;
-            let mut descriptor = SourceDescriptor::all_routes(SourceId::new(source_id)?);
-            descriptor.market_type = Some(
-                kairos_primitives::integration::ProviderProductCode::new(product_name)
-                    .map_err(|e| e.to_string())?,
+            let mut descriptor = FeedDescriptor::all_routes(MarketFeedId::new(source_id)?);
+            descriptor.provider = Some(
+                kairos_primitives::market::Provider::new("massive")
+                    .expect("code-owned provider identity is valid"),
             );
+            descriptor.market_type = Some(crate::domain::market::ProviderSegmentCode::new(
+                product_name,
+            )?);
             descriptor.asset_type = Some(
                 "equity"
                     .parse::<kairos_primitives::reference::AssetClass>()
                     .map_err(|e| e.to_string())?,
             );
             plans.push(MarketSourcePlan {
-                descriptor: descriptor.with_observation_capabilities([
-                    ObservationKind::Quote,
-                    ObservationKind::Trade,
-                ]),
+                descriptor: descriptor.with_observation_capabilities(capabilities.clone()),
                 mode: MarketSourceMode::Stream,
             });
         },
-        MarketSourceBinding::Ibkr {
+        MarketProviderBinding::Ibkr {
             host,
             port,
             client_id,
@@ -462,18 +446,20 @@ fn install_one(
                     },
                 )
                 .map_err(|error| error.to_string())?;
-            let mut descriptor = SourceDescriptor::all_routes(SourceId::new(source_id)?);
-            descriptor.market_type = Some(
-                kairos_primitives::integration::ProviderProductCode::new("equity")
-                    .map_err(|error| error.to_string())?,
+            let mut descriptor = FeedDescriptor::all_routes(MarketFeedId::new(source_id)?);
+            descriptor.provider = Some(
+                kairos_primitives::market::Provider::new("ibkr")
+                    .expect("code-owned provider identity is valid"),
             );
+            descriptor.market_type =
+                Some(crate::domain::market::ProviderSegmentCode::new("equity")?);
             descriptor.asset_type = Some(
                 "equity"
                     .parse::<kairos_primitives::reference::AssetClass>()
                     .map_err(|error| error.to_string())?,
             );
             plans.push(MarketSourcePlan {
-                descriptor: descriptor.with_observation_capabilities([ObservationKind::Quote]),
+                descriptor: descriptor.with_observation_capabilities(capabilities),
                 mode: MarketSourceMode::Snapshot(positive_interval(
                     source_id,
                     *snapshot_interval_ms,
@@ -490,21 +476,13 @@ fn descriptor(
     product: &str,
     asset: &str,
     capabilities: impl IntoIterator<Item = ObservationKind>,
-) -> Result<SourceDescriptor, String> {
-    Ok(SourceDescriptor::new(
-        SourceId::new(source_id)?,
-        kairos_primitives::reference::Exchange::new(exchange).map_err(|e| e.to_string())?,
+) -> Result<FeedDescriptor, String> {
+    Ok(FeedDescriptor::for_provider(
+        MarketFeedId::new(source_id)?,
+        exchange,
+        kairos_primitives::reference::ExchangeId::new(exchange).map_err(|e| e.to_string())?,
         product,
         Some(asset.into()),
     )?
     .with_observation_capabilities(capabilities))
-}
-
-fn stream_kinds() -> [ObservationKind; 4] {
-    [
-        ObservationKind::Quote,
-        ObservationKind::Trade,
-        ObservationKind::Bar,
-        ObservationKind::OrderBook,
-    ]
 }

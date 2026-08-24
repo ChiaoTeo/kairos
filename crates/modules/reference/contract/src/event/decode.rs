@@ -3,8 +3,8 @@ use kairos_protocol::generated::kairos::reference::v_2 as fb;
 use crate::{ContractError, ContractResult};
 
 pub enum ReferenceEvent<'a> {
-    EntityUpserted(fb::EntityUpserted<'a>),
-    EntityUpdated(fb::EntityUpdated<'a>),
+    ExchangeUpserted(fb::ExchangeUpserted<'a>),
+    ExchangeUpdated(fb::ExchangeUpdated<'a>),
     AssetUpserted(fb::AssetUpserted<'a>),
     AssetUpdated(fb::AssetUpdated<'a>),
     InstrumentUpserted(fb::InstrumentUpserted<'a>),
@@ -26,14 +26,14 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<ReferenceEvent<'_>> {
         };
     }
     decode!(
-        entity_upserted_buffer_has_identifier,
-        root_as_entity_upserted,
-        EntityUpserted
+        exchange_upserted_buffer_has_identifier,
+        root_as_exchange_upserted,
+        ExchangeUpserted
     );
     decode!(
-        entity_updated_buffer_has_identifier,
-        root_as_entity_updated,
-        EntityUpdated
+        exchange_updated_buffer_has_identifier,
+        root_as_exchange_updated,
+        ExchangeUpdated
     );
     decode!(
         asset_upserted_buffer_has_identifier,

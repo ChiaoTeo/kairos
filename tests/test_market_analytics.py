@@ -7,7 +7,7 @@ import pytest
 from kairospy.application.market import (
     MarketAnalyticalApplication,
     ObservationScope,
-    OptionGreeksProjectionRequest,
+    OptionGreeksCalculationRequest,
 )
 
 
@@ -26,7 +26,7 @@ def _put_price(spot: float, strike: float, rate: float, sigma: float) -> float:
 
 def test_market_derives_reproducible_put_iv_and_greeks_with_lineage() -> None:
     observed = 1_700_000_000_000_000_000
-    request = OptionGreeksProjectionRequest(
+    request = OptionGreeksCalculationRequest(
         scope=ObservationScope.consolidated("instrument:option:SPY:test", "opra"),
         instrument_id="instrument:option:SPY:test",
         option_right="P",
@@ -57,10 +57,10 @@ def test_market_derives_reproducible_put_iv_and_greeks_with_lineage() -> None:
     assert payload["model_semantics"]["exercise"] == "european-proxy"
 
 
-def test_market_rejects_future_or_no_arbitrage_invalid_projection_inputs() -> None:
+def test_market_rejects_future_or_no_arbitrage_invalid_current_view_inputs() -> None:
     observed = 1_700_000_000_000_000_000
     with pytest.raises(ValueError, match="available before"):
-        OptionGreeksProjectionRequest(
+        OptionGreeksCalculationRequest(
             scope=ObservationScope.market("market"),
             instrument_id="instrument",
             option_right="P",
@@ -72,7 +72,7 @@ def test_market_rejects_future_or_no_arbitrage_invalid_projection_inputs() -> No
             available_at_unix_nanos=observed - 1,
             risk_free_rate=0.05,
         )
-    invalid_price = OptionGreeksProjectionRequest(
+    invalid_price = OptionGreeksCalculationRequest(
         scope=ObservationScope.market("market"),
         instrument_id="instrument",
         option_right="C",

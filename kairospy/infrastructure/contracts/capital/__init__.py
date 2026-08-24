@@ -1,10 +1,10 @@
 from .client import CapitalContractClient
 from .events import decode_event
-from .view import CapitalProjection, CapitalViewFrame, CapitalViewKey, CapitalViewReader
+from .view import CapitalCurrentViewQueries, CapitalViewFrame, CapitalViewKey, CapitalViewReader
 
 __all__ = [
     "CapitalContractClient",
-    "CapitalProjection",
+    "CapitalCurrentViewQueries",
     "CapitalViewFrame",
     "CapitalViewKey",
     "CapitalViewReader",

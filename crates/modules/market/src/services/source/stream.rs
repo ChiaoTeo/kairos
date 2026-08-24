@@ -10,8 +10,11 @@ use crate::domain::market::ResolvedMarket;
 pub(crate) fn subscription_request(
     market: &ResolvedMarket,
 ) -> Result<MarketSubscriptionRequest, IntegrationError> {
+    let binding = market.runtime_route().ok_or_else(|| {
+        IntegrationError::InvalidRequest("resolved Market has no runtime provider binding".into())
+    })?;
     let symbol = kairos_primitives::integration::ParticipantSymbol::new(
-        market.route.subscription_symbol.as_str(),
+        binding.subscription_symbol.as_str(),
     )
     .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
     let mut feeds = Vec::new();
@@ -24,7 +27,7 @@ pub(crate) fn subscription_request(
             update_speed_millis: None,
         });
     };
-    for capability in &market.route.observation_capabilities {
+    for capability in &binding.observation_capabilities {
         match capability {
             crate::ObservationKind::Quote => add(MarketDataKind::Quote, None),
             crate::ObservationKind::Trade => add(MarketDataKind::Trade, None),

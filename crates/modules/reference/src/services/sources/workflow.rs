@@ -2,7 +2,7 @@ use crate::domain::{
     ProviderCatalog, ReferenceError, ReferenceResult, ReferenceSourceDefinition,
     SourceDesiredState, SourceHealth, SourceTickBudget,
 };
-use crate::services::providers::ReferenceCredentialResolver;
+use crate::services::providers::{ReferenceCredentialResolver, ReferenceSourceBinding};
 use crate::services::sources::SourceUpdate;
 use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
@@ -37,8 +37,11 @@ pub(crate) trait ReferenceSource: Send {
         Ok(false)
     }
 
-    fn source_definition(&self) -> ReferenceSourceDefinition {
-        ReferenceSourceDefinition::from_source_id(self.source_id())
+    fn source_definition(&self) -> ReferenceResult<ReferenceSourceDefinition> {
+        match ReferenceSourceBinding::from_source_id(self.source_id()) {
+            Some(binding) => binding.builtin_definition(),
+            None => ReferenceSourceDefinition::runtime_default(self.source_id()),
+        }
     }
 
     fn normalized_facts_authoritative(&self) -> bool {

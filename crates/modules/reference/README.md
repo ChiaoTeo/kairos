@@ -9,8 +9,8 @@ routing policy, account facts, workspace resources, or research datasets.
 
 ## Synchronization rule
 
-Reference synchronization covers the complete explicitly configured scope of
-each provider/product. A source may use durable, explicit coverage (for
+Reference synchronization covers the complete configured scope of each
+provider. An internal source may use durable, explicit coverage (for
 example selected option underlyings), but an ad-hoc consumer query must never
 silently narrow authoritative synchronization.
 
@@ -20,16 +20,18 @@ may filter query results by underlying after the full catalog has been built.
 
 ## Default startup
 
-Reference owns its provider/product source registry. The registry is configured
-in the Workspace manifest; the process does not select providers from command
-line arguments:
+Reference owns its source registry. A workspace does not need a Reference
+section to start: public Binance, OKX, and Hyperliquid catalogs run with their
+built-in defaults, while credentialed providers remain disabled. The process
+does not select providers from command-line arguments:
 
 ```text
 kairos-reference-server --workspace <workspace>
 ```
 
-Configure providers in `<workspace>/kairos.toml` (or the discovered
-`.kairos/kairos.toml`):
+The normal configuration surface is provider-level. For example, enable
+Massive or disable a public provider in `<workspace>/kairos.toml` (or the
+discovered `.kairos/kairos.toml`):
 
 ```toml
 [reference.providers.massive]
@@ -41,7 +43,27 @@ endpoint = "https://api.massiveprivateserver.site"
 enabled = false
 ```
 
-Transport and runtime options use the canonical names below:
+Runtime tuning is optional and nested separately from provider selection:
+
+```toml
+[reference.runtime]
+refresh_interval_seconds = 60
+
+[reference.runtime.tick_budget]
+max_sources_per_tick = 3
+max_batches_per_source = 5
+```
+
+Provider endpoint overrides are also advanced settings. They stay below the
+provider and do not expose Reference source IDs or Integration product codes:
+
+```toml
+[reference.providers.binance.endpoints]
+spot = "https://api.binance.com"
+usd_m_futures = "https://fapi.binance.com"
+```
+
+Transport and command-line runtime overrides use the canonical names below:
 
 ```text
 --aeron-channel <URI>
@@ -61,10 +83,11 @@ all consumers together.
 Credentials are selected by Workspace credential ID and are never passed as
 secrets on the command line.
 
-Binance, OKX, and Hyperliquid public products are built in. Credentialed sources such as Massive are
-added only when enabled under `[reference.providers.*]`; their credentials are
-resolved from the Workspace credential store. Reference does not read
-`market.connections`; that section belongs to the Market runtime.
+Binance, OKX, and Hyperliquid public catalogs are built in. Credentialed
+providers such as Massive are added only when enabled under
+`[reference.providers.*]`; their credentials are resolved from the Workspace
+credential store. Reference does not read `market.connections`; that section
+belongs to the Market runtime.
 
 Public sources can be disabled explicitly when a workspace does not want them:
 
@@ -76,13 +99,16 @@ enabled = false
 enabled = false
 ```
 
-Binance Stocks Trading reference discovery is API-key protected and opt-in:
+Binance Stocks Trading reference discovery is API-key protected and opt-in.
+Providing a Binance credential enables that catalog without asking the user to
+select an internal product binding:
 
 ```toml
-[reference.products.binance.equity]
-enabled = true
+[reference.providers.binance]
 credential_id = "binance-equity-readonly"
-endpoint = "https://api.binance.com"
+
+[reference.providers.binance.endpoints]
+equity = "https://api.binance.com"
 ```
 
 This enables only the verified Equity catalog endpoint. It does not enable or imply Binance Equity
@@ -121,10 +147,10 @@ provider observations. Business modules never issue Reference SQL or depend on
 its table names and persistence records.
 
 Normal process control does not require a provider flag. The default registry
-skips credential files with no resolved API key, includes credentialed sources
-when their namespaced or conventional environment secret is available, and
-reports the resulting source mode through `reference providers`. Use
-`reference refresh` to request a refresh through the running process.
+runs public providers, adds explicitly enabled credentialed providers, and
+reports detailed source state only through the advanced `reference providers`
+control surface. Use `reference refresh` to request a refresh through the
+running process.
 
 ## Architecture
 
@@ -159,14 +185,14 @@ code, tests, and adapter provenance under
 
 Reference owns the canonical catalog and the Rust `ReferenceActor` remains its
 only mutable state owner. The Python query surface is read-only:
-`ReferenceClient` owns knowledge of the SQLite projection, while
+`ReferenceClient` owns knowledge of the SQLite catalog, while
 `ReferenceApplication` maps contract records into strategy-safe business
 models. Strategy code and CLI commands do not import table names or issue
 arbitrary SQL.
 
 `ReferenceReadSession` holds one read-only SQLite transaction and pins its
 catalog generation and event sequence. `ReferenceApplication.snapshot()`
-scopes that session for a strategy decision so related entity, asset,
+scopes that session for a strategy decision so related exchange, asset,
 instrument, listing, market, execution-access, and market-data-access queries
 cannot accidentally combine different catalog generations. One-shot queries
 use the same indexed filters and typed results.

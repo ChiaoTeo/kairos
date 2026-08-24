@@ -18,12 +18,12 @@
 
 - Integration owns the OKX provider-native connection, option-underlying enumeration, instrument
   requests, payload validation, and normalized `ExternalInstrumentCatalog` facts.
-- Reference owns canonical entities, assets, instruments, listings, markets, lifecycle diffing,
+- Reference owns canonical exchanges, assets, instruments, listings, markets, lifecycle diffing,
   persistence, snapshots, and event publication.
-- Spot, swap, futures, and options remain independent capability projections in Reference
+- Spot, swap, futures, and options remain independent capabilities in Reference
   composition. An option refresh is complete only after every advertised underlying has returned
   successfully.
-- Market's independent public WebSocket projection subscribes to `books` and `trades`. A snapshot
+- Market's independent public WebSocket stream subscribes to `books` and `trades`. A snapshot
   requires `prevSeqId=-1`; each incremental update must link its `prevSeqId` to the accepted
   `seqId`. A gap becomes `ResyncRequired` for the affected canonical market. The deprecated
   checksum field is deliberately ignored in favor of sequence continuity.
@@ -40,6 +40,6 @@
 - Integration caller-runtime test verifies the option request sequence: enumerate underlyings,
   then fetch and merge every option family.
 - Reference provider tests verify OKX normalized facts map into canonical Reference markets.
-- Live full-refresh validation covers all configured OKX product projections and reports provider
+- Live full-refresh validation covers all configured OKX product catalogs and reports provider
   health independently.
 - Focused Market-data test verifies snapshot acceptance and gap-triggered resync.

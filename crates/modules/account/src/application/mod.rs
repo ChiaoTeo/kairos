@@ -8,20 +8,26 @@ mod result;
 
 pub use app::{AccountApplication, AccountRuntimeMode};
 pub use cli::{
-    AccountBalanceItem, AccountBalancesResult, AccountCredentialProbeRequest,
-    AccountEarnHoldingItem, AccountEarnHoldingsResult, AccountEarnRewardItem, AccountFeeComponent,
-    AccountFeeDiscount, AccountFeesResult, AccountListItem, AccountListResult,
+    AccountAdapterKind, AccountBalanceItem, AccountBalancesResult, AccountBrowseResult,
+    AccountCredentialProbeRequest, AccountEarnHoldingItem, AccountEarnHoldingsResult,
+    AccountEarnRewardItem, AccountFeeComponent, AccountFeeDiscount, AccountFeesResult,
+    AccountListItem, AccountListResult, AccountLocalSnapshotResult, AccountModifyResult,
     AccountOpenOrderItem, AccountOpenOrdersResult, AccountOverviewCommercial,
     AccountOverviewConnection, AccountOverviewFacts, AccountOverviewHealth,
     AccountOverviewIdentity, AccountOverviewPermissions, AccountOverviewProfile,
     AccountOverviewResult, AccountPositionItem, AccountPositionsResult,
     AccountProviderConnectionArgs, AccountQueryCompleteness, AccountQueryError,
-    AccountSegmentProfileItem, AccountSegmentQueryOutcome, BindCredentialRequest,
+    AccountRecordResult, AccountRemoveResult, AccountSegmentProfileItem,
+    AccountSegmentQueryOutcome, AccountSimulateResult, BindCredentialRequest,
     CliAccountApplication, ConnectAccountProviderRequest, ConnectAccountRequest,
     CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+    StoredCredentialResult,
 };
 pub use command::{MarkToMarket, ReconcileAccount, RefreshAccount};
-pub use connected::ConnectedAccountApplication;
+pub use connected::{
+    AccountCurrentResult as ConnectedAccountCurrentResult, ConnectedAccountApplication,
+    ConnectedAccountOutput,
+};
 pub use error::AccountError;
 pub use result::{
     AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountDifference,

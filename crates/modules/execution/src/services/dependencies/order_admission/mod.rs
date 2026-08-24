@@ -4,8 +4,8 @@ use super::*;
 
 pub(super) struct OrderAdmissionContext {
     dependencies: ExecutionDependencyAccess,
-    allow_backtest_reference_without_projection: bool,
-    allow_backtest_balance_without_projection: bool,
+    allow_backtest_without_reference_state: bool,
+    allow_backtest_without_account_state: bool,
     reservation_ttl_nanos: u64,
 }
 
@@ -27,7 +27,7 @@ impl OrderAdmissionContext {
     pub(super) fn from_manifest_with_reference_snapshot(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<kairos_reference_contract::ReferenceProjectionSnapshot>,
+        reference_snapshot: Option<kairos_reference_contract::ExecutionReferenceSnapshot>,
     ) -> Result<Self, String> {
         Ok(Self {
             dependencies: ExecutionDependencyAccess::from_manifest_with_reference_snapshot(
@@ -35,8 +35,8 @@ impl OrderAdmissionContext {
                 path,
                 reference_snapshot,
             )?,
-            allow_backtest_reference_without_projection: false,
-            allow_backtest_balance_without_projection: false,
+            allow_backtest_without_reference_state: false,
+            allow_backtest_without_account_state: false,
             reservation_ttl_nanos: 60_000_000_000,
         })
     }
@@ -51,13 +51,13 @@ impl OrderAdmissionContext {
         self
     }
 
-    pub(super) fn with_backtest_reference_without_projection(mut self, enabled: bool) -> Self {
-        self.allow_backtest_reference_without_projection = enabled;
+    pub(super) fn allow_backtest_without_reference_state(mut self, enabled: bool) -> Self {
+        self.allow_backtest_without_reference_state = enabled;
         self
     }
 
-    pub(super) fn with_backtest_balance_without_projection(mut self, enabled: bool) -> Self {
-        self.allow_backtest_balance_without_projection = enabled;
+    pub(super) fn allow_backtest_without_account_state(mut self, enabled: bool) -> Self {
+        self.allow_backtest_without_account_state = enabled;
         self
     }
 
@@ -78,7 +78,7 @@ impl OrderAdmissionContext {
         &self,
         account_id: &str,
     ) -> Result<AccountCommitmentObservation, String> {
-        self.account_projection(account_id)
+        self.account_dependency_state(account_id)
             .map(|value| value.commitment_observation)
     }
 
@@ -98,7 +98,7 @@ impl OrderAdmissionContext {
         {
             return Err("limit price must be positive".into());
         }
-        let reference_market = if !self.allow_backtest_reference_without_projection {
+        let reference_market = if !self.allow_backtest_without_reference_state {
             let market = self.reference_market(
                 request.market_id.as_ref().map(MarketId::as_str),
                 request.instrument_id.as_str(),
@@ -108,8 +108,9 @@ impl OrderAdmissionContext {
         } else {
             None
         };
-        let account_projection = self.account_projection(request.account_id.as_str())?;
-        let balances = &account_projection.balances;
+        let account_dependency_state =
+            self.account_dependency_state(request.account_id.as_str())?;
+        let balances = &account_dependency_state.balances;
         let configured_quote_asset = request
             .options
             .quote_asset
@@ -145,10 +146,10 @@ impl OrderAdmissionContext {
         let mut commitment = if derivative_reduce {
             closeable_position_commitment(
                 request,
-                &account_projection.positions,
+                &account_dependency_state.positions,
                 active_commitments,
             )?
-        } else if !self.allow_backtest_balance_without_projection {
+        } else if !self.allow_backtest_without_account_state {
             let asset = asset.ok_or_else(|| {
                 "Reference must define the order commitment asset; symbol suffix inference is forbidden"
                     .to_string()
@@ -240,7 +241,7 @@ impl OrderAdmissionContext {
         if let Some(policy) = request.options.maker.as_ref() {
             if let Some(max_inventory) = policy.max_inventory_abs {
                 let current = find_position(
-                    &account_projection.positions,
+                    &account_dependency_state.positions,
                     request.instrument_id.as_str(),
                 )?
                 .unwrap_or(Decimal::ZERO);
@@ -268,14 +269,14 @@ impl OrderAdmissionContext {
                 } else {
                     -request_quantity
                 };
-                let projected = current
+                let resulting_inventory = current
                     .checked_add(reserved)
                     .and_then(|value| value.checked_add(signed_request))
-                    .ok_or_else(|| "maker inventory projection overflow".to_string())?;
-                if projected.abs() > decimal_signed_quantity(max_inventory)?.abs() {
+                    .ok_or_else(|| "maker inventory calculation overflow".to_string())?;
+                if resulting_inventory.abs() > decimal_signed_quantity(max_inventory)?.abs() {
                     return Err(format!(
-                        "maker inventory guard exceeded for {}: projected={}, limit={}",
-                        request.instrument_id, projected, max_inventory
+                        "maker inventory guard exceeded for {}: resulting_inventory={}, limit={}",
+                        request.instrument_id, resulting_inventory, max_inventory
                     ));
                 }
             }
@@ -299,7 +300,7 @@ impl OrderAdmissionContext {
             request.market_id.as_ref().map(MarketId::as_str),
             request.instrument_id.as_str(),
         )?;
-        let account = self.account_projection(request.account_id.as_str())?;
+        let account = self.account_dependency_state(request.account_id.as_str())?;
         let market = if self.market_snapshot.is_some() {
             self.read_market_quote(request.market_id.as_deref(), request.instrument_id.as_str())?
                 .map(|(_, generation)| SnapshotWatermark {
@@ -330,10 +331,7 @@ impl OrderAdmissionContext {
             initial_margin_rate_bps: route.initial_margin_rate_bps,
             margin_rule_id: route.margin_rule_id.clone(),
             exchange_id: Some(reference_market.exchange_id),
-            funding_broker: Some(
-                kairos_primitives::account::BrokerId::new(route.participant_id.clone())
-                    .map_err(|error| error.to_string())?,
-            ),
+            funding_broker: Some(route.broker_id.clone()),
             funding_segment: Some(request.segment_key.clone()),
             collateral_asset: request
                 .options
@@ -348,7 +346,7 @@ impl OrderAdmissionContext {
 
 fn closeable_position_commitment(
     request: &SubmitOrder,
-    positions: &[ProjectedPosition],
+    positions: &[AccountPositionFact],
     active_commitments: &[OrderCommitment],
 ) -> Result<OrderCommitment, String> {
     let position_side = request
@@ -495,8 +493,8 @@ mod tests {
         }
     }
 
-    fn net_position(quantity: i64) -> ProjectedPosition {
-        ProjectedPosition {
+    fn net_position(quantity: i64) -> AccountPositionFact {
+        AccountPositionFact {
             segment_key: "usd-m".into(),
             instrument_id: "instrument:btcusdt-perp".into(),
             position_side: PositionSide::Net,

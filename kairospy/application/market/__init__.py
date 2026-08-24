@@ -35,15 +35,17 @@ from .models import (
     Trade,
 )
 from .requests import (
+    CanonicalMarketTarget,
+    ConsolidatedInstrumentTarget,
     ExpiryRange,
     MarketData,
+    ObservationRequirement,
     OptionFilter,
     OptionRight,
     Options,
-    Participant,
-    ParticipantSet,
-    Source,
-    SourceSet,
+    OptionsTarget,
+    Provider,
+    ProviderPreference,
     StrikeRange,
     SubscriptionRequest,
     Timeframe,
@@ -99,9 +101,16 @@ class MarketDataApplication:
         _validate_events(events)
         times = [_event_time(event) for event in events]
         valid_times = [time for time in times if time is not None]
+        derivations = {
+            str(payload["derivation"])
+            for event in events
+            for payload in event.values()
+            if isinstance(payload, dict) and payload.get("derivation")
+        }
         entries = [item for item in self.list() if item.get("name") != name]
         entry = {
             "name": name,
+            "version": 1,
             "path": str(destination),
             "size": destination.stat().st_size,
             "format": storage_format,
@@ -111,14 +120,15 @@ class MarketDataApplication:
             "observation_types": sorted(
                 {next(iter(event)) for event in events if event}
             ),
-            "source_ids": sorted(
+            "providers": sorted(
                 {
-                    str(payload.get("source_id"))
+                    str(payload.get("provider"))
                     for event in events
                     for payload in event.values()
-                    if isinstance(payload, dict) and payload.get("source_id")
+                    if isinstance(payload, dict) and payload.get("provider")
                 }
             ),
+            "derivation": next(iter(derivations)) if len(derivations) == 1 else None,
         }
         if metadata:
             entry.update(
@@ -231,7 +241,7 @@ class MarketDataApplication:
                         "ask_price": _decimal_text(ask),
                         "ask_quantity": bar.get("volume"),
                         "observed_at_unix_nanos": bar["observed_at_unix_nanos"],
-                        "source_id": f"{bar['source_id']}:synthetic-quote",
+                        "provider": bar["provider"],
                         "derivation": "synthetic_quote",
                     }
                 }
@@ -358,14 +368,18 @@ __all__ = [
     "MarketCliApplication",
     "MarketDataApplication",
     "MarketData",
+    "CanonicalMarketTarget",
+    "ConsolidatedInstrumentTarget",
+    "ObservationRequirement",
     "OptionFilter",
-    "OptionGreeksProjectionRequest",
-    "OptionGreeksProjectionResult",
+    "OptionGreeksCalculationRequest",
+    "OptionGreeksCalculationResult",
     "OptionGreeks",
     "OptionRight",
     "Options",
-    "Participant",
-    "ParticipantSet",
+    "OptionsTarget",
+    "Provider",
+    "ProviderPreference",
     "Quote",
     "QuoteEvent",
     "Subscription",
@@ -373,8 +387,6 @@ __all__ = [
     "SubscriptionReleaseResult",
     "SubscriptionRequest",
     "SubscriptionStatus",
-    "Source",
-    "SourceSet",
     "ExpiryRange",
     "StrikeRange",
     "Timeframe",
@@ -387,8 +399,8 @@ __all__ = [
 
 from .analytics import (  # noqa: E402
     MarketAnalyticalApplication,
-    OptionGreeksProjectionRequest,
-    OptionGreeksProjectionResult,
+    OptionGreeksCalculationRequest,
+    OptionGreeksCalculationResult,
 )
 
 
@@ -422,7 +434,7 @@ def _write_parquet(events: list[dict[str, Any]], path: Path) -> None:
                 "kind": kind,
                 "scope_key": _scope_key(payload.get("scope")),
                 "instrument_id": payload.get("instrument_id"),
-                "source_id": payload.get("source_id"),
+                "provider": payload.get("provider"),
                 "observed_at_unix_nanos": _event_time(event),
                 "payload_json": json.dumps(payload, separators=(",", ":")),
             }
@@ -434,7 +446,7 @@ def _write_parquet(events: list[dict[str, Any]], path: Path) -> None:
                 ("kind", pa.string()),
                 ("scope_key", pa.string()),
                 ("instrument_id", pa.string()),
-                ("source_id", pa.string()),
+                ("provider", pa.string()),
                 ("observed_at_unix_nanos", pa.uint64()),
                 ("payload_json", pa.string()),
             ]
@@ -478,7 +490,7 @@ def _validate_events(events: list[dict[str, Any]]) -> None:
             )
         if payload["observed_at_unix_nanos"] < 0:
             raise ValueError(f"market dataset event {index} has negative event time")
-        for field in ("instrument_id", "source_id"):
+        for field in ("instrument_id", "provider"):
             if not isinstance(payload.get(field), str) or not payload[field].strip():
                 raise ValueError(f"market dataset event {index} is missing {field}")
         scope = payload.get("scope")

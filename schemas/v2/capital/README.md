@@ -2,7 +2,7 @@
 
 Capital commands and synchronous queries use the explicit JSON control
 boundary. Retained state is published as the `CapitalCurrentView` FlatBuffers
-mmap projection. Durable business transitions are published as typed
+mmap current view. Durable business transitions are published as typed
 FlatBuffers events on the Capital event stream (`1701`).
 
 The current view exposes policies, objectives, demand observations, source

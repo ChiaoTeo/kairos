@@ -9,18 +9,22 @@ pub mod composition;
 mod domain;
 mod services;
 
+pub(crate) use application::ProviderRouteBinding;
 pub use application::{
-    Bar, CliMarketApplication, CliMarketDiagnosticProvider, CliMarketHistoricalDataKind,
+    Bar, CliDirectObservationResult, CliMarketApplication, CliMarketBarResult,
+    CliMarketDatasetManifest, CliMarketDatasetsResult, CliMarketHistoricalDataKind,
     CliMarketHistoricalDownloadRequest, CliMarketHistoricalMarketType, CliMarketHistoricalProvider,
-    ConnectedMarketApplication, ConnectedMarketSourceQuery, ConnectedSourceAvailability,
-    DataFreshnessStatus, ExecutionEstimate, FeedStatus, FundingRate, IndexPrice, MarkPrice,
-    MarketApplication, MarketChange, MarketDataRoute, MarketError, MarketEvent, MarketFreshness,
-    MarketObservation, MarketReadiness, MarketSelectionQuery, MarketView, MarketViewFreshness,
-    MarketViewKey, MarketViewUpdate, ObservationKind, ObservationScope, ObservationSelector,
-    OpenInterest, OptionGreeks, OrderBook, OrderBookDelta, OrderBookResyncRequired, OrderBookSide,
-    PriceLevel, Quote, QuoteBar, Rate, ReconcileMarketUniverse, ReconcileResult, ResolvedMarket,
-    SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey, SourceState,
-    SourceStatus, SubscriptionId, SubscriptionMemberRequirement, SubscriptionMemberStatus,
-    SubscriptionMode, SubscriptionState, SubscriptionStatus, Ticker24h, Trade, TradeBar,
-    load_replay_events, load_replay_events_many,
+    CliMarketOnceProvider, CliMarketOnceRequest, CliMarketQuoteResult, CliMarketReplayResult,
+    CliMarketReplaySnapshot, CliMarketRoutesResult, CliMarketValidationResult,
+    ConnectedMarketApplication, ConnectedMarketOutput, ConnectedMarketRouteQuery,
+    ConnectedRouteAvailability, DataFreshnessStatus, ExecutionEstimate, FeedStatus, FundingRate,
+    IndexPrice, MarkPrice, MarketApplication, MarketChange, MarketDataRouteState, MarketError,
+    MarketEvent, MarketFreshness, MarketObservation, MarketReadiness, MarketSelectionQuery,
+    MarketView, MarketViewFreshness, MarketViewKey, MarketViewUpdate, ObservationKind,
+    ObservationScope, ObservationSelector, OpenInterest, OptionGreeks, OrderBook, OrderBookDelta,
+    OrderBookResyncRequired, OrderBookSide, PriceLevel, Quote, QuoteBar, Rate,
+    ReconcileMarketUniverse, ReconcileResult, ResolvedMarket, ResolvedMarketDataRoute,
+    SubscriptionId, SubscriptionMemberRequirement, SubscriptionMemberStatus, SubscriptionMode,
+    SubscriptionState, SubscriptionStatus, Ticker24h, Trade, TradeBar, load_replay_events,
+    load_replay_events_many,
 };

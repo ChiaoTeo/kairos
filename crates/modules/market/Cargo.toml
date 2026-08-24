@@ -11,6 +11,7 @@ name = "kairos_market"
 path = "src/lib.rs"
 
 [dependencies]
+chrono.workspace = true
 clap.workspace = true
 flatbuffers.workspace = true
 futures-util.workspace = true

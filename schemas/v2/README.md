@@ -11,7 +11,7 @@ owning business namespace, for example `schemas/v2/execution/`; this directory
 does not introduce a `kairos.v2` business namespace.
 
 V2 is the only active Kairos wire contract. It is designed from current business
-ownership and real cross-process use cases, not as a compatibility projection.
+ownership and real cross-process use cases, not as a compatibility adapter.
 
 Concrete roots are indexed in [`registry.md`](./registry.md). A root is active
 only when it has an admitted owner, publisher or caller, consumer, transport

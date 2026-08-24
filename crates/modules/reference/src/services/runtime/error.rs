@@ -4,6 +4,7 @@ use crate::domain::{
     ReferenceError, ReferenceSourceDefinition, SourceRuntimeError, SourceScopeKind,
     SourceSyncPolicy,
 };
+use crate::services::providers::{MassiveReferenceSource, ReferenceSourceBinding};
 
 pub(crate) fn source_runtime_error(error: &ReferenceError) -> SourceRuntimeError {
     let (record_kind, record_id) = error
@@ -22,12 +23,13 @@ pub(crate) fn source_runtime_error(error: &ReferenceError) -> SourceRuntimeError
 pub(crate) fn source_activation_unavailable_error(
     definition: &ReferenceSourceDefinition,
 ) -> SourceRuntimeError {
-    let scoped_massive_options = definition.provider_id.as_str() == "massive"
-        && definition.provider_product.as_deref() == Some("options")
-        && definition.sync_policy == SourceSyncPolicy::ScopedSnapshot;
+    let binding = ReferenceSourceBinding::from_source_id(definition.source_id.as_str());
+    let scoped_massive_options = binding
+        == Some(ReferenceSourceBinding::Massive(
+            MassiveReferenceSource::Options,
+        ));
     let credentialed_source_without_binding = definition.credential_binding.is_none()
-        && (matches!(definition.provider_product.as_deref(), Some("equity"))
-            || scoped_massive_options);
+        && binding.is_some_and(ReferenceSourceBinding::requires_credential);
     let code = if credentialed_source_without_binding {
         "reference.source_credential_binding_missing"
     } else if scoped_massive_options {
@@ -51,9 +53,9 @@ pub(crate) fn source_activation_unavailable_error(
         record_kind: Some("reference_source".to_owned()),
         record_id: Some(definition.source_id.to_string()),
         message: format!(
-            "reference source activation is not available: provider_id={} provider_product={} sync_policy={} scope_kind={}{}",
+            "reference source activation is not available: source_id={} provider_id={} sync_policy={} scope_kind={}{}",
+            definition.source_id,
             definition.provider_id,
-            definition.provider_product.as_deref().unwrap_or("unknown"),
             definition.sync_policy.as_str(),
             definition.scope.kind.as_str(),
             scope_id
@@ -73,11 +75,10 @@ fn safe_error_message(error: &ReferenceError) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::{source_activation_unavailable_error, source_runtime_error};
     use crate::domain::{
         ReferenceError, ReferenceSourceDefinition, SourceScope, SourceScopeKind, SourceSyncPolicy,
     };
-
-    use super::{source_activation_unavailable_error, source_runtime_error};
 
     #[test]
     fn source_runtime_error_keeps_safe_identity_and_code() {
@@ -96,13 +97,11 @@ mod tests {
     }
 
     #[test]
-    fn activation_error_explains_unsupported_scoped_source() {
+    fn activation_error_explains_missing_credential_for_scoped_source() {
         let definition = ReferenceSourceDefinition {
-            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
-            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-            provider_product: Some(
-                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-            ),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
+            provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             scope: SourceScope {
                 kind: SourceScopeKind::UnderlyingInstrument,
                 id: Some("instrument:equity:US:SPY:common".into()),
@@ -114,7 +113,7 @@ mod tests {
 
         let summary = source_activation_unavailable_error(&definition);
 
-        assert_eq!(summary.code, "reference.source_activation_unsupported");
+        assert_eq!(summary.code, "reference.source_credential_binding_missing");
         assert_eq!(summary.record_kind.as_deref(), Some("reference_source"));
         assert_eq!(summary.record_id.as_deref(), Some("massive-options"));
         assert!(summary.message.contains("provider_id=massive"));

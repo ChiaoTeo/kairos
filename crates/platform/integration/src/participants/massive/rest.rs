@@ -14,8 +14,9 @@ use crate::transport::http::ExchangeError;
 use crate::{
     ConnectionDescriptor, ExternalInstrumentCatalog, ExternalInstrumentCatalogPage,
     HistoricalBarQuery, HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery,
-    HistoricalWindow, InstrumentCatalogQuery, IntegrationError, MarketBar, MarketGreeks,
-    MarketGreeksQuery, MarketQuote, MarketTrade, ParticipantKind, ParticipantRef,
+    HistoricalWindow, InstrumentCatalogQuery, IntegrationError, MarketBar, MarketBarQuery,
+    MarketBarRequest, MarketGreeks, MarketGreeksQuery, MarketQuote, MarketQuoteQuery, MarketTrade,
+    MarketTradeQuery, ParticipantKind, ParticipantRef,
 };
 
 pub struct MassiveRestConnection {
@@ -138,11 +139,131 @@ impl MassiveRestConnection {
         })
     }
 
+    fn require_equities(&self) -> Result<(), IntegrationError> {
+        if self.instrument_query.instrument_type == InstrumentType::Equity {
+            Ok(())
+        } else {
+            Err(IntegrationError::InvalidRequest(
+                "Massive stock snapshots require an equities REST connection".into(),
+            ))
+        }
+    }
+
     fn market_type(&self) -> ServiceMarketType {
         match self.instrument_query.instrument_type {
             InstrumentType::Equity => ServiceMarketType::Equity,
             InstrumentType::Option => ServiceMarketType::Option,
         }
+    }
+}
+
+impl MarketQuoteQuery for MassiveRestConnection {
+    async fn fetch_quotes(
+        &mut self,
+        symbols: &[kairos_primitives::integration::ParticipantSymbol],
+    ) -> Result<Vec<MarketQuote>, IntegrationError> {
+        self.require_equities()?;
+        let mut values = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let snapshot = self
+                .service
+                .stock_snapshot(symbol.as_str())
+                .await
+                .map_err(map_exchange_error)?;
+            let quote = snapshot.quote.ok_or_else(|| {
+                IntegrationError::InvalidPayload(format!(
+                    "Massive stock snapshot returned no quote for {symbol}"
+                ))
+            })?;
+            values.extend(normalize_historical_quotes(
+                vec![quote],
+                &HistoricalWindow {
+                    symbol: symbol.clone(),
+                    start_time_unix_nanos: 0.into(),
+                    end_time_unix_nanos: u64::MAX.into(),
+                },
+            )?);
+        }
+        Ok(values)
+    }
+}
+
+impl MarketTradeQuery for MassiveRestConnection {
+    async fn fetch_trades(
+        &mut self,
+        symbols: &[kairos_primitives::integration::ParticipantSymbol],
+    ) -> Result<Vec<MarketTrade>, IntegrationError> {
+        self.require_equities()?;
+        let mut values = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let snapshot = self
+                .service
+                .stock_snapshot(symbol.as_str())
+                .await
+                .map_err(map_exchange_error)?;
+            let trade = snapshot.trade.ok_or_else(|| {
+                IntegrationError::InvalidPayload(format!(
+                    "Massive stock snapshot returned no trade for {symbol}"
+                ))
+            })?;
+            values.extend(normalize_historical_trades(
+                vec![trade],
+                &HistoricalWindow {
+                    symbol: symbol.clone(),
+                    start_time_unix_nanos: 0.into(),
+                    end_time_unix_nanos: u64::MAX.into(),
+                },
+            )?);
+        }
+        Ok(values)
+    }
+}
+
+impl MarketBarQuery for MassiveRestConnection {
+    async fn fetch_bars(
+        &mut self,
+        request: &MarketBarRequest,
+    ) -> Result<Vec<MarketBar>, IntegrationError> {
+        self.require_equities()?;
+        let mut values = Vec::with_capacity(request.symbols.len());
+        for symbol in &request.symbols {
+            let snapshot = self
+                .service
+                .stock_snapshot(symbol.as_str())
+                .await
+                .map_err(map_exchange_error)?;
+            let bar = match request.interval.as_str() {
+                "1m" => snapshot.minute_bar,
+                "1d" => snapshot.day_bar,
+                "prev" | "previous-day" => snapshot.previous_day_bar,
+                value => {
+                    return Err(IntegrationError::InvalidRequest(format!(
+                        "Massive stock snapshot does not provide {value} bars"
+                    )));
+                },
+            }
+            .ok_or_else(|| {
+                IntegrationError::InvalidPayload(format!(
+                    "Massive stock snapshot returned no {} bar for {symbol}",
+                    request.interval
+                ))
+            })?;
+            values.extend(normalize_historical(
+                vec![bar],
+                &HistoricalBarRequest {
+                    window: HistoricalWindow {
+                        symbol: symbol.clone(),
+                        start_time_unix_nanos: 0.into(),
+                        end_time_unix_nanos: u64::MAX.into(),
+                    },
+                    interval: request.interval.clone(),
+                    adjusted: request.adjusted,
+                },
+                &request.interval,
+                ServiceMarketType::Equity,
+            )?);
+        }
+        Ok(values)
     }
 }
 
@@ -346,6 +467,73 @@ mod error_tests {
     use std::net::TcpListener;
 
     use super::*;
+
+    #[tokio::test]
+    async fn stock_snapshot_exposes_quote_trade_and_minute_bar_capabilities() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0_u8; 8192];
+                let size = stream.read(&mut buffer).unwrap();
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                assert!(
+                    request
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .contains("/v2/snapshot/locale/us/markets/stocks/tickers/AAPL")
+                );
+                let body = r#"{"ticker":{"ticker":"AAPL","lastQuote":{"p":226.1,"s":10,"P":226.2,"S":12,"t":1787270400000000000},"lastTrade":{"i":"trade-1","p":226.15,"s":3,"t":1787270400000000100},"min":{"o":226,"h":226.3,"l":225.9,"c":226.15,"v":1200,"t":1787270400000},"day":{"o":224,"h":227,"l":223,"c":226.15,"v":2000000,"t":1787241600000}}}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let mut connection = MassiveRestConnection::new(
+            crate::ConnectionKey::new("market.massive.stocks.test").unwrap(),
+            MassiveRestConfig {
+                environment: "test".into(),
+                endpoint,
+                api_key: secrecy::SecretString::from("test-secret".to_owned()),
+                instrument_query: InstrumentQuery::equities(),
+            },
+        )
+        .unwrap();
+        let symbol = kairos_primitives::integration::ParticipantSymbol::new("AAPL").unwrap();
+
+        let quote = MarketQuoteQuery::fetch_quotes(&mut connection, std::slice::from_ref(&symbol))
+            .await
+            .unwrap()
+            .remove(0);
+        let trade = MarketTradeQuery::fetch_trades(&mut connection, std::slice::from_ref(&symbol))
+            .await
+            .unwrap()
+            .remove(0);
+        let bar = MarketBarQuery::fetch_bars(
+            &mut connection,
+            &MarketBarRequest {
+                symbols: vec![symbol.clone()],
+                interval: "1m".into(),
+                adjusted: Some(true),
+            },
+        )
+        .await
+        .unwrap()
+        .remove(0);
+
+        server.join().unwrap();
+        assert_eq!(quote.symbol, symbol);
+        assert_eq!(quote.bid_price.unwrap().to_string(), "226.1");
+        assert_eq!(quote.ask_price.unwrap().to_string(), "226.2");
+        assert_eq!(trade.price.to_string(), "226.15");
+        assert_eq!(bar.interval, "1m");
+        assert_eq!(bar.close.to_string(), "226.15");
+    }
 
     #[test]
     fn plan_denial_is_entitlement_not_transport() {

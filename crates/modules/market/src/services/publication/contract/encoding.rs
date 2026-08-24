@@ -53,7 +53,7 @@ fn strings<'a, A: flatbuffers::Allocator + 'a>(
     builder: &mut FlatBufferBuilder<'a, A>,
     market_id: &str,
     instrument_id: &str,
-    source_id: &str,
+    provider: &str,
 ) -> (
     flatbuffers::WIPOffset<&'a str>,
     flatbuffers::WIPOffset<&'a str>,
@@ -62,7 +62,7 @@ fn strings<'a, A: flatbuffers::Allocator + 'a>(
     (
         builder.create_string(market_id),
         builder.create_string(instrument_id),
-        builder.create_string(source_id),
+        builder.create_string(provider),
     )
 }
 
@@ -134,11 +134,11 @@ fn encode_observation(
                 &context(actor_id, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
-            let (_scope_key, instrument_id, source_id) = strings(
+            let (_scope_key, instrument_id, provider) = strings(
                 &mut b,
                 &value.scope.key(),
                 &value.instrument_id,
-                &value.source_id,
+                &value.provider,
             );
             let scope = observation_scope(&mut b, &value.scope);
             let bid_price = value.bid_price.map(dec);
@@ -159,7 +159,7 @@ fn encode_observation(
                     quote_id: None,
                     scope: Some(scope),
                     instrument_id: Some(instrument_id),
-                    source_id: Some(source_id),
+                    provider: Some(provider),
                     bid_price: bid_price.as_ref(),
                     bid_quantity: bid_quantity.as_ref(),
                     ask_price: ask_price.as_ref(),
@@ -194,11 +194,11 @@ fn encode_observation(
                 &context(actor_id, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
-            let (_scope_key, instrument_id, source_id) = strings(
+            let (_scope_key, instrument_id, provider) = strings(
                 &mut b,
                 &value.scope.key(),
                 &value.instrument_id,
-                &value.source_id,
+                &value.provider,
             );
             let scope = observation_scope(&mut b, &value.scope);
             let price = dec(value.price);
@@ -214,7 +214,7 @@ fn encode_observation(
                     trade_id,
                     scope: Some(scope),
                     instrument_id: Some(instrument_id),
-                    source_id: Some(source_id),
+                    provider: Some(provider),
                     price: Some(&price),
                     quantity: Some(&quantity),
                     aggressor_side: side(value.aggressor_side.as_deref()),
@@ -258,11 +258,11 @@ fn encode_observation(
                 &context(actor_id, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
-            let (_scope_key, instrument_id, source_id) = strings(
+            let (_scope_key, instrument_id, provider) = strings(
                 &mut b,
                 &value.scope.key(),
                 &value.instrument_id,
-                &value.source_id,
+                &value.provider,
             );
             let scope = observation_scope(&mut b, &value.scope);
             let spec = b.create_string(&value.timeframe);
@@ -277,7 +277,7 @@ fn encode_observation(
                 &fb::BarArgs {
                     scope: Some(scope),
                     instrument_id: Some(instrument_id),
-                    source_id: Some(source_id),
+                    provider: Some(provider),
                     bar_spec_id: Some(spec),
                     kind: bar_kind(derivation),
                     window_start_unix_nanos: 0,
@@ -314,11 +314,11 @@ fn encode_observation(
                 &context(actor_id, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
-            let (_scope_key, instrument_id, source_id) = strings(
+            let (_scope_key, instrument_id, provider) = strings(
                 &mut b,
                 &value.scope.key(),
                 &value.instrument_id,
-                &value.source_id,
+                &value.provider,
             );
             let scope = observation_scope(&mut b, &value.scope);
             let strike = value.strike.map(dec);
@@ -333,7 +333,7 @@ fn encode_observation(
                 &fb::GreeksArgs {
                     scope: Some(scope),
                     instrument_id: Some(instrument_id),
-                    source_id: Some(source_id),
+                    provider: Some(provider),
                     expiry_unix_nanos: value.expiry_unix_nanos.map(|v| v.get()),
                     strike: strike.as_ref(),
                     delta: delta.as_ref(),
@@ -408,11 +408,11 @@ fn encode_rate(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (_scope_key, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, provider) = strings(
         &mut b,
         &value.scope.key(),
         &value.instrument_id,
-        &value.source_id,
+        &value.provider,
     );
     let scope = observation_scope(&mut b, &value.scope);
     let rate_id = b.create_string(&value.rate_id);
@@ -425,7 +425,7 @@ fn encode_rate(
             rate_id: Some(rate_id),
             scope: Some(scope),
             instrument_id: Some(instrument_id),
-            source_id: Some(source_id),
+            provider: Some(provider),
             basis: Some(basis),
             value: Some(&rate),
             mark_price: mark.as_ref(),
@@ -462,11 +462,11 @@ fn encode_ticker(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (_scope_key, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, provider) = strings(
         &mut b,
         &value.scope.key(),
         &value.instrument_id,
-        &value.source_id,
+        &value.provider,
     );
     let scope = observation_scope(&mut b, &value.scope);
     let lp = value.last_price.map(dec);
@@ -488,7 +488,7 @@ fn encode_ticker(
         &fb::Ticker24hArgs {
             scope: Some(scope),
             instrument_id: Some(instrument_id),
-            source_id: Some(source_id),
+            provider: Some(provider),
             last_price: lp.as_ref(),
             bid_price: bp.as_ref(),
             bid_quantity: bq.as_ref(),
@@ -536,11 +536,11 @@ fn encode_mark_price(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (_scope_key, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, provider) = strings(
         &mut b,
         &value.scope.key(),
         &value.instrument_id,
-        &value.source_id,
+        &value.provider,
     );
     let scope = observation_scope(&mut b, &value.scope);
     let mark = dec(value.mark_price);
@@ -552,7 +552,7 @@ fn encode_mark_price(
         &fb::MarkPriceArgs {
             scope: Some(scope),
             instrument_id: Some(instrument_id),
-            source_id: Some(source_id),
+            provider: Some(provider),
             mark_price: Some(&mark),
             index_price: index.as_ref(),
             estimated_settlement_price: settlement.as_ref(),
@@ -591,11 +591,11 @@ fn encode_funding(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (_scope_key, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, provider) = strings(
         &mut b,
         &value.scope.key(),
         &value.instrument_id,
-        &value.source_id,
+        &value.provider,
     );
     let scope = observation_scope(&mut b, &value.scope);
     let rate = dec(value.funding_rate);
@@ -604,7 +604,7 @@ fn encode_funding(
         &fb::FundingRateArgs {
             scope: Some(scope),
             instrument_id: Some(instrument_id),
-            source_id: Some(source_id),
+            provider: Some(provider),
             funding_rate: Some(&rate),
             funding_period_seconds: value.funding_period_seconds.unwrap_or_default(),
             next_funding_time_unix_nanos: value.next_funding_time_unix_nanos.map_or(0, |v| v.get()),
@@ -641,11 +641,11 @@ fn encode_open_interest(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (_scope_key, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, provider) = strings(
         &mut b,
         &value.scope.key(),
         &value.instrument_id,
-        &value.source_id,
+        &value.provider,
     );
     let scope = observation_scope(&mut b, &value.scope);
     let contracts = dec(value.contracts);
@@ -657,7 +657,7 @@ fn encode_open_interest(
         &fb::OpenInterestArgs {
             scope: Some(scope),
             instrument_id: Some(instrument_id),
-            source_id: Some(source_id),
+            provider: Some(provider),
             contracts: Some(&contracts),
             quote_value: q.as_ref(),
             change_24h: c.as_ref(),
@@ -695,11 +695,11 @@ fn encode_index_price(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (_scope_key, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, provider) = strings(
         &mut b,
         &value.scope.key(),
         &value.instrument_id,
-        &value.source_id,
+        &value.provider,
     );
     let scope = observation_scope(&mut b, &value.scope);
     let spot = value.spot_index_price.map(dec);
@@ -711,7 +711,7 @@ fn encode_index_price(
         &fb::IndexPriceArgs {
             scope: Some(scope),
             instrument_id: Some(instrument_id),
-            source_id: Some(source_id),
+            provider: Some(provider),
             spot_index_price: spot.as_ref(),
             contract_index_price: contract.as_ref(),
             index_price: index.as_ref(),
@@ -741,13 +741,13 @@ fn orderbook_identity<'a, A: flatbuffers::Allocator + 'a>(
     b: &mut FlatBufferBuilder<'a, A>,
     book: &OrderBook,
 ) -> flatbuffers::WIPOffset<fb::OrderBookIdentity<'a>> {
-    let s = b.create_string(&book.source_id);
+    let s = b.create_string(&book.provider);
     let m = b.create_string(book.market_id.as_str());
     let i = b.create_string(book.instrument_id.as_str());
     fb::OrderBookIdentity::create(
         b,
         &fb::OrderBookIdentityArgs {
-            source_id: Some(s),
+            provider: Some(s),
             market_id: Some(m),
             instrument_id: Some(i),
         },
@@ -853,13 +853,13 @@ fn encode_orderbook_delta(
         &context(actor_id, identity, sequence),
         delta.event_time_unix_nanos.get(),
     );
-    let s = b.create_string(&delta.source_id);
+    let s = b.create_string(&delta.provider);
     let m = b.create_string(delta.market_id.as_str());
     let i = b.create_string(delta.instrument_id.as_str());
     let identity_offset = fb::OrderBookIdentity::create(
         &mut b,
         &fb::OrderBookIdentityArgs {
-            source_id: Some(s),
+            provider: Some(s),
             market_id: Some(m),
             instrument_id: Some(i),
         },
@@ -932,13 +932,13 @@ fn encode_orderbook_resync(
 ) -> Result<Vec<u8>, String> {
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(&mut b, &context(actor_id, identity, sequence), 0);
-    let source_id = b.create_string(&value.source_id);
+    let provider = b.create_string(&value.provider);
     let market_id = b.create_string(value.market_id.as_str());
     let instrument_id = b.create_string(value.instrument_id.as_str());
     let identity_offset = fb::OrderBookIdentity::create(
         &mut b,
         &fb::OrderBookIdentityArgs {
-            source_id: Some(source_id),
+            provider: Some(provider),
             market_id: Some(market_id),
             instrument_id: Some(instrument_id),
         },
@@ -983,7 +983,7 @@ mod tests {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: UnixNanos::new(7),
-            source_id: kairos_primitives::market::SourceId::new("source").unwrap(),
+            provider: kairos_primitives::market::Provider::new("source").unwrap(),
         };
         let bytes = encode_event(
             "market",
@@ -1006,7 +1006,7 @@ mod tests {
             value: "0.01".parse::<FixedRate>().unwrap(),
             mark_price: None,
             observed_at_unix_nanos: UnixNanos::new(7),
-            source_id: kairos_primitives::market::SourceId::new("source").unwrap(),
+            provider: kairos_primitives::market::Provider::new("source").unwrap(),
         };
         let bytes = encode_event(
             "market",

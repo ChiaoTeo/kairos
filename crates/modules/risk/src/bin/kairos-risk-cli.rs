@@ -3,11 +3,14 @@ use std::str::FromStr;
 
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use kairos_primitives::account::AccountId;
-use kairos_primitives::reference::Exchange;
+use kairos_primitives::reference::ExchangeId;
 use kairos_primitives::risk::ReservationId;
 use kairos_primitives::runtime::StrategyId;
 use kairos_primitives::time::UnixNanos;
-use kairos_risk::{CliRiskApplication, ConnectedRiskApplication, RiskCliRequestKind};
+use kairos_risk::{
+    CliRiskApplication, ConnectedRiskApplication, ConnectedRiskOutput, RiskCliRequestKind,
+    RiskStandaloneOutput,
+};
 use kairos_risk_contract::{
     AdvanceRiskTimeRequest, Amount, AuthorizeRequest, CircuitScope, CloseCircuitRequest,
     ConsumeReservationRequest, OpenCircuitRequest, PublishPolicyRequest, ReleaseReservationRequest,
@@ -15,7 +18,14 @@ use kairos_risk_contract::{
 };
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};
-use serde_json::Value;
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum RiskCliOutput {
+    Standalone(RiskStandaloneOutput),
+    Connected(ConnectedRiskOutput),
+}
 
 /// One-shot Risk inspection commands.
 ///
@@ -30,8 +40,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("workspace output format validated")
     });
     let value = match args.command {
-        Command::Standalone(command) => run_standalone(command, &workspace)?,
-        Command::Connected(command) => run_connected(command, &workspace).await?,
+        Command::Standalone(command) => {
+            RiskCliOutput::Standalone(run_standalone(command, &workspace)?)
+        },
+        Command::Connected(command) => {
+            RiskCliOutput::Connected(run_connected(command, &workspace).await?)
+        },
     };
     println!("{}", render(&value, output));
     Ok(())
@@ -40,50 +54,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run_standalone(
     command: StandaloneCommand,
     workspace: &Workspace,
-) -> Result<Value, Box<dyn std::error::Error>> {
+) -> Result<RiskStandaloneOutput, Box<dyn std::error::Error>> {
     let application = CliRiskApplication::open(workspace);
     match command {
-        StandaloneCommand::Schema(command) => Ok(application.schema(command.kind.map(Into::into))),
-        StandaloneCommand::Doctor(command) => {
-            application.doctor(command.kind.into(), &command.file)
-        },
-        StandaloneCommand::Preview(command) => {
-            application.preview(&command.policy_file, &command.request_file)
-        },
+        StandaloneCommand::Schema(command) => Ok(RiskStandaloneOutput::Schema(
+            application.schema(command.kind.map(Into::into)),
+        )),
+        StandaloneCommand::Doctor(command) => application
+            .doctor(command.kind.into(), &command.file)
+            .map(RiskStandaloneOutput::Doctor),
+        StandaloneCommand::Preview(command) => application
+            .preview(&command.policy_file, &command.request_file)
+            .map(RiskStandaloneOutput::Preview),
     }
 }
 
 async fn run_connected(
     command: ConnectedCommand,
     workspace: &Workspace,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    match command {
-        ConnectedCommand::Health(target) => connected_risk_app(target, workspace)?.health().await,
+) -> Result<ConnectedRiskOutput, Box<dyn std::error::Error>> {
+    let value = match command {
+        ConnectedCommand::Health(target) => {
+            ConnectedRiskOutput::Health(connected_risk_app(target, workspace)?.health().await?)
+        },
         ConnectedCommand::Latest(target) => {
             let actor_id = target.actor_id.clone();
-            connected_risk_app(target, workspace)?.latest(actor_id)
+            ConnectedRiskOutput::Latest(connected_risk_app(target, workspace)?.latest(actor_id)?)
         },
         ConnectedCommand::Limits(target) => {
             let actor_id = target.actor_id.clone();
-            connected_risk_app(target, workspace)?.limits(actor_id)
+            ConnectedRiskOutput::Limits(connected_risk_app(target, workspace)?.limits(actor_id)?)
         },
         ConnectedCommand::Reservations(target) => {
             let actor_id = target.actor_id.clone();
-            connected_risk_app(target, workspace)?.reservations(actor_id)
+            ConnectedRiskOutput::Reservations(
+                connected_risk_app(target, workspace)?.reservations(actor_id)?,
+            )
         },
         ConnectedCommand::Circuits(target) => {
             let actor_id = target.actor_id.clone();
-            connected_risk_app(target, workspace)?.circuits(actor_id)
+            ConnectedRiskOutput::Circuits(
+                connected_risk_app(target, workspace)?.circuits(actor_id)?,
+            )
         },
         ConnectedCommand::PreTradeCheck(command) => {
             let application = connected_risk_app(command.target, workspace)?;
             let request: AuthorizeRequest = read_json_file(&command.file)?;
-            application.pre_trade_check(request).await
+            ConnectedRiskOutput::Decision(application.pre_trade_check(request).await?)
         },
         ConnectedCommand::AuthorizeReserve(command) => {
             let application = connected_risk_app(command.target, workspace)?;
             let request: AuthorizeRequest = read_json_file(&command.file)?;
-            application.authorize_and_reserve(request).await
+            ConnectedRiskOutput::Decision(application.authorize_and_reserve(request).await?)
         },
         ConnectedCommand::Release(command) => {
             let application = connected_risk_app(command.target, workspace)?;
@@ -91,7 +113,7 @@ async fn run_connected(
                 reservation_id: reservation_id(command.reservation_id)?,
                 at_unix_nanos: UnixNanos::new(command.at_unix_nanos),
             };
-            application.release_reservation(request).await
+            ConnectedRiskOutput::Reservation(application.release_reservation(request).await?)
         },
         ConnectedCommand::Consume(command) => {
             let application = connected_risk_app(command.target, workspace)?;
@@ -99,7 +121,7 @@ async fn run_connected(
                 reservation_id: reservation_id(command.reservation_id)?,
                 at_unix_nanos: UnixNanos::new(command.at_unix_nanos),
             };
-            application.consume_reservation(request).await
+            ConnectedRiskOutput::Reservation(application.consume_reservation(request).await?)
         },
         ConnectedCommand::Resize(command) => {
             let application = connected_risk_app(command.target, workspace)?;
@@ -108,7 +130,7 @@ async fn run_connected(
                 amount: amount(command.amount)?,
                 at_unix_nanos: UnixNanos::new(command.at_unix_nanos),
             };
-            application.resize_reservation(request).await
+            ConnectedRiskOutput::Reservation(application.resize_reservation(request).await?)
         },
         ConnectedCommand::OpenCircuit(command) => {
             let application = connected_risk_app(command.target, workspace)?;
@@ -122,7 +144,7 @@ async fn run_connected(
                 reset_at_unix_nanos: command.reset_at_unix_nanos.map(UnixNanos::new),
                 reason: command.reason,
             };
-            application.open_circuit(request).await
+            ConnectedRiskOutput::Circuit(application.open_circuit(request).await?)
         },
         ConnectedCommand::CloseCircuit(command) => {
             let application = connected_risk_app(command.target, workspace)?;
@@ -134,21 +156,22 @@ async fn run_connected(
                 )?,
                 at_unix_nanos: UnixNanos::new(command.at_unix_nanos),
             };
-            application.close_circuit(request).await
+            ConnectedRiskOutput::Circuit(application.close_circuit(request).await?)
         },
         ConnectedCommand::PublishPolicy(command) => {
             let application = connected_risk_app(command.target, workspace)?;
             let request: PublishPolicyRequest = read_json_file(&command.file)?;
-            application.publish_policy(request).await
+            ConnectedRiskOutput::Command(application.publish_policy(request).await?)
         },
         ConnectedCommand::AdvanceTime(command) => {
             let application = connected_risk_app(command.target, workspace)?;
             let request = AdvanceRiskTimeRequest {
                 event_time_unix_nanos: UnixNanos::new(command.event_time_unix_nanos),
             };
-            application.advance_time(request).await
+            ConnectedRiskOutput::AdvanceTime(application.advance_time(request).await?)
         },
-    }
+    };
+    Ok(value)
 }
 
 fn read_json_file<T: serde::de::DeserializeOwned>(
@@ -174,7 +197,7 @@ fn circuit_scope(
     Ok(CircuitScope {
         account_id: account_id.map(AccountId::new).transpose()?,
         strategy_id: strategy_id.map(StrategyId::new).transpose()?,
-        exchange_id: exchange_id.map(Exchange::new).transpose()?,
+        exchange_id: exchange_id.map(ExchangeId::new).transpose()?,
     })
 }
 

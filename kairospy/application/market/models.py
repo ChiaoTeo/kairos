@@ -68,7 +68,7 @@ class Bar:
     volume: Decimal | None
     occurred_at: datetime
     occurred_at_unix_nanos: int
-    source_id: str | None = None
+    provider: str | None = None
 
     @property
     def market_id(self) -> MarketId | None:
@@ -91,7 +91,7 @@ class Quote:
     ask_quantity: Decimal | None
     occurred_at: datetime
     occurred_at_unix_nanos: int
-    source_id: str | None = None
+    provider: str | None = None
     bid_venue_code: str | None = None
     ask_venue_code: str | None = None
     tape: int | None = None
@@ -110,7 +110,7 @@ class Trade:
     aggressor_side: AggressorSide | None
     occurred_at: datetime
     occurred_at_unix_nanos: int
-    source_id: str | None = None
+    provider: str | None = None
     venue_code: str | None = None
     tape: int | None = None
     trf_id: int | None = None
@@ -135,7 +135,7 @@ class OptionGreeks:
     implied_volatility: Decimal | None
     occurred_at: datetime
     occurred_at_unix_nanos: int
-    source_id: str | None = None
+    provider: str | None = None
     derivation: str | None = None
 
     @property

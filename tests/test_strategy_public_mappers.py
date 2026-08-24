@@ -98,7 +98,7 @@ def test_market_mapper_exposes_option_greeks_without_losing_precision() -> None:
     assert event.data.occurred_at_unix_nanos == 1_704_067_200_123_456_789
 
 
-def test_execution_mapper_builds_intent_order_and_fill_projections() -> None:
+def test_execution_mapper_builds_intent_order_and_fill_models() -> None:
     intent = map_execution_intent(
         {
             "strategy_id": "strategy-a",

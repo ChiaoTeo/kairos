@@ -69,7 +69,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(workspace.process_socket("reference")?);
     let composition = build_application(&config, true).await?;
     let (mut application, system) = composition.into_conflux();
-    application.configure_conflux(args.refresh_interval, true);
+    if let Some(refresh_interval) = args.refresh_interval {
+        application.configure_conflux(refresh_interval, true);
+    }
 
     run_process(application, system, args.rpc_address, socket, health_file).await
 }
@@ -173,8 +175,8 @@ struct Args {
     reference_changes_stream: i32,
     #[arg(long)]
     aeron_dir: Option<String>,
-    #[arg(long = "refresh-interval", default_value = "5m", value_parser = parse_refresh_interval)]
-    refresh_interval: Duration,
+    #[arg(long = "refresh-interval", value_parser = parse_refresh_interval)]
+    refresh_interval: Option<Duration>,
 }
 
 #[cfg(test)]
@@ -215,6 +217,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(canonical.aeron_channel, "aeron:ipc");
+        assert!(canonical.refresh_interval.is_none());
         assert_eq!(
             canonical.reference_changes_stream,
             kairos_conflux::output_stream_ids::REFERENCE_CHANGES

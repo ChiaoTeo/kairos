@@ -1,4 +1,4 @@
-//! Concrete Risk reservation adapter and its bounded worker projection.
+//! Concrete Risk reservation adapter and its bounded worker state.
 
 mod adapter;
 mod simulated;

@@ -9,9 +9,9 @@ extern crate self as kairos_capital_contract;
 use std::path::Path;
 
 pub mod control;
+mod current;
 mod error;
 pub mod event;
-mod projection;
 pub mod view;
 
 pub use error::{ContractError, ContractResult};
@@ -32,7 +32,7 @@ pub use control::{
     ObserveCapitalDemandRequest, PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest,
     ReconcileCapitalPlanRequest, ReconcileCapitalPlanResponse,
 };
-pub use projection::{
+pub use current::{
     CapitalAlert, CapitalAlertKind, CapitalAlertSeverity, CapitalAvailability, CapitalCurrentView,
     CapitalDemand, CapitalDemandLifecycleStatus, CapitalEarnHolding, CapitalFacts,
     CapitalFundingHorizon, CapitalOperation, CapitalOperationKind, CapitalOperationStatus,

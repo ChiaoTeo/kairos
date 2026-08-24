@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import json
+from io import StringIO
 import tomllib
 
 import pytest
 
 from kairospy.application.account import (
     AccountAdminApplication,
+    AccountConfigurationApplication,
     CredentialApplication,
     TradeLeaseApplication,
 )
+from kairospy.application.credential import SecretRef
 from kairospy.application.workspace import WorkspaceApplication
+from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch import (
     _acquire_launch_leases,
     _release_launch_leases,
@@ -28,6 +33,30 @@ def test_account_modify_persists_model_and_other_fields(tmp_path) -> None:
     assert value["account_model"] == "margin"
     assert app.show("main")["account_model"] == "margin"
     assert app.show("main")["environment"] == "paper"
+
+
+def test_guided_paper_account_setup_configures_and_manually_tests(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="account"
+    )
+    answers = iter(("paper", "paper-main", "spot", "USDT=1000"))
+    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: True)
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            ["account", "--workspace", str(workspace.paths.root), "setup"], output
+        )
+        == 0
+    )
+
+    value = json.loads(output.getvalue())
+    assert value["account"]["account_id"] == "paper-main"
+    assert value["verification"]["verification_status"] == "verified"
+    assert "order submission" in value["verification"]["not_tested"]
 
 
 def test_live_account_requires_credential_unless_forced(tmp_path, monkeypatch) -> None:
@@ -128,3 +157,49 @@ def test_launch_lease_helpers_release_normalized_account_key(tmp_path) -> None:
     )
     _release_launch_leases(workspace, ["paper-account"], instance="one")
     assert TradeLeaseApplication(workspace).list() == []
+
+
+def test_account_manual_verification_records_scope_and_becomes_stale(tmp_path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="account"
+    )
+    app = AccountConfigurationApplication(workspace)
+    app.simulate("paper-account")
+
+    assert app.show("paper-account")["verification_status"] == "pending"
+    verified = app.test_connection("paper-account")
+
+    assert verified["verification_status"] == "verified"
+    assert "local account availability" in verified["tested"]
+    assert "order submission" in verified["not_tested"]
+    app.modify("paper-account", account_model="margin")
+    assert app.show("paper-account")["verification_status"] == "retest_required"
+
+
+def test_account_secret_ref_identity_invalidates_verification_without_leaking_secret(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="account"
+    )
+    credentials = CredentialApplication(workspace)
+    credentials.add("paper-key", provider="paper")
+    app = AccountConfigurationApplication(workspace)
+    app.connect("main", broker="paper", environment="paper", credential="paper-key")
+    assert app.test_connection("main")["verification_status"] == "verified"
+
+    from kairospy.application.credential import CredentialConfigurationApplication
+
+    CredentialConfigurationApplication(workspace).configure(
+        "paper-key",
+        provider="paper",
+        fields={"note": SecretRef("env", "KAIROS_PAPER_NOTE")},
+        overwrite=True,
+    )
+    monkeypatch.setenv("KAIROS_PAPER_NOTE", "never-print-this")
+
+    assert app.show("main")["verification_status"] == "retest_required"
+    evidence = workspace.paths.child(
+        "state", "configuration", "accounts", "main.json"
+    ).read_text()
+    assert "never-print-this" not in evidence

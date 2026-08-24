@@ -8,6 +8,22 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..workspace import Workspace
+from .references import ConfigurationReferenceApplication
+from .migration import ConfigurationMigrationApplication
+
+
+_SECRET_KEYS = frozenset(
+    {
+        "api_key",
+        "api_secret",
+        "authorization",
+        "password",
+        "private_key",
+        "secret",
+        "signing_secret",
+        "token",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +182,8 @@ class ConfigApplication:
             "profile list",
             "profile use",
             "profile create",
+            "agent status",
+            "agent setup",
         ]
 
     def profiles(self) -> list[str]:
@@ -208,7 +226,25 @@ class ConfigApplication:
         if not path.exists():
             return {}
         value = tomllib.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {"value": value}
+        result = value if isinstance(value, dict) else {"value": value}
+        return _redact_secrets(result)
 
 
-__all__ = ["ConfigApplication"]
+def _redact_secrets(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): (
+                "***" if str(key).lower() in _SECRET_KEYS else _redact_secrets(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secrets(item) for item in value]
+    return value
+
+
+__all__ = [
+    "ConfigApplication",
+    "ConfigurationMigrationApplication",
+    "ConfigurationReferenceApplication",
+]

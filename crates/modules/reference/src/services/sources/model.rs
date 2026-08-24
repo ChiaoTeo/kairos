@@ -47,16 +47,6 @@ impl SourceUpdate {
         }
     }
 
-    pub(crate) fn note_appended_records_seen(&mut self, appended_records: usize) {
-        if appended_records == 0 {
-            return;
-        }
-        let current_records_seen = self
-            .records_seen
-            .unwrap_or_else(|| self.catalog.record_count() as u64);
-        self.records_seen = Some(current_records_seen.saturating_add(appended_records as u64));
-    }
-
     pub(crate) fn note_scheduled_work_item(&mut self, work_item: &SourceWorkItem) {
         if self.work_item_id.is_none() {
             self.work_item_id = Some(work_item.work_item_id.clone());

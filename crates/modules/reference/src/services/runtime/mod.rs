@@ -9,10 +9,11 @@ mod transition;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use crate::domain::{ReferenceSourceDefinition, SourceDesiredState, SourceHealth};
 pub(crate) use error::{source_activation_unavailable_error, source_runtime_error};
 pub(crate) use scheduler::{SourceScheduleDecision, SourceScheduleSkipReason};
 use status::default_source_health;
+
+use crate::domain::{ReferenceSourceDefinition, SourceDesiredState, SourceHealth};
 
 #[derive(Default)]
 pub(crate) struct SourceRuntimeRegistry {
@@ -88,13 +89,12 @@ impl SourceRuntimeRegistry {
 mod tests {
     use std::time::Instant;
 
-    use crate::domain::{
-        ReferenceSourceDefinition, SourceDesiredState, SourceRuntimeError, SourceRuntimePhase,
-        SourceRuntimeProgress, SourceRuntimeWorkItem, SourceScope, SourceSyncPolicy,
-        SourceTickBudget, SourceWorkItem, SourceWorkReason,
-    };
-
     use super::{SourceRuntimeRegistry, SourceScheduleDecision, SourceScheduleSkipReason};
+    use crate::domain::{
+        SourceDesiredState, SourceRuntimeError, SourceRuntimePhase, SourceRuntimeProgress,
+        SourceRuntimeWorkItem, SourceScope, SourceSyncPolicy, SourceTickBudget, SourceWorkItem,
+        SourceWorkReason,
+    };
 
     #[test]
     fn success_resets_failure_and_marks_last_good() {
@@ -128,13 +128,14 @@ mod tests {
     fn source_definitions_are_registry_state() {
         let mut runtime = SourceRuntimeRegistry::default();
 
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
 
         let definitions = runtime.definitions().cloned().collect::<Vec<_>>();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].source_id, "massive-options");
-        assert_eq!(definitions[0].provider_id, "massive");
-        assert_eq!(definitions[0].provider_product.as_deref(), Some("options"));
+        assert_eq!(definitions[0].provider_id.as_str(), "massive");
         assert_eq!(definitions[0].sync_policy, SourceSyncPolicy::ScopedSnapshot);
         let health = runtime.health_for(["massive-options"])[0].clone();
         assert_eq!(
@@ -278,7 +279,9 @@ mod tests {
     #[test]
     fn pause_and_resume_are_explicit_runtime_states() {
         let mut runtime = SourceRuntimeRegistry::default();
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
 
         runtime.mark_inactive("massive-options", SourceDesiredState::Paused);
         assert!(runtime.is_inactive("massive-options"));
@@ -302,8 +305,12 @@ mod tests {
     #[test]
     fn durable_desired_states_mark_inactive_sources() {
         let mut runtime = SourceRuntimeRegistry::default();
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("binance-spot"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("binance-spot").unwrap(),
+        );
 
         runtime.set_desired_states([
             ("massive-options".to_owned(), SourceDesiredState::Disabled),
@@ -344,7 +351,9 @@ mod tests {
     #[test]
     fn apply_desired_state_owns_inactive_and_resume_transitions() {
         let mut runtime = SourceRuntimeRegistry::default();
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
 
         runtime.apply_desired_state("massive-options", SourceDesiredState::Paused);
         assert!(runtime.is_inactive("massive-options"));
@@ -368,8 +377,12 @@ mod tests {
     #[test]
     fn source_health_for_active_sources_marks_registry_only_source_registered() {
         let mut runtime = SourceRuntimeRegistry::default();
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("binance-spot"));
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("binance-spot").unwrap(),
+        );
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
 
         let health = runtime.source_health_for_active_sources(["binance-spot"]);
 
@@ -383,7 +396,9 @@ mod tests {
     #[test]
     fn enabling_source_clears_inactive_runtime_artifacts() {
         let mut runtime = SourceRuntimeRegistry::default();
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
         runtime.mark_failure(
             "massive-options",
             false,
@@ -419,7 +434,9 @@ mod tests {
     #[test]
     fn scheduler_skips_inactive_and_retry_waiting_sources() {
         let mut runtime = SourceRuntimeRegistry::default();
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
 
         runtime.mark_inactive("massive-options", SourceDesiredState::Paused);
         assert_eq!(
@@ -446,7 +463,8 @@ mod tests {
     #[test]
     fn scheduler_returns_source_work_item_after_retry_window() {
         let mut runtime = SourceRuntimeRegistry::default();
-        let mut definition = ReferenceSourceDefinition::from_source_id("massive-options");
+        let mut definition =
+            crate::services::providers::reference_source_definition("massive-options").unwrap();
         definition.scope = SourceScope::underlying_instrument("instrument:equity:US:SPY:common");
         runtime.register_definition(definition);
         runtime.mark_failure("massive-options", true, None);
@@ -483,7 +501,8 @@ mod tests {
     #[test]
     fn scheduled_work_item_is_visible_in_runtime_health() {
         let mut runtime = SourceRuntimeRegistry::default();
-        let mut definition = ReferenceSourceDefinition::from_source_id("massive-options");
+        let mut definition =
+            crate::services::providers::reference_source_definition("massive-options").unwrap();
         definition.scope = SourceScope::underlying_instrument("instrument:equity:US:SPY:common");
         runtime.register_definition(definition);
 
@@ -516,7 +535,8 @@ mod tests {
     #[test]
     fn deferred_work_item_exposes_skip_reason_without_attempt() {
         let mut runtime = SourceRuntimeRegistry::default();
-        let mut definition = ReferenceSourceDefinition::from_source_id("massive-options");
+        let mut definition =
+            crate::services::providers::reference_source_definition("massive-options").unwrap();
         definition.scope = SourceScope::underlying_instrument("instrument:equity:US:SPY:common");
         runtime.register_definition(definition);
 
@@ -544,7 +564,8 @@ mod tests {
     #[test]
     fn targeted_refresh_work_item_uses_rpc_refresh_reason() {
         let mut runtime = SourceRuntimeRegistry::default();
-        let mut definition = ReferenceSourceDefinition::from_source_id("massive-options");
+        let mut definition =
+            crate::services::providers::reference_source_definition("massive-options").unwrap();
         definition.scope = SourceScope::underlying_instrument("instrument:equity:US:SPY:common");
         runtime.register_definition(definition);
 
@@ -574,7 +595,9 @@ mod tests {
     #[test]
     fn source_refresh_work_item_maps_skip_reasons_to_control_results() {
         let mut runtime = SourceRuntimeRegistry::default();
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
 
         runtime.mark_inactive("massive-options", SourceDesiredState::Paused);
         assert!(
@@ -607,7 +630,9 @@ mod tests {
     #[test]
     fn registered_source_without_adapter_error_distinguishes_unknown_source() {
         let mut runtime = SourceRuntimeRegistry::default();
-        runtime.register_definition(ReferenceSourceDefinition::from_source_id("massive-options"));
+        runtime.register_definition(
+            crate::services::providers::reference_source_definition("massive-options").unwrap(),
+        );
 
         let registered = runtime.registered_source_without_adapter_error("massive-options");
         assert!(

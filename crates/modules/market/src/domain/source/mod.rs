@@ -3,25 +3,26 @@ mod readiness;
 mod route;
 mod state;
 
-pub use identity::{SourceEpoch, SourceId};
-pub use readiness::{MarketReadiness, derive_readiness};
-pub use route::{SourceDescriptor, SourceRouteKey};
-pub use state::{SourceFailureKind, SourceState, SourceStatus};
+pub(crate) use identity::{MarketFeedId, SourceEpoch};
+pub use readiness::MarketReadiness;
+pub(crate) use readiness::derive_readiness;
+pub(crate) use route::FeedDescriptor;
+pub(crate) use state::{SourceFailureKind, SourceState, SourceStatus};
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::reference::Exchange;
+    use kairos_primitives::reference::ExchangeId;
 
     use super::{
-        MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceState,
+        FeedDescriptor, MarketFeedId, MarketReadiness, SourceEpoch, SourceFailureKind, SourceState,
         SourceStatus, derive_readiness,
     };
 
     fn state() -> SourceState {
         SourceState::starting(
-            SourceDescriptor::new(
-                SourceId::new("Binance.Spot").unwrap(),
-                Exchange::new("binance").unwrap(),
+            FeedDescriptor::new(
+                MarketFeedId::new("Binance.Spot").unwrap(),
+                ExchangeId::new("binance").unwrap(),
                 "spot",
                 Some("crypto".into()),
             )
@@ -32,11 +33,11 @@ mod tests {
     #[test]
     fn source_identity_is_normalized_and_validated() {
         assert_eq!(
-            SourceId::new(" Binance.Spot ").unwrap().as_str(),
+            MarketFeedId::new(" Binance.Spot ").unwrap().as_str(),
             "binance.spot"
         );
-        assert!(SourceId::new(" ").is_err());
-        assert!(SourceId::new("binance spot").is_err());
+        assert!(MarketFeedId::new(" ").is_err());
+        assert!(MarketFeedId::new("binance spot").is_err());
     }
 
     #[test]

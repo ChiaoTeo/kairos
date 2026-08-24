@@ -20,6 +20,9 @@ pub use app::{
     RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
     UpdateCapitalPolicy, UpdateCapitalRoute,
 };
-pub use cli::{CapitalCliRequestKind, CliCapitalApplication};
-pub use connected::ConnectedCapitalApplication;
+pub use cli::{
+    CapitalCliRequest, CapitalCliRequestKind, CapitalPlanResult, CapitalPreviewResult,
+    CapitalStandaloneOutput, CapitalValidationResult, CliCapitalApplication,
+};
+pub use connected::{ConnectedCapitalApplication, ConnectedCapitalOutput};
 pub use process::{CapitalConfluxConfig, CapitalProcess, CapitalProcessError};

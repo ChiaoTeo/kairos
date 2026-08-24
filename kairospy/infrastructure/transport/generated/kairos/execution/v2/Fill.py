@@ -116,14 +116,14 @@ class Fill(object):
         return None
 
     # Fill
-    def ReportedProviderId(self):
+    def ReportedBrokerId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Fill
-    def ProviderProduct(self):
+    def ExecutionChannel(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -285,17 +285,17 @@ def FillAddRemoteOrderId(builder, remoteOrderId):
 def AddRemoteOrderId(builder, remoteOrderId):
     FillAddRemoteOrderId(builder, remoteOrderId)
 
-def FillAddReportedProviderId(builder, reportedProviderId):
-    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(reportedProviderId), 0)
+def FillAddReportedBrokerId(builder, reportedBrokerId):
+    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(reportedBrokerId), 0)
 
-def AddReportedProviderId(builder, reportedProviderId):
-    FillAddReportedProviderId(builder, reportedProviderId)
+def AddReportedBrokerId(builder, reportedBrokerId):
+    FillAddReportedBrokerId(builder, reportedBrokerId)
 
-def FillAddProviderProduct(builder, providerProduct):
-    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(providerProduct), 0)
+def FillAddExecutionChannel(builder, executionChannel):
+    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(executionChannel), 0)
 
-def AddProviderProduct(builder, providerProduct):
-    FillAddProviderProduct(builder, providerProduct)
+def AddExecutionChannel(builder, executionChannel):
+    FillAddExecutionChannel(builder, executionChannel)
 
 def FillAddProviderSymbol(builder, providerSymbol):
     builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(providerSymbol), 0)

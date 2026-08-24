@@ -11,8 +11,8 @@ sys.modules.setdefault("kairos", _generated_kairos)
 
 
 _EVENT_ROOTS: tuple[tuple[bytes, str], ...] = (
-    (b"RENU", "EntityUpserted"),
-    (b"REND", "EntityUpdated"),
+    (b"RENU", "ExchangeUpserted"),
+    (b"REND", "ExchangeUpdated"),
     (b"RAU2", "AssetUpserted"),
     (b"RAD2", "AssetUpdated"),
     (b"RIU2", "InstrumentUpserted"),

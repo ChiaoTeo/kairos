@@ -23,7 +23,7 @@ impl<'a> Rate<'a> {
     pub const VT_RATE_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 10;
     pub const VT_BASIS: ::flatbuffers::VOffsetT = 12;
     pub const VT_VALUE: ::flatbuffers::VOffsetT = 14;
     pub const VT_MARK_PRICE: ::flatbuffers::VOffsetT = 16;
@@ -56,8 +56,8 @@ impl<'a> Rate<'a> {
         if let Some(x) = args.basis {
             builder.add_basis(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -105,13 +105,13 @@ impl<'a> Rate<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Rate::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Rate::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -190,8 +190,8 @@ impl ::flatbuffers::Verifiable for Rate<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("basis", Self::VT_BASIS, true)?
@@ -219,7 +219,7 @@ pub struct RateArgs<'a> {
     pub rate_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub basis: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub value: Option<&'a super::super::common::v_2::Decimal64>,
     pub mark_price: Option<&'a super::super::common::v_2::Decimal64>,
@@ -233,7 +233,7 @@ impl<'a> Default for RateArgs<'a> {
             rate_id: None,       // required field
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             basis: None,         // required field
             value: None,         // required field
             mark_price: None,
@@ -264,9 +264,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RateBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Rate::VT_INSTRUMENT_ID, instrument_id);
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Rate::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Rate::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_basis(&mut self, basis: ::flatbuffers::WIPOffset<&'b str>) {
@@ -314,7 +314,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RateBuilder<'a, 'b, A> {
         self.fbb_.required(o, Rate::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Rate::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, Rate::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, Rate::VT_PROVIDER, "provider");
         self.fbb_.required(o, Rate::VT_BASIS, "basis");
         self.fbb_.required(o, Rate::VT_VALUE, "value");
         ::flatbuffers::WIPOffset::new(o.value())
@@ -327,7 +327,7 @@ impl ::core::fmt::Debug for Rate<'_> {
         ds.field("rate_id", &self.rate_id());
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("basis", &self.basis());
         ds.field("value", &self.value());
         ds.field("mark_price", &self.mark_price());

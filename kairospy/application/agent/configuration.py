@@ -18,6 +18,20 @@ _OPERATIONS = frozenset(
         "option_spread",
     }
 )
+READ_ONLY_AGENT_TOOLS = frozenset(
+    {
+        "reference.get_instrument",
+        "market.get_latest_quote",
+        "market.get_recent_bars",
+        "market.get_freshness",
+        "account.get_position",
+        "account.get_equity",
+        "account.get_available_margin",
+        "risk.get_effective_limits",
+        "execution.get_active_intents",
+        "execution.get_recent_failures",
+    }
+)
 _FORBIDDEN_SECRET_KEYS = frozenset(
     {"api_key", "api_secret", "authorization", "password", "secret", "token"}
 )
@@ -216,7 +230,7 @@ class AgentLaunchConfig:
     enabled: bool
     required: bool
     runtime: str
-    profile: str | None
+    profile: Mapping[str, object] | None
     fixture_path: str | None
     max_queue_size: int
     shutdown_timeout_seconds: float
@@ -282,7 +296,7 @@ class AgentLaunchConfig:
             raise ValueError("backtest agent.runtime must be fixture")
         if launch_mode != "backtest" and runtime == "fixture":
             raise ValueError("fixture agent.runtime is only valid for backtest")
-        profile = _text(value.get("profile"), "agent.profile")
+        profile = _normalize_profile(value.get("profile"))
         fixture_path = None
         if runtime == "fixture":
             fixture_path = _text(value.get("fixture_path"), "agent.fixture_path")
@@ -359,13 +373,115 @@ class AgentLaunchConfig:
 
 def _normalize_mcp(value: object, index: int) -> Mapping[str, object]:
     mapping = _mapping(value, f"agent.mcp[{index}]")
-    _reject_unknown(mapping, {"server", "profile", "required"}, f"agent.mcp[{index}]")
+    _reject_unknown(
+        mapping,
+        {
+            "id",
+            "transport",
+            "command",
+            "args",
+            "cwd",
+            "url",
+            "credential",
+            "timeout_seconds",
+            "allowed_tools",
+            "scope_enforced",
+            "max_result_bytes",
+            "max_rows",
+            "freshness_required_tools",
+            "max_age_seconds",
+            "required",
+        },
+        f"agent.mcp[{index}]",
+    )
     _reject_secrets(mapping, f"agent.mcp[{index}]")
+    name = f"agent.mcp[{index}]"
+    transport = _text(mapping.get("transport"), f"{name}.transport")
+    if transport not in {"stdio", "streamable_http"}:
+        raise ValueError(f"{name}.transport must be stdio or streamable_http")
+    allowed = tuple(
+        dict.fromkeys(_string_list(mapping.get("allowed_tools", ()), f"{name}.allowed_tools"))
+    )
+    if not allowed:
+        raise ValueError(f"{name}.allowed_tools is required")
+    forbidden = sorted(set(allowed) - READ_ONLY_AGENT_TOOLS)
+    if forbidden:
+        raise ValueError(f"{name}.allowed_tools contains non-approved tool: {forbidden[0]}")
+    if mapping.get("scope_enforced", True) is not True:
+        raise ValueError(f"{name}.scope_enforced must be true")
+    result: dict[str, object] = {
+        "id": _text(mapping.get("id"), f"{name}.id"),
+        "transport": transport,
+        "timeout_seconds": _number(
+            mapping.get("timeout_seconds", 5), f"{name}.timeout_seconds", minimum=0.1, maximum=300
+        ),
+        "allowed_tools": list(allowed),
+        "scope_enforced": True,
+        "max_result_bytes": _integer(
+            mapping.get("max_result_bytes", 65_536), f"{name}.max_result_bytes", minimum=1, maximum=65_536
+        ),
+        "max_rows": _integer(
+            mapping.get("max_rows", 200), f"{name}.max_rows", minimum=1, maximum=10_000
+        ),
+        "required": _boolean(mapping.get("required", False), f"{name}.required"),
+    }
+    if transport == "stdio":
+        result["command"] = _text(mapping.get("command"), f"{name}.command")
+        result["args"] = list(_string_list(mapping.get("args", ()), f"{name}.args"))
+        if mapping.get("cwd") is not None:
+            result["cwd"] = _text(mapping.get("cwd"), f"{name}.cwd")
+        if mapping.get("url") is not None or mapping.get("credential") is not None:
+            raise ValueError(f"{name} stdio transport cannot configure url or credential")
+    else:
+        url = _text(mapping.get("url"), f"{name}.url")
+        if not url.startswith(("https://", "http://127.0.0.1", "http://localhost")):
+            raise ValueError(f"{name}.url must use HTTPS")
+        result["url"] = url
+        if mapping.get("credential") is not None:
+            result["credential"] = _text(mapping.get("credential"), f"{name}.credential")
+        if mapping.get("command") is not None or mapping.get("args"):
+            raise ValueError(f"{name} streamable_http transport cannot configure command or args")
+    freshness = tuple(
+        dict.fromkeys(
+            _string_list(
+                mapping.get("freshness_required_tools", ()),
+                f"{name}.freshness_required_tools",
+            )
+        )
+    )
+    if not set(freshness).issubset(allowed):
+        raise ValueError(f"{name}.freshness_required_tools must be allowed tools")
+    if freshness:
+        result["freshness_required_tools"] = list(freshness)
+        result["max_age_seconds"] = _number(
+            mapping.get("max_age_seconds"), f"{name}.max_age_seconds", minimum=0.1, maximum=86_400
+        )
+    return result
+
+
+def _normalize_profile(value: object) -> Mapping[str, object]:
+    profile = _mapping(value, "agent.profile")
+    _reject_unknown(
+        profile,
+        {"version", "goal", "rubric", "invalidation_rules", "reason_codes", "risk_flags"},
+        "agent.profile",
+    )
+    rubric = _string_list(profile.get("rubric", ()), "agent.profile.rubric")
+    invalidation = _string_list(
+        profile.get("invalidation_rules", ()), "agent.profile.invalidation_rules"
+    )
+    if not rubric or not invalidation:
+        raise ValueError("agent.profile rubric and invalidation_rules are required")
     return {
-        "server": _text(mapping.get("server"), f"agent.mcp[{index}].server"),
-        "profile": _text(mapping.get("profile"), f"agent.mcp[{index}].profile"),
-        "required": _boolean(
-            mapping.get("required", False), f"agent.mcp[{index}].required"
+        "version": _text(profile.get("version", "1"), "agent.profile.version"),
+        "goal": _text(profile.get("goal"), "agent.profile.goal"),
+        "rubric": list(rubric),
+        "invalidation_rules": list(invalidation),
+        "reason_codes": list(
+            _string_list(profile.get("reason_codes", ()), "agent.profile.reason_codes")
+        ),
+        "risk_flags": list(
+            _string_list(profile.get("risk_flags", ()), "agent.profile.risk_flags")
         ),
     }
 
@@ -469,4 +585,9 @@ def _is_pinned_openai_model(value: str) -> bool:
     )
 
 
-__all__ = ["AgentLaunchConfig", "AgentModelConfig", "IntentReviewConfig"]
+__all__ = [
+    "AgentLaunchConfig",
+    "AgentModelConfig",
+    "IntentReviewConfig",
+    "READ_ONLY_AGENT_TOOLS",
+]

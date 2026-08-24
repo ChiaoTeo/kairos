@@ -10,7 +10,7 @@
 
 ## Kairos Account mapping
 
-- `BinanceCoinMConnection` is a provider-native principal projection with an independent
+- `BinanceCoinMConnection` is a provider-native principal connection with an independent
   Coin-M REST endpoint, authenticated snapshot handle, listen-key channel, channel epoch,
   and bounded private-event queue.
 - Account composition maps the configured `coin_m_futures` segment directly to the async

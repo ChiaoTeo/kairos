@@ -4,10 +4,10 @@ use kairos_protocol::control::jsonrpc::{RpcResult, conflux_rpc};
 pub trait MarketControlRpc {
     async fn health(&self) -> RpcResult<kairos_market_contract::MarketHealthResponse>;
 
-    async fn data_sources(
+    async fn data_routes(
         &self,
-        query: kairos_market_contract::MarketDataSourcesQuery,
-    ) -> RpcResult<kairos_market_contract::MarketDataSourcesResponse>;
+        query: kairos_market_contract::MarketDataRoutesQuery,
+    ) -> RpcResult<kairos_market_contract::MarketDataRoutesResponse>;
 
     async fn subscribe(
         &self,

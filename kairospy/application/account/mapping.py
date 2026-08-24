@@ -209,7 +209,7 @@ def map_accounts_snapshot(
     root = _mapping(root.get("snapshot", root), "Accounts snapshot payload")
     generation = _integer(root.get("generation", 0), "generation")
     rows = tuple(
-        _mapping(account, "account projection")
+        _mapping(account, "account current view")
         for account in _sequence(root.get("accounts", ()), "accounts")
     )
     enabled = tuple(

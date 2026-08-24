@@ -1,5 +1,5 @@
 use kairos_primitives::account::{AccountId, SegmentKey};
-use kairos_primitives::reference::{Currency, Exchange, InstrumentId};
+use kairos_primitives::reference::{Currency, ExchangeId, InstrumentId};
 use kairos_primitives::risk::{DecisionId, PolicyId, ReservationId};
 use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId};
 use kairos_primitives::time::{BasisPoints, DurationNanos, Generation, Sequence, UnixNanos};
@@ -164,7 +164,7 @@ pub struct PolicyScope {
     pub account_id: Option<AccountId>,
     pub strategy_id: Option<StrategyId>,
     pub instrument_id: Option<InstrumentId>,
-    pub exchange_id: Option<Exchange>,
+    pub exchange_id: Option<ExchangeId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -195,7 +195,7 @@ pub struct AuthorizeRequest {
     pub account_id: AccountId,
     pub strategy_id: StrategyId,
     pub instrument_id: InstrumentId,
-    pub exchange_id: Exchange,
+    pub exchange_id: ExchangeId,
     pub proposal: TradeRiskProposal,
     pub at_unix_nanos: UnixNanos,
     pub reservation_ttl_nanos: DurationNanos,
@@ -220,7 +220,7 @@ pub struct TradeRiskProposal {
 pub struct CircuitScope {
     pub account_id: Option<AccountId>,
     pub strategy_id: Option<StrategyId>,
-    pub exchange_id: Option<Exchange>,
+    pub exchange_id: Option<ExchangeId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

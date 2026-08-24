@@ -239,9 +239,8 @@ pub(super) fn binance_provider_catalog(
         )));
     }
     let mut catalog = ProviderCatalog {
-        entities: vec![Entity {
-            entity_id: "exchange:binance".into(),
-            entity_type: "exchange".into(),
+        exchanges: vec![Exchange {
+            exchange_id: ExchangeId::new("exchange:binance")?,
             name: "Binance".into(),
             status: "active".into(),
             source_id: None,
@@ -445,7 +444,7 @@ fn append_binance_instrument(
     } else {
         format!("listing:binance:{canonical_family}:{source_symbol}")
     })?;
-    let exchange_id = kairos_primitives::reference::Exchange::new("exchange:binance")?;
+    let exchange_id = kairos_primitives::reference::ExchangeId::new("exchange:binance")?;
     let market_id = kairos_primitives::reference::MarketId::new(format!(
         "market:binance:{canonical_family}:{source_symbol}"
     ))?;

@@ -7,7 +7,7 @@ use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use sqlx::{Row, Sqlite, SqlitePool};
 
 use crate::domain::{
-    AffectedReferenceSet, Asset, Entity, Instrument, LifecycleEvent, Listing, Market,
+    AffectedReferenceSet, Asset, Exchange, Instrument, LifecycleEvent, Listing, Market,
     ReferenceCatalog, ReferenceError, ReferenceResult,
 };
 use crate::services::publication::EncodedPublication;
@@ -160,7 +160,7 @@ pub(crate) struct CatalogRuntimeSnapshot {
     pub generation: Generation,
     pub event_sequence: Sequence,
     pub committed_at_unix_nanos: UnixNanos,
-    pub entity_count: usize,
+    pub exchange_count: usize,
     pub asset_count: usize,
     pub instrument_count: usize,
     pub listing_count: usize,
@@ -192,7 +192,7 @@ impl CatalogWriteMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AffectedReferenceSetSummary {
     pub total_count: usize,
-    pub entity_count: usize,
+    pub exchange_count: usize,
     pub asset_count: usize,
     pub instrument_count: usize,
     pub listing_count: usize,
@@ -204,7 +204,7 @@ impl From<&AffectedReferenceSet> for AffectedReferenceSetSummary {
     fn from(affected: &AffectedReferenceSet) -> Self {
         Self {
             total_count: affected.total_count(),
-            entity_count: affected.entities.len(),
+            exchange_count: affected.exchanges.len(),
             asset_count: affected.assets.len(),
             instrument_count: affected.instruments.len(),
             listing_count: affected.listings.len(),
@@ -224,7 +224,7 @@ pub(crate) struct CatalogSaveOutcome {
 pub(crate) struct CatalogReconcileSummary {
     pub affected_write_mode: &'static str,
     pub affected_total_count: usize,
-    pub affected_entity_count: usize,
+    pub affected_exchange_count: usize,
     pub affected_asset_count: usize,
     pub affected_instrument_count: usize,
     pub affected_listing_count: usize,
@@ -240,7 +240,7 @@ impl CatalogReconcileSummary {
             Some(outcome) => Self {
                 affected_write_mode: outcome.write_mode.as_str(),
                 affected_total_count: outcome.affected.total_count,
-                affected_entity_count: outcome.affected.entity_count,
+                affected_exchange_count: outcome.affected.exchange_count,
                 affected_asset_count: outcome.affected.asset_count,
                 affected_instrument_count: outcome.affected.instrument_count,
                 affected_listing_count: outcome.affected.listing_count,
@@ -249,7 +249,7 @@ impl CatalogReconcileSummary {
             None => Self {
                 affected_write_mode: affected.write_mode(),
                 affected_total_count: affected.total_count(),
-                affected_entity_count: affected.entities.len(),
+                affected_exchange_count: affected.exchanges.len(),
                 affected_asset_count: affected.assets.len(),
                 affected_instrument_count: affected.instruments.len(),
                 affected_listing_count: affected.listings.len(),
@@ -266,7 +266,7 @@ pub(crate) async fn load_runtime_snapshot(
         generation,
         event_sequence,
         committed_at_unix_nanos,
-        entity_count,
+        exchange_count,
         asset_count,
         instrument_count,
         listing_count,
@@ -301,7 +301,7 @@ pub(crate) async fn load_runtime_snapshot(
         "SELECT generation,
                 event_sequence,
                 committed_at_unix_nanos,
-                (SELECT COUNT(*) FROM reference_entities_current),
+                (SELECT COUNT(*) FROM reference_exchanges_current),
                 (SELECT COUNT(*) FROM reference_assets_current),
                 (SELECT COUNT(*) FROM reference_instruments_current),
                 (SELECT COUNT(*) FROM reference_listings_current),
@@ -333,7 +333,7 @@ pub(crate) async fn load_runtime_snapshot(
         generation: (generation as u64).into(),
         event_sequence: (event_sequence as u64).into(),
         committed_at_unix_nanos: (committed_at_unix_nanos as u64).into(),
-        entity_count: entity_count as usize,
+        exchange_count: exchange_count as usize,
         asset_count: asset_count as usize,
         instrument_count: instrument_count as usize,
         listing_count: listing_count as usize,
@@ -381,7 +381,7 @@ pub(crate) async fn load(pool: &SqlitePool) -> sqlx::Result<Option<ReferenceCata
         })
         .collect::<Result<_, sqlx::Error>>()?;
     let mut catalog = ReferenceCatalog {
-        entities: records!("reference_entities_current", entity_id, Entity),
+        exchanges: records!("reference_exchanges_current", exchange_id, Exchange),
         assets,
         instruments: records!("reference_instruments_current", instrument_id, Instrument),
         listings: records!("reference_listings_current", listing_id, Listing),
@@ -411,7 +411,7 @@ pub(crate) async fn save_refresh(
     commit_pending_provider_promotions(&mut tx).await?;
     let write_mode;
     if affected.requires_full_replace
-        || (affected.is_empty() && current_projection_is_empty(&mut tx).await?)
+        || (affected.is_empty() && current_catalog_is_empty(&mut tx).await?)
     {
         write_mode = CatalogWriteMode::FullReplace;
         replace_current_state(&mut tx, catalog).await?;
@@ -455,10 +455,10 @@ pub(crate) async fn save_refresh(
     })
 }
 
-async fn current_projection_is_empty(tx: &mut sqlx::Transaction<'_, Sqlite>) -> sqlx::Result<bool> {
+async fn current_catalog_is_empty(tx: &mut sqlx::Transaction<'_, Sqlite>) -> sqlx::Result<bool> {
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT \
-           (SELECT COUNT(*) FROM reference_entities_current) + \
+           (SELECT COUNT(*) FROM reference_exchanges_current) + \
            (SELECT COUNT(*) FROM reference_assets_current) + \
            (SELECT COUNT(*) FROM reference_instruments_current) + \
            (SELECT COUNT(*) FROM reference_listings_current) + \
@@ -490,13 +490,12 @@ async fn replace_current_state(
         };
     }
 
-    for entity in catalog.entities.values() {
-        track!("entity", &entity.entity_id);
-        sqlx::query("INSERT INTO reference_entities_current(entity_id,entity_type,status,payload) VALUES (?,?,?,?) ON CONFLICT(entity_id) DO UPDATE SET entity_type=excluded.entity_type,status=excluded.status,payload=excluded.payload WHERE reference_entities_current.payload<>excluded.payload")
-            .bind(&entity.entity_id)
-            .bind(entity.entity_type.as_str())
-            .bind(entity.status.as_str())
-            .bind(serde_json::to_string(entity).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
+    for exchange in catalog.exchanges.values() {
+        track!("exchange", exchange.exchange_id.as_str());
+        sqlx::query("INSERT INTO reference_exchanges_current(exchange_id,status,payload) VALUES (?,?,?) ON CONFLICT(exchange_id) DO UPDATE SET status=excluded.status,payload=excluded.payload WHERE reference_exchanges_current.payload<>excluded.payload")
+            .bind(exchange.exchange_id.as_str())
+            .bind(exchange.status.as_str())
+            .bind(serde_json::to_string(exchange).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
             .execute(&mut **tx)
             .await?;
     }
@@ -556,7 +555,7 @@ async fn replace_current_state(
             .await?;
     }
     for statement in [
-        "DELETE FROM reference_entities_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='entity' AND k.record_id=reference_entities_current.entity_id)",
+        "DELETE FROM reference_exchanges_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='exchange' AND k.record_id=reference_exchanges_current.exchange_id)",
         "DELETE FROM reference_assets_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='asset' AND k.record_id=reference_assets_current.asset_id)",
         "DELETE FROM reference_instruments_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='instrument' AND k.record_id=reference_instruments_current.instrument_id)",
         "DELETE FROM reference_listings_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='listing' AND k.record_id=reference_listings_current.listing_id)",
@@ -584,11 +583,11 @@ async fn update_affected_current_state(
     catalog: &ReferenceCatalog,
     affected: &AffectedReferenceSet,
 ) -> sqlx::Result<()> {
-    for id in &affected.entities {
-        if let Some(entity) = catalog.entities.get(id) {
-            upsert_entity(tx, entity).await?;
+    for id in &affected.exchanges {
+        if let Some(exchange) = catalog.exchanges.get(id) {
+            upsert_exchange(tx, exchange).await?;
         } else {
-            sqlx::query("DELETE FROM reference_entities_current WHERE entity_id = ?")
+            sqlx::query("DELETE FROM reference_exchanges_current WHERE exchange_id = ?")
                 .bind(id)
                 .execute(&mut **tx)
                 .await?;
@@ -643,15 +642,14 @@ async fn update_affected_current_state(
     Ok(())
 }
 
-async fn upsert_entity(
+async fn upsert_exchange(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
-    entity: &Entity,
+    exchange: &Exchange,
 ) -> sqlx::Result<()> {
-    sqlx::query("INSERT INTO reference_entities_current(entity_id,entity_type,status,payload) VALUES (?,?,?,?) ON CONFLICT(entity_id) DO UPDATE SET entity_type=excluded.entity_type,status=excluded.status,payload=excluded.payload WHERE reference_entities_current.payload<>excluded.payload")
-        .bind(&entity.entity_id)
-        .bind(entity.entity_type.as_str())
-        .bind(entity.status.as_str())
-        .bind(serde_json::to_string(entity).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
+    sqlx::query("INSERT INTO reference_exchanges_current(exchange_id,status,payload) VALUES (?,?,?) ON CONFLICT(exchange_id) DO UPDATE SET status=excluded.status,payload=excluded.payload WHERE reference_exchanges_current.payload<>excluded.payload")
+        .bind(exchange.exchange_id.as_str())
+        .bind(exchange.status.as_str())
+        .bind(serde_json::to_string(exchange).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
         .execute(&mut **tx)
         .await?;
     Ok(())
@@ -799,11 +797,10 @@ fn persistence(error: impl std::fmt::Display) -> ReferenceError {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::{AffectedReferenceSet, LifecycleEvent};
-
     use super::{
         AffectedReferenceSetSummary, CatalogReconcileSummary, CatalogSaveOutcome, CatalogWriteMode,
     };
+    use crate::domain::{AffectedReferenceSet, LifecycleEvent};
 
     #[test]
     fn reconcile_summary_prefers_committed_save_outcome() {
@@ -815,7 +812,7 @@ mod tests {
             write_mode: CatalogWriteMode::FullReplace,
             affected: AffectedReferenceSetSummary {
                 total_count: 5,
-                entity_count: 1,
+                exchange_count: 1,
                 asset_count: 1,
                 instrument_count: 1,
                 listing_count: 1,

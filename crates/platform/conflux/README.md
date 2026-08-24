@@ -13,7 +13,7 @@ Each process declares:
 - one global `ConfluxEvent` handler and an optional local event type.
 
 Conflux provides typed JSON-RPC control service registration for each
-long-running module contract. View, Aeron, SQLite projections, transport
+long-running module contract. View, Aeron, SQLite catalog readers, transport
 construction, and other capabilities remain on each module's concrete
 Contract implementation.
 

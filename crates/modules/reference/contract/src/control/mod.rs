@@ -3,14 +3,15 @@ mod types;
 
 pub use service::{ReferenceControlRpcClient, ReferenceControlRpcServer};
 pub use types::{
+    BinanceReferenceSource, HyperliquidReferenceSource, MassiveReferenceSource, OkxReferenceSource,
     ReferenceAppPhase, ReferenceAppRuntimeError, ReferenceAppRuntimeStatus,
     ReferenceCatalogIntegrityStatus, ReferenceCatalogReadiness, ReferenceCatalogRuntimeStatus,
     ReferenceControlError, ReferenceCoverageRuntimeStatus, ReferenceDiagnostic,
     ReferenceDiagnosticSeverity, ReferenceHealthResponse, ReferenceHealthStatus,
     ReferenceMutationResponse, ReferenceOptionCoverageRequest, ReferenceOptionCoverageResponse,
-    ReferenceProviderHealth, ReferenceProviderProduct, ReferenceProviderStatus,
-    ReferencePublicationRuntimeError, ReferencePublicationRuntimeStatus, ReferencePublishResponse,
-    ReferenceRefreshResponse, ReferenceRuntimeStatus, ReferenceRuntimeStatusResponse,
+    ReferenceProviderHealth, ReferenceProviderStatus, ReferencePublicationRuntimeError,
+    ReferencePublicationRuntimeStatus, ReferencePublishResponse, ReferenceRefreshResponse,
+    ReferenceRuntimeStatus, ReferenceRuntimeStatusResponse, ReferenceSourceBinding,
     ReferenceSourceControlRequest, ReferenceSourceDefinitionRequest, ReferenceSourceDesiredState,
     ReferenceSourceKind, ReferenceSourcePhase, ReferenceSourceProgress,
     ReferenceSourceProgressKind, ReferenceSourceRuntimeError, ReferenceSourceRuntimeStatus,

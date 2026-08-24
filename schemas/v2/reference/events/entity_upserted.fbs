@@ -1,6 +1,0 @@
-include "../../common/metadata.fbs";
-include "../types/entity.fbs";
-namespace kairos.reference.v2;
-table EntityUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; entity:Entity (required); }
-root_type EntityUpserted;
-file_identifier "RENU";

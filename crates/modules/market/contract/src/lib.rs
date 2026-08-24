@@ -12,11 +12,12 @@ pub mod view;
 
 pub use control::{
     MarketCommandEnvelope, MarketCommandOutcome, MarketCommandStatus, MarketControlError,
-    MarketControlRpcClient, MarketControlRpcServer, MarketDataSource, MarketDataSourcesQuery,
-    MarketDataSourcesResponse, MarketFeedStatus, MarketHealthResponse, MarketHealthStatus,
-    MarketOperation, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse, MarketSourceStatus,
-    MarketSubscribePayload, MarketSubscriptionResponse, MarketSubscriptionStatus,
-    MarketUnsubscribePayload, SubscriptionOwnerKey,
+    MarketControlRpcClient, MarketControlRpcServer, MarketDataRoute, MarketDataRouteState,
+    MarketDataRoutesQuery, MarketDataRoutesResponse, MarketFeedStatus, MarketHealthResponse,
+    MarketHealthStatus, MarketOperation, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse,
+    MarketSubscribePayload, MarketSubscriptionResponse, MarketSubscriptionState, MarketTarget,
+    MarketUnsubscribePayload, ObservationRequirement, ProviderPreference, SubscriptionOwnerKey,
+    SubscriptionPendingReason,
 };
 pub use encode::{
     BarEncoder, EncodeContext, GreeksEncoder, OrderBookEncoder, QuoteEncoder, TradeEncoder,
@@ -59,137 +60,132 @@ impl MarketClient {
     pub fn quote(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<Quote> {
         Quote::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::Quote, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::Quote, qualifier)?,
         )
     }
 
     pub fn bar_window(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<BarWindow> {
         BarWindow::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::BarWindow, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::BarWindow, qualifier)?,
         )
     }
 
     pub fn order_book(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<OrderBook> {
         OrderBook::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::OrderBook, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::OrderBook, qualifier)?,
         )
     }
 
     pub fn freshness(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<Freshness> {
         Freshness::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::Freshness, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::Freshness, qualifier)?,
         )
     }
 
     pub fn greeks(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<Greeks> {
         Greeks::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::Greeks, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::Greeks, qualifier)?,
         )
     }
 
     pub fn rate(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<Rate> {
         Rate::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::Rate, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::Rate, qualifier)?,
         )
     }
 
     pub fn ticker_24h(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<Ticker24h> {
         Ticker24h::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::Ticker24h, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::Ticker24h, qualifier)?,
         )
     }
 
     pub fn mark_price(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<MarkPrice> {
         MarkPrice::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::MarkPrice, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::MarkPrice, qualifier)?,
         )
     }
 
     pub fn funding_rate(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<FundingRate> {
         FundingRate::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::FundingRate, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::FundingRate, qualifier)?,
         )
     }
 
     pub fn open_interest(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<OpenInterest> {
         OpenInterest::open(
             self.require_view_root()?,
-            MarketViewKey::new(
-                scope_key,
-                source_id,
-                MarketViewKind::OpenInterest,
-                qualifier,
-            )?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::OpenInterest, qualifier)?,
         )
     }
 
     pub fn index_price(
         &self,
         scope_key: impl Into<String>,
-        source_id: impl AsRef<str>,
+        provider: impl AsRef<str>,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<IndexPrice> {
         IndexPrice::open(
             self.require_view_root()?,
-            MarketViewKey::new(scope_key, source_id, MarketViewKind::IndexPrice, qualifier)?,
+            MarketViewKey::new(scope_key, provider, MarketViewKind::IndexPrice, qualifier)?,
         )
     }
 

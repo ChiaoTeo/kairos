@@ -358,7 +358,8 @@ mod tests {
                     strategy_id: kairos_primitives::runtime::StrategyId::new("strategy-1").unwrap(),
                     instrument_id: kairos_primitives::reference::InstrumentId::new("instrument-1")
                         .unwrap(),
-                    exchange_id: kairos_primitives::reference::Exchange::new("exchange-1").unwrap(),
+                    exchange_id: kairos_primitives::reference::ExchangeId::new("exchange-1")
+                        .unwrap(),
                     proposal: kairos_risk_contract::TradeRiskProposal {
                         notional: Amount::new(10, 0).unwrap(),
                         initial_margin_rate_bps: 10_000.into(),

@@ -111,11 +111,11 @@ impl AccountRuntime {
         fill: AccountFill,
     ) -> Result<ApplyOutcome, String> {
         let actor_before = self.actor.clone();
-        let projection = self
+        let segment_view = self
             .actor
-            .projection(&fill.segment_key)
+            .segment_view(&fill.segment_key)
             .ok_or_else(|| format!("fill segment is not configured: {}", fill.segment_key))?;
-        let settlement = crate::services::settlement::settle_paper_fill(&projection, &fill)
+        let settlement = crate::services::settlement::settle_paper_fill(&segment_view, &fill)
             .map_err(|error| error.to_string())?;
         let fill_event = AccountEvent::Fill(fill.clone());
         let undo = self
@@ -172,11 +172,11 @@ impl AccountRuntime {
 
     pub(crate) fn mark_to_market(&mut self, request: MarkToMarket) -> Result<(), String> {
         let segment_key = request.segment_key.clone();
-        let projection = self
+        let segment_view = self
             .actor
-            .projection(&segment_key)
+            .segment_view(&segment_key)
             .ok_or_else(|| format!("mark segment is not configured: {}", request.segment_key))?;
-        let mut positions = projection.positions.clone();
+        let mut positions = segment_view.positions.clone();
         let mut found = false;
         for position in &mut positions {
             if position.instrument_id == request.instrument_id {
@@ -192,8 +192,8 @@ impl AccountRuntime {
                 request.instrument_id
             ));
         }
-        let equity = calculate_equity(&projection, &positions, &request.quote_asset)?;
-        let initial_equity = projection.initial_equity.or(Some(equity));
+        let equity = calculate_equity(&segment_view, &positions, &request.quote_asset)?;
+        let initial_equity = segment_view.initial_equity.or(Some(equity));
         let net_profit = initial_equity
             .map(|initial| {
                 equity
@@ -207,14 +207,14 @@ impl AccountRuntime {
             collateral: Vec::new(),
             positions,
             open_orders: Vec::new(),
-            status: projection.status,
+            status: segment_view.status,
             observed_at_unix_nanos: request.observed_at_unix_nanos,
             equity: Some(equity),
             initial_equity,
             net_profit,
-            account_model: projection.observed_account_model,
-            margin_mode: projection.margin_mode,
-            position_mode: projection.position_mode,
+            account_model: segment_view.observed_account_model,
+            margin_mode: segment_view.margin_mode,
+            position_mode: segment_view.position_mode,
             kind: SnapshotKind::Delta,
         };
         self.apply_event(AccountEvent::Snapshot(snapshot))?;
@@ -534,11 +534,11 @@ fn unrealized_pnl(position: &Position) -> Result<Money, String> {
 }
 
 fn calculate_equity(
-    projection: &crate::application::AccountSegmentView,
+    segment_view: &crate::application::AccountSegmentView,
     positions: &[Position],
     quote_asset: &str,
 ) -> Result<Money, String> {
-    let balance = projection
+    let balance = segment_view
         .balances
         .iter()
         .find(|value| value.asset_code.eq_ignore_ascii_case(quote_asset))

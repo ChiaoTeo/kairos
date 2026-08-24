@@ -68,9 +68,8 @@ pub(super) fn hyperliquid_provider_catalog(
         )));
     }
     let mut catalog = ProviderCatalog {
-        entities: vec![Entity {
-            entity_id: "exchange:hyperliquid".into(),
-            entity_type: "exchange".into(),
+        exchanges: vec![Exchange {
+            exchange_id: ExchangeId::new("exchange:hyperliquid")?,
             name: "Hyperliquid".into(),
             status: "active".into(),
             source_id: None,
@@ -129,7 +128,7 @@ pub(super) fn hyperliquid_provider_catalog(
         let listing_id = kairos_primitives::reference::ListingId::new(format!(
             "listing:hyperliquid:{family}:{base}:{quote}"
         ))?;
-        let exchange_id = kairos_primitives::reference::Exchange::new("exchange:hyperliquid")?;
+        let exchange_id = kairos_primitives::reference::ExchangeId::new("exchange:hyperliquid")?;
         let status: kairos_primitives::reference::ReferenceStatus =
             if value.active { "active" } else { "inactive" }.into();
         catalog.instruments.push(Instrument {

@@ -9,15 +9,15 @@ def test_home_groups_complete_product_surface(interactive_context, capsys) -> No
     home.print_help(interactive_context)
     text = capsys.readouterr().out
     for label in (
-        "市场行情",
-        "策略运行",
-        "交易管理",
-        "市场目录",
-        "数据与研究",
-        "系统与配置",
+        "查看市场行情",
+        "查找市场标的",
+        "配置并运行策略",
+        "管理运行资源",
+        "准备数据研究",
+        "维护系统",
     ):
         assert label in text
-    assert "?. 帮助" in text
+    assert "?. 查看帮助" in text
     assert "诊断与观测" not in text
     assert "项目与帮助" not in text
 
@@ -27,9 +27,10 @@ def test_home_numeric_and_text_navigation(interactive_context) -> None:
     assert interactive_context.shell_path == ("risk",)
     interactive_context.shell_path = ()
     assert home.handle(interactive_context, ("4",)) is ShellControl.HANDLED
-    assert interactive_context.shell_path == ("trade",)
-    assert home.handle(interactive_context, ("1",)) is ShellControl.HANDLED
-    assert interactive_context.shell_path == ("trade", "accounts")
+    assert interactive_context.shell_path == ("resources",)
+    interactive_context.shell_path = ()
+    assert home.handle(interactive_context, ("notifications",)) is ShellControl.HANDLED
+    assert interactive_context.shell_path == ("resources", "notifications")
 
 
 def test_home_market_navigation_is_standalone(interactive_context) -> None:
@@ -57,7 +58,7 @@ def test_home_group_menus_expose_technical_sections_at_second_level(
 ) -> None:
     for path, labels in (
         (("data-research",), ("数据", "研究")),
-        (("operations",), ("项目工作区", "系统服务", "通知", "高级配置", "系统诊断")),
+        (("operations",), ("项目工作区", "系统服务", "高级配置", "系统诊断")),
         (("trade",), ("账户与订单", "风险管理", "资金管理")),
         (("strategy",), ("运行列表与控制", "运行观测台", "运行快照")),
     ):

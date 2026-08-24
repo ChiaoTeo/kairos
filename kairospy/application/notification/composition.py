@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import tomllib
 from typing import Mapping
 
 from kairospy.application.workspace import InstanceWorkspace, Workspace
+from kairospy.application.credential import CredentialConfigurationApplication
 from kairospy.strategy import StrategyIdentity, StrategyLogger
 
 from .application import NotificationApplication
@@ -38,6 +40,7 @@ class _DestinationRecord:
     destination_id: str
     sender: str
     credential_id: str | None
+    enabled: bool
     settings: Mapping[str, str]
 
 
@@ -118,7 +121,18 @@ def compose_notifications(
             NotificationApplication(runtime), runtime, None
         )
 
-    records, config_hash = _load_destinations(workspace.paths.notification_config())
+    records, destination_config_hash = _load_destinations(
+        workspace.paths.notification_config()
+    )
+    config_hash = _notification_resources_hash(
+        workspace, records, destination_config_hash, mode=mode
+    )
+    expected_config_hash = str(config.get("workspace_config_hash", "")).strip()
+    if expected_config_hash and expected_config_hash != config_hash:
+        raise NotificationConfigError(
+            "Workspace notification configuration changed after this Launch instance "
+            "was assembled; create a new instance"
+        )
     referenced = referenced_destination_ids
     issues: list[str] = []
     destinations: dict[str, NotificationDestination] = {}
@@ -205,6 +219,9 @@ def validate_notification_resources(
         record = records.get(destination_id)
         if record is None:
             issues.append(f"notification destination not found: {destination_id}")
+            continue
+        if not record.enabled:
+            issues.append(f"notification destination is disabled: {destination_id}")
             continue
         if record.sender not in {"feishu", "telegram"}:
             issues.append(
@@ -293,9 +310,13 @@ async def test_notification_destination(
     )
     await composition.runtime.start()
     try:
+        sent_at = datetime.now(timezone.utc).isoformat()
         receipt = composition.application.publish(
-            title="Kairos notification test",
-            body="This message verifies the configured notification destination.",
+            title="Kairos 测试通知",
+            body=(
+                f"Kairos 测试 · Workspace {workspace.identity.workspace_id} · "
+                f"发送时间 {sent_at}"
+            ),
             routes=("test",),
         )
         await composition.runtime.flush(timeout=10)
@@ -335,10 +356,15 @@ def _load_destinations(path: Path) -> tuple[dict[str, _DestinationRecord], str]:
         sender = str(raw_record.get("sender", "")).strip().lower()
         credential = raw_record.get("credential_id")
         credential_id = None if credential is None else str(credential).strip()
+        enabled = raw_record.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise NotificationConfigError(
+                f"notification destination {destination_id} enabled must be a boolean"
+            )
         settings = {
             str(key): str(item)
             for key, item in raw_record.items()
-            if key not in {"sender", "credential_id"}
+            if key not in {"sender", "credential_id", "enabled"}
             and isinstance(item, (str, int, float, bool))
         }
         forbidden = {
@@ -355,7 +381,7 @@ def _load_destinations(path: Path) -> tuple[dict[str, _DestinationRecord], str]:
                 f"{sorted(present)[0]}"
             )
         records[destination_id] = _DestinationRecord(
-            destination_id, sender, credential_id, settings
+            destination_id, sender, credential_id, enabled, settings
         )
     return records, hashlib.sha256(raw).hexdigest()
 
@@ -367,6 +393,10 @@ def _resolve_destination(
         raise NotificationConfigError(
             f"notification destination {record.destination_id} has unsupported sender: "
             f"{record.sender}"
+        )
+    if not record.enabled:
+        raise NotificationConfigError(
+            f"notification destination is disabled: {record.destination_id}"
         )
     if not record.credential_id:
         raise NotificationConfigError(
@@ -381,7 +411,11 @@ def _resolve_destination(
         )
     if record.sender == "feishu":
         signing_secret = _credential_value(
-            record.credential_id, "signing_secret", credential, required=False
+            workspace,
+            record.credential_id,
+            "signing_secret",
+            credential,
+            required=False,
         )
         if signing_secret:
             raise NotificationConfigError(
@@ -390,7 +424,7 @@ def _resolve_destination(
             )
         secrets = {
             "webhook_url": _credential_value(
-                record.credential_id, "webhook_url", credential
+                workspace, record.credential_id, "webhook_url", credential
             ),
         }
     else:
@@ -400,7 +434,7 @@ def _resolve_destination(
             )
         secrets = {
             "bot_token": _credential_value(
-                record.credential_id, "bot_token", credential
+                workspace, record.credential_id, "bot_token", credential
             )
         }
     return NotificationDestination(
@@ -443,6 +477,7 @@ def _credential_file(workspace: Workspace, credential_id: str) -> Path:
 
 
 def _credential_value(
+    workspace: Workspace,
     credential_id: str,
     field: str,
     values: Mapping[str, object],
@@ -455,12 +490,40 @@ def _credential_value(
         "bot_token": ("bot_token", "api_key"),
     }.get(field, (field,))
     value = ""
-    for alias in aliases:
-        stored = values.get(alias)
-        if isinstance(stored, str) and stored.strip():
-            value = stored.strip()
-            break
-    if not value:
+    reference_configured = False
+    secret_refs = values.get("fields", values.get("secrets"))
+    if isinstance(secret_refs, Mapping):
+        for alias in aliases:
+            reference = secret_refs.get(alias)
+            if not isinstance(reference, Mapping):
+                continue
+            reference_configured = True
+            source = str(reference.get("source", "")).strip().lower()
+            identifier = str(reference.get("id", "")).strip()
+            if source == "env" and re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", identifier):
+                value = os.environ.get(identifier, "").strip()
+            elif source == "file" and identifier:
+                path = Path(identifier).expanduser()
+                if not path.is_absolute():
+                    path = workspace.paths.root / path
+                try:
+                    value = path.read_text(encoding="utf-8").strip()
+                except FileNotFoundError:
+                    value = ""
+            elif source:
+                raise NotificationConfigError(
+                    f"notification credential {credential_id} has unsupported "
+                    f"SecretRef source: {source}"
+                )
+            if value:
+                break
+    if not value and not reference_configured:
+        for alias in aliases:
+            stored = values.get(alias)
+            if isinstance(stored, str) and stored.strip():
+                value = stored.strip()
+                break
+    if not value and not reference_configured:
         prefix = re.sub(r"[^A-Za-z0-9]", "_", credential_id).upper()
         for alias in aliases:
             value = os.environ.get(
@@ -473,6 +536,51 @@ def _credential_value(
             f"notification credential {credential_id} is missing {field}"
         )
     return value
+
+
+def notification_config_hash(workspace: Workspace, *, mode: str = "paper") -> str:
+    """Return the content identity pinned into a Launch instance."""
+
+    records, config_hash = _load_destinations(workspace.paths.notification_config())
+    return _notification_resources_hash(workspace, records, config_hash, mode=mode)
+
+
+def _notification_resources_hash(
+    workspace: Workspace,
+    records: Mapping[str, _DestinationRecord],
+    destination_config_hash: str,
+    *,
+    mode: str,
+) -> str:
+    if mode == "backtest":
+        return destination_config_hash
+    resources: list[tuple[str, str]] = [("destinations", destination_config_hash)]
+    credentials = CredentialConfigurationApplication(workspace)
+    for destination_id, record in sorted(records.items()):
+        if not record.credential_id:
+            resources.append((f"credential:{destination_id}", "missing"))
+            continue
+        try:
+            summary = credentials.show(record.credential_id)
+            value = hashlib.sha256(
+                json.dumps(
+                    {
+                        "credential_id": record.credential_id,
+                        "provider": summary.get("provider"),
+                        "role": summary.get("role"),
+                        "secret_refs": summary.get("secret_refs", {}),
+                        "legacy_plaintext": summary.get("legacy_plaintext", False),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        except KeyError:
+            value = "missing"
+        resources.append((f"credential:{record.credential_id}", value))
+    return hashlib.sha256(
+        json.dumps(resources, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _routes(value: object) -> dict[str, tuple[str, ...]]:
@@ -536,6 +644,7 @@ __all__ = [
     "NotificationConfigError",
     "NotificationProcessComposition",
     "compose_notifications",
+    "notification_config_hash",
     "test_notification_destination",
     "validate_notification_resources",
     "validate_workspace_notifications",

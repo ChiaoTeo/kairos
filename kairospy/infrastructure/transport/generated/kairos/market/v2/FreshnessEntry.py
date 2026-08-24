@@ -29,7 +29,7 @@ class FreshnessEntry(object):
         self._tab = flatbuffers.table.Table(buf, pos)
 
     # FreshnessEntry
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(4))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -94,11 +94,11 @@ def FreshnessEntryStart(builder):
 def Start(builder):
     FreshnessEntryStart(builder)
 
-def FreshnessEntryAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def FreshnessEntryAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    FreshnessEntryAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    FreshnessEntryAddProvider(builder, provider)
 
 def FreshnessEntryAddScope(builder, scope):
     builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(scope), 0)

@@ -25,7 +25,7 @@ class OrderBookIdentity(object):
         self._tab = flatbuffers.table.Table(buf, pos)
 
     # OrderBookIdentity
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(4))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -51,11 +51,11 @@ def OrderBookIdentityStart(builder):
 def Start(builder):
     OrderBookIdentityStart(builder)
 
-def OrderBookIdentityAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def OrderBookIdentityAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    OrderBookIdentityAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    OrderBookIdentityAddProvider(builder, provider)
 
 def OrderBookIdentityAddMarketId(builder, marketId):
     builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)

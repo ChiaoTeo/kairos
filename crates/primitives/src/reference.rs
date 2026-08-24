@@ -7,7 +7,7 @@ use crate::DomainTypeError;
 use crate::text::text_type;
 
 text_type!(Symbol);
-text_type!(Exchange);
+text_type!(ExchangeId);
 text_type!(AssetId);
 text_type!(ListingId);
 text_type!(IssuerId);
@@ -17,6 +17,9 @@ text_type!(TradingCalendarId);
 text_type!(Currency);
 text_type!(InstrumentId);
 text_type!(MarketId);
+// Opaque Reference runtime/configuration binding identity, intentionally
+// distinct from a Market data Provider.
+text_type!(ReferenceSourceId);
 
 macro_rules! legacy_default {
     ($name:ident, $value:literal) => {
@@ -28,7 +31,7 @@ macro_rules! legacy_default {
     };
 }
 
-impl Default for Exchange {
+impl Default for ExchangeId {
     fn default() -> Self {
         Self::new("exchange:unknown").expect("canonical default exchange is valid")
     }
@@ -40,7 +43,7 @@ legacy_default!(MarketId, "market:unresolved");
 legacy_default!(Symbol, "symbol:unresolved");
 legacy_default!(AssetId, "asset:unresolved");
 
-fn exchange_key(exchange: &Exchange) -> &str {
+fn exchange_key(exchange: &ExchangeId) -> &str {
     exchange.as_str().trim_start_matches("exchange:")
 }
 
@@ -57,7 +60,7 @@ impl InstrumentId {
 impl ListingId {
     /// Canonical venue listing identity. Quote/currency context belongs to a market.
     pub fn venue(
-        exchange: &Exchange,
+        exchange: &ExchangeId,
         kind: InstrumentKind,
         listing_key: impl AsRef<str>,
     ) -> Result<Self, DomainTypeError> {
@@ -71,7 +74,7 @@ impl ListingId {
 
     /// Canonical spot listing identity, including its exchange and quote context.
     pub fn spot(
-        exchange: &Exchange,
+        exchange: &ExchangeId,
         base_asset: impl AsRef<str>,
         quote_asset: impl AsRef<str>,
     ) -> Result<Self, DomainTypeError> {
@@ -87,7 +90,7 @@ impl ListingId {
 impl MarketId {
     /// Canonical venue market identity for an observable/tradable entry point.
     pub fn venue(
-        exchange: &Exchange,
+        exchange: &ExchangeId,
         kind: InstrumentKind,
         market_key: impl AsRef<str>,
     ) -> Result<Self, DomainTypeError> {
@@ -101,7 +104,7 @@ impl MarketId {
 
     /// Canonical spot market identity retains the venue symbol.
     pub fn spot(
-        exchange: &Exchange,
+        exchange: &ExchangeId,
         venue_symbol: impl AsRef<str>,
     ) -> Result<Self, DomainTypeError> {
         Self::venue(exchange, InstrumentKind::Spot, venue_symbol)

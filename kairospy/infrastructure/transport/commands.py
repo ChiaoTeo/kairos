@@ -152,22 +152,18 @@ class MarketCommandClient:
             instance_id,
             operation="subscribe",
             payload={
-                "subject": request.subject,
-                "selectors": list(request.selectors),
-                "source_id": request.source_id,
-                "source_ids": list(request.source_ids),
-                "exchange": request.exchange,
-                "market_type": request.market_type,
-                "asset_type": request.asset_type,
-                "params": dict(request.params),
-                "dynamic": request.dynamic,
+                "target": request.target.wire(),
+                "observations": [
+                    observation.wire() for observation in request.observations
+                ],
+                "provider_preference": request.provider_preference.wire(),
             },
         )
         value = self.client.call("market_subscribe", [body])
         return _handle(request_id, 202, value)
 
-    def data_sources(self, query: Mapping[str, object] | None = None) -> dict[str, Any]:
-        return self.client.call("market_data_sources", [dict(query or {})])
+    def data_routes(self, query: Mapping[str, object] | None = None) -> dict[str, Any]:
+        return self.client.call("market_data_routes", [dict(query or {})])
 
     def unsubscribe(
         self,

@@ -554,7 +554,7 @@ impl ExecutionRpcActor for ExecutionApplication {
         query: ExecutionRoutesQuery,
         context: &mut Context<'_, Self>,
     ) -> RpcResult<ExecutionRoutesResponse> {
-        let participant = query.participant_id.clone();
+        let participant = query.broker_id.clone();
         let query = parse_route_query(&query).map_err(rpc_execution_error)?;
         let routes = self
             .available_execution_routes(&query)
@@ -562,7 +562,7 @@ impl ExecutionRpcActor for ExecutionApplication {
             .filter(|route| {
                 participant
                     .as_ref()
-                    .is_none_or(|value| route.participant_id.eq_ignore_ascii_case(value.as_str()))
+                    .is_none_or(|value| route.broker_id.eq_ignore_ascii_case(value.as_str()))
             })
             .map(route_response)
             .collect::<Result<Vec<_>, _>>()
@@ -1289,9 +1289,8 @@ fn route_response(
         segment_key: route.segment_key,
         instrument_id: route.instrument_id,
         market_id: route.market_id,
-        participant_id: kairos_primitives::integration::ParticipantId::new(route.participant_id)
-            .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-        provider_product: route.provider_product,
+        broker_id: route.broker_id,
+        execution_channel: route.execution_channel,
         order_entry_symbol: route.order_entry_symbol,
         supported_order_types: route.supported_order_types,
         supported_options: route

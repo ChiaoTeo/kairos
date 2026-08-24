@@ -5,8 +5,9 @@ mod config;
 use std::path::Path;
 
 pub use config::{
-    ReferenceConfig, ReferenceParticipantConfig, ReferenceProductConfig, ReferenceProviderConfig,
-    ReferenceRuntimeConfig, ReferenceTickBudgetConfig,
+    BinanceReferenceEndpoints, BinanceReferenceProvider, CredentialedReferenceProvider,
+    PublicReferenceProvider, ReferenceConfig, ReferenceProviders, ReferenceRuntimeConfig,
+    ReferenceTickBudgetConfig,
 };
 use kairos_conflux::{
     AeronOutputDeclaration, BinanceCredential, CredentialStore, load_workspace_credential,
@@ -96,12 +97,9 @@ impl ReferenceComposition {
 
 pub type ComposedReferenceApplication = ReferenceApplication;
 
-/// Build the normal Workspace Reference catalog.
-///
-/// Reference owns the source selection for the global catalog. Public Binance,
-/// OKX, and Hyperliquid products are built in; credentialed providers such as
-/// Massive are added only when explicitly enabled in
-/// `[reference.providers.*]`. Every provider can be explicitly disabled there.
+/// Build the normal Workspace Reference catalog from typed, owner-defined
+/// source bindings. Runtime ids and synchronization policies are never read
+/// from user configuration.
 async fn build_source_plan(
     config: &ReferenceCompositionConfig,
 ) -> ReferenceResult<ReferenceSourcePlan> {
@@ -115,63 +113,8 @@ async fn build_source_plan(
         .as_ref()
         .map(ReferenceConfig::load)
         .transpose()
-        .map_err(crate::domain::ReferenceError::Provider)?;
-    let reference = reference.as_ref();
-
-    let mut providers = Vec::new();
-    if !provider_disabled(reference, "binance")
-        && product_enabled_or_default(reference, "binance", "spot", true)
-    {
-        providers.push(ReferenceProviderPlan::BinanceSpot {
-            key: "reference-binance-spot".into(),
-            endpoint: product_endpoint(
-                reference,
-                "binance",
-                "spot",
-                default_endpoint("binance-spot"),
-            ),
-        });
-    }
-    if !provider_disabled(reference, "binance")
-        && product_enabled_or_default(reference, "binance", "usd-m-futures", true)
-    {
-        providers.push(ReferenceProviderPlan::BinanceUsdM {
-            key: "reference-binance-usdm".into(),
-            endpoint: product_endpoint(
-                reference,
-                "binance",
-                "usd-m-futures",
-                default_endpoint("binance-usdm-futures"),
-            ),
-        });
-    }
-    if !provider_disabled(reference, "binance")
-        && product_enabled_or_default(reference, "binance", "coin-m-futures", true)
-    {
-        providers.push(ReferenceProviderPlan::BinanceCoinM {
-            key: "reference-binance-coinm".into(),
-            endpoint: product_endpoint(
-                reference,
-                "binance",
-                "coin-m-futures",
-                default_endpoint("binance-coinm-futures"),
-            ),
-        });
-    }
-    if !provider_disabled(reference, "binance")
-        && product_enabled_or_default(reference, "binance", "options", true)
-    {
-        providers.push(ReferenceProviderPlan::BinanceOptions {
-            key: "reference-binance-options".into(),
-            endpoint: product_endpoint(
-                reference,
-                "binance",
-                "options",
-                default_endpoint("binance-options"),
-            ),
-        });
-    }
-
+        .map_err(crate::domain::ReferenceError::Provider)?
+        .unwrap_or_default();
     let credentials_root = workspace
         .as_ref()
         .map(|workspace| workspace.config_root().join("credentials"));
@@ -184,246 +127,146 @@ async fn build_source_plan(
         .transpose()
         .map_err(crate::domain::ReferenceError::Provider)?
         .unwrap_or_default();
-    if !provider_disabled(reference, "okx") {
-        for (product, source_id, instrument_type) in [
-            ("spot", "okx-spot", OkxProduct::Spot),
-            ("margin", "okx-margin", OkxProduct::Margin),
-            ("swap", "okx-swap", OkxProduct::Swap),
-            ("futures", "okx-futures", OkxProduct::Futures),
-            ("options", "okx-options", OkxProduct::Option),
-        ] {
-            if product_enabled_or_default(reference, "okx", product, true) {
-                providers.push(ReferenceProviderPlan::Okx {
-                    key: format!("reference-{source_id}"),
-                    source_id: source_id.into(),
-                    product: instrument_type,
-                    endpoint: product_endpoint(
-                        reference,
-                        "okx",
-                        product,
-                        default_endpoint(source_id),
-                    ),
-                });
-            }
-        }
-    }
-    if !provider_disabled(reference, "hyperliquid") {
-        if product_enabled_or_default(reference, "hyperliquid", "perpetual", true) {
-            providers.push(ReferenceProviderPlan::Hyperliquid {
-                key: "reference-hyperliquid-perpetual".into(),
-                product: HyperliquidProduct::Perpetual,
-                endpoint: product_endpoint(
-                    reference,
-                    "hyperliquid",
-                    "perpetual",
-                    default_endpoint("hyperliquid"),
-                ),
-            });
-        }
-        if product_enabled_or_default(reference, "hyperliquid", "spot", true) {
-            providers.push(ReferenceProviderPlan::Hyperliquid {
-                key: "reference-hyperliquid-spot".into(),
-                product: HyperliquidProduct::Spot,
-                endpoint: product_endpoint(
-                    reference,
-                    "hyperliquid",
-                    "spot",
-                    default_endpoint("hyperliquid"),
-                ),
-            });
-        }
-    }
 
-    let massive_credential = credentials_root.as_deref().and_then(|root| {
-        load_workspace_credential(
-            root,
-            "massive",
-            provider_config(reference, "massive").and_then(|value| value.credential_id.as_deref()),
-        )
-        .ok()
-        .flatten()
-    });
-    let massive_enabled = provider_enabled(reference, "massive");
-    if massive_enabled {
-        let credential = massive_credential.ok_or_else(|| {
-            crate::domain::ReferenceError::Provider(
-                "Reference Massive source is enabled but its credential is missing".into(),
-            )
-        })?;
-        if credential.api_key.trim().is_empty() {
-            return Err(crate::domain::ReferenceError::Provider(
-                "Reference Massive source is enabled but its API key is missing".into(),
-            ));
-        }
-        let endpoint = provider_endpoint(reference, "massive", default_endpoint("massive"));
-        if product_enabled_or_default(reference, "massive", "equity", true) {
-            let equity_sync_store = SqlxProviderSyncStore::open(&config.database).await?;
-            providers.push(ReferenceProviderPlan::MassiveEquity {
-                key: "reference-massive-equity".into(),
-                api_key: credential.api_key.clone(),
-                endpoint: endpoint.clone(),
-                sync_store: equity_sync_store,
-            });
-        }
-        if product_enabled_or_default(reference, "massive", "options", true) {
-            // Stock-options coverage is explicit and mutable at runtime. Do
-            // not make a global options reference scan the default just
-            // because Massive can enumerate it.
-            let mut sync_store = SqlxProviderSyncStore::open(&config.database).await?;
-            let underlyings = sync_store.option_underlyings("massive-options").await?;
-            providers.push(ReferenceProviderPlan::MassiveOptions {
-                api_key: credential.api_key,
-                endpoint,
-                sync_store,
-                underlyings,
-            });
-        }
-    }
-
-    if product_enabled(reference, "binance", "equity") {
-        let product = product_config(reference, "binance", "equity");
-        let credential_id = product.and_then(|value| value.credential_id.as_deref());
-        let credential = credentials_root
-            .as_deref()
-            .and_then(|root| {
-                load_workspace_credential(root, "binance", credential_id)
-                    .ok()
-                    .flatten()
-            })
-            .ok_or_else(|| {
-                crate::domain::ReferenceError::Provider(
-                    "Reference Binance equity source is enabled but its credential is missing"
+    let mut providers = Vec::new();
+    let configured = reference.providers;
+    if configured.binance.enabled {
+        let credential_id = configured.binance.credential_id;
+        let endpoints = configured.binance.endpoints;
+        providers.push(ReferenceProviderPlan::BinanceSpot {
+            key: "reference-binance-spot".into(),
+            endpoint: configured_endpoint(endpoints.spot, default_endpoint("binance-spot")),
+        });
+        providers.push(ReferenceProviderPlan::BinanceUsdM {
+            key: "reference-binance-usdm".into(),
+            endpoint: configured_endpoint(
+                endpoints.usd_m_futures,
+                default_endpoint("binance-usdm-futures"),
+            ),
+        });
+        providers.push(ReferenceProviderPlan::BinanceCoinM {
+            key: "reference-binance-coinm".into(),
+            endpoint: configured_endpoint(
+                endpoints.coin_m_futures,
+                default_endpoint("binance-coinm-futures"),
+            ),
+        });
+        providers.push(ReferenceProviderPlan::BinanceOptions {
+            key: "reference-binance-options".into(),
+            endpoint: configured_endpoint(endpoints.options, default_endpoint("binance-options")),
+        });
+        if credential_id.is_some() {
+            let credential = load_required_credential(
+                credentials_root.as_deref(),
+                "binance",
+                credential_id.as_deref(),
+                "Binance equity",
+            )?;
+            providers.push(ReferenceProviderPlan::BinanceEquity {
+                key: "reference-binance-stocks".into(),
+                endpoint: configured_endpoint(endpoints.equity, default_endpoint("binance-equity")),
+                credential: BinanceCredential {
+                    principal_id: credential_id
+                        .as_deref()
+                        .expect("credential id was present")
                         .into(),
-                )
-            })?;
-        if credential.api_key.trim().is_empty() {
-            return Err(crate::domain::ReferenceError::Provider(
-                "Reference Binance equity source is enabled but its API key is missing".into(),
-            ));
+                    api_key: secrecy::SecretString::new(credential.0.into()),
+                    secret: credential.1,
+                },
+            });
         }
-        let endpoint = product
-            .and_then(|value| value.endpoint.clone())
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| default_endpoint("binance-equity").to_owned());
-        providers.push(ReferenceProviderPlan::BinanceEquity {
-            key: "reference-binance-stocks".into(),
+    }
+    if configured.okx.enabled {
+        let endpoint = configured.okx.endpoint;
+        for product in [
+            OkxProduct::Spot,
+            OkxProduct::Margin,
+            OkxProduct::Swap,
+            OkxProduct::Futures,
+            OkxProduct::Option,
+        ] {
+            let source_id = product.source_id();
+            providers.push(ReferenceProviderPlan::Okx {
+                key: format!("reference-{source_id}"),
+                source_id: source_id.into(),
+                product,
+                endpoint: configured_endpoint(endpoint.clone(), default_endpoint(source_id)),
+            });
+        }
+    }
+    if configured.hyperliquid.enabled {
+        let endpoint = configured.hyperliquid.endpoint;
+        for product in [HyperliquidProduct::Spot, HyperliquidProduct::Perpetual] {
+            providers.push(ReferenceProviderPlan::Hyperliquid {
+                key: format!("reference-{}", product.source_id()),
+                product,
+                endpoint: configured_endpoint(endpoint.clone(), default_endpoint("hyperliquid")),
+            });
+        }
+    }
+    if configured.massive.enabled {
+        let credential_id = configured.massive.credential_id;
+        let endpoint = configured.massive.endpoint;
+        let credential = load_required_credential(
+            credentials_root.as_deref(),
+            "massive",
+            credential_id.as_deref(),
+            "Massive",
+        )?;
+        let endpoint = configured_endpoint(endpoint, default_endpoint("massive"));
+        providers.push(ReferenceProviderPlan::MassiveEquity {
+            key: "reference-massive-equity".into(),
+            api_key: credential.0.clone(),
+            endpoint: endpoint.clone(),
+            sync_store: SqlxProviderSyncStore::open(&config.database).await?,
+        });
+        let mut sync_store = SqlxProviderSyncStore::open(&config.database).await?;
+        let underlyings = sync_store.option_underlyings("massive-options").await?;
+        providers.push(ReferenceProviderPlan::MassiveOptions {
+            api_key: credential.0,
             endpoint,
-            credential: BinanceCredential {
-                principal_id: credential_id.unwrap_or("reference-binance-stocks").into(),
-                api_key: secrecy::SecretString::new(credential.api_key.into()),
-                secret: credential.secret,
-            },
+            sync_store,
+            underlyings,
         });
     }
 
     let sync_store = SqlxProviderSyncStore::open(&config.database).await?;
-    let mut participants = vec![
-        configured_provider("binance", "Binance"),
-        configured_provider("hyperliquid", "Hyperliquid"),
-    ];
-    if !provider_disabled(reference, "okx") {
-        participants.push(configured_provider("okx", "OKX"));
-    }
-    if let Some(reference) = reference {
-        for (id, participant) in &reference.participants {
-            if participant.enabled != Some(false) {
-                let entity_type = crate::domain::EntityKind::from(participant.entity_type.as_str());
-                if entity_type == crate::domain::EntityKind::Unknown
-                    || participant.name.trim().is_empty()
-                {
-                    return Err(crate::domain::ReferenceError::Provider(format!(
-                        "reference participant {id} requires a supported type and name"
-                    )));
-                }
-                participants.push(crate::domain::Entity {
-                    source_id: None,
-                    entity_id: format!("{}:{id}", entity_type.as_str()),
-                    entity_type,
-                    name: participant.name.clone(),
-                    status: "active".into(),
-                });
-            }
-        }
-    }
     Ok(ReferenceSourcePlan::new_with_credential_resolver(
         providers,
-        participants,
         sync_store,
         credential_resolver,
     ))
 }
 
-fn configured_provider(id: &str, name: &str) -> crate::domain::Entity {
-    crate::domain::Entity {
-        source_id: None,
-        entity_id: format!("data_provider:{id}"),
-        entity_type: "data_provider".into(),
-        name: name.into(),
-        status: "active".into(),
-    }
-}
-
-fn provider_config<'a>(
-    reference: Option<&'a ReferenceConfig>,
-    provider: &str,
-) -> Option<&'a ReferenceProviderConfig> {
-    reference.and_then(|value| value.providers.get(provider))
-}
-
-fn provider_enabled(reference: Option<&ReferenceConfig>, provider: &str) -> bool {
-    provider_config(reference, provider)
-        .and_then(|value| value.enabled)
-        .unwrap_or(false)
-}
-
-fn provider_disabled(reference: Option<&ReferenceConfig>, provider: &str) -> bool {
-    provider_config(reference, provider).and_then(|value| value.enabled) == Some(false)
-}
-
-fn provider_endpoint(reference: Option<&ReferenceConfig>, provider: &str, default: &str) -> String {
-    provider_config(reference, provider)
-        .and_then(|value| value.endpoint.clone())
+fn configured_endpoint(endpoint: Option<String>, default: &str) -> String {
+    endpoint
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| default.to_owned())
 }
 
-fn product_endpoint(
-    reference: Option<&ReferenceConfig>,
+fn load_required_credential(
+    credentials_root: Option<&Path>,
     provider: &str,
-    product: &str,
-    default: &str,
-) -> String {
-    product_config(reference, provider, product)
-        .and_then(|value| value.endpoint.clone())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| provider_endpoint(reference, provider, default))
-}
-
-fn product_config<'a>(
-    reference: Option<&'a ReferenceConfig>,
-    provider: &str,
-    product: &str,
-) -> Option<&'a ReferenceProductConfig> {
-    reference
-        .and_then(|value| value.products.get(provider))
-        .and_then(|value| value.get(product))
-}
-
-fn product_enabled_or_default(
-    reference: Option<&ReferenceConfig>,
-    provider: &str,
-    product: &str,
-    default: bool,
-) -> bool {
-    product_config(reference, provider, product)
-        .and_then(|value| value.enabled)
-        .unwrap_or(default)
-}
-
-fn product_enabled(reference: Option<&ReferenceConfig>, provider: &str, product: &str) -> bool {
-    product_config(reference, provider, product)
-        .and_then(|value| value.enabled)
-        .unwrap_or(false)
+    credential_id: Option<&str>,
+    label: &str,
+) -> ReferenceResult<(String, secrecy::SecretString)> {
+    let credential = credentials_root
+        .and_then(|root| {
+            load_workspace_credential(root, provider, credential_id)
+                .ok()
+                .flatten()
+        })
+        .ok_or_else(|| {
+            crate::domain::ReferenceError::Provider(format!(
+                "Reference {label} source is enabled but its credential is missing"
+            ))
+        })?;
+    if credential.api_key.trim().is_empty() {
+        return Err(crate::domain::ReferenceError::Provider(format!(
+            "Reference {label} source is enabled but its API key is missing"
+        )));
+    }
+    Ok((credential.api_key, credential.secret))
 }
 
 pub fn declare_reference_changes_output(
@@ -642,6 +485,7 @@ pub async fn build_application(
         .unwrap_or_default();
     let tick_budget = runtime_config.tick_budget.to_domain()?;
     let mut application = ReferenceApplication::new("reference-actor", source_plan, store).await?;
+    application.configure_conflux(runtime_config.refresh_interval(), true);
     application.configure_tick_budget(tick_budget);
     Ok(ReferenceComposition {
         application,

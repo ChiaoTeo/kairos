@@ -27,11 +27,8 @@ class MarketControlClient:
     def subscribe(self, request: Mapping[str, object]) -> Mapping[str, Any]:
         return self.call("market_subscribe", [request])
 
-    def data_sources(self, query: Mapping[str, object] | None = None) -> Mapping[str, Any]:
-        return self.call("market_data_sources", [dict(query or {})])
-
-    def subscription(self, subscription_id: str) -> Mapping[str, Any]:
-        return self.call("market_data_sources", [{"subscription_id": subscription_id}])
+    def data_routes(self, query: Mapping[str, object] | None = None) -> Mapping[str, Any]:
+        return self.call("market_data_routes", [dict(query or {})])
 
     def unsubscribe(
         self, subscription_id: str, *, headers: Mapping[str, str]

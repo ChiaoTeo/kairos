@@ -130,7 +130,7 @@ where
         };
         let desired_by_source = desired_states.iter().cloned().collect::<BTreeMap<_, _>>();
         for source in &sources {
-            let mut definition = source.source_definition();
+            let mut definition = source.source_definition()?;
             if let Some(desired_state) = desired_by_source.get(definition.source_id.as_str()) {
                 definition.desired_state = *desired_state;
             }
@@ -941,7 +941,7 @@ where
 #[cfg(test)]
 pub(super) fn provider_catalog_uses_current_canonical_shape(catalog: &ProviderCatalog) -> bool {
     if catalog
-        .entities
+        .exchanges
         .iter()
         .any(|value| value.source_id.is_some())
         || catalog.assets.iter().any(|value| value.source_id.is_some())

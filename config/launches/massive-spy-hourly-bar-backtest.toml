@@ -27,5 +27,5 @@ enabled = true
 route_id = "paper-account-equity"
 account_id = "paper-account"
 segment_key = "equity"
-participant_id = "simulated"
-product = "equity"
+broker_id = "simulated"
+execution_channel = "equity"

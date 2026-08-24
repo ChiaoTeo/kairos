@@ -70,8 +70,8 @@ class AccountContractClient:
         return self._client.call(method, params)
 
 
-class AccountCurrentProjection:
-    """Synchronous Account application projection over one v2 current view."""
+class AccountCurrentViewReader:
+    """Synchronous Account application current-view reader over one v2 current view."""
 
     def __init__(self, view_root: str | Path, *, account_id: AccountId) -> None:
         sys.modules.setdefault("kairos", _generated_kairos)
@@ -95,7 +95,7 @@ class AccountCurrentProjection:
             raise ValueError("Account current view key identity mismatch")
         if _text(root.AccountId()) != str(account_id):
             raise ValueError(
-                f"account {account_id!s} is not present in Account projection"
+                f"account {account_id!s} is not present in Account current view"
             )
         generation = snapshot.generation
         if int(metadata.Generation()) != generation:
@@ -116,8 +116,8 @@ class AccountCurrentProjection:
         )
 
 
-class AccountObservedOrdersProjection:
-    """Synchronous Account projection over the observed-orders view."""
+class AccountObservedOrdersViewReader:
+    """Synchronous Account current view over the observed-orders view."""
 
     def __init__(self, view_root: str | Path, *, account_id: AccountId) -> None:
         sys.modules.setdefault("kairos", _generated_kairos)
@@ -142,7 +142,7 @@ class AccountObservedOrdersProjection:
             raise ValueError("Account observed-orders view key identity mismatch")
         if _text(root.AccountId()) != str(account_id):
             raise ValueError(
-                f"account {account_id!s} is not present in Account observed-orders projection"
+                f"account {account_id!s} is not present in Account observed-orders current view"
             )
         return {
             "account_id": str(account_id),
@@ -410,8 +410,8 @@ def _decimal_wire(value) -> str:
 
 __all__ = [
     "AccountContractClient",
-    "AccountCurrentProjection",
-    "AccountObservedOrdersProjection",
+    "AccountCurrentViewReader",
+    "AccountObservedOrdersViewReader",
     "CommandEnvelope",
     "QueryEnvelope",
     "backtest_mark_to_market_request",

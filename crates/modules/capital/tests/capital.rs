@@ -357,7 +357,7 @@ fn restart_requires_fresh_member_observation_before_reopening_write_barrier() {
         CapitalReadiness::WaitingForAccounts
     );
 
-    // Re-observing the same Account projection is not a business-fact change,
+    // Re-observing the same Account current view is not a business-fact change,
     // but it is the fresh runtime evidence required to reopen the barrier.
     for value in [facts(30, 70, 100), source_facts(35, 100)] {
         recovered
@@ -1052,10 +1052,10 @@ fn indeterminate_transfer_reconciles_before_account_observed_completion() {
         CapitalRecoveryAction::ReconcileOriginalOperation
     );
     assert_eq!(indeterminate.recovery_decided_at, Some(UnixNanos::new(122)));
-    let projected = capital_current_view(&application.snapshot());
-    assert_eq!(projected.alerts.len(), 1);
-    assert_eq!(projected.alerts[0].plan_id, plan_id);
-    assert_eq!(projected.alerts[0].opened_at, UnixNanos::new(122));
+    let current_view = capital_current_view(&application.snapshot());
+    assert_eq!(current_view.alerts.len(), 1);
+    assert_eq!(current_view.alerts[0].plan_id, plan_id);
+    assert_eq!(current_view.alerts[0].opened_at, UnixNanos::new(122));
     let same_operation = application
         .begin_operation(BeginCapitalOperation {
             capital_group_id: group_id.clone(),

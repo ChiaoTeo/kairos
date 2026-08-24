@@ -17,8 +17,12 @@ pub use backtest::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
     BacktestRunResult, Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar,
 };
-pub use cli::{CliExecutionApplication, StandaloneExecutionBinding};
-pub use connected::ConnectedExecutionApplication;
+pub use cli::{
+    CliExecutionApplication, CliExecutionCommandResult, CliExecutionContext, CliExecutionFill,
+    CliExecutionFillsResult, CliExecutionOrder, CliExecutionOrderResult, CliExecutionOrdersResult,
+    CliExecutionOutcome, CliExecutionOutput, CliExecutionReplaceResult, StandaloneExecutionBinding,
+};
+pub use connected::{ConnectedExecutionApplication, ConnectedExecutionOutput};
 pub(crate) use model::remote_status;
 pub use model::{
     CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent,

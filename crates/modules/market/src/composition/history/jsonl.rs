@@ -302,7 +302,7 @@ mod tests {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(time),
-            source_id: kairos_primitives::market::SourceId::new("binance").unwrap(),
+            provider: kairos_primitives::market::Provider::new("binance").unwrap(),
         })
     }
 

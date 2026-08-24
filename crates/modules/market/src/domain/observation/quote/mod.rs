@@ -1,5 +1,5 @@
 use kairos_primitives::decimal::{Price, Quantity};
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::InstrumentId;
 use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
@@ -16,5 +16,5 @@ pub struct Quote {
     pub ask_venue_code: Option<String>,
     pub tape: Option<u32>,
     pub observed_at_unix_nanos: UnixNanos,
-    pub source_id: SourceId,
+    pub provider: Provider,
 }

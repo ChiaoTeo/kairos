@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from kairospy.surface.cli.interactive.models import GuidedCommand, ShellControl
 from kairospy.surface.cli.interactive.session import (
+    _prompt_label,
     _run_shell,
     prompt_path,
     shell_command,
 )
+
+
+def test_prompt_label_adds_a_product_breadcrumb(interactive_context) -> None:
+    interactive_context.shell_path = ("operations", "market")
+
+    assert _prompt_label(interactive_context) == "首页 / 系统与配置 / 市场行情"
+    assert prompt_path(interactive_context) == "/operations/market"
 
 
 def test_root_dispatches_to_product_section(interactive_context) -> None:
@@ -65,7 +73,7 @@ def test_top_level_market_enters_standalone_scope(interactive_context) -> None:
     assert prompt_path(interactive_context) == "/market"
 
 
-def test_cancelled_source_selection_does_not_execute_a_command(
+def test_cancelled_provider_selection_does_not_execute_a_command(
     interactive_context, monkeypatch
 ) -> None:
     from types import SimpleNamespace
@@ -77,13 +85,16 @@ def test_cancelled_source_selection_does_not_execute_a_command(
     monkeypatch.setattr(market.reference, "select_market", lambda _context: record)
     monkeypatch.setattr(
         market,
-        "_load_sources",
+        "_load_routes",
         lambda *_args: {
-            "sources": [
+            "routes": [
                 {
-                    "source_id": "binance-spot",
-                    "configured": True,
-                    "ready": True,
+                    "provider": "binance",
+                    "state": "ready",
+                },
+                {
+                    "provider": "massive",
+                    "state": "ready",
                 }
             ]
         },

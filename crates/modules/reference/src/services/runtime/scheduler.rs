@@ -2,11 +2,10 @@
 
 use std::time::Instant;
 
+use super::SourceRuntimeRegistry;
 use crate::domain::{
     ReferenceError, ReferenceResult, SourceTickBudget, SourceWorkItem, SourceWorkReason,
 };
-
-use super::SourceRuntimeRegistry;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SourceScheduleDecision {

@@ -44,30 +44,13 @@ def handle(
         routes = {
             "1": ("reference", "assets"),
             "assets": ("reference", "assets"),
-            "5": ("reference", "instruments"),
+            "2": ("reference", "exchanges"),
+            "exchanges": ("reference", "exchanges"),
+            "3": ("reference", "instruments"),
             "instruments": ("reference", "instruments"),
-            "6": ("reference", "markets"),
+            "4": ("reference", "markets"),
             "markets": ("reference", "markets"),
         }
-        participant_routes = {
-            "2": ("exchanges", "exchange", "交易所"),
-            "exchanges": ("exchanges", "exchange", "交易所"),
-            "3": ("brokers", "broker", "券商"),
-            "brokers": ("brokers", "broker", "券商"),
-            "4": ("providers", "data_provider", "数据提供商"),
-            "providers": ("providers", "data_provider", "数据提供商"),
-        }
-        participant = participant_routes.get(key)
-        if participant is not None:
-            route, entity_type, label = participant
-            context.shell_path = ("reference", route)
-            print_menu(context)
-            keep_path = _reference_search_and_select(
-                context, ("entity", label, entity_type), query=None
-            )
-            if not keep_path:
-                context.shell_path = ("reference",)
-            return ShellControl.HANDLED
         route = routes.get(key)
         if route is None:
             return None
@@ -99,7 +82,7 @@ def handle(
     if collection is None:
         return None
     query = " ".join(parts).strip()
-    if collection[0] == "entity" and query in {"refresh", "list", "ls"}:
+    if collection[0] == "exchange" and query in {"refresh", "list", "ls"}:
         query = ""
     if query in {"search", "find", "s"}:
         query = typer.prompt("输入代码或名称").strip()
@@ -109,7 +92,7 @@ def handle(
         typer.echo("请输入代码或名称；输入 list 可浏览前 10 条。")
         return ShellControl.HANDLED
     keep_path = _reference_search_and_select(context, collection, query or None)
-    if collection[0] == "entity" and not keep_path:
+    if collection[0] == "exchange" and not keep_path:
         context.shell_path = ("reference",)
     return ShellControl.HANDLED
 
@@ -121,13 +104,6 @@ _REFERENCE_INSTRUMENT_TYPES = {
     "futures": ("future", "交割合约"),
     "options": ("option", "期权"),
     "indices": ("index", "指数"),
-}
-
-
-_REFERENCE_PARTICIPANT_TYPES = {
-    "exchanges": ("exchange", "交易所"),
-    "brokers": ("broker", "券商"),
-    "providers": ("data_provider", "数据提供商"),
 }
 
 
@@ -146,7 +122,7 @@ def print_menu(context: InteractiveContext) -> None:
                 "  4. 技术标识",
             ),
             "market": ("  1. 概览", "  2. 技术标识"),
-            "entity": (
+            "exchange": (
                 "  1. 概览",
                 "  2. 上市信息或市场",
                 "  3. 技术标识",
@@ -161,10 +137,8 @@ def print_menu(context: InteractiveContext) -> None:
                     "Reference 市场目录：",
                     "  1. 资产",
                     "  2. 交易所",
-                    "  3. 券商",
-                    "  4. 数据提供商",
-                    "  5. 交易品种",
-                    "  6. 具体市场",
+                    "  3. 交易品种",
+                    "  4. 具体市场",
                 )
             )
         )
@@ -187,7 +161,7 @@ def print_menu(context: InteractiveContext) -> None:
         return
     collection = _reference_collection(path)
     if collection is not None:
-        if collection[0] == "entity":
+        if collection[0] == "exchange":
             typer.echo(f"{collection[1]}：输入 refresh 重新读取列表。")
         else:
             typer.echo(
@@ -207,10 +181,8 @@ def _reference_collection(path: tuple[str, ...]) -> tuple[str, str, str | None] 
         return ("asset", "资产", None)
     if path == ("reference", "markets"):
         return ("market", "具体市场", None)
-    if len(path) == 2 and path[0] == "reference":
-        participant = _REFERENCE_PARTICIPANT_TYPES.get(path[1])
-        if participant is not None:
-            return ("entity", participant[1], participant[0])
+    if path == ("reference", "exchanges"):
+        return ("exchange", "交易所", None)
     if len(path) == 3 and path[:2] == ("reference", "instruments"):
         instrument = _REFERENCE_INSTRUMENT_TYPES.get(path[2])
         if instrument is not None:
@@ -239,10 +211,8 @@ def _reference_search_and_select(
         app = _application(context)
         if kind == "asset":
             records = app.find_assets(query=query, active_only=True, limit=25)
-        elif kind == "entity":
-            records = app.find_entities(
-                query=query, entity_type=subtype, active_only=True, limit=25
-            )
+        elif kind == "exchange":
+            records = app.find_exchanges(query=query, active_only=True, limit=25)
         elif kind == "instrument":
             records = app.find_instruments(
                 query=query, instrument_type=subtype, active_only=True, limit=25
@@ -291,7 +261,7 @@ def select_market(
             )
             return record
         context.selected_market = None
-        context.selected_market_source = None
+        context.selected_market_provider = None
 
     query = typer.prompt("输入代码或名称（直接回车浏览可用标的）", default="").strip()
     try:
@@ -337,7 +307,7 @@ def select_market(
         return None
     selected = ranked[int(choice) - 1]
     context.selected_market = selected
-    context.selected_market_source = None
+    context.selected_market_provider = None
     return selected
 
 
@@ -365,7 +335,7 @@ def _rank_reference_records(
 def _reference_search_values(kind: str, record: Any) -> tuple[str, ...]:
     if kind == "asset":
         return (record.code, record.name or "", str(record.id))
-    if kind == "entity":
+    if kind == "exchange":
         return (record.name, str(record.id))
     if kind == "instrument":
         return (record.symbol, record.name or "", str(record.id))
@@ -385,14 +355,13 @@ def _render_reference_results(kind: str, records: Sequence[Any]) -> None:
                     _status_label(record.status),
                 ]
             )
-    elif kind == "entity":
-        table = PrettyTable(["序号", "名称", "类型", "状态"])
+    elif kind == "exchange":
+        table = PrettyTable(["序号", "名称", "状态"])
         for index, record in enumerate(records, 1):
             table.add_row(
                 [
                     index,
                     record.name,
-                    _entity_type_label(record.entity_type),
                     _status_label(record.status),
                 ]
             )
@@ -439,7 +408,7 @@ def _render_reference_results(kind: str, records: Sequence[Any]) -> None:
 def _reference_record_slug(kind: str, record: Any) -> str:
     if kind == "asset":
         return record.code
-    if kind == "entity":
+    if kind == "exchange":
         return _short_id(record.id)
     if kind == "instrument":
         return record.symbol
@@ -451,8 +420,8 @@ def _reference_record_label(kind: str | None, record: Any) -> str:
         return (
             f"{record.code} · {record.name or _asset_class_label(record.asset_class)}"
         )
-    if kind == "entity":
-        return f"{record.name} · {_entity_type_label(record.entity_type)}"
+    if kind == "exchange":
+        return record.name
     if kind == "instrument":
         return f"{record.symbol} · {_instrument_type_label(record.instrument_type)}"
     return f"{record.venue_symbol or record.instrument.display_symbol} · {_short_id(record.exchange_id)}"
@@ -473,12 +442,11 @@ def _print_reference_detail(context: InteractiveContext, *, technical: bool) -> 
         table.add_row(["状态", _status_label(record.status)])
         if technical:
             table.add_row(["Asset ID", record.id])
-    elif kind == "entity":
+    elif kind == "exchange":
         table.add_row(["名称", record.name])
-        table.add_row(["参与方类型", _entity_type_label(record.entity_type)])
         table.add_row(["状态", _status_label(record.status)])
         if technical:
-            table.add_row(["Entity ID", record.id])
+            table.add_row(["Exchange ID", record.id])
     elif kind == "instrument":
         table.add_row(["代码", record.symbol])
         table.add_row(["名称", record.name or "—"])
@@ -544,15 +512,12 @@ def _reference_detail_command(
     if kind == "instrument" and key in {"4", "technical"}:
         _print_reference_detail(context, technical=True)
         return ShellControl.HANDLED
-    if kind == "entity" and key in {"2", "related"}:
-        if record.entity_type == "exchange":
-            _render_related_reference(
-                context, "listing", exchange=record.id, active_only=True, limit=10
-            )
-        else:
-            typer.echo("当前目录没有这个参与方的下级 Reference 记录。")
+    if kind == "exchange" and key in {"2", "related"}:
+        _render_related_reference(
+            context, "listing", exchange=record.id, active_only=True, limit=10
+        )
         return ShellControl.HANDLED
-    if kind == "entity" and key in {"3", "technical"}:
+    if kind == "exchange" and key in {"3", "technical"}:
         _print_reference_detail(context, technical=True)
         return ShellControl.HANDLED
     if kind == "market" and key in {"2", "technical"}:
@@ -604,12 +569,6 @@ def _asset_class_label(value: str) -> str:
     )
 
 
-def _entity_type_label(value: str) -> str:
-    return {"exchange": "交易所", "broker": "券商", "data_provider": "数据提供商"}.get(
-        value, value
-    )
-
-
 def _instrument_type_label(value: str) -> str:
     return {
         "equity": "股票",
@@ -627,10 +586,8 @@ def choose(context: InteractiveContext) -> GuidedCommand:
         (
             ("1", "资产"),
             ("2", "交易所"),
-            ("3", "券商"),
-            ("4", "数据提供商"),
-            ("5", "交易品种"),
-            ("6", "具体市场"),
+            ("3", "交易品种"),
+            ("4", "具体市场"),
         ),
     )
     if choice == "1":
@@ -649,23 +606,17 @@ def choose(context: InteractiveContext) -> GuidedCommand:
             ),
             f"检索资产 {query}",
         )
-    if choice in {"2", "3", "4"}:
-        participant = {
-            "2": ("exchanges", "交易所"),
-            "3": ("brokers", "券商"),
-            "4": ("providers", "数据提供商"),
-        }[choice]
+    if choice == "2":
         return GuidedCommand(
             (
                 "reference",
-                "participants",
-                participant[0],
+                "exchanges",
                 "--format",
                 "table",
             ),
-            f"查看{participant[1]}",
+            "查看交易所",
         )
-    if choice == "5":
+    if choice == "3":
         instrument_type = _prompt_menu(
             "请选择交易品种类型：",
             (

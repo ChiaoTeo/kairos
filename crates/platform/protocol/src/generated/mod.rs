@@ -28,8 +28,8 @@ pub mod kairos {
         pub mod v_2 {
             mod asset_generated;
             pub use asset_generated::*;
-            mod entity_generated;
-            pub use entity_generated::*;
+            mod exchange_generated;
+            pub use exchange_generated::*;
             mod instrument_generated;
             pub use instrument_generated::*;
             mod listing_generated;
@@ -58,10 +58,10 @@ pub mod kairos {
             pub use asset_updated_generated::*;
             mod asset_upserted_generated;
             pub use asset_upserted_generated::*;
-            mod entity_updated_generated;
-            pub use entity_updated_generated::*;
-            mod entity_upserted_generated;
-            pub use entity_upserted_generated::*;
+            mod exchange_updated_generated;
+            pub use exchange_updated_generated::*;
+            mod exchange_upserted_generated;
+            pub use exchange_upserted_generated::*;
         }
     }
 

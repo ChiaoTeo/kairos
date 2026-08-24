@@ -1,7 +1,7 @@
 use flatbuffers::FlatBufferBuilder;
 use kairos_market::{
-    MarketApplication, MarketDataRoute, MarketObservation, MarketSelectionQuery,
-    ObservationSelector, Quote, Rate, ReconcileMarketUniverse, ResolvedMarket, SubscriptionId,
+    MarketApplication, MarketObservation, MarketSelectionQuery, ObservationSelector, Quote, Rate,
+    ReconcileMarketUniverse, ResolvedMarket, SubscriptionId,
 };
 use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, EventMetadataArgs};
 use kairos_protocol::generated::kairos::reference::v_2::{
@@ -9,13 +9,13 @@ use kairos_protocol::generated::kairos::reference::v_2::{
     MarketUpsertedArgs, finish_market_upserted_buffer,
 };
 
-fn market(id: &str, symbol: &str) -> ResolvedMarket {
+fn market(id: &str, _symbol: &str) -> ResolvedMarket {
     ResolvedMarket::new(
         id,
         format!("instrument:{id}"),
         kairos_primitives::reference::InstrumentKind::Spot,
         "binance",
-        MarketDataRoute::new(format!("test:{id}"), "binance", "spot", symbol).unwrap(),
+        "binance",
     )
     .unwrap()
 }
@@ -33,7 +33,7 @@ fn rate_observation_has_a_qualified_view_and_freshness_watermark() {
             value: "0.0001".parse().unwrap(),
             mark_price: Some("100.5".parse().unwrap()),
             observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(7),
-            source_id: kairos_primitives::market::SourceId::new("binance").unwrap(),
+            provider: kairos_primitives::market::Provider::new("binance").unwrap(),
         }))
         .unwrap();
 
@@ -70,7 +70,7 @@ fn actor_owns_sequence_and_latest_observation() {
         ask_venue_code: None,
         tape: None,
         observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(7),
-        source_id: kairos_primitives::market::SourceId::new("test").unwrap(),
+        provider: kairos_primitives::market::Provider::new("test").unwrap(),
     });
     assert_eq!(actor.ingest(value).unwrap(), 1);
     assert_eq!(actor.event_sequence(), 1);
@@ -100,7 +100,7 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
         ask_venue_code: None,
         tape: None,
         observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(2),
-        source_id: kairos_primitives::market::SourceId::new("binance").unwrap(),
+        provider: kairos_primitives::market::Provider::new("binance").unwrap(),
     });
     assert_eq!(actor.ingest(quote).unwrap(), 1);
     assert!(actor.query().latest_quote("market:btc").is_some());
@@ -115,7 +115,7 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
         close: "1".parse().unwrap(),
         volume: None,
         observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(3),
-        source_id: kairos_primitives::market::SourceId::new("binance").unwrap(),
+        provider: kairos_primitives::market::Provider::new("binance").unwrap(),
         derivation: "direct".into(),
     });
     assert_eq!(actor.ingest(bar).unwrap(), 1);
@@ -123,7 +123,7 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
 }
 
 #[test]
-fn static_subscription_can_hold_multiple_source_legs_for_one_market() {
+fn static_subscription_keeps_one_canonical_member_per_market() {
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
     let base = market("market:btc", "BTCUSDT");
 
@@ -131,10 +131,7 @@ fn static_subscription_can_hold_multiple_source_legs_for_one_market() {
         .subscribe_static_many_with_selectors(
             SubscriptionId::new("multi-source").unwrap(),
             "strategy",
-            vec![
-                base.clone().with_source("massive").unwrap(),
-                base.with_source("binance").unwrap(),
-            ],
+            vec![base],
             vec![ObservationSelector::parse("quote").unwrap()],
         )
         .unwrap();
@@ -145,21 +142,12 @@ fn static_subscription_can_hold_multiple_source_legs_for_one_market() {
         .into_iter()
         .find(|subscription| subscription.id.as_str() == "multi-source")
         .unwrap();
-    assert_eq!(subscription.members.len(), 2);
-    assert!(
-        subscription
-            .members
-            .contains_key("market:btc#source:massive")
-    );
-    assert!(
-        subscription
-            .members
-            .contains_key("market:btc#source:binance")
-    );
+    assert_eq!(subscription.members.len(), 1);
+    assert!(subscription.members.contains_key("market:btc"));
 }
 
 #[test]
-fn market_universe_can_hold_multiple_source_legs_for_one_market() {
+fn market_universe_keeps_one_canonical_member_per_market() {
     let base = market("market:btc", "BTCUSDT");
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
     let id = SubscriptionId::new("dynamic-1").unwrap();
@@ -176,28 +164,25 @@ fn market_universe_can_hold_multiple_source_legs_for_one_market() {
         .reconcile_market_universe(ReconcileMarketUniverse {
             generation: 1.into(),
             event_sequence: 1.into(),
-            markets: vec![
-                base.clone().with_source("massive").unwrap(),
-                base.with_source("binance").unwrap(),
-            ],
+            markets: vec![base],
         })
         .unwrap();
 
     let state = actor.current_view().subscriptions.remove(0);
     assert_eq!(state.id, id);
-    assert_eq!(state.members.len(), 2);
+    assert_eq!(state.members.len(), 1);
     assert_eq!(
         state
             .members
             .values()
             .map(|market| market.member_id())
             .collect::<Vec<_>>(),
-        vec!["market:btc#source:binance", "market:btc#source:massive"]
+        vec!["market:btc"]
     );
 }
 
 #[test]
-fn out_of_order_observation_does_not_regress_current_projection() {
+fn out_of_order_observation_does_not_regress_current_view() {
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
     let quote = |time: u64, price: &str| {
         MarketObservation::Quote(Quote {
@@ -212,7 +197,7 @@ fn out_of_order_observation_does_not_regress_current_projection() {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(time),
-            source_id: kairos_primitives::market::SourceId::new("test").unwrap(),
+            provider: kairos_primitives::market::Provider::new("test").unwrap(),
         })
     };
     actor.ingest(quote(10, "100")).unwrap();
@@ -246,7 +231,7 @@ fn source_agnostic_typed_query_rejects_ambiguous_views() {
                 ask_venue_code: None,
                 tape: None,
                 observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(10),
-                source_id: kairos_primitives::market::SourceId::new(source_id).unwrap(),
+                provider: kairos_primitives::market::Provider::new(source_id).unwrap(),
             }))
             .unwrap();
     }
@@ -262,10 +247,8 @@ fn dynamic_subscription_reconciles_reference_changes_idempotently() {
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
     let id = SubscriptionId::new("dynamic-1").unwrap();
     let query = MarketSelectionQuery {
-        exchange_id: Some(kairos_primitives::reference::Exchange::new("binance").unwrap()),
-        provider_product: Some(
-            kairos_primitives::integration::ProviderProductCode::new("spot").unwrap(),
-        ),
+        exchange_id: Some(kairos_primitives::reference::ExchangeId::new("binance").unwrap()),
+        instrument_kind: Some(kairos_primitives::reference::InstrumentKind::Spot),
         active_only: true,
         ..Default::default()
     };

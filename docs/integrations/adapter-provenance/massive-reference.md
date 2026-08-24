@@ -14,7 +14,7 @@
   HTTP failure classification, and normalized `ExternalInstrumentCatalog`
   facts.
 - Reference owns the durable cursor and page staging, canonical
-  entities/assets/instruments/listings/markets, last-known-good promotion,
+  exchanges/assets/instruments/listings/markets, last-known-good promotion,
   lifecycle events, snapshots, and publication.
 - Massive is a DataProvider, not a canonical exchange. Stock ticker
   `primary_exchange` is mapped only to the primary Listing. Option

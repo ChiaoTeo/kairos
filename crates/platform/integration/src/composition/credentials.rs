@@ -105,6 +105,18 @@ pub fn resolve_credential_value(
     field: &str,
     stored: &str,
 ) -> Result<Option<String>, String> {
+    if let Some((source, id)) = parse_secret_ref(stored) {
+        return match source {
+            "env" => Ok(std::env::var(id)
+                .ok()
+                .filter(|value| !value.trim().is_empty())),
+            "file" => std::fs::read_to_string(Path::new(id))
+                .map(|value| value.trim().to_owned())
+                .map(|value| (!value.is_empty()).then_some(value))
+                .map_err(|error| format!("cannot resolve credential file SecretRef: {error}")),
+            _ => Err(format!("unsupported credential SecretRef source: {source}")),
+        };
+    }
     if !stored.trim().is_empty() {
         return Ok(Some(stored.to_owned()));
     }
@@ -134,6 +146,39 @@ pub fn resolve_credential_value(
         .ok()
         .or_else(|| conventional.and_then(|name| std::env::var(name).ok()))
         .filter(|value| !value.trim().is_empty()))
+}
+
+/// Encode a field-level SecretRef without placing its resolved value in a
+/// credential record. The opaque representation is serialized as a typed TOML
+/// table by [`CredentialStore`].
+pub fn credential_secret_ref(source: &str, id: &str) -> Result<String, String> {
+    let source = source.trim();
+    let id = id.trim();
+    match source {
+        "env"
+            if !id.is_empty()
+                && id.chars().enumerate().all(|(index, value)| {
+                    value.is_ascii_uppercase()
+                        || value.is_ascii_digit() && index > 0
+                        || value == '_' && index > 0
+                }) => {},
+        "file" if !id.is_empty() && !id.contains('\0') => {},
+        "env" => {
+            return Err(
+                "environment SecretRef id must use uppercase letters, numbers, and underscores"
+                    .into(),
+            );
+        },
+        "file" => return Err("file SecretRef id must be a non-empty path".into()),
+        _ => return Err(format!("unsupported credential SecretRef source: {source}")),
+    }
+    Ok(format!("secret-ref:{source}:{id}"))
+}
+
+fn parse_secret_ref(value: &str) -> Option<(&str, &str)> {
+    let value = value.strip_prefix("secret-ref:")?;
+    let (source, id) = value.split_once(':')?;
+    Some((source, id))
 }
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -287,9 +332,9 @@ fn load_credential_toml(path: &Path) -> Result<Option<CredentialRecord>, String>
             .or_else(|| table_text(table, "provider"))
             .unwrap_or_else(|| "unknown".into()),
         role: table_text(table, "role").unwrap_or_else(|| "readonly".into()),
-        api_key: table_text(table, "api_key").unwrap_or_default(),
-        secret: table_text(table, "api_secret").unwrap_or_default(),
-        passphrase: table_text(table, "passphrase").unwrap_or_default(),
+        api_key: value_from_table(table, "api_key"),
+        secret: value_from_table(table, "api_secret"),
+        passphrase: value_from_table(table, "passphrase"),
     }))
 }
 
@@ -332,29 +377,74 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
 }
 
 fn credential_toml(record: &CredentialRecord) -> String {
-    format!(
-        "[credential]\nid = {}\nbroker = {}\nrole = {}\napi_key = {}\napi_secret = {}\npassphrase = {}\n",
+    let mut document = format!(
+        "[credential]\nid = {}\nprovider = {}\nrole = {}\n",
         toml_string(&record.credential_id),
         toml_string(&record.provider),
         toml_string(&record.role),
-        toml_string(&record.api_key),
-        toml_string(&record.secret),
-        toml_string(&record.passphrase),
-    )
+    );
+    let fields = [
+        ("api_key", record.api_key.as_str()),
+        ("api_secret", record.secret.as_str()),
+        ("passphrase", record.passphrase.as_str()),
+    ];
+    for (field, value) in fields {
+        if parse_secret_ref(value).is_none() && !value.is_empty() {
+            // Plaintext is retained only for legacy records read during
+            // migration. New mutation surfaces construct field SecretRefs.
+            document.push_str(&format!("{field} = {}\n", toml_string(value)));
+        }
+    }
+    for (field, value) in fields {
+        write_credential_secret_ref(&mut document, field, value);
+    }
+    document
 }
 
 fn value_from_table(table: &toml::map::Map<String, toml::Value>, key: &str) -> String {
-    table
+    let legacy = table
         .get(key)
         .and_then(toml::Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !legacy.is_empty() {
+        return legacy;
+    }
+    let Some(reference) = table
+        .get("fields")
+        .and_then(toml::Value::as_table)
+        .and_then(|fields| fields.get(key))
+        .and_then(toml::Value::as_table)
+    else {
+        return String::new();
+    };
+    let source = reference
+        .get("source")
+        .and_then(toml::Value::as_str)
+        .unwrap_or_default();
+    let id = reference
+        .get("id")
+        .and_then(toml::Value::as_str)
+        .unwrap_or_default();
+    credential_secret_ref(source, id).unwrap_or_default()
+}
+
+fn write_credential_secret_ref(document: &mut String, field: &str, value: &str) {
+    if let Some((source, id)) = parse_secret_ref(value) {
+        document.push_str(&format!(
+            "\n[credential.fields.{field}]\nsource = {}\nid = {}\n",
+            toml_string(source),
+            toml_string(id),
+        ));
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CredentialRecord, load_workspace_credential};
+    use super::{
+        CredentialRecord, CredentialStore, credential_secret_ref, load_workspace_credential,
+    };
 
     #[test]
     fn loads_workspace_credential_by_id_from_toml_only() {
@@ -410,5 +500,37 @@ api_secret = "do-not-log-me"
         assert!(!debug.contains("secret-value"));
         assert!(!debug.contains("passphrase-value"));
         assert_eq!(record.api_key_value(), None);
+    }
+
+    #[test]
+    fn field_secret_refs_round_trip_without_persisting_secret_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credentials.toml");
+        let secret_path = directory.path().join("api-secret");
+        std::fs::write(&secret_path, "secret-from-file\n").unwrap();
+        unsafe { std::env::set_var("KAIROS_TEST_CREDENTIAL_API_KEY", "key-from-env") };
+        let store = CredentialStore {
+            credentials: vec![CredentialRecord {
+                credential_id: "binance-main".into(),
+                provider: "binance".into(),
+                role: "trade".into(),
+                api_key: credential_secret_ref("env", "KAIROS_TEST_CREDENTIAL_API_KEY").unwrap(),
+                secret: credential_secret_ref("file", &secret_path.display().to_string()).unwrap(),
+                passphrase: String::new(),
+            }],
+        };
+
+        store.save(&path).unwrap();
+        let text = std::fs::read_to_string(directory.path().join("binance-main.toml")).unwrap();
+        assert!(text.contains("[credential.fields.api_key]"));
+        assert!(text.contains("source = \"env\""));
+        assert!(!text.contains("key-from-env"));
+        assert!(!text.contains("secret-from-file"));
+
+        let loaded = CredentialStore::load(path).unwrap();
+        let record = &loaded.credentials[0];
+        assert_eq!(record.api_key_value().as_deref(), Some("key-from-env"));
+        assert_eq!(record.secret_value().as_deref(), Some("secret-from-file"));
+        unsafe { std::env::remove_var("KAIROS_TEST_CREDENTIAL_API_KEY") };
     }
 }

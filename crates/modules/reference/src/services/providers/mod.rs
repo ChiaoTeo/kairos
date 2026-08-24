@@ -24,6 +24,7 @@ impl ConnectionRef {
 
 mod activation;
 mod binance;
+mod binding;
 mod credentials;
 mod fan_in;
 mod hyperliquid;
@@ -39,6 +40,9 @@ pub use binance::{
 };
 #[cfg(test)]
 use binance::{binance_equity_provider_catalog, binance_provider_catalog};
+#[cfg(test)]
+pub(crate) use binding::reference_source_definition;
+pub(crate) use binding::{BinanceReferenceSource, MassiveReferenceSource, ReferenceSourceBinding};
 pub(crate) use credentials::ReferenceCredentialResolver;
 use fan_in::MASSIVE_PAGE_TIMEOUT;
 pub use fan_in::ProviderFanInSource;
@@ -47,6 +51,7 @@ use fan_in::provider_catalog_uses_current_canonical_shape;
 pub use hyperliquid::HyperliquidSource;
 #[cfg(test)]
 use hyperliquid::hyperliquid_provider_catalog;
+use kairos_primitives::reference::ExchangeId;
 pub(crate) use massive::massive_options_underlying_from_scope;
 #[cfg(test)]
 use massive::massive_provider_catalog;
@@ -57,12 +62,12 @@ use okx::okx_provider_catalog;
 pub(crate) use plan::{ReferenceProviderPlan, ReferenceSourcePlan};
 
 use crate::domain::{
-    Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceError, ReferenceResult,
+    Asset, Exchange, Instrument, Listing, Market, ProviderCatalog, ReferenceError, ReferenceResult,
     ReferenceSourceDefinition, SourceDesiredState, SourceHealth, SourceScope, SourceScopeKind,
     SourceTickBudget,
 };
 use crate::services::sources::{ReferenceSource, SourceUpdate};
-use crate::services::storage::provider_sync::PROVIDER_PROJECTION_VERSION;
+use crate::services::storage::provider_sync::PROVIDER_SCAN_FORMAT_VERSION;
 use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,7 +99,7 @@ pub(crate) enum OkxProduct {
 }
 
 impl OkxProduct {
-    const fn source_id(self) -> &'static str {
+    pub(crate) const fn source_id(self) -> &'static str {
         match self {
             Self::Spot => "okx-spot",
             Self::Margin => "okx-margin",
@@ -112,7 +117,7 @@ pub(crate) enum HyperliquidProduct {
 }
 
 impl HyperliquidProduct {
-    const fn source_id(self) -> &'static str {
+    pub(crate) const fn source_id(self) -> &'static str {
         match self {
             Self::Perpetual => "hyperliquid-perpetual",
             Self::Spot => "hyperliquid-spot",
@@ -215,8 +220,8 @@ fn merge_provider_catalog(
 ) -> ProviderCatalog {
     let previous = previous.unwrap_or_default();
     ProviderCatalog {
-        entities: merge_records(previous.entities, incoming.entities, |value| {
-            value.entity_id.clone()
+        exchanges: merge_records(previous.exchanges, incoming.exchanges, |value| {
+            value.exchange_id.clone()
         }),
         assets: merge_records(previous.assets, incoming.assets, |value| {
             value.asset_id.clone()

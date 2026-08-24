@@ -407,13 +407,13 @@ fn account_toml(record: &AccountBindingRecord) -> Result<String, String> {
         }
     }
     for segment in &record.segments {
-        let provider_product = record
+        let provider_segment = record
             .product_for_segment(segment)
             .ok_or_else(|| format!("account segment {segment} has no explicit provider product"))?;
         lines.extend([
             String::new(),
             format!("[segments.{}]", toml_key(segment)),
-            format!("product_family = {}", toml_string(provider_product)),
+            format!("product_family = {}", toml_string(provider_segment)),
         ]);
         if let Some(trading_mode) = record.segment_trading_modes.get(segment) {
             lines.push(format!("trading_mode = {}", toml_string(trading_mode)));

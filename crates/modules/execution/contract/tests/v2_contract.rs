@@ -2,11 +2,10 @@ use kairos_execution_contract::event::decode_event;
 use kairos_execution_contract::{
     ExecutionRouteCandidateResponse, ExecutionViewKey, ExecutionViewKind, execution_view_path,
 };
-use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::execution::{
-    ExecutionRouteId, OrderEntrySymbol, OrderOptionCode, OrderType,
+    ExecutionChannelCode, ExecutionRouteId, OrderEntrySymbol, OrderOptionCode, OrderType,
 };
-use kairos_primitives::integration::{ParticipantId, ProviderProductCode};
 use kairos_primitives::reference::{InstrumentId, MarketId};
 
 #[test]
@@ -92,8 +91,8 @@ fn route_contract_uses_order_entry_symbol_in_json_shape() {
         segment_key: Some(SegmentKey::new("swap").unwrap()),
         instrument_id: Some(InstrumentId::new("instrument:btc-perp").unwrap()),
         market_id: Some(MarketId::new("market:okx:swap:BTC-USDT-SWAP").unwrap()),
-        participant_id: ParticipantId::new("okx").unwrap(),
-        provider_product: ProviderProductCode::new("swap").unwrap(),
+        broker_id: BrokerId::new("okx").unwrap(),
+        execution_channel: ExecutionChannelCode::new("swap").unwrap(),
         order_entry_symbol: OrderEntrySymbol::new("BTC-USDT-SWAP").unwrap(),
         supported_order_types: vec![OrderType::Market, OrderType::Limit],
         supported_options: vec![OrderOptionCode::new("reduce_only").unwrap()],
@@ -119,8 +118,8 @@ fn route_contract_accepts_legacy_provider_symbol_json() {
         "segment_key": "swap",
         "instrument_id": "instrument:btc-perp",
         "market_id": "market:okx:swap:BTC-USDT-SWAP",
-        "participant_id": "okx",
-        "provider_product": "swap",
+        "broker_id": "okx",
+        "execution_channel": "swap",
         "provider_symbol": "BTC-USDT-SWAP",
         "supported_order_types": ["market"],
         "supported_options": ["reduce_only"],
@@ -140,8 +139,8 @@ fn route_contract_rejects_invalid_semantic_identity() {
         "segment_key": null,
         "instrument_id": null,
         "market_id": null,
-        "participant_id": "okx",
-        "provider_product": "swap",
+        "broker_id": "okx",
+        "execution_channel": "swap",
         "order_entry_symbol": "BTC-USDT-SWAP",
         "supported_order_types": ["market"],
         "supported_options": [],

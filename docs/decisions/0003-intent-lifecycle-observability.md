@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-18
-- Scope: Strategy decisions, Execution intent lifecycle and notification projection
+- Scope: Strategy decisions, Execution intent lifecycle and notification policy
 
 ## Context
 
@@ -30,7 +30,7 @@ Strategy-owned decision.
   independently of human notification configuration.
 - Strategy projects selected business facts into notifications. Execution
   never depends on notification transports or delivery results.
-- Notification projection uses stable deduplication keys so replay does not
+- Notification current view uses stable deduplication keys so replay does not
   create another logical notification.
 
 ## Consequences

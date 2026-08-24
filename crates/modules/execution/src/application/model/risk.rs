@@ -1,6 +1,6 @@
 use kairos_primitives::account::{BrokerId, SegmentKey};
 use kairos_primitives::decimal::Money;
-use kairos_primitives::reference::{Currency, Exchange};
+use kairos_primitives::reference::{Currency, ExchangeId};
 
 use super::SnapshotWatermark;
 
@@ -14,7 +14,7 @@ pub struct RiskAuthorizationContext {
     pub available_margin: Option<Money>,
     pub initial_margin_rate_bps: Option<u32>,
     pub margin_rule_id: Option<String>,
-    pub exchange_id: Option<Exchange>,
+    pub exchange_id: Option<ExchangeId>,
     pub funding_broker: Option<BrokerId>,
     pub funding_segment: Option<SegmentKey>,
     pub collateral_asset: Option<Currency>,

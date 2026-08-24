@@ -22,7 +22,7 @@ impl<'a> ::flatbuffers::Follow<'a> for Ticker24h<'a> {
 impl<'a> Ticker24h<'a> {
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 8;
     pub const VT_LAST_PRICE: ::flatbuffers::VOffsetT = 10;
     pub const VT_BID_PRICE: ::flatbuffers::VOffsetT = 12;
     pub const VT_BID_QUANTITY: ::flatbuffers::VOffsetT = 14;
@@ -99,8 +99,8 @@ impl<'a> Ticker24h<'a> {
         if let Some(x) = args.last_price {
             builder.add_last_price(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -134,13 +134,13 @@ impl<'a> Ticker24h<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Ticker24h::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Ticker24h::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -326,8 +326,8 @@ impl ::flatbuffers::Verifiable for Ticker24h<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<super::super::common::v_2::Decimal64>(
@@ -413,7 +413,7 @@ impl ::flatbuffers::Verifiable for Ticker24h<'_> {
 pub struct Ticker24hArgs<'a> {
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub last_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub bid_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub bid_quantity: Option<&'a super::super::common::v_2::Decimal64>,
@@ -437,7 +437,7 @@ impl<'a> Default for Ticker24hArgs<'a> {
         Ticker24hArgs {
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             last_price: None,
             bid_price: None,
             bid_quantity: None,
@@ -479,9 +479,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> Ticker24hBuilder<'a, 'b, A> {
         );
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Ticker24h::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Ticker24h::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_last_price(&mut self, last_price: &super::super::common::v_2::Decimal64) {
@@ -630,7 +630,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> Ticker24hBuilder<'a, 'b, A> {
         self.fbb_.required(o, Ticker24h::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Ticker24h::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, Ticker24h::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, Ticker24h::VT_PROVIDER, "provider");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -640,7 +640,7 @@ impl ::core::fmt::Debug for Ticker24h<'_> {
         let mut ds = f.debug_struct("Ticker24h");
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("last_price", &self.last_price());
         ds.field("bid_price", &self.bid_price());
         ds.field("bid_quantity", &self.bid_quantity());

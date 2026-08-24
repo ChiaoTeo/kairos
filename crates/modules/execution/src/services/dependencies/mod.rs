@@ -7,7 +7,7 @@
 mod access;
 mod order_admission;
 mod planning;
-mod projection;
+mod state;
 mod workers;
 
 use std::collections::BTreeMap;
@@ -19,10 +19,10 @@ use kairos_primitives::execution::OrderId;
 use kairos_primitives::reference::{InstrumentId, InstrumentKind, MarketId};
 use kairos_primitives::runtime::StrategyId;
 use kairos_primitives::time::UnixNanos;
-use kairos_reference_contract::{ReferenceMarket, ReferenceProjectionSnapshot};
-use projection::*;
+use kairos_reference_contract::{ExecutionReferenceSnapshot, Market};
 use rust_decimal::Decimal;
 use serde_json::Value;
+use state::*;
 
 #[cfg(test)]
 use crate::application::core::orders::admission::risk_amount;
@@ -39,7 +39,7 @@ use crate::application::{
 use crate::domain::{CommitmentBasis, CommitmentResource, OrderCommitment, OrderSide, OrderType};
 use crate::services::risk::SocketExecutionRiskReservations;
 
-/// Composition-owned projection of the Market quote view. This is an adapter
+/// Composition-owned copy of the Market quote view. This is an adapter
 /// record, not a public backtest/replay model.
 type MarketQuote = PlanningQuote;
 
@@ -117,7 +117,7 @@ impl SocketExecutionIntentPlanner {
     pub fn from_manifest_with_reference_snapshot(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<ReferenceProjectionSnapshot>,
+        reference_snapshot: Option<ExecutionReferenceSnapshot>,
     ) -> Result<Self, String> {
         IntentPlanningContext::from_manifest_with_reference_snapshot(
             system,
@@ -166,7 +166,7 @@ impl SocketExecutionOrderAdmission {
     pub fn from_manifest_with_reference_snapshot(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<ReferenceProjectionSnapshot>,
+        reference_snapshot: Option<ExecutionReferenceSnapshot>,
     ) -> Result<Self, String> {
         OrderAdmissionContext::from_manifest_with_reference_snapshot(
             system,
@@ -186,17 +186,13 @@ impl SocketExecutionOrderAdmission {
         self
     }
 
-    pub fn with_backtest_reference_without_projection(mut self, enabled: bool) -> Self {
-        self.context = self
-            .context
-            .with_backtest_reference_without_projection(enabled);
+    pub fn allow_backtest_without_reference_state(mut self, enabled: bool) -> Self {
+        self.context = self.context.allow_backtest_without_reference_state(enabled);
         self
     }
 
-    pub fn with_backtest_balance_without_projection(mut self, enabled: bool) -> Self {
-        self.context = self
-            .context
-            .with_backtest_balance_without_projection(enabled);
+    pub fn allow_backtest_without_account_state(mut self, enabled: bool) -> Self {
+        self.context = self.context.allow_backtest_without_account_state(enabled);
         self
     }
 
@@ -234,7 +230,7 @@ impl SocketExecutionOrderAdmission {
     }
 }
 
-fn find_available(response: &[ProjectedBalance], asset: &str) -> Result<Option<Decimal>, String> {
+fn find_available(response: &[AccountBalanceFact], asset: &str) -> Result<Option<Decimal>, String> {
     response
         .iter()
         .find(|balance| balance.asset_code.eq_ignore_ascii_case(asset))
@@ -247,7 +243,7 @@ fn find_available(response: &[ProjectedBalance], asset: &str) -> Result<Option<D
 }
 
 fn find_position(
-    response: &[ProjectedPosition],
+    response: &[AccountPositionFact],
     instrument: &str,
 ) -> Result<Option<Decimal>, String> {
     response

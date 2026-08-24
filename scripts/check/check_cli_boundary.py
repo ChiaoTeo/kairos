@@ -583,13 +583,13 @@ def main() -> int:
         (launch_text, CLI_COMMANDS / "launch.py"),
     ):
         if (
-            "Account current projection does not expose open orders" in text
+            "Account current view does not expose open orders" in text
             or '"status": "unsupported"' in text
             and "open_orders" in text
         ):
             failures.append(
                 f"{path.relative_to(ROOT)} must not expose Account open-orders "
-                "as an unsupported half-entry; use observed-orders projection"
+                "as an unsupported half-entry; use observed-orders view"
             )
     native_text = (ROOT / "kairospy" / "application" / "system" / "__init__.py").read_text(
         encoding="utf-8"
@@ -604,8 +604,8 @@ def main() -> int:
         "_run_workspace_account_connected_command(",
         "_workspace_account_client(owner).refresh(",
         "_workspace_account_client(owner).reconcile(",
-        "_workspace_account_client(owner).current_projection(",
-        "_workspace_account_client(owner).observed_orders_projection(",
+        "_workspace_account_client(owner).current_view(",
+        "_workspace_account_client(owner).observed_orders_view(",
     ):
         if token in root_text:
             failures.append(
@@ -903,7 +903,7 @@ def main() -> int:
                     if leaked:
                         failures.append(
                             f"{path.relative_to(ROOT)} standalone mode exposes runtime "
-                            f"or projection commands: {sorted(leaked)}"
+                            f"or current-view commands: {sorted(leaked)}"
                         )
                     if boundary.product_name == "Risk":
                         for token in ("Schema", "Doctor", "Preview"):
@@ -1003,7 +1003,7 @@ def main() -> int:
                             if token not in variants:
                                 failures.append(
                                     f"{path.relative_to(ROOT)} must expose Execution "
-                                    f"connected {token} as a real contract/projection command"
+                                    f"connected {token} as a real contract/current-view command"
                                 )
                         for token in (
                             "dry_run",
@@ -1062,7 +1062,7 @@ def main() -> int:
                             if token not in variants:
                                 failures.append(
                                     f"{path.relative_to(ROOT)} must expose Account "
-                                    f"connected {token} as a real contract/projection command"
+                                    f"connected {token} as a real contract/current-view command"
                                 )
                         for token in (
                             "pub struct ConnectedAccountApplication",
@@ -1111,7 +1111,7 @@ def main() -> int:
                             if token not in variants:
                                 failures.append(
                                     f"{path.relative_to(ROOT)} must expose Risk "
-                                    f"connected {token} as real contract/projection commands"
+                                    f"connected {token} as real contract/current-view commands"
                                 )
                         for token in (
                             "pub struct ConnectedRiskApplication",
@@ -1262,7 +1262,7 @@ def main() -> int:
                             if token not in variants:
                                 failures.append(
                                     f"{path.relative_to(ROOT)} must expose Capital "
-                                    f"connected {token} as a real contract/projection command"
+                                    f"connected {token} as a real contract/current-view command"
                                 )
                         for token in (
                             "pub struct ConnectedCapitalApplication",
@@ -1369,6 +1369,7 @@ def main() -> int:
                     for token in (
                         "MarketControlRpcClient",
                         "MarketDataSourcesQuery",
+                        "MarketDataRoutesQuery",
                         "SnapshotEnvelopeMetadata",
                         "ViewMetadata",
                         "fn connected_market_client(",

@@ -11,7 +11,7 @@ use super::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};
 use crate::domain::market::ResolvedMarket;
 use crate::domain::observation::MarketObservation;
 use crate::domain::source::{
-    SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceStatus,
+    FeedDescriptor, MarketFeedId, SourceEpoch, SourceFailureKind, SourceStatus,
 };
 
 const COMMAND_CAPACITY: usize = 1_024;
@@ -61,7 +61,7 @@ impl ReplaySource {
         events.sort_by(|left, right| {
             left.observed_at_unix_nanos()
                 .cmp(&right.observed_at_unix_nanos())
-                .then_with(|| left.source_id().cmp(right.source_id()))
+                .then_with(|| left.provider().cmp(right.provider()))
                 .then_with(|| left.scope().cmp(right.scope()))
                 .then_with(|| left.kind().cmp(&right.kind()))
         });
@@ -190,7 +190,7 @@ pub(crate) fn load_replay_checkpoint(
 }
 
 pub(crate) fn spawn_replay(
-    descriptor: SourceDescriptor,
+    descriptor: FeedDescriptor,
     source: ReplaySource,
     input_capacity: usize,
 ) -> SourceHandle {
@@ -207,7 +207,7 @@ pub(crate) fn spawn_replay(
 }
 
 async fn run(
-    descriptor: SourceDescriptor,
+    descriptor: FeedDescriptor,
     mut source: ReplaySource,
     mut commands: mpsc::Receiver<SourceCommand>,
     inputs: mpsc::Sender<SourceInput>,
@@ -327,7 +327,7 @@ async fn run(
 async fn complete(
     source: &mut ReplaySource,
     inputs: &mpsc::Sender<SourceInput>,
-    source_id: &SourceId,
+    source_id: &MarketFeedId,
     epoch: SourceEpoch,
 ) {
     source.completed = true;
@@ -348,7 +348,7 @@ async fn complete(
 
 async fn send_status(
     inputs: &mpsc::Sender<SourceInput>,
-    source_id: &SourceId,
+    source_id: &MarketFeedId,
     epoch: SourceEpoch,
     status: SourceStatus,
 ) -> Result<(), mpsc::error::SendError<SourceInput>> {
@@ -381,7 +381,7 @@ mod tests {
             close: "1".parse().unwrap(),
             volume: None,
             observed_at_unix_nanos: UnixNanos::new(time),
-            source_id: kairos_primitives::market::SourceId::new("replay-fixture").unwrap(),
+            provider: kairos_primitives::market::Provider::new("replay-fixture").unwrap(),
             derivation: "test".into(),
         })
     }

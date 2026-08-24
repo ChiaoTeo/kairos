@@ -26,7 +26,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Observation(crate::MarketObservation::Quote(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::Quote,
                     None::<String>,
                 )
@@ -37,7 +37,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Observation(crate::MarketObservation::Rate(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::Rate,
                     Some(value.rate_id.clone()),
                 )
@@ -48,7 +48,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Observation(crate::MarketObservation::Ticker24h(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::Ticker24h,
                     None::<String>,
                 )
@@ -59,7 +59,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Observation(crate::MarketObservation::MarkPrice(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::MarkPrice,
                     None::<String>,
                 )
@@ -70,7 +70,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Observation(crate::MarketObservation::FundingRate(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::FundingRate,
                     None::<String>,
                 )
@@ -81,7 +81,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Observation(crate::MarketObservation::OpenInterest(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::OpenInterest,
                     None::<String>,
                 )
@@ -92,7 +92,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Observation(crate::MarketObservation::IndexPrice(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::IndexPrice,
                     None::<String>,
                 )
@@ -112,7 +112,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Observation(crate::MarketObservation::OptionGreeks(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::Greeks,
                     None::<String>,
                 )
@@ -123,7 +123,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::OrderBook(value) => {
                 let key = MarketViewKey::new(
                     value.market_id.to_string(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::OrderBook,
                     Some(value.instrument_id.to_string()),
                 )
@@ -134,7 +134,7 @@ pub(crate) fn encode_change_view(
             MarketViewUpdate::Freshness(value) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
-                    value.source_id.clone(),
+                    value.provider.clone(),
                     MarketViewKind::Freshness,
                     Some(value.data_kind.as_str()),
                 )
@@ -156,7 +156,7 @@ fn encode_bar(
 ) -> Result<EncodedMarketView, String> {
     let key = MarketViewKey::new(
         value.scope.key(),
-        value.source_id.clone(),
+        value.provider.clone(),
         MarketViewKind::BarWindow,
         Some(value.timeframe.clone()),
     )
@@ -223,7 +223,7 @@ fn encode_quote(
     );
     let scope = observation_scope(&mut builder, &value.scope);
     let instrument_id = builder.create_string(value.instrument_id.as_str());
-    let source_id = builder.create_string(&value.source_id);
+    let provider = builder.create_string(&value.provider);
     let bid_price = value
         .bid_price
         .map(|v| Decimal64::new(v.mantissa(), v.scale()));
@@ -250,7 +250,7 @@ fn encode_quote(
             quote_id: None,
             scope: Some(scope),
             instrument_id: Some(instrument_id),
-            source_id: Some(source_id),
+            provider: Some(provider),
             bid_price: bid_price.as_ref(),
             bid_quantity: bid_quantity.as_ref(),
             ask_price: ask_price.as_ref(),
@@ -326,7 +326,7 @@ fn encode_rate_view(
     let rate_id = b.create_string(&value.rate_id);
     let scope = observation_scope(&mut b, &value.scope);
     let instrument_id = b.create_string(value.instrument_id.as_str());
-    let source_id = b.create_string(&value.source_id);
+    let provider = b.create_string(&value.provider);
     let basis = b.create_string(&value.basis);
     let v = Decimal64::new(value.value.mantissa(), value.value.scale());
     let mark = value
@@ -338,7 +338,7 @@ fn encode_rate_view(
             rate_id: Some(rate_id),
             scope: Some(scope),
             instrument_id: Some(instrument_id),
-            source_id: Some(source_id),
+            provider: Some(provider),
             basis: Some(basis),
             value: Some(&v),
             mark_price: mark.as_ref(),
@@ -383,7 +383,7 @@ fn encode_ticker_view(
     );
     let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
-    let s = b.create_string(&value.source_id);
+    let s = b.create_string(&value.provider);
     let lp = value
         .last_price
         .map(|x| Decimal64::new(x.mantissa(), x.scale()));
@@ -429,7 +429,7 @@ fn encode_ticker_view(
         &market_fb::Ticker24hArgs {
             scope: Some(scope),
             instrument_id: Some(i),
-            source_id: Some(s),
+            provider: Some(s),
             last_price: lp.as_ref(),
             bid_price: bp.as_ref(),
             bid_quantity: bq.as_ref(),
@@ -485,7 +485,7 @@ fn encode_mark_price_view(
     );
     let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
-    let s = b.create_string(&value.source_id);
+    let s = b.create_string(&value.provider);
     let mp = Decimal64::new(value.mark_price.mantissa(), value.mark_price.scale());
     let ip = value
         .index_price
@@ -501,7 +501,7 @@ fn encode_mark_price_view(
         &market_fb::MarkPriceArgs {
             scope: Some(scope),
             instrument_id: Some(i),
-            source_id: Some(s),
+            provider: Some(s),
             mark_price: Some(&mp),
             index_price: ip.as_ref(),
             estimated_settlement_price: es.as_ref(),
@@ -548,14 +548,14 @@ fn encode_funding_view(
     );
     let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
-    let s = b.create_string(&value.source_id);
+    let s = b.create_string(&value.provider);
     let fr = Decimal64::new(value.funding_rate.mantissa(), value.funding_rate.scale());
     let v = market_fb::FundingRate::create(
         &mut b,
         &market_fb::FundingRateArgs {
             scope: Some(scope),
             instrument_id: Some(i),
-            source_id: Some(s),
+            provider: Some(s),
             funding_rate: Some(&fr),
             funding_period_seconds: value.funding_period_seconds.unwrap_or_default(),
             next_funding_time_unix_nanos: value.next_funding_time_unix_nanos.map_or(0, |x| x.get()),
@@ -600,7 +600,7 @@ fn encode_open_interest_view(
     );
     let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
-    let s = b.create_string(&value.source_id);
+    let s = b.create_string(&value.provider);
     let c = Decimal64::new(value.contracts.mantissa(), value.contracts.scale());
     let q = value
         .quote_value
@@ -616,7 +616,7 @@ fn encode_open_interest_view(
         &market_fb::OpenInterestArgs {
             scope: Some(scope),
             instrument_id: Some(i),
-            source_id: Some(s),
+            provider: Some(s),
             contracts: Some(&c),
             quote_value: q.as_ref(),
             change_24h: ch.as_ref(),
@@ -663,7 +663,7 @@ fn encode_bar_view(
     );
     let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
-    let s = b.create_string(&value.source_id);
+    let s = b.create_string(&value.provider);
     let spec = b.create_string(&value.timeframe);
     let open = Decimal64::new(value.open.mantissa(), value.open.scale());
     let high = Decimal64::new(value.high.mantissa(), value.high.scale());
@@ -677,7 +677,7 @@ fn encode_bar_view(
         &market_fb::BarArgs {
             scope: Some(scope),
             instrument_id: Some(i),
-            source_id: Some(s),
+            provider: Some(s),
             bar_spec_id: Some(spec),
             kind: if kind == "trades" {
                 market_fb::BarKind::TRADES
@@ -737,7 +737,7 @@ fn encode_greeks_view(
     );
     let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
-    let s = b.create_string(&value.source_id);
+    let s = b.create_string(&value.provider);
     let strike = value
         .strike
         .map(|x| Decimal64::new(x.mantissa(), x.scale()));
@@ -754,7 +754,7 @@ fn encode_greeks_view(
         &market_fb::GreeksArgs {
             scope: Some(scope),
             instrument_id: Some(i),
-            source_id: Some(s),
+            provider: Some(s),
             expiry_unix_nanos: value.expiry_unix_nanos.map(|x| x.get()),
             strike: strike.as_ref(),
             delta: delta.as_ref(),
@@ -804,7 +804,7 @@ fn encode_index_price_view(
     );
     let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
-    let s = b.create_string(&value.source_id);
+    let s = b.create_string(&value.provider);
     let spot = value
         .spot_index_price
         .map(|x| Decimal64::new(x.mantissa(), x.scale()));
@@ -822,7 +822,7 @@ fn encode_index_price_view(
         &market_fb::IndexPriceArgs {
             scope: Some(scope),
             instrument_id: Some(i),
-            source_id: Some(s),
+            provider: Some(s),
             spot_index_price: spot.as_ref(),
             contract_index_price: contract.as_ref(),
             index_price: index.as_ref(),
@@ -866,13 +866,13 @@ fn encode_orderbook_view(
         key,
         book.event_time_unix_nanos.get(),
     );
-    let source_id = b.create_string(&book.source_id);
+    let provider = b.create_string(&book.provider);
     let market_id = b.create_string(book.market_id.as_str());
     let instrument_id = b.create_string(book.instrument_id.as_str());
     let identity_offset = market_fb::OrderBookIdentity::create(
         &mut b,
         &market_fb::OrderBookIdentityArgs {
-            source_id: Some(source_id),
+            provider: Some(provider),
             market_id: Some(market_id),
             instrument_id: Some(instrument_id),
         },
@@ -963,13 +963,13 @@ fn encode_freshness(
         key,
         value.last_received_time_unix_nanos.get(),
     );
-    let source_id = builder.create_string(&value.source_id);
+    let provider = builder.create_string(&value.provider);
     let scope = observation_scope(&mut builder, &value.scope);
     let data_kind = builder.create_string(value.data_kind.as_str());
     let entry = market_fb::FreshnessEntry::create(
         &mut builder,
         &market_fb::FreshnessEntryArgs {
-            source_id: Some(source_id),
+            provider: Some(provider),
             scope: Some(scope),
             data_kind: Some(data_kind),
             last_event_time_unix_nanos: value.last_event_time_unix_nanos.get(),

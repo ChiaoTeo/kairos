@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::decimal::Money;
-use kairos_primitives::reference::{Currency, Exchange, InstrumentId};
+use kairos_primitives::reference::{Currency, ExchangeId, InstrumentId};
 use kairos_primitives::risk::{PolicyId, ReservationId};
 use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
 use kairos_primitives::time::{BasisPoints, DurationNanos, Generation, Sequence, UnixNanos};
@@ -222,7 +222,7 @@ pub struct PolicyScope {
     pub account_id: Option<AccountId>,
     pub strategy_id: Option<StrategyId>,
     pub instrument_id: Option<InstrumentId>,
-    pub exchange_id: Option<Exchange>,
+    pub exchange_id: Option<ExchangeId>,
 }
 
 impl PolicyScope {
@@ -293,7 +293,7 @@ pub struct AuthorizeRequest {
     pub account_id: AccountId,
     pub strategy_id: StrategyId,
     pub instrument_id: InstrumentId,
-    pub exchange_id: Exchange,
+    pub exchange_id: ExchangeId,
     /// Normalized trade facts supplied by Execution. Risk derives every
     /// budget usage from this proposal; callers do not choose one policy
     /// metric and thereby bypass the others.
@@ -429,7 +429,7 @@ pub enum ReasonCode {
 pub struct CircuitScope {
     pub account_id: Option<AccountId>,
     pub strategy_id: Option<StrategyId>,
-    pub exchange_id: Option<Exchange>,
+    pub exchange_id: Option<ExchangeId>,
 }
 
 impl CircuitScope {

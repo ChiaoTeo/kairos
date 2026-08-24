@@ -4,7 +4,7 @@ use kairos_conflux::AeronOutputDeclaration;
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_workspace::Workspace;
 
-use super::super::reference::{build_reference_projection, project_market_universe};
+use super::super::reference::{build_market_universe_resolver, resolve_market_universe};
 use super::super::{
     MarketCompositionConfig, MarketHost, MarketHostRequest, MarketRuntimeProfile,
     MarketRuntimeScope, attach_replay_source_with_policy,
@@ -12,14 +12,14 @@ use super::super::{
 use crate::application::load_replay_events;
 use crate::composition::history::{HistoryCollectionSpec, spawn_jsonl_history};
 use crate::services::source::load_replay_checkpoint;
-use crate::{MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId};
+use crate::{MarketApplication, ResolvedMarket, SubscriptionId};
 
 const VIEW_SLOT_SIZE: usize = 4_194_304;
 const MAX_DYNAMIC_MEMBERS: usize = 10_000;
 
 fn collection_market_descriptor(
-    reference: &kairos_reference_contract::ReferenceProjectionSnapshot,
-    sources: &std::collections::BTreeMap<String, super::super::config::MarketSourceBinding>,
+    reference: &kairos_reference_contract::MarketReferenceSnapshot,
+    sources: &std::collections::BTreeMap<String, super::super::config::MarketProviderBinding>,
     name: &str,
     collection: &super::super::config::MarketCollectionConfig,
 ) -> Result<ResolvedMarket, MarketStartupError> {
@@ -28,102 +28,81 @@ fn collection_market_descriptor(
             "Market collection {name} requires exactly one of market_id or instrument_id"
         )));
     }
-    let source_id = collection.source_id.as_deref().ok_or_else(|| {
-        MarketStartupError::new(format!(
-            "Market collection {name} requires source_id; provider routes are Market-owned"
-        ))
-    })?;
-    let binding = sources.get(source_id).ok_or_else(|| {
-        MarketStartupError::new(format!(
-            "Market collection {name} references unknown source {source_id}"
-        ))
-    })?;
-    if !binding.enabled() {
+    let universe = resolve_market_universe(reference, sources)
+        .map_err(MarketStartupError::new)?
+        .markets;
+    let mut descriptor =
+        if let Some(market_id) = collection.market_id.as_deref() {
+            universe
+            .into_iter()
+            .find(|market| market.market_id().is_some_and(|candidate| candidate == market_id))
+            .ok_or_else(|| {
+                MarketStartupError::new(format!(
+                    "Market collection {name} references missing or unsupported Market {market_id}"
+                ))
+            })?
+        } else {
+            let instrument_id = collection
+                .instrument_id
+                .as_deref()
+                .expect("collection identity validated");
+            let instrument = reference
+                .instruments
+                .iter()
+                .find(|instrument| instrument.instrument_id == instrument_id)
+                .ok_or_else(|| {
+                    MarketStartupError::new(format!(
+                        "Market collection {name} references missing instrument {instrument_id}"
+                    ))
+                })?;
+            let canonical = universe
+            .iter()
+            .find(|market| {
+                market.instrument_id == instrument.instrument_id
+                    && collection.provider.as_ref().is_none_or(|provider| {
+                        market.runtime_routes.contains_key(provider)
+                    })
+            })
+            .ok_or_else(|| {
+                MarketStartupError::new(format!(
+                    "Market collection {name} has no provider route for instrument {instrument_id}"
+                ))
+            })?;
+            let binding = collection
+                .provider
+                .as_ref()
+                .and_then(|provider| canonical.runtime_routes.get(provider))
+                .or_else(|| canonical.runtime_routes.values().next())
+                .cloned()
+                .expect("resolved Market has a runtime binding");
+            let mut value = ResolvedMarket::consolidated_reference(
+                instrument.instrument_id.clone(),
+                collection.network_id.clone(),
+                instrument.instrument_type,
+                binding,
+            )
+            .map_err(MarketStartupError::new)?;
+            value.underlying_instrument_id = instrument.underlying_instrument_id.clone();
+            value.asset_type = collection
+                .asset_type
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(|error| MarketStartupError::new(format!("{error}")))?;
+            value
+        };
+    let provider = collection
+        .provider
+        .clone()
+        .or_else(|| descriptor.runtime_routes.keys().next().cloned())
+        .ok_or_else(|| {
+            MarketStartupError::new(format!("Market collection {name} has no provider route"))
+        })?;
+    if !descriptor.retain_provider(&provider) {
         return Err(MarketStartupError::new(format!(
-            "Market collection {name} references disabled source {source_id}"
+            "Market collection {name} cannot be served by provider {provider}"
         )));
     }
-    let (provider, provider_product) = super::super::sources::binding_provider_product(binding);
-    let target_id = collection
-        .market_id
-        .as_deref()
-        .or(collection.instrument_id.as_deref())
-        .expect("collection identity validated");
-    let route = MarketDataRoute::new(
-        format!("market-route:{source_id}:{target_id}"),
-        provider,
-        provider_product,
-        collection.subject.clone(),
-    )
-    .map_err(MarketStartupError::new)?
-    .with_observation_capabilities(super::super::reference::adapter_observation_capabilities(
-        provider,
-        provider_product,
-    ));
-    let mut descriptor = if let Some(market_id) = collection.market_id.as_deref() {
-        let market = reference
-            .markets
-            .iter()
-            .find(|market| market.market_id == market_id)
-            .ok_or_else(|| {
-                MarketStartupError::new(format!(
-                    "Market collection {name} references missing market {market_id}"
-                ))
-            })?;
-        let instrument = reference
-            .instruments
-            .iter()
-            .find(|instrument| instrument.instrument_id == market.instrument_id)
-            .ok_or_else(|| {
-                MarketStartupError::new(format!(
-                    "Market collection {name} references missing instrument {}",
-                    market.instrument_id
-                ))
-            })?;
-        let mut value = ResolvedMarket::from_reference(
-            market.market_id.clone(),
-            market.instrument_id.clone(),
-            instrument.instrument_type,
-            market.exchange_id.clone(),
-            route,
-        )
-        .map_err(MarketStartupError::new)?;
-        value.asset_type = market.asset_type;
-        value.underlying_instrument_id = market.underlying_instrument_id.clone();
-        value
-    } else {
-        let instrument_id = collection
-            .instrument_id
-            .as_deref()
-            .expect("collection identity validated");
-        let instrument = reference
-            .instruments
-            .iter()
-            .find(|instrument| instrument.instrument_id == instrument_id)
-            .ok_or_else(|| {
-                MarketStartupError::new(format!(
-                    "Market collection {name} references missing instrument {instrument_id}"
-                ))
-            })?;
-        let mut value = ResolvedMarket::consolidated_reference(
-            instrument.instrument_id.clone(),
-            collection.network_id.clone(),
-            instrument.instrument_type,
-            route,
-        )
-        .map_err(MarketStartupError::new)?;
-        value.underlying_instrument_id = instrument.underlying_instrument_id.clone();
-        value.asset_type = collection
-            .asset_type
-            .as_deref()
-            .map(str::parse)
-            .transpose()
-            .map_err(|error| MarketStartupError::new(format!("{error}")))?;
-        value
-    };
-    descriptor = descriptor
-        .with_source(source_id)
-        .map_err(MarketStartupError::new)?;
     Ok(descriptor)
 }
 
@@ -281,7 +260,7 @@ pub async fn build_market_host(
     if let Some(snapshot) = initial_reference_snapshot.as_ref() {
         application
             .reconcile_market_universe(
-                project_market_universe(snapshot, &market_config.sources)
+                resolve_market_universe(snapshot, &market_config.providers)
                     .map_err(MarketStartupError::new)?,
             )
             .map_err(MarketStartupError::new)?;
@@ -328,7 +307,6 @@ pub async fn build_market_host(
                 || name == ".."
                 || name.contains('/')
                 || name.contains('\\')
-                || collection.subject.trim().is_empty()
             {
                 return Err(MarketStartupError::new(format!(
                     "invalid Market collection identity: {name}"
@@ -344,8 +322,12 @@ pub async fn build_market_host(
                     "Market collection {name} requires the Reference current view"
                 ))
             })?;
-            let descriptor =
-                collection_market_descriptor(reference, &market_config.sources, name, collection)?;
+            let descriptor = collection_market_descriptor(
+                reference,
+                &market_config.providers,
+                name,
+                collection,
+            )?;
             let subscription_id = SubscriptionId::new(format!("collection:{name}"))
                 .map_err(MarketStartupError::new)?;
             let owner_id = format!("collection:{name}");
@@ -355,7 +337,7 @@ pub async fn build_market_host(
                     owner_id,
                     descriptor.clone(),
                     collection
-                        .selectors
+                        .observations
                         .iter()
                         .map(|value| crate::ObservationSelector::parse(value))
                         .collect::<Result<Vec<_>, _>>()
@@ -365,7 +347,7 @@ pub async fn build_market_host(
             history_specs.push(HistoryCollectionSpec {
                 name: name.clone(),
                 scope_key: descriptor.scope.key(),
-                selectors: collection.selectors.clone(),
+                selectors: collection.observations.clone(),
                 root: workspace
                     .data_root()
                     .join("market")
@@ -383,11 +365,11 @@ pub async fn build_market_host(
     // remains independent of the live Reference/Aeron runtime. Live modes
     // use the Reference client held by Conflux so no watcher task becomes a
     // second Aeron owner and Market does not create a foreign module client.
-    let reference_projection = if let Some(key) = reference_client_key {
-        Some(crate::application::ReferenceProjectionConfig {
+    let reference_universe_sync = if let Some(key) = reference_client_key {
+        Some(crate::application::ReferenceUniverseSyncConfig {
             client_key: key,
             interval: profile.reference_recovery_interval,
-            projection: build_reference_projection(&market_config.sources),
+            resolver: build_market_universe_resolver(&market_config.providers),
         })
     } else {
         None
@@ -399,7 +381,7 @@ pub async fn build_market_host(
         super::super::sources::install_connections(
             &mut system,
             &credentials_root,
-            &market_config.sources,
+            &market_config.providers,
         )
         .map_err(MarketStartupError::new)?
     } else {
@@ -413,7 +395,7 @@ pub async fn build_market_host(
             identity,
             source_plans,
             history,
-            reference_projection,
+            reference_universe_sync,
         )
         .map_err(MarketStartupError::new)?;
     application

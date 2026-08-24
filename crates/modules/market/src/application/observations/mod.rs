@@ -1,5 +1,6 @@
-//! Observation ingestion and current projection use cases.
+//! Observation ingestion and current-view read use cases.
 
+mod access;
 mod bar;
 mod funding_rate;
 mod index_price;
@@ -7,7 +8,6 @@ mod mark_price;
 mod open_interest;
 mod option_greeks;
 mod order_book;
-mod projection;
 mod quote;
 mod quote_bar;
 mod rate;

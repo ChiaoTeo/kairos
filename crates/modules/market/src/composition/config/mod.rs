@@ -12,6 +12,6 @@ pub use profile::{
 };
 pub use sources::{
     BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
-    HyperliquidMarketType, MarketSourceBinding, MassiveMarketProduct, OkxInstrumentType,
-    PublicMarketTransport,
+    HyperliquidMarketType, MarketProviderBinding, MarketProviderBindings, MassiveMarketProduct,
+    OkxInstrumentType, PublicMarketTransport,
 };

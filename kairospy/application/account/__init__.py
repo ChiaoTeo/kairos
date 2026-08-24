@@ -7,15 +7,18 @@ credentials, and launch leases are persisted by the Workspace layer.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import socket
 from uuid import uuid4
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..credential import CredentialConfigurationApplication, SecretRef
 from ..workspace import Workspace
 from .application import AccountApplication
 from .errors import (
@@ -69,6 +72,15 @@ def _text(value: str, name: str) -> str:
     return value
 
 
+def _credential_environment_names(
+    credential_id: str, fields: tuple[str, ...]
+) -> dict[str, str]:
+    prefix = "KAIROS_CREDENTIAL_" + "".join(
+        character if character.isalnum() else "_" for character in credential_id.upper()
+    )
+    return {field.upper(): f"{prefix}_{field.upper()}" for field in fields}
+
+
 def _cli(workspace: Workspace) -> "AccountCliApplication":
     return AccountCliApplication(workspace)
 
@@ -87,8 +99,8 @@ def _account(value: Any) -> dict[str, Any]:
 
 
 @dataclass(frozen=True, slots=True)
-class AccountAdminApplication:
-    """Thin Python adapter over ``kairos-account-cli`` administration."""
+class AccountConfigurationApplication:
+    """Configure Account-owned bindings and retain manual verification evidence."""
 
     workspace: Workspace
 
@@ -98,16 +110,298 @@ class AccountAdminApplication:
 
     def list(self) -> list[dict[str, Any]]:
         value = _cli(self.workspace).run(["list"])
-        return (
+        accounts = (
             list(value) if isinstance(value, list) else list(value.get("accounts", []))
         )
+        return [
+            self._with_verification(self._show_raw(str(item["account_id"])))
+            for item in accounts
+        ]
 
     def show(self, account_id: str) -> dict[str, Any]:
+        return self._with_verification(self._show_raw(account_id))
+
+    def _show_raw(self, account_id: str) -> dict[str, Any]:
         return _account(
             _cli(self.workspace).run(
                 ["show", "--account-id", _text(account_id, "account_id")]
             )
         )
+
+    def verification(self, account_id: str) -> dict[str, Any]:
+        account = self._show_raw(account_id)
+        fingerprint = self._configuration_fingerprint(account)
+        evidence = self._read_verification(account_id)
+        if evidence is None:
+            return {
+                "verification_status": "pending",
+                "last_tested_at": None,
+                "tested": [],
+                "not_tested": [],
+                "tested_configuration_hash": None,
+                "current_configuration_hash": fingerprint,
+            }
+        status = str(evidence.get("result") or "failed")
+        if evidence.get("configuration_hash") != fingerprint:
+            status = "retest_required"
+        return {
+            "verification_status": status,
+            "last_tested_at": evidence.get("tested_at"),
+            "tested": list(evidence.get("tested") or ()),
+            "not_tested": list(evidence.get("not_tested") or ()),
+            "capabilities": list(evidence.get("capabilities") or ()),
+            "segments": list(evidence.get("segments") or ()),
+            "error_category": evidence.get("error_category"),
+            "tested_configuration_hash": evidence.get("configuration_hash"),
+            "current_configuration_hash": fingerprint,
+        }
+
+    def resource_snapshot(self, account_id: str) -> dict[str, Any]:
+        """Return the secret-free Account facts pinned by a Launch instance."""
+
+        account = self._show_raw(account_id)
+        verification = self.verification(account_id)
+        return {
+            "account_id": account_id,
+            "broker": account.get("broker"),
+            "integration_provider": account.get("integration_provider"),
+            "environment": account.get("environment"),
+            "masked_remote_identity": _mask_identity(account.get("remote_identity")),
+            "segments": list(account.get("segments") or ()),
+            "permissions": dict(account.get("permissions") or {}),
+            "credential_identities": self._credential_identities(account),
+            "verification": verification,
+            "resource_hash": self._configuration_fingerprint(account),
+        }
+
+    def test_connection(
+        self,
+        account_id: str,
+        *,
+        probe: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Run an explicit read/permission probe and store only stable, secret-free facts."""
+
+        account = self._show_raw(account_id)
+        tested_at = datetime.now(timezone.utc).isoformat()
+        try:
+            discovered = dict(
+                probe(account) if probe is not None else self._probe_account(account)
+            )
+            account = self._show_raw(account_id)
+            evidence = {
+                "schema_version": 1,
+                "account_id": account_id,
+                "configuration_hash": self._configuration_fingerprint(account),
+                "result": "verified",
+                "tested_at": tested_at,
+                "tested": list(
+                    discovered.get("tested")
+                    or (
+                        "identity authentication",
+                        "account read",
+                        "permission discovery",
+                    )
+                ),
+                "not_tested": list(
+                    discovered.get("not_tested")
+                    or ("order submission", "fund transfer")
+                ),
+                "capabilities": sorted(
+                    str(value) for value in discovered.get("capabilities") or ()
+                ),
+                "segments": sorted(
+                    str(value)
+                    for value in discovered.get("segments")
+                    or account.get("segments")
+                    or ()
+                ),
+                "masked_remote_identity": _mask_identity(
+                    discovered.get("remote_identity") or account.get("remote_identity")
+                ),
+            }
+        except Exception as error:
+            evidence = {
+                "schema_version": 1,
+                "account_id": account_id,
+                "configuration_hash": self._configuration_fingerprint(account),
+                "result": "failed",
+                "tested_at": tested_at,
+                "tested": [
+                    "identity authentication",
+                    "account read",
+                    "permission discovery",
+                ],
+                "not_tested": ["order submission", "fund transfer"],
+                "capabilities": [],
+                "segments": [],
+                "error_category": _probe_error_category(error),
+            }
+        _write_json(self._verification_path(account_id), evidence)
+        return self.verification(account_id)
+
+    def _probe_account(self, account: Mapping[str, Any]) -> Mapping[str, Any]:
+        environment = str(account.get("environment") or "").lower()
+        broker = str(account.get("broker") or "").lower()
+        if environment in {"paper", "simulated"} or broker in {"paper", "simulated"}:
+            return {
+                "tested": ["local account availability", "balance state readability"],
+                "not_tested": [
+                    "remote authentication",
+                    "order submission",
+                    "fund transfer",
+                ],
+                "capabilities": ["read", "trade"],
+                "segments": list(account.get("segments") or ()),
+            }
+        credentials = account.get("credentials")
+        bindings = credentials if isinstance(credentials, list) else []
+        if not bindings and account.get("credential_id"):
+            bindings = [
+                {
+                    "name": "default",
+                    "credential_id": account["credential_id"],
+                    "role": account.get("credential_role") or "readonly",
+                }
+            ]
+        if not bindings or not isinstance(bindings[0], Mapping):
+            raise ValueError("account has no credential binding")
+        binding = bindings[0]
+        result = _cli(self.workspace).run(
+            [
+                "credential",
+                "add",
+                "--account-id",
+                str(account["account_id"]),
+                "--name",
+                str(binding.get("name") or "default"),
+                "--credential-id",
+                str(binding.get("credential_id") or ""),
+                "--role",
+                str(binding.get("role") or "readonly"),
+                "--force",
+            ]
+        )
+        updated = result.get("account", result) if isinstance(result, Mapping) else {}
+        permissions = updated.get("permissions") if isinstance(updated, Mapping) else {}
+        capabilities = [
+            str(name)
+            for name, state in (
+                permissions.items() if isinstance(permissions, Mapping) else ()
+            )
+            if str(state).lower() in {"granted", "true", "enabled"}
+        ]
+        return {
+            "capabilities": capabilities or ["read"],
+            "segments": list(updated.get("segments") or ()),
+            "remote_identity": updated.get("remote_identity"),
+        }
+
+    def _with_verification(self, account: dict[str, Any]) -> dict[str, Any]:
+        return {**account, **self.verification(str(account["account_id"]))}
+
+    def _configuration_fingerprint(self, account: Mapping[str, Any]) -> str:
+        credential_ids = {
+            str(value)
+            for value in (account.get("credential_id"),)
+            if isinstance(value, str) and value
+        }
+        bindings = account.get("credentials")
+        if isinstance(bindings, list):
+            credential_ids.update(
+                str(item.get("credential_id"))
+                for item in bindings
+                if isinstance(item, Mapping) and item.get("credential_id")
+            )
+        credentials: list[dict[str, Any]] = []
+        owner = CredentialConfigurationApplication(self.workspace)
+        for credential_id in sorted(credential_ids):
+            try:
+                value = owner.show(credential_id)
+            except (KeyError, OSError, ValueError):
+                value = {"credential_id": credential_id, "missing": True}
+            credentials.append(
+                {
+                    "credential_id": credential_id,
+                    "provider": value.get("provider"),
+                    "role": value.get("role"),
+                    "secret_refs": value.get("secret_refs", {}),
+                    "legacy_plaintext": value.get("legacy_plaintext", False),
+                }
+            )
+        payload = {
+            key: account.get(key)
+            for key in (
+                "account_id",
+                "broker",
+                "integration_provider",
+                "environment",
+                "segments",
+                "segment_products",
+                "segment_trading_modes",
+                "account_model",
+                "credential_id",
+                "credentials",
+                "credential_role",
+                "status",
+            )
+        }
+        payload["credential_references"] = credentials
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), default=str
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _credential_identities(
+        self, account: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        credential_ids = {
+            str(value)
+            for value in (account.get("credential_id"),)
+            if isinstance(value, str) and value
+        }
+        bindings = account.get("credentials")
+        if isinstance(bindings, list):
+            credential_ids.update(
+                str(item.get("credential_id"))
+                for item in bindings
+                if isinstance(item, Mapping) and item.get("credential_id")
+            )
+        owner = CredentialConfigurationApplication(self.workspace)
+        result: list[dict[str, Any]] = []
+        for credential_id in sorted(credential_ids):
+            try:
+                value = owner.show(credential_id)
+            except (KeyError, OSError, ValueError):
+                result.append({"credential_id": credential_id, "missing": True})
+                continue
+            result.append(
+                {
+                    "credential_id": credential_id,
+                    "provider": value.get("provider"),
+                    "role": value.get("role"),
+                    "secret_refs": value.get("secret_refs", {}),
+                }
+            )
+        return result
+
+    def _verification_path(self, account_id: str) -> Path:
+        return self.workspace.paths.child(
+            "state",
+            "configuration",
+            "accounts",
+            f"{_text(account_id, 'account_id')}.json",
+        )
+
+    def _read_verification(self, account_id: str) -> dict[str, Any] | None:
+        path = self._verification_path(account_id)
+        if not path.is_file():
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
 
     def schemas(self) -> dict[str, Any]:
         return dict(_cli(self.workspace).run(["schemas"]))
@@ -286,6 +580,7 @@ class AccountAdminApplication:
                 ]
             )
         )
+        self._verification_path(account_id).unlink(missing_ok=True)
         return {
             "account_id": account_id,
             "status": "deleted" if value.get("removed") else "not_found",
@@ -326,20 +621,28 @@ class CredentialApplication:
         kind: str | None = None,
         force: bool = True,
     ) -> dict[str, Any]:
-        _cli(self.workspace).run(
-            [
-                "credential-create",
-                "--credential-id",
-                _text(credential_id, "credential_id"),
-                "--provider",
-                _text(provider, "provider"),
-            ]
+        credential_id = _text(credential_id, "credential_id")
+        provider = _text(provider, "provider")
+        environment = _credential_environment_names(credential_id, fields)
+        references = {
+            field: SecretRef("env", environment[field.upper()]) for field in fields
+        }
+        CredentialConfigurationApplication(self.workspace).configure(
+            credential_id,
+            provider=provider,
+            fields=references,
+            role=kind or "readonly",
+            overwrite=force,
         )
         return {
             "credential_id": credential_id,
             "provider": provider,
             "kind": kind or "api",
             "fields": list(fields),
+            "secret_refs": {
+                field: {"source": "env", "id": environment[field.upper()]}
+                for field in fields
+            },
             "secret_storage": "environment-or-external-secret-store",
         }
 
@@ -400,6 +703,28 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
         json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     temporary.replace(path)
+
+
+def _mask_identity(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if len(value) <= 4:
+        return "*" * len(value)
+    return f"{value[:2]}{'*' * min(8, len(value) - 4)}{value[-2:]}"
+
+
+def _probe_error_category(error: Exception) -> str:
+    text = str(error).lower()
+    if any(
+        value in text for value in ("auth", "credential", "permission", "unauthorized")
+    ):
+        return "authentication_or_permission"
+    if any(value in text for value in ("timeout", "network", "connect", "dns")):
+        return "network"
+    if any(value in text for value in ("rate", "429", "quota")):
+        return "rate_limited"
+    return "provider_response"
 
 
 @dataclass(frozen=True, slots=True)
@@ -570,9 +895,14 @@ class TradeLeaseApplication:
 
 from .cli import AccountCliApplication  # noqa: E402
 
+# Compatibility name for callers that have not yet migrated to the explicit
+# configuration-boundary vocabulary.
+AccountAdminApplication = AccountConfigurationApplication
+
 __all__ = [
     "AccountApplication",
     "AccountAdminApplication",
+    "AccountConfigurationApplication",
     "AccountEvent",
     "AccountLookupError",
     "AccountNotEnabledError",

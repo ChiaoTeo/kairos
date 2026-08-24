@@ -1,8 +1,8 @@
 from kairospy.strategy import (
     BarEvent,
     MarketData,
-    Participant,
-    ParticipantSet,
+    Provider,
+    ProviderPreference,
     QuoteEvent,
     Strategy,
     StrategyContext,
@@ -33,20 +33,22 @@ class PrintAaplMulti(Strategy):
         context.market.subscribe(
             market.id,
             data=[MarketData.QUOTE, MarketData.bar(Timeframe.MIN_1)],
-            participants=ParticipantSet.only(Participant.MASSIVE, Participant.BINANCE),
+            provider_preference=ProviderPreference.require(
+                Provider.MASSIVE, Provider.BINANCE
+            ),
         )
         print(
             f"{self.symbol} subscribed market={market.id} "
-            "data=quote,bar:1m participants=massive,binance",
+            "data=quote,bar:1m providers=massive,binance",
             flush=True,
         )
 
     def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
         del context
         quote = event.data
-        source = quote.source_id or quote.scope.key()
+        provider = quote.provider or quote.scope.key()
         print(
-            f"AAPL quote source={source} "
+            f"AAPL quote provider={provider} "
             f"scope={quote.scope.key()} "
             f"market={quote.market_id or '-'} instrument={quote.instrument.id} "
             f"bid={quote.bid_price if quote.bid_price is not None else '-'} "
@@ -57,9 +59,9 @@ class PrintAaplMulti(Strategy):
     def on_bar(self, context: StrategyContext, event: BarEvent) -> None:
         del context
         bar = event.data
-        source = bar.source_id or bar.scope.key()
+        provider = bar.provider or bar.scope.key()
         print(
-            f"AAPL bar source={source} "
+            f"AAPL bar provider={provider} "
             f"scope={bar.scope.key()} "
             f"market={bar.market_id or '-'} instrument={bar.instrument.id} "
             f"timeframe={bar.timeframe} close={bar.close}",

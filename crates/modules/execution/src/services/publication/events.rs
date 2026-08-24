@@ -256,12 +256,12 @@ fn encode_fill_event(
         .as_ref()
         .map(|value| builder.create_string(value.as_str()))
         .or_else(|| remote_order_id.map(|value| builder.create_string(value)));
-    let reported_provider_id = fill
-        .reported_provider_id
+    let reported_broker_id = fill
+        .reported_broker_id
         .as_ref()
         .map(|value| builder.create_string(value));
-    let provider_product = fill
-        .provider_product
+    let execution_channel = fill
+        .execution_channel
         .as_ref()
         .map(|value| builder.create_string(value.as_str()));
     let order_entry_symbol = fill
@@ -288,8 +288,8 @@ fn encode_fill_event(
             market_id: Some(market_id),
             execution_route_id: Some(execution_route_id),
             remote_order_id,
-            reported_provider_id,
-            provider_product,
+            reported_broker_id,
+            execution_channel,
             provider_symbol: order_entry_symbol,
             side: match fill.side {
                 OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,

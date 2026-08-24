@@ -33,8 +33,8 @@ impl<'a> Fill<'a> {
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 24;
     pub const VT_EXECUTION_ROUTE_ID: ::flatbuffers::VOffsetT = 26;
     pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 28;
-    pub const VT_REPORTED_PROVIDER_ID: ::flatbuffers::VOffsetT = 30;
-    pub const VT_PROVIDER_PRODUCT: ::flatbuffers::VOffsetT = 32;
+    pub const VT_REPORTED_BROKER_ID: ::flatbuffers::VOffsetT = 30;
+    pub const VT_EXECUTION_CHANNEL: ::flatbuffers::VOffsetT = 32;
     pub const VT_PROVIDER_SYMBOL: ::flatbuffers::VOffsetT = 34;
     pub const VT_SIDE: ::flatbuffers::VOffsetT = 36;
     pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 38;
@@ -78,11 +78,11 @@ impl<'a> Fill<'a> {
         if let Some(x) = args.provider_symbol {
             builder.add_provider_symbol(x);
         }
-        if let Some(x) = args.provider_product {
-            builder.add_provider_product(x);
+        if let Some(x) = args.execution_channel {
+            builder.add_execution_channel(x);
         }
-        if let Some(x) = args.reported_provider_id {
-            builder.add_reported_provider_id(x);
+        if let Some(x) = args.reported_broker_id {
+            builder.add_reported_broker_id(x);
         }
         if let Some(x) = args.remote_order_id {
             builder.add_remote_order_id(x);
@@ -269,23 +269,23 @@ impl<'a> Fill<'a> {
         }
     }
     #[inline]
-    pub fn reported_provider_id(&self) -> Option<&'a str> {
+    pub fn reported_broker_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_REPORTED_PROVIDER_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_REPORTED_BROKER_ID, None)
         }
     }
     #[inline]
-    pub fn provider_product(&self) -> Option<&'a str> {
+    pub fn execution_channel(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_PROVIDER_PRODUCT, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_EXECUTION_CHANNEL, None)
         }
     }
     #[inline]
@@ -438,13 +438,13 @@ impl ::flatbuffers::Verifiable for Fill<'_> {
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "reported_provider_id",
-                Self::VT_REPORTED_PROVIDER_ID,
+                "reported_broker_id",
+                Self::VT_REPORTED_BROKER_ID,
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "provider_product",
-                Self::VT_PROVIDER_PRODUCT,
+                "execution_channel",
+                Self::VT_EXECUTION_CHANNEL,
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -493,8 +493,8 @@ pub struct FillArgs<'a> {
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub execution_route_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub remote_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub reported_provider_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub provider_product: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub reported_broker_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub execution_channel: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub provider_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub side: super::super::common::v_2::Side,
     pub quantity: Option<&'a super::super::common::v_2::Decimal64>,
@@ -521,8 +521,8 @@ impl<'a> Default for FillArgs<'a> {
             market_id: None,          // required field
             execution_route_id: None, // required field
             remote_order_id: None,
-            reported_provider_id: None,
-            provider_product: None,
+            reported_broker_id: None,
+            execution_channel: None,
             provider_symbol: None,
             side: super::super::common::v_2::Side::UNSPECIFIED,
             quantity: None, // required field
@@ -613,20 +613,20 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FillBuilder<'a, 'b, A> {
         );
     }
     #[inline]
-    pub fn add_reported_provider_id(
+    pub fn add_reported_broker_id(
         &mut self,
-        reported_provider_id: ::flatbuffers::WIPOffset<&'b str>,
+        reported_broker_id: ::flatbuffers::WIPOffset<&'b str>,
     ) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            Fill::VT_REPORTED_PROVIDER_ID,
-            reported_provider_id,
+            Fill::VT_REPORTED_BROKER_ID,
+            reported_broker_id,
         );
     }
     #[inline]
-    pub fn add_provider_product(&mut self, provider_product: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_execution_channel(&mut self, execution_channel: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            Fill::VT_PROVIDER_PRODUCT,
-            provider_product,
+            Fill::VT_EXECUTION_CHANNEL,
+            execution_channel,
         );
     }
     #[inline]
@@ -723,8 +723,8 @@ impl ::core::fmt::Debug for Fill<'_> {
         ds.field("market_id", &self.market_id());
         ds.field("execution_route_id", &self.execution_route_id());
         ds.field("remote_order_id", &self.remote_order_id());
-        ds.field("reported_provider_id", &self.reported_provider_id());
-        ds.field("provider_product", &self.provider_product());
+        ds.field("reported_broker_id", &self.reported_broker_id());
+        ds.field("execution_channel", &self.execution_channel());
         ds.field("provider_symbol", &self.provider_symbol());
         ds.field("side", &self.side());
         ds.field("quantity", &self.quantity());

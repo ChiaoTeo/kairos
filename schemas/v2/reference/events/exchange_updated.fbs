@@ -1,0 +1,6 @@
+include "../../common/metadata.fbs";
+include "../types/exchange.fbs";
+namespace kairos.reference.v2;
+table ExchangeUpdated { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; exchange:Exchange (required); }
+root_type ExchangeUpdated;
+file_identifier "REND";

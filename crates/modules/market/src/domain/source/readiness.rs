@@ -12,7 +12,9 @@ pub enum MarketReadiness {
     Stopped,
 }
 
-pub fn derive_readiness<'a>(sources: impl IntoIterator<Item = &'a SourceState>) -> MarketReadiness {
+pub(crate) fn derive_readiness<'a>(
+    sources: impl IntoIterator<Item = &'a SourceState>,
+) -> MarketReadiness {
     let sources = sources.into_iter().collect::<Vec<_>>();
     if sources.is_empty() {
         return MarketReadiness::Ready;

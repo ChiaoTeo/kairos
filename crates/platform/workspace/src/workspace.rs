@@ -778,11 +778,14 @@ mod tests {
 workspace_id = "demo"
 
 [market.collections.btc-bars]
-subject = "BTCUSDT"
-selectors = ["bar:1m"]
+market_id = "market:binance:spot:BTCUSDT"
+observations = ["bar"]
 exchange = "binance"
 market_type = "spot"
-source_id = "binance-spot"
+provider = "binance"
+
+[[market.providers]]
+type = "binance-spot"
 "#,
         )
         .unwrap();
@@ -790,8 +793,11 @@ source_id = "binance-spot"
         let workspace = Workspace::open(root.path()).unwrap();
         let market: toml::Value = workspace.read_section("market").unwrap();
         let collection = &market["collections"]["btc-bars"];
-        assert_eq!(collection["subject"].as_str(), Some("BTCUSDT"));
-        assert_eq!(collection["source_id"].as_str(), Some("binance-spot"));
+        assert_eq!(
+            collection["market_id"].as_str(),
+            Some("market:binance:spot:BTCUSDT")
+        );
+        assert_eq!(collection["provider"].as_str(), Some("binance"));
     }
 
     #[test]

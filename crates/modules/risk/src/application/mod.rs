@@ -14,5 +14,8 @@ pub use app::{
     OpenCircuit, PublishPolicy, ReleaseReservation, ResizeReservation, RiskApplication,
     RiskClockMode, RiskCurrentView, RiskDecision, RiskError, RiskEvent, RiskSnapshot,
 };
-pub use cli::{CliRiskApplication, RiskCliRequestKind};
-pub use connected::ConnectedRiskApplication;
+pub use cli::{
+    CliRiskApplication, RiskCliRequestKind, RiskDoctorResult, RiskPreviewResult,
+    RiskStandaloneOutput,
+};
+pub use connected::{ConnectedRiskApplication, ConnectedRiskOutput};

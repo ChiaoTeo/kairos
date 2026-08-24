@@ -22,7 +22,7 @@ impl<'a> ::flatbuffers::Follow<'a> for OpenInterest<'a> {
 impl<'a> OpenInterest<'a> {
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 8;
     pub const VT_CONTRACTS: ::flatbuffers::VOffsetT = 10;
     pub const VT_QUOTE_VALUE: ::flatbuffers::VOffsetT = 12;
     pub const VT_CHANGE_24H: ::flatbuffers::VOffsetT = 14;
@@ -59,8 +59,8 @@ impl<'a> OpenInterest<'a> {
         if let Some(x) = args.contracts {
             builder.add_contracts(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -97,13 +97,13 @@ impl<'a> OpenInterest<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(OpenInterest::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(OpenInterest::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -190,8 +190,8 @@ impl ::flatbuffers::Verifiable for OpenInterest<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<super::super::common::v_2::Decimal64>(
@@ -231,7 +231,7 @@ impl ::flatbuffers::Verifiable for OpenInterest<'_> {
 pub struct OpenInterestArgs<'a> {
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub contracts: Option<&'a super::super::common::v_2::Decimal64>,
     pub quote_value: Option<&'a super::super::common::v_2::Decimal64>,
     pub change_24h: Option<&'a super::super::common::v_2::Decimal64>,
@@ -245,7 +245,7 @@ impl<'a> Default for OpenInterestArgs<'a> {
         OpenInterestArgs {
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             contracts: None,     // required field
             quote_value: None,
             change_24h: None,
@@ -277,9 +277,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OpenInterestBuilder<'a, 'b, A
         );
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(OpenInterest::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(OpenInterest::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_contracts(&mut self, contracts: &super::super::common::v_2::Decimal64) {
@@ -345,8 +345,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OpenInterestBuilder<'a, 'b, A
         self.fbb_.required(o, OpenInterest::VT_SCOPE, "scope");
         self.fbb_
             .required(o, OpenInterest::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_
-            .required(o, OpenInterest::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, OpenInterest::VT_PROVIDER, "provider");
         self.fbb_
             .required(o, OpenInterest::VT_CONTRACTS, "contracts");
         ::flatbuffers::WIPOffset::new(o.value())
@@ -358,7 +357,7 @@ impl ::core::fmt::Debug for OpenInterest<'_> {
         let mut ds = f.debug_struct("OpenInterest");
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("contracts", &self.contracts());
         ds.field("quote_value", &self.quote_value());
         ds.field("change_24h", &self.change_24h());

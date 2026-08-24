@@ -86,6 +86,21 @@ pub(crate) fn quote(
         observed_at_unix_nanos: now(),
     })
 }
+
+pub(crate) fn equity_quote(
+    symbol: &ParticipantSymbol,
+    row: &Value,
+) -> Result<MarketQuote, IntegrationError> {
+    Ok(MarketQuote {
+        symbol: symbol.clone(),
+        bid_price: parse(row.get("bidPrice"))?,
+        bid_quantity: parse(row.get("bidSize"))?,
+        ask_price: parse(row.get("askPrice"))?,
+        ask_quantity: parse(row.get("askSize"))?,
+        last_price: None,
+        observed_at_unix_nanos: now(),
+    })
+}
 pub(crate) fn mark_price(
     symbol: &ParticipantSymbol,
     row: &Value,
@@ -304,9 +319,12 @@ where
     T::Err: std::fmt::Display,
 {
     value
-        .and_then(Value::as_str)
-        .filter(|v| !v.is_empty())
-        .map(str::parse)
+        .and_then(|value| match value {
+            Value::String(value) if !value.is_empty() => Some(value.clone()),
+            Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .map(|value| value.parse())
         .transpose()
         .map_err(payload)
 }

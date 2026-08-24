@@ -7,6 +7,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use serde::Serialize;
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -48,15 +49,19 @@ impl OutputFormat {
     }
 }
 
-pub fn render(value: &Value, format: OutputFormat) -> String {
+pub fn render<T: Serialize + ?Sized>(value: &T, format: OutputFormat) -> String {
     match format {
         OutputFormat::Json => serde_json::to_string_pretty(value).expect("JSON serialization"),
         OutputFormat::Text => {
+            let value = serde_json::to_value(value).expect("JSON serialization");
             let mut output = String::new();
-            render_text(value, "", &mut output);
+            render_text(&value, "", &mut output);
             output.trim_end_matches('\n').to_owned()
         },
-        OutputFormat::Table => render_table(value),
+        OutputFormat::Table => {
+            let value = serde_json::to_value(value).expect("JSON serialization");
+            render_table(&value)
+        },
     }
 }
 

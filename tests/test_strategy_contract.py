@@ -81,11 +81,11 @@ def test_disabled_execution_returns_a_typed_rejected_receipt() -> None:
     assert receipt.error == "execution is disabled for this launch"
 
 
-def test_account_application_owns_concrete_multi_account_projection_selection() -> None:
+def test_account_application_owns_concrete_multi_account_current_view_selection() -> None:
     main_id = AccountId("main")
     secondary_id = AccountId("secondary")
 
-    class Projection:
+    class LatestView:
         def __init__(self, equity: Decimal) -> None:
             self.equity = equity
 
@@ -111,8 +111,8 @@ def test_account_application_owns_concrete_multi_account_projection_selection() 
 
     account = AccountApplication(
         {
-            main_id: Projection(Decimal("100")),
-            secondary_id: Projection(Decimal("200")),
+            main_id: LatestView(Decimal("100")),
+            secondary_id: LatestView(Decimal("200")),
         }
     )
 
@@ -135,8 +135,8 @@ def test_account_application_has_no_callable_or_object_adapter() -> None:
     ).exists()
 
 
-def test_risk_application_owns_concrete_projection_query() -> None:
-    class Projection:
+def test_risk_application_owns_concrete_current_view_query() -> None:
+    class LatestView:
         def status(self, account_id: AccountId) -> RiskStatus:
             return RiskStatus(
                 account_id,
@@ -148,7 +148,7 @@ def test_risk_application_owns_concrete_projection_query() -> None:
                 1,
             )
 
-    risk = RiskApplication(Projection())
+    risk = RiskApplication(LatestView())
 
     status = risk.status(account="main")
     assert status.account_id == AccountId("main")
@@ -157,7 +157,7 @@ def test_risk_application_owns_concrete_projection_query() -> None:
 
 
 def test_unavailable_risk_fails_at_the_application_boundary() -> None:
-    with pytest.raises(RuntimeError, match="Risk projection is unavailable"):
+    with pytest.raises(RuntimeError, match="Risk latest view is unavailable"):
         RiskApplication(None).status(account="main")
 
 

@@ -5,11 +5,11 @@ pub use super::storage::catalog_store::SqlxCatalogStore;
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use kairos_primitives::reference::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
+    use kairos_primitives::reference::{ExchangeId, InstrumentId, ListingId, MarketId, Symbol};
 
     use super::SqlxCatalogStore;
     use crate::domain::{
-        Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceCatalog,
+        Exchange, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceCatalog,
         ReferenceSourceDefinition, SourceDesiredState, SourceScope, SourceSyncPolicy,
     };
     use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
@@ -117,7 +117,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v4_open_invalidates_legacy_market_identity_and_access_tables() {
+    async fn v5_open_invalidates_legacy_reference_catalog_tables() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let initialized = SqlxCatalogStore::open(&path).await.unwrap();
@@ -298,7 +298,7 @@ mod tests {
             market_id: market_id.clone(),
             instrument_id: instrument_id.clone(),
             listing_id: Some(ListingId::new("listing:binance:btc-usdt").unwrap()),
-            exchange_id: Exchange::new("binance").unwrap(),
+            exchange_id: ExchangeId::new("binance").unwrap(),
             instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
             venue_symbol: Some(Symbol::new("BTCUSDT").unwrap()),
             status: "active".into(),
@@ -333,7 +333,7 @@ mod tests {
             "an unchanged refresh must not rewrite current-state rows"
         );
 
-        let reader = kairos_reference_contract::ReferenceSqliteReader::open(&path).unwrap();
+        let reader = kairos_reference_contract::ReferenceCatalog::open(&path).unwrap();
         let stats = reader.stats().unwrap();
         assert_eq!(stats.markets, 1);
         assert_eq!(stats.active_markets, 1);
@@ -345,17 +345,17 @@ mod tests {
             1
         );
         assert!(reader.record("market:binance:btc-usdt").unwrap().is_some());
-        let projection = reader
-            .projection(&kairos_reference_contract::SqliteMarketQuery {
+        let catalog_page = reader
+            .market_catalog(&kairos_reference_contract::MarketCatalogQuery {
                 venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
                 limit: 100,
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(projection.watermark.generation, 3.into());
-        assert_eq!(projection.watermark.event_sequence, 5.into());
-        assert_eq!(projection.markets.len(), 1);
-        assert_eq!(projection.instruments.len(), 1);
+        assert_eq!(catalog_page.watermark.generation, 3.into());
+        assert_eq!(catalog_page.watermark.event_sequence, 5.into());
+        assert_eq!(catalog_page.markets.len(), 1);
+        assert_eq!(catalog_page.instruments.len(), 1);
     }
 
     #[tokio::test]
@@ -445,7 +445,7 @@ mod tests {
             listings: vec![Listing {
                 listing_id: ListingId::new("listing:nasdaq:equity:AAPL").unwrap(),
                 instrument_id: InstrumentId::new("instrument:equity:US:AAPL:common").unwrap(),
-                exchange_id: Exchange::new("exchange:nasdaq").unwrap(),
+                exchange_id: ExchangeId::new("exchange:nasdaq").unwrap(),
                 exchange_symbol: Symbol::new("AAPL").unwrap(),
                 status: "active".into(),
                 effective_from_unix_nanos: 0.into(),
@@ -520,7 +520,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn projection_version_change_restarts_only_unfinished_provider_scan() {
+    async fn scan_format_version_change_restarts_only_unfinished_provider_scan() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let page = ProviderCatalog {
@@ -539,12 +539,12 @@ mod tests {
             .append_staged_page("massive-equity", Some("cursor-2"), &page)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO reference_provider_records(provider,record_kind,record_id,payload) VALUES ('massive-equity','entity','committed','{}')")
+        sqlx::query("INSERT INTO reference_provider_records(provider,record_kind,record_id,payload) VALUES ('massive-equity','exchange','committed','{}')")
             .execute(&store.pool)
             .await
             .unwrap();
 
-        assert!(store.prepare_projection("massive-equity").await.unwrap());
+        assert!(store.prepare_scan("massive-equity").await.unwrap());
         assert!(
             store
                 .staged_pages("massive-equity")
@@ -563,7 +563,7 @@ mod tests {
             .unwrap(),
             1
         );
-        assert!(!store.prepare_projection("massive-equity").await.unwrap());
+        assert!(!store.prepare_scan("massive-equity").await.unwrap());
     }
 
     #[tokio::test]
@@ -619,9 +619,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let page = |id: &str, status: &str| ProviderCatalog {
-            entities: vec![Entity {
-                entity_id: id.into(),
-                entity_type: "data_provider".into(),
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new(id).unwrap(),
                 name: id.into(),
                 status: status.into(),
                 ..Default::default()
@@ -679,28 +678,27 @@ mod tests {
     async fn promote_staged_reports_actual_provider_record_change_count() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
-        let entity = |id: &str, status: &str| Entity {
-            entity_id: id.into(),
-            entity_type: "data_provider".into(),
+        let exchange = |id: &str, status: &str| Exchange {
+            exchange_id: ExchangeId::new(id).unwrap(),
             name: id.into(),
             status: status.into(),
             ..Default::default()
         };
         let committed = ProviderCatalog {
-            entities: vec![
-                entity("provider:kept", "active"),
-                entity("provider:removed", "active"),
+            exchanges: vec![
+                exchange("provider:kept", "active"),
+                exchange("provider:removed", "active"),
             ],
             ..Default::default()
         };
         let staged_first = ProviderCatalog {
-            entities: vec![entity("provider:kept", "active")],
+            exchanges: vec![exchange("provider:kept", "active")],
             ..Default::default()
         };
         let staged_latest = ProviderCatalog {
-            entities: vec![
-                entity("provider:kept", "inactive"),
-                entity("provider:added", "active"),
+            exchanges: vec![
+                exchange("provider:kept", "inactive"),
+                exchange("exchange:added", "active"),
             ],
             ..Default::default()
         };
@@ -732,9 +730,8 @@ mod tests {
         let listing_id = ListingId::new("listing:test").unwrap();
         let market_id = MarketId::new("market:test").unwrap();
         let catalog = ProviderCatalog {
-            entities: vec![Entity {
-                entity_id: "exchange:test".into(),
-                entity_type: "exchange".into(),
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new("exchange:test").unwrap(),
                 name: "Test".into(),
                 status: "active".into(),
                 ..Default::default()
@@ -749,7 +746,7 @@ mod tests {
             listings: vec![Listing {
                 listing_id: listing_id.clone(),
                 instrument_id: instrument_id.clone(),
-                exchange_id: Exchange::new("exchange:test").unwrap(),
+                exchange_id: ExchangeId::new("exchange:test").unwrap(),
                 exchange_symbol: Symbol::new("TEST").unwrap(),
                 status: "active".into(),
                 effective_from_unix_nanos: 1.into(),
@@ -759,7 +756,7 @@ mod tests {
                 market_id,
                 instrument_id,
                 listing_id: Some(listing_id),
-                exchange_id: Exchange::new("exchange:test").unwrap(),
+                exchange_id: ExchangeId::new("exchange:test").unwrap(),
                 instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
                 venue_symbol: Some(Symbol::new("TEST").unwrap()),
                 status: "active".into(),
@@ -814,9 +811,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let catalog = |status: &str| ProviderCatalog {
-            entities: vec![Entity {
-                entity_id: "provider:shared".into(),
-                entity_type: "data_provider".into(),
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new("exchange:shared").unwrap(),
                 name: "Shared".into(),
                 status: status.into(),
                 ..Default::default()
@@ -851,7 +847,7 @@ mod tests {
         .await
         .unwrap_err()
         .to_string();
-        assert!(error.contains("irreconcilable canonical entity conflict"));
+        assert!(error.contains("irreconcilable canonical exchange conflict"));
         let state = catalog_store.load_runtime_snapshot().await.unwrap();
         assert_eq!(state.generation.get(), 1);
         assert_eq!(state.event_sequence.get(), 1);
@@ -918,7 +914,7 @@ mod tests {
         );
         assert_eq!(result.event_count, RECORDS as usize);
         assert!(after.saturating_sub(before) <= MAX_RSS_GROWTH_KIB);
-        let reader = kairos_reference_contract::ReferenceSqliteReader::open(&path).unwrap();
+        let reader = kairos_reference_contract::ReferenceCatalog::open(&path).unwrap();
         assert_eq!(reader.stats().unwrap().assets, RECORDS as u64);
         assert_eq!(
             reader
@@ -982,11 +978,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let definition = ReferenceSourceDefinition {
-            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
-            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-            provider_product: Some(
-                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-            ),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
+            provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
             desired_state: SourceDesiredState::Paused,
             credential_binding: Some(
@@ -1034,7 +1028,7 @@ mod tests {
             .await
             .unwrap();
             sqlx::query(
-                "INSERT INTO reference_meta(id, schema_version, generation, event_sequence, committed_at_unix_nanos) VALUES (1, 4, 0, 0, 0)",
+                "INSERT INTO reference_meta(id, schema_version, generation, event_sequence, committed_at_unix_nanos) VALUES (1, 6, 0, 0, 0)",
             )
             .execute(&pool)
             .await

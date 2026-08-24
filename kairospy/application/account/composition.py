@@ -19,13 +19,13 @@ def build_strategy_access(
     account_clients: Mapping[AccountId, AccountSystemClient],
     required_segments: Mapping[AccountId, tuple[str, ...]] | None = None,
 ) -> AccountApplication:
-    """Build one current-view projection for each enabled logical Account."""
+    """Build one current-view reader for each enabled logical Account."""
 
     if not account_clients:
         return AccountApplication({})
     return AccountApplication(
         {
-            account_id: client.current_projection(account_id)
+            account_id: client.current_view(account_id)
             for account_id, client in account_clients.items()
         },
         AeronAccountEventSource(
@@ -51,7 +51,7 @@ def mark_backtest_account(
     if not isinstance(segment_key, str) or not segment_key.strip():
         raise ValueError("Account backtest result is missing segment_key")
     return (
-        client.current_projection(account_id)
+        client.current_view(account_id)
         .snapshot(account_id)
         .segment(segment_key)
     )

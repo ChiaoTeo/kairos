@@ -10,7 +10,7 @@ from kairospy.application.workspace import InstanceWorkspace, Workspace
 from kairospy.infrastructure.transport.commands import MarketCommandClient
 from kairospy.infrastructure.transport.market import (
     AeronMarketEventSource,
-    MarketProjection,
+    MarketViewAccess,
     UnixMarketEventStream,
 )
 from kairospy.strategy import StrategyIdentity
@@ -22,11 +22,6 @@ from .application import MarketApplication
 class MarketAccessConfig:
     scope: Literal["shared", "instance"]
     replayable: bool = False
-    source_id: str = "default"
-
-    def __post_init__(self) -> None:
-        if not self.source_id.strip():
-            raise ValueError("Market source_id is required for v2 current views")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +45,7 @@ def build_strategy_access(
     config: MarketAccessConfig,
     client: MarketSystemClient,
 ) -> StrategyMarketAccess:
-    """Build Market commands, current projection, and events as one access slice."""
+    """Build Market commands, current views, and events as one access slice."""
 
     if config.scope == "shared":
         event_socket = workspace.paths.process_socket("market-events")
@@ -73,14 +68,13 @@ def build_strategy_access(
     )
     application = MarketApplication(
         commands,
-        MarketProjection(snapshot),
+        MarketViewAccess(snapshot),
         event_source,
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,
         # Shared Market is a workspace process and intentionally carries no
         # launch/instance ownership. Instance Market must match both.
         launch_id=identity.launch_id if config.scope == "instance" else None,
-        source_id=config.source_id,
     )
     return StrategyMarketAccess(application=application)
 

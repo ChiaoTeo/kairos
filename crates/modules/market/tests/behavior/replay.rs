@@ -1,7 +1,5 @@
 use kairos_market::composition::{attach_replay_source, attach_replay_source_with_checkpoint};
-use kairos_market::{
-    MarketApplication, MarketDataRoute, MarketObservation, Quote, ResolvedMarket, SubscriptionId,
-};
+use kairos_market::{MarketApplication, MarketObservation, Quote, ResolvedMarket, SubscriptionId};
 
 fn fixture() -> (ResolvedMarket, Vec<MarketObservation>) {
     let descriptor = ResolvedMarket::new(
@@ -9,7 +7,7 @@ fn fixture() -> (ResolvedMarket, Vec<MarketObservation>) {
         "instrument:btc",
         kairos_primitives::reference::InstrumentKind::Spot,
         "binance",
-        MarketDataRoute::new("test:btc", "binance", "spot", "BTCUSDT").unwrap(),
+        "binance",
     )
     .unwrap();
     let events = (1..=2)
@@ -27,7 +25,7 @@ fn fixture() -> (ResolvedMarket, Vec<MarketObservation>) {
                 ask_venue_code: None,
                 tape: None,
                 observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(time),
-                source_id: kairos_primitives::market::SourceId::new("recorded").unwrap(),
+                provider: kairos_primitives::market::Provider::new("recorded").unwrap(),
             })
         })
         .collect();

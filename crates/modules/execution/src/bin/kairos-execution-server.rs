@@ -31,7 +31,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let route_options = args.connection_options_list(&workspace)?;
     let simulated = route_options.iter().all(|options| {
         matches!(
-            options.participant_id.trim().to_ascii_lowercase().as_str(),
+            options.broker_id.trim().to_ascii_lowercase().as_str(),
             "simulated" | "paper"
         )
     });
@@ -88,7 +88,7 @@ fn acquire_exclusive_provider_process_locks(
 ) -> Result<Vec<WorkspaceProcessLock>, Box<dyn std::error::Error>> {
     let identities = routes
         .iter()
-        .filter(|route| route.participant_id.trim().eq_ignore_ascii_case("ibkr"))
+        .filter(|route| route.broker_id.trim().eq_ignore_ascii_case("ibkr"))
         .map(|route| {
             format!(
                 "ibkr|{}|{}|client-id:{}",
@@ -123,13 +123,13 @@ fn acquire_execution_writer_leases(
         .iter()
         .map(|route| {
             let identity = format!(
-                    "participant:{}|environment:{}|principal:{}|account:{}|segment:{}|product:{}|trading-mode:{}",
-                    route.participant_id.trim().to_ascii_lowercase(),
+                    "participant:{}|environment:{}|principal:{}|account:{}|segment:{}|execution_channel:{}|trading-mode:{}",
+                    route.broker_id.trim().to_ascii_lowercase(),
                     environment.trim().to_ascii_lowercase(),
                     route.principal_scope_id.trim(),
                     route.account_id.trim(),
                     route.segment_key.trim(),
-                    route.product.trim().to_ascii_lowercase(),
+                    route.execution_channel.trim().to_ascii_lowercase(),
                     route.trading_mode.as_deref().unwrap_or("").trim().to_ascii_lowercase(),
                 );
             (identity, route.account_id.clone(), route.segment_key.clone())
@@ -185,8 +185,8 @@ struct ExecutionRouteConfig {
     required: bool,
     account_id: String,
     segment_key: String,
-    participant_id: String,
-    product: String,
+    broker_id: String,
+    execution_channel: String,
     #[serde(default)]
     trading_mode: Option<String>,
     #[serde(default)]
@@ -298,11 +298,11 @@ impl Args {
         if route.route_id.trim().is_empty()
             || route.account_id.trim().is_empty()
             || route.segment_key.trim().is_empty()
-            || route.participant_id.trim().is_empty()
-            || route.product.trim().is_empty()
+            || route.broker_id.trim().is_empty()
+            || route.execution_channel.trim().is_empty()
         {
             return Err(
-                "execution route_id, account_id, segment_key, participant_id, and product are required"
+                "execution route_id, account_id, segment_key, broker_id, and execution_channel are required"
                     .into(),
             );
         }
@@ -310,18 +310,18 @@ impl Args {
             workspace.existing_path(&["config", "credentials"], &["credentials"])?;
         let stored = load_workspace_credential(
             &credentials_root,
-            &route.participant_id,
+            &route.broker_id,
             route.credential_id.as_deref(),
         )?;
         let (default_base_url, default_websocket_url) =
-            provider_endpoints(&route.participant_id, &route.product);
+            provider_endpoints(&route.broker_id, &route.execution_channel);
         Ok(ExecutionConnectionOptions {
             route_id: route.route_id.clone(),
             required: route.required,
             account_id: route.account_id,
             segment_key: route.segment_key,
-            participant_id: route.participant_id,
-            product: route.product,
+            broker_id: route.broker_id,
+            execution_channel: route.execution_channel,
             trading_mode: route.trading_mode,
             api_key: stored
                 .as_ref()
@@ -380,10 +380,10 @@ impl Args {
     }
 }
 
-fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static str) {
+fn provider_endpoints(provider: &str, execution_channel: &str) -> (&'static str, &'static str) {
     match (
         provider.trim().to_ascii_lowercase().as_str(),
-        product.trim().to_ascii_lowercase().as_str(),
+        execution_channel.trim().to_ascii_lowercase().as_str(),
     ) {
         ("binance", "spot") => (
             "https://api.binance.com",
@@ -420,12 +420,12 @@ mod tests {
     #[test]
     fn route_config_accepts_credential_references_and_rejects_inline_secrets() {
         let routes: Vec<ExecutionRouteConfig> = serde_json::from_str(
-            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","participant_id":"okx","product":"swap","credential_id":"okx-main"}]"#,
+            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","broker_id":"okx","execution_channel":"swap","credential_id":"okx-main"}]"#,
         )
         .unwrap();
         assert_eq!(routes[0].credential_id.as_deref(), Some("okx-main"));
         assert!(serde_json::from_str::<Vec<ExecutionRouteConfig>>(
-            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","participant_id":"okx","product":"swap","api_key":"secret"}]"#,
+            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","broker_id":"okx","execution_channel":"swap","api_key":"secret"}]"#,
         )
         .is_err());
     }
@@ -439,7 +439,7 @@ mod tests {
         std::fs::create_dir_all(instance.paths().config_root()).unwrap();
         std::fs::write(
             instance.normalized_config().unwrap(),
-            r#"{"accounts":["secondary"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","participant_id":"simulated","product":"swap"}]}}"#,
+            r#"{"accounts":["secondary"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","broker_id":"simulated","execution_channel":"swap"}]}}"#,
         )
         .unwrap();
         let args = Args {
@@ -456,11 +456,11 @@ mod tests {
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].account_id, "secondary");
         assert_eq!(routes[0].segment_key, "swap");
-        assert_eq!(routes[0].participant_id, "simulated");
+        assert_eq!(routes[0].broker_id, "simulated");
 
         std::fs::write(
             instance.normalized_config().unwrap(),
-            r#"{"accounts":["main"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","participant_id":"simulated","product":"swap"}]}}"#,
+            r#"{"accounts":["main"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","broker_id":"simulated","execution_channel":"swap"}]}}"#,
         )
         .unwrap();
         let error = args
@@ -479,8 +479,8 @@ mod tests {
             required: true,
             account_id: "DU123".into(),
             segment_key: "equity".into(),
-            participant_id: "ibkr".into(),
-            product: "equity".into(),
+            broker_id: "ibkr".into(),
+            execution_channel: "equity".into(),
             trading_mode: None,
             api_key: SecretString::from(String::new()),
             secret: SecretString::from(String::new()),

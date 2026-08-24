@@ -177,14 +177,14 @@ impl ExecutionApplication {
                             fee_currency: None,
                             occurred_at_unix_nanos: remote_order.occurred_at_unix_nanos,
                             execution_market_id: None,
-                            reported_provider_id: local
+                            reported_broker_id: local
                                 .selected_route
                                 .as_ref()
-                                .map(|route| route.participant_id.clone()),
-                            provider_product: local
+                                .map(|route| route.broker_id.clone()),
+                            execution_channel: local
                                 .selected_route
                                 .as_ref()
-                                .map(|route| route.provider_product.clone()),
+                                .map(|route| route.execution_channel.clone()),
                             order_entry_symbol: local
                                 .selected_route
                                 .as_ref()
@@ -351,14 +351,14 @@ impl ExecutionApplication {
                 fee_currency: event.fee_currency.clone(),
                 occurred_at_unix_nanos: Some(event.occurred_at_unix_nanos),
                 execution_market_id: None,
-                reported_provider_id: local
+                reported_broker_id: local
                     .selected_route
                     .as_ref()
-                    .map(|route| route.participant_id.clone()),
-                provider_product: local
+                    .map(|route| route.broker_id.clone()),
+                execution_channel: local
                     .selected_route
                     .as_ref()
-                    .map(|route| route.provider_product.clone()),
+                    .map(|route| route.execution_channel.clone()),
                 order_entry_symbol: local
                     .selected_route
                     .as_ref()
@@ -459,14 +459,14 @@ impl ExecutionApplication {
                 fee_currency: unknown.fee_currency,
                 occurred_at_unix_nanos: Some(unknown.last_seen_at_unix_nanos),
                 execution_market_id: None,
-                reported_provider_id: local
+                reported_broker_id: local
                     .selected_route
                     .as_ref()
-                    .map(|route| route.participant_id.clone()),
-                provider_product: local
+                    .map(|route| route.broker_id.clone()),
+                execution_channel: local
                     .selected_route
                     .as_ref()
-                    .map(|route| route.provider_product.clone()),
+                    .map(|route| route.execution_channel.clone()),
                 order_entry_symbol: local
                     .selected_route
                     .as_ref()

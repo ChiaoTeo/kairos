@@ -10,7 +10,7 @@ use crate::services::participants::binance::socket::SocketService;
 use crate::{ConnectionDescriptor, ConnectionHealth, IntegrationError, ParticipantRejection};
 
 /// Reusable signed request/response protocol used by concrete Binance
-/// WebSocket API connections. It is not a capability projection.
+/// WebSocket API connections..
 pub(crate) struct ApiService {
     socket: SocketService,
     credential: BinanceCredential,

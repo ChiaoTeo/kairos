@@ -125,7 +125,7 @@ binary-owned facts task. During shutdown the Actor closes admission, queries
 already delivered participant operations, records unresolved recovery work,
 and never creates a reverse movement.
 
-The current projection contains the policy envelope, active and terminal
+The current view contains the policy envelope, active and terminal
 objectives/demands, source facts and watermarks, availability, routes, plans,
 reservations, and participant operations. Capital publishes each durable
 transition as one typed event root on its own stream. The Actor outbox is
@@ -330,7 +330,7 @@ A definite pre-delivery expiry or participant rejection records
 Operators may invoke `capital_reconcile_capital_plan` to query an existing fenced
 operation, but that command rejects `Prepared` operations and contains no
 amount, route, or idempotency-key override. Open `ReconcileOriginalOperation`
-and `HoldAndReview` decisions are projected as warning or critical Capital
+and `HoldAndReview` decisions are published as warning or critical Capital
 alerts with the plan, operation, reason, and durable decision timestamp. The
 alert closes after Account-observed settlement; the transition remains in the
 journal and typed event audit.

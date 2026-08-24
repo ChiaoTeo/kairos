@@ -72,7 +72,7 @@ fn execution_cli_accepts_semantic_decimal_arguments() {
 }
 
 #[test]
-fn execution_does_not_reintroduce_cross_provider_product_aliases() {
+fn execution_does_not_reintroduce_cross_execution_channel_aliases() {
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     for path in rust_files(&source_root) {
         let source = fs::read_to_string(&path).expect("read Execution source");
@@ -86,7 +86,7 @@ fn execution_does_not_reintroduce_cross_provider_product_aliases() {
         ] {
             assert!(
                 !source.contains(forbidden),
-                "cross-provider product alias {forbidden} leaked through {}",
+                "cross-provider execution-channel alias {forbidden} leaked through {}",
                 path.display()
             );
         }
@@ -127,7 +127,7 @@ fn execution_server_uses_only_normalized_multi_route_configuration() {
     .expect("read Execution server");
     assert!(server.contains("normalized_config()"));
     assert!(!server.contains("normalized-config.json"));
-    assert!(server.contains("participant_id: String"));
+    assert!(server.contains("broker_id: String"));
     for forbidden in [
         "routes_json:",
         "#[arg(long, default_value = \"main\")]",
@@ -157,20 +157,17 @@ fn execution_reads_account_business_state_from_the_typed_mmap_view() {
             .join("src/application/core/orders/admission/mod.rs"),
     )
     .expect("read Execution-owned admission policy");
-    let projection = fs::read_to_string(root.join("dependencies/projection/mod.rs"))
-        .expect("read Execution typed projections");
-    assert!(projection.contains("AccountClient"));
-    assert!(projection.contains("account_current("));
-    assert!(projection.contains("observed_orders("));
-    assert!(!projection.contains("SharedSnapshotReader"));
-    assert!(projection.contains("metadata.applied_revision()"));
-    assert!(projection.contains("ViewCompleteness::COMPLETE"));
-    assert!(projection.contains("FreshnessState::FRESH"));
-    assert!(projection.contains("struct DependencyProjectionRuntime"));
-    assert!(projection.contains("impl Drop for DependencyProjectionRuntime"));
-    assert!(!dependencies.contains("start_projection_workers"));
-    assert!(!dependencies.contains("projection_workers"));
-    assert!(!dependencies.contains("projection_stop"));
+    let dependency_state = fs::read_to_string(root.join("dependencies/state/mod.rs"))
+        .expect("read Execution typed dependency states");
+    assert!(dependency_state.contains("AccountClient"));
+    assert!(dependency_state.contains("account_current("));
+    assert!(dependency_state.contains("observed_orders("));
+    assert!(!dependency_state.contains("SharedSnapshotReader"));
+    assert!(dependency_state.contains("metadata.applied_revision()"));
+    assert!(dependency_state.contains("ViewCompleteness::COMPLETE"));
+    assert!(dependency_state.contains("FreshnessState::FRESH"));
+    assert!(dependency_state.contains("struct DependencyStateRuntime"));
+    assert!(dependency_state.contains("impl Drop for DependencyStateRuntime"));
     assert!(!dependencies.contains("SocketExecutionDependencyContext"));
     assert!(!dependencies.contains("struct IntentPlanningContext"));
     assert!(intent_planning.contains("struct IntentPlanningContext"));
@@ -199,19 +196,19 @@ fn execution_reads_account_business_state_from_the_typed_mmap_view() {
 #[test]
 fn execution_does_not_create_reference_contract_clients_inside_the_module() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let projection =
-        fs::read_to_string(root.join("src/services/dependencies/projection/mod.rs")).unwrap();
+    let dependency_state =
+        fs::read_to_string(root.join("src/services/dependencies/state/mod.rs")).unwrap();
     let module = rust_source(&root.join("src/composition/connections"));
-    assert!(!projection.contains("ReferenceClient::connect"));
+    assert!(!dependency_state.contains("ReferenceClient::connect"));
     assert!(!module.contains("ReferenceClient::connect"));
-    assert!(!projection.contains("read_execution_snapshot"));
+    assert!(!dependency_state.contains("read_execution_snapshot"));
     assert!(!module.contains("read_execution_snapshot"));
-    assert!(projection.contains("project_reference_snapshot"));
-    assert!(!projection.contains("ReferenceViewReader"));
+    assert!(dependency_state.contains("reference_dependency_state"));
+    assert!(!dependency_state.contains("ReferenceViewReader"));
     assert!(!module.contains("ReferenceViewReader"));
-    assert!(!projection.contains("ReferenceSqliteReader"));
+    assert!(!dependency_state.contains("ReferenceSqliteReader"));
     assert!(!module.contains("ReferenceSqliteReader"));
-    assert!(!projection.contains("reference_markets_current"));
+    assert!(!dependency_state.contains("reference_markets_current"));
     assert!(!module.contains("reference_execution_accesses_current"));
 }
 
@@ -281,7 +278,7 @@ fn execution_dependencies_follow_their_concrete_owner_modules() {
         "access/mod.rs",
         "order_admission/mod.rs",
         "planning/mod.rs",
-        "projection/mod.rs",
+        "state/mod.rs",
         "workers/mod.rs",
     ] {
         assert!(
@@ -310,7 +307,6 @@ fn execution_dependencies_follow_their_concrete_owner_modules() {
     for obsolete in [
         "account_facts",
         "admission_rules",
-        "dependency_projection",
         "dependency_worker",
         "risk_reservations",
         "risk_worker",

@@ -67,7 +67,7 @@
   concrete `HyperliquidWebSocketConnection` type directly implementing the redesigned event traits;
   provider subscription state remains internal. Composition may create multiple named sockets only
   for an explicit fault/throughput boundary.
-- The old `HyperliquidConnection` factory and `HyperliquidLiveMarket` projection have been
+- The old `HyperliquidConnection` factory and `HyperliquidLiveMarket` adapter have been
   removed. `HyperliquidInfoRestConnection`, `HyperliquidAccountRestConnection`,
   `HyperliquidExchangeRestConnection`, and `HyperliquidWebSocketConnection` are the concrete
   owners. The exchange connection directly implements `OrderCommand`; signing stays in the SDK

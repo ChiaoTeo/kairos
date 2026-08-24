@@ -10,6 +10,7 @@ from prettytable import PrettyTable
 import typer
 
 from kairospy.application.launch.application import LaunchRegistryApplication
+from kairospy.application.market.cli import MarketCliApplication
 
 from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
 from . import reference
@@ -24,12 +25,25 @@ _SNAPSHOT_KINDS = {
     "greeks": "greeks",
 }
 
-_DIRECT_PROVIDERS = {
-    "spot": (
-        ("binance-spot-rest", "Binance Spot REST"),
-        ("binance-spot-websocket", "Binance Spot WebSocket"),
+_DIRECT_DATA_KINDS = {
+    "equity": (
+        ("quote", "最新报价"),
+        ("trade", "最近成交"),
+        ("bar", "最新分钟 K"),
     ),
-    "option": (("binance-options-rest", "Binance Options REST"),),
+    "spot": (
+        ("quote", "最新报价"),
+        ("trade", "最近成交"),
+        ("bar", "最新 K 线"),
+        ("order-book", "买卖盘口"),
+    ),
+    "option": (
+        ("quote", "最新报价"),
+        ("trade", "最近成交"),
+        ("bar", "最新 K 线"),
+        ("order-book", "买卖盘口"),
+        ("option-greeks", "Greeks"),
+    ),
 }
 
 _HISTORICAL_PROVIDERS = {
@@ -58,11 +72,36 @@ def print_menu(context: InteractiveContext) -> None:
                 )
             )
             return
+        if _has_direct_market_context(context):
+            descriptor = _selected_direct_descriptor(context)
+            if descriptor is None:
+                _clear_direct_market_context(context)
+            else:
+                provider = context.selected_market_provider
+                provider_label = (
+                    str(provider.get("provider"))
+                    if provider is not None
+                    else "尚未选择"
+                )
+                lines = [
+                    f"当前标的：{descriptor['symbol']} · "
+                    f"{descriptor['exchange_id']} · {descriptor['market_type']}",
+                    f"数据 Provider：{provider_label}",
+                ]
+                lines.extend(
+                    f"  {index}. {label}"
+                    for index, (_kind, label) in enumerate(
+                        _DIRECT_DATA_KINDS.get(descriptor["market_type"], ()), 1
+                    )
+                )
+                lines.append("  s. 切换标的")
+                typer.echo("\n".join(lines))
+                return
         typer.echo(
             "\n".join(
                 (
                     "行情中心：",
-                    "  1. 搜索标的并查看实时行情",
+                    "  1. 搜索标的并查看行情",
                     "  2. 下载历史行情",
                     "  3. 查看本地行情数据",
                     "  c. 连接运行中的行情服务",
@@ -78,7 +117,7 @@ def print_menu(context: InteractiveContext) -> None:
                 (
                     "当前 Market：workspace 共享服务（连接模式）",
                     "  1. 查看状态",
-                    "  2. 查看数据源",
+                        "  2. 查看数据路由",
                     "  3. Quote 快照",
                     "  4. K 线快照",
                     "  5. Greeks 快照",
@@ -100,7 +139,7 @@ def print_menu(context: InteractiveContext) -> None:
                 f"当前 Market：launch={launch_id} "
                 f"instance={context.selected_launch_instance or '—'}（连接模式）",
                 "  1. 查看状态",
-                "  2. 查看数据源",
+                "  2. 查看数据路由",
                 "  3. Quote 快照",
                 "  4. K 线快照",
                 "  5. Greeks 快照",
@@ -118,6 +157,10 @@ def print_help(context: InteractiveContext) -> None:
             typer.echo("可用命令：validate/reference-universe/back/home/exit")
             typer.echo("这里只检查市场定义和 Reference 到 Market 的映射。")
             return
+        if _has_direct_market_context(context):
+            typer.echo("可用命令：quote/trade/bar/order-book/switch/back/home/exit")
+            typer.echo("行情查询完成后会保留当前标的；输入 switch 切换标的。")
+            return
         typer.echo(
             "可用命令：once/download/datasets/replay/connect/diagnostics/advanced/"
             "back/home/exit"
@@ -125,13 +168,13 @@ def print_help(context: InteractiveContext) -> None:
         typer.echo("查看运行中服务的行情时，请选择“连接运行中的行情服务”。")
         return
     commands = (
-        "status/sources/quote/bar/greeks/freshness/"
+        "status/routes/quote/bar/greeks/freshness/"
         "pause-replay/resume-replay/back/home/exit"
     )
     if _scope(context) == "system":
         commands = f"{commands}/start/stop/restart/logs"
     typer.echo(f"可用命令：{commands}")
-    typer.echo("Market 和 Source 只能从当前作用域返回的列表中选择。")
+    typer.echo("Market 和 Provider 只能从当前作用域返回的 route 列表中选择。")
 
 
 def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
@@ -142,8 +185,8 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
     key = parts[0]
     if key in {"1", "status"}:
         return _status_command(context)
-    if key in {"2", "sources"}:
-        return _sources_command(context)
+    if key in {"2", "routes"}:
+        return _routes_command(context)
     kind = _SNAPSHOT_KINDS.get(key)
     if kind is not None:
         return build_snapshot_command(context, kind)
@@ -200,10 +243,15 @@ def enter_launch_market(context: InteractiveContext) -> ShellControl:
     context.selected_launch_instance = instance_id
     launch_id = context.selected_launch or context.shell_path[1]
     context.shell_path = (
-        "launch", launch_id, "instances", instance_id, "components", "market"
+        "launch",
+        launch_id,
+        "instances",
+        instance_id,
+        "components",
+        "market",
     )
     context.selected_market = None
-    context.selected_market_source = None
+    context.selected_market_provider = None
     return ShellControl.HANDLED
 
 
@@ -216,11 +264,11 @@ def build_snapshot_command(
     if market is None:
         return ShellControl.HANDLED
     selected_kind = observation_kind or kind
-    source = _select_source(context, market, selected_kind)
-    if source is None:
+    provider_route = _select_provider(context, market, selected_kind)
+    if provider_route is None:
         return ShellControl.HANDLED
     market_id = str(market.id)
-    source_id = str(source["source_id"])
+    provider = str(provider_route["provider"])
     prefix = _command_prefix(context)
     if kind == "freshness":
         argv = (
@@ -229,9 +277,9 @@ def build_snapshot_command(
             *_launch_argument(context),
             "--market-id",
             market_id,
-            "--source-id",
-            source_id,
-            "--qualifier",
+            "--provider",
+            provider,
+            "--observation",
             selected_kind,
             "--format",
             "table",
@@ -245,8 +293,8 @@ def build_snapshot_command(
             kind,
             "--market-id",
             market_id,
-            "--source-id",
-            source_id,
+            "--provider",
+            provider,
         )
     else:
         argv = (
@@ -258,8 +306,8 @@ def build_snapshot_command(
             _require_launch_instance(context),
             "--market-id",
             market_id,
-            "--source-id",
-            source_id,
+            "--provider",
+            provider,
         )
     if kind == "bar":
         timeframe = typer.prompt("timeframe", default="1m").strip()
@@ -310,7 +358,7 @@ def choose(context: InteractiveContext) -> GuidedCommand:
         raise typer.BadParameter("快照类型必须从列表中选择")
     command = build_snapshot_command(context, kind)
     if not isinstance(command, GuidedCommand):
-        raise typer.BadParameter("未完成 Market 或 Source 选择")
+        raise typer.BadParameter("未完成 Market 或 Provider 选择")
     return command
 
 
@@ -334,7 +382,31 @@ def _handle_direct(context: InteractiveContext, parts: tuple[str, ...]) -> Shell
         context.shell_path = ("system", "market")
         context.selected_service = "market"
         context.selected_market = None
+        context.selected_market_provider = None
         return ShellControl.HANDLED
+    if _has_direct_market_context(context):
+        if len(parts) != 1:
+            return None
+        key = parts[0]
+        if key in {"s", "switch"}:
+            _clear_direct_market_context(context)
+            return _direct_once_command(context)
+        descriptor = _selected_direct_descriptor(context)
+        if descriptor is None:
+            _clear_direct_market_context(context)
+            return ShellControl.HANDLED
+        choices = _DIRECT_DATA_KINDS.get(descriptor["market_type"], ())
+        selected_kind = next(
+            (
+                kind
+                for index, (kind, _label) in enumerate(choices, 1)
+                if key in {str(index), kind}
+            ),
+            None,
+        )
+        if selected_kind is not None:
+            return _direct_once_command(context, observation_kind=selected_kind)
+        return None
     if parts in {("d",), ("diagnostics",)}:
         context.shell_path = ("market", "diagnostics")
         return ShellControl.HANDLED
@@ -376,43 +448,139 @@ def _handle_direct(context: InteractiveContext, parts: tuple[str, ...]) -> Shell
 
 
 def _direct_once_command(
-    context: InteractiveContext, *, manual: bool = False
+    context: InteractiveContext,
+    *,
+    manual: bool = False,
+    observation_kind: str | None = None,
 ) -> ShellAction:
     descriptor = (
         _manual_descriptor()
         if manual
         else _direct_descriptor(
             context,
-            allowed_market_types=tuple(_DIRECT_PROVIDERS),
             availability_label="实时行情",
         )
     )
     if descriptor is None:
         return ShellControl.HANDLED
-    providers = _DIRECT_PROVIDERS.get(descriptor["market_type"], ())
-    if not providers:
-        typer.echo(
-            "当前没有支持该标的类型的实时行情数据源。"
-        )
+    if manual:
+        context.selected_market = descriptor
+    context.shell_path = ("market", descriptor["symbol"])
+    data_kinds = _DIRECT_DATA_KINDS.get(descriptor["market_type"], ())
+    if not data_kinds:
+        typer.echo("已找到该标的，但当前没有可用的实时 Provider route。")
+        if descriptor["market_type"] in _HISTORICAL_PROVIDERS:
+            typer.echo("可返回行情中心选择“下载历史行情”。")
         return ShellControl.HANDLED
-    provider = providers[0][0]
-    if len(providers) > 1:
-        provider = _prompt_choice("选择实时行情数据源", providers)
-        if provider is None:
+    if observation_kind is None:
+        selected_kind = _prompt_data_kind(data_kinds)
+        if selected_kind is None:
             return ShellControl.HANDLED
+        observation_kind, kind_label = selected_kind
     else:
-        typer.echo(f"实时行情数据源：{providers[0][1]}")
+        kind_label = next(
+            (label for kind, label in data_kinds if kind == observation_kind),
+            observation_kind,
+        )
+    provider_route = _select_direct_provider(context, descriptor, observation_kind)
+    if provider_route is None:
+        return ShellControl.HANDLED
     return GuidedCommand(
         (
             "market",
             "once",
             *_descriptor_arguments(descriptor),
             "--provider",
-            provider,
+            str(provider_route["provider"]),
+            "--observation-kind",
+            observation_kind,
             "--format",
             "table",
         ),
-        f"查看 {provider} 实时行情",
+        f"查看 {descriptor['symbol']} {kind_label}",
+        show_command=False,
+    )
+
+
+def _prompt_data_kind(choices: tuple[tuple[str, str], ...]) -> tuple[str, str] | None:
+    typer.echo("你想查看：")
+    for index, (_kind, label) in enumerate(choices, 1):
+        typer.echo(f"  {index}. {label}")
+    choice = typer.prompt("请输入序号；输入 b 返回", default="1").strip()
+    if choice in {"b", "back"}:
+        return None
+    if not choice.isdigit() or not 1 <= int(choice) <= len(choices):
+        typer.echo("无效的选项序号。")
+        return None
+    return choices[int(choice) - 1]
+
+
+def _select_direct_provider(
+    context: InteractiveContext,
+    descriptor: Mapping[str, str],
+    observation_kind: str,
+) -> dict[str, Any] | None:
+    try:
+        payload = _load_direct_routes(
+            context,
+            descriptor["market_type"],
+            observation_kind,
+        )
+    except Exception as error:
+        typer.echo(f"读取可用 Provider route 失败：{error}")
+        return None
+    raw_routes = payload.get("routes", [])
+    routes = [dict(value) for value in raw_routes if isinstance(value, Mapping)]
+    if not routes:
+        typer.echo("当前没有支持这种行情的已配置 Provider route。")
+        return None
+    current = context.selected_market_provider
+    if current is not None:
+        selected = next(
+            (
+                route
+                for route in routes
+                if str(route.get("provider")) == str(current.get("provider"))
+            ),
+            None,
+        )
+        if selected is not None:
+            typer.echo(
+                f"继续使用当前 Provider：{selected.get('provider')}"
+            )
+            context.selected_market_provider = selected
+            return selected
+    if len(routes) == 1:
+        context.selected_market_provider = routes[0]
+        return routes[0]
+    typer.echo("可用 Provider：")
+    for index, route in enumerate(routes, 1):
+        typer.echo(f"  {index}. {route['provider']}")
+    choice = typer.prompt("选择 Provider 序号；输入 b 返回", default="1").strip()
+    if choice in {"b", "back"}:
+        return None
+    if not choice.isdigit() or not 1 <= int(choice) <= len(routes):
+        typer.echo("无效的 Provider 序号。")
+        return None
+    selected = routes[int(choice) - 1]
+    context.selected_market_provider = selected
+    return selected
+
+
+def _load_direct_routes(
+    context: InteractiveContext,
+    market_type: str,
+    observation_kind: str,
+) -> dict[str, Any]:
+    return MarketCliApplication(context.owner).run(
+        (
+            "standalone",
+            "routes",
+            "--market-type",
+            market_type,
+            "--observation-kind",
+            observation_kind,
+        )
     )
 
 
@@ -465,14 +633,12 @@ def _direct_download_command(context: InteractiveContext) -> ShellAction:
     providers = _HISTORICAL_PROVIDERS[descriptor["market_type"]]
     if len(providers) == 1:
         provider = providers[0][0]
-        typer.echo(f"历史行情数据源：{providers[0][1]}")
+        typer.echo(f"历史行情 Provider：{providers[0][1]}")
     else:
-        provider = _prompt_choice("选择历史行情数据源", providers)
+        provider = _prompt_choice("选择历史行情 Provider", providers)
         if provider is None:
             return ShellControl.HANDLED
-    data_kind = _prompt_choice(
-        "选择要下载的行情", _HISTORICAL_DATA_KINDS[provider]
-    )
+    data_kind = _prompt_choice("选择要下载的行情", _HISTORICAL_DATA_KINDS[provider])
     if data_kind is None:
         return ShellControl.HANDLED
     today = datetime.now(timezone.utc).date()
@@ -491,7 +657,7 @@ def _direct_download_command(context: InteractiveContext) -> ShellAction:
         return ShellControl.HANDLED
     default_file = (
         "market-history/"
-        f"{_safe_filename(descriptor['source_symbol'])}-{data_kind}.jsonl"
+        f"{_safe_filename(descriptor['symbol'])}-{data_kind}.jsonl"
     )
     destination = typer.prompt("保存位置", default=default_file).strip()
     if not destination:
@@ -503,7 +669,7 @@ def _direct_download_command(context: InteractiveContext) -> ShellAction:
         "--provider",
         provider,
         "--symbol",
-        descriptor["source_symbol"],
+        descriptor["symbol"],
         "--market-type",
         descriptor["market_type"],
         "--data-kind",
@@ -526,7 +692,7 @@ def _direct_download_command(context: InteractiveContext) -> ShellAction:
         argv = (*argv, "--interval", interval)
     return GuidedCommand(
         (*argv, "--format", "table"),
-        f"下载 {descriptor['source_symbol']} 历史行情",
+        f"下载 {descriptor['symbol']} 历史行情",
     )
 
 
@@ -610,6 +776,11 @@ def _direct_descriptor(
     allowed_market_types: tuple[str, ...] = (),
     availability_label: str = "行情查询",
 ) -> dict[str, str] | None:
+    selected = _selected_direct_descriptor(context)
+    if selected is not None:
+        if not allowed_market_types or selected["market_type"] in allowed_market_types:
+            return selected
+        _clear_direct_market_context(context)
     if context.owner is not None:
         record = reference.select_market(
             context,
@@ -620,17 +791,65 @@ def _direct_descriptor(
             return None
         symbol = record.venue_symbol or record.instrument.display_symbol
         if not symbol:
-            typer.echo("所选标的缺少行情数据源使用的代码。")
+            typer.echo("所选标的缺少行情 Provider 使用的 symbol。")
             return None
+        context.selected_market = record
         return {
             "market_id": str(record.id),
             "instrument_id": str(record.instrument.id),
             "exchange_id": str(record.exchange_id).rsplit(":", 1)[-1],
             "market_type": str(record.instrument_kind),
-            "source_symbol": str(symbol),
+            "symbol": str(symbol),
         }
     typer.echo("当前没有可用的标的目录，将进入高级输入。")
-    return _manual_descriptor()
+    descriptor = _manual_descriptor()
+    if descriptor is not None:
+        context.selected_market = descriptor
+    return descriptor
+
+
+def _has_direct_market_context(context: InteractiveContext) -> bool:
+    return (
+        len(context.shell_path) == 2
+        and context.shell_path[0] == "market"
+        and context.shell_path[1] != "diagnostics"
+        and context.selected_market is not None
+    )
+
+
+def _selected_direct_descriptor(
+    context: InteractiveContext,
+) -> dict[str, str] | None:
+    selected = context.selected_market
+    if selected is None:
+        return None
+    if isinstance(selected, Mapping):
+        required = {
+            "market_id",
+            "instrument_id",
+            "exchange_id",
+            "market_type",
+            "symbol",
+        }
+        if required.issubset(selected):
+            return {key: str(selected[key]) for key in required}
+        return None
+    symbol = selected.venue_symbol or selected.instrument.display_symbol
+    if not symbol:
+        return None
+    return {
+        "market_id": str(selected.id),
+        "instrument_id": str(selected.instrument.id),
+        "exchange_id": str(selected.exchange_id).rsplit(":", 1)[-1],
+        "market_type": str(selected.instrument_kind),
+        "symbol": str(symbol),
+    }
+
+
+def _clear_direct_market_context(context: InteractiveContext) -> None:
+    context.selected_market = None
+    context.selected_market_provider = None
+    context.shell_path = ("market",)
 
 
 def _manual_descriptor() -> dict[str, str] | None:
@@ -640,7 +859,7 @@ def _manual_descriptor() -> dict[str, str] | None:
         "instrument_id": typer.prompt("Instrument ID").strip(),
         "exchange_id": typer.prompt("Exchange ID").strip(),
         "market_type": typer.prompt("Market type").strip(),
-        "source_symbol": typer.prompt("Provider symbol").strip(),
+        "symbol": typer.prompt("Provider symbol").strip(),
     }
     if any(not value for value in values.values()):
         typer.echo("完整市场标识的所有字段都不能为空。")
@@ -658,14 +877,12 @@ def _descriptor_arguments(descriptor: Mapping[str, str]) -> tuple[str, ...]:
         descriptor["exchange_id"],
         "--market-type",
         descriptor["market_type"],
-        "--source-symbol",
-        descriptor["source_symbol"],
+        "--symbol",
+        descriptor["symbol"],
     )
 
 
-def _prompt_choice(
-    title: str, choices: tuple[tuple[str, str], ...]
-) -> str | None:
+def _prompt_choice(title: str, choices: tuple[tuple[str, str], ...]) -> str | None:
     typer.echo(title)
     for index, (_value, label) in enumerate(choices, 1):
         typer.echo(f"  {index}. {label}")
@@ -699,14 +916,14 @@ def _status_command(context: InteractiveContext) -> GuidedCommand:
     )
 
 
-def _sources_command(context: InteractiveContext) -> ShellAction:
+def _routes_command(context: InteractiveContext) -> ShellAction:
     market = reference.select_market(context)
     if market is None:
         return ShellControl.HANDLED
     return GuidedCommand(
         (
             *_command_prefix(context),
-            "sources",
+            "routes",
             *_launch_argument(context),
             "--market-id",
             str(market.id),
@@ -714,64 +931,63 @@ def _sources_command(context: InteractiveContext) -> ShellAction:
             "--format",
             "table",
         ),
-        "查看目标 Market runtime 的已配置数据源",
+        "查看目标 Market 的已配置 Provider routes",
     )
 
 
-def _select_source(
+def _select_provider(
     context: InteractiveContext, market: Any, observation_kind: str
 ) -> dict[str, Any] | None:
     try:
-        payload = _load_sources(context, str(market.id), observation_kind)
+        payload = _load_routes(context, str(market.id), observation_kind)
     except Exception as error:
-        typer.echo(f"读取目标 Market 数据源失败：{error}")
+        typer.echo(f"读取目标 Market routes 失败：{error}")
         return None
-    raw_sources = payload.get("sources", [])
-    sources = [dict(value) for value in raw_sources if isinstance(value, Mapping)]
-    if not sources:
-        typer.echo(f"目标 Market 没有支持 {observation_kind} 的已配置数据源。")
+    raw_routes = payload.get("routes", [])
+    routes = [dict(value) for value in raw_routes if isinstance(value, Mapping)]
+    if not routes:
+        typer.echo(f"目标 Market 没有支持 {observation_kind} 的已配置 route。")
         typer.echo(f"已查询：{market.id}")
-        typer.echo("请查看当前作用域的数据源配置或订阅状态。")
+        typer.echo("请查看当前作用域的 Provider 配置或订阅状态。")
         return None
 
-    current = context.selected_market_source
+    current = context.selected_market_provider
     if current is not None and any(
-        str(value.get("source_id")) == str(current.get("source_id"))
-        for value in sources
+        str(value.get("provider")) == str(current.get("provider"))
+        for value in routes
     ):
-        typer.echo(f"继续使用当前数据源：{current['source_id']}")
+        typer.echo(f"继续使用当前 Provider：{current['provider']}")
         return current
 
     table = PrettyTable(
-        ["序号", "Source", "Provider", "配置", "状态", "Ready", "支持行情"]
+        ["序号", "Provider", "状态", "Selected", "支持行情", "等待原因"]
     )
     table.align = "l"
-    for index, source in enumerate(sources, 1):
+    for index, route in enumerate(routes, 1):
         table.add_row(
             [
                 index,
-                source.get("source_id", "—"),
-                source.get("provider_id") or "—",
-                "是" if source.get("configured") else "否",
-                source.get("status", "—"),
-                "是" if source.get("ready") else "否",
-                ", ".join(map(str, source.get("observation_capabilities", []))) or "—",
+                route.get("provider", "—"),
+                route.get("state", "—"),
+                "是" if route.get("selected") else "否",
+                ", ".join(map(str, route.get("observation_kinds", []))) or "—",
+                route.get("pending_reason") or "—",
             ]
         )
-    typer.echo(f"可用于 {observation_kind} 的数据源：")
+    typer.echo(f"可用于 {observation_kind} 的 Provider routes：")
     typer.echo(table)
-    choice = typer.prompt("选择 Source 序号；输入 b 返回", default="b").strip()
+    choice = typer.prompt("选择 Provider 序号；输入 b 返回", default="b").strip()
     if choice in {"b", "back", ""}:
         return None
-    if not choice.isdigit() or not 1 <= int(choice) <= len(sources):
-        typer.echo("无效的 Source 序号；不会尝试读取行情文件。")
+    if not choice.isdigit() or not 1 <= int(choice) <= len(routes):
+        typer.echo("无效的 Provider 序号；不会尝试读取行情文件。")
         return None
-    selected = sources[int(choice) - 1]
-    context.selected_market_source = selected
+    selected = routes[int(choice) - 1]
+    context.selected_market_provider = selected
     return selected
 
 
-def _load_sources(
+def _load_routes(
     context: InteractiveContext, market_id: str, observation_kind: str
 ) -> dict[str, Any]:
     if context.owner is None:
@@ -789,7 +1005,7 @@ def _load_sources(
         )
 
         return _run_workspace_market_connected_command(
-            context.owner, "sources", arguments
+            context.owner, "routes", arguments
         )
     from kairospy.surface.cli.commands.launch import (
         _run_instance_market_connected_command,
@@ -799,7 +1015,7 @@ def _load_sources(
         context.owner,
         launch_id=context.selected_launch or context.shell_path[1],
         instance=_require_launch_instance(context),
-        command="sources",
+        command="routes",
         arguments=arguments,
         require_views=False,
     )
@@ -873,11 +1089,7 @@ def _scope(context: InteractiveContext) -> str:
         return "direct"
     if path[:2] == ("system", "market"):
         return "system"
-    if (
-        len(path) >= 6
-        and path[0] == "launch"
-        and path[-2:] == ("components", "market")
-    ):
+    if len(path) >= 6 and path[0] == "launch" and path[-2:] == ("components", "market"):
         return "launch"
     raise RuntimeError("Market 交互必须从 system 或 launch 连接作用域进入")
 

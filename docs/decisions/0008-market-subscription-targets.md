@@ -1,6 +1,6 @@
 # Decision 0008: Market Subscription Target API
 
-- Status: Accepted
+- Status: Superseded by [Decision 0012](0012-market-provider-routes.md)
 - Date: 2026-08-21
 - Scope: Python Strategy Market API, Market contract, Market runtime subscription resolution
 
@@ -227,5 +227,5 @@ Strategy owns only the intent:
 - Market control handling: `crates/modules/market/src/application/conflux.rs`
 - Market subscription resolution: `crates/modules/market/src/application/subscriptions/`
 - Market source routing: `crates/modules/market/src/application/sources/subscriptions.rs`
-- Reference-to-Market universe projection: `crates/modules/market/src/composition/reference/projection.rs`
+- Reference-to-Market universe current view: `crates/modules/market/src/composition/reference/current view.rs`
 - Example strategy: `strategies/print_aapl_multi.py`

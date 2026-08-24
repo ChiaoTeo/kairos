@@ -55,7 +55,7 @@ class RecordingExecutionCommands:
         )
 
 
-class Projection:
+class CurrentViews:
     def __init__(self, intents=()) -> None:
         self.intents = {str(value.id): value for value in intents}
 
@@ -69,10 +69,10 @@ class Projection:
         return ()
 
 
-def application(commands=None, projection=None) -> ExecutionApplication:
+def application(commands=None, current_views=None) -> ExecutionApplication:
     return ExecutionApplication(
         commands,
-        projection,
+        current_views,
         strategy_id="strategy-a",
         instance_id="instance-1",
         account_ids=(AccountId("main"), AccountId("hedge")),
@@ -81,7 +81,7 @@ def application(commands=None, projection=None) -> ExecutionApplication:
 
 def test_for_account_is_only_single_account_sugar_over_canonical_requests() -> None:
     commands = RecordingExecutionCommands()
-    execution = application(commands, Projection())
+    execution = application(commands, CurrentViews())
     main = execution.for_account("main", segment="usd_m_futures")
 
     target = main.target_position(
@@ -107,7 +107,7 @@ def test_for_account_is_only_single_account_sugar_over_canonical_requests() -> N
 
 def test_root_execute_submits_one_cross_account_intent() -> None:
     commands = RecordingExecutionCommands()
-    execution = application(commands, Projection())
+    execution = application(commands, CurrentViews())
     request = PairArbitrageRequest(
         ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), "main"),
         ArbitrageLegRequest("BTC-PERP", "Sell", Decimal("1"), "hedge"),
@@ -123,7 +123,7 @@ def test_root_execute_submits_one_cross_account_intent() -> None:
 
 def test_cross_account_intent_rejects_entire_request_before_transport() -> None:
     commands = RecordingExecutionCommands()
-    execution = application(commands, Projection())
+    execution = application(commands, CurrentViews())
     request = PairArbitrageRequest(
         ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), "main"),
         ArbitrageLegRequest("BTC-PERP", "Sell", Decimal("1"), "outside"),
@@ -139,7 +139,7 @@ def test_cross_account_intent_rejects_entire_request_before_transport() -> None:
 
 def test_for_account_rejects_unconfigured_account_at_selection_time() -> None:
     with pytest.raises(ExecutionAccountNotEnabledError, match="outside"):
-        application(RecordingExecutionCommands(), Projection()).for_account("outside")
+        application(RecordingExecutionCommands(), CurrentViews()).for_account("outside")
 
 
 def test_intent_queries_filter_strategy_and_complete_account_scope() -> None:
@@ -176,7 +176,7 @@ def test_intent_queries_filter_strategy_and_complete_account_scope() -> None:
     )
     execution = application(
         RecordingExecutionCommands(),
-        Projection((owned, foreign_strategy, foreign_account)),
+        CurrentViews((owned, foreign_strategy, foreign_account)),
     )
 
     assert execution.require_intent(IntentId("owned")) is owned
@@ -188,7 +188,7 @@ def test_intent_queries_filter_strategy_and_complete_account_scope() -> None:
 
 def test_refresh_quote_requires_an_owned_intent() -> None:
     commands = RecordingExecutionCommands()
-    execution = application(commands, Projection())
+    execution = application(commands, CurrentViews())
     request = QuoteRefreshRequest("outside-intent", Decimal("99"), Decimal("101"), 123)
 
     receipt = execution.refresh_quote(request)
@@ -347,7 +347,7 @@ def test_execution_cursor_recovers_decision_progress_from_current_view(
         updated_at_unix_nanos=10,
     )
 
-    class CurrentProjection:
+    class CurrentView:
         def recovery_snapshot(self):
             return 7, (intent,), (), True
 
@@ -364,7 +364,7 @@ def test_execution_cursor_recovers_decision_progress_from_current_view(
     decisions = Decisions()
     execution = ExecutionApplication(
         None,
-        CurrentProjection(),
+        CurrentView(),
         EventSource(()),
         strategy_id="strategy-a",
         instance_id="instance-1",

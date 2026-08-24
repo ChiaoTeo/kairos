@@ -25,15 +25,14 @@ class ReferenceStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class Entity:
-    id: str
-    entity_type: str
+class Exchange:
+    id: ExchangeId
     name: str
     status: ReferenceStatus = ReferenceStatus.UNKNOWN
 
     def __post_init__(self) -> None:
-        if not self.id.strip() or not self.entity_type.strip() or not self.name.strip():
-            raise ValueError("entity id, type, and name are required")
+        if not str(self.id).strip() or not self.name.strip():
+            raise ValueError("exchange id and name are required")
 
 
 @dataclass(frozen=True, slots=True)

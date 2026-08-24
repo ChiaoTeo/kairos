@@ -23,7 +23,7 @@ impl<'a> Trade<'a> {
     pub const VT_TRADE_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 10;
     pub const VT_PRICE: ::flatbuffers::VOffsetT = 12;
     pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 14;
     pub const VT_AGGRESSOR_SIDE: ::flatbuffers::VOffsetT = 16;
@@ -65,8 +65,8 @@ impl<'a> Trade<'a> {
         if let Some(x) = args.price {
             builder.add_price(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -114,13 +114,13 @@ impl<'a> Trade<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Trade::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Trade::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -253,8 +253,8 @@ impl ::flatbuffers::Verifiable for Trade<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<super::super::common::v_2::Decimal64>("price", Self::VT_PRICE, true)?
@@ -303,7 +303,7 @@ pub struct TradeArgs<'a> {
     pub trade_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub price: Option<&'a super::super::common::v_2::Decimal64>,
     pub quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub aggressor_side: super::super::common::v_2::Side,
@@ -322,7 +322,7 @@ impl<'a> Default for TradeArgs<'a> {
             trade_id: None,
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             price: None,         // required field
             quantity: None,      // required field
             aggressor_side: super::super::common::v_2::Side::UNSPECIFIED,
@@ -360,9 +360,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> TradeBuilder<'a, 'b, A> {
         );
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Trade::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Trade::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_price(&mut self, price: &super::super::common::v_2::Decimal64) {
@@ -441,7 +441,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> TradeBuilder<'a, 'b, A> {
         self.fbb_.required(o, Trade::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Trade::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, Trade::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, Trade::VT_PROVIDER, "provider");
         self.fbb_.required(o, Trade::VT_PRICE, "price");
         self.fbb_.required(o, Trade::VT_QUANTITY, "quantity");
         ::flatbuffers::WIPOffset::new(o.value())
@@ -454,7 +454,7 @@ impl ::core::fmt::Debug for Trade<'_> {
         ds.field("trade_id", &self.trade_id());
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("price", &self.price());
         ds.field("quantity", &self.quantity());
         ds.field("aggressor_side", &self.aggressor_side());

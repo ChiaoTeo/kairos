@@ -26,7 +26,7 @@ pub use kairos_integration::blocking::{
     OrderCommand as BlockingOrderCommand, OrderQuery as BlockingOrderQuery,
 };
 pub use kairos_integration::composition::credentials::{
-    CredentialRecord, CredentialStore, load_workspace_credential,
+    CredentialRecord, CredentialStore, credential_secret_ref, load_workspace_credential,
 };
 pub use kairos_integration::participants::binance::advanced::portfolio::BinancePortfolioMarginRestConnection;
 pub use kairos_integration::participants::binance::advanced::portfolio::pro::BinancePortfolioMarginProRestConnection;
@@ -107,14 +107,15 @@ pub use kairos_integration::{
     ExternalOrder, ExternalOrderQuery, ExternalOrderStatus, ExternalParticipantEvent,
     ExternalPosition, ExternalPositionMode, FeeQuery, HistoricalBarQuery, HistoricalBarRequest,
     HistoricalQuoteQuery, HistoricalTradeQuery, HistoricalWindow, IndeterminateCommand,
-    InstrumentCatalogQuery, IntegrationError, MaintenanceOutcome, MarketBarQuery, MarketDataKind,
-    MarketDataStream, MarketEvent, MarketEventKind, MarketFeed, MarketFundingRateQuery,
-    MarketGreeksQuery, MarketIndexPriceQuery, MarketMarkPriceQuery, MarketOpenInterestQuery,
-    MarketOrderBookQuery, MarketQuote, MarketQuoteQuery, MarketStatusQuery, MarketSubscription,
+    InstrumentCatalogQuery, IntegrationError, MaintenanceOutcome, MarketBar, MarketBarQuery,
+    MarketBarRequest, MarketDataKind, MarketDataStream, MarketEvent, MarketEventKind, MarketFeed,
+    MarketFundingRateQuery, MarketGreeks, MarketGreeksQuery, MarketIndexPriceQuery,
+    MarketMarkPriceQuery, MarketOpenInterestQuery, MarketOrderBook, MarketOrderBookQuery,
+    MarketOrderBookRequest, MarketQuote, MarketQuoteQuery, MarketStatusQuery, MarketSubscription,
     MarketSubscriptionCommand, MarketSubscriptionId, MarketSubscriptionOutcome,
-    MarketSubscriptionRequest, MarketTickerQuery, MarketTradeQuery, MarketVenueEvidence,
-    OrderCommand, OrderEntryEvent, OrderEntryOptions, OrderEntryRequest, OrderEntryStatus,
-    OrderQuery, OrderSide, OrderStatus, OrderType, ParticipantEventStream,
+    MarketSubscriptionRequest, MarketTickerQuery, MarketTrade, MarketTradeQuery,
+    MarketVenueEvidence, OrderCommand, OrderEntryEvent, OrderEntryOptions, OrderEntryRequest,
+    OrderEntryStatus, OrderQuery, OrderSide, OrderStatus, OrderType, ParticipantEventStream,
     ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
     ParticipantRejection, TimeInForce,
 };

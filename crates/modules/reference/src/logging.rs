@@ -389,8 +389,6 @@ pub mod fields {
         ReferenceLogField::new("source_id", ReferenceLogFieldCategory::Business);
     pub const PROVIDER_ID: ReferenceLogField =
         ReferenceLogField::new("provider_id", ReferenceLogFieldCategory::Business);
-    pub const PROVIDER_PRODUCT: ReferenceLogField =
-        ReferenceLogField::new("provider_product", ReferenceLogFieldCategory::Business);
     pub const SCOPE_ID: ReferenceLogField =
         ReferenceLogField::new("scope_id", ReferenceLogFieldCategory::Business);
     pub const SCOPE_KIND: ReferenceLogField =
@@ -417,8 +415,8 @@ pub mod fields {
         ReferenceLogField::new("generation", ReferenceLogFieldCategory::Business);
     pub const EVENT_SEQUENCE: ReferenceLogField =
         ReferenceLogField::new("event_sequence", ReferenceLogFieldCategory::Business);
-    pub const PROJECTION_VERSION: ReferenceLogField =
-        ReferenceLogField::new("projection_version", ReferenceLogFieldCategory::Business);
+    pub const SCAN_FORMAT_VERSION: ReferenceLogField =
+        ReferenceLogField::new("scan_format_version", ReferenceLogFieldCategory::Business);
 
     pub const PHASE: ReferenceLogField =
         ReferenceLogField::new("phase", ReferenceLogFieldCategory::Progress);
@@ -440,8 +438,10 @@ pub mod fields {
         ReferenceLogField::new("active_market_count", ReferenceLogFieldCategory::Progress);
     pub const AFFECTED_ASSET_COUNT: ReferenceLogField =
         ReferenceLogField::new("affected_asset_count", ReferenceLogFieldCategory::Progress);
-    pub const AFFECTED_ENTITY_COUNT: ReferenceLogField =
-        ReferenceLogField::new("affected_entity_count", ReferenceLogFieldCategory::Progress);
+    pub const AFFECTED_EXCHANGE_COUNT: ReferenceLogField = ReferenceLogField::new(
+        "affected_exchange_count",
+        ReferenceLogFieldCategory::Progress,
+    );
     pub const AFFECTED_INSTRUMENT_COUNT: ReferenceLogField = ReferenceLogField::new(
         "affected_instrument_count",
         ReferenceLogFieldCategory::Progress,
@@ -468,8 +468,8 @@ pub mod fields {
         ReferenceLogField::new("degraded_source_count", ReferenceLogFieldCategory::Progress);
     pub const DISCARDED_INPUTS: ReferenceLogField =
         ReferenceLogField::new("discarded_inputs", ReferenceLogFieldCategory::Progress);
-    pub const ENTITY_COUNT: ReferenceLogField =
-        ReferenceLogField::new("entity_count", ReferenceLogFieldCategory::Progress);
+    pub const EXCHANGE_COUNT: ReferenceLogField =
+        ReferenceLogField::new("exchange_count", ReferenceLogFieldCategory::Progress);
     pub const EVENT_COUNT: ReferenceLogField =
         ReferenceLogField::new("event_count", ReferenceLogFieldCategory::Progress);
     pub const FACTS_PERSISTED: ReferenceLogField =
@@ -595,7 +595,6 @@ pub mod fields {
         METHOD,
         SOURCE_ID,
         PROVIDER_ID,
-        PROVIDER_PRODUCT,
         SCOPE_ID,
         SCOPE_KIND,
         GENERATION_BEFORE,
@@ -609,7 +608,7 @@ pub mod fields {
         TRIGGER,
         GENERATION,
         EVENT_SEQUENCE,
-        PROJECTION_VERSION,
+        SCAN_FORMAT_VERSION,
         PHASE,
         PROGRESS_KIND,
         PAGES_DONE,
@@ -620,7 +619,7 @@ pub mod fields {
         COMPLETE,
         ACTIVE_MARKET_COUNT,
         AFFECTED_ASSET_COUNT,
-        AFFECTED_ENTITY_COUNT,
+        AFFECTED_EXCHANGE_COUNT,
         AFFECTED_INSTRUMENT_COUNT,
         AFFECTED_LISTING_COUNT,
         AFFECTED_MARKET_COUNT,
@@ -631,7 +630,7 @@ pub mod fields {
         COMMITTED_AT_UNIX_NANOS,
         DEGRADED_SOURCE_COUNT,
         DISCARDED_INPUTS,
-        ENTITY_COUNT,
+        EXCHANGE_COUNT,
         EVENT_COUNT,
         FACTS_PERSISTED,
         INSTRUMENT_COUNT,
@@ -684,8 +683,9 @@ pub mod fields {
 
 #[cfg(test)]
 mod tests {
-    use super::{events, fields};
     use std::path::Path;
+
+    use super::{events, fields};
 
     #[test]
     fn reference_log_events_use_layered_event_names() {

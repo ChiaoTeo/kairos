@@ -40,3 +40,23 @@ def test_dangerous_command_can_be_cancelled(
     )
     assert called is False
     assert interactive_context.last_status == 0
+
+
+def test_product_command_can_hide_technical_argv(
+    interactive_context, capsys
+) -> None:
+    execute_guided_command(
+        interactive_context,
+        GuidedCommand(
+            ("market", "once", "--market-id", "internal-id"),
+            "查看 AAPL 最新报价",
+            show_command=False,
+        ),
+        execute=lambda _argv: 0,
+        yes=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "查看 AAPL 最新报价" in output
+    assert "准备执行" not in output
+    assert "internal-id" not in output

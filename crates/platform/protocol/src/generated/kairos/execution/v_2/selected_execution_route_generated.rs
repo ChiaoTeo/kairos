@@ -22,9 +22,9 @@ impl<'a> ::flatbuffers::Follow<'a> for SelectedExecutionRoute<'a> {
 impl<'a> SelectedExecutionRoute<'a> {
     pub const VT_ROUTE_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_SELECTION_KIND: ::flatbuffers::VOffsetT = 6;
-    pub const VT_PARTICIPANT_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_BROKER_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_DESTINATION_MARKET_ID: ::flatbuffers::VOffsetT = 10;
-    pub const VT_PROVIDER_PRODUCT: ::flatbuffers::VOffsetT = 12;
+    pub const VT_EXECUTION_CHANNEL: ::flatbuffers::VOffsetT = 12;
     pub const VT_PROVIDER_SYMBOL: ::flatbuffers::VOffsetT = 14;
     pub const VT_SELECTED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 16;
 
@@ -47,14 +47,14 @@ impl<'a> SelectedExecutionRoute<'a> {
         if let Some(x) = args.provider_symbol {
             builder.add_provider_symbol(x);
         }
-        if let Some(x) = args.provider_product {
-            builder.add_provider_product(x);
+        if let Some(x) = args.execution_channel {
+            builder.add_execution_channel(x);
         }
         if let Some(x) = args.destination_market_id {
             builder.add_destination_market_id(x);
         }
-        if let Some(x) = args.participant_id {
-            builder.add_participant_id(x);
+        if let Some(x) = args.broker_id {
+            builder.add_broker_id(x);
         }
         if let Some(x) = args.route_id {
             builder.add_route_id(x);
@@ -92,14 +92,14 @@ impl<'a> SelectedExecutionRoute<'a> {
         }
     }
     #[inline]
-    pub fn participant_id(&self) -> &'a str {
+    pub fn broker_id(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(
-                    SelectedExecutionRoute::VT_PARTICIPANT_ID,
+                    SelectedExecutionRoute::VT_BROKER_ID,
                     None,
                 )
                 .unwrap()
@@ -118,14 +118,14 @@ impl<'a> SelectedExecutionRoute<'a> {
         }
     }
     #[inline]
-    pub fn provider_product(&self) -> &'a str {
+    pub fn execution_channel(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(
-                    SelectedExecutionRoute::VT_PROVIDER_PRODUCT,
+                    SelectedExecutionRoute::VT_EXECUTION_CHANNEL,
                     None,
                 )
                 .unwrap()
@@ -172,8 +172,8 @@ impl ::flatbuffers::Verifiable for SelectedExecutionRoute<'_> {
             )?
             .visit_field::<RouteSelectionKind>("selection_kind", Self::VT_SELECTION_KIND, false)?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "participant_id",
-                Self::VT_PARTICIPANT_ID,
+                "broker_id",
+                Self::VT_BROKER_ID,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -182,8 +182,8 @@ impl ::flatbuffers::Verifiable for SelectedExecutionRoute<'_> {
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "provider_product",
-                Self::VT_PROVIDER_PRODUCT,
+                "execution_channel",
+                Self::VT_EXECUTION_CHANNEL,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -203,9 +203,9 @@ impl ::flatbuffers::Verifiable for SelectedExecutionRoute<'_> {
 pub struct SelectedExecutionRouteArgs<'a> {
     pub route_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub selection_kind: RouteSelectionKind,
-    pub participant_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub broker_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub destination_market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub provider_product: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub execution_channel: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub provider_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub selected_at_unix_nanos: u64,
 }
@@ -215,10 +215,10 @@ impl<'a> Default for SelectedExecutionRouteArgs<'a> {
         SelectedExecutionRouteArgs {
             route_id: None, // required field
             selection_kind: RouteSelectionKind::UNSPECIFIED,
-            participant_id: None, // required field
+            broker_id: None, // required field
             destination_market_id: None,
-            provider_product: None, // required field
-            provider_symbol: None,  // required field
+            execution_channel: None, // required field
+            provider_symbol: None,   // required field
             selected_at_unix_nanos: 0,
         }
     }
@@ -245,10 +245,10 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> SelectedExecutionRouteBuilder
         );
     }
     #[inline]
-    pub fn add_participant_id(&mut self, participant_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_broker_id(&mut self, broker_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            SelectedExecutionRoute::VT_PARTICIPANT_ID,
-            participant_id,
+            SelectedExecutionRoute::VT_BROKER_ID,
+            broker_id,
         );
     }
     #[inline]
@@ -262,10 +262,10 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> SelectedExecutionRouteBuilder
         );
     }
     #[inline]
-    pub fn add_provider_product(&mut self, provider_product: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_execution_channel(&mut self, execution_channel: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            SelectedExecutionRoute::VT_PROVIDER_PRODUCT,
-            provider_product,
+            SelectedExecutionRoute::VT_EXECUTION_CHANNEL,
+            execution_channel,
         );
     }
     #[inline]
@@ -298,15 +298,12 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> SelectedExecutionRouteBuilder
         let o = self.fbb_.end_table(self.start_);
         self.fbb_
             .required(o, SelectedExecutionRoute::VT_ROUTE_ID, "route_id");
+        self.fbb_
+            .required(o, SelectedExecutionRoute::VT_BROKER_ID, "broker_id");
         self.fbb_.required(
             o,
-            SelectedExecutionRoute::VT_PARTICIPANT_ID,
-            "participant_id",
-        );
-        self.fbb_.required(
-            o,
-            SelectedExecutionRoute::VT_PROVIDER_PRODUCT,
-            "provider_product",
+            SelectedExecutionRoute::VT_EXECUTION_CHANNEL,
+            "execution_channel",
         );
         self.fbb_.required(
             o,
@@ -322,9 +319,9 @@ impl ::core::fmt::Debug for SelectedExecutionRoute<'_> {
         let mut ds = f.debug_struct("SelectedExecutionRoute");
         ds.field("route_id", &self.route_id());
         ds.field("selection_kind", &self.selection_kind());
-        ds.field("participant_id", &self.participant_id());
+        ds.field("broker_id", &self.broker_id());
         ds.field("destination_market_id", &self.destination_market_id());
-        ds.field("provider_product", &self.provider_product());
+        ds.field("execution_channel", &self.execution_channel());
         ds.field("provider_symbol", &self.provider_symbol());
         ds.field("selected_at_unix_nanos", &self.selected_at_unix_nanos());
         ds.finish()

@@ -29,7 +29,7 @@ table OrderBookLevelChange {
 }
 
 table OrderBookIdentity {
-  source_id:string (required);
+  provider:string (required);
   market_id:string (required);
   instrument_id:string (required);
 }

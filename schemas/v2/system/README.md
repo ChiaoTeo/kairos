@@ -15,4 +15,4 @@ System vocabulary and must not expose provider-specific domain types.
 
 System-level health and stop methods are exposed through the Conflux JSON-RPC
 control registration. They are intentionally separate from the FlatBuffers
-current view, which is a one-shot operational projection for local consumers.
+current view, which is a one-shot operational current view for local consumers.

@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 
 use super::provider_sync::{
     append_staged_page, clear_staged_pages, has_last_good, load_provider_candidate, load_state,
-    option_underlyings, prepare_projection, promote_staged, provider_records, remove_last_good,
+    option_underlyings, prepare_scan, promote_staged, provider_records, remove_last_good,
     save_last_good, set_option_underlying, set_source_desired_state, source_definitions,
     source_desired_states, staged_pages, upsert_source_definition,
 };
@@ -60,12 +60,12 @@ impl SqlxProviderSyncStore {
         operation(self.pool.clone()).await.map_err(persistence)
     }
 
-    pub(crate) async fn prepare_projection(&mut self, provider: &str) -> ReferenceResult<bool> {
+    pub(crate) async fn prepare_scan(&mut self, provider: &str) -> ReferenceResult<bool> {
         if !self.normalized_promotion {
             return Ok(false);
         }
         let provider = provider.to_owned();
-        self.run(|pool| async move { prepare_projection(&pool, &provider).await })
+        self.run(|pool| async move { prepare_scan(&pool, &provider).await })
             .await
     }
 

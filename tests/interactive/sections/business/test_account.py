@@ -24,6 +24,46 @@ def test_account_selected_context_builds_owned_command(
     assert "当前账户" in capsys.readouterr().out
 
 
+def test_resource_account_list_exposes_guided_setup(interactive_context) -> None:
+    interactive_context.shell_path = ("resources", "accounts")
+
+    command = account.handle(interactive_context, ("new",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.argv == ("account", "setup")
+    assert command.dangerous is True
+
+
+def test_account_detail_exposes_lifecycle_actions(interactive_context) -> None:
+    interactive_context.shell_path = ("resources", "accounts", "paper-main")
+    interactive_context.selected_account = "paper-main"
+
+    enabled = account.handle(interactive_context, ("enable",))
+    disabled = account.handle(interactive_context, ("disable",))
+    deleted = account.handle(interactive_context, ("delete",))
+
+    assert isinstance(enabled, GuidedCommand)
+    assert enabled.argv[:5] == (
+        "account",
+        "modify",
+        "--account-id",
+        "paper-main",
+        "--status",
+    )
+    assert enabled.argv[5] == "configured"
+    assert isinstance(disabled, GuidedCommand)
+    assert disabled.argv[5] == "disabled"
+    assert disabled.dangerous is True
+    assert isinstance(deleted, GuidedCommand)
+    assert deleted.argv[:4] == (
+        "account",
+        "remove",
+        "--account-id",
+        "paper-main",
+    )
+    assert deleted.dangerous is True
+
+
 def test_account_text_alias_matches_numeric(interactive_context) -> None:
     interactive_context.shell_path = ("trade", "accounts", "paper-main")
     interactive_context.selected_account = "paper-main"

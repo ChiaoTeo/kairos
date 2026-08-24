@@ -25,7 +25,7 @@ impl IntentPlanningContext {
     pub(super) fn from_manifest_with_reference_snapshot(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<kairos_reference_contract::ReferenceProjectionSnapshot>,
+        reference_snapshot: Option<kairos_reference_contract::ExecutionReferenceSnapshot>,
     ) -> Result<Self, String> {
         Ok(Self {
             dependencies: ExecutionDependencyAccess::from_manifest_with_reference_snapshot(
@@ -57,7 +57,9 @@ impl IntentPlanningContext {
             }
             self.health(leg.account_id.as_str())?;
             let (side, quantity) = if leg.target_position {
-                let positions = self.account_projection(leg.account_id.as_str())?.positions;
+                let positions = self
+                    .account_dependency_state(leg.account_id.as_str())?
+                    .positions;
                 let current =
                     find_position(&positions, leg.instrument_id.as_str())?.unwrap_or(Decimal::ZERO);
                 let target = decimal_quantity(leg.quantity)?;
@@ -146,7 +148,7 @@ impl IntentPlanningContext {
         &mut self,
         intent: &ExecuteStrategyIntent,
     ) -> Result<Vec<SubmitOrder>, String> {
-        self.refresh_account_projections()?;
+        self.refresh_account_dependency_states()?;
         self.refresh_watermarks();
         if !intent.legs.is_empty() {
             return self.plan_explicit_legs(intent);
@@ -166,7 +168,9 @@ impl IntentPlanningContext {
         let mut orders = Vec::with_capacity(intent.account_ids.len());
         for (index, account_id) in intent.account_ids.iter().enumerate() {
             self.health(account_id.as_str())?;
-            let positions = self.account_projection(account_id.as_str())?.positions;
+            let positions = self
+                .account_dependency_state(account_id.as_str())?
+                .positions;
             let current =
                 find_position(&positions, intent.instrument_id.as_str())?.unwrap_or(Decimal::ZERO);
             let target = decimal_quantity(intent.target_quantity)?;

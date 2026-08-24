@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import codeop
+from collections.abc import Mapping
 from contextlib import redirect_stdout
 from dataclasses import asdict
 from io import StringIO
@@ -13,6 +14,7 @@ from typing import Any
 import typer
 from prettytable import PrettyTable
 
+from kairospy.application.account import AccountConfigurationApplication
 from kairospy.application.market import read_replay_events
 from kairospy.application.launch.application import (
     LaunchConfigError,
@@ -39,6 +41,8 @@ from kairospy.application.system import (
     UnixRestClient,
 )
 from kairospy.application.launch.application.wizard import (
+    LaunchResourceSetup,
+    LaunchWizardExit,
     build_and_validate,
     draft_preview,
     load_values,
@@ -55,6 +59,8 @@ from kairospy.surface.cli.options import (
 
 
 launch_app = typer.Typer(no_args_is_help=True, help="Manage launch instances")
+draft_app = typer.Typer(no_args_is_help=True, help="Manage persisted Launch drafts")
+launch_app.add_typer(draft_app, name="draft")
 strategy_app = typer.Typer(
     no_args_is_help=True, help="Manage the strategy inside a launch instance"
 )
@@ -116,16 +122,92 @@ def init_launch(
     path = owner.paths.launch_config(resolved_launch_id)
     if path.exists():
         raise typer.BadParameter(f"launch config already exists: {path}")
-    draft = prompt_draft(default_launch_id=resolved_launch_id)
-    values = draft.apply({})
+    application = LaunchConfigurationApplication()
+    initial = {
+        "launch": {
+            "id": resolved_launch_id,
+            "mode": "paper",
+            "strategy": "builtin:interactive",
+        }
+    }
+    application.save_draft(owner.paths.root, resolved_launch_id, initial)
+    draft, exit_status = _prompt_launch_draft(
+        initial,
+        default_launch_id=resolved_launch_id,
+        owner=owner,
+        application=application,
+    )
+    if draft is None:
+        resource = (
+            exit_status.split(":", 1)[1]
+            if isinstance(exit_status, str)
+            and exit_status.startswith("resource_required:")
+            else None
+        )
+        _emit(
+            {
+                "launch_id": resolved_launch_id,
+                "status": exit_status,
+                "path": str(
+                    application.draft_path(owner.paths.root, resolved_launch_id)
+                ),
+                **(
+                    {
+                        "resource": resource,
+                        "next_actions": [
+                            f"open 运行资源/{resource} and complete a manual test",
+                            f"kairos launch edit {resolved_launch_id}",
+                        ],
+                    }
+                    if resource is not None
+                    else {}
+                ),
+            },
+            output,
+        )
+        return
+    values = draft.apply(initial)
+    draft_status = application.save_draft(owner.paths.root, resolved_launch_id, values)
     typer.echo(draft_preview(values))
+    _print_readiness_result(draft_status)
+    if not draft_status["ready"]:
+        _emit(
+            {
+                **draft_status,
+                "next_actions": [
+                    "configure and manually test the listed Workspace resources",
+                    f"kairos launch edit {resolved_launch_id}",
+                ],
+            },
+            output,
+        )
+        return
     if not typer.confirm("保存并创建 launch 配置", default=True):
-        _emit({"status": "cancelled", "path": str(path)}, output)
+        if not typer.confirm("保留草稿以便稍后继续", default=True):
+            application.discard_draft(owner.paths.root, resolved_launch_id)
+            _emit({"status": "discarded", "path": str(path)}, output)
+            return
+        _emit({**draft_status, "status": "draft_saved"}, output)
         return
     try:
         report = build_and_validate(path, values, owner.paths.root)
     except LaunchConfigError as error:
         raise typer.BadParameter(str(error)) from error
+    application.discard_draft(owner.paths.root, resolved_launch_id)
+    if typer.confirm("保存后立即创建 Instance 并启动", default=False):
+        runtime = _start_saved_launch(owner, path)
+        _emit(
+            {
+                "status": "created_and_started"
+                if runtime.get("status") != "cancelled"
+                else "created_not_started",
+                "path": str(path),
+                "validation": report,
+                "runtime": runtime,
+            },
+            output,
+        )
+        return
     _emit({"status": "created", "path": str(path), "validation": report}, output)
 
 
@@ -138,19 +220,230 @@ def edit_launch(
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
+    application = LaunchConfigurationApplication()
     try:
-        path = _launch_config_path(owner, launch_id)
-        values = load_values(path)
-        draft = prompt_draft(values, default_launch_id=path.stem)
+        candidate = Path(launch_id).expanduser()
+        if candidate.is_file():
+            path = candidate.resolve()
+        else:
+            pending_path = application.draft_path(owner.paths.root, launch_id)
+            path = (
+                owner.paths.launch_config(launch_id)
+                if pending_path.is_file()
+                else _launch_config_path(owner, launch_id)
+            )
+        resolved_id = path.stem
+        draft_path = application.draft_path(owner.paths.root, resolved_id)
+        values = load_values(draft_path if draft_path.is_file() else path)
+        application.save_draft(owner.paths.root, resolved_id, values)
+        draft, exit_status = _prompt_launch_draft(
+            values,
+            default_launch_id=resolved_id,
+            owner=owner,
+            application=application,
+        )
+        if draft is None:
+            resource = (
+                exit_status.split(":", 1)[1]
+                if isinstance(exit_status, str)
+                and exit_status.startswith("resource_required:")
+                else None
+            )
+            _emit(
+                {
+                    "launch_id": resolved_id,
+                    "status": exit_status,
+                    "published_launch_unchanged": path.is_file(),
+                    "path": str(draft_path),
+                    **(
+                        {
+                            "resource": resource,
+                            "next_actions": [
+                                f"open 运行资源/{resource} and complete a manual test",
+                                f"kairos launch edit {resolved_id}",
+                            ],
+                        }
+                        if resource is not None
+                        else {}
+                    ),
+                },
+                output,
+            )
+            return
         updated = draft.apply(values)
+        draft_status = application.save_draft(owner.paths.root, resolved_id, updated)
         typer.echo(draft_preview(updated))
+        _print_readiness_result(draft_status)
+        if not draft_status["ready"]:
+            _emit(
+                {
+                    **draft_status,
+                    "published_launch_unchanged": path.is_file(),
+                    "next_actions": [
+                        "configure and manually test the listed Workspace resources",
+                        f"kairos launch edit {resolved_id}",
+                    ],
+                },
+                output,
+            )
+            return
         if not typer.confirm("保存 launch 配置", default=True):
-            _emit({"status": "cancelled", "path": str(path)}, output)
+            if not typer.confirm("保留工作草稿以便稍后继续", default=True):
+                application.discard_draft(owner.paths.root, resolved_id)
+                _emit({"status": "discarded", "path": str(path)}, output)
+                return
+            _emit({**draft_status, "status": "draft_saved"}, output)
             return
         report = build_and_validate(path, updated, owner.paths.root)
+        application.discard_draft(owner.paths.root, resolved_id)
     except (FileNotFoundError, LaunchConfigError) as error:
         raise typer.BadParameter(str(error)) from error
-    _emit({"status": "updated", "path": str(path), "validation": report}, output)
+    existing_instances = LaunchRegistryApplication(owner).instances(resolved_id)
+    if existing_instances:
+        typer.echo(
+            f"已有 {len(existing_instances)} 个 Instance 保留旧资源快照；"
+            "本次配置只会应用到新 Instance。"
+        )
+    if typer.confirm("保存后使用新 Instance 启动", default=False):
+        runtime = _start_saved_launch(owner, path)
+        _emit(
+            {
+                "status": "updated_and_started"
+                if runtime.get("status") != "cancelled"
+                else "updated_not_started",
+                "path": str(path),
+                "validation": report,
+                "runtime": runtime,
+            },
+            output,
+        )
+        return
+    _emit(
+        {
+            "status": "updated",
+            "path": str(path),
+            "validation": report,
+            "existing_instances_unchanged": len(existing_instances),
+            "next_action": "create a new Instance to apply this Launch version",
+        },
+        output,
+    )
+
+
+@draft_app.command("list")
+def list_launch_drafts(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(LaunchConfigurationApplication().list_drafts(owner.paths.root), output)
+
+
+@draft_app.command("discard")
+def discard_launch_draft(
+    launch_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    LaunchConfigurationApplication().discard_draft(owner.paths.root, launch_id)
+    _emit({"launch_id": launch_id, "status": "discarded"}, output)
+
+
+def _prompt_launch_draft(
+    values: Mapping[str, Any],
+    *,
+    default_launch_id: str,
+    owner: Any,
+    application: LaunchConfigurationApplication,
+) -> tuple[Any | None, str | None]:
+    """Provide identical q/Ctrl-C semantics for new and existing working copies."""
+
+    latest = dict(values)
+
+    def persist_step(_step: str, patched: Mapping[str, Any]) -> None:
+        nonlocal latest
+        latest = dict(patched)
+        application.save_draft(owner.paths.root, default_launch_id, latest)
+
+    while True:
+        try:
+            return (
+                prompt_draft(
+                    latest,
+                    default_launch_id=default_launch_id,
+                    workspace=owner,
+                    on_step=persist_step,
+                ),
+                None,
+            )
+        except LaunchResourceSetup as request:
+            application.record_draft_return(
+                owner.paths.root,
+                default_launch_id,
+                resource=request.resource,
+                step=request.step,
+            )
+            return None, f"resource_required:{request.resource}"
+        except (LaunchWizardExit, typer.Abort, KeyboardInterrupt):
+            choice = typer.prompt(
+                "退出向导：1 保存草稿并退出 / 2 放弃本次未保存修改 / 3 继续编辑",
+                default="1",
+            ).strip()
+            if choice == "1":
+                return None, "draft_saved"
+            if choice == "2":
+                application.discard_draft(owner.paths.root, default_launch_id)
+                return None, "discarded"
+            if choice == "3":
+                continue
+            typer.echo("请输入 1、2 或 3。")
+
+
+def _print_readiness_result(status: Mapping[str, Any]) -> None:
+    issues = list(status.get("issues") or ())
+    warnings = list(status.get("warnings") or ())
+    typer.echo(f"检查结果：{len(issues)} 项阻塞 · {len(warnings)} 项警告")
+    diagnostics = list(status.get("diagnostics") or ())
+    if diagnostics:
+        for diagnostic in diagnostics:
+            if not isinstance(diagnostic, Mapping):
+                continue
+            marker = "✗" if diagnostic.get("severity") == "blocker" else "!"
+            typer.echo(
+                f"  {marker} [{diagnostic.get('owner') or 'Launch'}] "
+                f"{diagnostic.get('reason') or '-'}"
+            )
+            typer.echo(f"    修复：{diagnostic.get('action') or '编辑 Launch 草稿'}")
+        return
+    for issue in issues:
+        typer.echo(f"  ✗ {issue}")
+    for warning in warnings:
+        typer.echo(f"  ! {warning}")
+
+
+def _start_saved_launch(owner: Any, path: Path) -> dict[str, Any]:
+    """Create a new Instance only after the ready Launch has been atomically saved."""
+
+    application = LaunchConfigurationApplication()
+    config = application.load(path, workspace_root=owner.paths.root)
+    config.require_valid()
+    if config.mode == "live":
+        typer.echo(_live_start_confirmation(owner, config))
+        if not typer.confirm(
+            "确认以上真实账户、LIVE 环境和最大风险范围，并立即启动",
+            default=False,
+        ):
+            return {
+                "launch_id": config.launch_id,
+                "mode": "live",
+                "status": "cancelled",
+                "reason": "live_start_not_confirmed",
+            }
+    try:
+        return LaunchRuntimeApplication(owner).start(config)
+    except LaunchRuntimeError as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 def _group(name: str, commands: tuple[str, ...]) -> typer.Typer:
@@ -292,6 +585,11 @@ def start(
     account_id: list[str] = typer.Option(
         [], "--account-id", help="Account binding to lease; repeatable."
     ),
+    confirm_live: bool = typer.Option(
+        False,
+        "--confirm-live",
+        help="Explicitly acknowledge the displayed live account and risk scope.",
+    ),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
@@ -323,6 +621,23 @@ def start(
         raise typer.BadParameter("launch id does not match launch config")
     if strategy is not None and strategy != launch_config.strategy:
         raise typer.BadParameter("--strategy does not match launch config")
+    if launch_config.mode == "live":
+        confirmation = _live_start_confirmation(owner, launch_config)
+        typer.echo(confirmation)
+        if not confirm_live and not typer.confirm(
+            "确认以上真实账户、LIVE 环境和最大风险范围，并立即启动",
+            default=False,
+        ):
+            _emit(
+                {
+                    "launch_id": launch_config.launch_id,
+                    "mode": "live",
+                    "status": "cancelled",
+                    "reason": "live_start_not_confirmed",
+                },
+                output,
+            )
+            return
     overrides: dict[str, Any] = {}
     if params:
         try:
@@ -414,6 +729,7 @@ def stop(
 def restart(
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
+    confirm_live: bool = typer.Option(False, "--confirm-live"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
@@ -445,9 +761,53 @@ def restart(
         config=None,
         params=None,
         account_id=[],
+        confirm_live=confirm_live,
         workspace=workspace,
         output=output,
     )
+
+
+def _live_start_confirmation(owner: Any, launch_config: Any) -> str:
+    """Render the second, start-time live warning without resolving secrets."""
+
+    plan = launch_config.plan()
+    configured_accounts = _mapping(launch_config.values.get("accounts"))
+    intent_by_ref = {
+        str(value.get("ref")): value
+        for value in configured_accounts.values()
+        if isinstance(value, Mapping) and value.get("ref")
+    }
+    account_lines: list[str] = []
+    accounts = AccountConfigurationApplication(owner)
+    for account_id in plan.account_refs:
+        try:
+            account = accounts.show(account_id)
+        except (KeyError, OSError, RuntimeError, ValueError):
+            account = {}
+        intent = intent_by_ref.get(account_id, {})
+        segments = intent.get("segments") or account.get("segments") or ()
+        account_lines.append(
+            f"{account_id} / {account.get('environment') or 'live'} / "
+            f"{','.join(str(value) for value in segments) or '全部 segment'} / "
+            f"{'允许交易' if intent.get('trade') is True else '只读'}"
+        )
+    safety = plan.live_safety or {}
+    maximum = safety.get("max_order_notional", "由 risk profile 限定")
+    return "\n".join(
+        (
+            "LIVE 启动高风险确认（不会展示 Secret）",
+            f"  Launch       {plan.launch_id}",
+            f"  环境         LIVE（会产生真实外部副作用）",
+            f"  真实账户     {'；'.join(account_lines) or '(无账户)'}",
+            f"  风险 Profile {plan.risk_profile or '(未配置)'}",
+            f"  单笔最大范围 {maximum}",
+            f"  限价单要求   {'是' if safety.get('require_limit_orders', True) else '否'}",
+        )
+    )
+
+
+def _mapping(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 @strategy_app.command("status")
@@ -530,7 +890,7 @@ def _instance_account_snapshot(
         raise typer.BadParameter(
             f"launch instance has no connected account component for {account_id}"
         )
-    snapshot = client.current_projection(account_key).snapshot(account_key)
+    snapshot = client.current_view(account_key).snapshot(account_key)
     return asdict(snapshot), resolved_instance, mode
 
 
@@ -597,7 +957,7 @@ def launch_instance_component_account_snapshot(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Read one Account current projection selected by a launch instance."""
+    """Read one Account current view selected by a launch instance."""
     owner = WorkspaceApplication().open(workspace)
     snapshot, resolved_instance, mode = _instance_account_snapshot(
         owner, launch_id=launch_id, instance=instance, account_id=account_id
@@ -744,27 +1104,27 @@ def launch_instance_component_market_status(
     )
 
 
-@instance_component_market_app.command("sources")
-def launch_instance_component_market_sources(
+@instance_component_market_app.command("routes")
+def launch_instance_component_market_routes(
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
     market_id: str | None = typer.Option(None, "--market-id"),
     instrument_id: str | None = typer.Option(None, "--instrument-id"),
     observation_kind: str | None = typer.Option(None, "--observation-kind"),
-    provider_id: str | None = typer.Option(None, "--provider-id"),
+    provider: str | None = typer.Option(None, "--provider"),
     configured_only: bool = typer.Option(False, "--configured-only"),
     ready_only: bool = typer.Option(False, "--ready-only"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Read Market source readiness selected by a launch instance."""
+    """Read Market provider-route readiness selected by a launch instance."""
     owner = WorkspaceApplication().open(workspace)
     arguments: list[str] = []
     for option, value in (
         ("--market-id", market_id),
         ("--instrument-id", instrument_id),
         ("--observation-kind", observation_kind),
-        ("--provider-id", provider_id),
+        ("--provider", provider),
     ):
         if value is not None:
             arguments.extend((option, value))
@@ -777,7 +1137,7 @@ def launch_instance_component_market_sources(
             owner,
             launch_id=launch_id,
             instance=instance,
-            command="sources",
+            command="routes",
             arguments=arguments,
             require_views=False,
         ),
@@ -789,7 +1149,7 @@ def launch_instance_component_market_sources(
 def launch_instance_component_market_snapshot(
     launch_id: str,
     kind: str = typer.Argument(..., help="Snapshot kind: quote, bar, or greeks."),
-    source_id: str = typer.Option(..., "--source-id"),
+    provider: str | None = typer.Option(None, "--provider"),
     market_id: str | None = typer.Option(None, "--market-id"),
     symbol: str | None = typer.Option(None, "--symbol"),
     exchange: str = typer.Option("binance", "--exchange"),
@@ -799,13 +1159,15 @@ def launch_instance_component_market_snapshot(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Read one Market projection view selected by a launch instance."""
+    """Read one Market current view selected by a launch instance."""
     owner = WorkspaceApplication().open(workspace)
     if market_id is None:
         if not symbol:
             raise typer.BadParameter("snapshot requires --market-id or --symbol")
         market_id = f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
-    arguments = [kind, "--market-id", market_id, "--source-id", source_id]
+    arguments = [kind, "--market-id", market_id]
+    if provider is not None:
+        arguments.extend(("--provider", provider))
     if timeframe is not None:
         arguments.extend(("--timeframe", timeframe))
     _emit(
@@ -825,17 +1187,19 @@ def launch_instance_component_market_snapshot(
 def launch_instance_component_market_freshness(
     launch_id: str,
     market_id: str = typer.Option(..., "--market-id"),
-    source_id: str = typer.Option(..., "--source-id"),
-    qualifier: str | None = typer.Option(None, "--qualifier"),
+    observation: str | None = typer.Option(None, "--observation"),
+    provider: str | None = typer.Option(None, "--provider"),
     instance: str | None = typer.Option(None, "--instance"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     """Read Market freshness selected by a launch instance."""
     owner = WorkspaceApplication().open(workspace)
-    arguments = ["--market-id", market_id, "--source-id", source_id]
-    if qualifier is not None:
-        arguments.extend(("--qualifier", qualifier))
+    arguments = ["--market-id", market_id]
+    if observation is not None:
+        arguments.extend(("--observation", observation))
+    if provider is not None:
+        arguments.extend(("--provider", provider))
     _emit(
         _run_instance_market_connected_command(
             owner,
@@ -911,7 +1275,7 @@ def launch_instance_component_account_open_orders(
     account_key = AccountId(account_id)
     _emit(
         {
-            **client.observed_orders_projection(account_key).open_orders(account_key),
+            **client.observed_orders_view(account_key).open_orders(account_key),
             "launch_id": launch_id,
             "instance_id": resolved_instance,
             "mode": mode,

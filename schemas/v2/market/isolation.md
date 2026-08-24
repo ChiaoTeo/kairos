@@ -8,7 +8,7 @@ runtime `scope`; it is never inferred from an observation `market_id`.
 | `workspace_id` | `workspace-demo` | Workspace/System | Hard process, socket, credential, and resource boundary |
 | `market_runtime_id` | `market:shared` or `market:launch-1:instance-1` | Market composition | One concrete Market Actor and its event/view publisher |
 | `owner_id` | `strategy-1:instance-1` | Caller/Strategy | Subscription demand owner used for release and authorization |
-| `source_id` | `binance.spot` | Market composition/Integration | Provenance and routing identity, not an isolation boundary |
+| `provider` | `binance.spot` | Market composition/Integration | Provenance and routing identity, not an isolation boundary |
 
 ## Runtime profiles
 
@@ -57,7 +57,7 @@ different launch/instance identity is rejected.
   `resource_id`, `resource_epoch`, and `view_key` before decoding rows.
 - `ObservationScope` is a canonical business identity; it is not a process or
   permission boundary.
-- `source_id` distinguishes provenance and routing. It must not be used to
+- `provider` distinguishes provenance and routing. It must not be used to
   grant a caller access to another Market runtime.
 
 The Python entry point should receive a resolved runtime endpoint from

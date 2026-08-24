@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS reference_provider_control (
 CREATE TABLE IF NOT EXISTS reference_source_registry (
     source_id TEXT PRIMARY KEY,
     provider_id TEXT NOT NULL,
-    provider_product TEXT,
     scope_kind TEXT NOT NULL,
     scope_id TEXT,
     desired_state TEXT NOT NULL
@@ -48,7 +47,7 @@ CREATE TABLE IF NOT EXISTS reference_source_registry (
 );
 
 CREATE INDEX IF NOT EXISTS reference_source_registry_provider_idx
-    ON reference_source_registry(provider_id, provider_product, desired_state, source_id);
+    ON reference_source_registry(provider_id, desired_state, source_id);
 
 CREATE TABLE IF NOT EXISTS reference_option_coverage (
     provider TEXT NOT NULL,
@@ -75,21 +74,20 @@ INSERT OR IGNORE INTO reference_meta(
     generation,
     event_sequence,
     committed_at_unix_nanos
-) VALUES (1, 4, 0, 0, 0);
+) VALUES (1, 6, 0, 0, 0);
 
--- v2 removes the derived Access projections. Canonical provider facts can
+-- v2 removes the derived Access views. Canonical provider facts can
 -- rebuild every retained Reference row; these tables never owned history.
 DROP TABLE IF EXISTS reference_execution_accesses_current;
 DROP TABLE IF EXISTS reference_market_data_accesses_current;
 
-CREATE TABLE IF NOT EXISTS reference_entities_current (
-    entity_id TEXT PRIMARY KEY,
-    entity_type TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS reference_exchanges_current (
+    exchange_id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
     payload TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS reference_entities_type_status_idx
-    ON reference_entities_current(entity_type, status, entity_id);
+CREATE INDEX IF NOT EXISTS reference_exchanges_status_idx
+    ON reference_exchanges_current(status, exchange_id);
 
 CREATE TABLE IF NOT EXISTS reference_assets_current (
     asset_id TEXT PRIMARY KEY,
@@ -212,9 +210,7 @@ CREATE TABLE IF NOT EXISTS reference_provider_sync (
 -- Normalized pages contain canonical IDs, so unfinished scans must be
 -- restarted when those identity rules change. This version is independent
 -- from the public catalog schema and never invalidates committed records.
-CREATE TABLE IF NOT EXISTS reference_provider_projection_version (
+CREATE TABLE IF NOT EXISTS reference_provider_scan_format (
     provider TEXT PRIMARY KEY,
     version INTEGER NOT NULL
 ) WITHOUT ROWID;
-
-UPDATE reference_meta SET schema_version = 4 WHERE id = 1 AND schema_version < 4;

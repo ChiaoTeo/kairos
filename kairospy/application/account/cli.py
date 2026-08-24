@@ -23,6 +23,11 @@ class AccountCliApplication:
     ) -> list[str]:
         """Build a Rust command; only this adapter owns workspace binding."""
         reject_owned_options(arguments, {"--workspace"})
+        arguments = tuple(arguments)
+        if not arguments or not any(
+            item in {"standalone", "connected"} for item in arguments
+        ):
+            arguments = ("standalone", *arguments)
         command = [
             self.binaries.get("account") or resolve_binary("kairos-account-cli"),
             "--workspace",

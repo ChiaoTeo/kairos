@@ -5,6 +5,29 @@ Kairos Strategy 可以通过 `ctx.notifications` 发布逻辑通知。策略只�
 长期架构约束和失败语义见
 [`../decisions/0002-strategy-notification-delivery.md`](../decisions/0002-strategy-notification-delivery.md)。
 
+## 交互式配置
+
+推荐运行 `kairos i`，进入“系统与配置 → 通知”。该向导会：
+
+1. 显示现有 Destination、Credential 和 SecretRef 可用状态；
+2. 分渠道引导配置飞书自定义机器人或 Telegram Bot；
+3. 使用 Telegram `getMe` 验证 Bot，并通过 `getUpdates` 发现可选 chat；
+4. 把 Destination 绑定到 Launch-owned route；
+5. 在显式确认后发送真实测试消息。
+
+也可以直接运行：
+
+```bash
+kairos notifications setup --provider feishu --workspace /path/to/project
+kairos notifications setup --provider telegram --workspace /path/to/project
+kairos notifications list --workspace /path/to/project
+```
+
+Destination 和 Credential 是 Workspace 系统资源；route、`default_routes` 和
+`lifecycle_routes` 属于 Launch。创建 Launch Instance 时，Kairos 会把 route 映射和
+Workspace 通知配置 hash 写入脱敏的 `normalized.json`。运行中的 Instance 不会自动采用
+后来修改的 Destination；修改系统通知配置后应创建新的 Instance。
+
 ## 1. 配置 Workspace destinations
 
 编辑 Workspace 内的：
@@ -28,9 +51,10 @@ chat_id = "-1001234567890"
 
 Webhook 和 Bot Token 不能写在该文件中。
 
-## 2. 声明 credential
+## 2. 声明 credential 和 SecretRef
 
-Credential 文件只声明 identity 和 provider：
+Credential 文件声明 identity、provider 和结构化 SecretRef。向导只保存引用，不把
+Webhook 或 Bot Token 写入通知配置、命令参数、日志或 Instance 配置：
 
 ```text
 .kairos/config/credentials/feishu-options.toml
@@ -41,6 +65,10 @@ Credential 文件只声明 identity 和 provider：
 id = "feishu-options"
 provider = "feishu"
 role = "notification-send"
+
+[credential.secrets.webhook_url]
+source = "env"
+id = "KAIROS_CREDENTIAL_FEISHU_OPTIONS_WEBHOOK_URL"
 ```
 
 ```text
@@ -52,9 +80,13 @@ role = "notification-send"
 id = "telegram-options"
 provider = "telegram"
 role = "notification-send"
+
+[credential.secrets.bot_token]
+source = "env"
+id = "KAIROS_CREDENTIAL_TELEGRAM_OPTIONS_BOT_TOKEN"
 ```
 
-通过运行环境提供 secret：
+`source = "env"` 从运行环境读取 secret：
 
 ```text
 KAIROS_CREDENTIAL_FEISHU_OPTIONS_WEBHOOK_URL
@@ -62,6 +94,17 @@ KAIROS_CREDENTIAL_TELEGRAM_OPTIONS_BOT_TOKEN
 ```
 
 兼容现有 credential 命名时，飞书 Webhook 和 Telegram Bot Token 也可以分别使用 `API_KEY`。
+
+也支持文件 SecretRef，适合容器 Secret mount。相对路径从 `.kairos` Workspace 根目录解析：
+
+```toml
+[credential.secrets.bot_token]
+source = "file"
+id = "/run/secrets/kairos-telegram-token"
+```
+
+Credential 文件由向导以 `0600` 权限原子写入。当前不支持把 Secret 明文写入向导生成的
+Credential；旧的明文字段仍保持只读兼容。
 
 ## 3. 在 Launch 中选择 routes
 
@@ -78,7 +121,7 @@ enabled = false
 enabled = true
 required = true
 default_routes = ["signals"]
-# Enables the built-in intent-lifecycle-standard projection. Machine-readable
+# Enables the built-in intent-lifecycle-standard notification policy. Machine-readable
 # Execution events and the Strategy decision journal remain enabled regardless.
 lifecycle_routes = ["urgent"]
 queue_capacity = 256
@@ -101,6 +144,20 @@ kairos launch diagnose validate spy-option-signals --workspace /path/to/project
 ```bash
 kairos notifications test feishu-options --workspace /path/to/project
 ```
+
+管理和绑定命令：
+
+```bash
+kairos notifications uses feishu-options --workspace /path/to/project
+kairos notifications attach feishu-options --launch spy-option-signals \
+  --route signals --default-route --workspace /path/to/project
+kairos notifications disable feishu-options --workspace /path/to/project
+kairos notifications delete feishu-options --workspace /path/to/project
+```
+
+仍被 Launch route 引用的 Destination 默认不能删除；应先 `detach`，或者在明确理解影响时
+使用 `--force`。禁用 Destination 后，新 Launch 的校验会明确失败；已运行 Instance 保持其
+启动时的装配结果。
 
 ## 4. 在 Strategy 中发布
 

@@ -43,9 +43,9 @@ enum DeliveryCertainty:ubyte {
 table SelectedExecutionRoute {
   route_id:string (required);
   selection_kind:RouteSelectionKind = UNSPECIFIED;
-  participant_id:string (required);
+  broker_id:string (required);
   destination_market_id:string;
-  provider_product:string (required);
+  execution_channel:string (required);
   provider_symbol:string (required);
   selected_at_unix_nanos:ulong;
 }

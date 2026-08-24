@@ -3,11 +3,11 @@ use std::path::PathBuf;
 
 use kairos_conflux::{
     CredentialRecord, CredentialStore, ExternalAccountCredentialProfile, ExternalFeeComponent,
-    ExternalFeeSchedule, ExternalOrder,
+    ExternalFeeSchedule, ExternalOrder, credential_secret_ref,
 };
+use kairos_primitives::DomainTypeError;
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::DecimalParts;
-use kairos_primitives::integration::ProviderId;
 use kairos_primitives::reference::Currency;
 use kairos_workspace::Workspace;
 use serde::Serialize;
@@ -22,6 +22,53 @@ use crate::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
 };
 use crate::domain::AccountModel;
+
+fn secret_ref_value(
+    source: Option<String>,
+    id: Option<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match (source, id) {
+        (None, None) => Ok(String::new()),
+        (Some(source), Some(id)) => credential_secret_ref(&source, &id).map_err(Into::into),
+        _ => Err("credential SecretRef requires both source and id".into()),
+    }
+}
+
+/// Operational adapter selection for an Account connection.
+///
+/// It deliberately does not use Market's `Provider`: Account business
+/// identity is `BrokerId`, while this value only selects integration wiring.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct AccountAdapterKind(String);
+
+impl AccountAdapterKind {
+    pub fn new(value: impl Into<String>) -> Result<Self, DomainTypeError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(DomainTypeError::Empty {
+                type_name: "AccountAdapterKind",
+            });
+        }
+        if value.trim() != value || value.chars().any(char::is_whitespace) {
+            return Err(DomainTypeError::Invalid {
+                type_name: "AccountAdapterKind",
+                reason: "adapter kind must be a non-empty token without whitespace",
+            });
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for AccountAdapterKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,7 +110,7 @@ pub struct AccountOverviewIdentity {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AccountOverviewConnection {
-    pub integration_provider: ProviderId,
+    pub integration_adapter: AccountAdapterKind,
     pub credential_bindings: Vec<AccountCredentialSummary>,
 }
 
@@ -133,7 +180,7 @@ pub struct AccountOverviewHealth {
 /// Standalone Account CLI facade.
 ///
 /// This facade owns one CLI invocation worth of workspace/config access. It
-/// must not create Conflux, register RPC actors, publish projections, or read
+/// must not create Conflux, register RPC actors, publish current views, or read
 /// launch-instance runtime state.
 pub struct CliAccountApplication {
     pub registry_path: PathBuf,
@@ -156,12 +203,7 @@ pub struct AccountListItem {
     pub alias: String,
     pub broker: BrokerId,
     pub exchange: Option<String>,
-    pub integration_provider: ProviderId,
-    /// Deprecated compatibility alias for `integration_provider`.
-    ///
-    /// Account identity is carried by `broker`; callers must not interpret
-    /// this field as the account's business owner.
-    pub provider: ProviderId,
+    pub integration_adapter: AccountAdapterKind,
     pub environment: String,
     pub segments: Vec<SegmentKey>,
     pub products: Vec<String>,
@@ -173,13 +215,215 @@ pub struct AccountListItem {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountBrowseResult {
+    pub accounts: Vec<AccountRecordResult>,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountRecordResult {
+    pub account_id: String,
+    pub alias: String,
+    pub broker: String,
+    pub integration_provider: String,
+    pub exchange: Option<String>,
+    pub environment: String,
+    pub remote_identity: Option<String>,
+    pub permissions: BTreeMap<String, String>,
+    pub segments: Vec<String>,
+    pub segment_products: BTreeMap<String, String>,
+    pub segment_trading_modes: BTreeMap<String, String>,
+    pub account_model: Option<String>,
+    pub credential_id: Option<String>,
+    pub credentials: Vec<AccountCredentialBindingResult>,
+    pub credential_role: Option<String>,
+    pub status: String,
+    pub initial_balances: Vec<String>,
+    pub fee_rate: Option<String>,
+    pub values: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountCredentialBindingResult {
+    pub name: String,
+    pub credential_id: String,
+    pub role: String,
+}
+
+impl From<AccountBindingRecord> for AccountRecordResult {
+    fn from(value: AccountBindingRecord) -> Self {
+        Self {
+            account_id: value.account_id,
+            alias: value.alias,
+            broker: value.broker,
+            integration_provider: value.integration_provider,
+            exchange: value.exchange,
+            environment: value.environment,
+            remote_identity: value.remote_identity,
+            permissions: value.permissions,
+            segments: value.segments,
+            segment_products: value.segment_products,
+            segment_trading_modes: value.segment_trading_modes,
+            account_model: value.account_model,
+            credential_id: value.credential_id,
+            credentials: value
+                .credentials
+                .into_iter()
+                .map(|credential| AccountCredentialBindingResult {
+                    name: credential.name,
+                    credential_id: credential.credential_id,
+                    role: credential.role,
+                })
+                .collect(),
+            credential_role: value.credential_role,
+            status: value.status,
+            initial_balances: value.initial_balances,
+            fee_rate: value.fee_rate,
+            values: value.values,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountModifyResult {
+    #[serde(flatten)]
+    pub account: AccountRecordResult,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountSimulateResult {
+    pub account: AccountRecordResult,
+    pub mode: &'static str,
+    pub status: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountRemoveResult {
+    pub account_id: String,
+    pub removed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoredCredentialResult {
+    pub credential_id: String,
+    pub provider: String,
+    pub role: String,
+    pub api_key: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountModelSwitchResult {
+    pub account_id: String,
+    pub from_model: Option<String>,
+    pub to_model: String,
+    pub status: &'static str,
+    pub reason: String,
+    pub account: AccountRecordResult,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountRegistrationResult {
+    pub account_id: String,
+    pub status: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountCredentialBindResult {
+    pub account_id: String,
+    pub name: String,
+    pub credential_id: String,
+    pub role: String,
+    pub checked: bool,
+    pub status: &'static str,
+    pub account: AccountRecordResult,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountCredentialProfileResult {
+    pub remote_identity: Option<String>,
+    pub account_type: Option<String>,
+    pub permissions: Vec<String>,
+    pub segments: Vec<String>,
+    pub attributes: BTreeMap<String, String>,
+}
+
+impl From<ExternalAccountCredentialProfile> for AccountCredentialProfileResult {
+    fn from(value: ExternalAccountCredentialProfile) -> Self {
+        Self {
+            remote_identity: value.remote_identity,
+            account_type: value.account_type,
+            permissions: value.permissions,
+            segments: value.segments,
+            attributes: value.attributes,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountConnectResult {
+    pub account_id: String,
+    pub provider: String,
+    pub segment: String,
+    pub discovered_segments: Vec<String>,
+    pub status: &'static str,
+    pub source: &'static str,
+    pub credential_profile: Option<AccountCredentialProfileResult>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CredentialMutationResult {
+    pub credential_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<bool>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CredentialDetailResult {
+    pub credential_id: String,
+    pub provider: String,
+    pub role: String,
+    pub api_key: String,
+    pub secret: String,
+    pub passphrase: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountDoctorResult {
+    pub accounts: Vec<AccountRecordResult>,
+    pub issues: Vec<String>,
+    pub runtime: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountLocalSnapshotResult {
+    pub account_id: String,
+    pub source: &'static str,
+    pub mode: &'static str,
+    pub kind: &'static str,
+    pub segments: Vec<AccountLocalSegmentResult>,
+    pub positions: Vec<AccountPositionItem>,
+    pub open_orders: Vec<AccountOpenOrderItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccountLocalSegmentResult {
+    pub segment: String,
+    pub balances: Vec<AccountBalanceItem>,
+    pub positions: Vec<AccountPositionItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AccountTradingBinding {
     pub account_id: AccountId,
     pub remote_account_id: String,
-    pub provider: ProviderId,
+    pub integration_adapter: AccountAdapterKind,
     pub environment: String,
     pub segment_key: SegmentKey,
-    pub provider_product: String,
+    pub provider_segment: String,
     pub trading_mode: Option<String>,
     pub credential_id: Option<String>,
     pub credential_role: String,
@@ -376,8 +620,7 @@ impl TryFrom<&AccountBindingRecord> for AccountListItem {
             alias: record.alias.clone(),
             broker: BrokerId::new(record.broker.clone())?,
             exchange: record.exchange.clone(),
-            integration_provider: ProviderId::new(record.integration_provider.clone())?,
-            provider: ProviderId::new(record.integration_provider.clone())?,
+            integration_adapter: AccountAdapterKind::new(record.integration_provider.clone())?,
             environment: record.environment.clone(),
             segments: record
                 .segments
@@ -567,7 +810,7 @@ impl CliAccountApplication {
         if !matches!(provider.as_str(), "ibkr" | "paper" | "simulated") && credential_id.is_none() {
             return Err(format!("account {account_id} has no credential binding").into());
         }
-        let provider_product = account
+        let provider_segment = account
             .product_for_segment(segment)
             .unwrap_or(segment)
             .to_owned();
@@ -577,7 +820,7 @@ impl CliAccountApplication {
             .cloned()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| {
-                default_rest_endpoint(&provider, &provider_product)
+                default_rest_endpoint(&provider, &provider_segment)
                     .unwrap_or_default()
                     .to_owned()
             });
@@ -587,10 +830,10 @@ impl CliAccountApplication {
                 .remote_identity
                 .clone()
                 .unwrap_or_else(|| account.account_id.clone()),
-            provider: ProviderId::new(provider)?,
+            integration_adapter: AccountAdapterKind::new(provider)?,
             environment: account.environment.clone(),
             segment_key: SegmentKey::new(segment.to_owned())?,
-            provider_product,
+            provider_segment,
             trading_mode: account.segment_trading_modes.get(segment).cloned(),
             credential_id,
             credential_role,
@@ -617,7 +860,7 @@ impl CliAccountApplication {
     pub fn browse_accounts(
         &self,
         query: Option<&str>,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountBrowseResult, Box<dyn std::error::Error>> {
         let query = query.map(str::to_ascii_lowercase);
         let accounts: Vec<_> = self
             .registry
@@ -635,24 +878,25 @@ impl CliAccountApplication {
                 })
             })
             .cloned()
+            .map(AccountRecordResult::from)
             .collect();
-        Ok(serde_json::json!({
-            "accounts": accounts,
-            "count": accounts.len(),
-        }))
+        Ok(AccountBrowseResult {
+            count: accounts.len(),
+            accounts,
+        })
     }
 
     pub fn show_account(
         &self,
         account_id: &str,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountRecordResult, Box<dyn std::error::Error>> {
         let value = self
             .registry
             .accounts
             .iter()
             .find(|record| record.account_id == account_id)
             .ok_or_else(|| format!("account not found: {account_id}"))?;
-        Ok(serde_json::to_value(value)?)
+        Ok(value.clone().into())
     }
 
     pub async fn overview(
@@ -669,7 +913,7 @@ impl CliAccountApplication {
             masked_remote_identity: account.remote_identity.as_deref().map(mask_identity),
         };
         let connection = AccountOverviewConnection {
-            integration_provider: ProviderId::new(account.integration_provider.clone())?,
+            integration_adapter: AccountAdapterKind::new(account.integration_provider.clone())?,
             credential_bindings: account
                 .credentials
                 .iter()
@@ -811,7 +1055,7 @@ impl CliAccountApplication {
             let product = account.product_for_segment(segment).unwrap_or(segment);
             let binding = AccountSegmentBinding {
                 segment_key: segment.clone(),
-                provider_product: product.to_owned(),
+                provider_segment: product.to_owned(),
                 trading_mode: account.segment_trading_modes.get(segment).cloned(),
             };
             let mut options = base_options.clone();
@@ -948,7 +1192,7 @@ impl CliAccountApplication {
             }
             let binding = AccountSegmentBinding {
                 segment_key: segment.clone(),
-                provider_product: product.to_owned(),
+                provider_segment: product.to_owned(),
                 trading_mode: account.segment_trading_modes.get(segment).cloned(),
             };
             let mut options = base_options.clone();
@@ -1029,17 +1273,17 @@ impl CliAccountApplication {
     pub fn local_snapshot(
         &self,
         account_id: &str,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountLocalSnapshotResult, Box<dyn std::error::Error>> {
         let account = self.local_query_account(account_id)?;
-        Ok(serde_json::json!({
-            "account_id": account.account_id,
-            "source": "local_registry",
-            "mode": "standalone",
-            "kind": "snapshot",
-            "segments": self.local_segments(account)?,
-            "positions": [],
-            "open_orders": [],
-        }))
+        Ok(AccountLocalSnapshotResult {
+            account_id: account.account_id.clone(),
+            source: "local_registry",
+            mode: "standalone",
+            kind: "snapshot",
+            segments: self.local_segments(account)?,
+            positions: Vec::new(),
+            open_orders: Vec::new(),
+        })
     }
 
     pub async fn balances(
@@ -1125,7 +1369,7 @@ impl CliAccountApplication {
             let product = account.product_for_segment(segment).unwrap_or(segment);
             let binding = AccountSegmentBinding {
                 segment_key: segment.clone(),
-                provider_product: product.to_owned(),
+                provider_segment: product.to_owned(),
                 trading_mode: account.segment_trading_modes.get(segment).cloned(),
             };
             let mut options = base_options.clone();
@@ -1242,7 +1486,7 @@ impl CliAccountApplication {
             let product = account.product_for_segment(segment).unwrap_or(segment);
             let binding = AccountSegmentBinding {
                 segment_key: segment.clone(),
-                provider_product: product.to_owned(),
+                provider_segment: product.to_owned(),
                 trading_mode: account.segment_trading_modes.get(segment).cloned(),
             };
             let mut options = base_options.clone();
@@ -1477,7 +1721,7 @@ impl CliAccountApplication {
             let product = account.product_for_segment(segment).unwrap_or(segment);
             let binding = AccountSegmentBinding {
                 segment_key: segment.clone(),
-                provider_product: product.to_owned(),
+                provider_segment: product.to_owned(),
                 trading_mode: account.segment_trading_modes.get(segment).cloned(),
             };
             let mut options = base_options.clone();
@@ -1645,7 +1889,7 @@ impl CliAccountApplication {
         account_id: &str,
         target: &str,
         reason: &str,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountModelSwitchResult, Box<dyn std::error::Error>> {
         let target_model = AccountModel::parse(target)
             .ok_or_else(|| format!("unsupported account model: {target}"))?;
         let mut record = self
@@ -1666,20 +1910,20 @@ impl CliAccountApplication {
         record.status = "reconciling".into();
         self.registry.upsert_account(record.clone());
         self.registry.save(&self.registry_path)?;
-        Ok(serde_json::json!({
-            "account_id": account_id,
-            "from_model": previous,
-            "to_model": target,
-            "status": "requested",
-            "reason": reason,
-            "account": record,
-        }))
+        Ok(AccountModelSwitchResult {
+            account_id: account_id.to_owned(),
+            from_model: previous,
+            to_model: target.to_owned(),
+            status: "requested",
+            reason: reason.to_owned(),
+            account: record.into(),
+        })
     }
 
     pub fn register_account(
         &mut self,
         request: RegisterAccountRequest,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountRegistrationResult, Box<dyn std::error::Error>> {
         let values = parse_field_values(&request.fields)?;
         self.registry.upsert_account(AccountBindingRecord {
             account_id: request.account_id.clone(),
@@ -1706,16 +1950,16 @@ impl CliAccountApplication {
             values,
         });
         self.registry.save(&self.registry_path)?;
-        Ok(serde_json::json!({
-            "account_id": request.account_id,
-            "status": "registered",
-        }))
+        Ok(AccountRegistrationResult {
+            account_id: request.account_id,
+            status: "registered",
+        })
     }
 
     pub fn modify_account(
         &mut self,
         request: ModifyAccountRequest,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountModifyResult, Box<dyn std::error::Error>> {
         let fee_rate_requested = request.fee_rate.is_some();
         let mut record = self
             .registry
@@ -1741,11 +1985,11 @@ impl CliAccountApplication {
         }
         if let Some(value) = request.segment {
             record.segments = vec![value.clone()];
-            let provider_product = request
+            let provider_segment = request
                 .product
                 .clone()
                 .ok_or("--product is required when changing --segment")?;
-            record.segment_products = BTreeMap::from([(value, provider_product)]);
+            record.segment_products = BTreeMap::from([(value, provider_segment)]);
             record.segment_trading_modes.clear();
         } else if let Some(value) = request.product {
             let segment_key = record
@@ -1789,22 +2033,23 @@ impl CliAccountApplication {
         }
         self.registry.upsert_account(record.clone());
         self.registry.save(&self.registry_path)?;
-        let mut value = serde_json::to_value(&record)?;
-        if fee_rate_requested && record.environment.eq_ignore_ascii_case("live") {
-            value.as_object_mut().expect("record serializes as object").insert(
-                "warnings".into(),
-                serde_json::json!([
-                    "fee_rate is deprecated for live accounts; use the product/symbol fees query for observed rates"
-                ]),
-            );
-        }
-        Ok(value)
+        let warnings = if fee_rate_requested && record.environment.eq_ignore_ascii_case("live") {
+            vec![
+                "fee_rate is deprecated for live accounts; use the product/symbol fees query for observed rates",
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(AccountModifyResult {
+            account: record.into(),
+            warnings,
+        })
     }
 
     pub fn simulate_account(
         &mut self,
         request: SimulateAccountRequest,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountSimulateResult, Box<dyn std::error::Error>> {
         let record = AccountBindingRecord {
             account_id: request.account_id.clone(),
             alias: request.account_id.clone(),
@@ -1828,47 +2073,47 @@ impl CliAccountApplication {
         };
         self.registry.upsert_account(record.clone());
         self.registry.save(&self.registry_path)?;
-        Ok(serde_json::json!({
-            "account": record,
-            "mode": "paper",
-            "status": "simulated",
-        }))
+        Ok(AccountSimulateResult {
+            account: record.into(),
+            mode: "paper",
+            status: "simulated",
+        })
     }
 
     pub fn remove_account(
         &mut self,
         account_id: &str,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountRemoveResult, Box<dyn std::error::Error>> {
         let removed = self.registry.remove_account(account_id);
         self.registry.save(&self.registry_path)?;
-        Ok(serde_json::json!({
-            "account_id": account_id,
-            "removed": removed,
-        }))
+        Ok(AccountRemoveResult {
+            account_id: account_id.to_owned(),
+            removed,
+        })
     }
 
-    pub fn list_credentials(&self) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    pub fn list_credentials(
+        &self,
+    ) -> Result<Vec<StoredCredentialResult>, Box<dyn std::error::Error>> {
         let values: Vec<_> = self
             .credential_store
             .credentials
             .iter()
-            .map(|record| {
-                serde_json::json!({
-                    "credential_id": record.credential_id,
-                    "provider": record.provider,
-                    "role": record.role,
-                    "api_key": redact(&record.api_key),
-                })
+            .map(|record| StoredCredentialResult {
+                credential_id: record.credential_id.clone(),
+                provider: record.provider.clone(),
+                role: record.role.clone(),
+                api_key: redact(&record.api_key),
             })
             .collect();
-        Ok(serde_json::to_value(values)?)
+        Ok(values)
     }
 
     pub fn bind_credential(
         &mut self,
         request: BindCredentialRequest,
         credential_profile: Option<&ExternalAccountCredentialProfile>,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountCredentialBindResult, Box<dyn std::error::Error>> {
         let mut record = self
             .registry
             .accounts
@@ -1944,22 +2189,22 @@ impl CliAccountApplication {
         }
         self.registry.upsert_account(record.clone());
         self.registry.save(&self.registry_path)?;
-        Ok(serde_json::json!({
-            "account_id": request.account_id,
-            "name": request.name,
-            "credential_id": request.credential_id,
-            "role": request.role,
-            "checked": credential_profile.is_some(),
-            "status": "bound",
-            "account": record,
-        }))
+        Ok(AccountCredentialBindResult {
+            account_id: request.account_id,
+            name: request.name,
+            credential_id: request.credential_id,
+            role: request.role,
+            checked: credential_profile.is_some(),
+            status: "bound",
+            account: record.into(),
+        })
     }
 
     pub async fn bind_credential_with_probe(
         &mut self,
         request: BindCredentialRequest,
         probe: AccountCredentialProbeRequest,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountCredentialBindResult, Box<dyn std::error::Error>> {
         let credential_profile = if probe.check {
             let options = self.credential_probe_options(
                 &request.account_id,
@@ -1980,7 +2225,16 @@ impl CliAccountApplication {
     pub fn connect_account(
         &mut self,
         request: ConnectAccountRequest,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountConnectResult, Box<dyn std::error::Error>> {
+        let result = AccountConnectResult {
+            account_id: request.account_id.clone(),
+            provider: request.provider.clone(),
+            segment: request.segment.clone(),
+            discovered_segments: request.discovered_segments.clone(),
+            status: "connected",
+            source: "direct_provider",
+            credential_profile: request.credential_profile.clone().map(Into::into),
+        };
         self.registry.upsert_account(AccountBindingRecord {
             account_id: request.account_id.clone(),
             alias: request.alias.unwrap_or_else(|| request.account_id.clone()),
@@ -2030,21 +2284,13 @@ impl CliAccountApplication {
             values: BTreeMap::new(),
         });
         self.registry.save(&self.registry_path)?;
-        Ok(serde_json::json!({
-            "account_id": request.account_id,
-            "provider": request.provider,
-            "segment": request.segment,
-            "discovered_segments": request.discovered_segments,
-            "status": "connected",
-            "source": "direct_provider",
-            "credential_profile": request.credential_profile,
-        }))
+        Ok(result)
     }
 
     pub async fn connect_account_from_provider(
         &mut self,
         request: ConnectAccountProviderRequest,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountConnectResult, Box<dyn std::error::Error>> {
         let selected_segment = request.connection.segment.clone();
         let account_id = request
             .connection
@@ -2290,27 +2536,34 @@ impl CliAccountApplication {
     pub fn create_credential(
         &mut self,
         request: CreateCredentialRequest,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<CredentialMutationResult, Box<dyn std::error::Error>> {
+        if request.api_key.is_some() || request.secret.is_some() || request.passphrase.is_some() {
+            return Err(
+                "credential plaintext fields are read-only legacy input; use field-level SecretRef options"
+                    .into(),
+            );
+        }
         self.credential_store.upsert(CredentialRecord {
             credential_id: request.credential_id.clone(),
             provider: request.provider,
             role: request.role,
-            api_key: request.api_key.unwrap_or_default(),
-            secret: request.secret.unwrap_or_default(),
-            passphrase: request.passphrase,
+            api_key: secret_ref_value(request.api_key_source, request.api_key_ref)?,
+            secret: secret_ref_value(request.secret_source, request.secret_ref)?,
+            passphrase: secret_ref_value(request.passphrase_source, request.passphrase_ref)?,
         });
         self.credential_store.save(&self.credentials_path)?;
-        Ok(serde_json::json!({
-            "credential_id": request.credential_id,
-            "status": "created",
-        }))
+        Ok(CredentialMutationResult {
+            credential_id: request.credential_id,
+            status: Some("created"),
+            removed: None,
+        })
     }
 
     pub fn delete_credential(
         &mut self,
         credential_id: &str,
         force: bool,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<CredentialMutationResult, Box<dyn std::error::Error>> {
         if !force
             && self
                 .registry
@@ -2325,31 +2578,44 @@ impl CliAccountApplication {
         }
         let removed = self.credential_store.remove(credential_id);
         self.credential_store.save(&self.credentials_path)?;
-        Ok(serde_json::json!({
-            "credential_id": credential_id,
-            "removed": removed,
-        }))
+        Ok(CredentialMutationResult {
+            credential_id: credential_id.to_owned(),
+            status: None,
+            removed: Some(removed),
+        })
     }
 
     pub fn show_credential(
         &self,
         credential_id: &str,
         reveal_secrets: bool,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<CredentialDetailResult, Box<dyn std::error::Error>> {
         let credential = self
             .credential_store
             .credentials
             .iter()
             .find(|record| record.credential_id == credential_id)
             .ok_or_else(|| format!("credential not found: {credential_id}"))?;
-        Ok(serde_json::json!({
-            "credential_id": credential.credential_id,
-            "provider": credential.provider,
-            "role": credential.role,
-            "api_key": if reveal_secrets { credential.api_key_value().unwrap_or_default() } else { redact(&credential.api_key) },
-            "secret": if reveal_secrets { credential.secret_value().unwrap_or_default() } else { "***".to_string() },
-            "passphrase": if reveal_secrets { credential.passphrase_value().unwrap_or_default() } else { "***".to_string() },
-        }))
+        Ok(CredentialDetailResult {
+            credential_id: credential.credential_id.clone(),
+            provider: credential.provider.clone(),
+            role: credential.role.clone(),
+            api_key: if reveal_secrets {
+                credential.api_key_value().unwrap_or_default()
+            } else {
+                redact(&credential.api_key)
+            },
+            secret: if reveal_secrets {
+                credential.secret_value().unwrap_or_default()
+            } else {
+                "***".to_string()
+            },
+            passphrase: if reveal_secrets {
+                credential.passphrase_value().unwrap_or_default()
+            } else {
+                "***".to_string()
+            },
+        })
     }
 
     pub fn schemas(&self) -> serde_json::Value {
@@ -2384,7 +2650,7 @@ impl CliAccountApplication {
     pub fn doctor(
         &self,
         account_id: Option<&str>,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    ) -> Result<AccountDoctorResult, Box<dyn std::error::Error>> {
         let selected_account_id = account_id
             .map(|value| self.resolve_account_id(value))
             .transpose()?;
@@ -2427,11 +2693,15 @@ impl CliAccountApplication {
         for account in &selected_accounts {
             issues.extend(account_configuration_issues(account));
         }
-        Ok(serde_json::json!({
-            "accounts": selected_accounts,
-            "issues": issues,
-            "runtime": serde_json::Map::new(),
-        }))
+        Ok(AccountDoctorResult {
+            accounts: selected_accounts
+                .into_iter()
+                .cloned()
+                .map(Into::into)
+                .collect(),
+            issues,
+            runtime: BTreeMap::new(),
+        })
     }
 
     pub fn resolve_account_id(&self, value: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -2563,20 +2833,20 @@ impl CliAccountApplication {
     fn local_segments(
         &self,
         account: &AccountBindingRecord,
-    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<AccountLocalSegmentResult>, Box<dyn std::error::Error>> {
         let mut segments = Vec::new();
         for segment in &account.segments {
             let mut balances = Vec::new();
             for value in &account.initial_balances {
                 if let Some(balance) = local_balance(segment, value)? {
-                    balances.push(serde_json::to_value(balance)?);
+                    balances.push(balance);
                 }
             }
-            segments.push(serde_json::json!({
-                "segment": segment,
-                "balances": balances,
-                "positions": [],
-            }));
+            segments.push(AccountLocalSegmentResult {
+                segment: segment.clone(),
+                balances,
+                positions: Vec::new(),
+            });
         }
         Ok(segments)
     }
@@ -2983,7 +3253,13 @@ pub struct CreateCredentialRequest {
     pub role: String,
     pub api_key: Option<String>,
     pub secret: Option<String>,
-    pub passphrase: String,
+    pub passphrase: Option<String>,
+    pub api_key_source: Option<String>,
+    pub api_key_ref: Option<String>,
+    pub secret_source: Option<String>,
+    pub secret_ref: Option<String>,
+    pub passphrase_source: Option<String>,
+    pub passphrase_ref: Option<String>,
 }
 
 pub struct BindCredentialRequest {
@@ -3284,9 +3560,7 @@ mod tests {
 
         assert_eq!(value["accounts"][0]["account_id"], "main");
         assert_eq!(value["accounts"][0]["broker"], "custodian-x");
-        assert_eq!(value["accounts"][0]["integration_provider"], "binance");
-        // Retained for one compatibility cycle; business identity is broker.
-        assert_eq!(value["accounts"][0]["provider"], "binance");
+        assert_eq!(value["accounts"][0]["integration_adapter"], "binance");
         assert_eq!(
             value["accounts"][0]["configured_credential_role"],
             "readonly"
@@ -3301,6 +3575,8 @@ mod tests {
             "credentials",
             "segment_products",
             "credential_role",
+            "integration_provider",
+            "provider",
         ] {
             assert!(value["accounts"][0].get(internal).is_none());
         }
@@ -3356,7 +3632,7 @@ role = "trade"
         let trade = application
             .trading_binding("main", Some("usd_m"), "trade")
             .unwrap();
-        assert_eq!(trade.provider_product, "usd_m_futures");
+        assert_eq!(trade.provider_segment, "usd_m_futures");
         assert_eq!(trade.credential_id.as_deref(), Some("binance-trade"));
         assert_eq!(trade.credential_role, "trade");
         let serialized = serde_json::to_value(trade).unwrap();

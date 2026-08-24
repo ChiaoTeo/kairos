@@ -1,5 +1,5 @@
 use kairos_primitives::decimal::{Price, Rate};
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::InstrumentId;
 use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
@@ -13,5 +13,5 @@ pub struct IndexPrice {
     pub index_price: Option<Price>,
     pub funding_rate: Option<Rate>,
     pub observed_at_unix_nanos: UnixNanos,
-    pub source_id: SourceId,
+    pub provider: Provider,
 }

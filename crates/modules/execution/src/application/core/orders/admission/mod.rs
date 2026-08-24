@@ -2,7 +2,7 @@
 
 use kairos_primitives::decimal::{Money, Price, Quantity, SignedQuantity};
 use kairos_primitives::time::UnixNanos;
-use kairos_reference_contract::ReferenceMarket;
+use kairos_reference_contract::Market;
 #[cfg(test)]
 use kairos_risk_contract::Amount as RiskAmount;
 use rust_decimal::Decimal;
@@ -24,7 +24,7 @@ pub(crate) struct PlanningQuote {
 const MAX_PRICE_DEVIATION_BPS: i64 = 500;
 
 pub(crate) fn validate_reference_rules(
-    market: &ReferenceMarket,
+    market: &Market,
     request: &SubmitOrder,
 ) -> Result<(), String> {
     let status = market.status.as_str();

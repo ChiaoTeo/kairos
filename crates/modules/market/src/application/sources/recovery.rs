@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::super::{MarketApplication, MarketError};
-use crate::domain::source::{SourceEpoch, SourceId, SourceStatus};
+use crate::domain::source::{MarketFeedId, SourceEpoch, SourceStatus};
 use crate::services::actor::PendingSourceRequest;
 use crate::services::source::messages::{SourceCommand, SourceInput, SourceRequestId};
 
@@ -43,7 +43,7 @@ impl MarketApplication {
     }
 
     pub async fn set_replay_paused(&mut self, paused: bool) -> Result<(), MarketError> {
-        let replay_id = SourceId::new("replay").expect("static replay source id");
+        let replay_id = MarketFeedId::new("replay").expect("static replay source id");
         let source = self
             .actor
             .attached_sources
@@ -82,9 +82,8 @@ impl MarketApplication {
                 error,
             } => {
                 let previous_epoch = self
-                    .current_view()
-                    .sources
-                    .get(&source_id)
+                    .actor
+                    .source_state(&source_id)
                     .map(|source| source.epoch)
                     .unwrap_or_default();
                 if epoch > previous_epoch {
@@ -230,10 +229,9 @@ impl MarketApplication {
         Ok(0)
     }
 
-    fn accepts_epoch(&self, source_id: &SourceId, epoch: SourceEpoch) -> bool {
-        self.current_view()
-            .sources
-            .get(source_id)
+    fn accepts_epoch(&self, source_id: &MarketFeedId, epoch: SourceEpoch) -> bool {
+        self.actor
+            .source_state(source_id)
             .is_some_and(|state| state.epoch == epoch)
     }
 
@@ -305,9 +303,8 @@ impl MarketApplication {
             } else {
                 for source in self.actor.attached_sources.keys().cloned().collect::<Vec<_>>() {
                     let epoch = self
-                        .current_view()
-                        .sources
-                        .get(&source)
+                        .actor
+                        .source_state(&source)
                         .map(|state| state.epoch)
                         .unwrap_or_default();
                     self.actor
@@ -341,14 +338,14 @@ impl MarketApplication {
 mod tests {
     use std::time::Duration;
 
-    use kairos_primitives::reference::{Exchange, InstrumentKind};
+    use kairos_primitives::reference::{ExchangeId, InstrumentKind};
     use kairos_primitives::time::UnixNanos;
     use tokio::sync::mpsc;
 
     use super::MarketApplication;
     use crate::domain::observation::{MarketObservation, Quote};
     use crate::domain::source::{
-        MarketReadiness, SourceDescriptor, SourceEpoch, SourceId, SourceStatus,
+        FeedDescriptor, MarketFeedId, MarketReadiness, SourceEpoch, SourceStatus,
     };
     use crate::domain::subscription::{
         SubscriptionId, SubscriptionMemberRequirement, SubscriptionStatus,
@@ -360,36 +357,32 @@ mod tests {
         market_id: &str,
         instrument_id: &str,
         exchange_id: &str,
-        provider_product: &str,
+        provider_segment: &str,
         asset_type: &str,
         subscription_symbol: &str,
     ) -> Result<crate::ResolvedMarket, String> {
-        let kind = match provider_product {
+        let kind = match provider_segment {
             "spot" => InstrumentKind::Spot,
             "options" => InstrumentKind::Option,
             "perpetual" | "swap" => InstrumentKind::Perpetual,
             "future" | "futures" => InstrumentKind::Future,
             _ => InstrumentKind::Equity,
         };
-        crate::ResolvedMarket::new(
+        crate::ResolvedMarket::new_with_binding(
             market_id,
             instrument_id,
             kind,
             exchange_id,
-            crate::MarketDataRoute::new(
-                format!("test:{market_id}"),
-                exchange_id,
-                provider_product,
-                subscription_symbol,
-            )?,
+            crate::ProviderRouteBinding::new(exchange_id, provider_segment, subscription_symbol)?,
         )?
         .with_asset_type(asset_type)
     }
 
     fn attach_test_source(application: &mut MarketApplication, id: &str, stop_on_shutdown: bool) {
-        let descriptor = SourceDescriptor::new(
-            SourceId::new(id).unwrap(),
-            Exchange::new(id).unwrap(),
+        let descriptor = FeedDescriptor::for_provider(
+            MarketFeedId::new(id).unwrap(),
+            id,
+            ExchangeId::new(id).unwrap(),
             "spot",
             Some("crypto".into()),
         )
@@ -454,7 +447,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscription_projection_reports_route_and_provider_readiness() {
+    async fn subscription_state_reports_route_and_provider_readiness() {
         let mut application = MarketApplication::new_with_source_capacity("market", 10, 1).unwrap();
         attach_test_source(&mut application, "binance", true);
         let status = application.next_source_input().await.unwrap();
@@ -528,9 +521,10 @@ mod tests {
     #[tokio::test]
     async fn orderbook_gap_requests_only_the_affected_market_resync() {
         let mut application = MarketApplication::new_with_source_capacity("market", 10, 2).unwrap();
-        let descriptor = SourceDescriptor::new(
-            SourceId::new("binance-spot").unwrap(),
-            Exchange::new("binance").unwrap(),
+        let descriptor = FeedDescriptor::for_provider(
+            MarketFeedId::new("binance-spot").unwrap(),
+            "binance",
+            ExchangeId::new("binance").unwrap(),
             "spot",
             Some("crypto".into()),
         )
@@ -549,7 +543,7 @@ mod tests {
         application
             .actor
             .apply_source_status(
-                &SourceId::new("binance-spot").unwrap(),
+                &MarketFeedId::new("binance-spot").unwrap(),
                 SourceEpoch::new(1),
                 SourceStatus::Ready,
                 None,
@@ -561,8 +555,8 @@ mod tests {
         .unwrap();
         application
             .ingest_orderbook_snapshot(
-                crate::domain::observation::order_book::OrderBook::snapshot_with_source(
-                    SourceId::new("binance-spot").unwrap(),
+                crate::domain::observation::order_book::OrderBook::snapshot_with_provider(
+                    kairos_primitives::market::Provider::new("binance").unwrap(),
                     "btc-usdt",
                     "btc",
                     10,
@@ -575,11 +569,10 @@ mod tests {
             .unwrap();
         application
             .apply_source_input(SourceInput::OrderBook {
-                source_id: SourceId::new("binance-spot").unwrap(),
+                source_id: MarketFeedId::new("binance-spot").unwrap(),
                 epoch: SourceEpoch::new(1),
                 update: crate::services::source::messages::SourceOrderBookUpdate {
                     market: Box::new(market.clone()),
-                    source_id: SourceId::new("binance-spot").unwrap(),
                     market_id: market.market_id().unwrap().clone(),
                     instrument_id: market.instrument_id.clone(),
                     first_sequence: 12.into(),
@@ -598,9 +591,12 @@ mod tests {
             } => assert_eq!(requested.market_id(), market.market_id()),
             _ => panic!("expected order-book resync command"),
         }
-        let snapshot = application.current_view();
         assert_eq!(
-            snapshot.sources[&SourceId::new("binance-spot").unwrap()].resyncing_markets,
+            application
+                .actor
+                .source_state(&MarketFeedId::new("binance-spot").unwrap())
+                .unwrap()
+                .resyncing_markets,
             vec![market.market_id().unwrap().clone()]
         );
     }
@@ -608,14 +604,15 @@ mod tests {
     #[tokio::test]
     async fn any_active_source_failure_changes_source_readiness() {
         let mut application = MarketApplication::new_with_source_capacity("market", 10, 2).unwrap();
-        let optional_id = SourceId::new("optional-route").unwrap();
-        let required_id = SourceId::new("required-route").unwrap();
+        let optional_id = MarketFeedId::new("optional-route").unwrap();
+        let required_id = MarketFeedId::new("required-route").unwrap();
         application
             .actor
             .register_source(
-                SourceDescriptor::new(
+                FeedDescriptor::for_provider(
                     optional_id.clone(),
-                    Exchange::new("optional").unwrap(),
+                    "optional",
+                    ExchangeId::new("optional").unwrap(),
                     "spot",
                     Some("crypto".into()),
                 )
@@ -625,9 +622,10 @@ mod tests {
         application
             .actor
             .register_source(
-                SourceDescriptor::new(
+                FeedDescriptor::for_provider(
                     required_id.clone(),
-                    Exchange::new("required").unwrap(),
+                    "required",
+                    ExchangeId::new("required").unwrap(),
                     "spot",
                     Some("crypto".into()),
                 )
@@ -657,28 +655,28 @@ mod tests {
 
         let snapshot = application.current_view();
         assert_eq!(snapshot.readiness, MarketReadiness::Degraded);
+        let optional = application.actor.source_state(&optional_id).unwrap();
+        let required = application.actor.source_state(&required_id).unwrap();
+        assert_eq!(optional.status, SourceStatus::Degraded);
         assert_eq!(
-            snapshot.sources[&optional_id].status,
-            SourceStatus::Degraded
-        );
-        assert_eq!(
-            snapshot.sources[&optional_id].last_failure_kind,
+            optional.last_failure_kind,
             Some(crate::domain::source::SourceFailureKind::Transport)
         );
-        assert_eq!(snapshot.sources[&required_id].status, SourceStatus::Ready);
-        assert_eq!(snapshot.sources[&required_id].epoch, SourceEpoch::new(1));
+        assert_eq!(required.status, SourceStatus::Ready);
+        assert_eq!(required.epoch, SourceEpoch::new(1));
     }
 
     #[tokio::test]
     async fn stale_route_epoch_observation_cannot_mutate_actor_state() {
         let mut application = MarketApplication::new_with_source_capacity("market", 10, 2).unwrap();
-        let source_id = SourceId::new("binance-spot").unwrap();
+        let source_id = MarketFeedId::new("binance-spot").unwrap();
         application
             .actor
             .register_source(
-                SourceDescriptor::new(
+                FeedDescriptor::for_provider(
                     source_id.clone(),
-                    Exchange::new("binance").unwrap(),
+                    "binance",
+                    ExchangeId::new("binance").unwrap(),
                     "spot",
                     Some("crypto".into()),
                 )
@@ -717,7 +715,7 @@ mod tests {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: UnixNanos::new(1),
-            source_id: source_id.clone(),
+            provider: kairos_primitives::market::Provider::new("binance").unwrap(),
         });
         application
             .apply_source_input(SourceInput::Observation {
@@ -742,10 +740,11 @@ mod tests {
     #[tokio::test]
     async fn epoch_advance_retries_pending_subscription_and_rejects_stale_ack() {
         let mut application = MarketApplication::new_with_source_capacity("market", 10, 4).unwrap();
-        let source_id = SourceId::new("binance-spot").unwrap();
-        let descriptor = SourceDescriptor::new(
+        let source_id = MarketFeedId::new("binance-spot").unwrap();
+        let descriptor = FeedDescriptor::for_provider(
             source_id.clone(),
-            Exchange::new("binance").unwrap(),
+            "binance",
+            ExchangeId::new("binance").unwrap(),
             "spot",
             Some("crypto".into()),
         )

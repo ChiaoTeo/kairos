@@ -1,14 +1,13 @@
 //! Source runtime phase transitions.
 
-use crate::domain::{
-    SourceDesiredState, SourceRuntimeError, SourceRuntimePhase, SourceRuntimeProgress,
-    SourceRuntimeWorkItem, SourceWorkItem,
-};
-
 use super::SourceRuntimeRegistry;
 use super::retry::{SourceRetryPolicy, retry_after_unix_nanos};
 use super::scheduler::SourceScheduleSkipReason;
 use super::status::inactive_runtime_phase;
+use crate::domain::{
+    SourceDesiredState, SourceRuntimeError, SourceRuntimePhase, SourceRuntimeProgress,
+    SourceRuntimeWorkItem, SourceWorkItem,
+};
 
 impl SourceRuntimeRegistry {
     pub(crate) fn mark_registration_error(&mut self, source_id: &str, error: SourceRuntimeError) {

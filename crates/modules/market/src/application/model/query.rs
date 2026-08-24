@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
 use kairos_primitives::decimal::{Money, Price, PriceDelta, Quantity, Rate};
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{InstrumentId, MarketId};
 
 use crate::domain::freshness::DataFreshnessStatus;
 use crate::domain::observation::{MarketObservation, MarketViewKey, ObservationKind};
-use crate::domain::source::SourceStatus;
 use crate::domain::view::MarketView;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,7 +42,7 @@ pub struct MarketDataAvailabilityQuery {
     pub market_id: Option<MarketId>,
     pub instrument_id: Option<InstrumentId>,
     pub observation_kind: Option<ObservationKind>,
-    pub provider_id: Option<String>,
+    pub provider: Option<Provider>,
     pub configured_only: bool,
     pub ready_only: bool,
 }
@@ -54,15 +53,24 @@ pub struct MarketDataAvailabilityQuery {
 pub struct MarketDataAvailability {
     pub market_id: MarketId,
     pub instrument_id: InstrumentId,
-    pub source_id: SourceId,
-    pub provider_id: String,
-    pub provider_product: String,
-    pub subscription_symbol: String,
+    pub provider: Provider,
     pub observation_capabilities: Vec<ObservationKind>,
     pub supported_by_adapter: bool,
     pub configured_in_workspace: bool,
-    pub runtime_status: Option<SourceStatus>,
+    pub state: MarketDataRouteState,
+    pub selected: bool,
+    pub pending_reason: Option<String>,
     pub freshness: BTreeMap<ObservationKind, DataFreshnessStatus>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketDataRouteState {
+    Supported,
+    Configured,
+    Ready,
+    Degraded,
+    Stopped,
 }
 
 impl MarketQueryResult {

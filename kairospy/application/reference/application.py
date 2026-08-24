@@ -9,7 +9,7 @@ from kairospy.domain_types import ExchangeId, InstrumentId, ListingId, MarketId
 
 from .models import (
     Asset,
-    Entity,
+    Exchange,
     Instrument,
     InstrumentRef,
     Listing,
@@ -32,7 +32,7 @@ _T = TypeVar("_T")
 
 
 class ReferenceApplication:
-    """Read-only, typed facade over Reference's current SQLite projection."""
+    """Read-only, typed facade over Reference's current SQLite catalog."""
 
     def __init__(
         self,
@@ -72,35 +72,33 @@ class ReferenceApplication:
                 event_sequence=int(query.event_sequence),
             )
 
-    def find_entities(
+    def find_exchanges(
         self,
         *,
-        entity_ids: Sequence[str] | None = None,
+        exchange_ids: Sequence[str] | None = None,
         query: str | None = None,
-        entity_type: str | None = None,
         status: str | None = None,
         active_only: bool = False,
         limit: int | None = None,
         offset: int = 0,
-    ) -> tuple[Entity, ...]:
-        rows = self._require_client().entities(
-            entity_ids=entity_ids,
+    ) -> tuple[Exchange, ...]:
+        rows = self._require_client().exchanges(
+            exchange_ids=exchange_ids,
             query=query,
-            entity_type=entity_type,
             status=status,
             active_only=active_only,
             limit=limit,
             offset=offset,
         )
-        return tuple(_entity_from_row(row) for row in rows)
+        return tuple(_exchange_from_row(row) for row in rows)
 
-    def entity(self, entity_id: str) -> Entity | None:
+    def exchange(self, exchange_id: str) -> Exchange | None:
         return _optional_one(
-            self.find_entities(entity_ids=(entity_id,), limit=2), "entity", entity_id
+            self.find_exchanges(exchange_ids=(exchange_id,), limit=2), "exchange", exchange_id
         )
 
-    def require_entity(self, entity_id: str) -> Entity:
-        return _require_one(self.entity(entity_id), "entity", entity_id)
+    def require_exchange(self, exchange_id: str) -> Exchange:
+        return _require_one(self.exchange(exchange_id), "exchange", exchange_id)
 
     def find_assets(
         self,
@@ -394,10 +392,9 @@ def _status(row: Mapping[str, object]) -> ReferenceStatus:
     )
 
 
-def _entity_from_row(row: Mapping[str, object]) -> Entity:
-    return Entity(
-        id=_required(row, "entityId", "entity_id"),
-        entity_type=_required(row, "entityType", "entity_type"),
+def _exchange_from_row(row: Mapping[str, object]) -> Exchange:
+    return Exchange(
+        id=ExchangeId(_required(row, "exchangeId", "exchange_id")),
         name=_required(row, "name"),
         status=_status(row),
     )

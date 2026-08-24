@@ -152,7 +152,7 @@ class AccountStatusChange:
 
 @dataclass(frozen=True, slots=True)
 class AccountSegmentSnapshot:
-    """Immutable facts for one Account segment at one projection generation."""
+    """Immutable facts for one Account segment at one current-view generation."""
 
     account_id: AccountId
     segment_key: SegmentKey

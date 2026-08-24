@@ -6,24 +6,33 @@
 
 extern crate self as kairos_reference_contract;
 
+pub mod catalog;
 pub mod control;
 pub mod encode;
 pub mod error;
 pub mod event;
-pub mod transport;
 
 use std::path::PathBuf;
 
+pub use catalog::{
+    AccountReferenceSnapshot, Asset, Exchange, ExecutionReferenceSnapshot, Instrument,
+    InstrumentCatalogQuery, LifecycleEntry, Listing, Market, MarketCatalogQuery,
+    MarketReferenceSnapshot, ProviderHealthState, REFERENCE_SQLITE_SCHEMA_VERSION,
+    ReferenceCatalog, ReferenceCatalogSnapshot, ReferenceCatalogStats, ReferenceCatalogStatus,
+    ReferenceCollection, ReferenceIntegrityStats, ReferenceMarketCatalogPage, ReferenceMarketPage,
+    ReferenceWatermark,
+};
 pub use control::{
+    BinanceReferenceSource, HyperliquidReferenceSource, MassiveReferenceSource, OkxReferenceSource,
     ReferenceAppPhase, ReferenceAppRuntimeError, ReferenceAppRuntimeStatus,
     ReferenceCatalogIntegrityStatus, ReferenceCatalogReadiness, ReferenceCatalogRuntimeStatus,
     ReferenceControlError, ReferenceControlRpcClient, ReferenceControlRpcServer,
     ReferenceCoverageRuntimeStatus, ReferenceDiagnostic, ReferenceDiagnosticSeverity,
     ReferenceHealthResponse, ReferenceHealthStatus, ReferenceMutationResponse,
     ReferenceOptionCoverageRequest, ReferenceOptionCoverageResponse, ReferenceProviderHealth,
-    ReferenceProviderProduct, ReferenceProviderStatus, ReferencePublicationRuntimeError,
-    ReferencePublicationRuntimeStatus, ReferencePublishResponse, ReferenceRefreshResponse,
-    ReferenceRuntimeStatus, ReferenceRuntimeStatusResponse, ReferenceSourceControlRequest,
+    ReferenceProviderStatus, ReferencePublicationRuntimeError, ReferencePublicationRuntimeStatus,
+    ReferencePublishResponse, ReferenceRefreshResponse, ReferenceRuntimeStatus,
+    ReferenceRuntimeStatusResponse, ReferenceSourceBinding, ReferenceSourceControlRequest,
     ReferenceSourceDefinitionRequest, ReferenceSourceDesiredState, ReferenceSourceKind,
     ReferenceSourcePhase, ReferenceSourceProgress, ReferenceSourceProgressKind,
     ReferenceSourceRuntimeError, ReferenceSourceRuntimeStatus, ReferenceSourceScope,
@@ -40,13 +49,6 @@ pub use event::{
 };
 use kairos_primitives::runtime::ActorId;
 pub use kairos_transport::AeronEndpoint;
-pub use transport::{
-    Asset, Entity, Instrument, LifecycleEntry, Listing, Market, ProviderHealthState,
-    REFERENCE_SQLITE_SCHEMA_VERSION, ReferenceCatalogStats, ReferenceCatalogStatus,
-    ReferenceCollection, ReferenceHealth, ReferenceIntegrityStats, ReferenceMarket,
-    ReferenceMarketPage, ReferenceProjection, ReferenceProjectionSnapshot, ReferenceSqliteReader,
-    ReferenceWatermark, SqliteInstrumentQuery, SqliteMarketQuery,
-};
 
 /// Unified Reference client. Business reads use consumer-scoped SQLite queries.
 #[derive(Clone)]
@@ -86,54 +88,56 @@ impl ReferenceClient {
     }
 
     pub fn watermark(&self) -> ContractResult<ReferenceWatermark> {
-        ReferenceSqliteReader::open(&self.database)?.watermark()
+        self.catalog()?.watermark()
     }
 
     pub fn status(&self) -> ContractResult<ReferenceCatalogStatus> {
-        ReferenceSqliteReader::open(&self.database)?.status()
+        self.catalog()?.status()
+    }
+
+    pub fn catalog(&self) -> ContractResult<ReferenceCatalog> {
+        ReferenceCatalog::open(&self.database)
     }
 
     pub fn require_market(
         &self,
         market_id: &kairos_primitives::reference::MarketId,
-    ) -> ContractResult<ReferenceMarket> {
-        ReferenceSqliteReader::open(&self.database)?
-            .market(market_id)?
-            .ok_or_else(|| {
-                ContractError::Invalid(format!("required Reference market is missing: {market_id}"))
-            })
+    ) -> ContractResult<Market> {
+        self.catalog()?.market(market_id)?.ok_or_else(|| {
+            ContractError::Invalid(format!("required Reference market is missing: {market_id}"))
+        })
     }
 
-    pub fn market_snapshot(&self) -> ContractResult<ReferenceProjectionSnapshot> {
-        ReferenceSqliteReader::open(&self.database)?.market_snapshot(self.actor_id.as_str())
+    pub fn market_snapshot(&self) -> ContractResult<MarketReferenceSnapshot> {
+        self.catalog()?.market_snapshot(self.actor_id.as_str())
     }
 
-    pub fn execution_snapshot(&self) -> ContractResult<ReferenceProjectionSnapshot> {
-        ReferenceSqliteReader::open(&self.database)?.execution_snapshot(self.actor_id.as_str())
+    pub fn execution_snapshot(&self) -> ContractResult<ExecutionReferenceSnapshot> {
+        self.catalog()?.execution_snapshot(self.actor_id.as_str())
     }
 
-    pub fn account_snapshot(&self) -> ContractResult<ReferenceProjectionSnapshot> {
-        ReferenceSqliteReader::open(&self.database)?.account_snapshot(self.actor_id.as_str())
+    pub fn account_snapshot(&self) -> ContractResult<AccountReferenceSnapshot> {
+        self.catalog()?.account_snapshot(self.actor_id.as_str())
     }
 }
 
 pub fn read_market_snapshot(
     database: impl AsRef<std::path::Path>,
     actor_id: &ActorId,
-) -> ContractResult<ReferenceProjectionSnapshot> {
-    ReferenceSqliteReader::open(database)?.market_snapshot(actor_id.as_str())
+) -> ContractResult<MarketReferenceSnapshot> {
+    ReferenceCatalog::open(database)?.market_snapshot(actor_id.as_str())
 }
 
 pub fn read_execution_snapshot(
     database: impl AsRef<std::path::Path>,
     actor_id: &ActorId,
-) -> ContractResult<ReferenceProjectionSnapshot> {
-    ReferenceSqliteReader::open(database)?.execution_snapshot(actor_id.as_str())
+) -> ContractResult<ExecutionReferenceSnapshot> {
+    ReferenceCatalog::open(database)?.execution_snapshot(actor_id.as_str())
 }
 
 pub fn read_account_snapshot(
     database: impl AsRef<std::path::Path>,
     actor_id: &ActorId,
-) -> ContractResult<ReferenceProjectionSnapshot> {
-    ReferenceSqliteReader::open(database)?.account_snapshot(actor_id.as_str())
+) -> ContractResult<AccountReferenceSnapshot> {
+    ReferenceCatalog::open(database)?.account_snapshot(actor_id.as_str())
 }

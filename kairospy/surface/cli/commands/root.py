@@ -8,8 +8,14 @@ from typing import Any
 
 import typer
 
+from kairospy.application.agent import AgentResourceApplication
+from kairospy.application.credential import (
+    CredentialConfigurationApplication,
+    SecretRef,
+)
 from kairospy.application.launch.application import (
     LaunchControlApplication,
+    LaunchNotificationConfigurationApplication,
     LaunchRegistryApplication,
 )
 from kairospy.application.system import (
@@ -26,11 +32,17 @@ from kairospy.application.system.process_logging import (
     filter_log_lines,
     parse_since,
 )
-from kairospy.application.config import ConfigApplication
+from kairospy.application.config import (
+    ConfigApplication,
+    ConfigurationMigrationApplication,
+    ConfigurationReferenceApplication,
+)
 from kairospy.application.notification.composition import (
     test_notification_destination,
     validate_workspace_notifications,
 )
+from kairospy.application.notification import NotificationAdminApplication
+from kairospy.application.reference import ReferenceProviderConfigurationApplication
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli.options import OutputFormat, effective_output, render
 
@@ -117,15 +129,18 @@ def _run_workspace_market_connected_command(
             "无法连接 workspace Market 服务。"
             "请先运行：kairos system component market status"
         )
-    value = NativeCliApplication(owner).run("market", [
-        "connected",
-        command,
-        "--socket",
-        str(socket),
-        "--view-root",
-        str(owner.paths.child("snapshots", "market", "market-shared")),
-        *arguments,
-    ])
+    value = NativeCliApplication(owner).run(
+        "market",
+        [
+            "connected",
+            command,
+            "--socket",
+            str(socket),
+            "--view-root",
+            str(owner.paths.child("snapshots", "market", "market-shared")),
+            *arguments,
+        ],
+    )
     return {**value, "scope": "system"}
 
 
@@ -182,7 +197,9 @@ def _workspace_capital_client(owner: Any) -> CapitalSystemClient:
 def _run_workspace_capital_connected_command(
     owner: Any, command: str, arguments: list[str]
 ) -> dict[str, Any]:
-    return NativeCliApplication(owner).run("capital", ["connected", command, *arguments])
+    return NativeCliApplication(owner).run(
+        "capital", ["connected", command, *arguments]
+    )
 
 
 def _add_group(
@@ -220,6 +237,151 @@ system_component_app.add_typer(system_component_capital_app, name="capital")
 notifications_app = typer.Typer(no_args_is_help=True, help="Notification commands")
 
 
+@notifications_app.command("list")
+def notifications_list(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    destinations = [
+        {
+            **destination,
+            "launch_references": ConfigurationReferenceApplication(
+                owner
+            ).destination_references(str(destination["destination_id"])),
+        }
+        for destination in NotificationAdminApplication(owner).list()
+    ]
+    _emit(destinations, output)
+
+
+@notifications_app.command("setup")
+def notifications_setup(
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Interactively add or update a Feishu or Telegram destination."""
+
+    from kairospy.surface.cli.notification_setup import run_notification_setup
+
+    owner = WorkspaceApplication().open(workspace)
+    run_notification_setup(owner, provider=provider, output=output)
+
+
+@notifications_app.command("uses")
+def notifications_uses(
+    destination_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        LaunchNotificationConfigurationApplication(owner).references_to(destination_id),
+        output,
+    )
+
+
+@notifications_app.command("disable")
+def notifications_disable(
+    destination_id: str,
+    force: bool = typer.Option(False, "--force"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    references = ConfigurationReferenceApplication(owner).destination_references(
+        destination_id
+    )
+    if references and not force:
+        locations = ", ".join(
+            f"{item['source']}:{item['location']}" for item in references
+        )
+        raise typer.BadParameter(
+            f"destination is referenced by Launch routes: {locations}; "
+            "replace those references or use --force"
+        )
+    _emit(
+        {
+            **NotificationAdminApplication(owner).set_enabled(destination_id, False),
+            "references": references,
+            "forced": force,
+        },
+        output,
+    )
+
+
+@notifications_app.command("delete")
+def notifications_delete(
+    destination_id: str,
+    force: bool = typer.Option(False, "--force"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    references = ConfigurationReferenceApplication(owner).destination_references(
+        destination_id
+    )
+    if references and not force:
+        locations = ", ".join(
+            f"{item['source']}:{item['location']}" for item in references
+        )
+        raise typer.BadParameter(
+            f"destination is referenced by Launch routes: {locations}; "
+            "detach it or use --force"
+        )
+    _emit(
+        {
+            **NotificationAdminApplication(owner).delete(destination_id),
+            "references": references,
+            "forced": force,
+        },
+        output,
+    )
+
+
+@notifications_app.command("attach")
+def notifications_attach(
+    destination_id: str,
+    launch_id: str = typer.Option(..., "--launch"),
+    route: str = typer.Option("signals", "--route"),
+    default: bool = typer.Option(False, "--default-route"),
+    lifecycle: bool = typer.Option(False, "--lifecycle-route"),
+    required: bool = typer.Option(True, "--required/--optional"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    NotificationAdminApplication(owner).show(destination_id)
+    _emit(
+        LaunchNotificationConfigurationApplication(owner).attach(
+            launch_id,
+            destination_id,
+            route=route,
+            default=default,
+            lifecycle=lifecycle,
+            required=required,
+        ),
+        output,
+    )
+
+
+@notifications_app.command("detach")
+def notifications_detach(
+    destination_id: str,
+    launch_id: str = typer.Option(..., "--launch"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        LaunchNotificationConfigurationApplication(owner).detach(
+            launch_id, destination_id
+        ),
+        output,
+    )
+
+
 @notifications_app.command("validate")
 def notifications_validate(
     mode: str = typer.Option("paper", "--mode"),
@@ -239,7 +401,20 @@ def notifications_test(
     import asyncio
 
     owner = WorkspaceApplication().open(workspace)
-    _emit(asyncio.run(test_notification_destination(owner, destination_id)), output)
+    admin = NotificationAdminApplication(owner)
+    try:
+        result = asyncio.run(test_notification_destination(owner, destination_id))
+    except Exception as error:
+        admin.record_test(
+            destination_id,
+            succeeded=False,
+            detail=f"{type(error).__name__}: delivery test failed",
+        )
+        raise typer.BadParameter(
+            f"{type(error).__name__}: delivery test failed"
+        ) from None
+    admin.record_test(destination_id, succeeded=True)
+    _emit(result, output)
 
 
 @project_app.command(
@@ -492,6 +667,17 @@ def config_doctor(
     _emit(ConfigApplication(WorkspaceApplication().open(workspace)).doctor(), output)
 
 
+@config_app.command("migrate")
+def config_migrate_preview(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Preview legacy upgrades; this command never modifies configuration."""
+
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ConfigurationMigrationApplication(owner).preview(), output)
+
+
 @config_app.command("explain")
 def config_explain(
     name: str,
@@ -515,6 +701,378 @@ def config_operations(
 
 profile_app = typer.Typer(no_args_is_help=True, help="Configuration profiles")
 config_app.add_typer(profile_app, name="profile")
+
+credential_config_app = typer.Typer(
+    no_args_is_help=True, help="Configure Workspace external-service SecretRefs"
+)
+config_app.add_typer(credential_config_app, name="credential")
+
+data_config_app = typer.Typer(
+    no_args_is_help=True,
+    help="Configure and manually test shared Workspace data providers",
+)
+config_app.add_typer(data_config_app, name="data")
+
+
+@credential_config_app.command("list")
+def credential_config_list(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(CredentialConfigurationApplication(owner).list(), output)
+
+
+@credential_config_app.command("setup")
+def credential_config_setup(
+    provider: str = typer.Option(..., "--provider"),
+    credential_id: str | None = typer.Option(None, "--credential-id"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    application = CredentialConfigurationApplication(owner)
+    schema = application.schema(provider)
+    selected_id = (
+        credential_id
+        or typer.prompt("连接 id", default=f"{provider.strip().lower()}-main").strip()
+    )
+    try:
+        existing = application.show(selected_id)
+    except KeyError:
+        existing = None
+    if existing is not None:
+        references = ConfigurationReferenceApplication(owner).credential_references(
+            selected_id
+        )
+        typer.echo(
+            f"当前连接：{selected_id} · provider={existing.get('provider')} · "
+            f"SecretRef={existing.get('secret_refs') or {}}"
+        )
+        typer.echo(
+            "受影响引用："
+            + (
+                "；".join(f"{item['source']}:{item['location']}" for item in references)
+                or "无"
+            )
+        )
+        if not typer.confirm(
+            "替换 SecretRef 元数据吗？配置变化后相关资源需要重新手动测试",
+            default=False,
+        ):
+            _emit({**existing, "status": "unchanged"}, output)
+            return
+    fields: dict[str, SecretRef] = {}
+    for field in schema["required_fields"]:
+        source = (
+            typer.prompt(f"{field} Secret 来源 [env/file]", default="env")
+            .strip()
+            .lower()
+        )
+        default_reference = (
+            application.default_environment(selected_id, str(field))
+            if source == "env"
+            else str(owner.paths.root / "secrets" / selected_id / str(field))
+        )
+        reference = typer.prompt(
+            f"{field} SecretRef id", default=default_reference
+        ).strip()
+        fields[str(field)] = SecretRef(source, reference)  # type: ignore[arg-type]
+    _emit(
+        application.configure(
+            selected_id,
+            provider=provider,
+            fields=fields,
+            overwrite=existing is not None,
+        ),
+        output,
+    )
+
+
+@credential_config_app.command("references")
+def credential_config_references(
+    credential_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Show every configuration location that currently uses a credential."""
+
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        ConfigurationReferenceApplication(owner).credential_references(credential_id),
+        output,
+    )
+
+
+@credential_config_app.command("delete")
+def credential_config_delete(
+    credential_id: str,
+    force: bool = typer.Option(False, "--force"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Delete an unreferenced credential; --force leaves dependants unready."""
+
+    owner = WorkspaceApplication().open(workspace)
+    references = ConfigurationReferenceApplication(owner).credential_references(
+        credential_id
+    )
+    if references and not force:
+        locations = ", ".join(
+            f"{item['source']}:{item['location']}" for item in references
+        )
+        raise typer.BadParameter(
+            f"credential is referenced by configuration: {locations}; "
+            "replace those references or use --force"
+        )
+    result = CredentialConfigurationApplication(owner).delete(credential_id)
+    owner.paths.child(
+        "state", "configuration", "models", f"{credential_id}.json"
+    ).unlink(missing_ok=True)
+    _emit({**result, "references": references, "forced": force}, output)
+
+
+@data_config_app.command("list")
+def data_config_list(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ReferenceProviderConfigurationApplication(owner).list(), output)
+
+
+@data_config_app.command("setup")
+def data_config_setup(
+    credential_id: str | None = typer.Option(None, "--credential-id"),
+    endpoint: str = typer.Option("https://api.massive.com", "--endpoint"),
+    options: bool = typer.Option(False, "--options"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    credentials = CredentialConfigurationApplication(owner)
+    massive_credentials = [
+        str(value["credential_id"])
+        for value in credentials.list()
+        if value.get("provider") == "massive"
+    ]
+    selected = (
+        credential_id
+        or typer.prompt(
+            "Massive 安全凭据 id",
+            default=massive_credentials[0]
+            if massive_credentials
+            else "massive-readonly",
+        ).strip()
+    )
+    if selected not in massive_credentials:
+        source = (
+            typer.prompt("API Key Secret 来源 [env/file]", default="env")
+            .strip()
+            .lower()
+        )
+        reference = typer.prompt(
+            "API Key SecretRef id",
+            default=(
+                credentials.default_environment(selected, "api_key")
+                if source == "env"
+                else str(owner.paths.root / "secrets" / selected / "api_key")
+            ),
+        ).strip()
+        credentials.configure(
+            selected,
+            provider="massive",
+            fields={"api_key": SecretRef(source, reference)},  # type: ignore[arg-type]
+        )
+    capabilities = ["reference", "equity_market"]
+    if options:
+        capabilities.append("options")
+    value = ReferenceProviderConfigurationApplication(owner).configure_massive(
+        credential_id=selected,
+        endpoint=endpoint,
+        capabilities=capabilities,
+    )
+    if value.get("configured") is not True:
+        typer.echo(
+            "Massive SecretRef 已保存但当前进程尚不可解析；若使用环境变量，"
+            "请设置后重新进入 kairos i，再主动执行读取测试。"
+        )
+    _emit(value, output)
+
+
+@data_config_app.command("test")
+def data_config_test(
+    connection_id: str = typer.Argument("massive"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Read fixed AAPL Reference and SPY hourly-bar samples; no write occurs."""
+
+    owner = WorkspaceApplication().open(workspace)
+    typer.echo("将进行认证、AAPL 标的查询和 SPY 小样本小时线读取；不会修改远端数据。")
+    if not typer.confirm("开始手动测试", default=False):
+        _emit({"status": "cancelled", "connection_id": connection_id}, output)
+        return
+    _emit(
+        ReferenceProviderConfigurationApplication(owner).test_connection(connection_id),
+        output,
+    )
+
+
+@data_config_app.command("disable")
+def data_config_disable(
+    connection_id: str = typer.Argument("massive"),
+    force: bool = typer.Option(False, "--force"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    references = ConfigurationReferenceApplication(owner).data_provider_references(
+        connection_id
+    )
+    if references and not force:
+        locations = ", ".join(
+            f"{item['source']}:{item['location']}" for item in references
+        )
+        raise typer.BadParameter(
+            f"data connection is referenced by Launch configuration: {locations}; "
+            "replace those references or use --force"
+        )
+    _emit(
+        {
+            **ReferenceProviderConfigurationApplication(owner).set_enabled(
+                connection_id, enabled=False
+            ),
+            "references": references,
+            "forced": force,
+        },
+        output,
+    )
+
+
+@data_config_app.command("references")
+def data_config_references(
+    connection_id: str = typer.Argument("massive"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        ConfigurationReferenceApplication(owner).data_provider_references(
+            connection_id
+        ),
+        output,
+    )
+
+
+@data_config_app.command("delete")
+def data_config_delete(
+    connection_id: str = typer.Argument("massive"),
+    force: bool = typer.Option(False, "--force"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    references = ConfigurationReferenceApplication(owner).data_provider_references(
+        connection_id
+    )
+    if references and not force:
+        locations = ", ".join(
+            f"{item['source']}:{item['location']}" for item in references
+        )
+        raise typer.BadParameter(
+            f"data connection is referenced by Launch configuration: {locations}; "
+            "replace those references or use --force"
+        )
+    result = ReferenceProviderConfigurationApplication(owner).delete(connection_id)
+    _emit({**result, "references": references, "forced": force}, output)
+
+
+agent_config_app = typer.Typer(
+    no_args_is_help=True,
+    help="Prepare and manually test Workspace OpenAI model connections",
+)
+config_app.add_typer(agent_config_app, name="agent")
+
+
+@agent_config_app.command("status")
+def agent_config_status(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(AgentResourceApplication(owner).status(), output)
+
+
+@agent_config_app.command("setup")
+def agent_config_setup(
+    credential_id: str | None = typer.Option(None, "--credential-id"),
+    model: str | None = typer.Option(None, "--model"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Configure an OpenAI SecretRef; Profile and MCP are Launch-owned."""
+    owner = WorkspaceApplication().open(workspace)
+    resources = AgentResourceApplication(owner)
+    existing_credentials = resources.credential_ids()
+    selected_credential = credential_id or typer.prompt(
+        "OpenAI credential id",
+        default=existing_credentials[0] if existing_credentials else "openai-agent",
+    )
+    configured: dict[str, object] | None = None
+    if selected_credential not in existing_credentials:
+        source = typer.prompt("Secret 来源 [env/file]", default="env").strip().lower()
+        credentials = CredentialConfigurationApplication(owner)
+        default_reference = (
+            credentials.default_environment(selected_credential, "api_key")
+            if source == "env"
+            else str(owner.paths.root / "secrets" / selected_credential / "api_key")
+        )
+        reference = typer.prompt("SecretRef id", default=default_reference).strip()
+        configured = resources.configure_openai_credential(
+            selected_credential,
+            SecretRef(source, reference),  # type: ignore[arg-type]
+        )
+        if configured.get("configured") is not True:
+            typer.echo(
+                "SecretRef 尚不可解析。若使用环境变量，请设置后重新进入 kairos i 再测试。"
+            )
+    selected_model = (
+        model
+        or typer.prompt(
+            "用于手动测试的固定模型 snapshot", default="gpt-5.4-2026-08-01"
+        ).strip()
+    )
+    verification: dict[str, object] | None = None
+    if typer.confirm("立即执行一次最小模型调用测试（可能产生少量费用）", default=False):
+        verification = resources.test_openai_model(selected_credential, selected_model)
+    _emit(
+        {
+            **resources.status(),
+            "selected_credential": selected_credential,
+            "selected_model": selected_model,
+            "configured": configured,
+            "verification": verification,
+            "next_steps": ["在 Launch 中配置 Agent Profile 与 MCP"],
+        },
+        output,
+    )
+
+
+@agent_config_app.command("test")
+def agent_config_test(
+    credential_id: str,
+    model: str = typer.Option(..., "--model"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Perform a user-triggered minimum model call and store secret-safe evidence."""
+
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        AgentResourceApplication(owner).test_openai_model(credential_id, model),
+        output,
+    )
 
 
 @profile_app.command("list")
@@ -608,25 +1166,25 @@ def system_component_market_status(
     )
 
 
-@system_component_market_app.command("sources")
-def system_component_market_sources(
+@system_component_market_app.command("routes")
+def system_component_market_routes(
     workspace: Path = typer.Option(None, "--workspace"),
     market_id: str | None = typer.Option(None, "--market-id"),
     instrument_id: str | None = typer.Option(None, "--instrument-id"),
     observation_kind: str | None = typer.Option(None, "--observation-kind"),
-    provider_id: str | None = typer.Option(None, "--provider-id"),
+    provider: str | None = typer.Option(None, "--provider"),
     configured_only: bool = typer.Option(False, "--configured-only"),
     ready_only: bool = typer.Option(False, "--ready-only"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Read data source readiness from the workspace-scoped Market server."""
+    """Read provider-route readiness from the workspace-scoped Market server."""
     owner = WorkspaceApplication().open(workspace)
     arguments: list[str] = []
     for option, value in (
         ("--market-id", market_id),
         ("--instrument-id", instrument_id),
         ("--observation-kind", observation_kind),
-        ("--provider-id", provider_id),
+        ("--provider", provider),
     ):
         if value is not None:
             arguments.extend((option, value))
@@ -634,14 +1192,14 @@ def system_component_market_sources(
         arguments.append("--configured-only")
     if ready_only:
         arguments.append("--ready-only")
-    _emit(_run_workspace_market_connected_command(owner, "sources", arguments), output)
+    _emit(_run_workspace_market_connected_command(owner, "routes", arguments), output)
 
 
 @system_component_market_app.command("snapshot")
 def system_component_market_snapshot(
     kind: str = typer.Argument(..., help="Snapshot kind: quote, bar, or greeks."),
     market_id: str | None = typer.Option(None, "--market-id"),
-    source_id: str = typer.Option(..., "--source-id"),
+    provider: str | None = typer.Option(None, "--provider"),
     symbol: str | None = typer.Option(None, "--symbol"),
     exchange: str = typer.Option("binance", "--exchange"),
     market_type: str = typer.Option("spot", "--market-type"),
@@ -649,13 +1207,15 @@ def system_component_market_snapshot(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Read one current Market projection view from the workspace scope."""
+    """Read one current Market current view from the workspace scope."""
     owner = WorkspaceApplication().open(workspace)
     if market_id is None:
         if not symbol:
             raise typer.BadParameter("snapshot requires --market-id or --symbol")
         market_id = f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
-    arguments = [kind, "--market-id", market_id, "--source-id", source_id]
+    arguments = [kind, "--market-id", market_id]
+    if provider is not None:
+        arguments.extend(("--provider", provider))
     if timeframe is not None:
         arguments.extend(("--timeframe", timeframe))
     _emit(_run_workspace_market_connected_command(owner, "snapshot", arguments), output)
@@ -664,73 +1224,58 @@ def system_component_market_snapshot(
 @system_component_market_app.command("freshness")
 def system_component_market_freshness(
     market_id: str = typer.Option(..., "--market-id"),
-    source_id: str = typer.Option(..., "--source-id"),
-    qualifier: str | None = typer.Option(None, "--qualifier"),
+    observation: str | None = typer.Option(None, "--observation"),
+    provider: str | None = typer.Option(None, "--provider"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Read one current Market freshness projection from the workspace scope."""
+    """Read one current Market freshness current view from the workspace scope."""
     owner = WorkspaceApplication().open(workspace)
-    arguments = [
-        "--market-id",
-        market_id,
-        "--source-id",
-        source_id,
-    ]
-    if qualifier is not None:
-        arguments.extend(["--qualifier", qualifier])
-    _emit(_run_workspace_market_connected_command(owner, "freshness", arguments), output)
+    arguments = ["--market-id", market_id]
+    if observation is not None:
+        arguments.extend(["--observation", observation])
+    if provider is not None:
+        arguments.extend(["--provider", provider])
+    _emit(
+        _run_workspace_market_connected_command(owner, "freshness", arguments), output
+    )
 
 
 @system_component_market_app.command("subscribe")
 def system_component_market_subscribe(
     subscription_id: str = typer.Option(..., "--subscription-id"),
-    subject: str = typer.Option(..., "--subject"),
-    source_id: str | None = typer.Option(None, "--source-id"),
+    market_id: str = typer.Option(..., "--market-id"),
     strategy_id: str = typer.Option("cli", "--strategy-id"),
     instance_id: str = typer.Option("cli", "--instance-id"),
-    selector: list[str] = typer.Option([], "--selector"),
-    exchange: str | None = typer.Option(None, "--exchange"),
-    market_type: str | None = typer.Option(None, "--market-type"),
-    asset_type: str | None = typer.Option(None, "--asset-type"),
-    identity: str | None = typer.Option(None, "--identity"),
-    param: list[str] = typer.Option([], "--param"),
-    chain: bool = typer.Option(False, "--chain"),
+    data: list[str] = typer.Option(..., "--data"),
+    prefer_provider: list[str] = typer.Option([], "--prefer-provider"),
+    require_provider: list[str] = typer.Option([], "--require-provider"),
+    all_eligible_providers: bool = typer.Option(False, "--all-eligible-providers"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     """Create a runtime subscription on the workspace-scoped Market server."""
-    for item in param:
-        if "=" not in item:
-            raise typer.BadParameter("--param must use KEY=VALUE")
-    if chain:
-        param = [*param, 'mode="chain"']
-    if identity is not None:
-        param = [*param, f"identity={json.dumps(identity)}"]
+    policies = bool(prefer_provider) + bool(require_provider) + all_eligible_providers
+    if policies > 1:
+        raise typer.BadParameter("select only one provider policy")
     arguments = [
         "--subscription-id",
         subscription_id,
-        "--subject",
-        subject,
+        "--market-id",
+        market_id,
         "--strategy-id",
         strategy_id,
         "--instance-id",
         instance_id,
     ]
-    if source_id is not None:
-        arguments.extend(["--source-id", source_id])
-    if exchange is not None:
-        arguments.extend(["--exchange", exchange])
-    if market_type is not None:
-        arguments.extend(["--market-type", market_type])
-    if asset_type is not None:
-        arguments.extend(["--asset-type", asset_type])
-    if chain:
-        arguments.append("--dynamic")
-    for value in selector:
-        arguments.extend(["--selector", value])
-    for value in param:
-        arguments.extend(["--param", value])
+    for value in data:
+        arguments.extend(["--data", value])
+    for value in prefer_provider:
+        arguments.extend(["--prefer-provider", value])
+    for value in require_provider:
+        arguments.extend(["--require-provider", value])
+    if all_eligible_providers:
+        arguments.append("--all-eligible-providers")
     owner = WorkspaceApplication().open(workspace)
     value = _run_workspace_market_connected_command(owner, "subscribe", arguments)
     _emit(value, output)
@@ -1321,7 +1866,7 @@ def system_component_reference_catalog(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read the Reference catalog projection from the workspace component."""
+    """Read the Reference catalog from the workspace component."""
     owner = WorkspaceApplication().open(workspace)
     _emit(_workspace_reference_client(owner).catalog(), output)
 
@@ -1413,7 +1958,10 @@ def system_component_reference_options_add(
 ) -> None:
     """Add one underlying to Reference option coverage on the workspace component."""
     owner = WorkspaceApplication().open(workspace)
-    _emit(_workspace_reference_client(owner).set_option_underlying(underlying, True), output)
+    _emit(
+        _workspace_reference_client(owner).set_option_underlying(underlying, True),
+        output,
+    )
 
 
 @system_component_reference_app.command("options-remove")
@@ -1424,7 +1972,10 @@ def system_component_reference_options_remove(
 ) -> None:
     """Remove one underlying from Reference option coverage on the workspace component."""
     owner = WorkspaceApplication().open(workspace)
-    _emit(_workspace_reference_client(owner).set_option_underlying(underlying, False), output)
+    _emit(
+        _workspace_reference_client(owner).set_option_underlying(underlying, False),
+        output,
+    )
 
 
 @system_app.command("list")

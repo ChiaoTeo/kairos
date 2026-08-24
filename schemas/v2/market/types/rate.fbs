@@ -7,7 +7,7 @@ table Rate {
   rate_id:string (required);
   scope:ObservationScope (required);
   instrument_id:string (required);
-  source_id:string (required);
+  provider:string (required);
   basis:string (required);
   value:kairos.common.v2.Decimal64 (required);
   mark_price:kairos.common.v2.Decimal64;

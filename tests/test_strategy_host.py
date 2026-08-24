@@ -43,10 +43,9 @@ from kairospy.strategy import (
     OptionFilter,
     OptionRight,
     Options,
-    Participant,
-    ParticipantSet,
-    Source,
-    SourceSet,
+    OptionsTarget,
+    Provider,
+    ProviderPreference,
     StrikeRange,
     Strategy,
     StrategyCommand,
@@ -95,7 +94,7 @@ def EventEnvelope(
     )
     if domain == "data" and isinstance(payload, dict):
         symbol = str(payload.get("symbol", "BTCUSDT"))
-        source_id = str(payload.get("source_id", payload.get("source", "test")))
+        provider = str(payload.get("provider", "test"))
         instrument_id = f"instrument:test:{symbol}"
         market_id = f"market:test:{symbol}"
         if kind == "bar":
@@ -110,7 +109,7 @@ def EventEnvelope(
                 close,
                 None,
                 event_time,
-                source_id,
+                provider,
                 "provider",
             )
         elif kind == "quote":
@@ -124,7 +123,7 @@ def EventEnvelope(
                 ask,
                 None,
                 event_time,
-                source_id,
+                provider,
             )
     if domain == "clock" and kind == "advance":
         assert occurred_at is not None
@@ -152,9 +151,7 @@ class UserStrategy(Strategy):
         self.events: list[int] = []
 
     def on_start(self, context) -> None:
-        context.market.subscribe_bars(
-            _MARKET, timeframe="1m", source_id="market-source:primary"
-        )
+        context.market.subscribe_bars(_MARKET, timeframe="1m")
 
     def on_market(self, context, event) -> None:
         if not isinstance(event, BarEvent):
@@ -685,7 +682,8 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     assert status.subscriptions[0]["status"] == "pending"
     assert len(bus.requests) == 1
     assert bus.requests[0].operation == "market.subscribe"
-    assert bus.requests[0].payload.source_id == "market-source:primary"
+    assert bus.requests[0].payload.target.market_id == str(_MARKET.id)
+    assert bus.requests[0].payload.provider_preference == ProviderPreference.automatic()
     assert strategy.events == []
 
     bus.resolve(bus.requests[0].request_id)
@@ -728,110 +726,69 @@ def test_market_subscription_uses_reference_market_route(tmp_path: Path) -> None
     host.context.market.subscribe_quotes(market)
 
     request = bus.requests[-1].payload
-    assert request.subject == str(market.id)
-    assert request.identity == str(market.id)
-    assert request.source_id is None
-    assert request.exchange is None
-    assert request.market_type is None
-    assert request.params == {"market_id": str(market.id)}
+    assert request.target.market_id == str(market.id)
+    assert tuple(value.selector for value in request.observations) == ("quote",)
+    assert request.provider_preference == ProviderPreference.automatic()
 
 
-def test_market_subscription_can_target_multiple_participants(tmp_path: Path) -> None:
-    class SourceAwarePorts(InMemoryApplicationPorts):
-        def data_sources(self, query):
-            assert query == {"market_id": "market:sip:equity:US:AAPL"}
-            return {
-                "sources": [
-                    {"source_id": "massive-equity"},
-                    {"source_id": "binance-equity"},
-                    {"source_id": "okx-spot"},
-                ]
-            }
-
-    bus = SourceAwarePorts()
+def test_market_subscription_can_require_multiple_providers(tmp_path: Path) -> None:
+    bus = InMemoryApplicationPorts()
     host, _, _, _ = _host(tmp_path, bus=bus)
     market_id = MarketId("market:sip:equity:US:AAPL")
 
     group = host.context.market.subscribe(
         market_id,
         data=[MarketData.QUOTE, MarketData.bar(Timeframe.MIN_1)],
-        participants=ParticipantSet.only(Participant.MASSIVE, Participant.BINANCE),
+        provider_preference=ProviderPreference.require(
+            Provider.MASSIVE, Provider.BINANCE
+        ),
     )
 
     request = bus.requests[-1].payload
     assert len(group.subscriptions) == 1
-    assert request.source_id is None
-    assert request.source_ids == (
-        "massive-equity",
-        "binance-equity",
+    assert request.target.market_id == str(market_id)
+    assert request.provider_preference == ProviderPreference.require(
+        Provider.MASSIVE, Provider.BINANCE
     )
-    assert request.subject == str(market_id)
-    assert request.identity == str(market_id)
-    assert request.selectors == ("quote", "bar:1m")
+    assert tuple(value.selector for value in request.observations) == (
+        "quote",
+        "bar:1m",
+    )
 
 
-def test_market_subscription_participant_constants_discover_sources(
+def test_market_subscription_provider_constants_do_not_discover_sources(
     tmp_path: Path,
 ) -> None:
-    class SourceAwarePorts(InMemoryApplicationPorts):
-        def data_sources(self, query):
-            assert query == {"market_id": "market:sip:equity:US:AAPL"}
-            return {"sources": [{"source_id": "massive-equity"}]}
-
-    bus = SourceAwarePorts()
+    bus = InMemoryApplicationPorts()
     host, _, _, _ = _host(tmp_path, bus=bus)
     market_id = MarketId("market:sip:equity:US:AAPL")
 
     host.context.market.subscribe_bars(
         market_id,
         timeframe=Timeframe.MIN_1,
-        participants=[Participant.MASSIVE],
+        provider_preference=ProviderPreference.prefer(Provider.MASSIVE),
     )
 
     request = bus.requests[-1].payload
-    assert request.source_ids == ("massive-equity",)
-    assert request.selectors == ("bar:1m",)
+    assert request.provider_preference == ProviderPreference.prefer(Provider.MASSIVE)
+    assert tuple(value.selector for value in request.observations) == ("bar:1m",)
 
 
-def test_market_subscription_all_participants_uses_discovery(tmp_path: Path) -> None:
-    class SourceAwarePorts(InMemoryApplicationPorts):
-        def data_sources(self, query):
-            assert query == {"market_id": "market:sip:equity:US:AAPL"}
-            return {
-                "sources": [
-                    {"source_id": "massive-equity"},
-                    {"source_id": "binance-equity"},
-                ]
-            }
-
-    bus = SourceAwarePorts()
+def test_market_subscription_all_eligible_is_one_intent(tmp_path: Path) -> None:
+    bus = InMemoryApplicationPorts()
     host, _, _, _ = _host(tmp_path, bus=bus)
     market_id = MarketId("market:sip:equity:US:AAPL")
 
-    host.context.market.subscribe_quotes(market_id, participants=ParticipantSet.ALL)
+    host.context.market.subscribe_quotes(
+        market_id, provider_preference=ProviderPreference.all_eligible()
+    )
 
     request = bus.requests[-1].payload
-    assert request.source_ids == (
-        "massive-equity",
-        "binance-equity",
-    )
+    assert request.provider_preference == ProviderPreference.all_eligible()
 
 
 def test_market_subscription_accepts_options_target(tmp_path: Path) -> None:
-    class SourceAwarePorts(InMemoryApplicationPorts):
-        def data_sources(self, query):
-            assert query == {
-                "target": "options",
-                "underlying_market_id": "market:exchange:nasdaq:equity:SPY",
-            }
-            return {
-                "sources": [
-                    {"source_id": "massive-options"},
-                    {"source_id": "binance-options"},
-                ]
-            }
-
-    bus = SourceAwarePorts()
+    bus = InMemoryApplicationPorts()
     host, _, _, _ = _host(tmp_path, bus=bus)
     underlying = MarketId("market:exchange:nasdaq:equity:SPY")
 
@@ -845,61 +802,47 @@ def test_market_subscription_accepts_options_target(tmp_path: Path) -> None:
             ),
         ),
         data=[MarketData.QUOTE, MarketData.GREEKS],
-        participants=ParticipantSet.only(Participant.MASSIVE),
+        provider_preference=ProviderPreference.require(Provider.MASSIVE),
     )
 
     request = bus.requests[-1].payload
-    assert request.subject == f"options:{underlying}"
-    assert request.selectors == ("quote", "greeks")
-    assert request.source_ids == ("massive-options",)
-    assert request.dynamic is True
-    assert request.params == {
-        "target": "options",
-        "mode": "chain",
-        "underlying_market_id": str(underlying),
-        "filter": {
-            "right": "both",
-            "strike_mode": "absolute",
-            "strike_lower": "440",
-            "strike_upper": "460",
-            "limit": 40,
-        },
-    }
+    assert isinstance(request.target, OptionsTarget)
+    assert request.target.underlying_market_id == str(underlying)
+    assert request.target.strike_lower == "440"
+    assert request.target.strike_upper == "460"
+    assert request.target.limit == 40
+    assert tuple(value.selector for value in request.observations) == (
+        "quote",
+        "greeks",
+    )
+    assert request.provider_preference == ProviderPreference.require(Provider.MASSIVE)
 
 
-def test_options_subscription_all_participants_uses_target_discovery(
+def test_options_subscription_all_eligible_does_not_use_discovery(
     tmp_path: Path,
 ) -> None:
-    class SourceAwarePorts(InMemoryApplicationPorts):
-        def data_sources(self, query):
-            assert query == {
-                "target": "options",
-                "underlying_market_id": "market:exchange:nasdaq:equity:SPY",
-            }
-            return {"sources": [{"source_id": "massive-options"}]}
-
-    bus = SourceAwarePorts()
+    bus = InMemoryApplicationPorts()
     host, _, _, _ = _host(tmp_path, bus=bus)
     underlying = MarketId("market:exchange:nasdaq:equity:SPY")
 
     host.context.market.subscribe(
         Options(underlying, OptionFilter(limit=10)),
         data=[MarketData.QUOTE],
-        participants=ParticipantSet.ALL,
+        provider_preference=ProviderPreference.all_eligible(),
     )
 
     request = bus.requests[-1].payload
-    assert request.source_ids == ("massive-options",)
-    assert request.params["target"] == "options"
+    assert isinstance(request.target, OptionsTarget)
+    assert request.provider_preference == ProviderPreference.all_eligible()
 
 
 def test_options_subscription_resolves_around_spot_from_current_quote(
     tmp_path: Path,
 ) -> None:
     class QuoteSnapshots(InMemoryMarketSnapshotReader):
-        def read_quote(self, market_id: str, source_id: str) -> Quote:
+        def read_quote(self, market_id: str, provider: str) -> Quote:
             assert market_id == "market:exchange:nasdaq:equity:SPY"
-            assert source_id == "default"
+            assert provider == "massive"
             return Quote(
                 ObservationScope.market(MarketId(market_id)),
                 InstrumentRef(InstrumentId("instrument:equity:US:SPY:common"), "SPY"),
@@ -924,21 +867,21 @@ def test_options_subscription_resolves_around_spot_from_current_quote(
             ),
         ),
         data=[MarketData.QUOTE],
-        sources=SourceSet.only(Source.MASSIVE_OPTIONS),
+        provider_preference=ProviderPreference.require(Provider.MASSIVE),
     )
 
-    filter_params = bus.requests[-1].payload.params["filter"]
-    assert filter_params["strike_mode"] == "absolute"
-    assert Decimal(filter_params["strike_lower"]) == Decimal("90.9")
-    assert Decimal(filter_params["strike_upper"]) == Decimal("111.1")
+    target = bus.requests[-1].payload.target
+    assert isinstance(target, OptionsTarget)
+    assert Decimal(target.strike_lower) == Decimal("90.9")
+    assert Decimal(target.strike_upper) == Decimal("111.1")
 
 
 def test_options_subscription_around_spot_requires_current_quote(
     tmp_path: Path,
 ) -> None:
     class EmptyQuoteSnapshots(InMemoryMarketSnapshotReader):
-        def read_quote(self, market_id: str, source_id: str) -> None:
-            del market_id, source_id
+        def read_quote(self, market_id: str, provider: str) -> None:
+            del market_id, provider
             return None
 
     host, _, bus, _ = _host(tmp_path)
@@ -951,18 +894,18 @@ def test_options_subscription_around_spot_requires_current_quote(
                 OptionFilter(strike=StrikeRange.around_spot(percent="0.10")),
             ),
             data=[MarketData.QUOTE],
-            sources=SourceSet.only(Source.MASSIVE_OPTIONS),
+            provider_preference=ProviderPreference.require(Provider.MASSIVE),
         )
 
     assert not bus.requests
 
 
-def test_market_events_are_filtered_by_requested_source(tmp_path: Path) -> None:
+def test_market_client_does_not_guess_provider_from_event_source_names(tmp_path: Path) -> None:
     host, _, _, stream = _host(tmp_path)
     market_id = MarketId("market:test:AAPL")
     host.context.market.subscribe_quotes(
         market_id,
-        sources=SourceSet.only(Source.MASSIVE_EQUITY),
+        provider_preference=ProviderPreference.require(Provider.MASSIVE),
     )
     stream.append(
         EventEnvelope(
@@ -970,7 +913,7 @@ def test_market_events_are_filtered_by_requested_source(tmp_path: Path) -> None:
             1,
             "data",
             "quote",
-            {"symbol": "AAPL", "source_id": "binance-equity"},
+            {"symbol": "AAPL", "provider": "binance"},
             datetime(2024, 1, 1, tzinfo=timezone.utc),
         )
     )
@@ -980,7 +923,7 @@ def test_market_events_are_filtered_by_requested_source(tmp_path: Path) -> None:
             2,
             "data",
             "quote",
-            {"symbol": "AAPL", "source_id": "massive-equity"},
+            {"symbol": "AAPL", "provider": "massive"},
             datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
         )
     )
@@ -992,8 +935,8 @@ def test_market_events_are_filtered_by_requested_source(tmp_path: Path) -> None:
 
     event = asyncio.run(first_market_event())
 
-    assert event.metadata.sequence == 2
-    assert event.data.source_id == "massive-equity"
+    assert event.metadata.sequence == 1
+    assert event.data.provider == Provider.BINANCE
 
 
 def test_strategy_start_fails_when_enabled_business_event_source_is_not_ready(
@@ -1243,7 +1186,12 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
         for record in records
         if record.get("event") == "market_subscription_requested"
     )
-    assert requested["data"]["market_type"] is None
+    assert requested["data"]["target"] == {
+        "type": "market",
+        "market_id": str(_MARKET.id),
+    }
+    assert requested["data"]["observations"] == ["bar:1m"]
+    assert requested["data"]["provider_preference"] == {"mode": "automatic"}
     assert any(
         record.get("event") == "market_subscriptions_active" for record in records
     )
@@ -1462,7 +1410,7 @@ def test_strategy_host_consumes_instance_event_stream(tmp_path: Path) -> None:
                 1,
                 "data",
                 "bar",
-                {"close": 101, "source_id": "market-source:primary"},
+                {"close": 101, "provider": "test"},
             )
         )
         for _ in range(20):

@@ -1,10 +1,9 @@
-use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::{Money, Price, Quantity, Rate, Ratio, SignedQuantity};
 use kairos_primitives::execution::{
-    ExecutionRouteId, FillId, IntentId, LegId, OrderEntrySymbol, OrderId, OrderOptionCode,
-    OrderSide, OrderType,
+    ExecutionChannelCode, ExecutionRouteId, FillId, IntentId, LegId, OrderEntrySymbol, OrderId,
+    OrderOptionCode, OrderSide, OrderType,
 };
-use kairos_primitives::integration::{ParticipantId, ProviderProductCode};
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
 use kairos_primitives::risk::DecisionId;
 use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId, WorkspaceId};
@@ -80,8 +79,8 @@ pub struct ExecutionRouteCandidateResponse {
     pub segment_key: Option<SegmentKey>,
     pub instrument_id: Option<InstrumentId>,
     pub market_id: Option<MarketId>,
-    pub participant_id: ParticipantId,
-    pub provider_product: ProviderProductCode,
+    pub broker_id: BrokerId,
+    pub execution_channel: ExecutionChannelCode,
     #[serde(alias = "provider_symbol")]
     pub order_entry_symbol: OrderEntrySymbol,
     pub supported_order_types: Vec<OrderType>,
@@ -480,7 +479,7 @@ pub struct ExecutionRoutesQuery {
     pub segment_key: Option<SegmentKey>,
     pub instrument_id: Option<InstrumentId>,
     pub market_id: Option<MarketId>,
-    pub participant_id: Option<ParticipantId>,
+    pub broker_id: Option<BrokerId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

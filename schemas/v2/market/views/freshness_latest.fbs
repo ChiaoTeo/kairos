@@ -15,7 +15,7 @@ enum FreshnessStatus:ubyte {
 }
 
 table FreshnessEntry {
-  source_id:string (required);
+  provider:string (required);
   scope:ObservationScope (required);
   data_kind:string (required);
   last_event_time_unix_nanos:ulong;

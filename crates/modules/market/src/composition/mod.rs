@@ -1,4 +1,5 @@
 mod config;
+mod direct;
 mod history;
 mod host;
 mod launch;
@@ -8,12 +9,16 @@ mod sources;
 pub use config::{
     BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
     HyperliquidMarketType, MarketConfig as MarketCompositionConfig, MarketHostRequest,
-    MarketReplayClock, MarketReplayConfig, MarketRuntimeProfile, MarketRuntimeScope,
-    MarketSourceBinding, MassiveMarketProduct, OkxInstrumentType, PublicMarketTransport,
+    MarketProviderBinding, MarketProviderBindings, MarketReplayClock, MarketReplayConfig,
+    MarketRuntimeProfile, MarketRuntimeScope, MassiveMarketProduct, OkxInstrumentType,
+    PublicMarketTransport,
 };
+pub use direct::{compose_standalone_market, standalone_market_routes};
 pub use host::MarketHost;
-pub use launch::{DiagnosticProvider, MarketStartupError, build_market_host, run_diagnostic_once};
-pub use reference::project_reference_market_universe;
+pub use launch::{MarketStartupError, build_market_host};
+pub use reference::{
+    CliReferenceUniverseResult, cli_reference_universe, resolve_reference_market_universe,
+};
 pub use sources::{
     attach_replay_source, attach_replay_source_with_checkpoint, attach_replay_source_with_policy,
     default_endpoint,

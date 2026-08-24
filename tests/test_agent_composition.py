@@ -27,13 +27,23 @@ from kairospy.application.reference import InstrumentRef
 from kairospy.application.execution import TargetPositionRequest
 
 
+PROFILE = {
+    "version": "1",
+    "goal": "Review the candidate against the supplied context.",
+    "rubric": ["Prefer bounded risk", "Use fresh evidence"],
+    "invalidation_rules": ["Abstain when evidence is unavailable"],
+    "reason_codes": ["safe", "risk"],
+    "risk_flags": ["concentration"],
+}
+
+
 def _config(*, required: bool = True) -> AgentLaunchConfig:
     return AgentLaunchConfig.from_mapping(
         {
             "enabled": True,
             "required": required,
             "runtime": "fixture",
-            "profile": "review-v1",
+            "profile": PROFILE,
             "fixture_path": "decisions.jsonl",
             "capabilities": {
                 "intent_review": {
@@ -50,18 +60,6 @@ def _config(*, required: bool = True) -> AgentLaunchConfig:
 
 def _resources(tmp_path: Path):
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ws")
-    (workspace.paths.agent_profiles_root() / "review-v1.toml").write_text(
-        """[profile]
-id = "review-v1"
-version = "1"
-goal = "Review the candidate against the supplied context."
-rubric = ["Prefer bounded risk", "Use fresh evidence"]
-invalidation_rules = ["Abstain when evidence is unavailable"]
-reason_codes = ["safe", "risk"]
-risk_flags = ["concentration"]
-""",
-        encoding="utf-8",
-    )
     (workspace.paths.project_root / "decisions.jsonl").write_text("", encoding="utf-8")
     return workspace
 
@@ -183,7 +181,7 @@ def test_paper_agent_must_start_in_shadow() -> None:
             {
                 "enabled": True,
                 "runtime": "openai-agents",
-                "profile": "review-v1",
+                "profile": PROFILE,
                 "model": {
                     "provider": "openai",
                     "model": "gpt-5.4-2026-03-05",
@@ -204,7 +202,7 @@ def test_paper_agent_must_start_in_shadow() -> None:
 def test_exposure_reduction_requires_fresh_complete_account_evidence() -> None:
     instrument = InstrumentRef(InstrumentId("BTCUSDT"), "BTCUSDT")
 
-    class Projection:
+    class CurrentView:
         def __init__(self, completeness: SegmentCompleteness) -> None:
             self.completeness = completeness
 
@@ -231,11 +229,13 @@ def test_exposure_reduction_requires_fresh_complete_account_evidence() -> None:
 
     complete = _exposure_classifier(
         AccountApplication(
-            {AccountId("main"): Projection(SegmentCompleteness.COMPLETE)}
+            {AccountId("main"): CurrentView(SegmentCompleteness.COMPLETE)}
         )
     )
     partial = _exposure_classifier(
-        AccountApplication({AccountId("main"): Projection(SegmentCompleteness.PARTIAL)})
+        AccountApplication(
+            {AccountId("main"): CurrentView(SegmentCompleteness.PARTIAL)}
+        )
     )
 
     assert (

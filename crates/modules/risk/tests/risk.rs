@@ -71,7 +71,7 @@ fn request(id: &str, value: i64) -> AuthorizeRequest {
         account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
         strategy_id: strategy_id("strategy"),
         instrument_id: kairos_primitives::reference::InstrumentId::new("instrument").unwrap(),
-        exchange_id: kairos_primitives::reference::Exchange::new("exchange").unwrap(),
+        exchange_id: kairos_primitives::reference::ExchangeId::new("exchange").unwrap(),
         proposal: TradeRiskProposal {
             notional: amount(value),
             initial_margin_rate_bps: 10_000.into(),

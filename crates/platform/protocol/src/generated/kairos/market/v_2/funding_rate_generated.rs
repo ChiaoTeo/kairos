@@ -22,7 +22,7 @@ impl<'a> ::flatbuffers::Follow<'a> for FundingRate<'a> {
 impl<'a> FundingRate<'a> {
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 8;
     pub const VT_FUNDING_RATE: ::flatbuffers::VOffsetT = 10;
     pub const VT_FUNDING_PERIOD_SECONDS: ::flatbuffers::VOffsetT = 12;
     pub const VT_NEXT_FUNDING_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 14;
@@ -51,8 +51,8 @@ impl<'a> FundingRate<'a> {
         if let Some(x) = args.funding_rate {
             builder.add_funding_rate(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -89,13 +89,13 @@ impl<'a> FundingRate<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(FundingRate::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(FundingRate::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -174,8 +174,8 @@ impl ::flatbuffers::Verifiable for FundingRate<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<super::super::common::v_2::Decimal64>(
@@ -210,7 +210,7 @@ impl ::flatbuffers::Verifiable for FundingRate<'_> {
 pub struct FundingRateArgs<'a> {
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub funding_rate: Option<&'a super::super::common::v_2::Decimal64>,
     pub funding_period_seconds: u64,
     pub next_funding_time_unix_nanos: u64,
@@ -223,7 +223,7 @@ impl<'a> Default for FundingRateArgs<'a> {
         FundingRateArgs {
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             funding_rate: None,  // required field
             funding_period_seconds: 0,
             next_funding_time_unix_nanos: 0,
@@ -254,9 +254,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FundingRateBuilder<'a, 'b, A>
         );
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(FundingRate::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(FundingRate::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_funding_rate(&mut self, funding_rate: &super::super::common::v_2::Decimal64) {
@@ -314,8 +314,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FundingRateBuilder<'a, 'b, A>
         self.fbb_.required(o, FundingRate::VT_SCOPE, "scope");
         self.fbb_
             .required(o, FundingRate::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_
-            .required(o, FundingRate::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, FundingRate::VT_PROVIDER, "provider");
         self.fbb_
             .required(o, FundingRate::VT_FUNDING_RATE, "funding_rate");
         ::flatbuffers::WIPOffset::new(o.value())
@@ -327,7 +326,7 @@ impl ::core::fmt::Debug for FundingRate<'_> {
         let mut ds = f.debug_struct("FundingRate");
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("funding_rate", &self.funding_rate());
         ds.field("funding_period_seconds", &self.funding_period_seconds());
         ds.field(

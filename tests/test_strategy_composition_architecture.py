@@ -30,7 +30,7 @@ def test_strategy_has_no_other_module_infrastructure_construction() -> None:
     )
     for forbidden in (
         "kairospy.infrastructure",
-        "MarketProjection",
+        "MarketViewAccess",
         "UnixJsonCommandClient",
         "StrategyClient" + "Bundle",
         "compose_strategy_" + "applications",
@@ -84,7 +84,7 @@ def test_business_composition_uses_system_clients_for_contract_views() -> None:
             "ViewReader",
             "CurrentViewReader",
             "ViewKey",
-            "Projection",
+            "CurrentView",
             "from kairospy.infrastructure.contracts",
         ):
             assert forbidden not in source
@@ -122,7 +122,7 @@ def test_business_applications_do_not_mirror_dependencies_as_private_protocols()
             encoding="utf-8"
         )
         assert not re.search(
-            r"class\s+_(?:\w)*(?:Commands|Snapshots|Reader|Projection|Handle)\s*\([^)]*Protocol",
+            r"class\s+_(?:\w)*(?:Commands|Snapshots|Reader|CurrentView|Handle)\s*\([^)]*Protocol",
             source,
         )
 

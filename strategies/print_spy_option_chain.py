@@ -10,8 +10,8 @@ from kairospy.strategy import (
     OptionFilter,
     OptionRight,
     Options,
-    Participant,
-    ParticipantSet,
+    Provider,
+    ProviderPreference,
     QuoteEvent,
     Strategy,
     StrategyContext,
@@ -54,7 +54,7 @@ class PrintSpyOptionChain(Strategy):
         context.market.subscribe(
             market.id,
             data=[MarketData.QUOTE],
-            participants=ParticipantSet.only(Participant.MASSIVE),
+            provider_preference=ProviderPreference.require(Provider.MASSIVE),
         )
         context.logger.info(
             "spy_underlying_subscribed",
@@ -85,7 +85,7 @@ class PrintSpyOptionChain(Strategy):
                 ),
             ),
             data=[MarketData.QUOTE],
-            participants=ParticipantSet.only(Participant.MASSIVE),
+            provider_preference=ProviderPreference.require(Provider.MASSIVE),
         )
         context.logger.info(
             "spy_option_window_subscribed",
@@ -110,7 +110,7 @@ class PrintSpyOptionChain(Strategy):
                 symbol=self.underlying,
                 bid=_price(bid),
                 ask=_price(ask),
-                source=quote.source_id or "unknown",
+                provider=quote.provider or "unknown",
             )
             if (
                 not self._option_subscription_attempted
@@ -139,7 +139,7 @@ class PrintSpyOptionChain(Strategy):
             bid_size=_price(quote.bid_quantity),
             ask_size=_price(quote.ask_quantity),
             scope=scope_key,
-            source=quote.source_id or "unknown",
+            provider=quote.provider or "unknown",
         )
 
 

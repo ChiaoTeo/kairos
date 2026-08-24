@@ -16,6 +16,8 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0009 | [Account 观察事实与查询真实性](0009-account-observed-facts-and-query-truth.md) | Accepted |
 | 0010 | [Interactive CLI 产品 Section 边界](0010-interactive-cli-product-sections.md) | Accepted |
 | 0011 | [账户交易工作台与 Execution 操作模式](0011-trade-workbench-and-execution-modes.md) | Accepted |
+| 0012 | [Market Provider Routes and Private Feeds](0012-market-provider-routes.md) | Accepted |
+| 0013 | [Read Model and Query Naming](0013-read-model-and-query-naming.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

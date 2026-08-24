@@ -16,7 +16,7 @@ from ..domain.identity import LaunchIdentity
 
 @dataclass(frozen=True, slots=True)
 class StrategyLaunchConfig:
-    """Typed projection of canonical Launch config needed by Strategy assembly."""
+    """Typed normalized view of canonical Launch config needed by Strategy assembly."""
 
     identity: LaunchIdentity
     market_scope: Literal["shared", "instance"]

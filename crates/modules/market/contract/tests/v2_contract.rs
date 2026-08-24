@@ -1,7 +1,7 @@
 use kairos_market_contract::{MarketViewKey, MarketViewKind, market_view_path};
 
 #[test]
-fn mmap_resources_are_isolated_by_market_source_and_view() {
+fn mmap_resources_are_isolated_by_market_provider_and_view() {
     let quote = MarketViewKey::new(
         "market:binance:spot:BTCUSDT",
         "binance.spot",
@@ -40,13 +40,13 @@ fn mmap_resources_are_isolated_by_market_source_and_view() {
 fn canonical_view_key_contains_all_partition_identity() {
     let key = MarketViewKey::new(
         "market:fixture",
-        "source:fixture",
+        "fixture",
         MarketViewKind::OrderBook,
         None::<String>,
     )
     .unwrap();
     assert_eq!(
         key.canonical_key(),
-        "scope=market:fixture;source=source:fixture;view=order-book;qualifier="
+        "scope=market:fixture;provider=fixture;view=order-book;qualifier="
     );
 }

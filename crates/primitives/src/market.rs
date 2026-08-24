@@ -6,6 +6,104 @@ use crate::text::text_type;
 text_type!(SubscriptionId);
 text_type!(SubscriptionSymbol);
 
+/// Stable identity of a Market/Reference data provider.
+///
+/// A provider is the party a strategy may select and audit (for example
+/// Massive or Binance). It deliberately does not identify an adapter,
+/// connection, feed instance, transport, or provider-native product.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct Provider(String);
+
+impl Provider {
+    pub const MASSIVE: &'static str = "massive";
+    pub const BINANCE: &'static str = "binance";
+    pub const OKX: &'static str = "okx";
+    pub const HYPERLIQUID: &'static str = "hyperliquid";
+    pub const IBKR: &'static str = "ibkr";
+
+    pub fn new(value: impl Into<String>) -> Result<Self, DomainTypeError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(DomainTypeError::Empty {
+                type_name: "Provider",
+            });
+        }
+        if value.trim() != value {
+            return Err(DomainTypeError::Invalid {
+                type_name: "Provider",
+                reason: "leading or trailing whitespace is not allowed",
+            });
+        }
+        if value.chars().any(char::is_whitespace) {
+            return Err(DomainTypeError::Invalid {
+                type_name: "Provider",
+                reason: "whitespace is not allowed",
+            });
+        }
+        if value != value.to_ascii_lowercase() {
+            return Err(DomainTypeError::Invalid {
+                type_name: "Provider",
+                reason: "provider identity must use lowercase canonical spelling",
+            });
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for Provider {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl AsRef<str> for Provider {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::ops::Deref for Provider {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<String> for Provider {
+    type Error = DomainTypeError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&str> for Provider {
+    type Error = DomainTypeError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
 /// Closed vocabulary for observations published by Market data sources.
 ///
 /// This value crosses the Market domain/contract boundary, so it lives with
@@ -73,81 +171,5 @@ impl ObservationKind {
 impl std::fmt::Display for ObservationKind {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(transparent)]
-pub struct SourceId(String);
-
-impl SourceId {
-    pub fn new(value: impl Into<String>) -> Result<Self, DomainTypeError> {
-        let value = value.into().trim().to_ascii_lowercase();
-        if value.is_empty() {
-            return Err(DomainTypeError::Empty {
-                type_name: "SourceId",
-            });
-        }
-        if value.chars().any(char::is_whitespace) {
-            return Err(DomainTypeError::Invalid {
-                type_name: "SourceId",
-                reason: "whitespace is not allowed",
-            });
-        }
-        Ok(Self(value))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for SourceId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
-    }
-}
-
-impl AsRef<str> for SourceId {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl std::ops::Deref for SourceId {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
-    }
-}
-
-impl std::fmt::Display for SourceId {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl TryFrom<String> for SourceId {
-    type Error = DomainTypeError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl TryFrom<&str> for SourceId {
-    type Error = DomainTypeError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::new(value)
     }
 }

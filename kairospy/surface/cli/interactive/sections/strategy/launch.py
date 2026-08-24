@@ -8,9 +8,11 @@ from prettytable import PrettyTable
 import typer
 
 from kairospy.application.launch.application import (
+    LaunchConfigurationApplication,
     LaunchRegistryApplication,
     LaunchRuntimeApplication,
 )
+from kairospy.application.launch.application.wizard import load_values
 from kairospy.surface.console.models import ObserveSnapshot
 
 from ...context import unique_launches
@@ -35,7 +37,7 @@ def print_menu(context: InteractiveContext) -> None:
     if context.shell_path == ("launch",):
         typer.echo("策略运行：")
         print_list(context)
-        typer.echo("输入序号选择并进入 launch；refresh 刷新列表。")
+        typer.echo("输入序号选择；n 创建运行方案；refresh 刷新列表。")
         return
     launch_id = context.selected_launch or context.shell_path[1]
     if _is_components_path(context.shell_path):
@@ -108,11 +110,17 @@ def _prompt_menu(title: str, choices: tuple[tuple[str, str], ...]) -> str:
         typer.echo("这个选项不存在，请重新输入。")
 
 
-def handle(
-    context: InteractiveContext, parts: tuple[str, ...]
-) -> ShellAction:
+def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
     if context.shell_path == ("launch",):
         ids = launch_ids(context.owner, context.snapshot)
+        if parts in {("n",), ("new",), ("create",)}:
+            launch_id = typer.prompt("Launch id", default="new-launch").strip()
+            context.selected_launch = launch_id
+            return GuidedCommand(
+                ("launch", "init", launch_id),
+                "创建并持久保存 Launch 草稿",
+                dangerous=True,
+            )
         if len(parts) == 1 and parts[0].isdigit():
             index = int(parts[0])
             if not 1 <= index <= len(ids):
@@ -168,6 +176,8 @@ def handle(
     if parts in {("1",), ("summary",), ("overview",)}:
         print_summary(context)
         return ShellControl.HANDLED
+    if parts in {("fix",), ("repair",)}:
+        return _fix_first_readiness_issue(context, launch_id)
     if parts in {("12",), ("instances",)}:
         context.shell_path = ("launch", launch_id, "instances")
         _auto_select_only_instance(context)
@@ -175,9 +185,16 @@ def handle(
     if parts == ("current",):
         return _enter_current_instance(context)
     aliases = {
-        "2": "start", "3": "status", "4": "logs", "5": "attach",
-        "6": "wait", "7": "stop", "8": "validate", "9": "edit",
-        "10": "report", "11": "restart",
+        "2": "start",
+        "3": "status",
+        "4": "logs",
+        "5": "attach",
+        "6": "wait",
+        "7": "stop",
+        "8": "validate",
+        "9": "edit",
+        "10": "report",
+        "11": "restart",
     }
     action = aliases.get(parts[0], parts[0]) if len(parts) == 1 else ""
     if action not in _ACTIONS:
@@ -191,12 +208,18 @@ def _handle_components(
     if len(parts) != 1:
         return None
     component = {
-        "1": "market", "market": "market",
-        "2": "execution", "execution": "execution",
-        "3": "reference", "reference": "reference",
-        "4": "risk", "risk": "risk",
-        "5": "capital", "capital": "capital",
-        "6": "account", "account": "account",
+        "1": "market",
+        "market": "market",
+        "2": "execution",
+        "execution": "execution",
+        "3": "reference",
+        "reference": "reference",
+        "4": "risk",
+        "risk": "risk",
+        "5": "capital",
+        "capital": "capital",
+        "6": "account",
+        "account": "account",
     }.get(parts[0])
     if component is None:
         return None
@@ -206,6 +229,7 @@ def _handle_components(
     context.selected_launch_instance = instance_id
     if component == "market":
         from ..business import market
+
         context.shell_path = (*context.shell_path, "market")
         return ShellControl.HANDLED
     if component == "execution":
@@ -218,8 +242,16 @@ def _handle_components(
         )
     return GuidedCommand(
         (
-            "launch", "instance", "component", component, "status", launch_id,
-            "--instance", instance_id, "--format", "text",
+            "launch",
+            "instance",
+            "component",
+            component,
+            "status",
+            launch_id,
+            "--instance",
+            instance_id,
+            "--format",
+            "text",
         ),
         f"查看 launch {component} 组件状态",
     )
@@ -230,7 +262,9 @@ def _handle_timeline(
 ) -> GuidedCommand | None:
     if len(parts) != 1:
         return None
-    action = {"1": "list", "list": "list", "2": "export", "export": "export"}.get(parts[0])
+    action = {"1": "list", "list": "list", "2": "export", "export": "export"}.get(
+        parts[0]
+    )
     if action is None:
         return None
     launch_id = context.selected_launch or context.shell_path[1]
@@ -246,7 +280,9 @@ def _handle_timeline(
         argv = (*argv, "--destination", destination, "--format", "text")
     return GuidedCommand(
         argv,
-        "查看 launch instance 时间线" if action == "list" else "导出 launch instance 时间线",
+        "查看 launch instance 时间线"
+        if action == "list"
+        else "导出 launch instance 时间线",
         dangerous=action == "export",
     )
 
@@ -392,11 +428,21 @@ def _is_instance_path(path: tuple[str, ...]) -> bool:
 
 
 def _is_components_path(path: tuple[str, ...]) -> bool:
-    return len(path) == 5 and path[0] == "launch" and path[2] == "instances" and path[4] == "components"
+    return (
+        len(path) == 5
+        and path[0] == "launch"
+        and path[2] == "instances"
+        and path[4] == "components"
+    )
 
 
 def _is_timeline_path(path: tuple[str, ...]) -> bool:
-    return len(path) == 5 and path[0] == "launch" and path[2] == "instances" and path[4] == "timeline"
+    return (
+        len(path) == 5
+        and path[0] == "launch"
+        and path[2] == "instances"
+        and path[4] == "timeline"
+    )
 
 
 def print_list(context: InteractiveContext) -> None:
@@ -410,17 +456,30 @@ def print_list(context: InteractiveContext) -> None:
             unique_launches(context.snapshot) if context.snapshot is not None else ()
         )
     }
-    table = PrettyTable(["序号", "launch", "mode", "state", "instance"])
+    table = PrettyTable(["序号", "launch", "mode", "配置准备", "正在运行", "最近结果"])
     table.align = "l"
     for index, launch_id in enumerate(ids, start=1):
         record = records.get(launch_id, {})
+        readiness = _launch_readiness(context, launch_id)
+        runtime_state = str(record.get("state") or "not_started")
+        active = (
+            runtime_state
+            if runtime_state in {"running", "starting", "stopping"}
+            else "未运行"
+        )
+        recent = (
+            runtime_state
+            if runtime_state in {"failed", "completed", "stopped"}
+            else "-"
+        )
         table.add_row(
             [
                 index,
                 launch_id,
-                record.get("mode", "-"),
-                record.get("state", "not_started"),
-                record.get("instance_id", "-"),
+                readiness.get("mode") or record.get("mode", "-"),
+                readiness["label"],
+                active,
+                recent,
             ]
         )
     typer.echo(table)
@@ -442,15 +501,27 @@ def print_summary(context: InteractiveContext) -> None:
             {},
         )
     config = (
-        context.owner.paths.launch_config(launch_id)
-        if context.owner is not None
-        else None
+        _launch_source_path(context, launch_id) if context.owner is not None else None
     )
+    readiness = _launch_readiness(context, launch_id)
     table = PrettyTable(["launch 上下文", "值"])
     table.align = "l"
     table.add_row(["launch", launch_id])
     table.add_row(["mode", record.get("mode", "-")])
-    table.add_row(["state", record.get("state", "not_started")])
+    table.add_row(["configuration readiness", readiness["label"]])
+    table.add_row(["runtime state", record.get("state", "not_started")])
+    table.add_row(
+        [
+            "readiness issues",
+            "；".join(str(value) for value in readiness.get("issues") or ()) or "-",
+        ]
+    )
+    table.add_row(
+        [
+            "readiness warnings",
+            "；".join(str(value) for value in readiness.get("warnings") or ()) or "-",
+        ]
+    )
     table.add_row(["instance", record.get("instance_id", "-")])
     table.add_row(["config", str(config) if config is not None else "-"])
     typer.echo(table)
@@ -476,8 +547,14 @@ def choose(context: InteractiveContext) -> GuidedCommand:
         ),
     )
     action_name = {
-        "1": "start", "2": "status", "3": "logs", "4": "attach",
-        "5": "wait", "6": "stop", "7": "validate", "8": "edit",
+        "1": "start",
+        "2": "status",
+        "3": "logs",
+        "4": "attach",
+        "5": "wait",
+        "6": "stop",
+        "7": "validate",
+        "8": "edit",
         "9": "report",
     }[action]
     return build_command(launch_id, action_name)
@@ -486,9 +563,7 @@ def choose(context: InteractiveContext) -> GuidedCommand:
 def build_command(launch_id: str, action: str) -> GuidedCommand:
     argv, summary, dangerous, streaming = _ACTIONS[action]
     command_argv = (
-        ("launch", *argv)
-        if "--help" in argv
-        else ("launch", *argv, launch_id)
+        ("launch", *argv) if "--help" in argv else ("launch", *argv, launch_id)
     )
     return GuidedCommand(
         command_argv,
@@ -506,11 +581,7 @@ def prompt_launch_id(
         typer.echo("可用 launch：")
         for index, launch_id in enumerate(ids, start=1):
             typer.echo(f"  {index}. {launch_id}")
-        default = (
-            str(ids.index(selected_launch) + 1)
-            if selected_launch in ids
-            else "1"
-        )
+        default = str(ids.index(selected_launch) + 1) if selected_launch in ids else "1"
         value = typer.prompt(
             "选择 launch 序号或直接输入 launch id", default=default
         ).strip()
@@ -534,6 +605,10 @@ def launch_ids(owner, snapshot: ObserveSnapshot | None) -> tuple[str, ...]:
                 if path.stem not in values:
                     values.append(path.stem)
         try:
+            for item in LaunchConfigurationApplication().list_drafts(owner.paths.root):
+                launch_id = str(item.get("launch_id") or "").strip()
+                if launch_id and launch_id not in values:
+                    values.append(launch_id)
             for item in LaunchRegistryApplication(owner).list():
                 launch_id = str(item.get("launch_id") or "").strip()
                 if launch_id and launch_id not in values:
@@ -541,3 +616,87 @@ def launch_ids(owner, snapshot: ObserveSnapshot | None) -> tuple[str, ...]:
         except Exception:
             pass
     return tuple(values)
+
+
+def _launch_source_path(context: InteractiveContext, launch_id: str):
+    application = LaunchConfigurationApplication()
+    draft = application.draft_path(context.owner.paths.root, launch_id)
+    return draft if draft.is_file() else context.owner.paths.launch_config(launch_id)
+
+
+def _launch_readiness(context: InteractiveContext, launch_id: str) -> dict[str, Any]:
+    if context.owner is None:
+        return {"label": "未知", "issues": [], "mode": None}
+    path = _launch_source_path(context, launch_id)
+    if not path.is_file():
+        return {"label": "配置缺失", "issues": ["Launch 配置不存在"], "mode": None}
+    application = LaunchConfigurationApplication()
+    try:
+        config = application.load(path, workspace_root=context.owner.paths.root)
+        report = application.validate(path, workspace_root=context.owner.paths.root)
+    except Exception as error:
+        return {"label": "需要处理", "issues": [str(error)], "mode": None}
+    is_draft = path.parent.name == ".drafts"
+    label = (
+        f"{'草稿 · 可发布' if is_draft else '可启动'} · {len(report.get('warnings') or ())} 项警告"
+        if report["valid"] and report.get("warnings")
+        else "草稿 · 可发布"
+        if report["valid"] and is_draft
+        else "可启动"
+        if report["valid"]
+        else f"{'草稿 · ' if is_draft else ''}需要处理 {len(report['issues'])} 项"
+    )
+    return {
+        "label": label,
+        "issues": list(report["issues"]),
+        "warnings": list(report.get("warnings") or ()),
+        "diagnostics": list(report.get("diagnostics") or ()),
+        "mode": config.mode,
+        "ready": bool(report["valid"]),
+        "draft": is_draft,
+    }
+
+
+def _fix_first_readiness_issue(
+    context: InteractiveContext, launch_id: str
+) -> ShellControl:
+    readiness = _launch_readiness(context, launch_id)
+    issues = [str(value) for value in readiness.get("issues") or ()]
+    if not issues:
+        typer.echo("当前 Launch 没有配置阻塞项。")
+        return ShellControl.HANDLED
+    text = issues[0].lower()
+    resource = (
+        "accounts"
+        if "account" in text
+        else "data"
+        if "massive" in text or "data connection" in text
+        else "models"
+        if "agent" in text or "model" in text or "openai" in text
+        else "notifications"
+        if "notification" in text
+        else None
+    )
+    if resource is None or context.owner is None:
+        typer.echo(f"首个阻塞项需要手动处理：{issues[0]}")
+        return ShellControl.HANDLED
+    application = LaunchConfigurationApplication()
+    draft_path = application.draft_path(context.owner.paths.root, launch_id)
+    if not draft_path.is_file():
+        source = context.owner.paths.launch_config(launch_id)
+        if source.is_file():
+            application.save_draft(
+                context.owner.paths.root, launch_id, load_values(source)
+            )
+    application.record_draft_return(
+        context.owner.paths.root,
+        launch_id,
+        resource=resource,
+        step=resource,
+    )
+    context.selected_launch = launch_id
+    context.shell_path = ("resources", resource)
+    typer.echo(
+        f"已保存 Launch {launch_id} 草稿。完成资源配置和手动测试后输入 continue 返回。"
+    )
+    return ShellControl.HANDLED

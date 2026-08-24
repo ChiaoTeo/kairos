@@ -128,7 +128,7 @@ provider-native inherent method.
 | Capability | Binance | Hyperliquid | Massive | OKX |
 |---|---|---|---|---|
 | `InstrumentCatalogQuery` | Spot, USD-M, COIN-M, Options, Equity, Alpha | Info Spot/Perpetual | Equity/Options/Futures/Forex/Crypto; Indices provider-native | Spot/Margin/Swap/Futures/Options |
-| `MarketQuoteQuery` | Spot, futures, Options, Equity, Alpha | all mids | | ticker projection |
+| `MarketQuoteQuery` | Spot, futures, Options, Equity, Alpha | all mids | | ticker endpoint |
 | `MarketTradeQuery` | Spot, futures, Options, Alpha | | historical only | recent trades |
 | `MarketBarQuery` | Spot, futures, Options, Alpha | historical capability only | historical capability only | candles |
 | `MarketOrderBookQuery` | Spot, futures, Options, Alpha | L2 book | | books |

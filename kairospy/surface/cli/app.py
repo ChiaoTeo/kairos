@@ -220,7 +220,7 @@ app.command(
 app.add_typer(
     notifications_app,
     name="notifications",
-    help="Validate and test outbound notification destinations.",
+    help="Configure, bind, validate, and test outbound notification destinations.",
     rich_help_panel="Business tools",
 )
 app.add_typer(

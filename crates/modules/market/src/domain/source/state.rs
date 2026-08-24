@@ -1,11 +1,11 @@
 use kairos_primitives::reference::MarketId;
 use serde::{Deserialize, Serialize};
 
-use super::{SourceDescriptor, SourceEpoch};
+use super::{FeedDescriptor, SourceEpoch};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SourceStatus {
+pub(crate) enum SourceStatus {
     #[default]
     Starting,
     Ready,
@@ -18,7 +18,7 @@ pub enum SourceStatus {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SourceFailureKind {
+pub(crate) enum SourceFailureKind {
     InvalidRequest,
     NotReady,
     Unsupported,
@@ -38,18 +38,18 @@ pub enum SourceFailureKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceState {
-    pub descriptor: SourceDescriptor,
-    pub status: SourceStatus,
-    pub epoch: SourceEpoch,
-    pub last_error: Option<String>,
+pub(crate) struct SourceState {
+    pub(crate) descriptor: FeedDescriptor,
+    pub(crate) status: SourceStatus,
+    pub(crate) epoch: SourceEpoch,
+    pub(crate) last_error: Option<String>,
     #[serde(default)]
-    pub last_failure_kind: Option<SourceFailureKind>,
-    pub resyncing_markets: Vec<MarketId>,
+    pub(crate) last_failure_kind: Option<SourceFailureKind>,
+    pub(crate) resyncing_markets: Vec<MarketId>,
 }
 
 impl SourceState {
-    pub fn starting(descriptor: SourceDescriptor) -> Self {
+    pub(crate) fn starting(descriptor: FeedDescriptor) -> Self {
         Self {
             descriptor,
             status: SourceStatus::Starting,
@@ -60,7 +60,7 @@ impl SourceState {
         }
     }
 
-    pub fn change_status(
+    pub(crate) fn change_status(
         &mut self,
         epoch: SourceEpoch,
         status: SourceStatus,

@@ -14,7 +14,7 @@ pub(crate) use connections::install as install_connections;
 pub use replay::{
     attach_replay_source, attach_replay_source_with_checkpoint, attach_replay_source_with_policy,
 };
-pub(crate) use routing::{binding_provider_product, binding_supports_canonical_market};
+pub(crate) use routing::{binding_observation_capabilities, binding_provider_segment};
 
 pub(super) fn positive_interval(
     source_id: &str,

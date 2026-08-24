@@ -8,8 +8,9 @@ pub mod logging;
 mod services;
 
 pub use application::{
-    CliReferenceApplication, LifecycleQuery, MarketQuery, ReferenceApplication,
-    ReferenceCatalogCollection, ReferenceCatalogListRequest, ReferenceKind,
+    CliReferenceApplication, ConnectedReferenceOutput, LifecycleQuery, MarketQuery,
+    ReferenceApplication, ReferenceCatalogCollection, ReferenceCatalogListRequest,
+    ReferenceCatalogRecord, ReferenceCatalogStatusResult, ReferenceCliOutput, ReferenceKind,
     ReferenceMarketCatalogRequest, ReferenceOptionChainRequest, ReferencePublication,
     ReferenceQuery, ReferenceReadModel, ReferenceRecord, ReferenceRefreshResult,
     UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,

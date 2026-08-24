@@ -23,7 +23,7 @@ use kairos_execution::{
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
     MarketObservation, OrderSide, OrderType, Quote, UnknownRemoteOrderResolution,
 };
-use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::execution::{
     ClientOrderId, ExecutionRouteId, FillId, IntentId, LegId, OrderId,
@@ -48,8 +48,8 @@ fn fill_report(
         fee_currency: None,
         occurred_at_unix_nanos: occurred_at_unix_nanos.map(Into::into),
         execution_market_id: None,
-        reported_provider_id: None,
-        provider_product: None,
+        reported_broker_id: None,
+        execution_channel: None,
         order_entry_symbol: None,
         remote_order_id: None,
     }
@@ -211,8 +211,8 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
-        participant_id: "simulated".into(),
-        product: "spot".into(),
+        broker_id: "simulated".into(),
+        execution_channel: "spot".into(),
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -249,8 +249,8 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
             segment_key: None,
             instrument_id: None,
             market_id: None,
-            participant_id: "simulated".into(),
-            provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
+            broker_id: BrokerId::new("simulated").unwrap(),
+            execution_channel: kairos_primitives::execution::ExecutionChannelCode::new("spot")
                 .unwrap(),
             order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
                 .unwrap(),
@@ -291,8 +291,8 @@ fn configure_test_access(application: &mut ExecutionApplication) {
             segment_key: None,
             instrument_id: None,
             market_id: None,
-            participant_id: "simulated".into(),
-            provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
+            broker_id: BrokerId::new("simulated").unwrap(),
+            execution_channel: kairos_primitives::execution::ExecutionChannelCode::new("spot")
                 .unwrap(),
             order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
                 .unwrap(),
@@ -334,8 +334,8 @@ fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() 
             segment_key: None,
             instrument_id: Some(InstrumentId::new("BTCUSDT").unwrap()),
             market_id: None,
-            participant_id: "simulated".into(),
-            provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
+            broker_id: BrokerId::new("simulated").unwrap(),
+            execution_channel: kairos_primitives::execution::ExecutionChannelCode::new("spot")
                 .unwrap(),
             order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
                 .unwrap(),
@@ -384,8 +384,8 @@ fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state
             segment_key: None,
             instrument_id: None,
             market_id: None,
-            participant_id: "simulated".into(),
-            provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
+            broker_id: BrokerId::new("simulated").unwrap(),
+            execution_channel: kairos_primitives::execution::ExecutionChannelCode::new("spot")
                 .unwrap(),
             order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
                 .unwrap(),
@@ -447,8 +447,8 @@ fn selected_route_snapshot_is_persisted_with_the_order() {
     let selected = app.orders(None)[0].selected_route.clone().unwrap();
     let attempts = app.orders(None)[0].attempts.clone();
     assert_eq!(selected.route_id, "execution-route:test");
-    assert_eq!(selected.participant_id, "simulated");
-    assert_eq!(selected.provider_product, "spot");
+    assert_eq!(selected.broker_id, "simulated");
+    assert_eq!(selected.execution_channel, "spot");
     assert_eq!(selected.order_entry_symbol, "BTCUSDT");
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].selected_route, selected);
@@ -617,8 +617,8 @@ fn normalized_remote_execution_event_reconciles_a_fill() {
         required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
-        participant_id: "simulated".into(),
-        product: "spot".into(),
+        broker_id: "simulated".into(),
+        execution_channel: "spot".into(),
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -742,8 +742,8 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
-        participant_id: "simulated".into(),
-        product: "spot".into(),
+        broker_id: "simulated".into(),
+        execution_channel: "spot".into(),
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -1001,8 +1001,8 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
         required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
-        participant_id: "simulated".into(),
-        product: "spot".into(),
+        broker_id: "simulated".into(),
+        execution_channel: "spot".into(),
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -1065,8 +1065,8 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
         required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
-        participant_id: "simulated".into(),
-        product: "spot".into(),
+        broker_id: "simulated".into(),
+        execution_channel: "spot".into(),
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -2070,8 +2070,8 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
         required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
-        participant_id: "simulated".into(),
-        product: "spot".into(),
+        broker_id: "simulated".into(),
+        execution_channel: "spot".into(),
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -2438,8 +2438,8 @@ fn reported_execution_market_does_not_overwrite_the_selected_destination() {
             segment_key: None,
             instrument_id: None,
             market_id: Some(selected_market.clone()),
-            participant_id: "broker".into(),
-            provider_product: kairos_primitives::integration::ProviderProductCode::new("smart")
+            broker_id: BrokerId::new("broker").unwrap(),
+            execution_channel: kairos_primitives::execution::ExecutionChannelCode::new("smart")
                 .unwrap(),
             order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTC").unwrap(),
             supported_order_types: vec![OrderType::Market],
@@ -2469,7 +2469,7 @@ fn reported_execution_market_does_not_overwrite_the_selected_destination() {
     .unwrap();
     let mut report = fill_report("smart-fill", "smart-route-order", 1, 100, 0, Some(10));
     report.execution_market_id = Some(MarketId::new("market:exchange:actual").unwrap());
-    report.reported_provider_id = Some("broker".into());
+    report.reported_broker_id = Some(BrokerId::new("broker").unwrap());
     app.record_fill(report).unwrap();
 
     let order = &app.orders(None)[0];

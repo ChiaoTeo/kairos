@@ -18,12 +18,296 @@ from kairospy.application.data import DatasetRef, DatasetSetRef
 from kairospy.application.launch.application.wizard import (
     LaunchDraft,
     build_and_validate,
+    draft_preview,
     load_values,
+    prompt_agent_config,
+    prompt_notification_config,
 )
 from kairospy.application.workspace import WorkspaceApplication
+from kairospy.application.account import AccountConfigurationApplication
+from kairospy.application.credential import (
+    CredentialConfigurationApplication,
+    SecretRef,
+)
 from kairospy.surface.cli import execute_argv
-from kairospy.surface.cli.commands.launch import _launch_config_path
+from kairospy.surface.cli.commands.launch import (
+    _launch_config_path,
+    _live_start_confirmation,
+    _prompt_launch_draft,
+)
+from kairospy.application.launch.application.wizard import LaunchWizardExit
 from io import StringIO
+
+
+def test_final_preview_is_complete_and_secret_safe() -> None:
+    values = {
+        "launch": {"id": "live-grid", "mode": "live", "strategy": "grid:run"},
+        "accounts": {"main": {"ref": "main", "segments": ["spot"], "trade": True}},
+        "execution": {"enabled": True, "routes": [{"route_id": "main-spot"}]},
+        "risk": {"profile": "live-default"},
+        "live": {"safety": {"max_order_notional": "100"}},
+        "agent": {
+            "enabled": True,
+            "model": {
+                "credential": "openai-main",
+                "model": "gpt-snapshot",
+                "api_key": "must-not-render",
+            },
+            "profile": {"version": "2"},
+            "mcp": [{"allowed_tools": ["account.get_position", "order.submit"]}],
+        },
+        "notifications": {
+            "enabled": True,
+            "required": True,
+            "routes": {"risk": ["telegram-ops"]},
+        },
+        "legacy_secret": "also-must-not-render",
+    }
+
+    preview = draft_preview(values)
+
+    for expected in (
+        "LIVE（会连接真实账户）",
+        "main / spot / 允许交易",
+        "live-default",
+        "单笔最大名义金额 100",
+        "openai-main / gpt-snapshot",
+        "2 个工具 · 1 个疑似写入工具",
+        "telegram-ops · required",
+    ):
+        assert expected in preview
+    assert "must-not-render" not in preview
+
+
+def test_live_start_confirmation_repeats_account_environment_and_risk(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="live")
+    accounts = AccountConfigurationApplication(workspace)
+    accounts.connect(
+        "live-main",
+        broker="paper",
+        integration_provider="paper",
+        environment="live",
+    )
+    accounts.test_connection("live-main")
+    path = workspace.paths.launch_config("live-grid")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '[launch]\nid = "live-grid"\nmode = "live"\nstrategy = "grid:run"\n\n'
+        '[accounts.main]\nref = "live-main"\nsegments = ["spot"]\ntrade = true\n\n'
+        "[execution]\nenabled = false\n\n"
+        '[risk]\nprofile = "live-default"\n\n'
+        "[live.safety]\ntrading_enabled = true\nrequire_limit_orders = true\n"
+        'max_order_notional = "100"\n',
+        encoding="utf-8",
+    )
+    config = LaunchConfigurationApplication().load(
+        path, workspace_root=workspace.paths.root
+    )
+
+    warning = _live_start_confirmation(workspace, config)
+
+    assert "LIVE（会产生真实外部副作用）" in warning
+    assert "live-main / live / spot / 允许交易" in warning
+    assert "live-default" in warning
+    assert "单笔最大范围 100" in warning
+
+
+def test_live_execution_requires_explicit_side_effect_and_notional_bound(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "live.toml"
+    path.write_text(
+        '[launch]\nid = "live"\nmode = "live"\nstrategy = "x:y"\n\n'
+        "[execution]\nenabled = true\n"
+        'routes = [{ route_id = "main-spot", account_id = "main", '
+        'segment_key = "spot", broker_id = "binance", '
+        'execution_channel = "spot" }]\n\n'
+        '[accounts.main]\nref = "main"\nsegments = ["spot"]\ntrade = true\n\n'
+        '[risk]\nprofile = "production-default"\n\n'
+        "[live.safety]\ntrading_enabled = false\nrequire_limit_orders = true\n",
+        encoding="utf-8",
+    )
+
+    blocked = LaunchConfigurationApplication().validate(path)
+    assert "live.safety.trading_enabled must be explicitly true" in " ".join(
+        blocked["issues"]
+    )
+    assert "live.safety.max_order_notional is required" in " ".join(blocked["issues"])
+    assert all(item["severity"] == "blocker" for item in blocked["diagnostics"])
+    assert any(
+        item["owner"] == "Risk/Launch" and item["action"]
+        for item in blocked["diagnostics"]
+    )
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "trading_enabled = false",
+            'trading_enabled = true\nmax_order_notional = "100"',
+        ),
+        encoding="utf-8",
+    )
+    assert LaunchConfigurationApplication().validate(path)["valid"] is True
+
+
+def test_launch_wizard_q_offers_persistent_draft_exit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="q")
+    application = LaunchConfigurationApplication()
+    values = {"launch": {"id": "working", "mode": "paper", "strategy": "x:y"}}
+    application.save_draft(workspace.paths.root, "working", values)
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.prompt_draft",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(LaunchWizardExit()),
+    )
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.launch.typer.prompt",
+        lambda *_args, **_kwargs: "1",
+    )
+
+    draft, status = _prompt_launch_draft(
+        values,
+        default_launch_id="working",
+        owner=workspace,
+        application=application,
+    )
+
+    assert draft is None
+    assert status == "draft_saved"
+    assert application.draft_path(workspace.paths.root, "working").is_file()
+
+
+def test_launch_wizard_atomically_persists_each_completed_step_before_q(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="step-draft"
+    )
+    application = LaunchConfigurationApplication()
+    initial = {
+        "launch": {
+            "id": "working",
+            "mode": "paper",
+            "strategy": "builtin:interactive",
+        }
+    }
+    application.save_draft(workspace.paths.root, "working", initial)
+    answers = iter(["paper", "custom:Strategy", "2", "q", "1"])
+    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: next(answers))
+
+    draft, status = _prompt_launch_draft(
+        initial,
+        default_launch_id="working",
+        owner=workspace,
+        application=application,
+    )
+
+    persisted = application.load_draft(workspace.paths.root, "working")
+    assert draft is None
+    assert status == "draft_saved"
+    assert persisted["launch"] == {
+        "id": "working",
+        "mode": "paper",
+        "strategy": "custom:Strategy",
+    }
+    assert persisted["accounts"] == {}
+
+
+def test_launch_wizard_records_account_resource_return_without_changing_intent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="resource-return"
+    )
+    application = LaunchConfigurationApplication()
+    initial = {
+        "launch": {
+            "id": "working",
+            "mode": "paper",
+            "strategy": "builtin:interactive",
+        }
+    }
+    application.save_draft(workspace.paths.root, "working", initial)
+    answers = iter(["paper", "custom:Strategy", "1"])
+    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: next(answers))
+
+    draft, status = _prompt_launch_draft(
+        initial,
+        default_launch_id="working",
+        owner=workspace,
+        application=application,
+    )
+
+    assert draft is None
+    assert status == "resource_required:accounts"
+    assert application.draft_return(workspace.paths.root, "working") == {
+        "launch_id": "working",
+        "resource": "accounts",
+        "step": "accounts_and_execution_scope",
+    }
+    assert (
+        application.load_draft(workspace.paths.root, "working")["launch"]["strategy"]
+        == "custom:Strategy"
+    )
+
+
+def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="unverified-data"
+    )
+    path = workspace.paths.launch_config("paper-unverified-data")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '[launch]\nid = "paper-unverified-data"\nmode = "paper"\n'
+        'strategy = "builtin:interactive"\n\n'
+        "[execution]\nenabled = false\n\n"
+        '[paper.market]\nprofile = "some-unverified-profile"\nscope = "shared"\n',
+        encoding="utf-8",
+    )
+
+    report = LaunchConfigurationApplication().validate(
+        path, workspace_root=workspace.paths.root
+    )
+
+    assert report["valid"] is False
+    assert report["diagnostics"] == [
+        {
+            "owner": "Reference/Market",
+            "resource": "data_provider",
+            "severity": "blocker",
+            "reason": (
+                "Workspace data connection is not supported or verified: "
+                "some-unverified-profile"
+            ),
+            "action": "configure and manually test the selected data connection",
+        }
+    ]
+
+
+def test_enabled_agent_and_notification_keep_incomplete_intent_for_resource_fix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="incomplete-resources"
+    )
+    confirmations = iter([True, False, True])
+    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: next(confirmations))
+    monkeypatch.setattr(
+        "typer.prompt",
+        lambda *_args, **kwargs: str(kwargs.get("default") or ""),
+    )
+
+    agent = prompt_agent_config({}, mode="paper", workspace=workspace)
+    notifications = prompt_notification_config({}, mode="paper", workspace=workspace)
+
+    assert agent["enabled"] is True
+    assert agent["required"] is False
+    assert "model" not in agent
+    assert notifications == {"enabled": True, "required": False, "routes": {}}
 
 
 def _write_config(path: Path, *, mode: str = "paper") -> Path:
@@ -136,8 +420,8 @@ asset = "USDT"
     automatic = tmp_path / "capital-automatic.toml"
     automatic.write_text(
         enabled.read_text(encoding="utf-8").replace(
-            "strategy_id = \"strategy-a\"",
-            "strategy_id = \"strategy-a\"\nautomatic_execution = true",
+            'strategy_id = "strategy-a"',
+            'strategy_id = "strategy-a"\nautomatic_execution = true',
         ),
         encoding="utf-8",
     )
@@ -194,7 +478,14 @@ enabled = false
 def test_launch_draft_preserves_advanced_values_and_writes_valid_toml(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "manual.toml"
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-draft"
+    )
+    accounts = AccountConfigurationApplication(workspace)
+    for account_id in ("main", "secondary"):
+        accounts.simulate(account_id)
+        accounts.test_connection(account_id)
+    path = workspace.paths.launch_config("manual")
     original = {
         "launch": {"id": "old", "mode": "paper", "strategy": "old:Strategy"},
         "strategy": {"params": {"symbol": "BTCUSDT"}},
@@ -208,7 +499,7 @@ def test_launch_draft_preserves_advanced_values_and_writes_valid_toml(
         execution_enabled=False,
     ).apply(original)
 
-    report = build_and_validate(path, updated, tmp_path)
+    report = build_and_validate(path, updated, workspace.paths.root)
 
     assert report["valid"] is True
     values = load_values(path)
@@ -216,6 +507,42 @@ def test_launch_draft_preserves_advanced_values_and_writes_valid_toml(
     assert values["strategy"]["params"] == {"symbol": "BTCUSDT"}
     assert values["paper"]["events"] == "events.jsonl"
     assert values["accounts"]["account_2"]["ref"] == "secondary"
+
+
+def test_launch_draft_writes_agent_selection_without_account_or_secret_copy() -> None:
+    values = LaunchDraft(
+        launch_id="agent-paper",
+        mode="paper",
+        strategy="builtin:interactive",
+        accounts=("main",),
+        execution_enabled=False,
+        agent={
+            "enabled": True,
+            "required": False,
+            "runtime": "openai-agents",
+            "profile": "intent-review-v1",
+            "model": {
+                "provider": "openai",
+                "model": "gpt-5.4-2026-03-05",
+                "credential": "openai-prod",
+            },
+            "capabilities": {
+                "intent_review": {
+                    "initial_mode": "shadow",
+                    "strategy_selectable_modes": ["shadow", "gate"],
+                    "operations": ["target_position"],
+                    "failure_policy": "reject_new_exposure",
+                    "required_contexts": [],
+                    "revisions": {},
+                }
+            },
+            "mcp": [],
+        },
+    ).apply({})
+
+    assert values["agent"]["model"]["credential"] == "openai-prod"
+    assert "api_key" not in repr(values["agent"])
+    assert "accounts" not in values["agent"]
 
 
 def test_launch_draft_does_not_replace_existing_file_when_validation_fails(
@@ -247,7 +574,7 @@ def test_launch_draft_materializes_one_explicit_execution_route_per_account() ->
         strategy="builtin:interactive",
         accounts=("main", "hedge"),
         execution_enabled=True,
-        execution_participant_id="simulated",
+        execution_broker_id="simulated",
     ).apply({})
 
     assert values["execution"]["routes"] == [
@@ -255,15 +582,15 @@ def test_launch_draft_materializes_one_explicit_execution_route_per_account() ->
             "route_id": "main-spot",
             "account_id": "main",
             "segment_key": "spot",
-            "participant_id": "simulated",
-            "product": "spot",
+            "broker_id": "simulated",
+            "execution_channel": "spot",
         },
         {
             "route_id": "hedge-spot",
             "account_id": "hedge",
             "segment_key": "spot",
-            "participant_id": "simulated",
-            "product": "spot",
+            "broker_id": "simulated",
+            "execution_channel": "spot",
         },
     ]
 
@@ -275,8 +602,8 @@ def test_live_launch_draft_materializes_risk_and_execution_selection() -> None:
         strategy="builtin:interactive",
         accounts=("main",),
         execution_enabled=True,
-        execution_participant_id="ibkr",
-        execution_product="equity",
+        execution_broker_id="ibkr",
+        execution_channel="equity",
         execution_segment_key="equity",
         risk_profile="production-conservative",
     ).apply({})
@@ -286,8 +613,8 @@ def test_live_launch_draft_materializes_risk_and_execution_selection() -> None:
         "route_id": "main-equity",
         "account_id": "main",
         "segment_key": "equity",
-        "participant_id": "ibkr",
-        "product": "equity",
+        "broker_id": "ibkr",
+        "execution_channel": "equity",
     }
 
 
@@ -311,6 +638,9 @@ def test_launch_environment_writes_normalized_config_inside_instance(
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="launch"
     )
+    accounts = AccountConfigurationApplication(workspace)
+    accounts.simulate("paper-account")
+    accounts.test_connection("paper-account")
     config = _write_config(tmp_path / "demo.toml")
 
     environment = LaunchConfigurationApplication().environment(
@@ -330,11 +660,106 @@ def test_launch_environment_writes_normalized_config_inside_instance(
         environment.normalized_config_path.read_text(encoding="utf-8")
     )
     assert normalized["launch"]["mode"] == "paper"
+    assert normalized["snapshot_schema_version"] == 1
+    assert (
+        normalized["resource_snapshots"]["accounts"]["paper-account"]["verification"][
+            "verification_status"
+        ]
+        == "verified"
+    )
+    assert normalized["resource_hashes"]["accounts:paper-account"]
     assert environment.process_environment["KAIROS_LAUNCH_INSTANCE_ID"] == "one"
     assert environment.process_environment["KAIROS_LAUNCH_NORMALIZED_CONFIG"] == str(
         environment.normalized_config_path
     )
     assert environment.process_environment["KAIROS_EXECUTION_DRY_RUN"] == "true"
+
+
+def test_instance_resource_drift_uses_secret_ref_identity_not_secret_value(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="drift"
+    )
+    monkeypatch.setenv("KAIROS_PAPER_NOTE", "first-secret-value")
+    credentials = CredentialConfigurationApplication(workspace)
+    credentials.configure(
+        "paper-credential",
+        provider="paper",
+        fields={"note": SecretRef("env", "KAIROS_PAPER_NOTE")},
+    )
+    accounts = AccountConfigurationApplication(workspace)
+    accounts.connect(
+        "paper-account",
+        broker="paper",
+        environment="paper",
+        credential="paper-credential",
+    )
+    accounts.test_connection("paper-account")
+    config = _write_config(workspace.paths.launch_config("demo-launch"))
+    application = LaunchConfigurationApplication()
+    environment = application.environment(
+        config, workspace_root=workspace.paths.root, instance_id="one"
+    )
+    encoded = environment.normalized_config_path.read_text()
+    assert "first-secret-value" not in encoded
+
+    monkeypatch.setenv("KAIROS_PAPER_NOTE", "rotated-secret-value")
+    assert application.instance_resource_drift(
+        environment.normalized_config_path, workspace_root=workspace.paths.root
+    ) == {"valid": True, "issues": []}
+
+    monkeypatch.setenv("KAIROS_PAPER_NOTE_V2", "rotated-secret-value")
+    credentials.configure(
+        "paper-credential",
+        provider="paper",
+        fields={"note": SecretRef("env", "KAIROS_PAPER_NOTE_V2")},
+        overwrite=True,
+    )
+    drift = application.instance_resource_drift(
+        environment.normalized_config_path, workspace_root=workspace.paths.root
+    )
+    assert drift["valid"] is False
+    assert drift["issues"][0]["resource"] == "accounts:paper-account"
+
+
+def test_launch_configuration_persists_unready_draft_and_return_point(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="draft-return"
+    )
+    application = LaunchConfigurationApplication()
+    values = {
+        "launch": {
+            "id": "live-draft",
+            "mode": "live",
+            "strategy": "builtin:interactive",
+        },
+        "accounts": {"main": {"ref": "missing", "enabled": True}},
+        "execution": {"enabled": False},
+        "risk": {"profile": "production-default"},
+        "live": {"safety": {"trading_enabled": False}},
+    }
+
+    saved = application.save_draft(workspace.paths.root, "live-draft", values)
+    return_point = application.record_draft_return(
+        workspace.paths.root,
+        "live-draft",
+        resource="accounts",
+        step="accounts",
+    )
+
+    assert saved["status"] == "draft"
+    assert saved["ready"] is False
+    assert "Account" in " ".join(saved["issues"])
+    assert application.load_draft(workspace.paths.root, "live-draft") == values
+    assert application.list_drafts(workspace.paths.root)[0]["launch_id"] == "live-draft"
+    assert application.draft_return(workspace.paths.root, "live-draft") == return_point
+    assert not workspace.paths.launch_config("live-draft").exists()
+
+    application.clear_draft_return(workspace.paths.root, "live-draft")
+    assert application.draft_return(workspace.paths.root, "live-draft") is None
 
 
 def test_live_requires_live_table(tmp_path: Path) -> None:
@@ -359,6 +784,55 @@ def test_backtest_requires_market_window(tmp_path: Path) -> None:
     report = LaunchConfigurationApplication().validate(config)
     assert report["valid"] is False
     assert "backtest.market" in " ".join(report["issues"])
+
+
+def test_backtest_instance_does_not_parse_workspace_live_secrets(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="backtest-secret-isolation"
+    )
+    credential = workspace.paths.credential_config().parent / "broken-openai.toml"
+    credential.parent.mkdir(parents=True, exist_ok=True)
+    credential.write_text(
+        '[credential]\nid = "broken-openai"\nprovider = "openai"\n'
+        'api_key = "legacy-secret-must-not-enter-instance"\n',
+        encoding="utf-8",
+    )
+    workspace.paths.notification_config().write_text(
+        'version = 1\n[destinations.ops]\nsender = "telegram"\n'
+        'bot_token = "legacy-notification-secret"\n',
+        encoding="utf-8",
+    )
+    config = workspace.paths.launch_config("isolated-backtest")
+    config.write_text(
+        '[launch]\nid = "isolated-backtest"\nmode = "backtest"\n'
+        'strategy = "builtin:interactive"\n\n'
+        "[execution]\nenabled = false\n\n"
+        "[agent]\nenabled = false\nrequired = false\n\n"
+        "[notifications]\nenabled = false\nrequired = false\n\n"
+        '[backtest.market]\nstart = "2024-01-01T00:00:00Z"\n'
+        'end = "2024-01-02T00:00:00Z"\nevents = "data/events.jsonl"\n',
+        encoding="utf-8",
+    )
+
+    environment = LaunchConfigurationApplication().environment(
+        config, workspace_root=workspace.paths.root, instance_id="run-1"
+    )
+    normalized = json.loads(
+        environment.normalized_config_path.read_text(encoding="utf-8")
+    )
+
+    assert normalized["resource_snapshots"] == {
+        "accounts": {},
+        "data_providers": {},
+        "models": {},
+        "notifications": {},
+        "mcp_credentials": {},
+    }
+    encoded = json.dumps(normalized)
+    assert "legacy-secret-must-not-enter-instance" not in encoded
+    assert "legacy-notification-secret" not in encoded
 
 
 def test_mode_plan_resolves_backtest_paths_and_defaults_execution(
@@ -616,16 +1090,16 @@ def test_execution_routes_are_validated_without_inline_secrets(tmp_path: Path) -
 route_id = "binance-spot"
 account_id = "paper-account"
 segment_key = "spot"
-participant_id = "binance"
-product = "spot"
+broker_id = "binance"
+execution_channel = "spot"
 credential_id = "binance-main"
 
 [[execution.routes]]
 route_id = "okx-swap"
 account_id = "paper-account"
 segment_key = "swap"
-participant_id = "okx"
-product = "swap"
+broker_id = "okx"
+execution_channel = "swap"
 credential_id = "okx-main"
 """,
         encoding="utf-8",
@@ -785,6 +1259,9 @@ def test_launch_diagnose_reads_workspace_launch_toml(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="launch"
     )
+    accounts = AccountConfigurationApplication(workspace)
+    accounts.simulate("paper-account")
+    accounts.test_connection("paper-account")
     config_dir = workspace.paths.config / "launches"
     config_dir.mkdir(parents=True, exist_ok=True)
     _write_config(config_dir / "demo-launch.toml")
@@ -804,7 +1281,7 @@ def test_launch_diagnose_reads_workspace_launch_toml(tmp_path: Path) -> None:
         )
         == 0
     )
-    assert '"valid": true' in output.getvalue()
+    assert "valid: true" in output.getvalue()
 
 
 def test_launch_id_resolves_workspace_owned_config_without_explicit_path(

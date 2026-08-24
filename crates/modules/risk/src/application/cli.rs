@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use kairos_workspace::Workspace;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::application::contract::{authorize_from, policy_from};
@@ -11,7 +12,7 @@ use crate::services::actor::RiskActor;
 ///
 /// This facade is reserved for local policy/schema/dry-run risk previews. It
 /// must not create reservations, authorize runtime orders, connect to the Risk
-/// server, or read runtime projections.
+/// server, or read runtime current views.
 pub struct CliRiskApplication {
     workspace_root: PathBuf,
 }
@@ -20,6 +21,60 @@ pub struct CliRiskApplication {
 pub enum RiskCliRequestKind {
     Authorization,
     Policy,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RiskDoctorResult {
+    pub owner: &'static str,
+    pub mode: &'static str,
+    pub kind: &'static str,
+    pub valid: bool,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reservation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instrument_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exchange_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforcement: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RiskPreviewSource {
+    pub policy_files: Vec<String>,
+    pub request_file: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RiskPreviewResult {
+    pub owner: &'static str,
+    pub mode: &'static str,
+    pub effect: &'static str,
+    pub source: RiskPreviewSource,
+    pub decision: super::RiskDecision,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum RiskStandaloneOutput {
+    Schema(Value),
+    Doctor(RiskDoctorResult),
+    Preview(RiskPreviewResult),
 }
 
 impl CliRiskApplication {
@@ -53,55 +108,53 @@ impl CliRiskApplication {
         &self,
         kind: RiskCliRequestKind,
         file: &Path,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<RiskDoctorResult, Box<dyn std::error::Error>> {
         let data = std::fs::read_to_string(file)?;
         let result = match kind {
             RiskCliRequestKind::Authorization => {
                 match serde_json::from_str::<kairos_risk_contract::AuthorizeRequest>(&data) {
-                    Ok(request) => json!({
-                        "owner": "risk",
-                        "mode": "standalone",
-                        "kind": "authorization",
-                        "valid": true,
-                        "file": file.display().to_string(),
-                        "request_id": request.request_id,
-                        "reservation_id": request.reservation_id,
-                        "account_id": request.account_id,
-                        "strategy_id": request.strategy_id,
-                        "instrument_id": request.instrument_id,
-                        "exchange_id": request.exchange_id,
-                    }),
-                    Err(error) => json!({
-                        "owner": "risk",
-                        "mode": "standalone",
-                        "kind": "authorization",
-                        "valid": false,
-                        "file": file.display().to_string(),
-                        "error": error.to_string(),
-                    }),
+                    Ok(request) => RiskDoctorResult {
+                        owner: "risk",
+                        mode: "standalone",
+                        kind: "authorization",
+                        valid: true,
+                        file: file.display().to_string(),
+                        request_id: Some(request.request_id.to_string()),
+                        reservation_id: Some(request.reservation_id.to_string()),
+                        account_id: Some(request.account_id.to_string()),
+                        strategy_id: Some(request.strategy_id.to_string()),
+                        instrument_id: Some(request.instrument_id.to_string()),
+                        exchange_id: Some(request.exchange_id.to_string()),
+                        policy_id: None,
+                        version: None,
+                        metric: None,
+                        enforcement: None,
+                        error: None,
+                    },
+                    Err(error) => invalid_doctor_result("authorization", file, error),
                 }
             },
             RiskCliRequestKind::Policy => {
                 match serde_json::from_str::<kairos_risk_contract::PublishPolicyRequest>(&data) {
-                    Ok(request) => json!({
-                        "owner": "risk",
-                        "mode": "standalone",
-                        "kind": "policy",
-                        "valid": true,
-                        "file": file.display().to_string(),
-                        "policy_id": request.policy.policy_id,
-                        "version": request.policy.version,
-                        "metric": request.policy.metric.as_str(),
-                        "enforcement": enforcement_mode(request.policy.enforcement),
-                    }),
-                    Err(error) => json!({
-                        "owner": "risk",
-                        "mode": "standalone",
-                        "kind": "policy",
-                        "valid": false,
-                        "file": file.display().to_string(),
-                        "error": error.to_string(),
-                    }),
+                    Ok(request) => RiskDoctorResult {
+                        owner: "risk",
+                        mode: "standalone",
+                        kind: "policy",
+                        valid: true,
+                        file: file.display().to_string(),
+                        request_id: None,
+                        reservation_id: None,
+                        account_id: None,
+                        strategy_id: None,
+                        instrument_id: None,
+                        exchange_id: None,
+                        policy_id: Some(request.policy.policy_id.to_string()),
+                        version: Some(request.policy.version.get()),
+                        metric: Some(request.policy.metric.as_str().to_owned()),
+                        enforcement: Some(enforcement_mode(request.policy.enforcement)),
+                        error: None,
+                    },
+                    Err(error) => invalid_doctor_result("policy", file, error),
                 }
             },
         };
@@ -112,7 +165,7 @@ impl CliRiskApplication {
         &self,
         policy_files: &[PathBuf],
         request_file: &Path,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<RiskPreviewResult, Box<dyn std::error::Error>> {
         if policy_files.is_empty() {
             return Err("at least one --policy-file is required for standalone preview".into());
         }
@@ -127,19 +180,19 @@ impl CliRiskApplication {
         let request: kairos_risk_contract::AuthorizeRequest = read_json_file(request_file)?;
         let decision =
             application.pre_trade_check(authorize_from(request).map_err(invalid_data)?)?;
-        Ok(json!({
-            "owner": "risk",
-            "mode": "standalone",
-            "effect": "dry_run",
-            "source": {
-                "policy_files": policy_files
+        Ok(RiskPreviewResult {
+            owner: "risk",
+            mode: "standalone",
+            effect: "dry_run",
+            source: RiskPreviewSource {
+                policy_files: policy_files
                     .iter()
                     .map(|path| path.display().to_string())
                     .collect::<Vec<_>>(),
-                "request_file": request_file.display().to_string(),
+                request_file: request_file.display().to_string(),
             },
-            "decision": decision,
-        }))
+            decision,
+        })
     }
 }
 
@@ -148,6 +201,31 @@ fn read_json_file<T: serde::de::DeserializeOwned>(
 ) -> Result<T, Box<dyn std::error::Error>> {
     let data = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&data)?)
+}
+
+fn invalid_doctor_result(
+    kind: &'static str,
+    file: &Path,
+    error: impl std::fmt::Display,
+) -> RiskDoctorResult {
+    RiskDoctorResult {
+        owner: "risk",
+        mode: "standalone",
+        kind,
+        valid: false,
+        file: file.display().to_string(),
+        request_id: None,
+        reservation_id: None,
+        account_id: None,
+        strategy_id: None,
+        instrument_id: None,
+        exchange_id: None,
+        policy_id: None,
+        version: None,
+        metric: None,
+        enforcement: None,
+        error: Some(error.to_string()),
+    }
 }
 
 fn invalid_data(error: String) -> std::io::Error {

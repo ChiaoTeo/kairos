@@ -37,18 +37,18 @@ def _launch_market(workspace, *, view_root: bool = True):
     return instance, socket, view
 
 
-def test_system_market_sources_uses_owner_connected_cli_with_typed_filters(
+def test_system_market_routes_uses_owner_connected_cli_with_typed_filters(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init_project(
-        tmp_path / "workspace", workspace_id="system-market-sources"
+        tmp_path / "workspace", workspace_id="system-market-routes"
     )
     socket = _running_system_market(workspace)
     seen: list[tuple[str, list[str]]] = []
 
     def run(_self, component: str, arguments: list[str]):
         seen.append((component, arguments))
-        return {"sources": []}
+        return {"routes": []}
 
     monkeypatch.setattr(NativeCliApplication, "run", run)
     output = StringIO()
@@ -59,7 +59,7 @@ def test_system_market_sources_uses_owner_connected_cli_with_typed_filters(
                 "system",
                 "component",
                 "market",
-                "sources",
+                "routes",
                 "--workspace",
                 str(workspace.paths.root),
                 "--market-id",
@@ -82,7 +82,7 @@ def test_system_market_sources_uses_owner_connected_cli_with_typed_filters(
             "market",
             [
                 "connected",
-                "sources",
+                "routes",
                 "--socket",
                 str(socket),
                 "--view-root",
@@ -101,7 +101,7 @@ def test_system_market_sources_uses_owner_connected_cli_with_typed_filters(
     ("command", "tail", "requires_view"),
     [
         (
-            "sources",
+            "routes",
             [
                 "--market-id",
                 "market:binance:spot:BTCUSDT",
@@ -117,8 +117,8 @@ def test_system_market_sources_uses_owner_connected_cli_with_typed_filters(
                 "quote",
                 "--market-id",
                 "market:binance:spot:BTCUSDT",
-                "--source-id",
-                "binance-spot",
+                "--provider",
+                "binance",
             ],
             True,
         ),
@@ -127,10 +127,10 @@ def test_system_market_sources_uses_owner_connected_cli_with_typed_filters(
             [
                 "--market-id",
                 "market:binance:spot:BTCUSDT",
-                "--source-id",
-                "binance-spot",
-                "--qualifier",
+                "--observation",
                 "quote",
+                "--provider",
+                "binance",
             ],
             True,
         ),
@@ -168,7 +168,7 @@ def test_launch_market_connected_commands_use_manifest_target(
     assert value["instance_id"] == "run-1"
     expected_target = ["--socket", str(socket), "--view-root", str(view_root)]
     assert seen == [("market", ["connected", command, *expected_target, *tail])]
-    assert requires_view is (command != "sources")
+    assert requires_view is (command != "routes")
 
 
 def test_launch_market_view_command_rejects_manifest_without_view_root(
@@ -192,8 +192,8 @@ def test_launch_market_view_command_rejects_manifest_without_view_root(
                 "quote",
                 "--market-id",
                 "market:binance:spot:BTCUSDT",
-                "--source-id",
-                "binance-spot",
+                "--provider",
+                "binance",
                 "--workspace",
                 str(workspace.paths.root),
             ],

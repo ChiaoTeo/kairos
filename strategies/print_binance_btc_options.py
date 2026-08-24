@@ -30,7 +30,7 @@ class PrintBinanceBtcOptions(Strategy):
         print(
             "Binance BTC option quote "
             f"market={quote.market_id} "
-            f"source={quote.source_id or 'unknown'} "
+            f"provider={quote.provider or 'unknown'} "
             f"bid={quote.bid_price} "
             f"ask={quote.ask_price}",
             flush=True,

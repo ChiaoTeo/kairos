@@ -1,12 +1,12 @@
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use kairos_execution::ConnectedExecutionApplication;
 use kairos_execution::application::{
-    CliExecutionApplication, ExecutionOrderOptions, OrderSide, OrderType,
+    CliExecutionApplication, CliExecutionOutput, ExecutionOrderOptions, OrderSide, OrderType,
     StandaloneExecutionBinding, SubmitOrder,
 };
 use kairos_execution::composition::compose_standalone_execution;
+use kairos_execution::{ConnectedExecutionApplication, ConnectedExecutionOutput};
 use kairos_execution_contract::{
     CancelOrderRequest, CommandEnvelope, CompletionPolicy, ExecutionIntentRequest,
     ExecutionOrderOptionsRequest, ExecutionRoutesQuery, FailurePolicy, IntentLegRequest,
@@ -18,6 +18,7 @@ use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::runtime::{InstanceId, InstanceIdentity, LaunchId, StrategyId};
 use kairos_workspace::cli::{OutputFormat, render};
 use kairos_workspace::workspace::Workspace;
+use serde::Serialize;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,22 +78,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn connected_result(
-    value: serde_json::Value,
-    mode: &str,
-    launch_id: &str,
-    instance_id: &str,
-) -> serde_json::Value {
-    let mut object = match value {
-        serde_json::Value::Object(object) => object,
-        value => serde_json::Map::from_iter([("result".into(), value)]),
-    };
-    object.insert("owner".into(), "execution".into());
-    object.insert("mode".into(), mode.into());
-    object.insert("launch_id".into(), launch_id.into());
-    object.insert("instance_id".into(), instance_id.into());
-    object.insert("scope".into(), "launch-instance".into());
-    serde_json::Value::Object(object)
+#[derive(Debug, Serialize)]
+struct ConnectedExecutionCliOutput<'a> {
+    owner: &'static str,
+    mode: &'a str,
+    launch_id: &'a str,
+    instance_id: &'a str,
+    scope: &'static str,
+    #[serde(flatten)]
+    result: ConnectedExecutionOutput,
+}
+
+fn connected_result<'a>(
+    value: ConnectedExecutionOutput,
+    mode: &'a str,
+    launch_id: &'a str,
+    instance_id: &'a str,
+) -> ConnectedExecutionCliOutput<'a> {
+    ConnectedExecutionCliOutput {
+        owner: "execution",
+        mode,
+        launch_id,
+        instance_id,
+        scope: "launch-instance",
+        result: value,
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -156,43 +166,54 @@ fn connected_execution_app(
 fn execute_connected_query(
     application: &ConnectedExecutionApplication,
     command: ConnectedCommand,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    match command {
-        ConnectedCommand::Snapshot => application.snapshot(),
-        ConnectedCommand::Orders { account_id } => application.orders(account_id.as_deref()),
+) -> Result<ConnectedExecutionOutput, Box<dyn std::error::Error>> {
+    let value = match command {
+        ConnectedCommand::Snapshot => ConnectedExecutionOutput::Snapshot(application.snapshot()?),
+        ConnectedCommand::Orders { account_id } => {
+            ConnectedExecutionOutput::Orders(application.orders(account_id.as_deref())?)
+        },
         ConnectedCommand::OpenOrders { account_id } => {
-            application.open_orders(account_id.as_deref())
+            ConnectedExecutionOutput::Orders(application.open_orders(account_id.as_deref())?)
         },
-        ConnectedCommand::History { account_id } => application.history(account_id.as_deref()),
-        ConnectedCommand::UnknownRemoteOrders => application.unknown_remote_orders(),
+        ConnectedCommand::History { account_id } => {
+            ConnectedExecutionOutput::Orders(application.history(account_id.as_deref())?)
+        },
+        ConnectedCommand::UnknownRemoteOrders => {
+            ConnectedExecutionOutput::UnknownRemoteOrders(application.unknown_remote_orders()?)
+        },
         ConnectedCommand::Status { order_id } | ConnectedCommand::Inspect { order_id } => {
-            application.order_status(&order_id)
+            ConnectedExecutionOutput::Order(application.order_status(&order_id)?)
         },
-        ConnectedCommand::Events { order_id } => application.events(order_id.as_deref()),
+        ConnectedCommand::Events { order_id } => {
+            ConnectedExecutionOutput::Events(application.events(order_id.as_deref())?)
+        },
         ConnectedCommand::Trace { order_id } | ConnectedCommand::Journal { order_id } => {
-            application.trace(&order_id)
+            ConnectedExecutionOutput::Events(application.trace(&order_id)?)
         },
         ConnectedCommand::Audit {
             order_id,
             remote_order_id,
             status,
             limit,
-        } => application.audit(
+        } => ConnectedExecutionOutput::Events(application.audit(
             order_id.as_deref(),
             remote_order_id.as_deref(),
             status.as_deref(),
             limit,
-        ),
-        ConnectedCommand::Fills { order_id } => application.fills(order_id.as_deref()),
-        _ => unreachable!("control command routed to projection query"),
-    }
+        )?),
+        ConnectedCommand::Fills { order_id } => {
+            ConnectedExecutionOutput::Fills(application.fills(order_id.as_deref())?)
+        },
+        _ => unreachable!("control command routed to current-view query"),
+    };
+    Ok(value)
 }
 
 async fn execute_standalone_command(
     application: &mut CliExecutionApplication,
     binding: &StandaloneExecutionBinding,
     command: StandaloneCommand,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+) -> Result<CliExecutionOutput, Box<dyn std::error::Error>> {
     let value = match command {
         StandaloneCommand::OpenOrders(args) => application
             .open_orders(args.symbol.as_deref(), args.limit)
@@ -245,42 +266,42 @@ async fn execute_control_command(
     command: ConnectedCommand,
     launch_id: &str,
     instance_id: &str,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    match command {
+) -> Result<ConnectedExecutionOutput, Box<dyn std::error::Error>> {
+    let value = match command {
         ConnectedCommand::Routes {
             account_id,
             segment_key,
             instrument_id,
             market_id,
-        } => {
+        } => ConnectedExecutionOutput::Routes(
             application
                 .routes(ExecutionRoutesQuery {
                     account_id: account_id.map(AccountId::new).transpose()?,
                     segment_key: segment_key.map(SegmentKey::new).transpose()?,
                     instrument_id: instrument_id.map(InstrumentId::new).transpose()?,
                     market_id: market_id.map(MarketId::new).transpose()?,
-                    participant_id: None,
+                    broker_id: None,
                 })
-                .await
-        },
-        ConnectedCommand::Reconcile { order_id } => {
+                .await?,
+        ),
+        ConnectedCommand::Reconcile { order_id } => ConnectedExecutionOutput::Reconcile(
             application
                 .reconcile(ReconcileExecutionRequest {
                     order_id: order_id.map(OrderId::new).transpose()?,
                     ..ReconcileExecutionRequest::default()
                 })
-                .await
-        },
-        ConnectedCommand::Submit(args) => {
+                .await?,
+        ),
+        ConnectedCommand::Submit(args) => ConnectedExecutionOutput::Command(
             application
                 .submit_intent(submit_intent_request(
                     submit_request(args)?,
                     launch_id,
                     instance_id,
                 )?)
-                .await
-        },
-        ConnectedCommand::Cancel { order_id, reason } => {
+                .await?,
+        ),
+        ConnectedCommand::Cancel { order_id, reason } => ConnectedExecutionOutput::Command(
             application
                 .cancel_order(
                     OrderId::new(order_id)?,
@@ -288,12 +309,12 @@ async fn execute_control_command(
                         reason: Some(reason),
                     },
                 )
-                .await
-        },
+                .await?,
+        ),
         ConnectedCommand::Replace {
             order_id,
             replacement,
-        } => {
+        } => ConnectedExecutionOutput::Command(
             application
                 .replace_order(
                     OrderId::new(order_id)?,
@@ -314,10 +335,11 @@ async fn execute_control_command(
                         reason: None,
                     },
                 )
-                .await
-        },
+                .await?,
+        ),
         _ => unreachable!("query command routed to typed mmap"),
-    }
+    };
+    Ok(value)
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -727,7 +749,7 @@ fn parse_order_type(value: &str) -> Result<OrderType, Box<dyn std::error::Error>
     }
 }
 
-fn print_json(value: serde_json::Value) {
+fn print_json(value: impl Serialize) {
     let format = std::env::var("KAIROS_CLI_FORMAT")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -743,8 +765,8 @@ mod cli_tests {
     use kairos_primitives::reference::InstrumentId;
 
     use super::{
-        Cli, ExecutionOrderOptions, OrderSide, OrderType, SubmitOrder, connected_result,
-        submit_intent_request,
+        Cli, ConnectedExecutionOutput, ExecutionOrderOptions, OrderSide, OrderType, SubmitOrder,
+        connected_result, submit_intent_request,
     };
 
     #[test]
@@ -981,15 +1003,20 @@ mod cli_tests {
     #[test]
     fn connected_output_is_self_describing_without_python_decoration() {
         let value = connected_result(
-            serde_json::json!({"orders": []}),
+            ConnectedExecutionOutput::Command(kairos_execution_contract::ExecutionCommandStatus {
+                status: "ok".into(),
+                command_id: None,
+                intent_id: None,
+                order_id: None,
+            }),
             "paper",
             "grid-btc",
             "run-1",
         );
-        assert_eq!(value["owner"], "execution");
-        assert_eq!(value["mode"], "paper");
-        assert_eq!(value["launch_id"], "grid-btc");
-        assert_eq!(value["instance_id"], "run-1");
-        assert_eq!(value["scope"], "launch-instance");
+        assert_eq!(value.owner, "execution");
+        assert_eq!(value.mode, "paper");
+        assert_eq!(value.launch_id, "grid-btc");
+        assert_eq!(value.instance_id, "run-1");
+        assert_eq!(value.scope, "launch-instance");
     }
 }

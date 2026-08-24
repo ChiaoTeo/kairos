@@ -41,7 +41,7 @@ transport runtime, reconnect machinery, and public API shape were not adopted.
   timestamps, binding, channel, and epoch. Listen-key expiry, socket loss, and
   bounded queue overflow require route-scoped reconciliation.
 - The provider path is async-first. Synchronous capability signatures exist only under
-  `kairos_integration::blocking`; there is no hidden blocking transport or projection facade.
+  `kairos_integration::blocking`; there is no hidden blocking transport or facade.
 - Stop and stop-limit requests are explicitly unsupported because the current
   business request has no trigger-price field; they are not silently changed
   to market or limit orders.

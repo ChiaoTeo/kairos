@@ -1,49 +1,55 @@
 use std::collections::BTreeSet;
 
-use kairos_primitives::integration::ProviderProductCode;
-use kairos_primitives::reference::{AssetClass, Exchange};
+use kairos_primitives::market::Provider;
+use kairos_primitives::reference::{AssetClass, ExchangeId};
 use serde::{Deserialize, Serialize};
 
-use super::SourceId;
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct SourceRouteKey {
-    pub source_id: Option<SourceId>,
-    pub exchange: Option<Exchange>,
-    pub market_type: ProviderProductCode,
-    pub asset_type: Option<AssetClass>,
-}
-
-impl SourceRouteKey {
-    pub fn from_market(market: &crate::domain::market::ResolvedMarket) -> Self {
-        Self {
-            source_id: market.source_id.clone(),
-            exchange: market.exchange_id.clone(),
-            market_type: market.route.provider_product.clone(),
-            asset_type: market.asset_type,
-        }
-    }
-}
+use super::MarketFeedId;
+use crate::domain::market::ProviderSegmentCode;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceDescriptor {
-    pub id: SourceId,
-    pub exchange_id: Option<Exchange>,
-    pub market_type: Option<ProviderProductCode>,
-    pub asset_type: Option<AssetClass>,
+pub(crate) struct FeedDescriptor {
+    pub(crate) id: MarketFeedId,
+    /// Business provider served by this runtime feed. Replay/derived feeds do
+    /// not pretend to be providers and therefore leave this empty.
+    pub(crate) provider: Option<Provider>,
+    pub(crate) exchange_id: Option<ExchangeId>,
+    pub(crate) market_type: Option<ProviderSegmentCode>,
+    pub(crate) asset_type: Option<AssetClass>,
     /// Realtime observations implemented by this concrete source adapter.
     #[serde(default)]
-    pub observation_capabilities: BTreeSet<crate::domain::observation::ObservationKind>,
+    pub(crate) observation_capabilities: BTreeSet<crate::domain::observation::ObservationKind>,
 }
 
-impl SourceDescriptor {
-    pub fn new(
-        id: SourceId,
-        exchange_id: Exchange,
+impl FeedDescriptor {
+    pub(crate) fn new(
+        id: MarketFeedId,
+        exchange_id: ExchangeId,
         market_type: impl Into<String>,
         asset_type: Option<String>,
     ) -> Result<Self, String> {
-        let market_type = ProviderProductCode::new(market_type.into().trim().to_ascii_lowercase())
+        Self::build(id, None, exchange_id, market_type, asset_type)
+    }
+
+    pub(crate) fn for_provider(
+        id: MarketFeedId,
+        provider: impl Into<String>,
+        exchange_id: ExchangeId,
+        market_type: impl Into<String>,
+        asset_type: Option<String>,
+    ) -> Result<Self, String> {
+        let provider = Provider::new(provider.into()).map_err(|error| error.to_string())?;
+        Self::build(id, Some(provider), exchange_id, market_type, asset_type)
+    }
+
+    fn build(
+        id: MarketFeedId,
+        provider: Option<Provider>,
+        exchange_id: ExchangeId,
+        market_type: impl Into<String>,
+        asset_type: Option<String>,
+    ) -> Result<Self, String> {
+        let market_type = ProviderSegmentCode::new(market_type.into().trim().to_ascii_lowercase())
             .map_err(|error| error.to_string())?;
         let asset_type = asset_type
             .map(|value| value.trim().to_ascii_lowercase().parse::<AssetClass>())
@@ -51,6 +57,7 @@ impl SourceDescriptor {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             id,
+            provider,
             exchange_id: Some(exchange_id),
             market_type: Some(market_type),
             asset_type,
@@ -58,9 +65,10 @@ impl SourceDescriptor {
         })
     }
 
-    pub fn all_routes(id: SourceId) -> Self {
+    pub(crate) fn all_routes(id: MarketFeedId) -> Self {
         Self {
             id,
+            provider: None,
             exchange_id: None,
             market_type: None,
             asset_type: None,
@@ -68,7 +76,7 @@ impl SourceDescriptor {
         }
     }
 
-    pub fn with_observation_capabilities(
+    pub(crate) fn with_observation_capabilities(
         mut self,
         capabilities: impl IntoIterator<Item = crate::domain::observation::ObservationKind>,
     ) -> Self {

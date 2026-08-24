@@ -6,7 +6,7 @@ namespace kairos.market.v2;
 table OpenInterest {
   scope:ObservationScope (required);
   instrument_id:string (required);
-  source_id:string (required);
+  provider:string (required);
   contracts:kairos.common.v2.Decimal64 (required);
   quote_value:kairos.common.v2.Decimal64;
   change_24h:kairos.common.v2.Decimal64;

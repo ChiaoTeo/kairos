@@ -1,6 +1,6 @@
 """Account v2 current-view contract."""
 
-from .runtime import AccountCurrentProjection, AccountObservedOrdersProjection
+from .runtime import AccountCurrentViewReader, AccountObservedOrdersViewReader
 from .view_contract import (
     AccountViewFrame,
     AccountViewKey,
@@ -11,8 +11,8 @@ from .view_contract import (
 )
 
 __all__ = [
-    "AccountCurrentProjection",
-    "AccountObservedOrdersProjection",
+    "AccountCurrentViewReader",
+    "AccountObservedOrdersViewReader",
     "AccountViewFrame",
     "AccountViewKey",
     "AccountViewKind",

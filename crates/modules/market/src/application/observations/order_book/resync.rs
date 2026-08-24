@@ -1,13 +1,13 @@
 use super::super::super::{MarketApplication, MarketError};
 use crate::domain::market::ResolvedMarket;
-use crate::domain::source::{SourceEpoch, SourceId};
+use crate::domain::source::{MarketFeedId, SourceEpoch};
 use crate::services::actor::PendingSourceRequest;
 use crate::services::source::messages::SourceCommand;
 
 impl MarketApplication {
     pub(crate) async fn request_orderbook_resync(
         &mut self,
-        source_id: SourceId,
+        source_id: MarketFeedId,
         epoch: SourceEpoch,
         market: ResolvedMarket,
         reason: String,

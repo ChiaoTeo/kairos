@@ -52,13 +52,13 @@ fn encode_publication(
     let updated = !event.event_type.ends_with("_added") && event.event_type != "listed";
     let occurred_at = event.event_time_unix_nanos.get();
     let payload = match kind {
-        "entity" => {
-            let record = catalog.entities.get(id).ok_or_else(|| missing(kind, id))?;
-            let record = contract_entity(record);
+        "exchange" => {
+            let record = catalog.exchanges.get(id).ok_or_else(|| missing(kind, id))?;
+            let record = contract_exchange(record);
             if updated {
-                ReferenceEncoder::entity_updated(&record, &context, occurred_at)
+                ReferenceEncoder::exchange_updated(&record, &context, occurred_at)
             } else {
-                ReferenceEncoder::entity_upserted(&record, &context, occurred_at)
+                ReferenceEncoder::exchange_upserted(&record, &context, occurred_at)
             }
         },
         "asset" => {
@@ -118,10 +118,9 @@ fn missing(kind: &str, id: &str) -> ReferenceError {
     ReferenceError::Publication(format!("Reference record missing: {kind}:{id}"))
 }
 
-fn contract_entity(value: &crate::domain::Entity) -> kairos_reference_contract::Entity {
-    kairos_reference_contract::Entity {
-        entity_id: value.entity_id.clone(),
-        entity_type: value.entity_type.as_str().into(),
+fn contract_exchange(value: &crate::domain::Exchange) -> kairos_reference_contract::Exchange {
+    kairos_reference_contract::Exchange {
+        exchange_id: value.exchange_id.clone(),
         name: value.name.clone(),
         status: value.status,
     }

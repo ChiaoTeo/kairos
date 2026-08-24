@@ -8,21 +8,19 @@ use kairos_conflux::{
     SystemEvent,
 };
 use kairos_market_contract::{
-    MarketCommandOutcome, MarketCommandStatus, MarketControlError, MarketDataSource,
-    MarketDataSourcesResponse, MarketFeedStatus, MarketHealthResponse, MarketHealthStatus,
-    MarketOperation, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse, MarketSourceStatus,
-    MarketSubscribePayload, MarketSubscriptionResponse, MarketSubscriptionStatus,
-    MarketUnsubscribePayload, MarketViewPublisher, SubscriptionOwnerKey,
+    MarketCommandOutcome, MarketCommandStatus, MarketControlError, MarketDataRoute,
+    MarketDataRouteState, MarketDataRoutesResponse, MarketFeedStatus, MarketHealthResponse,
+    MarketHealthStatus, MarketOperation, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse,
+    MarketSubscribePayload, MarketSubscriptionResponse, MarketSubscriptionState, MarketTarget,
+    MarketUnsubscribePayload, MarketViewPublisher, ProviderPreference, SubscriptionOwnerKey,
+    SubscriptionPendingReason,
 };
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 
-use super::{
-    MarketApplication, MarketError, MarketRpcActor, OptionSelectionFilter, resolve_market,
-    resolve_market_by_id, resolve_option_markets,
-};
+use super::{MarketApplication, MarketError, MarketRpcActor};
 use crate::domain::source::{
-    SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey, SourceStatus,
+    FeedDescriptor, MarketFeedId, SourceEpoch, SourceFailureKind, SourceStatus,
 };
 use crate::services::actor::BusinessSubscriptionKey;
 use crate::services::publication::HistoryQueue;
@@ -43,13 +41,16 @@ fn strategy_subscription_owner(
     instance_id: &str,
     strategy_id: &str,
 ) -> String {
-    serde_json::to_string(&serde_json::json!([
-        "strategy",
-        launch_id.unwrap_or_default(),
+    let launch_id = launch_id.unwrap_or_default();
+    format!(
+        "strategy|{}:{}|{}:{}|{}:{}",
+        launch_id.len(),
+        launch_id,
+        instance_id.len(),
         instance_id,
-        strategy_id
-    ]))
-    .expect("strategy subscription owner is JSON-compatible")
+        strategy_id.len(),
+        strategy_id,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -61,18 +62,18 @@ pub(crate) enum MarketSourceMode {
 
 #[derive(Clone)]
 pub(crate) struct MarketSourcePlan {
-    pub(crate) descriptor: SourceDescriptor,
+    pub(crate) descriptor: FeedDescriptor,
     pub(crate) mode: MarketSourceMode,
 }
 
-pub(crate) struct ReferenceProjectionConfig {
+pub(crate) struct ReferenceUniverseSyncConfig {
     pub(crate) client_key: String,
     pub(crate) interval: Duration,
-    pub(crate) projection: crate::services::reference_projection::ReferenceUniverseProjection,
+    pub(crate) resolver: crate::application::MarketUniverseResolver,
 }
 
-struct ReferenceProjectionState {
-    config: ReferenceProjectionConfig,
+struct ReferenceUniverseSyncState {
+    config: ReferenceUniverseSyncConfig,
     required_sequence: u64,
     published_sequence: Option<u64>,
 }
@@ -85,9 +86,28 @@ pub(crate) struct MarketConfluxState {
     producer_incarnation: u64,
     source_plans: BTreeMap<String, MarketSourcePlan>,
     history: Option<HistoryQueue>,
-    reference_projection: Option<ReferenceProjectionState>,
-    command_results: BTreeMap<String, (serde_json::Value, serde_json::Value)>,
+    reference_universe_sync: Option<ReferenceUniverseSyncState>,
+    command_results: BTreeMap<String, CachedMarketControlResult>,
     view_publication: Option<MarketViewPublication>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CachedMarketControlRequest {
+    Subscribe(kairos_market_contract::MarketCommandEnvelope<MarketSubscribePayload>),
+    Unsubscribe(kairos_market_contract::MarketCommandEnvelope<MarketUnsubscribePayload>),
+    ReleaseOwner(kairos_market_contract::MarketCommandEnvelope<MarketReleaseOwnerPayload>),
+}
+
+#[derive(Clone, Debug)]
+enum CachedMarketControlResponse {
+    Subscription(MarketSubscriptionResponse),
+    Command(MarketCommandStatus),
+    ReleaseOwner(MarketReleaseOwnerResponse),
+}
+
+struct CachedMarketControlResult {
+    request: CachedMarketControlRequest,
+    response: CachedMarketControlResponse,
 }
 
 struct MarketViewPublication {
@@ -106,7 +126,7 @@ impl Default for MarketConfluxState {
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
             source_plans: BTreeMap::new(),
             history: None,
-            reference_projection: None,
+            reference_universe_sync: None,
             command_results: BTreeMap::new(),
             view_publication: None,
         }
@@ -138,7 +158,7 @@ impl MarketApplication {
         identity: InstanceIdentity,
         source_plans: Vec<MarketSourcePlan>,
         history: Option<HistoryQueue>,
-        reference_projection: Option<ReferenceProjectionConfig>,
+        reference_universe_sync: Option<ReferenceUniverseSyncConfig>,
     ) -> Result<(), String> {
         if freshness_interval.is_zero() || freshness_max_age.is_zero() {
             return Err("Market Conflux intervals and view slot size must be positive".into());
@@ -152,8 +172,8 @@ impl MarketApplication {
             .map(|plan| (plan.descriptor.id.to_string(), plan))
             .collect();
         self.conflux.history = history;
-        self.conflux.reference_projection =
-            reference_projection.map(|config| ReferenceProjectionState {
+        self.conflux.reference_universe_sync =
+            reference_universe_sync.map(|config| ReferenceUniverseSyncState {
                 config,
                 required_sequence: 0,
                 published_sequence: None,
@@ -176,7 +196,7 @@ impl MarketApplication {
             .subscriptions
             .into_iter()
             .flat_map(|subscription| subscription.members.into_values())
-            .map(|market| (SourceRouteKey::from_market(&market), market))
+            .filter_map(|market| market.data_route().map(|route| (route, market)))
             .collect::<BTreeMap<_, _>>()
             .into_values()
             .collect::<Vec<_>>();
@@ -189,26 +209,20 @@ impl MarketApplication {
             {
                 continue;
             }
-            let candidates = self
+            let mut candidates = self
                 .conflux
                 .source_plans
                 .values()
                 .filter(|plan| super::source_accepts(&plan.descriptor, &market))
                 .cloned()
                 .collect::<Vec<_>>();
-            let [plan] = candidates.as_slice() else {
-                return Err(MarketError::SourceUnavailable(if candidates.is_empty() {
-                    format!(
-                        "no managed Market connection supports {}",
-                        market.scope.key()
-                    )
-                } else {
-                    format!(
-                        "multiple managed Market connections support {}; select source_id",
-                        market.scope.key()
-                    )
-                }));
-            };
+            candidates.sort_by(|left, right| left.descriptor.id.cmp(&right.descriptor.id));
+            let plan = candidates.first().ok_or_else(|| {
+                MarketError::SourceUnavailable(format!(
+                    "no managed Market connection supports {}",
+                    market.scope.key()
+                ))
+            })?;
             if !managed_connection_exists(context, plan) {
                 return Err(MarketError::SourceUnavailable(format!(
                     "managed Market connection is missing: {}",
@@ -237,13 +251,13 @@ impl MarketApplication {
         &mut self,
         context: &mut Context<'_, Self>,
     ) -> Result<(), MarketError> {
-        let Some(reference) = self.conflux.reference_projection.as_ref() else {
+        let Some(reference) = self.conflux.reference_universe_sync.as_ref() else {
             return Ok(());
         };
         let client_key = reference.config.client_key.clone();
         let required_sequence = reference.required_sequence;
         let published_sequence = reference.published_sequence;
-        let projection = reference.config.projection.clone();
+        let resolver = reference.config.resolver.clone();
         let snapshot = context
             .reference_client(&client_key)
             .ok_or_else(|| {
@@ -253,13 +267,13 @@ impl MarketApplication {
             })?
             .market_snapshot()
             .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
-        let update = projection
-            .project(&snapshot, required_sequence)
+        let update = resolver
+            .resolve(&snapshot, required_sequence)
             .map_err(MarketError::SourceUnavailable)?;
         if published_sequence.is_some_and(|sequence| sequence >= update.event_sequence.get()) {
             return Ok(());
         }
-        if let Some(reference) = self.conflux.reference_projection.as_mut() {
+        if let Some(reference) = self.conflux.reference_universe_sync.as_mut() {
             reference.published_sequence = Some(update.event_sequence.get());
         }
         self.reconcile_market_universe(update)?;
@@ -273,8 +287,8 @@ impl MarketApplication {
 fn reference_event_sequence(event: &kairos_reference_contract::ReferenceEvent<'_>) -> u64 {
     use kairos_reference_contract::ReferenceEvent;
     match event {
-        ReferenceEvent::EntityUpserted(value) => value.metadata().sequence(),
-        ReferenceEvent::EntityUpdated(value) => value.metadata().sequence(),
+        ReferenceEvent::ExchangeUpserted(value) => value.metadata().sequence(),
+        ReferenceEvent::ExchangeUpdated(value) => value.metadata().sequence(),
         ReferenceEvent::AssetUpserted(value) => value.metadata().sequence(),
         ReferenceEvent::AssetUpdated(value) => value.metadata().sequence(),
         ReferenceEvent::InstrumentUpserted(value) => value.metadata().sequence(),
@@ -293,7 +307,7 @@ impl ConfluxActor for MarketApplication {
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
         self.activate_managed_sources(context)?;
         self.spawn_source_inputs(context);
-        if let Some(reference) = self.conflux.reference_projection.as_ref() {
+        if let Some(reference) = self.conflux.reference_universe_sync.as_ref() {
             context.spawn_timer("reference-universe", reference.config.interval);
         }
         self.sync_all_source_subscriptions(context).await?;
@@ -314,13 +328,13 @@ impl ConfluxActor for MarketApplication {
             ConfluxEvent::Reference(reference) => {
                 if self
                     .conflux
-                    .reference_projection
+                    .reference_universe_sync
                     .as_ref()
                     .is_some_and(|state| state.config.client_key == reference.client)
                 {
                     if let Ok(event) = reference.frame.decode() {
                         let sequence = reference_event_sequence(&event);
-                        if let Some(state) = self.conflux.reference_projection.as_mut() {
+                        if let Some(state) = self.conflux.reference_universe_sync.as_mut() {
                             state.required_sequence = state.required_sequence.max(sequence);
                         }
                     }
@@ -399,12 +413,12 @@ impl MarketRpcActor for MarketApplication {
         Ok(self.contract_health())
     }
 
-    async fn data_sources(
+    async fn data_routes(
         &mut self,
-        query: kairos_market_contract::MarketDataSourcesQuery,
+        query: kairos_market_contract::MarketDataRoutesQuery,
         context: &mut Context<'_, Self>,
-    ) -> RpcResult<MarketDataSourcesResponse> {
-        let response = self.data_sources_control(query);
+    ) -> RpcResult<MarketDataRoutesResponse> {
+        let response = self.data_routes_control(query);
         self.publish(context).await.map_err(rpc_market_error)?;
         Ok(response)
     }
@@ -484,197 +498,126 @@ impl MarketRpcActor for MarketApplication {
 }
 
 impl MarketApplication {
-    fn data_sources_control(
+    fn data_routes_control(
         &self,
-        query: kairos_market_contract::MarketDataSourcesQuery,
-    ) -> MarketDataSourcesResponse {
-        let view = self.current_view();
-        let has_filter = query.market_id.is_some()
-            || query.instrument_id.is_some()
-            || query.underlying_market_id.is_some()
-            || query.underlying_instrument_id.is_some()
-            || query.exchange.is_some()
-            || query.market_type.is_some()
-            || query.asset_type.is_some()
-            || query.target.is_some()
-            || query.observation_kind.is_some()
-            || query.provider_id.is_some();
-        let market_universe = self.market_universe();
-        let option_target = query
-            .target
-            .as_deref()
-            .is_some_and(|value| value.eq_ignore_ascii_case("options"));
-        let underlying_instrument_id = query
-            .underlying_instrument_id
-            .as_ref()
-            .map(|value| value.as_str())
-            .or_else(|| {
-                query.underlying_market_id.as_ref().and_then(|market_id| {
-                    market_universe
-                        .iter()
-                        .find(|market| market.market_id() == Some(market_id))
-                        .map(|market| market.instrument_id.as_str())
-                })
-            });
-        let matching_markets = market_universe
-            .iter()
-            .filter(|market| {
-                (!option_target
-                    || market.instrument_kind
-                        == kairos_primitives::reference::InstrumentKind::Option)
-                    && underlying_instrument_id.is_none_or(|value| {
-                        market.underlying_instrument_id.as_deref() == Some(value)
-                    })
-                    && query
-                        .market_id
-                        .as_ref()
-                        .is_none_or(|value| market.market_id() == Some(value))
-                    && query
-                        .instrument_id
-                        .as_ref()
-                        .is_none_or(|value| &market.instrument_id == value)
-                    && query
-                        .exchange
-                        .as_ref()
-                        .is_none_or(|value| market.exchange_id.as_ref() == Some(value))
-                    && query
-                        .market_type
-                        .as_ref()
-                        .is_none_or(|value| market.instrument_kind.as_str() == value.as_str())
-                    && query.asset_type.as_ref().is_none_or(|value| {
-                        market.asset_type.map(|class| class.as_str()) == Some(value.as_str())
-                    })
-                    && query
-                        .provider_id
-                        .as_ref()
-                        .is_none_or(|value| market.route.provider_id.as_str() == value.as_str())
-                    && query
-                        .observation_kind
-                        .is_none_or(|kind| market.route.observation_capabilities.contains(&kind))
-            })
-            .collect::<Vec<_>>();
-        let accepts_query = |descriptor: &SourceDescriptor| {
-            query
-                .observation_kind
-                .is_none_or(|kind| descriptor.observation_capabilities.contains(&kind))
-                && (!has_filter
-                    || matching_markets
-                        .iter()
-                        .any(|market| super::source_accepts(descriptor, market)))
-        };
-        let provider_for = |descriptor: &SourceDescriptor| {
-            matching_markets
-                .iter()
-                .find(|market| super::source_accepts(descriptor, market))
-                .map(|market| market.route.provider_id.clone())
-        };
-        let mut sources = BTreeMap::<SourceId, MarketDataSource>::new();
-        if !query.ready_only {
-            for plan in self.conflux.source_plans.values() {
-                if accepts_query(&plan.descriptor) {
-                    sources.insert(
-                        plan.descriptor.id.clone(),
-                        source_control_state(
-                            &plan.descriptor,
-                            SourceStatus::Stopped,
-                            provider_for(&plan.descriptor),
-                        ),
-                    );
-                }
-            }
-        }
-        for source in view.sources.values() {
-            if accepts_query(&source.descriptor)
-                && (!query.ready_only || source.status == SourceStatus::Ready)
+        query: kairos_market_contract::MarketDataRoutesQuery,
+    ) -> MarketDataRoutesResponse {
+        let mut routes = Vec::new();
+        for market in self.market_universe() {
+            let Some(market_id) = market.market_id() else {
+                continue;
+            };
+            if query
+                .market_id
+                .as_ref()
+                .is_some_and(|value| value != market_id)
+                || query
+                    .instrument_id
+                    .as_ref()
+                    .is_some_and(|value| value != &market.instrument_id)
             {
-                sources.insert(
-                    source.descriptor.id.clone(),
-                    source_control_state(
-                        &source.descriptor,
-                        source.status,
-                        provider_for(&source.descriptor),
-                    ),
-                );
+                continue;
             }
-        }
-        if !query.configured_only && !query.ready_only {
-            for market in &matching_markets {
-                let has_configured_source = self
+            for route in &market.data_routes {
+                if query
+                    .provider
+                    .as_ref()
+                    .is_some_and(|value| value != &route.provider)
+                    || query
+                        .observation_kind
+                        .is_some_and(|kind| !route.observation_kinds.contains(&kind))
+                {
+                    continue;
+                }
+                let plan_configured = self
                     .conflux
                     .source_plans
                     .values()
-                    .any(|plan| super::source_accepts(&plan.descriptor, market));
-                if has_configured_source {
+                    .any(|plan| plan.descriptor.provider.as_ref() == Some(&route.provider));
+                let states = self
+                    .actor
+                    .source_states()
+                    .filter(|source| source.descriptor.provider.as_ref() == Some(&route.provider))
+                    .map(|source| source.status)
+                    .collect::<Vec<_>>();
+                let configured = plan_configured || !states.is_empty();
+                let ready = states.contains(&SourceStatus::Ready);
+                if query.configured_only && !configured || query.ready_only && !ready {
                     continue;
                 }
-                let source_id = market.source_id.clone().unwrap_or_else(|| {
-                    SourceId::new(market.route.provider_id.as_str())
-                        .expect("provider identity is a valid fallback source identity")
+                let state = if ready {
+                    MarketDataRouteState::Ready
+                } else if states.iter().any(|status| {
+                    matches!(
+                        status,
+                        SourceStatus::Degraded
+                            | SourceStatus::Reconnecting
+                            | SourceStatus::WarmingUp
+                    )
+                }) {
+                    MarketDataRouteState::Degraded
+                } else if !states.is_empty() {
+                    MarketDataRouteState::Stopped
+                } else if plan_configured {
+                    MarketDataRouteState::Configured
+                } else {
+                    MarketDataRouteState::Supported
+                };
+                routes.push(MarketDataRoute {
+                    market_id: market_id.clone(),
+                    provider: route.provider.clone(),
+                    observation_kinds: route.observation_kinds.iter().copied().collect(),
+                    state,
+                    selected: market.selected_provider.as_ref() == Some(&route.provider),
+                    pending_reason: (!ready).then(|| {
+                        if configured {
+                            "provider route is configured but not ready"
+                        } else {
+                            "provider route is not configured"
+                        }
+                        .to_string()
+                    }),
                 });
-                sources
-                    .entry(source_id.clone())
-                    .or_insert(MarketDataSource {
-                        source_id,
-                        provider_id: Some(market.route.provider_id.clone()),
-                        observation_capabilities: market
-                            .route
-                            .observation_capabilities
-                            .iter()
-                            .copied()
-                            .collect(),
-                        configured: false,
-                        status: MarketSourceStatus::Disconnected,
-                        ready: false,
-                        stale: false,
-                    });
             }
         }
-        MarketDataSourcesResponse {
-            sources: sources.into_values().collect(),
-        }
+        routes.sort_by(|left, right| {
+            left.market_id
+                .cmp(&right.market_id)
+                .then_with(|| left.provider.cmp(&right.provider))
+        });
+        MarketDataRoutesResponse { routes }
     }
 
-    fn cached_control_response<T>(
+    fn cached_control_response(
         &self,
         key: &str,
-        request: &serde_json::Value,
-    ) -> Option<RpcResult<T>>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        self.conflux
-            .command_results
-            .get(key)
-            .map(|(cached_request, cached_response)| {
-                if cached_request == request {
-                    serde_json::from_value(cached_response.clone()).map_err(rpc_invalid)
-                } else {
-                    Err(idempotency_conflict())
-                }
-            })
+        request: &CachedMarketControlRequest,
+    ) -> Option<RpcResult<CachedMarketControlResponse>> {
+        self.conflux.command_results.get(key).map(|cached| {
+            if cached.request == *request {
+                Ok(cached.response.clone())
+            } else {
+                Err(idempotency_conflict())
+            }
+        })
     }
 
-    fn remember_control_response<T>(
+    fn remember_control_response(
         &mut self,
         key: String,
-        request: serde_json::Value,
-        response: &T,
-    ) -> RpcResult<()>
-    where
-        T: serde::Serialize,
-    {
+        request: CachedMarketControlRequest,
+        response: CachedMarketControlResponse,
+    ) {
         const MAX_COMMAND_RESULTS: usize = 4_096;
-        let response = serde_json::to_value(response).map_err(rpc_invalid)?;
         self.conflux
             .command_results
-            .insert(key, (request, response));
+            .insert(key, CachedMarketControlResult { request, response });
         while self.conflux.command_results.len() > MAX_COMMAND_RESULTS {
             let Some(oldest) = self.conflux.command_results.keys().next().cloned() else {
                 break;
             };
             self.conflux.command_results.remove(&oldest);
         }
-        Ok(())
     }
 
     async fn subscribe_control(
@@ -683,9 +626,12 @@ impl MarketApplication {
         context: &mut Context<'_, Self>,
     ) -> RpcResult<MarketSubscriptionResponse> {
         let key = command.idempotency_key.to_string();
-        let request = serde_json::to_value(&command).map_err(rpc_invalid)?;
+        let request = CachedMarketControlRequest::Subscribe(command.clone());
         if let Some(response) = self.cached_control_response(&key, &request) {
-            return response;
+            return match response? {
+                CachedMarketControlResponse::Subscription(response) => Ok(response),
+                _ => Err(rpc_invalid("cached market response type mismatch")),
+            };
         }
         let response = self.subscribe_contract(command).map_err(rpc_market_error)?;
         self.activate_managed_sources(context)
@@ -694,7 +640,11 @@ impl MarketApplication {
             .await
             .map_err(rpc_market_error)?;
         self.spawn_source_inputs(context);
-        self.remember_control_response(key, request, &response)?;
+        self.remember_control_response(
+            key,
+            request,
+            CachedMarketControlResponse::Subscription(response.clone()),
+        );
         Ok(response)
     }
 
@@ -704,9 +654,12 @@ impl MarketApplication {
         context: &mut Context<'_, Self>,
     ) -> RpcResult<MarketCommandStatus> {
         let key = command.idempotency_key.to_string();
-        let request = serde_json::to_value(&command).map_err(rpc_invalid)?;
+        let request = CachedMarketControlRequest::Unsubscribe(command.clone());
         if let Some(response) = self.cached_control_response(&key, &request) {
-            return response;
+            return match response? {
+                CachedMarketControlResponse::Command(response) => Ok(response),
+                _ => Err(rpc_invalid("cached market response type mismatch")),
+            };
         }
         let owner = strategy_subscription_owner(
             command.launch_id.as_deref(),
@@ -727,7 +680,11 @@ impl MarketApplication {
         let response = MarketCommandStatus {
             status: MarketCommandOutcome::Applied,
         };
-        self.remember_control_response(key, request, &response)?;
+        self.remember_control_response(
+            key,
+            request,
+            CachedMarketControlResponse::Command(response.clone()),
+        );
         Ok(response)
     }
 
@@ -737,9 +694,12 @@ impl MarketApplication {
         context: &mut Context<'_, Self>,
     ) -> RpcResult<MarketReleaseOwnerResponse> {
         let key = command.idempotency_key.to_string();
-        let request = serde_json::to_value(&command).map_err(rpc_invalid)?;
+        let request = CachedMarketControlRequest::ReleaseOwner(command.clone());
         if let Some(response) = self.cached_control_response(&key, &request) {
-            return response;
+            return match response? {
+                CachedMarketControlResponse::ReleaseOwner(response) => Ok(response),
+                _ => Err(rpc_invalid("cached market response type mismatch")),
+            };
         }
         let owner = strategy_subscription_owner(
             command.launch_id.as_deref(),
@@ -753,7 +713,11 @@ impl MarketApplication {
         let response = MarketReleaseOwnerResponse {
             released_subscriptions: removed,
         };
-        self.remember_control_response(key, request, &response)?;
+        self.remember_control_response(
+            key,
+            request,
+            CachedMarketControlResponse::ReleaseOwner(response.clone()),
+        );
         Ok(response)
     }
 
@@ -769,7 +733,7 @@ impl MarketApplication {
             || command.idempotency_key.trim().is_empty()
             || command.strategy_id.trim().is_empty()
             || command.instance_id.trim().is_empty()
-            || command.payload.subject.trim().is_empty()
+            || command.payload.observations.is_empty()
         {
             return Err(MarketError::Invalid(
                 "invalid Market subscribe envelope".into(),
@@ -777,11 +741,13 @@ impl MarketApplication {
         }
         let selectors = command
             .payload
-            .selectors
+            .observations
             .iter()
-            .map(|value| ObservationSelector::parse(value))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(MarketError::InvalidSubscription)?;
+            .map(|requirement| ObservationSelector {
+                kind: Some(requirement.kind),
+                qualifier: requirement.qualifier.clone(),
+            })
+            .collect::<Vec<_>>();
         let subscription_id = SubscriptionId::new(command.command_id.as_str())
             .map_err(|error| MarketError::InvalidSubscription(error.to_string()))?;
         let owner = strategy_subscription_owner(
@@ -789,96 +755,37 @@ impl MarketApplication {
             &command.instance_id,
             &command.strategy_id,
         );
-        let exchange = command
-            .payload
-            .exchange
-            .as_ref()
-            .map(|value| value.as_str())
-            .unwrap_or("binance");
-        let market_type = command
-            .payload
-            .market_type
-            .map(|value| value.as_str())
-            .unwrap_or("spot");
-        let asset_type = command.payload.asset_type.map(|value| value.as_str());
-        let subject = command
-            .payload
-            .subject
-            .strip_prefix("market.")
-            .unwrap_or(&command.payload.subject);
-        let explicit_market_id = command
-            .payload
-            .params
-            .get("market_id")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| subject.starts_with("market:").then_some(subject))
-            .map(kairos_primitives::reference::MarketId::new)
-            .transpose()
-            .map_err(|error| MarketError::Invalid(error.to_string()))?;
-        let options_target = command
-            .payload
-            .params
-            .get("target")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| value.eq_ignore_ascii_case("options"));
-        let chain = options_target
-            || command
-                .payload
-                .params
-                .get("mode")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| value.eq_ignore_ascii_case("chain"));
-        if command.payload.dynamic && !chain {
-            return Err(MarketError::Unsupported(
-                "dynamic subscriptions require params.target=options".into(),
-            ));
-        }
-        if command.payload.source_id.is_some() && !command.payload.source_ids.is_empty() {
-            return Err(MarketError::InvalidSubscription(
-                "use either source_id or source_ids, not both".into(),
-            ));
-        }
-        let source_ids = if command.payload.source_ids.is_empty() {
-            command
-                .payload
-                .source_id
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            command.payload.source_ids.clone()
-        };
-        if chain {
-            let filter = option_selection_filter(&command.payload.params, source_ids.clone())?;
-            let markets =
-                resolve_option_markets(&self.market_universe(), exchange, asset_type, &filter)
-                    .map_err(MarketError::InvalidSubscription)?;
-            if markets.is_empty() {
-                return Err(MarketError::NotFound("no option markets selected".into()));
-            }
-            let query = crate::MarketSelectionQuery {
-                exchange_id: Some(
-                    kairos_primitives::reference::Exchange::new(exchange)
-                        .map_err(|error| MarketError::Invalid(error.to_string()))?,
-                ),
-                provider_product: Some(
-                    kairos_primitives::integration::ProviderProductCode::new(market_type)
-                        .map_err(|error| MarketError::Invalid(error.to_string()))?,
-                ),
-                source_ids,
-                underlying_instrument_id: filter.underlying_instrument_id.clone().or_else(|| {
-                    markets
-                        .first()
-                        .and_then(|market| market.underlying_instrument_id.clone())
-                }),
-                expiry_from_unix_nanos: filter.expiry_from_unix_nanos,
-                expiry_to_unix_nanos: filter.expiry_to_unix_nanos,
-                strike_lower: filter.strike_lower,
-                strike_upper: filter.strike_upper,
-                option_right: filter.option_right.clone(),
-                active_only: true,
-                ..Default::default()
-            };
+        let universe = self.market_universe();
+        let (candidates, dynamic_query) =
+            resolve_contract_target(&universe, &command.payload.target)?;
+        let ready_providers = candidates
+            .iter()
+            .flat_map(|market| {
+                market.data_routes.iter().filter_map(|route| {
+                    let provider_ready = self.actor.source_states().any(|source| {
+                        source.status == crate::domain::source::SourceStatus::Ready
+                            && super::source_accepts(&source.descriptor, market)
+                            && super::sources::source_supports_selectors(
+                                &source.descriptor,
+                                &selectors,
+                            )
+                            && source.descriptor.provider.as_ref() == Some(&route.provider)
+                    });
+                    provider_ready.then_some(route.provider.clone())
+                })
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let markets = select_provider_routes(
+            candidates,
+            &command.payload.provider_preference,
+            &ready_providers,
+        )?;
+        let resolved_providers = markets
+            .iter()
+            .filter_map(|market| market.selected_provider.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        if let Some(query) = dynamic_query {
             self.subscribe_dynamic_with_selectors(
                 subscription_id.clone(),
                 owner.clone(),
@@ -887,42 +794,6 @@ impl MarketApplication {
                 selectors,
             )?;
         } else {
-            let universe = self.market_universe();
-            let markets = if source_ids.is_empty() {
-                vec![
-                    if let Some(market_id) = explicit_market_id.as_ref() {
-                        resolve_market_by_id(&universe, market_id, None)
-                    } else {
-                        resolve_market(&universe, exchange, market_type, asset_type, subject)
-                    }
-                    .map_err(MarketError::InvalidSubscription)?,
-                ]
-            } else {
-                let market = if explicit_market_id.is_none() {
-                    Some(
-                        resolve_market(&universe, exchange, market_type, asset_type, subject)
-                            .map_err(MarketError::InvalidSubscription)?,
-                    )
-                } else {
-                    None
-                };
-                source_ids
-                    .iter()
-                    .map(|source| {
-                        if let Some(market_id) = explicit_market_id.as_ref() {
-                            resolve_market_by_id(&universe, market_id, Some(source))
-                                .map_err(MarketError::InvalidSubscription)
-                        } else {
-                            market
-                                .as_ref()
-                                .expect("legacy market was resolved")
-                                .clone()
-                                .with_source(source.as_str())
-                                .map_err(MarketError::InvalidSubscription)
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-            };
             self.subscribe_static_many_with_selectors(
                 subscription_id.clone(),
                 owner.clone(),
@@ -930,19 +801,30 @@ impl MarketApplication {
                 selectors,
             )?;
         }
+
+        let status = self.subscription_status(&subscription_id);
+        let active = matches!(status, Some(crate::SubscriptionStatus::Ready));
+        let observations = command.payload.observations.clone();
         Ok(MarketSubscriptionResponse {
             subscription_id: subscription_id.clone(),
             owner_id: SubscriptionOwnerKey::new(owner).map_err(MarketError::InvalidSubscription)?,
-            status: match self.subscription_status(&subscription_id) {
-                Some(crate::SubscriptionStatus::Pending) => MarketSubscriptionStatus::Pending,
-                Some(crate::SubscriptionStatus::Ready) => MarketSubscriptionStatus::Ready,
-                Some(crate::SubscriptionStatus::Degraded) => MarketSubscriptionStatus::Degraded,
+            state: match status {
+                Some(crate::SubscriptionStatus::Ready) => MarketSubscriptionState::Active,
+                Some(crate::SubscriptionStatus::Degraded) => MarketSubscriptionState::Degraded,
                 Some(crate::SubscriptionStatus::Unavailable) => {
-                    MarketSubscriptionStatus::Unavailable
+                    MarketSubscriptionState::WaitingForProvider
                 },
-                Some(crate::SubscriptionStatus::Rejected) => MarketSubscriptionStatus::Rejected,
-                None => MarketSubscriptionStatus::Pending,
+                Some(crate::SubscriptionStatus::Rejected) => MarketSubscriptionState::Failed,
+                Some(crate::SubscriptionStatus::Pending) | None => {
+                    MarketSubscriptionState::Resolving
+                },
             },
+            satisfied: active.then_some(observations.clone()).unwrap_or_default(),
+            missing: (!active).then_some(observations).unwrap_or_default(),
+            resolved_providers,
+            pending_reason: (!active).then_some(SubscriptionPendingReason::ProviderUnavailable {
+                required: required_providers(&command.payload.provider_preference),
+            }),
         })
     }
 
@@ -1057,124 +939,229 @@ fn idempotency_conflict() -> ErrorObjectOwned {
     )
 }
 
-fn source_control_state(
-    descriptor: &SourceDescriptor,
-    status: SourceStatus,
-    provider_id: Option<kairos_primitives::integration::ProviderId>,
-) -> MarketDataSource {
-    MarketDataSource {
-        source_id: descriptor.id.clone(),
-        provider_id,
-        observation_capabilities: descriptor
-            .observation_capabilities
-            .iter()
-            .copied()
-            .collect(),
-        configured: true,
-        status: match status {
-            SourceStatus::Starting => MarketSourceStatus::Connecting,
-            SourceStatus::Ready => MarketSourceStatus::Ready,
-            SourceStatus::Paused => MarketSourceStatus::Paused,
-            SourceStatus::Reconnecting => MarketSourceStatus::Reconnecting,
-            SourceStatus::WarmingUp => MarketSourceStatus::WarmingUp,
-            SourceStatus::Degraded => MarketSourceStatus::Degraded,
-            SourceStatus::Stopped => MarketSourceStatus::Disconnected,
+fn resolve_contract_target(
+    universe: &[crate::ResolvedMarket],
+    target: &MarketTarget,
+) -> Result<
+    (
+        Vec<crate::ResolvedMarket>,
+        Option<crate::MarketSelectionQuery>,
+    ),
+    MarketError,
+> {
+    let (mut markets, query) = match target {
+        MarketTarget::Market { market_id } => (
+            universe
+                .iter()
+                .filter(|market| market.market_id() == Some(market_id) && market.is_active())
+                .cloned()
+                .collect::<Vec<_>>(),
+            None,
+        ),
+        MarketTarget::ConsolidatedInstrument {
+            instrument_id,
+            network_id,
+        } => (
+            universe
+                .iter()
+                .filter(|market| {
+                    market.instrument_id == *instrument_id
+                        && matches!(
+                            &market.scope,
+                            crate::ObservationScope::Consolidated {
+                                network_id: actual,
+                                ..
+                            } if actual == network_id
+                        )
+                        && market.is_active()
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+            None,
+        ),
+        MarketTarget::Options {
+            underlying_market_id,
+            underlying_instrument_id,
+            expiry_from_unix_nanos,
+            expiry_to_unix_nanos,
+            strike_lower,
+            strike_upper,
+            option_right,
+            limit: _,
+            ..
+        } => {
+            let underlying = underlying_instrument_id.clone().or_else(|| {
+                underlying_market_id.as_ref().and_then(|market_id| {
+                    universe
+                        .iter()
+                        .find(|market| market.market_id() == Some(market_id))
+                        .map(|market| market.instrument_id.clone())
+                })
+            });
+            let Some(underlying) = underlying else {
+                return Err(MarketError::InvalidSubscription(
+                    "option target requires a resolvable underlying market or instrument".into(),
+                ));
+            };
+            let markets = universe
+                .iter()
+                .filter(|market| {
+                    market.instrument_kind == kairos_primitives::reference::InstrumentKind::Option
+                        && market.underlying_instrument_id.as_ref() == Some(&underlying)
+                        && expiry_from_unix_nanos.is_none_or(|value| {
+                            market
+                                .expiry_unix_nanos
+                                .is_some_and(|expiry| expiry >= value)
+                        })
+                        && expiry_to_unix_nanos.is_none_or(|value| {
+                            market
+                                .expiry_unix_nanos
+                                .is_some_and(|expiry| expiry <= value)
+                        })
+                        && strike_lower
+                            .is_none_or(|value| market.strike.is_some_and(|strike| strike >= value))
+                        && strike_upper
+                            .is_none_or(|value| market.strike.is_some_and(|strike| strike <= value))
+                        && option_right.as_ref().is_none_or(|selected| {
+                            market.option_right.as_deref().is_some_and(|actual| {
+                                selected.eq_ignore_ascii_case("both")
+                                    || actual.eq_ignore_ascii_case(selected)
+                                    || (selected.eq_ignore_ascii_case("call")
+                                        && actual.eq_ignore_ascii_case("c"))
+                                    || (selected.eq_ignore_ascii_case("put")
+                                        && actual.eq_ignore_ascii_case("p"))
+                            })
+                        })
+                        && market.is_active()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let query = crate::MarketSelectionQuery {
+                underlying_instrument_id: Some(underlying),
+                expiry_from_unix_nanos: *expiry_from_unix_nanos,
+                expiry_to_unix_nanos: *expiry_to_unix_nanos,
+                strike_lower: *strike_lower,
+                strike_upper: *strike_upper,
+                option_right: option_right.clone(),
+                active_only: true,
+                ..Default::default()
+            };
+            (markets, Some(query))
         },
-        ready: status == SourceStatus::Ready,
-        stale: status == SourceStatus::Degraded,
-    }
-}
-
-fn option_selection_filter(
-    params: &BTreeMap<String, serde_json::Value>,
-    source_ids: Vec<SourceId>,
-) -> Result<OptionSelectionFilter, MarketError> {
-    let filter = params.get("filter").and_then(serde_json::Value::as_object);
-    if text_param(filter, "strike_mode")
-        .is_some_and(|value| value.eq_ignore_ascii_case("around_spot"))
+    };
+    markets.sort_by(|left, right| {
+        left.expiry_unix_nanos
+            .cmp(&right.expiry_unix_nanos)
+            .then_with(|| left.strike.cmp(&right.strike))
+            .then_with(|| left.option_right.cmp(&right.option_right))
+            .then_with(|| left.member_id().cmp(&right.member_id()))
+    });
+    if let MarketTarget::Options {
+        limit: Some(limit), ..
+    } = target
     {
-        return Err(MarketError::Unsupported(
-            "spot-relative option strike filters require a current underlying price; pass an absolute strike range"
-                .into(),
+        markets.truncate(*limit as usize);
+    }
+    if markets.is_empty() {
+        return Err(MarketError::NotFound(
+            "the selected Market target has not been resolved by Reference".into(),
         ));
     }
-    let underlying_symbol = text_param_object(params, "underlying");
-    let underlying_market_id = text_param_object(params, "underlying_market_id")
-        .map(kairos_primitives::reference::MarketId::new)
-        .transpose()
-        .map_err(|error| MarketError::Invalid(error.to_string()))?;
-    let underlying_instrument_id = text_param_object(params, "underlying_instrument_id")
-        .map(kairos_primitives::reference::InstrumentId::new)
-        .transpose()
-        .map_err(|error| MarketError::Invalid(error.to_string()))?;
-    let option_right =
-        text_param(filter, "right").filter(|value| !value.eq_ignore_ascii_case("both"));
-    Ok(OptionSelectionFilter {
-        underlying_market_id,
-        underlying_instrument_id,
-        underlying_symbol,
-        expiry_from_unix_nanos: u64_param(filter, "expiry_from_unix_nanos")
-            .map(kairos_primitives::time::UnixNanos::new),
-        expiry_to_unix_nanos: u64_param(filter, "expiry_to_unix_nanos")
-            .map(kairos_primitives::time::UnixNanos::new),
-        strike_lower: price_param(filter, "strike_lower")?,
-        strike_upper: price_param(filter, "strike_upper")?,
-        option_right,
-        limit: u64_param(filter, "limit").map(|value| value as usize),
-        source_ids,
-    })
+    Ok((markets, query))
 }
 
-fn text_param(
-    object: Option<&serde_json::Map<String, serde_json::Value>>,
-    key: &str,
-) -> Option<String> {
-    object?
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+fn select_provider_routes(
+    candidates: Vec<crate::ResolvedMarket>,
+    preference: &ProviderPreference,
+    ready_providers: &std::collections::BTreeSet<kairos_primitives::market::Provider>,
+) -> Result<Vec<crate::ResolvedMarket>, MarketError> {
+    let mut by_provider = std::collections::BTreeMap::<
+        kairos_primitives::market::Provider,
+        Vec<crate::ResolvedMarket>,
+    >::new();
+    for market in candidates {
+        for route in &market.data_routes {
+            let provider = route.provider.clone();
+            let Some(runtime_route) = market.runtime_routes.get(&provider).cloned() else {
+                continue;
+            };
+            let mut selected = market.clone();
+            selected
+                .data_routes
+                .retain(|value| value.provider == provider);
+            selected.runtime_routes =
+                std::collections::BTreeMap::from([(provider.clone(), runtime_route)]);
+            selected.selected_provider = Some(provider.clone());
+            by_provider.entry(provider).or_default().push(selected);
+        }
+    }
+    for routes in by_provider.values_mut() {
+        routes.sort_by_key(crate::ResolvedMarket::member_id);
+    }
+    let take_provider = |provider: &kairos_primitives::market::Provider| {
+        by_provider.get(provider).cloned().unwrap_or_default()
+    };
+    let selected: Vec<crate::ResolvedMarket> = match preference {
+        ProviderPreference::Automatic => ready_providers
+            .iter()
+            .find_map(|provider| by_provider.get(provider).cloned())
+            .or_else(|| by_provider.values().next().cloned())
+            .unwrap_or_default(),
+        ProviderPreference::Prefer(preferred) => preferred
+            .iter()
+            .filter(|provider| ready_providers.contains(*provider))
+            .find(|provider| by_provider.contains_key(*provider))
+            .map(take_provider)
+            .or_else(|| {
+                ready_providers
+                    .iter()
+                    .find_map(|provider| by_provider.get(provider).cloned())
+            })
+            .or_else(|| {
+                preferred
+                    .iter()
+                    .find(|provider| by_provider.contains_key(*provider))
+                    .map(take_provider)
+            })
+            .or_else(|| by_provider.values().next().cloned())
+            .unwrap_or_default(),
+        ProviderPreference::Require(required) => {
+            if required.is_empty() {
+                return Err(MarketError::InvalidSubscription(
+                    "Require provider preference must not be empty".into(),
+                ));
+            }
+            let missing = required
+                .iter()
+                .filter(|provider| !by_provider.contains_key(*provider))
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(MarketError::NotFound(format!(
+                    "required Market data provider is unavailable: {}",
+                    missing.join(", ")
+                )));
+            }
+            required.iter().flat_map(take_provider).collect()
+        },
+        ProviderPreference::AllEligible => by_provider.values().flatten().cloned().collect(),
+    };
+    if selected.is_empty() {
+        return Err(MarketError::NotFound(
+            "the selected Market has no eligible data provider".into(),
+        ));
+    }
+    Ok(selected)
 }
 
-fn text_param_object(params: &BTreeMap<String, serde_json::Value>, key: &str) -> Option<String> {
-    params
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+fn required_providers(preference: &ProviderPreference) -> Vec<kairos_primitives::market::Provider> {
+    match preference {
+        ProviderPreference::Require(providers) => providers.clone(),
+        _ => Vec::new(),
+    }
 }
 
-fn u64_param(
-    object: Option<&serde_json::Map<String, serde_json::Value>>,
-    key: &str,
-) -> Option<u64> {
-    object?.get(key).and_then(|value| {
-        value
-            .as_u64()
-            .or_else(|| value.as_str().and_then(|text| text.parse::<u64>().ok()))
-    })
-}
-
-fn price_param(
-    object: Option<&serde_json::Map<String, serde_json::Value>>,
-    key: &str,
-) -> Result<Option<kairos_primitives::decimal::Price>, MarketError> {
-    object
-        .and_then(|value| value.get(key))
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| value.to_string())
-                .parse::<kairos_primitives::decimal::Price>()
-                .map_err(|error| MarketError::Invalid(error.to_string()))
-        })
-        .transpose()
-}
-
-fn snapshot_timer_name(source_id: &SourceId) -> String {
+fn snapshot_timer_name(source_id: &MarketFeedId) -> String {
     format!("market-snapshot:{source_id}")
 }
 
@@ -1225,7 +1212,7 @@ impl MarketApplication {
 
     fn desired_managed_markets(
         &self,
-        source_id: &SourceId,
+        source_id: &MarketFeedId,
     ) -> BTreeMap<BusinessSubscriptionKey, crate::ResolvedMarket> {
         let Some(source) = self.actor.attached_sources.get(source_id) else {
             return BTreeMap::new();
@@ -1328,7 +1315,7 @@ impl MarketApplication {
     }
 
     fn mark_managed_source_ready(&mut self, value: &str) -> Result<(), MarketError> {
-        let Ok(source_id) = SourceId::new(value) else {
+        let Ok(source_id) = MarketFeedId::new(value) else {
             return Ok(());
         };
         if self
@@ -1350,7 +1337,7 @@ impl MarketApplication {
         generation: u64,
         event: kairos_conflux::MarketEvent,
     ) -> Result<(), MarketError> {
-        let source_id = SourceId::new(connection_key)
+        let source_id = MarketFeedId::new(connection_key)
             .map_err(|error| MarketError::Invalid(error.to_string()))?;
         if !self.actor.attached_sources.contains_key(&source_id) {
             return Ok(());
@@ -1359,18 +1346,19 @@ impl MarketApplication {
             .desired_managed_markets(&source_id)
             .into_values()
             .filter(|market| {
-                market
-                    .route
-                    .subscription_symbol
-                    .eq_ignore_ascii_case(event.symbol.as_str())
+                market.runtime_route().is_some_and(|binding| {
+                    binding
+                        .subscription_symbol
+                        .eq_ignore_ascii_case(event.symbol.as_str())
+                })
             })
-            .map(|market| (SourceRouteKey::from_market(&market), market))
+            .filter_map(|market| market.data_route().map(|route| (route, market)))
             .collect::<BTreeMap<_, _>>()
             .into_values();
         let Some(market) = markets.next() else {
             return Ok(());
         };
-        if let Some(input) = normalize(&source_id, &market, event)
+        if let Some(input) = normalize(&market, event)
             .map_err(MarketError::Invalid)?
             .map(|value| with_epoch(value, source_id, SourceEpoch::new(generation.max(1))))
         {
@@ -1385,11 +1373,11 @@ impl MarketApplication {
         context: &mut Context<'_, Self>,
     ) -> Result<(), MarketError> {
         let source_id =
-            SourceId::new(value).map_err(|error| MarketError::Invalid(error.to_string()))?;
+            MarketFeedId::new(value).map_err(|error| MarketError::Invalid(error.to_string()))?;
         let markets = self
             .desired_managed_markets(&source_id)
             .into_values()
-            .map(|market| (SourceRouteKey::from_market(&market), market))
+            .filter_map(|market| market.data_route().map(|route| (route, market)))
             .collect::<BTreeMap<_, _>>();
         if markets.is_empty() {
             return Ok(());
@@ -1398,7 +1386,11 @@ impl MarketApplication {
             .values()
             .map(|market| {
                 kairos_primitives::integration::ParticipantSymbol::new(
-                    market.route.subscription_symbol.as_str(),
+                    market
+                        .runtime_route()
+                        .expect("managed Market has a runtime binding")
+                        .subscription_symbol
+                        .as_str(),
                 )
                 .expect("resolved provider symbol is valid")
             })
@@ -1564,32 +1556,67 @@ fn now_unix_nanos() -> u64 {
 mod tests {
     use std::time::Duration;
 
-    use kairos_market_contract::{MarketDataSourcesQuery, MarketSourceStatus};
+    use kairos_market_contract::{MarketDataRouteState, MarketDataRoutesQuery};
     use kairos_primitives::decimal::Price;
     use kairos_primitives::reference::{
-        AssetClass, Exchange, InstrumentId, InstrumentKind, MarketId,
+        AssetClass, ExchangeId, InstrumentId, InstrumentKind, MarketId,
     };
     use kairos_primitives::runtime::InstanceIdentity;
     use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
     use super::*;
-    use crate::{MarketDataRoute, ObservationKind, ReconcileMarketUniverse, ResolvedMarket};
+    use crate::{ObservationKind, ProviderRouteBinding, ReconcileMarketUniverse, ResolvedMarket};
 
-    #[test]
-    fn data_sources_discovers_configured_source_plan_for_market_identity() {
-        let mut application = MarketApplication::new("market", 10).unwrap();
-        let market_id = MarketId::new("market:exchange:nasdaq:equity:AAPL").unwrap();
-        let mut market = ResolvedMarket::new(
-            market_id.as_str(),
+    fn market_with_provider(provider: &str) -> ResolvedMarket {
+        ResolvedMarket::new_with_binding(
+            "market:exchange:nasdaq:equity:AAPL",
             "instrument:equity:US:AAPL:common",
             InstrumentKind::Equity,
             "exchange:nasdaq",
-            MarketDataRoute::new("route:aapl", "massive", "equity", "AAPL")
+            ProviderRouteBinding::new(provider, "equity", "AAPL")
                 .unwrap()
                 .with_observation_capabilities([ObservationKind::Quote]),
         )
         .unwrap()
-        .with_source("massive-equity")
+    }
+
+    #[test]
+    fn automatic_and_prefer_select_ready_provider_routes() {
+        let mut market = market_with_provider("binance");
+        market
+            .merge_data_routes(&market_with_provider("massive"))
+            .unwrap();
+        let massive = kairos_primitives::market::Provider::new("massive").unwrap();
+        let ready = std::collections::BTreeSet::from([massive.clone()]);
+
+        let automatic =
+            select_provider_routes(vec![market.clone()], &ProviderPreference::Automatic, &ready)
+                .unwrap();
+        assert_eq!(automatic[0].selected_provider.as_ref(), Some(&massive));
+
+        let binance = kairos_primitives::market::Provider::new("binance").unwrap();
+        let preferred = select_provider_routes(
+            vec![market],
+            &ProviderPreference::Prefer(vec![binance]),
+            &ready,
+        )
+        .unwrap();
+        assert_eq!(preferred[0].selected_provider.as_ref(), Some(&massive));
+    }
+
+    #[test]
+    fn data_routes_discovers_configured_source_plan_for_market_identity() {
+        let mut application = MarketApplication::new("market", 10).unwrap();
+        let market_id = MarketId::new("market:exchange:nasdaq:equity:AAPL").unwrap();
+        let mut market = ResolvedMarket::new_with_binding(
+            market_id.as_str(),
+            "instrument:equity:US:AAPL:common",
+            InstrumentKind::Equity,
+            "exchange:nasdaq",
+            ProviderRouteBinding::new("massive", "equity", "AAPL")
+                .unwrap()
+                .with_observation_capabilities([ObservationKind::Quote]),
+        )
         .unwrap();
         market.asset_type = Some(AssetClass::Equity);
         application
@@ -1599,9 +1626,10 @@ mod tests {
                 markets: vec![market],
             })
             .unwrap();
-        let source = SourceDescriptor::new(
-            SourceId::new("massive-equity").unwrap(),
-            Exchange::new("data_provider:massive").unwrap(),
+        let source = FeedDescriptor::for_provider(
+            MarketFeedId::new("massive-equity").unwrap(),
+            "massive",
+            ExchangeId::new("massive").unwrap(),
             "equity",
             Some("equity".into()),
         )
@@ -1622,78 +1650,64 @@ mod tests {
             )
             .unwrap();
 
-        let response = application.data_sources_control(MarketDataSourcesQuery {
+        let response = application.data_routes_control(MarketDataRoutesQuery {
             market_id: Some(market_id),
             observation_kind: Some(ObservationKind::Quote),
-            provider_id: Some(kairos_primitives::integration::ProviderId::new("massive").unwrap()),
+            provider: Some(kairos_primitives::market::Provider::new("massive").unwrap()),
             configured_only: true,
             ..Default::default()
         });
 
-        assert_eq!(response.sources.len(), 1);
-        assert_eq!(response.sources[0].source_id.as_str(), "massive-equity");
+        assert_eq!(response.routes.len(), 1);
         assert_eq!(
-            response.sources[0]
-                .provider_id
-                .as_ref()
-                .map(|value| value.as_str()),
-            Some("massive")
+            response.routes[0].market_id,
+            "market:exchange:nasdaq:equity:AAPL"
         );
+        assert_eq!(response.routes[0].provider.as_str(), "massive");
         assert_eq!(
-            response.sources[0].observation_capabilities,
+            response.routes[0].observation_kinds,
             vec![ObservationKind::Quote]
         );
-        assert!(response.sources[0].configured);
-        assert_eq!(response.sources[0].status, MarketSourceStatus::Disconnected);
-        assert!(!response.sources[0].ready);
+        assert_eq!(response.routes[0].state, MarketDataRouteState::Configured);
+        assert!(!response.routes[0].selected);
 
-        let incompatible = application.data_sources_control(MarketDataSourcesQuery {
+        let incompatible = application.data_routes_control(MarketDataRoutesQuery {
             observation_kind: Some(ObservationKind::Trade),
             configured_only: true,
             ..Default::default()
         });
-        assert!(incompatible.sources.is_empty());
+        assert!(incompatible.routes.is_empty());
 
-        let ready = application.data_sources_control(MarketDataSourcesQuery {
+        let ready = application.data_routes_control(MarketDataRoutesQuery {
             observation_kind: Some(ObservationKind::Quote),
             ready_only: true,
             ..Default::default()
         });
-        assert!(ready.sources.is_empty());
+        assert!(ready.routes.is_empty());
     }
 
     #[test]
-    fn data_sources_discovers_configured_source_plan_for_options_target() {
+    fn data_routes_discovers_configured_source_plan_for_options_target() {
         let mut application = MarketApplication::new("market", 10).unwrap();
         let underlying_market_id = MarketId::new("market:exchange:nasdaq:equity:SPY").unwrap();
         let underlying_instrument_id =
             InstrumentId::new("instrument:equity:US:SPY:common").unwrap();
-        let mut underlying = ResolvedMarket::new(
+        let mut underlying = ResolvedMarket::new_with_binding(
             underlying_market_id.as_str(),
             underlying_instrument_id.as_str(),
             InstrumentKind::Equity,
             "exchange:nasdaq",
-            MarketDataRoute::new("route:spy", "massive", "equity", "SPY").unwrap(),
+            ProviderRouteBinding::new("massive", "equity", "SPY").unwrap(),
         )
-        .unwrap()
-        .with_source("massive-equity")
         .unwrap();
         underlying.asset_type = Some(AssetClass::Equity);
-        let mut option = ResolvedMarket::new(
+        let mut option = ResolvedMarket::new_with_binding(
             "market:opra:option:SPY260101C00450000",
             "instrument:option:US:SPY:20260101:C:450",
             InstrumentKind::Option,
             "exchange:nasdaq",
-            MarketDataRoute::new(
-                "route:spy-option",
-                "massive",
-                "options",
-                "O:SPY260101C00450000",
-            )
-            .unwrap(),
+            ProviderRouteBinding::new("massive", "options", "O:SPY260101C00450000").unwrap(),
         )
-        .unwrap()
-        .with_source("massive-options")
         .unwrap();
         option.asset_type = Some(AssetClass::Equity);
         option.underlying_instrument_id = Some(underlying_instrument_id);
@@ -1707,9 +1721,10 @@ mod tests {
                 markets: vec![underlying, option],
             })
             .unwrap();
-        let source = SourceDescriptor::new(
-            SourceId::new("massive-options").unwrap(),
-            Exchange::new("data_provider:massive").unwrap(),
+        let source = FeedDescriptor::for_provider(
+            MarketFeedId::new("massive-options").unwrap(),
+            "massive",
+            ExchangeId::new("massive").unwrap(),
             "options",
             Some("equity".into()),
         )
@@ -1729,15 +1744,13 @@ mod tests {
             )
             .unwrap();
 
-        let response = application.data_sources_control(MarketDataSourcesQuery {
-            target: Some("options".into()),
-            underlying_market_id: Some(underlying_market_id),
+        let response = application.data_routes_control(MarketDataRoutesQuery {
+            market_id: Some(MarketId::new("market:opra:option:SPY260101C00450000").unwrap()),
             ..Default::default()
         });
 
-        assert_eq!(response.sources.len(), 1);
-        assert_eq!(response.sources[0].source_id.as_str(), "massive-options");
-        assert_eq!(response.sources[0].status, MarketSourceStatus::Disconnected);
-        assert!(!response.sources[0].ready);
+        assert_eq!(response.routes.len(), 1);
+        assert_eq!(response.routes[0].provider.as_str(), "massive");
+        assert_eq!(response.routes[0].state, MarketDataRouteState::Configured);
     }
 }

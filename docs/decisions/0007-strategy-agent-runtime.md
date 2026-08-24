@@ -41,7 +41,7 @@ Strategy 只有两个 Agent 入口：
 - `ctx.agent.set_mode(mode)`：在 Launch allowlist 内切换 shadow/gate/revise；
 - `on_agent(ctx, event)`：best-effort 接收最小终态通知。
 
-前三个命令只更新本地 context/mode projection，不触发模型、MCP 或业务写。candidate admission 固定当时的
+前三个命令只更新本地 context/mode state，不触发模型、MCP 或业务写。candidate admission 固定当时的
 context snapshot、watermark、mode 与 mode revision；之后的更新不影响 queued/in-flight run。
 
 `on_agent` 仅暴露 decision ID、capability、终态和 Profile 允许的 reason codes。它不包含 original/effective
@@ -83,7 +83,7 @@ union，并由本地 policy 原子应用；只能降低 quantity、收紧价格/
 - **revise**：approve 提交 original；有效 revise 提交 rebuilt effective Intent；reject 不提交。
 
 queue full、timeout、invalid output、required context/MCP unavailable 或 runtime outage 时，对新增或无法判断的
-敞口 fail closed。只有 Account 的 fresh、complete 权威 projection 能证明是降低绝对敞口时，才允许沿 direct
+敞口 fail closed。只有 Account 的 fresh、complete 权威 current view 能证明是降低绝对敞口时，才允许沿 direct
 Execution path 绕过 Agent。绕过不能伪造 approved admission evidence；Agent failure 与下游降险成功分别记录。
 final command 已开始但 delivery certainty 未知时标记 `submission_indeterminate`，不得自动 retry。
 

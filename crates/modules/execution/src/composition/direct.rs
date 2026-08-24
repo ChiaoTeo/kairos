@@ -15,8 +15,8 @@ pub fn compose_standalone_execution(
     binding: StandaloneExecutionBinding,
 ) -> Result<CliExecutionApplication, Box<dyn std::error::Error>> {
     let provider = normalize(&binding.provider);
-    let product = effective_product(&provider, &binding);
-    validate_direct_capability(&provider, &product)?;
+    let execution_channel = effective_execution_channel(&provider, &binding);
+    validate_direct_capability(&provider, &execution_channel)?;
     validate_environment_endpoint(&provider, &binding.environment, &binding.base_url)?;
     if provider == "ibkr" {
         validate_ibkr_environment_port(&binding.environment, binding.port)?;
@@ -28,7 +28,7 @@ pub fn compose_standalone_execution(
     ))?;
     let connection = match provider.as_str() {
         "binance" => binance_connection(
-            &product,
+            &execution_channel,
             key,
             BinanceRestConfig {
                 environment: binding.environment.clone(),
@@ -97,26 +97,26 @@ fn validate_ibkr_environment_port(
     Ok(())
 }
 
-fn effective_product(provider: &str, binding: &StandaloneExecutionBinding) -> String {
-    let product = normalize(&binding.provider_product);
-    if provider != "binance" || product != "margin" {
-        return product;
+fn effective_execution_channel(provider: &str, binding: &StandaloneExecutionBinding) -> String {
+    let execution_channel = normalize(&binding.execution_channel);
+    if provider != "binance" || execution_channel != "margin" {
+        return execution_channel;
     }
     match binding.trading_mode.as_deref().map(normalize).as_deref() {
         Some("isolated") | Some("isolated-margin") => "isolated-margin".into(),
         Some("cross") | Some("cross-margin") => "cross-margin".into(),
-        _ => product,
+        _ => execution_channel,
     }
 }
 
 fn validate_direct_capability(
     provider: &str,
-    product: &str,
+    execution_channel: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let product = normalize(product);
+    let execution_channel = normalize(execution_channel);
     let supported = match provider {
         "binance" => matches!(
-            product.as_str(),
+            execution_channel.as_str(),
             "spot"
                 | "margin"
                 | "cross-margin"
@@ -128,19 +128,19 @@ fn validate_direct_capability(
                 | "stocks"
         ),
         "okx" | "okex" => matches!(
-            product.as_str(),
+            execution_channel.as_str(),
             "spot" | "margin" | "swap" | "futures" | "option" | "options"
         ),
-        "ibkr" => matches!(product.as_str(), "equity" | "stocks" | "spot"),
+        "ibkr" => matches!(execution_channel.as_str(), "equity" | "stocks" | "spot"),
         _ => false,
     };
     if supported {
         return Ok(());
     }
-    Err(
-        format!("standalone direct order capability is unavailable for {provider}/{product}")
-            .into(),
+    Err(format!(
+        "standalone direct order capability is unavailable for {provider}/{execution_channel}"
     )
+    .into())
 }
 
 fn validate_environment_endpoint(
@@ -274,7 +274,7 @@ fn validate_credential(
 #[cfg(test)]
 mod tests {
     use super::{
-        effective_product, validate_credential, validate_direct_capability,
+        effective_execution_channel, validate_credential, validate_direct_capability,
         validate_environment_endpoint, validate_ibkr_environment_port,
     };
     use crate::application::StandaloneExecutionBinding;
@@ -286,7 +286,7 @@ mod tests {
             provider: "binance".into(),
             environment: "live".into(),
             segment_key: "spot".into(),
-            provider_product: "spot".into(),
+            execution_channel: "spot".into(),
             trading_mode: None,
             credential_id: Some("credential-main".into()),
             credential_role: role.into(),
@@ -332,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_provider_products_fail_before_connection_or_credential_fallback() {
+    fn unsupported_execution_channels_fail_before_connection_or_credential_fallback() {
         assert!(validate_direct_capability("binance", "spot").is_ok());
         assert!(validate_direct_capability("okx", "swap").is_ok());
         assert!(validate_direct_capability("ibkr", "equity").is_ok());
@@ -353,16 +353,16 @@ mod tests {
     #[test]
     fn account_margin_mode_is_part_of_binance_direct_routing() {
         let mut value = binding("trade");
-        value.provider_product = "margin".into();
+        value.execution_channel = "margin".into();
         value.trading_mode = Some("isolated".into());
-        let product = effective_product("binance", &value);
-        assert_eq!(product, "isolated-margin");
-        assert!(validate_direct_capability("binance", &product).is_err());
+        let execution_channel = effective_execution_channel("binance", &value);
+        assert_eq!(execution_channel, "isolated-margin");
+        assert!(validate_direct_capability("binance", &execution_channel).is_err());
 
         value.trading_mode = Some("cross".into());
-        let product = effective_product("binance", &value);
-        assert_eq!(product, "cross-margin");
-        assert!(validate_direct_capability("binance", &product).is_ok());
+        let execution_channel = effective_execution_channel("binance", &value);
+        assert_eq!(execution_channel, "cross-margin");
+        assert!(validate_direct_capability("binance", &execution_channel).is_ok());
     }
 
     #[test]

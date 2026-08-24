@@ -22,7 +22,7 @@ impl<'a> ::flatbuffers::Follow<'a> for Bar<'a> {
 impl<'a> Bar<'a> {
     pub const VT_SCOPE: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_PROVIDER: ::flatbuffers::VOffsetT = 8;
     pub const VT_BAR_SPEC_ID: ::flatbuffers::VOffsetT = 10;
     pub const VT_KIND: ::flatbuffers::VOffsetT = 12;
     pub const VT_WINDOW_START_UNIX_NANOS: ::flatbuffers::VOffsetT = 14;
@@ -72,8 +72,8 @@ impl<'a> Bar<'a> {
         if let Some(x) = args.bar_spec_id {
             builder.add_bar_spec_id(x);
         }
-        if let Some(x) = args.source_id {
-            builder.add_source_id(x);
+        if let Some(x) = args.provider {
+            builder.add_provider(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -108,13 +108,13 @@ impl<'a> Bar<'a> {
         }
     }
     #[inline]
-    pub fn source_id(&self) -> &'a str {
+    pub fn provider(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Bar::VT_SOURCE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Bar::VT_PROVIDER, None)
                 .unwrap()
         }
     }
@@ -258,8 +258,8 @@ impl ::flatbuffers::Verifiable for Bar<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_id",
-                Self::VT_SOURCE_ID,
+                "provider",
+                Self::VT_PROVIDER,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -300,7 +300,7 @@ impl ::flatbuffers::Verifiable for Bar<'_> {
 pub struct BarArgs<'a> {
     pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub bar_spec_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub kind: BarKind,
     pub window_start_unix_nanos: u64,
@@ -319,7 +319,7 @@ impl<'a> Default for BarArgs<'a> {
         BarArgs {
             scope: None,         // required field
             instrument_id: None, // required field
-            source_id: None,     // required field
+            provider: None,      // required field
             bar_spec_id: None,   // required field
             kind: BarKind::UNSPECIFIED,
             window_start_unix_nanos: 0,
@@ -351,9 +351,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> BarBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Bar::VT_INSTRUMENT_ID, instrument_id);
     }
     #[inline]
-    pub fn add_source_id(&mut self, source_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_provider(&mut self, provider: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Bar::VT_SOURCE_ID, source_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Bar::VT_PROVIDER, provider);
     }
     #[inline]
     pub fn add_bar_spec_id(&mut self, bar_spec_id: ::flatbuffers::WIPOffset<&'b str>) {
@@ -427,7 +427,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> BarBuilder<'a, 'b, A> {
         self.fbb_.required(o, Bar::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Bar::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, Bar::VT_SOURCE_ID, "source_id");
+        self.fbb_.required(o, Bar::VT_PROVIDER, "provider");
         self.fbb_.required(o, Bar::VT_BAR_SPEC_ID, "bar_spec_id");
         self.fbb_.required(o, Bar::VT_OPEN, "open");
         self.fbb_.required(o, Bar::VT_HIGH, "high");
@@ -442,7 +442,7 @@ impl ::core::fmt::Debug for Bar<'_> {
         let mut ds = f.debug_struct("Bar");
         ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("source_id", &self.source_id());
+        ds.field("provider", &self.provider());
         ds.field("bar_spec_id", &self.bar_spec_id());
         ds.field("kind", &self.kind());
         ds.field("window_start_unix_nanos", &self.window_start_unix_nanos());

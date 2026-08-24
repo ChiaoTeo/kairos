@@ -292,7 +292,7 @@ impl AccountActor {
         (&self.actor_id, self.generation, self.event_sequence)
     }
 
-    pub(crate) fn projection(&self, segment_key: &SegmentKey) -> Option<AccountSegmentView> {
+    pub(crate) fn segment_view(&self, segment_key: &SegmentKey) -> Option<AccountSegmentView> {
         self.accounts
             .get(segment_key)
             .map(AccountSegmentView::from_account)

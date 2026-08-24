@@ -195,8 +195,8 @@ impl ExecutionApplication {
         validate_execution_route(&request, &route.candidate).map_err(ExecutionError::Invalid)?;
         let selected_route = crate::domain::SelectedExecutionRoute {
             route_id: route.candidate.route_id.clone(),
-            participant_id: route.candidate.participant_id.clone(),
-            provider_product: route.candidate.provider_product.clone(),
+            broker_id: route.candidate.broker_id.clone(),
+            execution_channel: route.candidate.execution_channel.clone(),
             order_entry_symbol: route.candidate.order_entry_symbol.clone(),
             destination_market_id: route.candidate.market_id.clone(),
             selected_at_unix_nanos: now.into(),
@@ -1212,9 +1212,9 @@ impl ExecutionApplication {
             .ok_or_else(|| ExecutionError::Invalid("quote intent disappeared".into()))
     }
 
-    /// Pull current projected quotes through the intent-planning port and
+    /// Pull current planned quotes through the intent-planning port and
     /// automatically refresh changed QuoteProvisioning intents.  The market
-    /// projection is advisory; every replacement still goes through the
+    /// current market state is advisory; every replacement still goes through the
     /// normal order validation, reservation and lifecycle path.
     pub fn refresh_maker_quotes(&mut self) -> Result<usize, ExecutionError> {
         let requests = self.maker_quote_refresh_requests()?;
@@ -1311,7 +1311,7 @@ impl ExecutionApplication {
                 bid_price: bid,
                 ask_price: ask,
                 quote_observed_at: quote.observed_at_unix_nanos,
-                reason: "projected market quote changed".into(),
+                reason: "market quote changed".into(),
             });
         }
         Ok(requests)

@@ -1,4 +1,4 @@
-"""Market-owned deterministic analytical projections.
+"""Market-owned deterministic analytical current views.
 
 This module receives canonical numeric values at the Application boundary. It
 does not decode wire/persistence decimal representations; those conversions
@@ -20,7 +20,7 @@ _SQRT_TWO_PI = math.sqrt(2.0 * math.pi)
 
 
 @dataclass(frozen=True, slots=True)
-class OptionGreeksProjectionRequest:
+class OptionGreeksCalculationRequest:
     scope: ObservationScope
     instrument_id: str
     option_right: str
@@ -31,9 +31,9 @@ class OptionGreeksProjectionRequest:
     observed_at_unix_nanos: int
     available_at_unix_nanos: int
     risk_free_rate: float
+    provider: str
     dividend_yield: float = 0.0
     price_basis: str = "mid"
-    source_id: str = "kairos-derived"
     reference_snapshot_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -41,7 +41,7 @@ class OptionGreeksProjectionRequest:
         if right not in {"C", "P"}:
             raise ValueError("option_right must be C or P")
         object.__setattr__(self, "option_right", right)
-        for name in ("instrument_id", "price_basis", "source_id"):
+        for name in ("instrument_id", "price_basis", "provider"):
             if not str(getattr(self, name)).strip():
                 raise ValueError(f"{name} is required")
         if self.expiry_unix_nanos <= self.observed_at_unix_nanos:
@@ -55,7 +55,7 @@ class OptionGreeksProjectionRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class OptionGreeksProjectionResult:
+class OptionGreeksCalculationResult:
     implied_volatility: float
     delta: float
     gamma: float
@@ -71,8 +71,8 @@ class MarketAnalyticalApplication:
     model_version: str = "black-scholes-european-v1"
 
     def option_greeks(
-        self, request: OptionGreeksProjectionRequest
-    ) -> OptionGreeksProjectionResult:
+        self, request: OptionGreeksCalculationRequest
+    ) -> OptionGreeksCalculationResult:
         time_to_expiry = (
             request.expiry_unix_nanos - request.observed_at_unix_nanos
         ) / _YEAR_NANOS
@@ -96,7 +96,7 @@ class MarketAnalyticalApplication:
             "dividend_yield": _number(request.dividend_yield),
             "observed_at_unix_nanos": request.observed_at_unix_nanos,
             "available_at_unix_nanos": request.available_at_unix_nanos,
-            "source_id": request.source_id,
+            "provider": request.provider,
             "derivation": self.model_version,
             "reference_snapshot_id": request.reference_snapshot_id,
             "model_semantics": {
@@ -106,7 +106,7 @@ class MarketAnalyticalApplication:
                 "calendar_days_per_year": 365.25,
             },
         }
-        return OptionGreeksProjectionResult(
+        return OptionGreeksCalculationResult(
             implied_volatility=volatility,
             delta=delta,
             gamma=gamma,
@@ -127,7 +127,7 @@ def _scope_payload(scope: ObservationScope) -> Mapping[str, object]:
 
 
 def _implied_volatility(
-    request: OptionGreeksProjectionRequest, time_to_expiry: float
+    request: OptionGreeksCalculationRequest, time_to_expiry: float
 ) -> float:
     discounted_spot = request.underlying_price * math.exp(
         -request.dividend_yield * time_to_expiry
@@ -160,7 +160,7 @@ def _implied_volatility(
 
 
 def _price(
-    request: OptionGreeksProjectionRequest,
+    request: OptionGreeksCalculationRequest,
     time_to_expiry: float,
     volatility: float,
 ) -> float:
@@ -173,7 +173,7 @@ def _price(
 
 
 def _greeks(
-    request: OptionGreeksProjectionRequest,
+    request: OptionGreeksCalculationRequest,
     time_to_expiry: float,
     volatility: float,
 ) -> tuple[float, float, float, float]:
@@ -219,7 +219,7 @@ def _greeks(
 
 
 def _d1_d2(
-    request: OptionGreeksProjectionRequest,
+    request: OptionGreeksCalculationRequest,
     time_to_expiry: float,
     volatility: float,
 ) -> tuple[float, float]:

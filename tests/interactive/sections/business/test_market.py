@@ -20,19 +20,34 @@ def _market_record():
     )
 
 
-def _sources():
+def _equity_market_record():
+    return SimpleNamespace(
+        id="market:nasdaq:equity:AAPL:USD",
+        venue_symbol="AAPL",
+        exchange_id="exchange:nasdaq",
+        instrument_kind="equity",
+        instrument=SimpleNamespace(
+            id="instrument:equity:US:AAPL:common", display_symbol="AAPL"
+        ),
+    )
+
+
+def _routes():
     return {
-        "sources": [
+        "routes": [
             {
-                "source_id": "binance-spot",
-                "provider_id": "binance",
-                "observation_capabilities": ["quote", "bar"],
-                "configured": True,
-                "status": "ready",
-                "ready": True,
+                "provider": "binance",
+                "observation_kinds": ["quote", "bar"],
+                "state": "ready",
+                "selected": True,
+                "pending_reason": None,
             }
         ]
     }
+
+
+def _direct_routes(*providers: str):
+    return {"routes": [{"provider": provider} for provider in providers]}
 
 
 def test_system_market_snapshot_numeric_and_text_alias_use_list_selections(
@@ -41,7 +56,7 @@ def test_system_market_snapshot_numeric_and_text_alias_use_list_selections(
     interactive_context.shell_path = ("system", "market")
     record = _market_record()
     monkeypatch.setattr(market.reference, "select_market", lambda _context: record)
-    monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
+    monkeypatch.setattr(market, "_load_routes", lambda *_args: _routes())
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "1")
 
     market.print_menu(interactive_context)
@@ -60,24 +75,24 @@ def test_system_market_snapshot_numeric_and_text_alias_use_list_selections(
         "quote",
         "--market-id",
         "market:binance:spot:BTCUSDT",
-        "--source-id",
-        "binance-spot",
+        "--provider",
+        "binance",
         "--format",
         "table",
     )
     output = capsys.readouterr().out
     assert "workspace 共享服务（连接模式）" in output
-    assert "只能从当前作用域返回的列表中选择" in output
+    assert "只能从当前作用域返回的 route 列表中选择" in output
 
 
-def test_market_source_cancel_never_constructs_snapshot(
+def test_market_provider_cancel_never_constructs_snapshot(
     interactive_context, monkeypatch
 ) -> None:
     interactive_context.shell_path = ("system", "market")
     monkeypatch.setattr(
         market.reference, "select_market", lambda _context: _market_record()
     )
-    monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
+    monkeypatch.setattr(market, "_load_routes", lambda *_args: _routes())
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "b")
 
     assert market.handle(interactive_context, ("quote",)) is ShellControl.HANDLED
@@ -87,14 +102,19 @@ def test_launch_market_command_keeps_selected_instance_and_scope(
     interactive_context, monkeypatch
 ) -> None:
     interactive_context.shell_path = (
-        "launch", "demo", "instances", "instance-1", "components", "market"
+        "launch",
+        "demo",
+        "instances",
+        "instance-1",
+        "components",
+        "market",
     )
     interactive_context.selected_launch = "demo"
     interactive_context.selected_launch_instance = "instance-1"
     monkeypatch.setattr(
         market.reference, "select_market", lambda _context: _market_record()
     )
-    monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
+    monkeypatch.setattr(market, "_load_routes", lambda *_args: _routes())
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "1")
 
     command = market.handle(interactive_context, ("quote",))
@@ -114,14 +134,14 @@ def test_launch_market_command_keeps_selected_instance_and_scope(
 
 
 def test_connected_market_has_no_subscription_or_raw_identity_entry(
-    interactive_context
+    interactive_context,
 ) -> None:
     interactive_context.shell_path = ("system", "market")
     assert market.handle(interactive_context, ("subscribe",)) is None
     assert market.handle(interactive_context, ("market:binance:spot:BTCUSDT",)) is None
 
 
-def test_source_discovery_uses_scope_adapter_with_typed_filters(
+def test_route_discovery_uses_scope_adapter_with_typed_filters(
     interactive_context, monkeypatch
 ) -> None:
     interactive_context.owner = object()
@@ -130,19 +150,22 @@ def test_source_discovery_uses_scope_adapter_with_typed_filters(
 
     def run(owner, command, arguments):
         seen.update(owner=owner, command=command, arguments=arguments)
-        return _sources()
+        return _routes()
 
     monkeypatch.setattr(
         "kairospy.surface.cli.commands.root._run_workspace_market_connected_command",
         run,
     )
 
-    assert market._load_sources(
-        interactive_context, "market:binance:spot:BTCUSDT", "quote"
-    ) == _sources()
+    assert (
+        market._load_routes(
+            interactive_context, "market:binance:spot:BTCUSDT", "quote"
+        )
+        == _routes()
+    )
     assert seen == {
         "owner": interactive_context.owner,
-        "command": "sources",
+        "command": "routes",
         "arguments": [
             "--market-id",
             "market:binance:spot:BTCUSDT",
@@ -167,7 +190,12 @@ def test_launch_instance_is_selected_only_from_registry_and_persisted(
     assert market.enter_launch_market(interactive_context) is ShellControl.HANDLED
     assert interactive_context.selected_launch_instance == "run-2"
     assert interactive_context.shell_path == (
-        "launch", "demo", "instances", "run-2", "components", "market"
+        "launch",
+        "demo",
+        "instances",
+        "run-2",
+        "components",
+        "market",
     )
     assert market._select_launch_instance(interactive_context) == "run-2"
 
@@ -178,7 +206,7 @@ def test_preview_command_contains_explicit_system_scope(
     monkeypatch.setattr(
         market.reference, "select_market", lambda _context: _market_record()
     )
-    monkeypatch.setattr(market, "_load_sources", lambda *_args: _sources())
+    monkeypatch.setattr(market, "_load_routes", lambda *_args: _routes())
     answers = iter(["2", "1", "1"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
 
@@ -209,8 +237,11 @@ def test_top_level_market_once_uses_standalone_provider(
         assert availability_label == "实时行情"
         return _market_record()
 
+    monkeypatch.setattr(market.reference, "select_market", select_market)
     monkeypatch.setattr(
-        market.reference, "select_market", select_market
+        market,
+        "_load_direct_routes",
+        lambda *_args: _direct_routes("binance"),
     )
     answers = iter(["1"])
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
@@ -229,16 +260,19 @@ def test_top_level_market_once_uses_standalone_provider(
         "binance",
         "--market-type",
         "spot",
-        "--source-symbol",
+        "--symbol",
         "BTCUSDT",
         "--provider",
-        "binance-spot-rest",
+        "binance",
+        "--observation-kind",
+        "quote",
         "--format",
         "table",
     )
     assert "system" not in command.argv
-    assert "source-id" not in " ".join(command.argv)
-    assert allowed_kinds == ("spot", "option")
+    assert "--provider" in command.argv
+    assert allowed_kinds is None
+    assert command.show_command is False
 
 
 def test_direct_market_menu_presents_user_tasks_in_product_order(
@@ -250,7 +284,7 @@ def test_direct_market_menu_presents_user_tasks_in_product_order(
 
     output = capsys.readouterr().out
     assert "行情中心" in output
-    assert "1. 搜索标的并查看实时行情" in output
+    assert "1. 搜索标的并查看行情" in output
     assert "2. 下载历史行情" in output
     assert "3. 查看本地行情数据" in output
     assert "c. 连接运行中的行情服务" in output
@@ -282,6 +316,11 @@ def test_direct_market_once_does_not_ask_for_description_strategy(
         "select_market",
         lambda _context, **_kwargs: _market_record(),
     )
+    monkeypatch.setattr(
+        market,
+        "_load_direct_routes",
+        lambda *_args: _direct_routes("binance"),
+    )
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "1")
 
     command = market.handle(interactive_context, ("once",))
@@ -290,7 +329,170 @@ def test_direct_market_once_does_not_ask_for_description_strategy(
     output = capsys.readouterr().out
     assert "选择 Market 描述方式" not in output
     assert "手动输入底层描述" not in output
-    assert "选择实时行情数据源" in output
+    assert "你想查看" in output
+    assert "最新报价" in output
+    assert "最近成交" in output
+    assert "买卖盘口" in output
+    assert "REST" not in output
+    assert "WebSocket" not in output
+
+
+def test_direct_market_once_offers_all_configured_equity_quote_routes(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("market",)
+    allowed_kinds = "not-called"
+
+    def select_market(
+        _context, *, allowed_instrument_kinds=None, availability_label="行情查询"
+    ):
+        nonlocal allowed_kinds
+        allowed_kinds = allowed_instrument_kinds
+        return _equity_market_record()
+
+    monkeypatch.setattr(market.reference, "select_market", select_market)
+    monkeypatch.setattr(
+        market,
+        "_load_direct_routes",
+        lambda *_args: _direct_routes("binance", "massive"),
+    )
+    answers = iter(["1", "1"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    result = market.handle(interactive_context, ("once",))
+
+    assert isinstance(result, GuidedCommand)
+    assert allowed_kinds is None
+    assert result.argv == (
+        "market",
+        "once",
+        "--market-id",
+        "market:nasdaq:equity:AAPL:USD",
+        "--instrument-id",
+        "instrument:equity:US:AAPL:common",
+        "--exchange-id",
+        "nasdaq",
+        "--market-type",
+        "equity",
+        "--symbol",
+        "AAPL",
+        "--provider",
+        "binance",
+        "--observation-kind",
+        "quote",
+        "--format",
+        "table",
+    )
+    output = capsys.readouterr().out
+    assert "最新报价" in output
+    assert "最近成交" in output
+    assert "最新分钟 K" in output
+    assert "可用 Provider" in output
+    assert "1. binance" in output
+    assert "2. massive" in output
+    assert interactive_context.shell_path == ("market", "AAPL")
+    assert interactive_context.selected_market_provider == {
+        "provider": "binance",
+    }
+
+
+def test_direct_market_context_reuses_target_and_provider_for_next_query(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("market", "AAPL")
+    interactive_context.selected_market = _equity_market_record()
+    interactive_context.selected_market_provider = {
+        "provider": "massive",
+    }
+    monkeypatch.setattr(
+        market.reference,
+        "select_market",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("当前标的上下文不应重新搜索")
+        ),
+    )
+    monkeypatch.setattr(
+        market,
+        "_load_direct_routes",
+        lambda *_args: _direct_routes("massive"),
+    )
+
+    market.print_menu(interactive_context)
+    command = market.handle(interactive_context, ("3",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.summary == "查看 AAPL 最新分钟 K"
+    assert "bar" in command.argv
+    assert interactive_context.shell_path == ("market", "AAPL")
+    output = capsys.readouterr().out
+    assert "当前标的：AAPL · nasdaq · equity" in output
+    assert "数据 Provider：massive" in output
+    assert "继续使用当前 Provider：massive" in output
+
+
+def test_direct_market_context_can_switch_target_without_leaving_market(
+    interactive_context, monkeypatch
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("market", "BTCUSDT")
+    interactive_context.selected_market = _market_record()
+    interactive_context.selected_market_provider = {
+        "provider": "binance",
+    }
+    monkeypatch.setattr(
+        market.reference,
+        "select_market",
+        lambda _context, **_kwargs: _equity_market_record(),
+    )
+    monkeypatch.setattr(
+        market,
+        "_load_direct_routes",
+        lambda *_args: _direct_routes("massive"),
+    )
+    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: "1")
+
+    command = market.handle(interactive_context, ("s",))
+
+    assert isinstance(command, GuidedCommand)
+    assert command.summary == "查看 AAPL 最新报价"
+    assert interactive_context.shell_path == ("market", "AAPL")
+    assert interactive_context.selected_market is not None
+    assert interactive_context.selected_market_provider == {
+        "provider": "massive",
+    }
+
+
+def test_direct_market_once_skips_provider_prompt_when_only_massive_supports_trade(
+    interactive_context, monkeypatch
+) -> None:
+    interactive_context.owner = object()
+    interactive_context.shell_path = ("market",)
+    monkeypatch.setattr(
+        market.reference,
+        "select_market",
+        lambda _context, **_kwargs: _equity_market_record(),
+    )
+    monkeypatch.setattr(
+        market,
+        "_load_direct_routes",
+        lambda *_args: _direct_routes("massive"),
+    )
+    prompts = []
+
+    def prompt(label, **_kwargs):
+        prompts.append(label)
+        return "2"
+
+    monkeypatch.setattr("typer.prompt", prompt)
+
+    result = market.handle(interactive_context, ("once",))
+
+    assert isinstance(result, GuidedCommand)
+    assert "--provider" in result.argv
+    assert "massive" in result.argv
+    assert prompts == ["请输入序号；输入 b 返回"]
 
 
 def test_history_download_starts_from_market_and_hides_canonical_ids(
@@ -348,7 +550,13 @@ def test_history_download_starts_from_market_and_hides_canonical_ids(
         "--format",
         "table",
     )
-    assert prompts == ["请输入序号；输入 b 返回", "开始日期", "结束日期", "保存位置", "K 线周期"]
+    assert prompts == [
+        "请输入序号；输入 b 返回",
+        "开始日期",
+        "结束日期",
+        "保存位置",
+        "K 线周期",
+    ]
     assert "Canonical" not in capsys.readouterr().out
 
 
@@ -410,7 +618,12 @@ def test_launch_market_replay_control_keeps_instance_scope(
     interactive_context,
 ) -> None:
     interactive_context.shell_path = (
-        "launch", "demo", "instances", "instance-1", "components", "market"
+        "launch",
+        "demo",
+        "instances",
+        "instance-1",
+        "components",
+        "market",
     )
     interactive_context.selected_launch = "demo"
     interactive_context.selected_launch_instance = "instance-1"

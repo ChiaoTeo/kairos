@@ -1,4 +1,4 @@
-//! Explicit synchronous projections for dedicated blocking workers.
+//! Explicit synchronous facades for dedicated blocking workers.
 //!
 //! Do not call these APIs from a Tokio worker. Async-first capabilities remain
 //! at the crate root; synchronous callers opt into this namespace explicitly.

@@ -630,7 +630,7 @@ class StrategyDecisionApplication:
         trace["notifications"] = [
             value
             for value in records
-            if value.get("record_type") == "notification_projected"
+            if value.get("record_type") == "notification_submission_recorded"
         ]
         return trace
 
@@ -767,7 +767,7 @@ class StrategyDecisionApplication:
         if state is None:
             return
         self._append(
-            "notification_projected",
+            "notification_submission_recorded",
             state,
             notification_id=getattr(receipt, "notification_id", None),
             status=getattr(receipt, "status", "accepted"),

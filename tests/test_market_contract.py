@@ -11,13 +11,13 @@ from kairospy.infrastructure.contracts.market import (
 def test_market_view_key_matches_rust_contract_path() -> None:
     key = MarketViewKey(
         scope_key="market:binance:spot:BTCUSDT",
-        source_id="binance",
+        provider="binance",
         kind=MarketViewKind.BAR,
         qualifier="1m",
     )
 
     assert key.canonical_key() == (
-        "scope=market:binance:spot:BTCUSDT;source=binance;view=bar;qualifier=1m"
+        "scope=market:binance:spot:BTCUSDT;provider=binance;view=bar;qualifier=1m"
     )
     assert key.resource_id() == (
         "scope-market%3Abinance%3Aspot%3ABTCUSDT-binance-bar-1m"

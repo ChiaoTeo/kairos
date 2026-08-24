@@ -32,8 +32,8 @@ def _reference_database(tmp_path: Path) -> Path:
             id INTEGER PRIMARY KEY, generation INTEGER, event_sequence INTEGER
         );
         INSERT INTO reference_meta VALUES(1, 3, 7);
-        CREATE TABLE reference_entities_current(
-            entity_id TEXT PRIMARY KEY, entity_type TEXT, status TEXT, payload TEXT
+        CREATE TABLE reference_exchanges_current(
+            exchange_id TEXT PRIMARY KEY, status TEXT, payload TEXT
         );
         CREATE TABLE reference_assets_current(
             asset_id TEXT PRIMARY KEY, code TEXT, asset_class TEXT, status TEXT,
@@ -88,11 +88,10 @@ def _reference_database(tmp_path: Path) -> Path:
         ),
     )
     records = {
-        "reference_entities_current": (
-            ("entity_id", "entity_type", "status"),
+        "reference_exchanges_current": (
+            ("exchange_id", "status"),
             {
-                "entity_id": "exchange:binance",
-                "entity_type": "exchange",
+                "exchange_id": "exchange:binance",
                 "name": "Binance",
                 "status": "active",
             },
@@ -211,7 +210,7 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
     )
     assert len(client.markets(asset_code="BTC", active_only=True)) == 1
     assert len(client.assets(code="BTC", asset_class="crypto")) == 1
-    assert len(client.entities(entity_type="exchange", active_only=True)) == 1
+    assert len(client.exchanges(active_only=True)) == 1
     assert (
         len(
             client.listings(
@@ -230,7 +229,7 @@ def test_reference_queries_search_names_and_escape_sql_wildcards(tmp_path) -> No
     assert [value["code"] for value in client.assets(query="bitco", limit=10)] == [
         "BTC"
     ]
-    assert [value["entityId"] for value in client.entities(query="BIN", limit=10)] == [
+    assert [value["exchangeId"] for value in client.exchanges(query="BIN", limit=10)] == [
         "exchange:binance"
     ]
     assert [
@@ -339,7 +338,7 @@ def test_reference_application_exposes_typed_catalog_and_access_queries(
     )
     market_id = MarketId("market:binance:spot:BTCUSDT")
 
-    assert application.require_entity("exchange:binance").name == "Binance"
+    assert application.require_exchange("exchange:binance").name == "Binance"
     assert isinstance(application.require_asset("asset:crypto:BTC"), Asset)
     instrument = application.require_instrument(InstrumentId("instrument:spot:BTC"))
     assert isinstance(instrument, Instrument)
@@ -448,7 +447,7 @@ def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
         )
     )
     assert set(fixture) == {
-        "entities",
+        "exchanges",
         "assets",
         "instruments",
         "listings",

@@ -8,11 +8,13 @@ use kairos_account::{
     AccountOpenOrdersResult, AccountOverviewResult, AccountPositionsResult,
     AccountProviderConnectionArgs, AccountQueryCompleteness, BindCredentialRequest,
     CliAccountApplication, ConnectAccountProviderRequest, ConnectedAccountApplication,
-    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+    ConnectedAccountCurrentResult, ConnectedAccountOutput, CreateCredentialRequest,
+    ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
 };
 use kairos_account_contract::{AccountSegmentsRequest, SimulatedSettlement};
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render, render_compact_table};
+use serde::Serialize;
 
 /// One-shot account inspection and mutation commands.
 #[tokio::main(flavor = "current_thread")]
@@ -274,12 +276,36 @@ enum StandaloneCommand {
         provider: String,
         #[arg(long, default_value = "readonly")]
         role: String,
-        #[arg(long, help = "Optional; prefer KAIROS_CREDENTIAL_<ID>_API_KEY")]
+        #[arg(
+            long,
+            hide = true,
+            help = "Legacy plaintext input; new writes reject it"
+        )]
         api_key: Option<String>,
-        #[arg(long, help = "Optional; prefer KAIROS_CREDENTIAL_<ID>_API_SECRET")]
+        #[arg(
+            long,
+            hide = true,
+            help = "Legacy plaintext input; new writes reject it"
+        )]
         secret: Option<String>,
-        #[arg(long, default_value = "")]
-        passphrase: String,
+        #[arg(
+            long,
+            hide = true,
+            help = "Legacy plaintext input; new writes reject it"
+        )]
+        passphrase: Option<String>,
+        #[arg(long, value_parser = ["env", "file"])]
+        api_key_source: Option<String>,
+        #[arg(long)]
+        api_key_ref: Option<String>,
+        #[arg(long, value_parser = ["env", "file"])]
+        api_secret_source: Option<String>,
+        #[arg(long)]
+        api_secret_ref: Option<String>,
+        #[arg(long, value_parser = ["env", "file"])]
+        passphrase_source: Option<String>,
+        #[arg(long)]
+        passphrase_ref: Option<String>,
     },
     CredentialShow {
         #[arg(long)]
@@ -501,11 +527,7 @@ async fn run_standalone(
             segment,
             access,
         } => {
-            print_json(serde_json::to_value(app.trading_binding(
-                account_id,
-                segment.as_deref(),
-                access,
-            )?)?);
+            print_json(app.trading_binding(account_id, segment.as_deref(), access)?);
             return Ok(());
         },
         StandaloneCommand::Overview => {
@@ -693,6 +715,12 @@ async fn run_standalone(
             api_key,
             secret,
             passphrase,
+            api_key_source,
+            api_key_ref,
+            api_secret_source,
+            api_secret_ref,
+            passphrase_source,
+            passphrase_ref,
         } => {
             print_json(app.create_credential(CreateCredentialRequest {
                 credential_id: credential_id.clone(),
@@ -701,6 +729,12 @@ async fn run_standalone(
                 api_key: api_key.clone(),
                 secret: secret.clone(),
                 passphrase: passphrase.clone(),
+                api_key_source: api_key_source.clone(),
+                api_key_ref: api_key_ref.clone(),
+                secret_source: api_secret_source.clone(),
+                secret_ref: api_secret_ref.clone(),
+                passphrase_source: passphrase_source.clone(),
+                passphrase_ref: passphrase_ref.clone(),
             })?);
             return Ok(());
         },
@@ -743,7 +777,7 @@ async fn run_standalone(
     }
 }
 
-fn print_json(value: serde_json::Value) {
+fn print_json(value: impl Serialize) {
     println!("{}", render(&value, selected_output_format()));
 }
 
@@ -756,7 +790,7 @@ fn selected_output_format() -> OutputFormat {
 
 fn print_account_list(value: AccountListResult) -> Result<(), serde_json::Error> {
     let output = match selected_output_format() {
-        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Json => render(&value, OutputFormat::Json),
         OutputFormat::Text | OutputFormat::Table => render_account_list(&value),
     };
     println!("{output}");
@@ -765,7 +799,7 @@ fn print_account_list(value: AccountListResult) -> Result<(), serde_json::Error>
 
 fn print_account_overview(value: AccountOverviewResult) -> Result<(), serde_json::Error> {
     let output = match selected_output_format() {
-        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Json => render(&value, OutputFormat::Json),
         OutputFormat::Text | OutputFormat::Table => render_account_overview(&value),
     };
     println!("{output}");
@@ -792,7 +826,7 @@ fn render_account_overview(value: &AccountOverviewResult) -> String {
         vec!["环境".into(), localized_status(&value.identity.environment)],
         vec![
             "集成提供方".into(),
-            value.connection.integration_provider.to_string(),
+            value.connection.integration_adapter.to_string(),
         ],
         vec![
             "配置账户模式".into(),
@@ -991,11 +1025,11 @@ fn localized_status(value: &str) -> String {
     match value {
         "live" => "实盘",
         "standalone" => "独立查询",
-        "direct_provider" => "Provider 直连",
+        "direct_provider" => "接入直连",
         "local_registry" => "本地配置",
         "complete" => "完整",
         "partial" => "部分完整",
-        "unavailable" => "不可用（Provider 未提供）",
+        "unavailable" => "不可用（接入未提供）",
         "unsupported" => "不支持",
         "not_applicable" => "不适用",
         "not_queried" => "尚未查询",
@@ -1022,7 +1056,7 @@ fn localized_status(value: &str) -> String {
 
 fn print_account_fees(value: AccountFeesResult) -> Result<(), serde_json::Error> {
     let output = match selected_output_format() {
-        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Json => render(&value, OutputFormat::Json),
         OutputFormat::Text | OutputFormat::Table => render_account_fees(&value),
     };
     println!("{output}");
@@ -1102,7 +1136,7 @@ fn render_account_fees(value: &AccountFeesResult) -> String {
 
 fn print_account_open_orders(value: AccountOpenOrdersResult) -> Result<(), serde_json::Error> {
     let output = match selected_output_format() {
-        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Json => render(&value, OutputFormat::Json),
         OutputFormat::Text | OutputFormat::Table => render_account_open_orders(&value),
     };
     println!("{output}");
@@ -1190,7 +1224,7 @@ fn render_account_open_orders(value: &AccountOpenOrdersResult) -> String {
 
 fn print_account_earn_holdings(value: AccountEarnHoldingsResult) -> Result<(), serde_json::Error> {
     let output = match selected_output_format() {
-        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Json => render(&value, OutputFormat::Json),
         OutputFormat::Text | OutputFormat::Table => render_account_earn_holdings(&value),
     };
     println!("{output}");
@@ -1273,7 +1307,7 @@ fn render_account_earn_holdings(value: &AccountEarnHoldingsResult) -> String {
 
 fn print_account_balances(value: AccountBalancesResult) -> Result<(), serde_json::Error> {
     let output = match selected_output_format() {
-        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Json => render(&value, OutputFormat::Json),
         OutputFormat::Text | OutputFormat::Table => render_account_balances(&value),
     };
     println!("{output}");
@@ -1282,7 +1316,7 @@ fn print_account_balances(value: AccountBalancesResult) -> Result<(), serde_json
 
 fn print_account_positions(value: AccountPositionsResult) -> Result<(), serde_json::Error> {
     let output = match selected_output_format() {
-        OutputFormat::Json => render(&serde_json::to_value(&value)?, OutputFormat::Json),
+        OutputFormat::Json => render(&value, OutputFormat::Json),
         OutputFormat::Text | OutputFormat::Table => render_account_positions(&value),
     };
     println!("{output}");
@@ -1618,43 +1652,38 @@ async fn run_connected(
     Ok(())
 }
 
-fn print_connected_result(command: &ConnectedCommand, value: serde_json::Value) {
+fn print_connected_result(command: &ConnectedCommand, value: ConnectedAccountOutput) {
     let output = match (selected_output_format(), command) {
         (OutputFormat::Text | OutputFormat::Table, ConnectedCommand::Balances { .. }) => {
-            render_connected_balances(&value)
+            match &value {
+                ConnectedAccountOutput::Current(current) => render_connected_balances(current),
+                _ => render(&value, selected_output_format()),
+            }
         },
         (format, _) => render(&value, format),
     };
     println!("{output}");
 }
 
-fn render_connected_balances(value: &serde_json::Value) -> String {
-    let account_id = value["account_id"].as_str().unwrap_or("unknown");
-    let rows = value["segments"]
-        .as_array()
-        .into_iter()
-        .flatten()
+fn render_connected_balances(value: &ConnectedAccountCurrentResult) -> String {
+    let rows = value
+        .segments
+        .iter()
         .flat_map(|segment| {
-            let segment_key = segment["segment_key"].as_str().unwrap_or("—").to_owned();
-            let freshness = segment["freshness"].as_str().unwrap_or("—").to_owned();
-            segment["balances"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(move |balance| {
-                    vec![
-                        segment_key.clone(),
-                        balance["asset_code"].as_str().unwrap_or("—").to_owned(),
-                        balance["total"].as_str().unwrap_or("—").to_owned(),
-                        balance["available"].as_str().unwrap_or("—").to_owned(),
-                        balance["locked"].as_str().unwrap_or("—").to_owned(),
-                        freshness.clone(),
-                    ]
-                })
+            segment.balances.iter().map(move |balance| {
+                vec![
+                    segment.segment_key.clone(),
+                    balance.asset_code.clone().unwrap_or_else(|| "—".to_owned()),
+                    balance.total.clone(),
+                    balance.available.clone().unwrap_or_else(|| "—".to_owned()),
+                    balance.locked.clone().unwrap_or_else(|| "—".to_owned()),
+                    segment.freshness.clone(),
+                ]
+            })
         })
         .collect::<Vec<_>>();
     if rows.is_empty() {
-        return format!("No balances for account {account_id}.");
+        return format!("No balances for account {}.", value.account_id);
     }
     render_compact_table(
         &[
@@ -1700,26 +1729,29 @@ async fn run_runtime_control(
     application: &ConnectedAccountApplication,
     args: &Cli,
     command: &ConnectedCommand,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    match command {
+) -> Result<ConnectedAccountOutput, Box<dyn std::error::Error>> {
+    let value = match command {
         ConnectedCommand::Fill { fill } => {
             if !is_paper_or_simulated(args.connection.provider.as_str()) {
                 return Err("simulated fill is available only for paper/simulated Account".into());
             }
-            application
-                .apply_simulated_settlement(fill.to_contract()?)
-                .await
+            ConnectedAccountOutput::Command(
+                application
+                    .apply_simulated_settlement(fill.to_contract()?)
+                    .await?,
+            )
         },
         ConnectedCommand::Refresh { .. } => {
             let request = account_segments_request(command)?;
-            application.refresh(request).await
+            ConnectedAccountOutput::Refresh(application.refresh(request).await?)
         },
         ConnectedCommand::Reconcile { .. } => {
             let request = account_segments_request(command)?;
-            application.reconcile(request).await
+            ConnectedAccountOutput::Refresh(application.reconcile(request).await?)
         },
         _ => unreachable!("runtime control command already matched"),
-    }
+    };
+    Ok(value)
 }
 
 fn account_segments_request(
@@ -1743,25 +1775,34 @@ fn read_mmap_query(
     application: &ConnectedAccountApplication,
     account_id: &str,
     command: &ConnectedCommand,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+) -> Result<ConnectedAccountOutput, Box<dyn std::error::Error>> {
     if let ConnectedCommand::OpenOrders { symbol, limit } = command {
-        return application.observed_orders(account_id, symbol.as_deref(), *limit);
+        return Ok(ConnectedAccountOutput::ObservedOrders(
+            application.observed_orders(account_id, symbol.as_deref(), *limit)?,
+        ));
     }
-    match command {
+    let value = match command {
         ConnectedCommand::Snapshot { symbol } => {
-            application.snapshot(account_id, symbol.as_deref())
+            ConnectedAccountOutput::Current(application.snapshot(account_id, symbol.as_deref())?)
         },
         ConnectedCommand::Balances {
             segments,
             include_zero,
             page,
             page_size,
-        } => application.balances(account_id, segments, *include_zero, *page, *page_size),
-        ConnectedCommand::Positions { segments, symbol } => {
-            application.positions(account_id, segments, symbol.as_deref())
-        },
+        } => ConnectedAccountOutput::Current(application.balances(
+            account_id,
+            segments,
+            *include_zero,
+            *page,
+            *page_size,
+        )?),
+        ConnectedCommand::Positions { segments, symbol } => ConnectedAccountOutput::Current(
+            application.positions(account_id, segments, symbol.as_deref())?,
+        ),
         _ => unreachable!("runtime control command routed to mmap"),
-    }
+    };
+    Ok(value)
 }
 
 fn resolve_runtime_account_resource(
@@ -1796,13 +1837,12 @@ fn resolve_runtime_account_resource(
 mod cli_tests {
     use clap::Parser;
     use kairos_account::{
-        AccountBalanceItem, AccountBalancesResult, AccountFeesResult, AccountListItem,
-        AccountListResult, AccountOpenOrdersResult, AccountPositionItem, AccountPositionsResult,
-        AccountQueryCompleteness, AccountQueryError,
+        AccountAdapterKind, AccountBalanceItem, AccountBalancesResult, AccountFeesResult,
+        AccountListItem, AccountListResult, AccountOpenOrdersResult, AccountPositionItem,
+        AccountPositionsResult, AccountQueryCompleteness, AccountQueryError,
     };
     use kairos_primitives::account::{AccountId, SegmentKey};
     use kairos_primitives::decimal::DecimalParts;
-    use kairos_primitives::integration::ProviderId;
     use kairos_primitives::reference::Currency;
 
     use super::{
@@ -1932,8 +1972,7 @@ mod cli_tests {
                     alias: "manual-live-readonly".into(),
                     broker: kairos_primitives::account::BrokerId::new("binance").unwrap(),
                     exchange: Some("binance".into()),
-                    integration_provider: ProviderId::new("binance").unwrap(),
-                    provider: ProviderId::new("binance").unwrap(),
+                    integration_adapter: AccountAdapterKind::new("binance").unwrap(),
                     environment: "live".into(),
                     segments: ["funding", "spot", "usd_m_futures"]
                         .map(|value| SegmentKey::new(value).unwrap())
@@ -1950,8 +1989,7 @@ mod cli_tests {
                     alias: "paper-account".into(),
                     broker: kairos_primitives::account::BrokerId::new("paper").unwrap(),
                     exchange: Some("paper".into()),
-                    integration_provider: ProviderId::new("paper").unwrap(),
-                    provider: ProviderId::new("paper").unwrap(),
+                    integration_adapter: AccountAdapterKind::new("paper").unwrap(),
                     environment: "paper".into(),
                     segments: vec![SegmentKey::new("spot").unwrap()],
                     products: vec!["paper".into()],
@@ -2153,6 +2191,6 @@ mod cli_tests {
             issues: Vec::new(),
         });
         assert!(output.contains("0.001"));
-        assert!(output.contains("不可用（Provider 未提供）"));
+        assert!(output.contains("不可用（接入未提供）"));
     }
 }

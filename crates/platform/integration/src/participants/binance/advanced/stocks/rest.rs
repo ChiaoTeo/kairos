@@ -81,7 +81,7 @@ impl MarketQuoteQuery for BinanceStocksRestConnection {
                     &[("symbol", symbol.as_str().into())],
                 )
                 .await?;
-            quotes.push(market::quote(symbol, &value)?);
+            quotes.push(market::equity_quote(symbol, &value)?);
         }
         Ok(quotes)
     }
@@ -310,4 +310,70 @@ fn payload(error: impl std::fmt::Display) -> IntegrationError {
 
 fn participant() -> ParticipantRef {
     ParticipantRef::new(ParticipantKind::Exchange, "binance").expect("static Binance participant")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    use secrecy::SecretString;
+
+    use super::*;
+    use crate::participants::binance::{BinanceCredential, BinanceRestConfig};
+
+    #[tokio::test]
+    async fn latest_equity_quote_uses_keyed_endpoint_and_stock_size_fields() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_line = request.lines().next().unwrap_or_default();
+            assert!(request_line.contains("/sapi/v1/equity/market/quote?symbol=AAPL"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("x-mbx-apikey: test-api-key")
+            );
+            assert!(!request_line.contains("signature="));
+            let body = r#"{"symbol":"AAPL","bidPrice":"180.50","askPrice":"180.52","bidSize":100,"askSize":200}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let mut connection = BinanceStocksRestConnection::new(
+            crate::ConnectionKey::new("market.binance.equity.test").unwrap(),
+            BinanceRestConfig {
+                environment: "test".into(),
+                endpoint,
+                credential: Some(BinanceCredential {
+                    principal_id: "test".into(),
+                    api_key: SecretString::from("test-api-key".to_owned()),
+                    secret: SecretString::from("test-secret".to_owned()),
+                }),
+            },
+        )
+        .unwrap();
+        let symbol = ParticipantSymbol::new("AAPL").unwrap();
+
+        let quote = connection
+            .fetch_quotes(std::slice::from_ref(&symbol))
+            .await
+            .unwrap()
+            .remove(0);
+
+        server.join().unwrap();
+        assert_eq!(quote.symbol, symbol);
+        assert_eq!(quote.bid_price.unwrap().to_string(), "180.5");
+        assert_eq!(quote.ask_price.unwrap().to_string(), "180.52");
+        assert_eq!(quote.bid_quantity.unwrap().to_string(), "100");
+        assert_eq!(quote.ask_quantity.unwrap().to_string(), "200");
+        assert!(quote.last_price.is_none());
+    }
 }

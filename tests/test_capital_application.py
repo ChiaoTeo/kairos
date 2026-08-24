@@ -88,7 +88,7 @@ def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
                 FundingObjectiveStatus.ACCEPTED,
             )
 
-    class Projection:
+    class CurrentView:
         def availability(self, **query):
             return CapitalAvailability(
                 query["capital_group_id"],
@@ -102,7 +102,7 @@ def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
 
     capital = CapitalApplication(
         Commands(),
-        Projection(),
+        CurrentView(),
         strategy_id="basis",
         launch_id="launch-a",
         instance_id="instance-a",
@@ -166,13 +166,13 @@ def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -
 
 
 def test_availability_transport_failure_degrades_without_blocking_strategy() -> None:
-    class Projection:
+    class CurrentView:
         def availability(self, **_query):
             raise RuntimeError("snapshot is warming up")
 
     capital = CapitalApplication(
         object(),
-        Projection(),
+        CurrentView(),
         strategy_id="basis",
         launch_id="launch-a",
         instance_id="instance-a",

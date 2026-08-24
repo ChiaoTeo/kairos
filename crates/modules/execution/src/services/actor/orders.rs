@@ -155,7 +155,8 @@ impl ExecutionActor {
                 .map_err(|error| error.to_string())?,
             CommitmentBasis::ContractNotional { .. } => {
                 return Err(
-                    "contract commitment resizing requires product-specific semantics".into(),
+                    "contract commitment resizing requires execution-channel-specific semantics"
+                        .into(),
                 );
             },
             CommitmentBasis::BaseQuantity

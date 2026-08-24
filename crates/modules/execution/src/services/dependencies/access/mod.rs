@@ -12,7 +12,7 @@ pub(super) struct ExecutionDependencyAccess {
     pub(super) risk: Option<kairos_risk_contract::RiskClient>,
     pub(super) risk_actor_id: Option<String>,
     pub(super) dependency_watermarks: DependencyWatermarks,
-    pub(super) projection: DependencyProjectionRuntime,
+    pub(super) dependency_state: DependencyStateRuntime,
 }
 
 impl ExecutionDependencyAccess {
@@ -34,7 +34,7 @@ impl ExecutionDependencyAccess {
     }
     /// Backtest market events are delivered directly to the deterministic
     /// simulator.  They may be Bars without a live Quote snapshot, so the
-    /// live quote projection must not reject an otherwise valid intent.
+    /// live quote view must not reject an otherwise valid intent.
     pub(super) fn without_market_snapshot(mut self) -> Self {
         self.market_snapshot = None;
         self.market = None;
@@ -44,7 +44,7 @@ impl ExecutionDependencyAccess {
     pub(super) fn from_manifest_with_reference_snapshot(
         system: &mut kairos_conflux::ConfluxSystem,
         path: impl AsRef<Path>,
-        reference_snapshot: Option<kairos_reference_contract::ReferenceProjectionSnapshot>,
+        reference_snapshot: Option<kairos_reference_contract::ExecutionReferenceSnapshot>,
     ) -> Result<Self, String> {
         let manifest_path = path.as_ref().to_path_buf();
         let value: Value = serde_json::from_slice(
@@ -123,11 +123,11 @@ impl ExecutionDependencyAccess {
             .and_then(Value::as_str)
             .unwrap_or("default")
             .to_owned();
-        let reference_projection = reference_snapshot.map(super::project_reference_snapshot);
-        let projection = DependencyProjectionRuntime::start(
+        let reference_dependency_state = reference_snapshot.map(super::reference_dependency_state);
+        let dependency_state = DependencyStateRuntime::start(
             &accounts,
             market_snapshot.as_deref(),
-            reference_projection,
+            reference_dependency_state,
             risk.clone(),
         );
         Ok(Self {
@@ -138,16 +138,19 @@ impl ExecutionDependencyAccess {
             risk,
             risk_actor_id,
             dependency_watermarks: DependencyWatermarks::default(),
-            projection,
+            dependency_state,
         })
     }
 
-    pub(super) fn account_projection(&self, account_id: &str) -> Result<AccountProjection, String> {
-        self.projection.account(account_id)
+    pub(super) fn account_dependency_state(
+        &self,
+        account_id: &str,
+    ) -> Result<AccountDependencyState, String> {
+        self.dependency_state.account(account_id)
     }
 
-    pub(super) fn reference_projection(&self) -> Result<ReferenceProjection, String> {
-        self.projection.reference()
+    pub(super) fn reference_dependency_state(&self) -> Result<ReferenceDependencyState, String> {
+        self.dependency_state.reference()
     }
 
     pub(super) fn read_market_quote(
@@ -226,23 +229,23 @@ impl ExecutionDependencyAccess {
     }
 
     pub(super) fn refresh_watermarks(&mut self) {
-        self.dependency_watermarks = self.projection.watermarks();
+        self.dependency_watermarks = self.dependency_state.watermarks();
     }
 
     /// Backtest commands are serialized by the StrategyHost. Refresh the
-    /// account projection synchronously at that barrier so a fill settled by
+    /// account dependency state synchronously at that barrier so a fill settled by
     /// Account is visible to the very next target-position intent.
-    pub(super) fn refresh_account_projections(&mut self) -> Result<(), String> {
-        self.projection.refresh_accounts(&self.accounts)
+    pub(super) fn refresh_account_dependency_states(&mut self) -> Result<(), String> {
+        self.dependency_state.refresh_accounts(&self.accounts)
     }
 
     pub(super) fn reference_market(
         &self,
         market_id: Option<&str>,
         instrument_id: &str,
-    ) -> Result<ReferenceMarket, String> {
-        let projected = self.reference_projection()?;
-        let markets = projected
+    ) -> Result<Market, String> {
+        let reference_state = self.reference_dependency_state()?;
+        let markets = reference_state
             .markets
             .into_iter()
             .filter(|value| {
@@ -265,8 +268,8 @@ impl ExecutionDependencyAccess {
     }
 
     pub(super) fn health(&self, account_id: &str) -> Result<(), String> {
-        let projection = self.account_projection(account_id)?;
-        let response = projection.health;
+        let account_state = self.account_dependency_state(account_id)?;
+        let response = account_state.health;
         if response.status != kairos_account_contract::AccountHealthStatus::Ready
             || response.lease_valid == Some(false)
         {

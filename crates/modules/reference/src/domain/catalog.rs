@@ -2,12 +2,14 @@
 
 use std::collections::BTreeMap;
 
-use kairos_primitives::reference::{InstrumentId, ListingId, MarketId, ReferenceStatus};
+use kairos_primitives::reference::{
+    ExchangeId, InstrumentId, ListingId, MarketId, ReferenceStatus,
+};
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Asset, Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceError,
+    Asset, Exchange, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceError,
     ReferenceResult,
 };
 
@@ -34,7 +36,7 @@ impl ManualUpsertPolicy {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceCatalog {
-    pub entities: BTreeMap<String, Entity>,
+    pub exchanges: BTreeMap<ExchangeId, Exchange>,
     pub assets: BTreeMap<String, Asset>,
     pub instruments: BTreeMap<InstrumentId, Instrument>,
     pub listings: BTreeMap<ListingId, Listing>,
@@ -46,18 +48,18 @@ pub struct ReferenceCatalog {
 
 impl ReferenceCatalog {
     pub fn apply(&mut self, mut incoming: ProviderCatalog, now: UnixNanos) -> Vec<LifecycleEvent> {
-        for entity in &mut incoming.entities {
-            entity.normalize_canonical_name();
+        for exchange in &mut incoming.exchanges {
+            exchange.normalize_canonical_name();
         }
-        let previous_entities = std::mem::take(&mut self.entities);
+        let previous_exchanges = std::mem::take(&mut self.exchanges);
         let previous_assets = std::mem::take(&mut self.assets);
         let previous_instruments = std::mem::take(&mut self.instruments);
         let previous_listings = std::mem::take(&mut self.listings);
         let previous_markets = std::mem::take(&mut self.markets);
-        self.entities = incoming
-            .entities
+        self.exchanges = incoming
+            .exchanges
             .into_iter()
-            .map(|v| (v.entity_id.clone(), v))
+            .map(|v| (v.exchange_id.clone(), v))
             .collect();
         self.assets = incoming
             .assets
@@ -79,8 +81,8 @@ impl ReferenceCatalog {
         // missing provider fact is expressed as an effective lifecycle
         // transition, never as a hard delete that makes historical identity
         // or an already-committed event impossible to resolve.
-        for (id, previous) in &previous_entities {
-            self.entities.entry(id.clone()).or_insert_with(|| {
+        for (id, previous) in &previous_exchanges {
+            self.exchanges.entry(id.clone()).or_insert_with(|| {
                 let mut retained = previous.clone();
                 retained.status = ReferenceStatus::Inactive;
                 retained
@@ -137,7 +139,7 @@ impl ReferenceCatalog {
             };
         }
 
-        diff_records!("entity", previous_entities, self.entities);
+        diff_records!("exchange", previous_exchanges, self.exchanges);
         diff_records!("asset", previous_assets, self.assets);
         diff_records!("instrument", previous_instruments, self.instruments);
         diff_records!("listing", previous_listings, self.listings);
@@ -220,7 +222,7 @@ impl ReferenceCatalog {
                 .get()
                 .saturating_add(events.len() as u64),
         );
-        if previous_entities != self.entities
+        if previous_exchanges != self.exchanges
             || previous_assets != self.assets
             || previous_instruments != self.instruments
             || previous_listings != self.listings
@@ -369,7 +371,7 @@ impl ReferenceCatalog {
 
     pub fn provider_catalog(&self) -> ProviderCatalog {
         ProviderCatalog {
-            entities: self.entities.values().cloned().collect(),
+            exchanges: self.exchanges.values().cloned().collect(),
             assets: self.assets.values().cloned().collect(),
             instruments: self.instruments.values().cloned().collect(),
             listings: self.listings.values().cloned().collect(),
@@ -426,11 +428,11 @@ fn reject_provider_owned_upsert(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use kairos_primitives::reference::{
-        AssetClass, AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol,
+        AssetClass, AssetId, ExchangeId, InstrumentId, ListingId, MarketId, Symbol,
     };
 
     use super::{
-        Asset, Entity, Instrument, LifecycleEvent, Listing, ManualUpsertPolicy, Market,
+        Asset, Exchange, Instrument, LifecycleEvent, Listing, ManualUpsertPolicy, Market,
         ProviderCatalog, ReferenceCatalog,
     };
 
@@ -456,9 +458,8 @@ mod tests {
 
     fn catalog_with_market(status: &str) -> ProviderCatalog {
         ProviderCatalog {
-            entities: vec![Entity {
-                entity_id: "exchange:test".into(),
-                entity_type: "exchange".into(),
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new("exchange:test").unwrap(),
                 name: "Test Exchange".into(),
                 status: "active".into(),
                 ..Default::default()
@@ -473,7 +474,7 @@ mod tests {
             listings: vec![Listing {
                 listing_id: listing_id("listing:test"),
                 instrument_id: instrument_id("instrument:test"),
-                exchange_id: Exchange::new("exchange:test").unwrap(),
+                exchange_id: ExchangeId::new("exchange:test").unwrap(),
                 exchange_symbol: Symbol::new("TEST").unwrap(),
                 status: status.into(),
                 effective_from_unix_nanos: 1.into(),
@@ -483,7 +484,7 @@ mod tests {
                 market_id: market_id("market:test"),
                 instrument_id: instrument_id("instrument:test"),
                 listing_id: Some(listing_id("listing:test")),
-                exchange_id: Exchange::new("exchange:test").unwrap(),
+                exchange_id: ExchangeId::new("exchange:test").unwrap(),
                 instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
                 venue_symbol: Some(kairos_primitives::reference::Symbol::new("TEST").unwrap()),
                 status: status.into(),
@@ -528,17 +529,15 @@ mod tests {
         let mut catalog = ReferenceCatalog::default();
         let events = catalog.apply(
             ProviderCatalog {
-                entities: vec![
-                    Entity {
-                        entity_id: "exchange:arcx".into(),
-                        entity_type: "exchange".into(),
+                exchanges: vec![
+                    Exchange {
+                        exchange_id: ExchangeId::new("exchange:arcx").unwrap(),
                         name: "Exchange".into(),
                         status: "active".into(),
                         ..Default::default()
                     },
-                    Entity {
-                        entity_id: "exchange:bats".into(),
-                        entity_type: "exchange".into(),
+                    Exchange {
+                        exchange_id: ExchangeId::new("exchange:bats").unwrap(),
                         name: "Exchange".into(),
                         status: "active".into(),
                         ..Default::default()
@@ -549,8 +548,8 @@ mod tests {
             10.into(),
         );
 
-        assert_eq!(catalog.entities["exchange:arcx"].name, "NYSE Arca");
-        assert_eq!(catalog.entities["exchange:bats"].name, "Cboe BZX Exchange");
+        assert_eq!(catalog.exchanges["exchange:arcx"].name, "NYSE Arca");
+        assert_eq!(catalog.exchanges["exchange:bats"].name, "Cboe BZX Exchange");
         assert_eq!(events.len(), 2);
     }
 
@@ -575,7 +574,7 @@ mod tests {
             listings: vec![Listing {
                 listing_id: listing_id("listing:missing"),
                 instrument_id: instrument_id("instrument:missing"),
-                exchange_id: Exchange::new("exchange:missing").unwrap(),
+                exchange_id: ExchangeId::new("exchange:missing").unwrap(),
                 exchange_symbol: Symbol::new("MISSING").unwrap(),
                 status: "active".into(),
                 effective_from_unix_nanos: 1.into(),
@@ -747,7 +746,7 @@ mod tests {
                 source_id: Some("binance-spot".into()),
                 listing_id: listing_id("listing:binance:spot:BTC:USDT"),
                 instrument_id: instrument_id("instrument:spot:BTC-USDT"),
-                exchange_id: Exchange::new("exchange:binance").unwrap(),
+                exchange_id: ExchangeId::new("exchange:binance").unwrap(),
                 exchange_symbol: Symbol::new("BTCUSDT").unwrap(),
                 status: "active".into(),
                 effective_from_unix_nanos: 1.into(),
@@ -760,7 +759,7 @@ mod tests {
                 Listing {
                     listing_id: listing_id("listing:binance:spot:BTC:USDT"),
                     instrument_id: instrument_id("instrument:spot:BTC-USDT"),
-                    exchange_id: Exchange::new("exchange:binance").unwrap(),
+                    exchange_id: ExchangeId::new("exchange:binance").unwrap(),
                     exchange_symbol: Symbol::new("BTC-USDT").unwrap(),
                     status: "active".into(),
                     effective_from_unix_nanos: 1.into(),

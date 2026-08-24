@@ -1,4 +1,4 @@
-//! Reference domain entities, errors, and catalog aggregate.
+//! Reference domain exchanges, errors, and catalog aggregate.
 
 mod catalog;
 mod entities;

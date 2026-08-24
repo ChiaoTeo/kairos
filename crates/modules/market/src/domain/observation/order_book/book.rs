@@ -1,4 +1,4 @@
-use kairos_primitives::market::SourceId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::time::{Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ pub(crate) struct DepthCursor {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OrderBook {
-    pub source_id: SourceId,
+    pub provider: Provider,
     pub market_id: MarketId,
     pub instrument_id: InstrumentId,
     pub sequence: Sequence,
@@ -52,8 +52,8 @@ impl OrderBook {
         bids: Vec<PriceLevel>,
         asks: Vec<PriceLevel>,
     ) -> Result<Self, String> {
-        Self::snapshot_with_source(
-            SourceId::new("market").expect("canonical market source is valid"),
+        Self::snapshot_with_provider(
+            Provider::new("market").expect("canonical market provider is valid"),
             market_id,
             instrument_id,
             sequence,
@@ -63,8 +63,8 @@ impl OrderBook {
         )
     }
 
-    pub fn snapshot_with_source(
-        source_id: SourceId,
+    pub fn snapshot_with_provider(
+        provider: Provider,
         market_id: impl Into<String>,
         instrument_id: impl Into<String>,
         sequence: impl Into<Sequence>,
@@ -78,7 +78,7 @@ impl OrderBook {
         let instrument_id = InstrumentId::new(instrument_id.into())
             .map_err(|error| format!("invalid instrument id: {error}"))?;
         let mut value = Self {
-            source_id,
+            provider,
             market_id,
             instrument_id,
             sequence,
@@ -101,7 +101,7 @@ impl OrderBook {
     }
 
     pub fn key(&self) -> String {
-        format!("{}:{}", self.source_id, self.market_id)
+        format!("{}:{}", self.provider, self.market_id)
     }
 
     pub fn canonical_checksum(&self) -> String {
@@ -123,7 +123,7 @@ impl OrderBook {
     }
 
     pub(super) fn validate(&self) -> Result<(), String> {
-        if self.source_id.trim().is_empty()
+        if self.provider.trim().is_empty()
             || self.market_id.trim().is_empty()
             || self.instrument_id.trim().is_empty()
         {

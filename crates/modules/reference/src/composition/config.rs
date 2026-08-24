@@ -1,40 +1,107 @@
 //! Reference-owned workspace configuration schema.
 
-use std::collections::BTreeMap;
-
 use serde::Deserialize;
 
 use crate::domain::{ReferenceError, ReferenceResult, SourceTickBudget};
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceProviders {
+    #[serde(default = "default_binance_provider")]
+    pub binance: BinanceReferenceProvider,
+    #[serde(default = "default_public_provider")]
+    pub okx: PublicReferenceProvider,
+    #[serde(default = "default_public_provider")]
+    pub hyperliquid: PublicReferenceProvider,
+    #[serde(default)]
+    pub massive: CredentialedReferenceProvider,
+}
+
+impl Default for ReferenceProviders {
+    fn default() -> Self {
+        Self {
+            binance: default_binance_provider(),
+            okx: default_public_provider(),
+            hyperliquid: default_public_provider(),
+            massive: CredentialedReferenceProvider::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BinanceReferenceProvider {
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    /// When present, also enables the credentialed Binance equity catalog.
+    pub credential_id: Option<String>,
+    #[serde(default)]
+    pub endpoints: BinanceReferenceEndpoints,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PublicReferenceProvider {
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    pub endpoint: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct ReferenceProviderConfig {
-    pub enabled: Option<bool>,
+#[serde(deny_unknown_fields)]
+pub struct CredentialedReferenceProvider {
+    #[serde(default)]
+    pub enabled: bool,
     pub credential_id: Option<String>,
     pub endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct ReferenceProductConfig {
-    pub enabled: Option<bool>,
-    pub credential_id: Option<String>,
-    pub endpoint: Option<String>,
+#[serde(deny_unknown_fields)]
+pub struct BinanceReferenceEndpoints {
+    pub spot: Option<String>,
+    pub usd_m_futures: Option<String>,
+    pub coin_m_futures: Option<String>,
+    pub options: Option<String>,
+    pub equity: Option<String>,
+}
+
+const fn enabled_by_default() -> bool {
+    true
+}
+
+fn default_binance_provider() -> BinanceReferenceProvider {
+    BinanceReferenceProvider {
+        enabled: true,
+        credential_id: None,
+        endpoints: BinanceReferenceEndpoints::default(),
+    }
+}
+
+fn default_public_provider() -> PublicReferenceProvider {
+    PublicReferenceProvider {
+        enabled: true,
+        endpoint: None,
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct ReferenceParticipantConfig {
-    #[serde(rename = "type")]
-    pub entity_type: String,
-    pub name: String,
-    pub enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ReferenceRuntimeConfig {
+    /// Optional advanced override. Zero-configuration runtime uses five minutes.
+    pub refresh_interval_seconds: Option<u64>,
     #[serde(default)]
     pub tick_budget: ReferenceTickBudgetConfig,
 }
 
+impl ReferenceRuntimeConfig {
+    pub fn refresh_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.refresh_interval_seconds.unwrap_or(300))
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ReferenceTickBudgetConfig {
     pub max_sources_per_tick: Option<u32>,
     pub max_batches_per_source: Option<u32>,
@@ -67,15 +134,12 @@ impl ReferenceTickBudgetConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ReferenceConfig {
     #[serde(default)]
     pub runtime: ReferenceRuntimeConfig,
     #[serde(default)]
-    pub providers: BTreeMap<String, ReferenceProviderConfig>,
-    #[serde(default)]
-    pub products: BTreeMap<String, BTreeMap<String, ReferenceProductConfig>>,
-    #[serde(default)]
-    pub participants: BTreeMap<String, ReferenceParticipantConfig>,
+    pub providers: ReferenceProviders,
 }
 
 impl ReferenceConfig {
@@ -92,36 +156,11 @@ impl ReferenceConfig {
             .tick_budget
             .to_domain()
             .map_err(|error| error.to_string())?;
-        for provider in self.providers.keys().chain(self.products.keys()) {
-            if !matches!(
-                provider.as_str(),
-                "binance" | "okx" | "hyperliquid" | "massive"
-            ) {
-                return Err(format!("unsupported Reference provider: {provider}"));
-            }
-        }
-        for (provider, products) in &self.products {
-            for product in products.keys() {
-                let supported = match provider.as_str() {
-                    "binance" => matches!(
-                        product.as_str(),
-                        "spot" | "usd-m-futures" | "coin-m-futures" | "options" | "equity"
-                    ),
-                    "okx" => matches!(
-                        product.as_str(),
-                        "spot" | "margin" | "swap" | "futures" | "options"
-                    ),
-                    "hyperliquid" => matches!(product.as_str(), "spot" | "perpetual"),
-                    "massive" => matches!(product.as_str(), "equity" | "options"),
-                    _ => false,
-                };
-                if !supported {
-                    return Err(format!(
-                        "unsupported Reference provider product: {provider}/{product}"
-                    ));
-                }
-            }
-        }
+        validate_non_zero_u64(
+            self.runtime.refresh_interval_seconds,
+            "refresh_interval_seconds",
+        )
+        .map_err(|error| error.to_string())?;
         Ok(())
     }
 }
@@ -138,7 +177,7 @@ fn validate_non_zero_u32(value: Option<u32>, field: &str) -> ReferenceResult<()>
 fn validate_non_zero_u64(value: Option<u64>, field: &str) -> ReferenceResult<()> {
     if value == Some(0) {
         return Err(ReferenceError::Invalid(format!(
-            "reference runtime tick budget {field} must be greater than zero"
+            "reference runtime {field} must be greater than zero"
         )));
     }
     Ok(())
@@ -149,15 +188,77 @@ mod tests {
     use super::ReferenceConfig;
 
     #[test]
-    fn rejects_unknown_provider_and_product_before_composition() {
-        let unknown_provider: ReferenceConfig =
-            serde_json::from_str(r#"{"providers":{"unknown":{"enabled":true}}}"#).unwrap();
-        assert!(unknown_provider.validate().is_err());
+    fn provider_configuration_does_not_expose_source_products() {
+        assert!(
+            serde_json::from_str::<ReferenceConfig>(
+                r#"{"providers":{"unknown":{"enabled":true}}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ReferenceConfig>(r#"{"providers":{"okx":{"product":"swap"}}}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ReferenceConfig>(
+                r#"{"products":{"binance":{"equity":{"enabled":true}}}}"#
+            )
+            .is_err()
+        );
 
-        let wrong_product: ReferenceConfig =
-            serde_json::from_str(r#"{"products":{"okx":{"usd-m-futures":{"enabled":true}}}}"#)
-                .unwrap();
-        assert!(wrong_product.validate().is_err());
+        let configured: ReferenceConfig = serde_json::from_str(
+            r#"{"providers":{"massive":{"enabled":true,"credential_id":"massive-readonly"}}}"#,
+        )
+        .unwrap();
+        assert!(configured.providers.massive.enabled);
+        assert_eq!(
+            configured.providers.massive.credential_id.as_deref(),
+            Some("massive-readonly")
+        );
+        configured.validate().unwrap();
+    }
+
+    #[test]
+    fn zero_configuration_enables_public_providers_only() {
+        let config = ReferenceConfig::default();
+
+        assert!(config.providers.binance.enabled);
+        assert!(config.providers.okx.enabled);
+        assert!(config.providers.hyperliquid.enabled);
+        assert!(!config.providers.massive.enabled);
+        assert!(config.providers.binance.credential_id.is_none());
+        assert_eq!(config.runtime.refresh_interval().as_secs(), 300);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn advanced_configuration_is_nested_below_runtime_and_provider() {
+        let config: ReferenceConfig = toml::from_str(
+            r#"
+            [runtime]
+            refresh_interval_seconds = 60
+
+            [providers.massive]
+            enabled = true
+            credential_id = "massive-readonly"
+            endpoint = "https://massive.example"
+
+            [providers.binance.endpoints]
+            spot = "https://binance.example"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.runtime.refresh_interval().as_secs(), 60);
+        assert_eq!(
+            config.providers.massive.credential_id.as_deref(),
+            Some("massive-readonly")
+        );
+        assert_eq!(
+            config.providers.binance.endpoints.spot.as_deref(),
+            Some("https://binance.example")
+        );
+        config.validate().unwrap();
     }
 
     #[test]
@@ -180,6 +281,7 @@ mod tests {
         assert_eq!(budget.max_records_per_batch, Some(1000));
         assert_eq!(budget.max_wall_clock_millis, Some(2500));
         assert_eq!(budget.max_publications_per_tick, Some(50));
+        assert_eq!(config.runtime.refresh_interval().as_secs(), 300);
 
         let invalid: ReferenceConfig = toml::from_str(
             r#"
@@ -189,5 +291,15 @@ mod tests {
         )
         .unwrap();
         assert!(invalid.validate().is_err());
+
+        let configured: ReferenceConfig = toml::from_str(
+            r#"
+            [runtime]
+            refresh_interval_seconds = 60
+            "#,
+        )
+        .unwrap();
+        configured.validate().unwrap();
+        assert_eq!(configured.runtime.refresh_interval().as_secs(), 60);
     }
 }

@@ -1,8 +1,8 @@
 use kairos_primitives::decimal::Price;
-use kairos_primitives::integration::ProviderId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{
-    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId,
-    ReferenceStatus, Symbol,
+    AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, IssuerId, ListingId,
+    ReferenceSourceId, ReferenceStatus, Symbol,
 };
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
@@ -47,7 +47,7 @@ pub struct UpsertInstrumentRequest {
 pub struct UpsertListingRequest {
     pub listing_id: ListingId,
     pub instrument_id: InstrumentId,
-    pub exchange_id: Exchange,
+    pub exchange_id: ExchangeId,
     pub exchange_symbol: Symbol,
     pub status: ReferenceStatus,
     pub effective_from_unix_nanos: UnixNanos,
@@ -98,22 +98,66 @@ impl ReferenceUpsertConflictPolicy {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceSourceControlRequest {
-    pub source_id: ProviderId,
+    pub source_id: ReferenceSourceId,
     pub desired_state: ReferenceSourceDesiredState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceSourceDefinitionRequest {
-    pub source_id: ProviderId,
-    pub provider_id: ProviderId,
-    #[serde(default)]
-    pub provider_product: Option<ReferenceProviderProduct>,
+    pub binding: ReferenceSourceBinding,
     #[serde(default)]
     pub scope: ReferenceSourceScope,
     pub desired_state: ReferenceSourceDesiredState,
     #[serde(default)]
     pub credential_binding: Option<String>,
-    pub sync_policy: ReferenceSourceSyncPolicy,
+}
+
+/// A Reference-owned, code-supported catalog source binding.
+///
+/// This is intentionally not a cross-module market segment or provider
+/// product. Each variant selects one concrete Reference adapter; provider,
+/// source identity and synchronization semantics are derived by the owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "provider", content = "source", rename_all = "snake_case")]
+pub enum ReferenceSourceBinding {
+    Binance(BinanceReferenceSource),
+    Okx(OkxReferenceSource),
+    Hyperliquid(HyperliquidReferenceSource),
+    Massive(MassiveReferenceSource),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BinanceReferenceSource {
+    Spot,
+    UsdMFutures,
+    CoinMFutures,
+    Options,
+    Equity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OkxReferenceSource {
+    Spot,
+    Margin,
+    Swap,
+    Futures,
+    Options,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HyperliquidReferenceSource {
+    Spot,
+    Perpetual,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MassiveReferenceSource {
+    Equity,
+    Options,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -130,7 +174,7 @@ pub struct ReferenceOptionCoverageRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceSourceScopeRequest {
-    pub source_id: ProviderId,
+    pub source_id: ReferenceSourceId,
     pub scope: ReferenceSourceScope,
     pub enabled: bool,
 }
@@ -226,7 +270,7 @@ pub struct ReferenceCatalogRuntimeStatus {
     #[serde(default)]
     pub committed_at_unix_nanos: UnixNanos,
     #[serde(default)]
-    pub entity_count: u64,
+    pub exchange_count: u64,
     #[serde(default)]
     pub asset_count: u64,
     #[serde(default)]
@@ -285,11 +329,9 @@ pub struct ReferenceCoverageRuntimeStatus {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceSourceRuntimeStatus {
-    pub source_id: ProviderId,
+    pub source_id: ReferenceSourceId,
     #[serde(default)]
-    pub provider_id: Option<ProviderId>,
-    #[serde(default)]
-    pub provider_product: Option<ReferenceProviderProduct>,
+    pub provider_id: Option<Provider>,
     #[serde(default)]
     pub source_kind: ReferenceSourceKind,
     #[serde(default)]
@@ -342,21 +384,6 @@ pub struct ReferenceSourceRuntimeError {
     #[serde(default)]
     pub record_id: Option<String>,
     pub message: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReferenceProviderProduct {
-    Spot,
-    Equity,
-    Options,
-    Usdm,
-    Coinm,
-    Margin,
-    Swap,
-    Futures,
-    Perpetual,
-    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -436,12 +463,12 @@ pub struct ReferenceDiagnostic {
     pub message: String,
     pub next_action: Option<String>,
     #[serde(default)]
-    pub source_id: Option<ProviderId>,
+    pub source_id: Option<ReferenceSourceId>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceProviderHealth {
-    pub source_id: ProviderId,
+    pub source_id: ReferenceSourceId,
     pub status: ReferenceProviderStatus,
     pub stale: bool,
 }
@@ -469,7 +496,7 @@ pub struct ReferenceMutationResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceSourceStatusResponse {
-    pub source_id: ProviderId,
+    pub source_id: ReferenceSourceId,
     pub status: ReferenceProviderStatus,
 }
 
@@ -485,7 +512,7 @@ pub struct ReferenceOptionCoverageResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceSourceScopeResponse {
-    pub source_id: ProviderId,
+    pub source_id: ReferenceSourceId,
     pub scope: ReferenceSourceScope,
     pub enabled: bool,
     pub generation: Generation,
@@ -510,6 +537,18 @@ pub enum ReferenceRuntimeStatus {
     Unavailable,
 }
 
+impl ReferenceRuntimeStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Syncing => "syncing",
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceAppPhase {
@@ -524,6 +563,22 @@ pub enum ReferenceAppPhase {
     Stopping,
 }
 
+impl ReferenceAppPhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Booting => "booting",
+            Self::Loading => "loading",
+            Self::Serving => "serving",
+            Self::Ticking => "ticking",
+            Self::Scanning => "scanning",
+            Self::Reconciling => "reconciling",
+            Self::Publishing => "publishing",
+            Self::Degraded => "degraded",
+            Self::Stopping => "stopping",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceCatalogReadiness {
@@ -532,6 +587,18 @@ pub enum ReferenceCatalogReadiness {
     Ready,
     Degraded,
     Invalid,
+}
+
+impl ReferenceCatalogReadiness {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Syncing => "syncing",
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::Invalid => "invalid",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -549,6 +616,23 @@ pub enum ReferenceSourcePhase {
     Paused,
 }
 
+impl ReferenceSourcePhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Registered => "registered",
+            Self::Idle => "idle",
+            Self::Scanning => "scanning",
+            Self::Promoting => "promoting",
+            Self::Syncing => "syncing",
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::Unavailable => "unavailable",
+            Self::Paused => "paused",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceSourceProgressKind {
@@ -558,12 +642,33 @@ pub enum ReferenceSourceProgressKind {
     Scoped,
 }
 
+impl ReferenceSourceProgressKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Complete => "complete",
+            Self::Paged => "paged",
+            Self::Scoped => "scoped",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceDiagnosticSeverity {
     Info,
     Warn,
     Error,
+}
+
+impl ReferenceDiagnosticSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -578,14 +683,16 @@ pub enum ReferenceProviderStatus {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::integration::ProviderId;
-    use kairos_primitives::reference::{AssetClass, AssetId, ReferenceStatus, Symbol};
+    use kairos_primitives::market::Provider;
+    use kairos_primitives::reference::{
+        AssetClass, AssetId, ReferenceSourceId, ReferenceStatus, Symbol,
+    };
 
     use super::{
-        ReferenceAppPhase, ReferenceAppRuntimeError, ReferenceAppRuntimeStatus,
-        ReferenceCatalogIntegrityStatus, ReferenceCatalogReadiness, ReferenceCatalogRuntimeStatus,
-        ReferenceProviderProduct, ReferencePublicationRuntimeError,
-        ReferencePublicationRuntimeStatus, ReferenceSourceControlRequest,
+        MassiveReferenceSource, ReferenceAppPhase, ReferenceAppRuntimeError,
+        ReferenceAppRuntimeStatus, ReferenceCatalogIntegrityStatus, ReferenceCatalogReadiness,
+        ReferenceCatalogRuntimeStatus, ReferencePublicationRuntimeError,
+        ReferencePublicationRuntimeStatus, ReferenceSourceBinding, ReferenceSourceControlRequest,
         ReferenceSourceDefinitionRequest, ReferenceSourceDesiredState, ReferenceSourceKind,
         ReferenceSourcePhase, ReferenceSourceProgress, ReferenceSourceProgressKind,
         ReferenceSourceRuntimeError, ReferenceSourceRuntimeStatus, ReferenceSourceScope,
@@ -616,9 +723,8 @@ mod tests {
     #[test]
     fn source_desired_state_is_typed_but_keeps_json_shape() {
         let status = ReferenceSourceRuntimeStatus {
-            source_id: ProviderId::new("massive-options").unwrap(),
-            provider_id: Some(ProviderId::new("massive").unwrap()),
-            provider_product: Some(ReferenceProviderProduct::Options),
+            source_id: ReferenceSourceId::new("massive-options").unwrap(),
+            provider_id: Some(Provider::new("massive").unwrap()),
             source_kind: ReferenceSourceKind::Scoped,
             configured: true,
             enabled: false,
@@ -660,7 +766,7 @@ mod tests {
 
         let value = serde_json::to_value(&status).unwrap();
         assert_eq!(value["provider_id"], "massive");
-        assert_eq!(value["provider_product"], "options");
+        assert!(value.get("provider_segment").is_none());
         assert_eq!(value["source_kind"], "scoped");
         assert_eq!(value["configured"], true);
         assert_eq!(value["enabled"], false);
@@ -673,14 +779,7 @@ mod tests {
         assert_eq!(value["last_error"]["code"], "reference.provider_failed");
         assert_eq!(value["last_error"]["retryable"], true);
         let decoded: ReferenceSourceRuntimeStatus = serde_json::from_value(value).unwrap();
-        assert_eq!(
-            decoded.provider_id,
-            Some(ProviderId::new("massive").unwrap())
-        );
-        assert_eq!(
-            decoded.provider_product,
-            Some(ReferenceProviderProduct::Options)
-        );
+        assert_eq!(decoded.provider_id, Some(Provider::new("massive").unwrap()));
         assert_eq!(
             decoded.last_error.as_ref().map(|error| error.code.as_str()),
             Some("reference.provider_failed")
@@ -703,7 +802,7 @@ mod tests {
     #[test]
     fn source_control_request_keeps_json_shape() {
         let request = ReferenceSourceControlRequest {
-            source_id: ProviderId::new("massive-options").unwrap(),
+            source_id: ReferenceSourceId::new("massive-options").unwrap(),
             desired_state: ReferenceSourceDesiredState::Paused,
         };
 
@@ -714,7 +813,7 @@ mod tests {
         let decoded: ReferenceSourceControlRequest = serde_json::from_value(value).unwrap();
         assert_eq!(
             decoded.source_id,
-            ProviderId::new("massive-options").unwrap()
+            ReferenceSourceId::new("massive-options").unwrap()
         );
         assert_eq!(decoded.desired_state, ReferenceSourceDesiredState::Paused);
     }
@@ -798,7 +897,7 @@ mod tests {
             generation: 7.into(),
             event_sequence: 11.into(),
             committed_at_unix_nanos: 123.into(),
-            entity_count: 1,
+            exchange_count: 1,
             asset_count: 2,
             instrument_count: 3,
             listing_count: 4,
@@ -817,7 +916,7 @@ mod tests {
 
         let value = serde_json::to_value(&status).unwrap();
         assert_eq!(value["committed_at_unix_nanos"], 123);
-        assert_eq!(value["entity_count"], 1);
+        assert_eq!(value["exchange_count"], 1);
         assert_eq!(value["asset_count"], 2);
         assert_eq!(value["instrument_count"], 3);
         assert_eq!(value["listing_count"], 4);
@@ -841,7 +940,7 @@ mod tests {
         assert_eq!(decoded.generation, 7.into());
         assert_eq!(decoded.event_sequence, 11.into());
         assert_eq!(decoded.committed_at_unix_nanos, 0.into());
-        assert_eq!(decoded.entity_count, 0);
+        assert_eq!(decoded.exchange_count, 0);
         assert_eq!(decoded.asset_count, 0);
         assert_eq!(decoded.instrument_count, 0);
         assert_eq!(decoded.listing_count, 0);
@@ -857,7 +956,7 @@ mod tests {
     #[test]
     fn source_scope_request_keeps_json_shape() {
         let request = ReferenceSourceScopeRequest {
-            source_id: ProviderId::new("massive-options").unwrap(),
+            source_id: ReferenceSourceId::new("massive-options").unwrap(),
             scope: ReferenceSourceScope {
                 kind: ReferenceSourceScopeKind::UnderlyingInstrument,
                 id: Some("instrument:equity:US:SPY:common".into()),
@@ -874,7 +973,7 @@ mod tests {
         let decoded: ReferenceSourceScopeRequest = serde_json::from_value(value).unwrap();
         assert_eq!(
             decoded.source_id,
-            ProviderId::new("massive-options").unwrap()
+            ReferenceSourceId::new("massive-options").unwrap()
         );
         assert_eq!(
             decoded.scope.kind,
@@ -894,40 +993,35 @@ mod tests {
     #[test]
     fn source_definition_request_keeps_json_shape() {
         let request = ReferenceSourceDefinitionRequest {
-            source_id: ProviderId::new("massive-options").unwrap(),
-            provider_id: ProviderId::new("massive").unwrap(),
-            provider_product: Some(ReferenceProviderProduct::Options),
+            binding: ReferenceSourceBinding::Massive(MassiveReferenceSource::Options),
             scope: ReferenceSourceScope {
                 kind: ReferenceSourceScopeKind::UnderlyingInstrument,
                 id: Some("instrument:equity:US:SPY:common".into()),
             },
             desired_state: ReferenceSourceDesiredState::Enabled,
             credential_binding: Some("massive.default".into()),
-            sync_policy: ReferenceSourceSyncPolicy::ScopedSnapshot,
         };
 
         let value = serde_json::to_value(&request).unwrap();
-        assert_eq!(value["source_id"], "massive-options");
-        assert_eq!(value["provider_id"], "massive");
-        assert_eq!(value["provider_product"], "options");
+        assert_eq!(value["binding"]["provider"], "massive");
+        assert_eq!(value["binding"]["source"], "options");
+        assert!(value.get("source_id").is_none());
+        assert!(value.get("provider_id").is_none());
+        assert!(value.get("provider_segment").is_none());
         assert_eq!(value["scope"]["kind"], "underlying_instrument");
         assert_eq!(value["scope"]["id"], "instrument:equity:US:SPY:common");
         assert_eq!(value["desired_state"], "enabled");
         assert_eq!(value["credential_binding"], "massive.default");
-        assert_eq!(value["sync_policy"], "scoped_snapshot");
+        assert!(value.get("sync_policy").is_none());
 
         let decoded: ReferenceSourceDefinitionRequest = serde_json::from_value(value).unwrap();
         assert_eq!(
-            decoded.provider_product,
-            Some(ReferenceProviderProduct::Options)
+            decoded.binding,
+            ReferenceSourceBinding::Massive(MassiveReferenceSource::Options)
         );
         assert_eq!(
             decoded.scope.kind,
             ReferenceSourceScopeKind::UnderlyingInstrument
-        );
-        assert_eq!(
-            decoded.sync_policy,
-            ReferenceSourceSyncPolicy::ScopedSnapshot
         );
     }
 }

@@ -5,42 +5,190 @@
 //! Standalone CLI commands must use `CliMarketApplication`.
 
 use kairos_market_contract::{
-    MarketClient, MarketCommandEnvelope, MarketControlRpcClient, MarketDataSourcesQuery,
-    MarketDataSourcesResponse, MarketSubscribePayload, MarketUnsubscribePayload,
-    SnapshotEnvelopeMetadata, ViewMetadata,
+    MarketClient, MarketCommandEnvelope, MarketCommandStatus, MarketControlRpcClient,
+    MarketDataRoutesQuery, MarketDataRoutesResponse, MarketHealthResponse, MarketSubscribePayload,
+    MarketSubscriptionResponse, MarketUnsubscribePayload, SnapshotEnvelopeMetadata, ViewMetadata,
 };
-use kairos_primitives::integration::ProviderId;
-use kairos_primitives::market::{ObservationKind, SourceId};
+use kairos_primitives::market::{ObservationKind, Provider};
 use kairos_primitives::reference::{InstrumentId, MarketId};
-use serde_json::Value;
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct MarketSnapshotResult {
+    pub kind: &'static str,
+    pub market_id: String,
+    pub provider: String,
+    pub qualifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_key: Option<String>,
+    pub status: &'static str,
+    pub present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub envelope_metadata: Option<MarketEnvelopeMetadataResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_metadata: Option<MarketViewMetadataResult>,
+    pub value: Option<MarketSnapshotValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<MarketSnapshotError>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum MarketSnapshotValue {
+    Quote(MarketQuoteResult),
+    BarWindow(MarketBarWindowResult),
+    Greeks(MarketGreeksResult),
+    Freshness(MarketFreshnessResult),
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketEnvelopeMetadataResult {
+    pub resource_epoch: u64,
+    pub producer_incarnation: u64,
+    pub generation: u64,
+    pub applied_event_sequence: u64,
+    pub published_at_unix_nanos: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketViewMetadataResult {
+    pub view_key: String,
+    pub generation: u64,
+    pub applied_revision: Option<u64>,
+    pub completeness: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketDecimalResult {
+    pub mantissa: i64,
+    pub scale: u8,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketQuoteResult {
+    pub quote_id: Option<String>,
+    pub instrument_id: String,
+    pub provider: String,
+    pub bid_price: Option<MarketDecimalResult>,
+    pub bid_quantity: Option<MarketDecimalResult>,
+    pub ask_price: Option<MarketDecimalResult>,
+    pub ask_quantity: Option<MarketDecimalResult>,
+    pub bid_venue_code: Option<String>,
+    pub ask_venue_code: Option<String>,
+    pub tape: u32,
+    pub source_observed_at_unix_nanos: u64,
+    pub received_at_unix_nanos: u64,
+    pub source_event_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketBarWindowResult {
+    pub shard_id: u32,
+    pub shard_count: u32,
+    pub bars: Vec<MarketBarResult>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketBarResult {
+    pub instrument_id: String,
+    pub provider: String,
+    pub bar_spec_id: String,
+    pub bar_kind: String,
+    pub window_start_unix_nanos: u64,
+    pub window_end_unix_nanos: u64,
+    pub open: Option<MarketDecimalResult>,
+    pub high: Option<MarketDecimalResult>,
+    pub low: Option<MarketDecimalResult>,
+    pub close: Option<MarketDecimalResult>,
+    pub volume: Option<MarketDecimalResult>,
+    pub source_observed_at_unix_nanos: u64,
+    pub received_at_unix_nanos: u64,
+    pub source_event_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketGreeksResult {
+    pub instrument_id: String,
+    pub provider: String,
+    pub expiry_unix_nanos: Option<u64>,
+    pub strike: Option<MarketDecimalResult>,
+    pub delta: Option<MarketDecimalResult>,
+    pub gamma: Option<MarketDecimalResult>,
+    pub vega: Option<MarketDecimalResult>,
+    pub theta: Option<MarketDecimalResult>,
+    pub implied_volatility: Option<MarketDecimalResult>,
+    pub source_observed_at_unix_nanos: u64,
+    pub received_at_unix_nanos: u64,
+    pub derivation_id: Option<String>,
+    pub source_event_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketFreshnessResult {
+    pub provider: String,
+    pub data_kind: String,
+    pub last_event_time_unix_nanos: u64,
+    pub last_received_time_unix_nanos: u64,
+    pub age_nanos: u64,
+    pub event_sequence: u64,
+    pub freshness_status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketSnapshotError {
+    pub code: &'static str,
+    pub message: &'static str,
+    pub retryable: bool,
+    pub details: MarketSnapshotErrorDetails,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarketSnapshotErrorDetails {
+    pub market_id: String,
+    pub provider: String,
+    pub kind: &'static str,
+    pub qualifier: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ConnectedMarketOutput {
+    Health(MarketHealthResponse),
+    Routes(MarketDataRoutesResponse),
+    Subscription(MarketSubscriptionResponse),
+    Command(MarketCommandStatus),
+    Snapshot(MarketSnapshotResult),
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ConnectedMarketSourceQuery {
+pub struct ConnectedMarketRouteQuery {
     pub market_id: Option<MarketId>,
     pub instrument_id: Option<InstrumentId>,
     pub observation_kind: Option<ObservationKind>,
-    pub provider_id: Option<ProviderId>,
+    pub provider: Option<Provider>,
     pub configured_only: bool,
     pub ready_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConnectedSourceAvailability {
+pub enum ConnectedRouteAvailability {
     Available,
     NotReady,
     NotAvailable,
 }
 
-impl ConnectedMarketSourceQuery {
-    fn into_contract(self) -> MarketDataSourcesQuery {
-        MarketDataSourcesQuery {
+impl ConnectedMarketRouteQuery {
+    fn into_contract(self) -> MarketDataRoutesQuery {
+        MarketDataRoutesQuery {
             market_id: self.market_id,
             instrument_id: self.instrument_id,
             observation_kind: self.observation_kind,
-            provider_id: self.provider_id,
+            provider: self.provider,
             configured_only: self.configured_only,
             ready_only: self.ready_only,
-            ..MarketDataSourcesQuery::default()
+            ..MarketDataRoutesQuery::default()
         }
     }
 }
@@ -54,48 +202,51 @@ impl ConnectedMarketApplication {
         Self { client }
     }
 
-    pub async fn health(&self) -> Result<Value, Box<dyn std::error::Error>> {
-        Ok(serde_json::to_value(self.client.control().health().await?)?)
+    pub async fn health(&self) -> Result<MarketHealthResponse, Box<dyn std::error::Error>> {
+        Ok(self.client.control().health().await?)
     }
 
-    pub async fn sources(
+    pub async fn routes(
         &self,
-        query: ConnectedMarketSourceQuery,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let response = self.source_catalog(query.into_contract()).await?;
-        Ok(serde_json::to_value(response)?)
+        query: ConnectedMarketRouteQuery,
+    ) -> Result<MarketDataRoutesResponse, Box<dyn std::error::Error>> {
+        self.route_catalog(query.into_contract()).await
     }
 
-    async fn source_catalog(
+    async fn route_catalog(
         &self,
-        query: MarketDataSourcesQuery,
-    ) -> Result<MarketDataSourcesResponse, Box<dyn std::error::Error>> {
-        Ok(self.client.control().data_sources(query).await?)
+        query: MarketDataRoutesQuery,
+    ) -> Result<MarketDataRoutesResponse, Box<dyn std::error::Error>> {
+        Ok(self.client.control().data_routes(query).await?)
     }
 
-    pub async fn source_availability(
+    pub async fn route_availability(
         &self,
         market_id: MarketId,
-        source_id: &SourceId,
+        provider: &Provider,
         observation_kind: Option<ObservationKind>,
-    ) -> Result<ConnectedSourceAvailability, Box<dyn std::error::Error>> {
+    ) -> Result<ConnectedRouteAvailability, Box<dyn std::error::Error>> {
         let response = self
-            .source_catalog(MarketDataSourcesQuery {
+            .route_catalog(MarketDataRoutesQuery {
                 market_id: Some(market_id),
                 observation_kind,
                 configured_only: true,
-                ..MarketDataSourcesQuery::default()
+                ..MarketDataRoutesQuery::default()
             })
             .await?;
         Ok(
             match response
-                .sources
+                .routes
                 .iter()
-                .find(|source| &source.source_id == source_id)
+                .find(|route| &route.provider == provider)
             {
-                Some(source) if source.ready => ConnectedSourceAvailability::Available,
-                Some(_) => ConnectedSourceAvailability::NotReady,
-                None => ConnectedSourceAvailability::NotAvailable,
+                Some(route)
+                    if route.state == kairos_market_contract::MarketDataRouteState::Ready =>
+                {
+                    ConnectedRouteAvailability::Available
+                },
+                Some(_) => ConnectedRouteAvailability::NotReady,
+                None => ConnectedRouteAvailability::NotAvailable,
             },
         )
     }
@@ -103,92 +254,86 @@ impl ConnectedMarketApplication {
     pub async fn subscribe(
         &self,
         command: MarketCommandEnvelope<MarketSubscribePayload>,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<MarketSubscriptionResponse, Box<dyn std::error::Error>> {
         let response = self.client.control().subscribe(command).await?;
-        Ok(serde_json::to_value(response)?)
+        Ok(response)
     }
 
     pub async fn unsubscribe(
         &self,
         command: MarketCommandEnvelope<MarketUnsubscribePayload>,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<MarketCommandStatus, Box<dyn std::error::Error>> {
         let response = self.client.control().unsubscribe(command).await?;
-        Ok(serde_json::to_value(response)?)
+        Ok(response)
     }
 
-    pub async fn recover(&self) -> Result<Value, Box<dyn std::error::Error>> {
-        Ok(serde_json::to_value(
-            self.client.control().recover().await?,
-        )?)
+    pub async fn recover(&self) -> Result<MarketCommandStatus, Box<dyn std::error::Error>> {
+        Ok(self.client.control().recover().await?)
     }
 
-    pub async fn pause_replay(&self) -> Result<Value, Box<dyn std::error::Error>> {
-        Ok(serde_json::to_value(
-            self.client.control().pause_replay().await?,
-        )?)
+    pub async fn pause_replay(&self) -> Result<MarketCommandStatus, Box<dyn std::error::Error>> {
+        Ok(self.client.control().pause_replay().await?)
     }
 
-    pub async fn resume_replay(&self) -> Result<Value, Box<dyn std::error::Error>> {
-        Ok(serde_json::to_value(
-            self.client.control().resume_replay().await?,
-        )?)
+    pub async fn resume_replay(&self) -> Result<MarketCommandStatus, Box<dyn std::error::Error>> {
+        Ok(self.client.control().resume_replay().await?)
     }
 
     pub fn quote_snapshot(
         &self,
         market_id: String,
-        source_id: String,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let result = (|| -> Result<Value, Box<dyn std::error::Error>> {
+        provider: String,
+    ) -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
+        let result = (|| -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
             let snapshot =
                 self.client
-                    .quote(market_id.clone(), source_id.clone(), None::<String>)?;
+                    .quote(market_id.clone(), provider.clone(), None::<String>)?;
             let frame = snapshot.read()?;
             let envelope = frame.envelope_metadata();
             let view = frame.view()?;
             let latest = view.quote();
             let quote = latest.value();
-            Ok(snapshot_json(
+            Ok(snapshot_result(
                 "quote",
                 &market_id,
-                &source_id,
+                &provider,
                 None,
                 snapshot.key().canonical_key(),
                 envelope,
-                view_metadata_json(view.metadata()),
+                view_metadata_result(view.metadata()),
                 true,
-                serde_json::json!({
-                    "quote_id": quote.quote_id(),
-                    "instrument_id": quote.instrument_id(),
-                    "source_id": quote.source_id(),
-                    "bid_price": decimal_json(quote.bid_price()),
-                    "bid_quantity": decimal_json(quote.bid_quantity()),
-                    "ask_price": decimal_json(quote.ask_price()),
-                    "ask_quantity": decimal_json(quote.ask_quantity()),
-                    "bid_venue_code": quote.bid_venue_code(),
-                    "ask_venue_code": quote.ask_venue_code(),
-                    "tape": quote.tape(),
-                    "source_observed_at_unix_nanos": quote.source_observed_at_unix_nanos(),
-                    "received_at_unix_nanos": quote.received_at_unix_nanos(),
-                    "source_event_id": latest.source_event_id(),
+                MarketSnapshotValue::Quote(MarketQuoteResult {
+                    quote_id: quote.quote_id().map(str::to_owned),
+                    instrument_id: quote.instrument_id().to_owned(),
+                    provider: quote.provider().to_owned(),
+                    bid_price: decimal_result(quote.bid_price()),
+                    bid_quantity: decimal_result(quote.bid_quantity()),
+                    ask_price: decimal_result(quote.ask_price()),
+                    ask_quantity: decimal_result(quote.ask_quantity()),
+                    bid_venue_code: quote.bid_venue_code().map(str::to_owned),
+                    ask_venue_code: quote.ask_venue_code().map(str::to_owned),
+                    tape: quote.tape(),
+                    source_observed_at_unix_nanos: quote.source_observed_at_unix_nanos(),
+                    received_at_unix_nanos: quote.received_at_unix_nanos(),
+                    source_event_id: latest.source_event_id().to_owned(),
                 }),
             ))
         })();
         Ok(result.unwrap_or_else(|error| {
-            snapshot_error_json("quote", &market_id, &source_id, None, error.as_ref())
+            snapshot_error_result("quote", &market_id, &provider, None, error.as_ref())
         }))
     }
 
     pub fn bar_snapshot(
         &self,
         market_id: String,
-        source_id: String,
+        provider: String,
         timeframe: String,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let result = (|| -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
+        let result = (|| -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
             let snapshot = self.client.bar_window(
                 market_id.clone(),
-                source_id.clone(),
+                provider.clone(),
                 Some(timeframe.clone()),
             )?;
             let frame = snapshot.read()?;
@@ -199,46 +344,46 @@ impl ConnectedMarketApplication {
                 .iter()
                 .map(|window| {
                     let bar = window.value();
-                    serde_json::json!({
-                        "instrument_id": bar.instrument_id(),
-                        "source_id": bar.source_id(),
-                        "bar_spec_id": bar.bar_spec_id(),
-                        "bar_kind": bar.kind().variant_name().unwrap_or("UNKNOWN").to_ascii_lowercase(),
-                        "window_start_unix_nanos": bar.window_start_unix_nanos(),
-                        "window_end_unix_nanos": bar.window_end_unix_nanos(),
-                        "open": decimal_json(Some(bar.open())),
-                        "high": decimal_json(Some(bar.high())),
-                        "low": decimal_json(Some(bar.low())),
-                        "close": decimal_json(Some(bar.close())),
-                        "volume": decimal_json(bar.volume()),
-                        "source_observed_at_unix_nanos": bar.source_observed_at_unix_nanos(),
-                        "received_at_unix_nanos": bar.received_at_unix_nanos(),
-                        "source_event_id": window.source_event_id(),
-                    })
+                    MarketBarResult {
+                        instrument_id: bar.instrument_id().to_owned(),
+                        provider: bar.provider().to_owned(),
+                        bar_spec_id: bar.bar_spec_id().to_owned(),
+                        bar_kind: enum_name(bar.kind().variant_name()),
+                        window_start_unix_nanos: bar.window_start_unix_nanos(),
+                        window_end_unix_nanos: bar.window_end_unix_nanos(),
+                        open: decimal_result(Some(bar.open())),
+                        high: decimal_result(Some(bar.high())),
+                        low: decimal_result(Some(bar.low())),
+                        close: decimal_result(Some(bar.close())),
+                        volume: decimal_result(bar.volume()),
+                        source_observed_at_unix_nanos: bar.source_observed_at_unix_nanos(),
+                        received_at_unix_nanos: bar.received_at_unix_nanos(),
+                        source_event_id: window.source_event_id().to_owned(),
+                    }
                 })
                 .collect::<Vec<_>>();
             let present = !bars.is_empty();
-            Ok(snapshot_json(
+            Ok(snapshot_result(
                 "bar",
                 &market_id,
-                &source_id,
+                &provider,
                 Some(&timeframe),
                 snapshot.key().canonical_key(),
                 envelope,
-                view_metadata_json(view.metadata()),
+                view_metadata_result(view.metadata()),
                 present,
-                serde_json::json!({
-                    "shard_id": view.shard_id(),
-                    "shard_count": view.shard_count(),
-                    "bars": bars,
+                MarketSnapshotValue::BarWindow(MarketBarWindowResult {
+                    shard_id: view.shard_id(),
+                    shard_count: view.shard_count(),
+                    bars,
                 }),
             ))
         })();
         Ok(result.unwrap_or_else(|error| {
-            snapshot_error_json(
+            snapshot_error_result(
                 "bar",
                 &market_id,
-                &source_id,
+                &provider,
                 Some(&timeframe),
                 error.as_ref(),
             )
@@ -248,58 +393,58 @@ impl ConnectedMarketApplication {
     pub fn greeks_snapshot(
         &self,
         market_id: String,
-        source_id: String,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let result = (|| -> Result<Value, Box<dyn std::error::Error>> {
+        provider: String,
+    ) -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
+        let result = (|| -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
             let snapshot =
                 self.client
-                    .greeks(market_id.clone(), source_id.clone(), None::<String>)?;
+                    .greeks(market_id.clone(), provider.clone(), None::<String>)?;
             let frame = snapshot.read()?;
             let envelope = frame.envelope_metadata();
             let view = frame.view()?;
             let latest = view.greeks();
             let greeks = latest.value();
-            Ok(snapshot_json(
+            Ok(snapshot_result(
                 "greeks",
                 &market_id,
-                &source_id,
+                &provider,
                 None,
                 snapshot.key().canonical_key(),
                 envelope,
-                view_metadata_json(view.metadata()),
+                view_metadata_result(view.metadata()),
                 true,
-                serde_json::json!({
-                    "instrument_id": greeks.instrument_id(),
-                    "source_id": greeks.source_id(),
-                    "expiry_unix_nanos": greeks.expiry_unix_nanos(),
-                    "strike": decimal_json(greeks.strike()),
-                    "delta": decimal_json(greeks.delta()),
-                    "gamma": decimal_json(greeks.gamma()),
-                    "vega": decimal_json(greeks.vega()),
-                    "theta": decimal_json(greeks.theta()),
-                    "implied_volatility": decimal_json(greeks.implied_volatility()),
-                    "source_observed_at_unix_nanos": greeks.source_observed_at_unix_nanos(),
-                    "received_at_unix_nanos": greeks.received_at_unix_nanos(),
-                    "derivation_id": greeks.derivation_id(),
-                    "source_event_id": latest.source_event_id(),
+                MarketSnapshotValue::Greeks(MarketGreeksResult {
+                    instrument_id: greeks.instrument_id().to_owned(),
+                    provider: greeks.provider().to_owned(),
+                    expiry_unix_nanos: greeks.expiry_unix_nanos(),
+                    strike: decimal_result(greeks.strike()),
+                    delta: decimal_result(greeks.delta()),
+                    gamma: decimal_result(greeks.gamma()),
+                    vega: decimal_result(greeks.vega()),
+                    theta: decimal_result(greeks.theta()),
+                    implied_volatility: decimal_result(greeks.implied_volatility()),
+                    source_observed_at_unix_nanos: greeks.source_observed_at_unix_nanos(),
+                    received_at_unix_nanos: greeks.received_at_unix_nanos(),
+                    derivation_id: greeks.derivation_id().map(str::to_owned),
+                    source_event_id: latest.source_event_id().to_owned(),
                 }),
             ))
         })();
         Ok(result.unwrap_or_else(|error| {
-            snapshot_error_json("greeks", &market_id, &source_id, None, error.as_ref())
+            snapshot_error_result("greeks", &market_id, &provider, None, error.as_ref())
         }))
     }
 
     pub fn freshness_snapshot(
         &self,
         market_id: String,
-        source_id: String,
+        provider: String,
         qualifier: Option<String>,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let result = (|| -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
+        let result = (|| -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
             let snapshot =
                 self.client
-                    .freshness(market_id.clone(), source_id.clone(), qualifier.clone())?;
+                    .freshness(market_id.clone(), provider.clone(), qualifier.clone())?;
             let frame = snapshot.read()?;
             let envelope = frame.envelope_metadata();
             let view = frame.view()?;
@@ -309,31 +454,31 @@ impl ConnectedMarketApplication {
                 .variant_name()
                 .unwrap_or("UNKNOWN")
                 .to_ascii_lowercase();
-            Ok(snapshot_json(
+            Ok(snapshot_result(
                 "freshness",
                 &market_id,
-                &source_id,
+                &provider,
                 qualifier.as_deref(),
                 snapshot.key().canonical_key(),
                 envelope,
-                view_metadata_json(view.metadata()),
+                view_metadata_result(view.metadata()),
                 true,
-                serde_json::json!({
-                    "source_id": entry.source_id(),
-                    "data_kind": entry.data_kind(),
-                    "last_event_time_unix_nanos": entry.last_event_time_unix_nanos(),
-                    "last_received_time_unix_nanos": entry.last_received_time_unix_nanos(),
-                    "age_nanos": entry.age_nanos(),
-                    "event_sequence": entry.event_sequence(),
-                    "freshness_status": status,
+                MarketSnapshotValue::Freshness(MarketFreshnessResult {
+                    provider: entry.provider().to_owned(),
+                    data_kind: entry.data_kind().to_owned(),
+                    last_event_time_unix_nanos: entry.last_event_time_unix_nanos(),
+                    last_received_time_unix_nanos: entry.last_received_time_unix_nanos(),
+                    age_nanos: entry.age_nanos(),
+                    event_sequence: entry.event_sequence(),
+                    freshness_status: status,
                 }),
             ))
         })();
         Ok(result.unwrap_or_else(|error| {
-            snapshot_error_json(
+            snapshot_error_result(
                 "freshness",
                 &market_id,
-                &source_id,
+                &provider,
                 qualifier.as_deref(),
                 error.as_ref(),
             )
@@ -341,45 +486,46 @@ impl ConnectedMarketApplication {
     }
 }
 
-fn snapshot_json(
-    kind: &str,
+fn snapshot_result(
+    kind: &'static str,
     market_id: &str,
-    source_id: &str,
+    provider: &str,
     qualifier: Option<&str>,
     view_key: String,
     envelope: SnapshotEnvelopeMetadata,
-    view_metadata: Value,
+    view_metadata: MarketViewMetadataResult,
     present: bool,
-    value: Value,
-) -> Value {
-    serde_json::json!({
-        "kind": kind,
-        "market_id": market_id,
-        "source_id": source_id,
-        "qualifier": qualifier,
-        "view_key": view_key,
-        "status": if present { "ready" } else { "not_found" },
-        "present": present,
-        "generation": envelope.generation,
-        "envelope_metadata": {
-            "resource_epoch": envelope.resource_epoch,
-            "producer_incarnation": envelope.producer_incarnation,
-            "generation": envelope.generation,
-            "applied_event_sequence": envelope.applied_event_sequence,
-            "published_at_unix_nanos": envelope.published_at_unix_nanos,
-        },
-        "view_metadata": view_metadata,
-        "value": value,
-    })
+    value: MarketSnapshotValue,
+) -> MarketSnapshotResult {
+    MarketSnapshotResult {
+        kind,
+        market_id: market_id.to_owned(),
+        provider: provider.to_owned(),
+        qualifier: qualifier.map(str::to_owned),
+        view_key: Some(view_key),
+        status: if present { "ready" } else { "not_found" },
+        present,
+        generation: Some(envelope.generation),
+        envelope_metadata: Some(MarketEnvelopeMetadataResult {
+            resource_epoch: envelope.resource_epoch,
+            producer_incarnation: envelope.producer_incarnation,
+            generation: envelope.generation,
+            applied_event_sequence: envelope.applied_event_sequence,
+            published_at_unix_nanos: envelope.published_at_unix_nanos,
+        }),
+        view_metadata: Some(view_metadata),
+        value: Some(value),
+        error: None,
+    }
 }
 
-fn snapshot_error_json(
-    kind: &str,
+fn snapshot_error_result(
+    kind: &'static str,
     market_id: &str,
-    source_id: &str,
+    provider: &str,
     qualifier: Option<&str>,
     error: &(dyn std::error::Error + 'static),
-) -> Value {
+) -> MarketSnapshotResult {
     let message = error.to_string();
     let lowered = message.to_ascii_lowercase();
     let (code, user_message, retryable) = if lowered.contains("no such file")
@@ -408,50 +554,52 @@ fn snapshot_error_json(
             true,
         )
     };
-    serde_json::json!({
-        "kind": kind,
-        "market_id": market_id,
-        "source_id": source_id,
-        "qualifier": qualifier,
-        "status": "unavailable",
-        "present": false,
-        "value": Value::Null,
-        "error": {
-            "code": code,
-            "message": user_message,
-            "retryable": retryable,
-            "details": {
-                "market_id": market_id,
-                "source_id": source_id,
-                "kind": kind,
-                "qualifier": qualifier,
-            }
-        }
-    })
+    MarketSnapshotResult {
+        kind,
+        market_id: market_id.to_owned(),
+        provider: provider.to_owned(),
+        qualifier: qualifier.map(str::to_owned),
+        view_key: None,
+        status: "unavailable",
+        present: false,
+        generation: None,
+        envelope_metadata: None,
+        view_metadata: None,
+        value: None,
+        error: Some(MarketSnapshotError {
+            code,
+            message: user_message,
+            retryable,
+            details: MarketSnapshotErrorDetails {
+                market_id: market_id.to_owned(),
+                provider: provider.to_owned(),
+                kind,
+                qualifier: qualifier.map(str::to_owned),
+            },
+        }),
+    }
 }
 
-fn decimal_json(
+fn decimal_result(
     value: Option<&kairos_protocol::generated::kairos::common::v_2::Decimal64>,
-) -> Value {
-    value.map_or(Value::Null, |value| {
-        serde_json::json!({
-            "mantissa": value.mantissa(),
-            "scale": value.scale(),
-        })
+) -> Option<MarketDecimalResult> {
+    value.map(|value| MarketDecimalResult {
+        mantissa: value.mantissa(),
+        scale: value.scale(),
     })
 }
 
-fn view_metadata_json(metadata: ViewMetadata<'_>) -> Value {
-    serde_json::json!({
-        "view_key": metadata.view_key(),
-        "generation": metadata.generation(),
-        "applied_revision": metadata.applied_revision(),
-        "completeness": metadata
-            .completeness()
-            .variant_name()
-            .unwrap_or("UNKNOWN")
-            .to_ascii_lowercase(),
-    })
+fn view_metadata_result(metadata: ViewMetadata<'_>) -> MarketViewMetadataResult {
+    MarketViewMetadataResult {
+        view_key: metadata.view_key().to_owned(),
+        generation: metadata.generation(),
+        applied_revision: metadata.applied_revision(),
+        completeness: enum_name(metadata.completeness().variant_name()),
+    }
+}
+
+fn enum_name(value: Option<&str>) -> String {
+    value.unwrap_or("UNKNOWN").to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -463,13 +611,14 @@ mod tests {
     #[test]
     fn missing_view_error_is_structured_without_exposing_os_message() {
         let error = io::Error::new(io::ErrorKind::NotFound, "No such file or directory");
-        let value = snapshot_error_json(
+        let result = snapshot_error_result(
             "quote",
             "market:binance:spot:BTCUSDT",
             "binance-spot",
             None,
             &error,
         );
+        let value = serde_json::to_value(result).unwrap();
 
         assert_eq!(value["status"], "unavailable");
         assert_eq!(value["error"]["code"], "view_not_found");
@@ -489,7 +638,14 @@ mod tests {
     #[test]
     fn invalid_view_payload_is_reported_as_corrupt() {
         let error = io::Error::new(io::ErrorKind::InvalidData, "expected QuoteLatestView");
-        let value = snapshot_error_json("quote", "market:test", "source", None, &error);
+        let value = serde_json::to_value(snapshot_error_result(
+            "quote",
+            "market:test",
+            "source",
+            None,
+            &error,
+        ))
+        .unwrap();
 
         assert_eq!(value["error"]["code"], "snapshot_corrupt");
         assert_eq!(value["error"]["retryable"], false);

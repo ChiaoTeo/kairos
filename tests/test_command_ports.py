@@ -24,7 +24,14 @@ from kairospy.strategy import (
     ReplaceOrderRequest,
     TimeInForce,
 )
-from kairospy.application.market import SubscriptionRequest as MarketSubscriptionRequest
+from kairospy.application.market import (
+    CanonicalMarketTarget,
+    ObservationRequirement,
+    OptionsTarget,
+    Provider,
+    ProviderPreference,
+    SubscriptionRequest as MarketSubscriptionRequest,
+)
 from kairospy.infrastructure.transport import (
     ExecutionCommandClient,
     MarketCommandClient,
@@ -60,7 +67,10 @@ def test_market_port_adapts_typed_subscription_to_owner_command() -> None:
     port = MarketCommandClient(client)
 
     handle = port.subscribe(
-        MarketSubscriptionRequest("BTCUSDT", selectors=("quote", "bar:1m")),
+        MarketSubscriptionRequest(
+            CanonicalMarketTarget("market:binance:spot:BTCUSDT"),
+            (ObservationRequirement("quote"), ObservationRequirement("bar", "1m")),
+        ),
         strategy_id="sma",
         instance_id="instance-1",
         request_id="request-1",
@@ -73,8 +83,15 @@ def test_market_port_adapts_typed_subscription_to_owner_command() -> None:
     assert body["operation"] == "subscribe"
     assert body["strategy_id"] == "sma"
     assert body["instance_id"] == "instance-1"
-    assert body["payload"]["selectors"] == ["quote", "bar:1m"]
-    assert body["payload"]["source_ids"] == []
+    assert body["payload"]["target"] == {
+        "type": "market",
+        "market_id": "market:binance:spot:BTCUSDT",
+    }
+    assert body["payload"]["observations"] == [
+        {"kind": "quote", "qualifier": None},
+        {"kind": "bar", "qualifier": "1m"},
+    ]
+    assert body["payload"]["provider_preference"] == {"mode": "automatic"}
 
 
 def test_market_port_releases_every_subscription_for_strategy_instance() -> None:
@@ -98,18 +115,23 @@ def test_market_port_releases_every_subscription_for_strategy_instance() -> None
     assert body["payload"] == {}
 
 
-def test_market_port_preserves_asset_type_route_key() -> None:
+def test_market_port_preserves_explicit_provider_preference() -> None:
     client = RecordingClient()
     port = MarketCommandClient(client)
     port.subscribe(
         MarketSubscriptionRequest(
-            "AAPL", exchange="okx", market_type="spot", asset_type="equity"
+            CanonicalMarketTarget("market:sip:equity:US:AAPL"),
+            (ObservationRequirement("quote"),),
+            ProviderPreference.require(Provider.MASSIVE),
         ),
         strategy_id="equity",
         instance_id="instance-1",
         request_id="request-equity",
     )
-    assert client.calls[0][1][0]["payload"]["asset_type"] == "equity"
+    assert client.calls[0][1][0]["payload"]["provider_preference"] == {
+        "mode": "require",
+        "providers": ["massive"],
+    }
 
 
 def test_market_port_queries_available_data_sources() -> None:
@@ -129,20 +151,28 @@ def test_market_port_forwards_chain_subscription_parameters() -> None:
     port = MarketCommandClient(client)
     port.subscribe(
         MarketSubscriptionRequest(
-            "market.AAPL",
-            selectors=("quote",),
-            exchange="massive",
-            market_type="options",
-            asset_type="equity",
-            params={"mode": "chain", "underlying": "AAPL"},
+            OptionsTarget(
+                underlying_market_id="market:sip:equity:US:AAPL",
+                option_right="both",
+                limit=40,
+            ),
+            (ObservationRequirement("quote"),),
         ),
         strategy_id="options",
         instance_id="instance-1",
         request_id="request-options",
     )
-    assert client.calls[0][1][0]["payload"]["params"] == {
-        "mode": "chain",
-        "underlying": "AAPL",
+    assert client.calls[0][1][0]["payload"]["target"] == {
+        "type": "options",
+        "underlying_market_id": "market:sip:equity:US:AAPL",
+        "underlying_instrument_id": None,
+        "expiry_from_unix_nanos": None,
+        "expiry_to_unix_nanos": None,
+        "strike_lower": None,
+        "strike_upper": None,
+        "option_right": "both",
+        "limit": 40,
+        "progressive": False,
     }
 
 

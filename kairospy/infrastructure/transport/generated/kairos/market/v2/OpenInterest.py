@@ -43,7 +43,7 @@ class OpenInterest(object):
         return None
 
     # OpenInterest
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -125,11 +125,11 @@ def OpenInterestAddInstrumentId(builder, instrumentId):
 def AddInstrumentId(builder, instrumentId):
     OpenInterestAddInstrumentId(builder, instrumentId)
 
-def OpenInterestAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def OpenInterestAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    OpenInterestAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    OpenInterestAddProvider(builder, provider)
 
 def OpenInterestAddContracts(builder, contracts):
     builder.PrependStructSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(contracts), 0)

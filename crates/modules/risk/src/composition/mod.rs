@@ -171,7 +171,7 @@ mod tests {
         Conflux, ConfluxConfig, ConfluxSystem, JsonRpcRuntimeConfig, ShutdownMode,
     };
     use kairos_primitives::account::{AccountId, SegmentKey};
-    use kairos_primitives::reference::{Currency, Exchange, InstrumentId};
+    use kairos_primitives::reference::{Currency, ExchangeId, InstrumentId};
     use kairos_primitives::risk::{MarginRuleCode, PolicyId, ReservationId};
     use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
     use kairos_risk_contract::{
@@ -243,7 +243,7 @@ mod tests {
                     account_id: AccountId::new("main").unwrap(),
                     strategy_id: StrategyId::new("strategy").unwrap(),
                     instrument_id: InstrumentId::new("instrument").unwrap(),
-                    exchange_id: Exchange::new("exchange").unwrap(),
+                    exchange_id: ExchangeId::new("exchange").unwrap(),
                     proposal: TradeRiskProposal {
                         notional: Amount::new(40, 0).unwrap(),
                         initial_margin_rate_bps: 10_000.into(),

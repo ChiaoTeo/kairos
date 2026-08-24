@@ -50,7 +50,7 @@ class Trade(object):
         return None
 
     # Trade
-    def SourceId(self):
+    def Provider(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -158,11 +158,11 @@ def TradeAddInstrumentId(builder, instrumentId):
 def AddInstrumentId(builder, instrumentId):
     TradeAddInstrumentId(builder, instrumentId)
 
-def TradeAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+def TradeAddProvider(builder, provider):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(provider), 0)
 
-def AddSourceId(builder, sourceId):
-    TradeAddSourceId(builder, sourceId)
+def AddProvider(builder, provider):
+    TradeAddProvider(builder, provider)
 
 def TradeAddPrice(builder, price):
     builder.PrependStructSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(price), 0)

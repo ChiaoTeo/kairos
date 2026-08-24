@@ -26,8 +26,6 @@ snapshots do not belong to `kairos market`.
 
 CONNECTED_COMMANDS = {
     "status",
-    "sources",
-    "data-sources",
     "snapshot",
     "refresh",
     "recover",

@@ -1,6 +1,6 @@
-use kairos_primitives::integration::ProviderId;
-use kairos_primitives::market::{ObservationKind, SourceId, SubscriptionId};
-use kairos_primitives::reference::{AssetClass, Exchange, InstrumentId, InstrumentKind, MarketId};
+use kairos_primitives::decimal::Price;
+use kairos_primitives::market::{ObservationKind, Provider, SubscriptionId};
+use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::runtime::{IdempotencyKey, InstanceId, LaunchId, RequestId, StrategyId};
 use kairos_primitives::time::Sequence;
 use serde::{Deserialize, Serialize};
@@ -31,20 +31,60 @@ pub enum MarketOperation {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketSubscribePayload {
-    pub subject: String,
-    pub selectors: Vec<String>,
+    pub target: MarketTarget,
+    pub observations: std::collections::BTreeSet<ObservationRequirement>,
     #[serde(default)]
-    pub source_id: Option<SourceId>,
+    pub provider_preference: ProviderPreference,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MarketTarget {
+    Market {
+        market_id: MarketId,
+    },
+    ConsolidatedInstrument {
+        instrument_id: InstrumentId,
+        #[serde(default)]
+        network_id: Option<String>,
+    },
+    Options {
+        #[serde(default)]
+        underlying_market_id: Option<MarketId>,
+        #[serde(default)]
+        underlying_instrument_id: Option<InstrumentId>,
+        #[serde(default)]
+        expiry_from_unix_nanos: Option<kairos_primitives::time::UnixNanos>,
+        #[serde(default)]
+        expiry_to_unix_nanos: Option<kairos_primitives::time::UnixNanos>,
+        #[serde(default)]
+        strike_lower: Option<Price>,
+        #[serde(default)]
+        strike_upper: Option<Price>,
+        #[serde(default)]
+        option_right: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        progressive: bool,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ObservationRequirement {
+    pub kind: ObservationKind,
     #[serde(default)]
-    pub source_ids: Vec<SourceId>,
-    pub exchange: Option<Exchange>,
-    pub market_type: Option<InstrumentKind>,
-    #[serde(default)]
-    pub asset_type: Option<AssetClass>,
-    #[serde(default)]
-    pub params: std::collections::BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
-    pub dynamic: bool,
+    pub qualifier: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", content = "providers", rename_all = "snake_case")]
+pub enum ProviderPreference {
+    #[default]
+    Automatic,
+    Prefer(Vec<Provider>),
+    Require(Vec<Provider>),
+    AllEligible,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -66,22 +106,13 @@ pub struct MarketControlError {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MarketDataSourcesQuery {
-    #[serde(default)]
-    pub target: Option<String>,
+pub struct MarketDataRoutesQuery {
     pub market_id: Option<MarketId>,
     pub instrument_id: Option<InstrumentId>,
     #[serde(default)]
-    pub underlying_market_id: Option<MarketId>,
-    #[serde(default)]
-    pub underlying_instrument_id: Option<InstrumentId>,
-    pub exchange: Option<Exchange>,
-    pub market_type: Option<InstrumentKind>,
-    pub asset_type: Option<AssetClass>,
-    #[serde(default)]
     pub observation_kind: Option<ObservationKind>,
     #[serde(default)]
-    pub provider_id: Option<ProviderId>,
+    pub provider: Option<Provider>,
     #[serde(default)]
     pub configured_only: bool,
     #[serde(default)]
@@ -114,41 +145,45 @@ pub enum MarketFeedStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MarketDataSource {
-    pub source_id: SourceId,
+pub struct MarketDataRoute {
+    pub market_id: MarketId,
+    pub provider: Provider,
     #[serde(default)]
-    pub provider_id: Option<ProviderId>,
+    pub observation_kinds: Vec<ObservationKind>,
+    pub state: MarketDataRouteState,
+    pub selected: bool,
     #[serde(default)]
-    pub observation_capabilities: Vec<ObservationKind>,
-    #[serde(default)]
-    pub configured: bool,
-    pub status: MarketSourceStatus,
-    pub ready: bool,
-    pub stale: bool,
+    pub pending_reason: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MarketSourceStatus {
-    Connecting,
+pub enum MarketDataRouteState {
+    Supported,
+    Configured,
     Ready,
-    Paused,
-    Reconnecting,
-    WarmingUp,
     Degraded,
-    Disconnected,
+    Stopped,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MarketDataSourcesResponse {
-    pub sources: Vec<MarketDataSource>,
+pub struct MarketDataRoutesResponse {
+    pub routes: Vec<MarketDataRoute>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketSubscriptionResponse {
     pub subscription_id: SubscriptionId,
     pub owner_id: SubscriptionOwnerKey,
-    pub status: MarketSubscriptionStatus,
+    pub state: MarketSubscriptionState,
+    #[serde(default)]
+    pub satisfied: std::collections::BTreeSet<ObservationRequirement>,
+    #[serde(default)]
+    pub missing: std::collections::BTreeSet<ObservationRequirement>,
+    #[serde(default)]
+    pub resolved_providers: std::collections::BTreeSet<Provider>,
+    #[serde(default)]
+    pub pending_reason: Option<SubscriptionPendingReason>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -185,12 +220,36 @@ impl std::fmt::Display for SubscriptionOwnerKey {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MarketSubscriptionStatus {
-    Pending,
-    Ready,
+pub enum MarketSubscriptionState {
+    Resolving,
+    Active,
+    PartiallyActive,
+    WaitingForProvider,
+    WaitingForMarket,
     Degraded,
-    Unavailable,
-    Rejected,
+    Failed,
+    Released,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum SubscriptionPendingReason {
+    ResolvingUnderlying,
+    WaitingForSpot,
+    SelectingContracts,
+    SubscribingMembers {
+        selected: u32,
+        active: u32,
+        failed: u32,
+    },
+    MarketUnavailable,
+    ProviderUnavailable {
+        #[serde(default)]
+        required: Vec<Provider>,
+    },
+    MissingObservations {
+        observations: std::collections::BTreeSet<ObservationRequirement>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -218,7 +277,8 @@ mod tests {
     use kairos_primitives::runtime::{IdempotencyKey, InstanceId, LaunchId, RequestId};
 
     use super::{
-        MarketCommandEnvelope, MarketDataSourcesQuery, MarketOperation, MarketSubscribePayload,
+        MarketCommandEnvelope, MarketDataRoutesQuery, MarketOperation, MarketSubscribePayload,
+        MarketTarget, ObservationRequirement, ProviderPreference,
     };
 
     #[test]
@@ -232,30 +292,35 @@ mod tests {
             launch_id: Some(LaunchId::new("launch-1").unwrap()),
             instance_id: InstanceId::new("instance-1").unwrap(),
             payload: MarketSubscribePayload {
-                subject: "BTCUSDT".into(),
-                selectors: vec!["trades".into()],
-                source_id: Some(kairos_primitives::market::SourceId::new("binance-spot").unwrap()),
-                source_ids: Vec::new(),
-                exchange: Some(kairos_primitives::reference::Exchange::new("binance").unwrap()),
-                market_type: Some(kairos_primitives::reference::InstrumentKind::Spot),
-                asset_type: None,
-                params: Default::default(),
-                dynamic: false,
+                target: MarketTarget::Market {
+                    market_id: kairos_primitives::reference::MarketId::new(
+                        "market:binance:spot:BTCUSDT",
+                    )
+                    .unwrap(),
+                },
+                observations: [ObservationRequirement {
+                    kind: kairos_primitives::market::ObservationKind::Trade,
+                    qualifier: None,
+                }]
+                .into_iter()
+                .collect(),
+                provider_preference: ProviderPreference::Automatic,
             },
         };
         let value = serde_json::to_value(command).unwrap();
         assert_eq!(value["operation"], "subscribe");
-        assert_eq!(value["payload"]["selectors"][0], "trades");
+        assert_eq!(value["payload"]["observations"][0]["kind"], "trade");
+        assert!(value["payload"].get("source_id").is_none());
         assert!(value.get("payload").is_some());
     }
 
     #[test]
-    fn data_source_query_uses_typed_discovery_filters() {
-        let query: MarketDataSourcesQuery = serde_json::from_value(serde_json::json!({
+    fn data_route_query_uses_typed_discovery_filters() {
+        let query: MarketDataRoutesQuery = serde_json::from_value(serde_json::json!({
             "market_id": "market:binance:spot:BTCUSDT",
             "instrument_id": "instrument:spot:BTC",
             "observation_kind": "quote",
-            "provider_id": "binance",
+            "provider": "binance",
             "configured_only": true,
             "ready_only": true
         }))
@@ -270,7 +335,7 @@ mod tests {
             Some(kairos_primitives::market::ObservationKind::Quote)
         );
         assert_eq!(
-            query.provider_id.as_ref().map(|value| value.as_str()),
+            query.provider.as_ref().map(|value| value.as_str()),
             Some("binance")
         );
         assert!(query.configured_only);

@@ -13,9 +13,22 @@ impl MarketApplication {
         &mut self,
         update: SourceOrderBookUpdate,
     ) -> Result<(), MarketError> {
+        let provider = update
+            .market
+            .selected_provider
+            .clone()
+            .or_else(|| {
+                update
+                    .market
+                    .runtime_route()
+                    .map(|route| route.provider.clone())
+            })
+            .ok_or_else(|| {
+                MarketError::Invalid("resolved Market has no selected provider".into())
+            })?;
         if update.snapshot {
-            let book = crate::domain::observation::order_book::OrderBook::snapshot_with_source(
-                update.source_id,
+            let book = crate::domain::observation::order_book::OrderBook::snapshot_with_provider(
+                provider,
                 update.market_id.to_string(),
                 update.instrument_id.to_string(),
                 update.last_sequence,
@@ -27,7 +40,7 @@ impl MarketApplication {
             self.ingest_orderbook_snapshot(book).map(|_| ())
         } else {
             self.ingest_orderbook_delta(OrderBookDelta {
-                source_id: update.source_id,
+                provider,
                 market_id: update.market_id,
                 instrument_id: update.instrument_id,
                 first_sequence: update.first_sequence,

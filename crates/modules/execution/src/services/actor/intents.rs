@@ -166,7 +166,7 @@ impl ExecutionActor {
     }
 
     /// Apply one intent lifecycle fact atomically inside the mutable state
-    /// owner. Sequence allocation and both durable/current projections must
+    /// owner. Sequence allocation and both durable and current views must
     /// never be assembled independently by the application facade.
     pub(crate) fn apply_intent_event(
         &mut self,

@@ -9,10 +9,126 @@ use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::execution::{OrderId, OrderSide as PrimitiveOrderSide};
 use kairos_primitives::reference::{InstrumentId, Symbol};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 
 use crate::application::{ExecutionOrderOptions, OrderSide, OrderType, SubmitOrder};
-use crate::services::direct::DirectOrderConnection;
+use crate::services::direct::{DirectFill, DirectOrderConnection};
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionContext {
+    pub owner: &'static str,
+    pub mode: &'static str,
+    pub scope: &'static str,
+    pub source: &'static str,
+    pub account_id: String,
+    pub provider: String,
+    pub environment: String,
+    pub segment: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionOrder {
+    pub order_id: String,
+    pub remote_order_id: String,
+    pub client_order_id: Option<String>,
+    pub symbol: String,
+    pub side: String,
+    pub order_type: String,
+    pub status: String,
+    pub quantity: String,
+    pub filled_quantity: String,
+    pub average_fill_price: Option<String>,
+    pub occurred_at_unix_nanos: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionFill {
+    pub fill_id: String,
+    pub remote_order_id: String,
+    pub symbol: String,
+    pub side: String,
+    pub price: String,
+    pub quantity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realized_pnl: Option<String>,
+    pub fee: Option<String>,
+    pub fee_currency: Option<String>,
+    pub executed_at_unix_nanos: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionOutcome {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filled_quantity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occurred_at_unix_nanos: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant_request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionOrdersResult {
+    #[serde(flatten)]
+    pub context: CliExecutionContext,
+    pub command: String,
+    pub orders: Vec<CliExecutionOrder>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionOrderResult {
+    #[serde(flatten)]
+    pub context: CliExecutionContext,
+    pub order: CliExecutionOrder,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionFillsResult {
+    #[serde(flatten)]
+    pub context: CliExecutionContext,
+    pub fills: Vec<CliExecutionFill>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionCommandResult {
+    #[serde(flatten)]
+    pub context: CliExecutionContext,
+    pub command: String,
+    pub outcome: CliExecutionOutcome,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CliExecutionReplaceResult {
+    #[serde(flatten)]
+    pub context: CliExecutionContext,
+    pub command: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<&'static str>,
+    pub cancel: CliExecutionOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submit: Option<CliExecutionOutcome>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum CliExecutionOutput {
+    Orders(CliExecutionOrdersResult),
+    Order(CliExecutionOrderResult),
+    Fills(CliExecutionFillsResult),
+    Command(CliExecutionCommandResult),
+    Replace(CliExecutionReplaceResult),
+}
 
 /// Account-owned facts required to establish one short-lived provider session.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -22,7 +138,7 @@ pub struct StandaloneExecutionBinding {
     pub provider: String,
     pub environment: String,
     pub segment_key: String,
-    pub provider_product: String,
+    pub execution_channel: String,
     pub trading_mode: Option<String>,
     pub credential_id: Option<String>,
     pub credential_role: String,
@@ -56,34 +172,35 @@ impl CliExecutionApplication {
         &mut self,
         symbol: Option<&str>,
         limit: Option<u32>,
-    ) -> Result<Value, String> {
+    ) -> Result<CliExecutionOutput, String> {
         let query = self.query(symbol, None, limit)?;
         let orders = self.connection.open_orders(&query).await.map_err(display)?;
-        Ok(self.orders_result("open-orders", orders))
+        Ok(CliExecutionOutput::Orders(
+            self.orders_result("open-orders", orders),
+        ))
     }
 
     pub async fn history(
         &mut self,
         symbol: Option<&str>,
         limit: Option<u32>,
-    ) -> Result<Value, String> {
+    ) -> Result<CliExecutionOutput, String> {
         let query = self.query(symbol, None, limit)?;
         let orders = self.connection.history(&query).await.map_err(display)?;
-        Ok(self.orders_result("history", orders))
+        Ok(CliExecutionOutput::Orders(
+            self.orders_result("history", orders),
+        ))
     }
 
-    pub async fn order(&mut self, order_id: &str, symbol: Option<&str>) -> Result<Value, String> {
+    pub async fn order(
+        &mut self,
+        order_id: &str,
+        symbol: Option<&str>,
+    ) -> Result<CliExecutionOutput, String> {
         let order = self.find_order(order_id, symbol).await?;
-        Ok(json!({
-            "owner": "execution",
-            "mode": "standalone",
-            "scope": "direct-provider",
-            "source": "provider",
-            "account_id": self.binding.account_id,
-            "provider": self.binding.provider,
-            "environment": self.binding.environment,
-            "segment": self.binding.segment_key,
-            "order": order_json(&order),
+        Ok(CliExecutionOutput::Order(CliExecutionOrderResult {
+            context: execution_context(&self.binding),
+            order: order_result(&order),
         }))
     }
 
@@ -92,22 +209,15 @@ impl CliExecutionApplication {
         symbol: Option<&str>,
         order_id: Option<&str>,
         limit: Option<u16>,
-    ) -> Result<Value, String> {
+    ) -> Result<CliExecutionOutput, String> {
         let fills = self
             .connection
             .fills(symbol, order_id, limit)
             .await
             .map_err(display)?;
-        Ok(json!({
-            "owner": "execution",
-            "mode": "standalone",
-            "scope": "direct-provider",
-            "source": "provider",
-            "account_id": self.binding.account_id,
-            "provider": self.binding.provider,
-            "environment": self.binding.environment,
-            "segment": self.binding.segment_key,
-            "fills": fills,
+        Ok(CliExecutionOutput::Fills(CliExecutionFillsResult {
+            context: execution_context(&self.binding),
+            fills: fills.into_iter().map(fill_result).collect(),
         }))
     }
 
@@ -115,7 +225,7 @@ impl CliExecutionApplication {
         &mut self,
         request: SubmitOrder,
         symbol: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> Result<CliExecutionOutput, String> {
         self.assert_account(&request)?;
         let provider_request = self.provider_request(&request, symbol)?;
         let outcome = self
@@ -123,10 +233,18 @@ impl CliExecutionApplication {
             .submit(&provider_request)
             .await
             .map_err(display)?;
-        Ok(command_json(&self.binding, "submit", outcome))
+        Ok(CliExecutionOutput::Command(command_result(
+            &self.binding,
+            "submit",
+            outcome,
+        )))
     }
 
-    pub async fn cancel(&mut self, order_id: &str, symbol: Option<&str>) -> Result<Value, String> {
+    pub async fn cancel(
+        &mut self,
+        order_id: &str,
+        symbol: Option<&str>,
+    ) -> Result<CliExecutionOutput, String> {
         let order = self.find_order(order_id, symbol).await?;
         let request = self.request_from_external(&order)?;
         let outcome = self
@@ -134,7 +252,11 @@ impl CliExecutionApplication {
             .cancel(&request, order.remote_order_id.as_str(), now_unix_nanos())
             .await
             .map_err(display)?;
-        Ok(command_json(&self.binding, "cancel", outcome))
+        Ok(CliExecutionOutput::Command(command_result(
+            &self.binding,
+            "cancel",
+            outcome,
+        )))
     }
 
     /// Portable replace semantics: confirm cancel first, then submit the replacement.
@@ -144,7 +266,7 @@ impl CliExecutionApplication {
         target_order_id: &str,
         replacement: SubmitOrder,
         symbol: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> Result<CliExecutionOutput, String> {
         self.assert_account(&replacement)?;
         let target = self.find_order(target_order_id, symbol).await?;
         let cancel_request = self.request_from_external(&target)?;
@@ -158,15 +280,12 @@ impl CliExecutionApplication {
             .await
             .map_err(display)?;
         if !matches!(canceled, CommandOutcome::Confirmed(_)) {
-            return Ok(json!({
-                "owner": "execution", "mode": "standalone", "scope": "direct-provider", "command": "replace",
-                "account_id": self.binding.account_id,
-                "provider": self.binding.provider,
-                "environment": self.binding.environment,
-                "segment": self.binding.segment_key,
-                "source": "provider",
-                "result": "replacement_not_submitted",
-                "cancel": outcome_json(canceled),
+            return Ok(CliExecutionOutput::Replace(CliExecutionReplaceResult {
+                context: execution_context(&self.binding),
+                command: "replace",
+                result: Some("replacement_not_submitted"),
+                cancel: outcome_result(canceled),
+                submit: None,
             }));
         }
         let provider_request = self.provider_request(&replacement, symbol)?;
@@ -175,15 +294,12 @@ impl CliExecutionApplication {
             .submit(&provider_request)
             .await
             .map_err(display)?;
-        Ok(json!({
-            "owner": "execution", "mode": "standalone", "scope": "direct-provider", "command": "replace",
-            "account_id": self.binding.account_id,
-            "provider": self.binding.provider,
-            "environment": self.binding.environment,
-            "segment": self.binding.segment_key,
-            "source": "provider",
-            "cancel": outcome_json(canceled),
-            "submit": outcome_json(submitted),
+        Ok(CliExecutionOutput::Replace(CliExecutionReplaceResult {
+            context: execution_context(&self.binding),
+            command: "replace",
+            result: None,
+            cancel: outcome_result(canceled),
+            submit: Some(outcome_result(submitted)),
         }))
     }
 
@@ -196,7 +312,7 @@ impl CliExecutionApplication {
         Ok(ExternalOrderQuery {
             symbol: symbol.map(Symbol::new).transpose().map_err(display)?,
             instrument_type: Some(ParticipantInstrumentTypeRef::new(
-                self.binding.provider_product.clone(),
+                self.binding.execution_channel.clone(),
             )?),
             order_id: order_id.map(OrderId::new).transpose().map_err(display)?,
             limit,
@@ -310,7 +426,7 @@ impl CliExecutionApplication {
                 self.binding.provider.clone(),
             )?,
             Some(ParticipantInstrumentTypeRef::new(
-                self.binding.provider_product.clone(),
+                self.binding.execution_channel.clone(),
             )?),
             symbol,
         )
@@ -332,15 +448,12 @@ impl CliExecutionApplication {
         Ok(())
     }
 
-    fn orders_result(&self, command: &str, orders: Vec<ExternalOrder>) -> Value {
-        json!({
-            "owner": "execution", "mode": "standalone", "scope": "direct-provider", "source": "provider",
-            "command": command, "account_id": self.binding.account_id,
-            "provider": self.binding.provider,
-            "environment": self.binding.environment,
-            "segment": self.binding.segment_key,
-            "orders": orders.iter().map(order_json).collect::<Vec<_>>(),
-        })
+    fn orders_result(&self, command: &str, orders: Vec<ExternalOrder>) -> CliExecutionOrdersResult {
+        CliExecutionOrdersResult {
+            context: execution_context(&self.binding),
+            command: command.to_owned(),
+            orders: orders.iter().map(order_result).collect(),
+        }
     }
 }
 
@@ -371,57 +484,100 @@ fn parse_tif(value: &str) -> Result<TimeInForce, String> {
     }
 }
 
-fn order_json(order: &ExternalOrder) -> Value {
-    json!({
-        "order_id": order.order_id.to_string(),
-        "remote_order_id": order.remote_order_id.to_string(),
-        "client_order_id": order.client_order_id.as_ref().map(ToString::to_string),
-        "symbol": order.symbol.to_string(),
-        "side": format!("{:?}", order.side).to_ascii_lowercase(),
-        "order_type": format!("{:?}", order.order_type).to_ascii_lowercase(),
-        "status": format!("{:?}", order.status).to_ascii_lowercase(),
-        "quantity": decimal(order.quantity),
-        "filled_quantity": decimal(order.filled_quantity),
-        "average_fill_price": order.average_fill_price.map(decimal),
-        "occurred_at_unix_nanos": order.occurred_at_unix_nanos.map(|value| value.get()),
-    })
+fn execution_context(binding: &StandaloneExecutionBinding) -> CliExecutionContext {
+    CliExecutionContext {
+        owner: "execution",
+        mode: "standalone",
+        scope: "direct-provider",
+        source: "provider",
+        account_id: binding.account_id.clone(),
+        provider: binding.provider.clone(),
+        environment: binding.environment.clone(),
+        segment: binding.segment_key.clone(),
+    }
 }
 
-fn command_json(
+fn order_result(order: &ExternalOrder) -> CliExecutionOrder {
+    CliExecutionOrder {
+        order_id: order.order_id.to_string(),
+        remote_order_id: order.remote_order_id.to_string(),
+        client_order_id: order.client_order_id.as_ref().map(ToString::to_string),
+        symbol: order.symbol.to_string(),
+        side: format!("{:?}", order.side).to_ascii_lowercase(),
+        order_type: format!("{:?}", order.order_type).to_ascii_lowercase(),
+        status: format!("{:?}", order.status).to_ascii_lowercase(),
+        quantity: decimal(order.quantity),
+        filled_quantity: decimal(order.filled_quantity),
+        average_fill_price: order.average_fill_price.map(decimal),
+        occurred_at_unix_nanos: order.occurred_at_unix_nanos.map(|value| value.get()),
+    }
+}
+
+fn fill_result(fill: DirectFill) -> CliExecutionFill {
+    CliExecutionFill {
+        fill_id: fill.fill_id,
+        remote_order_id: fill.remote_order_id,
+        symbol: fill.symbol,
+        side: fill.side,
+        price: fill.price,
+        quantity: fill.quantity,
+        realized_pnl: fill.realized_pnl,
+        fee: fill.fee,
+        fee_currency: fill.fee_currency,
+        executed_at_unix_nanos: fill.executed_at_unix_nanos,
+    }
+}
+
+fn command_result(
     binding: &StandaloneExecutionBinding,
     command: &str,
     outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>,
-) -> Value {
-    json!({
-        "owner": "execution", "mode": "standalone", "scope": "direct-provider", "source": "provider",
-        "command": command,
-        "account_id": binding.account_id,
-        "provider": binding.provider,
-        "environment": binding.environment,
-        "segment": binding.segment_key,
-        "outcome": outcome_json(outcome),
-    })
+) -> CliExecutionCommandResult {
+    CliExecutionCommandResult {
+        context: execution_context(binding),
+        command: command.to_owned(),
+        outcome: outcome_result(outcome),
+    }
 }
 
-fn outcome_json(outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>) -> Value {
+fn outcome_result(outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>) -> CliExecutionOutcome {
     match outcome {
-        CommandOutcome::Confirmed(event) => json!({
-            "status": "confirmed",
-            "order_id": event.order_id.to_string(),
-            "remote_order_id": event.remote_order_id.map(|value| value.to_string()),
-            "order_status": format!("{:?}", event.status).to_ascii_lowercase(),
-            "filled_quantity": event.filled_quantity.map(decimal),
-            "occurred_at_unix_nanos": event.occurred_at_unix_nanos.get(),
-            "reason": event.reason,
-        }),
-        CommandOutcome::Rejected(value) => json!({
-            "status": "rejected", "code": value.code, "message": value.message,
-            "participant_request_id": value.participant_request_id,
-        }),
-        CommandOutcome::Indeterminate(value) => json!({
-            "status": "indeterminate", "message": value.message,
-            "participant_request_id": value.participant_request_id,
-        }),
+        CommandOutcome::Confirmed(event) => CliExecutionOutcome {
+            status: "confirmed",
+            order_id: Some(event.order_id.to_string()),
+            remote_order_id: event.remote_order_id.map(|value| value.to_string()),
+            order_status: Some(format!("{:?}", event.status).to_ascii_lowercase()),
+            filled_quantity: event.filled_quantity.map(decimal),
+            occurred_at_unix_nanos: Some(event.occurred_at_unix_nanos.get()),
+            reason: Some(event.reason),
+            code: None,
+            message: None,
+            participant_request_id: None,
+        },
+        CommandOutcome::Rejected(value) => CliExecutionOutcome {
+            status: "rejected",
+            order_id: None,
+            remote_order_id: None,
+            order_status: None,
+            filled_quantity: None,
+            occurred_at_unix_nanos: None,
+            reason: None,
+            code: value.code,
+            message: Some(value.message),
+            participant_request_id: value.participant_request_id,
+        },
+        CommandOutcome::Indeterminate(value) => CliExecutionOutcome {
+            status: "indeterminate",
+            order_id: None,
+            remote_order_id: None,
+            order_status: None,
+            filled_quantity: None,
+            occurred_at_unix_nanos: None,
+            reason: None,
+            code: None,
+            message: Some(value.message),
+            participant_request_id: value.participant_request_id,
+        },
     }
 }
 

@@ -16,11 +16,11 @@ from .mapping import map_risk_event
 
 
 class RiskApplication:
-    """Concrete read-only Risk projection scoped to one strategy launch."""
+    """Concrete read-only Risk latest view scoped to one strategy launch."""
 
     def __init__(
         self,
-        projection: Any | None,
+        latest_view: Any | None,
         event_source: Any | None = None,
         *,
         account_ids: tuple[AccountId, ...] = (),
@@ -28,7 +28,7 @@ class RiskApplication:
         launch_id: str | None = None,
         instance_id: str | None = None,
     ) -> None:
-        self._projection = projection
+        self._latest_view = latest_view
         self._event_source = event_source
         self._account_ids = frozenset(account_ids)
         self._strategy_id = strategy_id
@@ -106,7 +106,7 @@ class RiskApplication:
             yield event
 
     def status(self, *, account: AccountId | str) -> RiskStatus:
-        if self._projection is None:
-            raise RuntimeError("Risk projection is unavailable")
+        if self._latest_view is None:
+            raise RuntimeError("Risk latest view is unavailable")
         account_id = account if isinstance(account, AccountId) else AccountId(account)
-        return self._projection.status(account_id)
+        return self._latest_view.status(account_id)

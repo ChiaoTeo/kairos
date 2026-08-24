@@ -28,8 +28,9 @@ def execute_guided_command(
     display = display_command(argv)
     typer.echo()
     typer.echo(f"── {command.summary} ──")
-    typer.echo(f"准备执行：{display}")
-    typer.echo(f"用途：{command.summary}")
+    if command.show_command:
+        typer.echo(f"准备执行：{display}")
+        typer.echo(f"用途：{command.summary}")
     if command.dangerous and not yes:
         typer.echo("这个动作可能改变运行状态。")
         if not typer.confirm("确认执行这个命令吗？", default=True):

@@ -13,7 +13,7 @@ enum BarKind:ubyte {
 table Bar {
   scope:ObservationScope (required);
   instrument_id:string (required);
-  source_id:string (required);
+  provider:string (required);
   bar_spec_id:string (required);
   kind:BarKind = UNSPECIFIED;
   window_start_unix_nanos:ulong;

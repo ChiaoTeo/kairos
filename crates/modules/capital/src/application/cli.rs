@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use kairos_workspace::Workspace;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 /// Standalone Capital CLI facade.
@@ -19,6 +20,96 @@ pub enum CapitalCliRequestKind {
     Availability,
     CancelFundingObjective,
     ReconcilePlan,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", content = "request", rename_all = "snake_case")]
+pub enum CapitalCliRequest {
+    FundingObjective(kairos_capital_contract::PublishFundingObjectiveRequest),
+    CapitalDemand(kairos_capital_contract::ObserveCapitalDemandRequest),
+    Availability(kairos_capital_contract::QueryCapitalAvailabilityRequest),
+    CancelFundingObjective(kairos_capital_contract::CancelFundingObjectiveRequest),
+    ReconcilePlan(kairos_capital_contract::ReconcileCapitalPlanRequest),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CapitalValidationResult {
+    pub owner: &'static str,
+    pub mode: &'static str,
+    pub kind: &'static str,
+    pub valid: bool,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CapitalPreviewResult {
+    pub owner: &'static str,
+    pub mode: &'static str,
+    pub command: &'static str,
+    pub kind: &'static str,
+    pub file: String,
+    pub valid: bool,
+    pub connects_server: bool,
+    pub writes_runtime_state: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<CapitalCliRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CapitalPlanInput {
+    pub file: String,
+    #[serde(flatten)]
+    pub request: CapitalCliRequest,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CapitalPlanInputError {
+    pub file: String,
+    pub kind: &'static str,
+    pub error: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CapitalPlanSummary {
+    pub objective_count: usize,
+    pub demand_count: usize,
+    pub availability_query_count: usize,
+    pub invalid_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CapitalPlanInputs {
+    pub objectives: Vec<CapitalPlanInput>,
+    pub demands: Vec<CapitalPlanInput>,
+    pub availability_queries: Vec<CapitalPlanInput>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CapitalPlanResult {
+    pub owner: &'static str,
+    pub mode: &'static str,
+    pub command: &'static str,
+    pub valid: bool,
+    pub connects_server: bool,
+    pub writes_runtime_state: bool,
+    pub executes_transfer: bool,
+    pub summary: CapitalPlanSummary,
+    pub inputs: CapitalPlanInputs,
+    pub errors: Vec<Vec<CapitalPlanInputError>>,
+    pub planning_limits: [&'static str; 3],
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum CapitalStandaloneOutput {
+    Schema(Value),
+    Validation(CapitalValidationResult),
+    Preview(CapitalPreviewResult),
+    Plan(CapitalPlanResult),
 }
 
 impl CliCapitalApplication {
@@ -61,51 +152,41 @@ impl CliCapitalApplication {
         &self,
         kind: CapitalCliRequestKind,
         file: &Path,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<CapitalValidationResult, Box<dyn std::error::Error>> {
         let data = std::fs::read_to_string(file)?;
-        let result = match kind {
-            CapitalCliRequestKind::FundingObjective => validate_file::<
-                kairos_capital_contract::PublishFundingObjectiveRequest,
-            >(kind, file, &data),
-            CapitalCliRequestKind::CapitalDemand => validate_file::<
-                kairos_capital_contract::ObserveCapitalDemandRequest,
-            >(kind, file, &data),
-            CapitalCliRequestKind::Availability => validate_file::<
-                kairos_capital_contract::QueryCapitalAvailabilityRequest,
-            >(kind, file, &data),
-            CapitalCliRequestKind::CancelFundingObjective => validate_file::<
-                kairos_capital_contract::CancelFundingObjectiveRequest,
-            >(kind, file, &data),
-            CapitalCliRequestKind::ReconcilePlan => validate_file::<
-                kairos_capital_contract::ReconcileCapitalPlanRequest,
-            >(kind, file, &data),
-        };
-        Ok(result)
+        let error = parse_request(kind, &data).err();
+        Ok(CapitalValidationResult {
+            owner: "capital",
+            mode: "standalone",
+            kind: kind.as_str(),
+            valid: error.is_none(),
+            file: file.display().to_string(),
+            error,
+        })
     }
 
     pub fn preview(
         &self,
         kind: CapitalCliRequestKind,
         file: &Path,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let value = read_json_value(file)?;
-        let validation = validate_value(kind, &value);
-        Ok(json!({
-            "owner": "capital",
-            "mode": "standalone",
-            "command": "preview",
-            "kind": kind.as_str(),
-            "file": file.display().to_string(),
-            "valid": validation.valid,
-            "connects_server": false,
-            "writes_runtime_state": false,
-            "summary": if validation.valid {
-                Some(preview_summary(kind, &value))
-            } else {
-                None
-            },
-            "error": validation.error,
-        }))
+    ) -> Result<CapitalPreviewResult, Box<dyn std::error::Error>> {
+        let data = std::fs::read_to_string(file)?;
+        let (request, error) = match parse_request(kind, &data) {
+            Ok(request) => (Some(request), None),
+            Err(error) => (None, Some(error)),
+        };
+        Ok(CapitalPreviewResult {
+            owner: "capital",
+            mode: "standalone",
+            command: "preview",
+            kind: kind.as_str(),
+            file: file.display().to_string(),
+            valid: error.is_none(),
+            connects_server: false,
+            writes_runtime_state: false,
+            request,
+            error,
+        })
     }
 
     pub fn plan(
@@ -113,7 +194,7 @@ impl CliCapitalApplication {
         objective_files: &[PathBuf],
         demand_files: &[PathBuf],
         availability_files: &[PathBuf],
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+    ) -> Result<CapitalPlanResult, Box<dyn std::error::Error>> {
         let objectives =
             collect_plan_inputs(CapitalCliRequestKind::FundingObjective, objective_files)?;
         let demands = collect_plan_inputs(CapitalCliRequestKind::CapitalDemand, demand_files)?;
@@ -121,112 +202,43 @@ impl CliCapitalApplication {
             collect_plan_inputs(CapitalCliRequestKind::Availability, availability_files)?;
         let invalid_count =
             objectives.invalid_count + demands.invalid_count + availability_queries.invalid_count;
-        Ok(json!({
-            "owner": "capital",
-            "mode": "standalone",
-            "command": "plan",
-            "valid": invalid_count == 0,
-            "connects_server": false,
-            "writes_runtime_state": false,
-            "executes_transfer": false,
-            "summary": {
-                "objective_count": objectives.items.len(),
-                "demand_count": demands.items.len(),
-                "availability_query_count": availability_queries.items.len(),
-                "invalid_count": invalid_count,
+        Ok(CapitalPlanResult {
+            owner: "capital",
+            mode: "standalone",
+            command: "plan",
+            valid: invalid_count == 0,
+            connects_server: false,
+            writes_runtime_state: false,
+            executes_transfer: false,
+            summary: CapitalPlanSummary {
+                objective_count: objectives.items.len(),
+                demand_count: demands.items.len(),
+                availability_query_count: availability_queries.items.len(),
+                invalid_count,
             },
-            "inputs": {
-                "objectives": objectives.items,
-                "demands": demands.items,
-                "availability_queries": availability_queries.items,
+            inputs: CapitalPlanInputs {
+                objectives: objectives.items,
+                demands: demands.items,
+                availability_queries: availability_queries.items,
             },
-            "errors": [
+            errors: vec![
                 objectives.errors,
                 demands.errors,
                 availability_queries.errors,
             ],
-            "planning_limits": [
+            planning_limits: [
                 "standalone plan validates and summarizes local typed request files only",
                 "route selection requires explicit offline fixtures or connected Capital runtime",
-                "no funding objective is published and no transfer is submitted"
+                "no funding objective is published and no transfer is submitted",
             ],
-        }))
+        })
     }
-}
-
-struct Validation {
-    valid: bool,
-    error: Option<String>,
 }
 
 struct PlanInputs {
-    items: Vec<Value>,
-    errors: Vec<Value>,
+    items: Vec<CapitalPlanInput>,
+    errors: Vec<CapitalPlanInputError>,
     invalid_count: usize,
-}
-
-fn read_json_value(file: &Path) -> Result<Value, Box<dyn std::error::Error>> {
-    let data = std::fs::read_to_string(file)?;
-    Ok(serde_json::from_str(&data)?)
-}
-
-fn validate_file<T: serde::de::DeserializeOwned>(
-    kind: CapitalCliRequestKind,
-    file: &Path,
-    data: &str,
-) -> Value {
-    match serde_json::from_str::<T>(data) {
-        Ok(_) => json!({
-            "owner": "capital",
-            "mode": "standalone",
-            "kind": kind.as_str(),
-            "valid": true,
-            "file": file.display().to_string(),
-        }),
-        Err(error) => json!({
-            "owner": "capital",
-            "mode": "standalone",
-            "kind": kind.as_str(),
-            "valid": false,
-            "file": file.display().to_string(),
-            "error": error.to_string(),
-        }),
-    }
-}
-
-fn validate_value(kind: CapitalCliRequestKind, value: &Value) -> Validation {
-    let result = match kind {
-        CapitalCliRequestKind::FundingObjective => serde_json::from_value::<
-            kairos_capital_contract::PublishFundingObjectiveRequest,
-        >(value.clone())
-        .map(|_| ()),
-        CapitalCliRequestKind::CapitalDemand => serde_json::from_value::<
-            kairos_capital_contract::ObserveCapitalDemandRequest,
-        >(value.clone())
-        .map(|_| ()),
-        CapitalCliRequestKind::Availability => serde_json::from_value::<
-            kairos_capital_contract::QueryCapitalAvailabilityRequest,
-        >(value.clone())
-        .map(|_| ()),
-        CapitalCliRequestKind::CancelFundingObjective => serde_json::from_value::<
-            kairos_capital_contract::CancelFundingObjectiveRequest,
-        >(value.clone())
-        .map(|_| ()),
-        CapitalCliRequestKind::ReconcilePlan => serde_json::from_value::<
-            kairos_capital_contract::ReconcileCapitalPlanRequest,
-        >(value.clone())
-        .map(|_| ()),
-    };
-    match result {
-        Ok(()) => Validation {
-            valid: true,
-            error: None,
-        },
-        Err(error) => Validation {
-            valid: false,
-            error: Some(error.to_string()),
-        },
-    }
 }
 
 fn collect_plan_inputs(
@@ -236,20 +248,17 @@ fn collect_plan_inputs(
     let mut items = Vec::new();
     let mut errors = Vec::new();
     for file in files {
-        let value = read_json_value(file)?;
-        let validation = validate_value(kind, &value);
-        if validation.valid {
-            items.push(json!({
-                "file": file.display().to_string(),
-                "kind": kind.as_str(),
-                "summary": preview_summary(kind, &value),
-            }));
-        } else {
-            errors.push(json!({
-                "file": file.display().to_string(),
-                "kind": kind.as_str(),
-                "error": validation.error,
-            }));
+        let data = std::fs::read_to_string(file)?;
+        match parse_request(kind, &data) {
+            Ok(request) => items.push(CapitalPlanInput {
+                file: file.display().to_string(),
+                request,
+            }),
+            Err(error) => errors.push(CapitalPlanInputError {
+                file: file.display().to_string(),
+                kind: kind.as_str(),
+                error,
+            }),
         }
     }
     let invalid_count = errors.len();
@@ -260,62 +269,24 @@ fn collect_plan_inputs(
     })
 }
 
-fn preview_summary(kind: CapitalCliRequestKind, value: &Value) -> Value {
+fn parse_request(kind: CapitalCliRequestKind, data: &str) -> Result<CapitalCliRequest, String> {
     match kind {
-        CapitalCliRequestKind::FundingObjective => json!({
-            "request_id": text_field(value, "request_id"),
-            "capital_group_id": text_field(value, "capital_group_id"),
-            "objective_id": text_field(value, "objective_id"),
-            "strategy_id": text_field(value, "strategy_id"),
-            "destination": value.get("destination").cloned(),
-            "desired_available": text_field(value, "desired_available"),
-            "required_by_unix_nanos": value.get("required_by_unix_nanos").cloned(),
-            "expires_at_unix_nanos": value.get("expires_at_unix_nanos").cloned(),
-            "priority": text_field(value, "priority"),
-            "confidence_bps": value.get("confidence_bps").cloned(),
-            "runtime_action_if_connected": "publish_funding_objective",
-        }),
-        CapitalCliRequestKind::CapitalDemand => json!({
-            "request_id": text_field(value, "request_id"),
-            "capital_group_id": text_field(value, "capital_group_id"),
-            "demand_id": text_field(value, "demand_id"),
-            "strategy_id": text_field(value, "strategy_id"),
-            "destination": value.get("destination").cloned(),
-            "observed_shortfall": text_field(value, "observed_shortfall"),
-            "required_by_unix_nanos": value.get("required_by_unix_nanos").cloned(),
-            "expires_at_unix_nanos": value.get("expires_at_unix_nanos").cloned(),
-            "launch_id": text_field(value, "launch_id"),
-            "instance_id": text_field(value, "instance_id"),
-            "runtime_action_if_connected": "observe_capital_demand",
-        }),
-        CapitalCliRequestKind::Availability => json!({
-            "request_id": text_field(value, "request_id"),
-            "capital_group_id": text_field(value, "capital_group_id"),
-            "location": value.get("location").cloned(),
-            "runtime_action_if_connected": "query_capital_availability",
-        }),
-        CapitalCliRequestKind::CancelFundingObjective => json!({
-            "request_id": text_field(value, "request_id"),
-            "capital_group_id": text_field(value, "capital_group_id"),
-            "objective_id": text_field(value, "objective_id"),
-            "expected_version": value.get("expected_version").cloned(),
-            "strategy_id": text_field(value, "strategy_id"),
-            "runtime_action_if_connected": "cancel_funding_objective",
-        }),
-        CapitalCliRequestKind::ReconcilePlan => json!({
-            "request_id": text_field(value, "request_id"),
-            "capital_group_id": text_field(value, "capital_group_id"),
-            "plan_id": text_field(value, "plan_id"),
-            "runtime_action_if_connected": "reconcile_capital_plan",
-        }),
+        CapitalCliRequestKind::FundingObjective => serde_json::from_str(data)
+            .map(CapitalCliRequest::FundingObjective)
+            .map_err(|error| error.to_string()),
+        CapitalCliRequestKind::CapitalDemand => serde_json::from_str(data)
+            .map(CapitalCliRequest::CapitalDemand)
+            .map_err(|error| error.to_string()),
+        CapitalCliRequestKind::Availability => serde_json::from_str(data)
+            .map(CapitalCliRequest::Availability)
+            .map_err(|error| error.to_string()),
+        CapitalCliRequestKind::CancelFundingObjective => serde_json::from_str(data)
+            .map(CapitalCliRequest::CancelFundingObjective)
+            .map_err(|error| error.to_string()),
+        CapitalCliRequestKind::ReconcilePlan => serde_json::from_str(data)
+            .map(CapitalCliRequest::ReconcilePlan)
+            .map_err(|error| error.to_string()),
     }
-}
-
-fn text_field(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
 }
 
 impl CapitalCliRequestKind {

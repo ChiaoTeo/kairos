@@ -10,7 +10,7 @@ use kairos_conflux::{
 };
 use kairos_primitives::integration::ParticipantSymbol as ExternalSymbol;
 use kairos_primitives::reference::{
-    AssetClass, Currency, InstrumentId, InstrumentKind, MarketId, Symbol,
+    AssetClass, Currency, ExchangeId, InstrumentId, InstrumentKind, MarketId, Symbol,
 };
 
 use super::{
@@ -21,11 +21,12 @@ use super::{
     okx_provider_catalog, provider_catalog_uses_current_canonical_shape,
 };
 use crate::domain::{
-    Asset, Entity, Instrument, Market, ProviderCatalog, ReferenceResult, ReferenceSourceDefinition,
-    SourceDesiredState, SourceRuntimePhase, SourceScope, SourceSyncPolicy, SourceTickBudget,
+    Asset, Exchange, Instrument, Market, ProviderCatalog, ReferenceResult,
+    ReferenceSourceDefinition, SourceDesiredState, SourceRuntimePhase, SourceScope,
+    SourceSyncPolicy, SourceTickBudget,
 };
 use crate::services::actor::ReferenceActor;
-use crate::services::sources::{ConfiguredProviderSource, ParticipantAugmentedSource};
+use crate::services::sources::ConfiguredProviderSource;
 use crate::services::storage::catalog_store::SqlxCatalogStore;
 use crate::services::storage::provider_sync_store::SqlxProviderSyncStore;
 
@@ -174,9 +175,8 @@ async fn normalized_composite_persists_facts_without_returning_a_full_catalog() 
     let source = FixedSource {
         id: "provider-a",
         catalog: ProviderCatalog {
-            entities: vec![Entity {
-                entity_id: "provider:a".into(),
-                entity_type: "data_provider".into(),
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new("exchange:a").unwrap(),
                 name: "Provider A".into(),
                 status: "active".into(),
                 ..Default::default()
@@ -219,9 +219,8 @@ async fn normalized_fan_in_round_robins_source_tick_budget() {
             TestProviderSource::from(CountingSource {
                 id: "provider-a",
                 catalog: ProviderCatalog {
-                    entities: vec![Entity {
-                        entity_id: "provider:a".into(),
-                        entity_type: "data_provider".into(),
+                    exchanges: vec![Exchange {
+                        exchange_id: ExchangeId::new("exchange:a").unwrap(),
                         name: "Provider A".into(),
                         status: "active".into(),
                         ..Default::default()
@@ -233,9 +232,8 @@ async fn normalized_fan_in_round_robins_source_tick_budget() {
             TestProviderSource::from(DelayedCountingSource {
                 id: "provider-b",
                 catalog: ProviderCatalog {
-                    entities: vec![Entity {
-                        entity_id: "provider:b".into(),
-                        entity_type: "data_provider".into(),
+                    exchanges: vec![Exchange {
+                        exchange_id: ExchangeId::new("exchange:b").unwrap(),
                         name: "Provider B".into(),
                         status: "active".into(),
                         ..Default::default()
@@ -284,9 +282,8 @@ async fn normalized_fan_in_defers_sources_after_wall_clock_budget() {
             TestProviderSource::from(DelayedCountingSource {
                 id: "provider-a",
                 catalog: ProviderCatalog {
-                    entities: vec![Entity {
-                        entity_id: "provider:a".into(),
-                        entity_type: "data_provider".into(),
+                    exchanges: vec![Exchange {
+                        exchange_id: ExchangeId::new("exchange:a").unwrap(),
                         name: "Provider A".into(),
                         status: "active".into(),
                         ..Default::default()
@@ -299,9 +296,8 @@ async fn normalized_fan_in_defers_sources_after_wall_clock_budget() {
             TestProviderSource::from(DelayedCountingSource {
                 id: "provider-b",
                 catalog: ProviderCatalog {
-                    entities: vec![Entity {
-                        entity_id: "provider:b".into(),
-                        entity_type: "data_provider".into(),
+                    exchanges: vec![Exchange {
+                        exchange_id: ExchangeId::new("exchange:b").unwrap(),
                         name: "Provider B".into(),
                         status: "active".into(),
                         ..Default::default()
@@ -381,9 +377,8 @@ async fn actor_commits_normalized_composite_facts_without_catalog_materializatio
     let source = FixedSource {
         id: "provider-a",
         catalog: ProviderCatalog {
-            entities: vec![Entity {
-                entity_id: "provider:a".into(),
-                entity_type: "data_provider".into(),
+            exchanges: vec![Exchange {
+                exchange_id: ExchangeId::new("exchange:a").unwrap(),
                 name: "Provider A".into(),
                 status: "active".into(),
                 ..Default::default()
@@ -407,8 +402,8 @@ async fn actor_commits_normalized_composite_facts_without_catalog_materializatio
     assert_eq!(result.generation.get(), 1);
     assert_eq!(result.event_sequence.get(), 1);
     assert_eq!(result.events.len(), 1);
-    let reader = kairos_reference_contract::ReferenceSqliteReader::open(&path).unwrap();
-    assert!(reader.record("provider:a").unwrap().is_some());
+    let reader = kairos_reference_contract::ReferenceCatalog::open(&path).unwrap();
+    assert!(reader.record("exchange:a").unwrap().is_some());
 }
 
 #[async_trait::async_trait(?Send)]
@@ -504,34 +499,6 @@ impl ReferenceSource for FixedSource {
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         Ok(self.catalog.clone())
     }
-}
-
-#[tokio::test]
-async fn participant_augmented_step_counts_appended_records_seen() {
-    let source = FixedSource {
-        id: "provider-a",
-        catalog: ProviderCatalog {
-            markets: vec![Market {
-                market_id: typed_market_id("market:provider-a"),
-                status: "active".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        },
-    };
-    let participants = vec![Entity {
-        entity_id: "participant:venue:a".into(),
-        entity_type: "venue".into(),
-        name: "Venue A".into(),
-        ..Default::default()
-    }];
-    let mut source = ParticipantAugmentedSource::wrap(source, participants);
-
-    let update = source.fetch_catalog_step().await.unwrap();
-
-    assert_eq!(update.records_seen, Some(2));
-    assert_eq!(update.catalog.entities.len(), 1);
-    assert_eq!(update.catalog.markets.len(), 1);
 }
 
 #[async_trait::async_trait(?Send)]
@@ -900,7 +867,7 @@ fn binance_equity_broker_catalog_does_not_invent_exchange_listing_or_market() {
         catalog.instruments[0].instrument_id,
         "instrument:equity:US:AAPL:common"
     );
-    assert!(catalog.entities.is_empty());
+    assert!(catalog.exchanges.is_empty());
     assert!(catalog.listings.is_empty());
     assert!(catalog.markets.is_empty());
 }
@@ -932,8 +899,9 @@ fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
         }],
     })
     .unwrap();
-    assert!(catalog.entities.iter().any(|value| {
-        value.entity_id == "exchange:cboe-bzx-options" && value.name == "Cboe BZX Options Exchange"
+    assert!(catalog.exchanges.iter().any(|value| {
+        value.exchange_id == "exchange:cboe-bzx-options"
+            && value.name == "Cboe BZX Options Exchange"
     }));
     assert!(
         catalog
@@ -1046,20 +1014,17 @@ fn massive_equity_venues_have_specific_exchange_names() {
     })
     .unwrap();
 
-    assert!(
-        catalog
-            .entities
-            .iter()
-            .any(|entity| { entity.entity_id == "exchange:arcx" && entity.name == "NYSE Arca" })
-    );
-    assert!(catalog.entities.iter().any(|entity| {
-        entity.entity_id == "exchange:bats" && entity.name == "Cboe BZX Exchange"
+    assert!(catalog.exchanges.iter().any(|exchange| {
+        exchange.exchange_id == "exchange:arcx" && exchange.name == "NYSE Arca"
+    }));
+    assert!(catalog.exchanges.iter().any(|exchange| {
+        exchange.exchange_id == "exchange:bats" && exchange.name == "Cboe BZX Exchange"
     }));
     assert!(
         catalog
-            .entities
+            .exchanges
             .iter()
-            .all(|entity| entity.name != "Exchange")
+            .all(|exchange| exchange.name != "Exchange")
     );
 }
 
@@ -1107,7 +1072,7 @@ fn hyperliquid_provider_facts_receive_canonical_identity_only_in_reference() {
 }
 
 #[test]
-fn hyperliquid_spot_and_perpetual_have_distinct_provider_products() {
+fn hyperliquid_spot_and_perpetual_have_distinct_reference_markets() {
     let catalog = hyperliquid_provider_catalog(
         ExternalInstrumentCatalog {
             participant: ParticipantRef::new(ParticipantKind::Exchange, "hyperliquid").unwrap(),
@@ -1307,11 +1272,9 @@ async fn dynamic_source_definition_is_visible_in_source_health() {
 
     source
         .upsert_source_definition(ReferenceSourceDefinition {
-            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
-            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-            provider_product: Some(
-                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-            ),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
+            provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
             desired_state: SourceDesiredState::Paused,
             credential_binding: Some(
@@ -1328,13 +1291,12 @@ async fn dynamic_source_definition_is_visible_in_source_health() {
         .find(|value| value.source_id == "massive-options")
         .expect("dynamic source definition appears in provider health");
     assert_eq!(dynamic.status, SourceRuntimePhase::Paused);
-    assert_eq!(
-        dynamic
-            .definition
-            .as_ref()
-            .and_then(|definition| definition.provider_product.as_deref()),
-        Some("options")
-    );
+    let definition = dynamic
+        .definition
+        .as_ref()
+        .expect("dynamic source keeps its resolved definition");
+    assert_eq!(definition.source_id.as_str(), "massive-options");
+    assert_eq!(definition.provider_id.as_str(), "massive");
     let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
     let definitions = reopened.source_definitions().await.unwrap();
     assert!(
@@ -1366,11 +1328,9 @@ async fn enabled_registry_only_source_is_reported_as_registered() {
 
     source
         .upsert_source_definition(ReferenceSourceDefinition {
-            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
-            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-            provider_product: Some(
-                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-            ),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
+            provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
             desired_state: SourceDesiredState::Enabled,
             credential_binding: Some(
@@ -1413,12 +1373,9 @@ async fn dynamic_scoped_massive_options_definition_activates_runtime_adapter() {
     source
         .upsert_source_definition_with_connections(
             ReferenceSourceDefinition {
-                source_id: kairos_primitives::integration::ProviderId::new("massive-options")
+                source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
                     .unwrap(),
-                provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-                provider_product: Some(
-                    kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-                ),
+                provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
                 scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
                 desired_state: SourceDesiredState::Enabled,
                 credential_binding: Some(
@@ -1450,12 +1407,9 @@ async fn dynamic_scoped_massive_options_definition_activates_runtime_adapter() {
     source
         .upsert_source_definition_with_connections(
             ReferenceSourceDefinition {
-                source_id: kairos_primitives::integration::ProviderId::new("massive-options")
+                source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
                     .unwrap(),
-                provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-                provider_product: Some(
-                    kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-                ),
+                provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
                 scope: SourceScope::underlying_instrument("instrument:equity:US:QQQ:common"),
                 desired_state: SourceDesiredState::Enabled,
                 credential_binding: Some(
@@ -1523,13 +1477,9 @@ async fn dynamic_runtime_source_definition_activates_public_adapter() {
     source
         .upsert_source_definition_with_connections(
             ReferenceSourceDefinition {
-                source_id: kairos_primitives::integration::ProviderId::new("hyperliquid-spot")
+                source_id: kairos_primitives::reference::ReferenceSourceId::new("hyperliquid-spot")
                     .unwrap(),
-                provider_id: kairos_primitives::integration::ProviderId::new("hyperliquid")
-                    .unwrap(),
-                provider_product: Some(
-                    kairos_primitives::integration::ProviderProductCode::new("spot").unwrap(),
-                ),
+                provider_id: kairos_primitives::market::Provider::new("hyperliquid").unwrap(),
                 scope: SourceScope::global(),
                 desired_state: SourceDesiredState::Enabled,
                 credential_binding: None,
@@ -1609,12 +1559,9 @@ async fn dynamic_credentialed_source_definition_activates_runtime_adapter() {
     source
         .upsert_source_definition_with_connections(
             ReferenceSourceDefinition {
-                source_id: kairos_primitives::integration::ProviderId::new("binance-equity")
+                source_id: kairos_primitives::reference::ReferenceSourceId::new("binance-equity")
                     .unwrap(),
-                provider_id: kairos_primitives::integration::ProviderId::new("binance").unwrap(),
-                provider_product: Some(
-                    kairos_primitives::integration::ProviderProductCode::new("equity").unwrap(),
-                ),
+                provider_id: kairos_primitives::market::Provider::new("binance").unwrap(),
                 scope: SourceScope::global(),
                 desired_state: SourceDesiredState::Enabled,
                 credential_binding: Some(
@@ -1666,18 +1613,15 @@ async fn dynamic_massive_equity_source_definition_activates_runtime_adapter() {
     source
         .upsert_source_definition_with_connections(
             ReferenceSourceDefinition {
-                source_id: kairos_primitives::integration::ProviderId::new("massive-equity")
+                source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-equity")
                     .unwrap(),
-                provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-                provider_product: Some(
-                    kairos_primitives::integration::ProviderProductCode::new("equity").unwrap(),
-                ),
+                provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
                 scope: SourceScope::global(),
                 desired_state: SourceDesiredState::Enabled,
                 credential_binding: Some(
                     crate::domain::SourceCredentialBinding::new("massive.default").unwrap(),
                 ),
-                sync_policy: SourceSyncPolicy::FullSnapshot,
+                sync_policy: SourceSyncPolicy::PagedSnapshot,
             },
             &mut system.connections(),
         )
@@ -1737,12 +1681,9 @@ async fn dynamic_activation_error_is_visible_in_registered_source_health() {
     let error = source
         .upsert_source_definition_with_connections(
             ReferenceSourceDefinition {
-                source_id: kairos_primitives::integration::ProviderId::new("binance-equity")
+                source_id: kairos_primitives::reference::ReferenceSourceId::new("binance-equity")
                     .unwrap(),
-                provider_id: kairos_primitives::integration::ProviderId::new("binance").unwrap(),
-                provider_product: Some(
-                    kairos_primitives::integration::ProviderProductCode::new("equity").unwrap(),
-                ),
+                provider_id: kairos_primitives::market::Provider::new("binance").unwrap(),
                 scope: SourceScope::global(),
                 desired_state: SourceDesiredState::Enabled,
                 credential_binding: Some(
@@ -1797,11 +1738,9 @@ async fn registered_source_targeted_refresh_reports_missing_adapter() {
 
     source
         .upsert_source_definition(ReferenceSourceDefinition {
-            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
-            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-            provider_product: Some(
-                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-            ),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
+            provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
             desired_state: SourceDesiredState::Enabled,
             credential_binding: Some(
@@ -1840,11 +1779,9 @@ async fn paused_registry_only_source_targeted_refresh_is_skipped() {
 
     source
         .upsert_source_definition(ReferenceSourceDefinition {
-            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
-            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-            provider_product: Some(
-                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-            ),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
+            provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
             desired_state: SourceDesiredState::Paused,
             credential_binding: Some(
@@ -1881,11 +1818,9 @@ async fn disabled_registry_only_source_targeted_refresh_preserves_disabled_state
 
     source
         .upsert_source_definition(ReferenceSourceDefinition {
-            source_id: kairos_primitives::integration::ProviderId::new("massive-options").unwrap(),
-            provider_id: kairos_primitives::integration::ProviderId::new("massive").unwrap(),
-            provider_product: Some(
-                kairos_primitives::integration::ProviderProductCode::new("options").unwrap(),
-            ),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
+            provider_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             scope: SourceScope::underlying_instrument("instrument:equity:US:SPY:common"),
             desired_state: SourceDesiredState::Disabled,
             credential_binding: Some(

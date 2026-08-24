@@ -8,6 +8,20 @@ use kairos_conflux::{
     OkxRestConfig, OrderCommand, OrderEntryEvent, OrderEntryRequest, OrderQuery,
 };
 
+#[derive(Clone, Debug)]
+pub(crate) struct DirectFill {
+    pub(crate) fill_id: String,
+    pub(crate) remote_order_id: String,
+    pub(crate) symbol: String,
+    pub(crate) side: String,
+    pub(crate) price: String,
+    pub(crate) quantity: String,
+    pub(crate) realized_pnl: Option<String>,
+    pub(crate) fee: Option<String>,
+    pub(crate) fee_currency: Option<String>,
+    pub(crate) executed_at_unix_nanos: u64,
+}
+
 pub enum DirectOrderConnection {
     BinanceSpot(BinanceSpotRestConnection),
     BinanceMargin(BinanceMarginRestConnection),
@@ -139,7 +153,7 @@ impl DirectOrderConnection {
         symbol: Option<&str>,
         order_id: Option<&str>,
         limit: Option<u16>,
-    ) -> Result<Vec<serde_json::Value>, IntegrationError> {
+    ) -> Result<Vec<DirectFill>, IntegrationError> {
         use kairos_conflux::{BinanceHistoryQuery, OkxHistoryQuery};
         let binance_query = || -> Result<BinanceHistoryQuery, IntegrationError> {
             Ok(BinanceHistoryQuery {
@@ -171,43 +185,41 @@ impl DirectOrderConnection {
                 return Ok(rows
                     .into_iter()
                     .filter(|row| order_id.is_none_or(|id| row.order_id == id))
-                    .map(|row| {
-                        serde_json::json!({
-                            "fill_id": row.trade_id,
-                            "remote_order_id": row.order_id,
-                            "symbol": row.instrument.to_string(),
-                            "side": format!("{:?}", row.side).to_ascii_lowercase(),
-                            "price": decimal(row.price),
-                            "quantity": decimal(row.quantity),
-                            "fee": row.fee.map(decimal),
-                            "fee_currency": row.fee_currency.map(|value| value.to_string()),
-                            "executed_at_unix_nanos": row.executed_at_unix_nanos.get(),
-                        })
+                    .map(|row| DirectFill {
+                        fill_id: row.trade_id,
+                        remote_order_id: row.order_id,
+                        symbol: row.instrument.to_string(),
+                        side: format!("{:?}", row.side).to_ascii_lowercase(),
+                        price: decimal(row.price),
+                        quantity: decimal(row.quantity),
+                        realized_pnl: None,
+                        fee: row.fee.map(decimal),
+                        fee_currency: row.fee_currency.map(|value| value.to_string()),
+                        executed_at_unix_nanos: row.executed_at_unix_nanos.get(),
                     })
                     .collect());
             },
             Self::BinanceStocks(_) | Self::Ibkr(_) => {
                 return Err(IntegrationError::Unavailable(
-                    "standalone fill history is unavailable for this provider product".into(),
+                    "standalone fill history is unavailable for this provider execution channel"
+                        .into(),
                 ));
             },
         };
         Ok(rows
             .into_iter()
             .filter(|row| order_id.is_none_or(|id| row.order_id == id))
-            .map(|row| {
-                serde_json::json!({
-                    "fill_id": row.trade_id,
-                    "remote_order_id": row.order_id,
-                    "symbol": row.symbol.to_string(),
-                    "side": format!("{:?}", row.side).to_ascii_lowercase(),
-                    "price": decimal(row.price),
-                    "quantity": decimal(row.quantity),
-                    "realized_pnl": row.realized_pnl.map(decimal),
-                    "fee": row.commission.map(decimal),
-                    "fee_currency": row.commission_asset.map(|value| value.to_string()),
-                    "executed_at_unix_nanos": row.executed_at_unix_nanos.get(),
-                })
+            .map(|row| DirectFill {
+                fill_id: row.trade_id,
+                remote_order_id: row.order_id,
+                symbol: row.symbol.to_string(),
+                side: format!("{:?}", row.side).to_ascii_lowercase(),
+                price: decimal(row.price),
+                quantity: decimal(row.quantity),
+                realized_pnl: row.realized_pnl.map(decimal),
+                fee: row.commission.map(decimal),
+                fee_currency: row.commission_asset.map(|value| value.to_string()),
+                executed_at_unix_nanos: row.executed_at_unix_nanos.get(),
             })
             .collect())
     }
@@ -241,11 +253,11 @@ mod tests {
 }
 
 pub fn binance_connection(
-    product: &str,
+    execution_channel: &str,
     key: kairos_conflux::ConnectionKey,
     config: BinanceRestConfig,
 ) -> Result<DirectOrderConnection, IntegrationError> {
-    match normalize(product).as_str() {
+    match normalize(execution_channel).as_str() {
         "spot" => {
             BinanceSpotRestConnection::new(key, config).map(DirectOrderConnection::BinanceSpot)
         },

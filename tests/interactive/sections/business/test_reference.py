@@ -66,6 +66,23 @@ def test_market_selection_accepts_search_and_numeric_choice_but_no_raw_id(
     assert all("market id" not in label.lower() for label in prompts)
 
 
+def test_market_search_ranks_exact_aapl_ahead_of_prefixed_crypto_symbol() -> None:
+    equity = SimpleNamespace(
+        id="market:nasdaq:equity:AAPL:USD",
+        venue_symbol="AAPL",
+        instrument=SimpleNamespace(display_symbol="AAPL"),
+    )
+    crypto = SimpleNamespace(
+        id="market:binance:spot:AAPLBUSDT",
+        venue_symbol="AAPLBUSDT",
+        instrument=SimpleNamespace(display_symbol="AAPLB/USDT"),
+    )
+
+    ranked = reference._rank_reference_records("market", (crypto, equity), "AAPL")
+
+    assert ranked == (equity, crypto)
+
+
 def test_market_selection_filters_to_currently_supported_instrument_kinds(
     interactive_context, monkeypatch, capsys
 ) -> None:

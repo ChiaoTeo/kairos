@@ -97,7 +97,7 @@ pub struct HyperliquidLedgerPosition {
     pub signed_size: ExternalDecimal,
 }
 
-/// A provider-native, scalar-only projection of every documented ledger delta.
+/// A provider-native, normalized ledger record of every documented ledger delta.
 ///
 /// Fields that do not apply to a delta kind remain `None`. Keeping the provider
 /// discriminator makes additions forward-compatible without exposing raw JSON.

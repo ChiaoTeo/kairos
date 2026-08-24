@@ -1,12 +1,12 @@
-//! Reference domain entities and provider snapshots.
+//! Reference domain exchanges and provider snapshots.
 
 use std::collections::BTreeSet;
 
 use kairos_primitives::decimal::{Money, Price, Quantity};
-use kairos_primitives::integration::{ProviderId, ProviderProductCode};
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{
-    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId, MarketId,
-    ReferenceStatus, Symbol,
+    AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, IssuerId, ListingId, MarketId,
+    ReferenceSourceId, ReferenceStatus, Symbol,
 };
 use kairos_primitives::time::{Generation, UnixNanos};
 use serde::{Deserialize, Serialize};
@@ -15,10 +15,8 @@ use super::{ReferenceError, ReferenceResult};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceSourceDefinition {
-    pub source_id: ProviderId,
-    pub provider_id: ProviderId,
-    #[serde(default)]
-    pub provider_product: Option<ProviderProductCode>,
+    pub source_id: ReferenceSourceId,
+    pub provider_id: Provider,
     #[serde(default)]
     pub scope: SourceScope,
     pub desired_state: SourceDesiredState,
@@ -28,57 +26,18 @@ pub struct ReferenceSourceDefinition {
 }
 
 impl ReferenceSourceDefinition {
-    pub fn from_source_id(source_id: impl Into<String>) -> Self {
-        let source_id = source_id.into();
-        let (provider_id, provider_product, sync_policy) = match source_id.as_str() {
-            "binance-spot" => ("binance", Some("spot"), SourceSyncPolicy::FullSnapshot),
-            "binance-usdm-futures" => ("binance", Some("usdm"), SourceSyncPolicy::FullSnapshot),
-            "binance-coinm-futures" => ("binance", Some("coinm"), SourceSyncPolicy::FullSnapshot),
-            "binance-options" => ("binance", Some("options"), SourceSyncPolicy::FullSnapshot),
-            "binance-equity" | "reference-binance-stocks" => {
-                ("binance", Some("equity"), SourceSyncPolicy::FullSnapshot)
-            },
-            "okx-spot" => ("okx", Some("spot"), SourceSyncPolicy::FullSnapshot),
-            "okx-margin" => ("okx", Some("margin"), SourceSyncPolicy::FullSnapshot),
-            "okx-swap" => ("okx", Some("swap"), SourceSyncPolicy::FullSnapshot),
-            "okx-futures" => ("okx", Some("futures"), SourceSyncPolicy::FullSnapshot),
-            "okx-options" => ("okx", Some("options"), SourceSyncPolicy::FullSnapshot),
-            "hyperliquid-spot" => ("hyperliquid", Some("spot"), SourceSyncPolicy::FullSnapshot),
-            "hyperliquid-perpetual" => (
-                "hyperliquid",
-                Some("perpetual"),
-                SourceSyncPolicy::FullSnapshot,
-            ),
-            "massive-equity" => ("massive", Some("equity"), SourceSyncPolicy::PagedSnapshot),
-            "massive-options" => ("massive", Some("options"), SourceSyncPolicy::ScopedSnapshot),
-            _ => {
-                let mut parts = source_id.splitn(2, '-');
-                let provider_id = parts.next().unwrap_or(source_id.as_str());
-                let provider_product = parts.next();
-                (
-                    provider_id,
-                    provider_product,
-                    SourceSyncPolicy::FullSnapshot,
-                )
-            },
-        };
-        let provider_id = provider_id.to_owned();
-        let provider_product = provider_product.map(str::to_owned);
-        let source_id = ProviderId::new(source_id).expect("normalized reference source identity");
-        let provider_id = ProviderId::new(provider_id).expect("normalized provider identity");
-        let provider_product = provider_product
-            .map(ProviderProductCode::new)
-            .transpose()
-            .expect("normalized provider product code");
-        Self {
-            source_id,
-            provider_id,
-            provider_product,
+    /// Default definition for a source supplied directly to the Reference
+    /// runtime. Code-owned production adapters may replace these defaults at
+    /// the services boundary without making the domain depend on that registry.
+    pub(crate) fn runtime_default(source_id: &str) -> ReferenceResult<Self> {
+        Ok(Self {
+            source_id: ReferenceSourceId::new(source_id)?,
+            provider_id: Provider::new(source_id)?,
             scope: SourceScope::global(),
             desired_state: SourceDesiredState::Enabled,
             credential_binding: None,
-            sync_policy,
-        }
+            sync_policy: SourceSyncPolicy::FullSnapshot,
+        })
     }
 }
 
@@ -275,7 +234,7 @@ impl SourceWorkItem {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AffectedReferenceSet {
-    pub entities: BTreeSet<String>,
+    pub exchanges: BTreeSet<String>,
     pub assets: BTreeSet<String>,
     pub instruments: BTreeSet<String>,
     pub listings: BTreeSet<String>,
@@ -296,8 +255,8 @@ impl AffectedReferenceSet {
                 continue;
             };
             match kind {
-                "entity" => {
-                    affected.entities.insert(id.to_owned());
+                "exchange" => {
+                    affected.exchanges.insert(id.to_owned());
                 },
                 "asset" => {
                     affected.assets.insert(id.to_owned());
@@ -318,7 +277,7 @@ impl AffectedReferenceSet {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entities.is_empty()
+        self.exchanges.is_empty()
             && self.assets.is_empty()
             && self.instruments.is_empty()
             && self.listings.is_empty()
@@ -327,7 +286,7 @@ impl AffectedReferenceSet {
     }
 
     pub fn total_count(&self) -> usize {
-        self.entities.len()
+        self.exchanges.len()
             + self.assets.len()
             + self.instruments.len()
             + self.listings.len()
@@ -539,25 +498,24 @@ pub struct SourceRuntimeWorkItem {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Entity {
+pub struct Exchange {
     #[serde(default)]
     pub source_id: Option<String>,
-    pub entity_id: String,
-    pub entity_type: EntityKind,
+    pub exchange_id: ExchangeId,
     pub name: String,
     pub status: ReferenceStatus,
 }
 
-impl Entity {
+impl Exchange {
     pub fn normalize_canonical_name(&mut self) {
-        if let Some(name) = canonical_entity_name(&self.entity_id) {
+        if let Some(name) = canonical_exchange_name(self.exchange_id.as_str()) {
             self.name = name.into();
         }
     }
 }
 
-pub fn canonical_entity_name(entity_id: &str) -> Option<&'static str> {
-    match entity_id {
+pub fn canonical_exchange_name(exchange_id: &str) -> Option<&'static str> {
+    match exchange_id {
         "exchange:nasdaq" => Some("Nasdaq"),
         "exchange:nyse" => Some("NYSE"),
         "exchange:amex" => Some("NYSE American"),
@@ -568,133 +526,20 @@ pub fn canonical_entity_name(entity_id: &str) -> Option<&'static str> {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum EntityKind {
-    Exchange,
-    Broker,
-    DataProvider,
-    Issuer,
-    #[default]
-    Unknown,
-}
-
-impl EntityKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Exchange => "exchange",
-            Self::Broker => "broker",
-            Self::DataProvider => "data_provider",
-            Self::Issuer => "issuer",
-            Self::Unknown => "unknown",
-        }
-    }
-}
-
-impl From<&str> for EntityKind {
-    fn from(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "exchange" => Self::Exchange,
-            "broker" => Self::Broker,
-            "data_provider" | "provider" => Self::DataProvider,
-            "issuer" => Self::Issuer,
-            _ => Self::Unknown,
-        }
-    }
-}
-
-impl From<String> for EntityKind {
-    fn from(value: String) -> Self {
-        Self::from(value.as_str())
-    }
-}
-
 #[cfg(test)]
 mod source_workflow_tests {
+    use kairos_primitives::market::Provider;
+    use kairos_primitives::reference::ReferenceSourceId;
+
     use super::{
         ReferenceSourceDefinition, SourceCredentialBinding, SourceDesiredState, SourceScope,
         SourceSyncPolicy, SourceTickBudget, SourceWorkItem, SourceWorkReason,
     };
-    use kairos_primitives::integration::{ProviderId, ProviderProductCode};
-
-    #[test]
-    fn source_definition_infers_provider_product_and_policy() {
-        let definition = ReferenceSourceDefinition::from_source_id("massive-options");
-
-        assert_eq!(definition.provider_id, "massive");
-        assert_eq!(definition.provider_product.as_deref(), Some("options"));
-        assert_eq!(definition.sync_policy, SourceSyncPolicy::ScopedSnapshot);
-    }
-
-    #[test]
-    fn source_definition_normalizes_builtin_provider_products() {
-        let cases = [
-            (
-                "binance-spot",
-                "binance",
-                Some("spot"),
-                SourceSyncPolicy::FullSnapshot,
-            ),
-            (
-                "binance-usdm-futures",
-                "binance",
-                Some("usdm"),
-                SourceSyncPolicy::FullSnapshot,
-            ),
-            (
-                "binance-coinm-futures",
-                "binance",
-                Some("coinm"),
-                SourceSyncPolicy::FullSnapshot,
-            ),
-            (
-                "binance-options",
-                "binance",
-                Some("options"),
-                SourceSyncPolicy::FullSnapshot,
-            ),
-            (
-                "okx-swap",
-                "okx",
-                Some("swap"),
-                SourceSyncPolicy::FullSnapshot,
-            ),
-            (
-                "hyperliquid-perpetual",
-                "hyperliquid",
-                Some("perpetual"),
-                SourceSyncPolicy::FullSnapshot,
-            ),
-            (
-                "massive-equity",
-                "massive",
-                Some("equity"),
-                SourceSyncPolicy::PagedSnapshot,
-            ),
-            (
-                "massive-options",
-                "massive",
-                Some("options"),
-                SourceSyncPolicy::ScopedSnapshot,
-            ),
-        ];
-
-        for (source_id, provider_id, provider_product, sync_policy) in cases {
-            let definition = ReferenceSourceDefinition::from_source_id(source_id);
-            assert_eq!(definition.provider_id, provider_id);
-            assert_eq!(definition.provider_product.as_deref(), provider_product);
-            assert_eq!(definition.sync_policy, sync_policy);
-        }
-    }
-
     #[test]
     fn source_definition_credential_binding_is_typed_but_serializes_as_string() {
         let definition = ReferenceSourceDefinition {
-            source_id: ProviderId::new("massive-options").unwrap(),
-            provider_id: ProviderId::new("massive").unwrap(),
-            provider_product: Some(ProviderProductCode::new("options").unwrap()),
+            source_id: ReferenceSourceId::new("massive-options").unwrap(),
+            provider_id: Provider::new("massive").unwrap(),
             scope: SourceScope::global(),
             desired_state: SourceDesiredState::Enabled,
             credential_binding: Some(SourceCredentialBinding::new("massive.default").unwrap()),
@@ -707,12 +552,29 @@ mod source_workflow_tests {
         let invalid = serde_json::json!({
             "source_id": "massive-options",
             "provider_id": "massive",
-            "provider_product": "options",
             "desired_state": "enabled",
             "credential_binding": " massive.default ",
             "sync_policy": "scoped_snapshot"
         });
         assert!(serde_json::from_value::<ReferenceSourceDefinition>(invalid).is_err());
+    }
+
+    #[test]
+    fn persisted_source_definition_ignores_legacy_provider_product() {
+        let legacy = serde_json::json!({
+            "source_id": "massive-options",
+            "provider_id": "massive",
+            "provider_product": "options",
+            "scope": { "kind": "global", "id": null },
+            "desired_state": "enabled",
+            "credential_binding": null,
+            "sync_policy": "scoped_snapshot"
+        });
+
+        let definition: ReferenceSourceDefinition = serde_json::from_value(legacy).unwrap();
+        assert_eq!(definition.source_id.as_str(), "massive-options");
+        let current = serde_json::to_value(definition).unwrap();
+        assert!(current.get("provider_product").is_none());
     }
 
     #[test]
@@ -762,7 +624,7 @@ mod source_workflow_tests {
         assert!(!affected.requires_full_replace);
         assert!(affected.assets.contains("asset:BTC"));
         assert!(affected.markets.contains("market:binance:spot:btc-usdt"));
-        assert!(affected.entities.is_empty());
+        assert!(affected.exchanges.is_empty());
         assert!(affected.instruments.is_empty());
         assert!(affected.listings.is_empty());
         assert_eq!(affected.total_count(), 2);
@@ -822,7 +684,7 @@ pub struct Listing {
     pub source_id: Option<String>,
     pub listing_id: ListingId,
     pub instrument_id: InstrumentId,
-    pub exchange_id: Exchange,
+    pub exchange_id: ExchangeId,
     pub exchange_symbol: Symbol,
     pub status: ReferenceStatus,
     pub effective_from_unix_nanos: UnixNanos,
@@ -835,7 +697,7 @@ pub struct Market {
     pub instrument_id: InstrumentId,
     #[serde(default)]
     pub listing_id: Option<ListingId>,
-    pub exchange_id: Exchange,
+    pub exchange_id: ExchangeId,
     pub instrument_kind: InstrumentKind,
     #[serde(default)]
     pub asset_type: Option<AssetClass>,
@@ -869,7 +731,7 @@ pub struct LifecycleEvent {
     pub market_id: Option<MarketId>,
     pub instrument_id: Option<InstrumentId>,
     pub listing_id: Option<ListingId>,
-    pub exchange_id: Option<Exchange>,
+    pub exchange_id: Option<ExchangeId>,
     pub venue_symbol: Option<Symbol>,
     pub previous_status: Option<ReferenceStatus>,
     pub current_status: Option<ReferenceStatus>,
@@ -887,7 +749,7 @@ pub struct LifecycleEvent {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderCatalog {
-    pub entities: Vec<Entity>,
+    pub exchanges: Vec<Exchange>,
     pub assets: Vec<Asset>,
     pub instruments: Vec<Instrument>,
     pub listings: Vec<Listing>,
@@ -896,20 +758,20 @@ pub struct ProviderCatalog {
 
 impl ProviderCatalog {
     pub fn record_count(&self) -> usize {
-        self.entities.len()
+        self.exchanges.len()
             + self.assets.len()
             + self.instruments.len()
             + self.listings.len()
             + self.markets.len()
     }
 
-    /// Merge independently authoritative provider projections into one
+    /// Merge independently authoritative provider catalogs into one
     /// canonical candidate. This is a Reference domain rule: persistence and
     /// provider composition must not each invent their own conflict policy.
     pub fn merge<'a>(
         catalogs: impl IntoIterator<Item = &'a ProviderCatalog>,
     ) -> ReferenceResult<Self> {
-        let mut entities = std::collections::BTreeMap::new();
+        let mut exchanges = std::collections::BTreeMap::new();
         let mut assets = std::collections::BTreeMap::new();
         let mut instruments = std::collections::BTreeMap::new();
         let mut listings = std::collections::BTreeMap::new();
@@ -936,9 +798,9 @@ impl ProviderCatalog {
         for catalog in catalogs {
             merge_exact!(
                 catalog,
-                entities,
-                |value: &Entity| value.entity_id.clone(),
-                "entity"
+                exchanges,
+                |value: &Exchange| value.exchange_id.clone(),
+                "exchange"
             );
             for value in &catalog.assets {
                 if let Some(previous) = assets.get_mut(&value.asset_id) {
@@ -989,7 +851,7 @@ impl ProviderCatalog {
             )));
         }
         let candidate = Self {
-            entities: entities.into_values().collect(),
+            exchanges: exchanges.into_values().collect(),
             assets: assets.into_values().collect(),
             instruments: instruments.into_values().collect(),
             listings: listings.into_values().collect(),
@@ -1036,7 +898,7 @@ impl ProviderCatalog {
             Ok(())
         }
 
-        unique(&self.entities, "entity", |value| &value.entity_id)?;
+        unique(&self.exchanges, "exchange", |value| &value.exchange_id)?;
         unique(&self.assets, "asset", |value| &value.asset_id)?;
         unique(&self.instruments, "instrument", |value| {
             &value.instrument_id
@@ -1044,17 +906,14 @@ impl ProviderCatalog {
         unique(&self.listings, "listing", |value| &value.listing_id)?;
         unique(&self.markets, "market", |value| &value.market_id)?;
 
-        for entity in &self.entities {
-            if entity.entity_type == EntityKind::Unknown {
-                return Err(ReferenceError::Invalid(format!(
-                    "entity {} has unknown kind",
-                    entity.entity_id
-                )));
-            }
-            required(&entity.name, &format!("entity {} name", entity.entity_id))?;
+        for exchange in &self.exchanges {
             required(
-                entity.status.as_str(),
-                &format!("entity {} status", entity.entity_id),
+                &exchange.name,
+                &format!("exchange {} name", exchange.exchange_id),
+            )?;
+            required(
+                exchange.status.as_str(),
+                &format!("exchange {} status", exchange.exchange_id),
             )?;
         }
         for asset in &self.assets {
@@ -1156,10 +1015,10 @@ impl ProviderCatalog {
             .iter()
             .map(|value| value.listing_id.as_str())
             .collect();
-        let entity_ids: std::collections::BTreeSet<_> = self
-            .entities
+        let exchange_ids: std::collections::BTreeSet<_> = self
+            .exchanges
             .iter()
-            .map(|value| value.entity_id.as_str())
+            .map(|value| value.exchange_id.as_str())
             .collect();
         let asset_ids: std::collections::BTreeSet<_> = self
             .assets
@@ -1186,7 +1045,7 @@ impl ProviderCatalog {
                     listing.listing_id, listing.instrument_id
                 )));
             }
-            if !entity_ids.contains(listing.exchange_id.as_str()) {
+            if !exchange_ids.contains(listing.exchange_id.as_str()) {
                 return Err(ReferenceError::Invalid(format!(
                     "listing {} references missing exchange {}",
                     listing.listing_id, listing.exchange_id
@@ -1269,7 +1128,7 @@ impl ProviderCatalog {
                     )));
                 }
             }
-            if !entity_ids.contains(market.exchange_id.as_str()) {
+            if !exchange_ids.contains(market.exchange_id.as_str()) {
                 return Err(ReferenceError::Invalid(format!(
                     "market {} references missing exchange {}",
                     market.market_id, market.exchange_id

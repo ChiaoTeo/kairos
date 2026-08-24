@@ -12,7 +12,7 @@ pub(crate) fn install_execution_connections(
     let mut descriptors = Vec::new();
     for option in options {
         if matches!(
-            option.participant_id.trim().to_ascii_lowercase().as_str(),
+            option.broker_id.trim().to_ascii_lowercase().as_str(),
             "simulated" | "paper"
         ) {
             continue;
@@ -46,16 +46,16 @@ fn concrete_route(
     system: &mut kairos_conflux::ConfluxSystem,
     option: &ExecutionConnectionOptions,
 ) -> Result<InstalledRoute, String> {
-    let provider = option.participant_id.trim().to_ascii_lowercase();
-    let product = normalize(&option.product);
+    let provider = option.broker_id.trim().to_ascii_lowercase();
+    let execution_channel = normalize(&option.execution_channel);
     let binding_id = format!("execution.{}", option.route_id);
     match provider.as_str() {
-        "binance" => binance_route(system, option, &product, binding_id),
-        "okx" | "okex" => okx_route(system, option, &product, binding_id),
-        "ibkr" => ibkr_route(system, option, &product, binding_id),
+        "binance" => binance_route(system, option, &execution_channel, binding_id),
+        "okx" | "okex" => okx_route(system, option, &execution_channel, binding_id),
+        "ibkr" => ibkr_route(system, option, &execution_channel, binding_id),
         _ => Err(format!(
             "production execution route is not available for {} {}",
-            option.participant_id, option.product
+            option.broker_id, option.execution_channel
         )),
     }
 }
@@ -63,7 +63,7 @@ fn concrete_route(
 fn binance_route(
     system: &mut kairos_conflux::ConfluxSystem,
     option: &ExecutionConnectionOptions,
-    product: &str,
+    execution_channel: &str,
     binding_id: String,
 ) -> Result<InstalledRoute, String> {
     let key = |suffix: &str| {
@@ -133,10 +133,10 @@ fn binance_route(
         }};
     }
 
-    match product {
+    match execution_channel {
         "spot" => family!(binance_spot_rest, binance_spot_user_websocket, "spot"),
         "cross-margin" | "isolated-margin" => {
-            if product == "isolated-margin"
+            if execution_channel == "isolated-margin"
                 && option
                     .isolated_symbol
                     .as_deref()
@@ -156,17 +156,19 @@ fn binance_route(
         "equity" | "stocks" => {
             family!(binance_stocks_rest, binance_stocks_user_websocket, "stocks")
         },
-        _ => Err(format!("unsupported Binance execution product: {product}")),
+        _ => Err(format!(
+            "unsupported Binance execution channel: {execution_channel}"
+        )),
     }
 }
 
 fn okx_route(
     system: &mut kairos_conflux::ConfluxSystem,
     option: &ExecutionConnectionOptions,
-    product: &str,
+    execution_channel: &str,
     binding_id: String,
 ) -> Result<InstalledRoute, String> {
-    let trading_mode = okx_trading_mode(product, option.trading_mode.as_deref())?;
+    let trading_mode = okx_trading_mode(execution_channel, option.trading_mode.as_deref())?;
     let credential = okx_credential(option);
     let rest_config = |_suffix: &str| kairos_conflux::OkxPrivateRestConfig {
         connection: kairos_conflux::OkxRestConfig {
@@ -238,11 +240,13 @@ fn okx_route(
 fn ibkr_route(
     system: &mut kairos_conflux::ConfluxSystem,
     option: &ExecutionConnectionOptions,
-    product: &str,
+    execution_channel: &str,
     binding_id: String,
 ) -> Result<InstalledRoute, String> {
-    if !matches!(product, "equity" | "stocks" | "spot") {
-        return Err(format!("unsupported IBKR execution product: {product}"));
+    if !matches!(execution_channel, "equity" | "stocks" | "spot") {
+        return Err(format!(
+            "unsupported IBKR execution channel: {execution_channel}"
+        ));
     }
     let order_config = || kairos_conflux::IbkrOrderConfig {
         environment: environment(option),
@@ -354,10 +358,10 @@ fn environment(option: &ExecutionConnectionOptions) -> String {
 fn instrument_type(
     option: &ExecutionConnectionOptions,
 ) -> Result<ParticipantInstrumentTypeRef, String> {
-    let provider = option.participant_id.trim().to_ascii_lowercase();
-    let product = normalize(&option.product);
+    let provider = option.broker_id.trim().to_ascii_lowercase();
+    let execution_channel = normalize(&option.execution_channel);
     let value = match provider.as_str() {
-        "binance" => match product.as_str() {
+        "binance" => match execution_channel.as_str() {
             "spot" => "binance-spot",
             "cross-margin" => "binance-cross-margin",
             "isolated-margin" => "binance-isolated-margin",
@@ -365,11 +369,21 @@ fn instrument_type(
             "coin-m-futures" => "binance-coinm",
             "options" => "binance-options",
             "equity" | "stocks" => "binance-stocks",
-            _ => return Err(format!("unsupported Binance execution product: {product}")),
+            _ => {
+                return Err(format!(
+                    "unsupported Binance execution channel: {execution_channel}"
+                ));
+            },
         },
-        "okx" | "okex" => match product.as_str() {
-            "spot" | "margin" | "swap" | "futures" | "option" | "options" => product.as_str(),
-            _ => return Err(format!("unsupported OKX execution product: {product}")),
+        "okx" | "okex" => match execution_channel.as_str() {
+            "spot" | "margin" | "swap" | "futures" | "option" | "options" => {
+                execution_channel.as_str()
+            },
+            _ => {
+                return Err(format!(
+                    "unsupported OKX execution channel: {execution_channel}"
+                ));
+            },
         },
         "ibkr" => "equity",
         _ => return Err(format!("unsupported execution participant: {provider}")),
@@ -377,9 +391,9 @@ fn instrument_type(
     ParticipantInstrumentTypeRef::new(value)
 }
 
-fn okx_trading_mode(product: &str, configured: Option<&str>) -> Result<String, String> {
+fn okx_trading_mode(execution_channel: &str, configured: Option<&str>) -> Result<String, String> {
     let mode = configured.map(normalize).unwrap_or_else(|| {
-        if product == "spot" {
+        if execution_channel == "spot" {
             "cash".into()
         } else {
             String::new()
@@ -387,13 +401,13 @@ fn okx_trading_mode(product: &str, configured: Option<&str>) -> Result<String, S
     });
     if !matches!(mode.as_str(), "cash" | "cross" | "isolated") {
         return Err(format!(
-            "OKX {product} execution route requires trading_mode cash, cross, or isolated"
+            "OKX {execution_channel} execution route requires trading_mode cash, cross, or isolated"
         ));
     }
-    if product == "spot" && mode != "cash" {
+    if execution_channel == "spot" && mode != "cash" {
         return Err("OKX spot execution requires cash trading_mode".into());
     }
-    if product == "margin" && mode == "cash" {
+    if execution_channel == "margin" && mode == "cash" {
         return Err("OKX margin execution requires cross or isolated trading_mode".into());
     }
     Ok(mode)
@@ -403,7 +417,7 @@ fn validate_ibkr_client_ids(options: &[ExecutionConnectionOptions]) -> Result<()
     let mut identities = std::collections::BTreeSet::new();
     for option in options
         .iter()
-        .filter(|option| option.participant_id.eq_ignore_ascii_case("ibkr"))
+        .filter(|option| option.broker_id.eq_ignore_ascii_case("ibkr"))
     {
         let identity = (
             option.host.trim().to_ascii_lowercase(),

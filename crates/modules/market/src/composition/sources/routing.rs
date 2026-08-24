@@ -1,14 +1,71 @@
 //! Market-owned route matching for concrete source bindings.
 
-use super::super::config::{self, BinanceDerivativeProduct, MarketSourceBinding};
+use super::super::config::{
+    self, BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
+    MarketProviderBinding, PublicMarketTransport,
+};
+use crate::ObservationKind;
 
-pub(crate) fn binding_provider_product(
-    binding: &MarketSourceBinding,
+pub(crate) fn binding_observation_capabilities(
+    binding: &MarketProviderBinding,
+) -> Vec<ObservationKind> {
+    use ObservationKind::{Bar, OptionGreeks, OrderBook, Quote, Trade};
+    match binding {
+        MarketProviderBinding::BinanceSpot {
+            transport: BinanceSpotTransport::Rest,
+            ..
+        } => vec![Quote],
+        MarketProviderBinding::BinanceSpot {
+            transport: BinanceSpotTransport::Websocket,
+            ..
+        } => vec![Quote, Trade, Bar, OrderBook],
+        MarketProviderBinding::BinanceEquity { .. } => vec![Quote],
+        MarketProviderBinding::BinanceDerivatives {
+            product: BinanceDerivativeProduct::Options,
+            transport: BinanceDerivativeTransport::Rest,
+            ..
+        } => vec![Quote, OptionGreeks],
+        MarketProviderBinding::BinanceDerivatives {
+            product: BinanceDerivativeProduct::Options,
+            transport: BinanceDerivativeTransport::Websocket,
+            ..
+        } => vec![Quote, Trade, OrderBook, OptionGreeks],
+        MarketProviderBinding::BinanceDerivatives {
+            transport: BinanceDerivativeTransport::Rest,
+            ..
+        } => vec![Quote],
+        MarketProviderBinding::BinanceDerivatives {
+            transport: BinanceDerivativeTransport::Websocket,
+            ..
+        } => vec![Quote, Trade, OrderBook],
+        MarketProviderBinding::Okx {
+            transport: PublicMarketTransport::Rest,
+            ..
+        }
+        | MarketProviderBinding::Hyperliquid {
+            transport: PublicMarketTransport::Rest,
+            ..
+        } => vec![Quote],
+        MarketProviderBinding::Okx {
+            transport: PublicMarketTransport::Websocket,
+            ..
+        }
+        | MarketProviderBinding::Hyperliquid {
+            transport: PublicMarketTransport::Websocket,
+            ..
+        } => vec![Trade, OrderBook],
+        MarketProviderBinding::Massive { .. } => vec![Quote, Trade],
+        MarketProviderBinding::Ibkr { .. } => vec![Quote],
+    }
+}
+
+pub(crate) fn binding_provider_segment(
+    binding: &MarketProviderBinding,
 ) -> (&'static str, &'static str) {
     match binding {
-        MarketSourceBinding::BinanceSpot { .. } => ("binance", "spot"),
-        MarketSourceBinding::BinanceEquity { .. } => ("binance", "equity"),
-        MarketSourceBinding::BinanceDerivatives { product, .. } => (
+        MarketProviderBinding::BinanceSpot { .. } => ("binance", "spot"),
+        MarketProviderBinding::BinanceEquity { .. } => ("binance", "equity"),
+        MarketProviderBinding::BinanceDerivatives { product, .. } => (
             "binance",
             match product {
                 BinanceDerivativeProduct::UsdMFutures => "usd-m-futures",
@@ -16,14 +73,14 @@ pub(crate) fn binding_provider_product(
                 BinanceDerivativeProduct::Options => "options",
             },
         ),
-        MarketSourceBinding::Massive { product, .. } => (
+        MarketProviderBinding::Massive { product, .. } => (
             "massive",
             match product {
                 config::MassiveMarketProduct::Equity => "equity",
                 config::MassiveMarketProduct::Options => "options",
             },
         ),
-        MarketSourceBinding::Okx {
+        MarketProviderBinding::Okx {
             instrument_type, ..
         } => (
             "okx",
@@ -34,7 +91,7 @@ pub(crate) fn binding_provider_product(
                 config::OkxInstrumentType::Options => "options",
             },
         ),
-        MarketSourceBinding::Hyperliquid {
+        MarketProviderBinding::Hyperliquid {
             market_type: configured,
             ..
         } => (
@@ -44,57 +101,6 @@ pub(crate) fn binding_provider_product(
                 config::HyperliquidMarketType::Perpetual => "perpetual",
             },
         ),
-        MarketSourceBinding::Ibkr { .. } => ("ibkr", "equity"),
-    }
-}
-
-pub(crate) fn binding_supports_canonical_market(
-    binding: &MarketSourceBinding,
-    exchange_id: &str,
-    kind: kairos_primitives::reference::InstrumentKind,
-) -> bool {
-    use kairos_primitives::reference::InstrumentKind::{Equity, Future, Option, Perpetual, Spot};
-    match binding {
-        MarketSourceBinding::BinanceSpot { .. } => {
-            exchange_id.eq_ignore_ascii_case("exchange:binance") && kind == Spot
-        },
-        MarketSourceBinding::BinanceDerivatives { product, .. } => {
-            exchange_id.eq_ignore_ascii_case("exchange:binance")
-                && match product {
-                    BinanceDerivativeProduct::Options => kind == Option,
-                    BinanceDerivativeProduct::UsdMFutures
-                    | BinanceDerivativeProduct::CoinMFutures => {
-                        matches!(kind, Future | Perpetual)
-                    },
-                }
-        },
-        MarketSourceBinding::Okx {
-            instrument_type, ..
-        } => {
-            exchange_id.eq_ignore_ascii_case("exchange:okx")
-                && match instrument_type {
-                    config::OkxInstrumentType::Spot => kind == Spot,
-                    config::OkxInstrumentType::Swap => kind == Perpetual,
-                    config::OkxInstrumentType::Futures => kind == Future,
-                    config::OkxInstrumentType::Options => kind == Option,
-                }
-        },
-        MarketSourceBinding::Hyperliquid {
-            market_type: configured,
-            ..
-        } => {
-            exchange_id.eq_ignore_ascii_case("exchange:hyperliquid")
-                && match configured {
-                    config::HyperliquidMarketType::Spot => kind == Spot,
-                    config::HyperliquidMarketType::Perpetual => kind == Perpetual,
-                }
-        },
-        MarketSourceBinding::BinanceEquity { .. } | MarketSourceBinding::Ibkr { .. } => {
-            kind == Equity
-        },
-        MarketSourceBinding::Massive { product, .. } => match product {
-            config::MassiveMarketProduct::Equity => kind == Equity,
-            config::MassiveMarketProduct::Options => kind == Option,
-        },
+        MarketProviderBinding::Ibkr { .. } => ("ibkr", "equity"),
     }
 }

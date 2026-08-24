@@ -25,7 +25,7 @@ def _bar(time: int) -> dict:
             "close": "100.5",
             "volume": "12",
             "observed_at_unix_nanos": time,
-            "source_id": "binance",
+            "provider": "binance",
             "derivation": "provider",
         }
     }
@@ -45,6 +45,9 @@ def test_market_dataset_ingest_round_trips_parquet_and_materializes_replay(
 
     assert entry["format"] == "parquet"
     assert entry["event_count"] == 2
+    assert entry["version"] == 1
+    assert entry["providers"] == ["binance"]
+    assert entry["derivation"] == "provider"
     assert Path(entry["manifest_path"]).is_file()
     assert app.read_events("btc-1m") == [_bar(1), _bar(2)]
 
@@ -77,6 +80,8 @@ def test_market_dataset_can_derive_explicit_synthetic_quotes_from_bars(
     entry = app.derive_synthetic_quotes("btc-1h", "btc-quotes", spread_bps="10")
 
     assert entry["observation_types"] == ["Quote"]
+    assert entry["providers"] == ["binance"]
+    assert entry["derivation"] == "synthetic_quote"
     quote = app.read_events("btc-quotes")[0]["Quote"]
     assert quote["bid_price"] == "100.44975"
     assert quote["ask_price"] == "100.55025"

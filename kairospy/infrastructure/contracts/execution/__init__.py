@@ -11,7 +11,7 @@ from typing import Any
 
 from .control import ExecutionControlClient
 from .events import decode_event
-from .projection import ExecutionProjection
+from .current import ExecutionCurrentViews
 from .view import (
     ExecutionViewFrame,
     ExecutionViewKey,
@@ -33,6 +33,8 @@ def backtest_market_payload(event: object) -> dict[str, Any] | None:
                 "Execution backtest input requires a market-scoped quote; "
                 "resolve consolidated data through an Execution destination route first"
             )
+        if quote.provider is None:
+            raise ValueError("Execution backtest quote requires provider provenance")
         body: dict[str, object] = {
             "Quote": {
                 "scope": {"kind": "market", "market_id": str(quote.market_id)},
@@ -50,7 +52,7 @@ def backtest_market_payload(event: object) -> dict[str, Any] | None:
                 if quote.ask_quantity is None
                 else format(quote.ask_quantity, "f"),
                 "observed_at_unix_nanos": quote.occurred_at_unix_nanos,
-                "source_id": quote.source_id or "strategy-market",
+                "provider": quote.provider,
             }
         }
     elif isinstance(event, BarEvent):
@@ -60,6 +62,8 @@ def backtest_market_payload(event: object) -> dict[str, Any] | None:
                 "Execution backtest input requires a market-scoped bar; "
                 "resolve consolidated data through an Execution destination route first"
             )
+        if bar.provider is None:
+            raise ValueError("Execution backtest bar requires provider provenance")
         body = {
             "Bar": {
                 "scope": {"kind": "market", "market_id": str(bar.market_id)},
@@ -71,7 +75,7 @@ def backtest_market_payload(event: object) -> dict[str, Any] | None:
                 "close": format(bar.close, "f"),
                 "volume": None if bar.volume is None else format(bar.volume, "f"),
                 "observed_at_unix_nanos": bar.occurred_at_unix_nanos,
-                "source_id": bar.source_id or "strategy-market",
+                "provider": bar.provider,
                 "derivation": "provider",
             }
         }
@@ -86,7 +90,7 @@ __all__ = [
     "ExecutionViewKey",
     "ExecutionViewKind",
     "ExecutionViewReader",
-    "ExecutionProjection",
+    "ExecutionCurrentViews",
     "decode_event",
     "decode_view",
     "backtest_market_payload",

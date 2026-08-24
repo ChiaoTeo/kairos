@@ -34,7 +34,7 @@ def _quote(time: int, instrument: str = "SPY") -> dict:
             "ask_price": "101",
             "observed_at_unix_nanos": time,
             "available_at_unix_nanos": time + 1,
-            "source_id": "fixture",
+            "provider": "fixture",
         }
     }
 
@@ -418,7 +418,7 @@ def test_greeks_envelope_maps_to_option_greeks_atomic_kind(tmp_path: Path) -> No
                     },
                     "instrument_id": "SPY-P-100",
                     "observed_at_unix_nanos": 10,
-                    "source_id": "derived",
+                    "provider": "derived",
                     "derivation": "test-model",
                 }
             },
@@ -921,7 +921,7 @@ def test_reviewed_massive_plan_executes_through_market_application_and_publishes
                         "ask_price": "1.10",
                         "ask_quantity": "3",
                         "observed_at_unix_nanos": 15_000_000,
-                        "source_id": "massive",
+                        "provider": "massive",
                     }
                 }
             )
@@ -1026,7 +1026,7 @@ def test_failed_acquisition_resumes_by_reusing_completed_steps(
                         "bid_price": "1",
                         "ask_price": "1.1",
                         "observed_at_unix_nanos": 15_000_000,
-                        "source_id": "massive",
+                        "provider": "massive",
                     }
                 }
             )
@@ -1101,7 +1101,7 @@ def test_acquisition_uses_explicit_bounded_concurrency(
                             "bid_price": "1",
                             "ask_price": "1.1",
                             "observed_at_unix_nanos": 15_000_000,
-                            "source_id": "massive",
+                            "provider": "massive",
                         }
                     }
                 )
@@ -1174,7 +1174,7 @@ def test_failed_concurrent_acquisition_reuses_successful_sibling_on_retry(
                         "bid_price": "1",
                         "ask_price": "1.1",
                         "observed_at_unix_nanos": 15_000_000,
-                        "source_id": "massive",
+                        "provider": "massive",
                     }
                 }
             )
@@ -1246,7 +1246,7 @@ def test_reviewed_massive_reference_plan_publishes_point_in_time_snapshot(
                 {
                     "kind": "option-contract",
                     "schema_version": "1",
-                    "source_id": "massive",
+                    "provider": "massive",
                     "observed_at_unix_nanos": as_of_nanos,
                     "available_at_unix_nanos": as_of_nanos,
                     "as_of": "2024-12-19",
@@ -1325,7 +1325,7 @@ def test_reviewed_massive_dividend_plan_uses_reference_data_path(
                 {
                     "kind": "cash-dividend",
                     "schema_version": "1",
-                    "source_id": "massive",
+                    "provider": "massive",
                     "observed_at_unix_nanos": 1_710_460_800_000_000_000,
                     "available_at_unix_nanos": 1_709_164_800_000_000_000,
                     "dividend_id": "div-1",
