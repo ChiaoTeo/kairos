@@ -382,7 +382,7 @@ mod tests {
             .expect("connect JSON-RPC socket");
         let body = r#"{"jsonrpc":"2.0","method":"ping","id":1}"#;
         let request = format!(
-            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
