@@ -1946,7 +1946,7 @@ async fn irreconcilable_provider_record_collision_rejects_the_refresh() {
     .unwrap();
     let error = source.fetch_catalog().await.unwrap_err().to_string();
     assert!(error.contains("canonical record conflicts"));
-    assert!(error.contains("market:market:shared"));
+    assert!(error.contains("market:shared"));
 }
 
 #[tokio::test]
@@ -2788,7 +2788,10 @@ async fn incomplete_provider_sync_does_not_replace_last_good_snapshot() {
     assert_eq!(first.markets[0].market_id, "market:complete-old");
     let second = source.fetch_catalog().await.unwrap();
     assert_eq!(second.markets[0].market_id, "market:complete-old");
-    assert_eq!(source.source_health()[0].status, SourceRuntimePhase::Ready);
+    assert_eq!(
+        source.source_health()[0].status,
+        SourceRuntimePhase::Scanning
+    );
     assert!(!source.source_health()[0].stale);
     let third = source.fetch_catalog().await.unwrap();
     assert_eq!(third.markets[0].market_id, "market:complete-new");

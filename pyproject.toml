@@ -31,7 +31,15 @@ observability = [
 agent = ["openai-agents[any-llm]>=0.7,<1"]
 
 [dependency-groups]
-dev = ["hypothesis>=6,<7", "pytest>=8,<9", "ruff>=0.12,<1", "pyright>=1.1.400,<2"]
+dev = [
+    "hypothesis>=6,<7",
+    "pytest>=8,<9",
+    "ruff>=0.12,<1",
+    "pyright>=1.1.400,<2",
+    "textual-dev>=1.8,<2",
+    "pytest-textual-snapshot>=1.1,<2",
+    "tui-test==0.1.0b2",
+]
 
 [project.scripts]
 kairospy = "kairospy.__main__:main"
@@ -51,14 +59,14 @@ include = ["kairospy*"]
 [tool.setuptools]
 py-modules = ["backend"]
 
+[tool.setuptools.package-data]
+kairospy = ["_bin/**/*", "surface/workbench/styles/*.tcss"]
+
 [[tool.setuptools-rust.ext-modules]]
 target = "kairospy._native_transport"
 path = "crates/platform/python-transport/Cargo.toml"
 binding = "PyO3"
 py-limited-api = "cp311"
-
-[tool.setuptools.package-data]
-kairospy = ["_bin/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

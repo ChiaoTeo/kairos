@@ -7,6 +7,7 @@ use super::defaults::*;
 use super::sources::MarketProviderBindings;
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct MarketConfig {
     #[serde(default)]
     pub providers: MarketProviderBindings,

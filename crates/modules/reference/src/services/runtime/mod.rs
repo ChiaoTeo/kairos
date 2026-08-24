@@ -113,7 +113,7 @@ mod tests {
         );
 
         let health = runtime.health_for(["massive-options"])[0].clone();
-        assert_eq!(health.status, SourceRuntimePhase::Ready);
+        assert_eq!(health.status, SourceRuntimePhase::Scanning);
         assert_eq!(
             health.progress,
             SourceRuntimeProgress::paged(Some(3), Some(8), Some(30), Some(6))

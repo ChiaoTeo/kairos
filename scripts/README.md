@@ -8,6 +8,7 @@ Scripts are grouped by the kind of repository operation they perform:
 | [`generate/`](generate/) | FlatBuffers bindings, schema validation, and wire fixtures |
 | [`docs/`](docs/) | Local OpenAPI documentation rendering |
 | [`build/`](build/) | Rust binary builds and observability benchmarks |
+| [`maintenance/`](maintenance/) | Explicit repair and local development setup tasks |
 
 Run these commands from the repository root. The paths are also used by CI
 and the relevant tests, so moving a script requires updating its callers.

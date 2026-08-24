@@ -9,6 +9,7 @@ from textual.binding import Binding
 
 from .dialogs import HelpDialog
 from .screens import (
+    CommandLineScreen,
     HomeScreen,
     MarketScreen,
     OperationsScreen,
@@ -21,198 +22,15 @@ from .screens.observe import ObserveScreen
 from .state import WorkbenchState
 
 
-WORKBENCH_CSS = """
-Screen {
-    layout: vertical;
-    background: $background;
-}
-
-Header {
-    dock: top;
-}
-
-Footer {
-    dock: bottom;
-}
-
-#page-title {
-    height: 3;
-    padding: 1 2 0 2;
-    text-style: bold;
-}
-
-#workspace-summary {
-    height: 2;
-    padding: 0 2;
-    color: $text-muted;
-}
-
-ActionList {
-    height: auto;
-    max-height: 1fr;
-    margin: 0 1 1 1;
-    padding: 0 1;
-    border: round $surface-lighten-2;
-}
-
-ModalScreen {
-    align: center middle;
-    background: $background 65%;
-}
-
-.dialog {
-    width: 72;
-    max-width: 90%;
-    height: auto;
-    max-height: 80%;
-    padding: 1 2;
-    border: round $primary;
-    background: $surface;
-}
-
-.dialog-title {
-    height: 2;
-    text-style: bold;
-}
-
-.dialog-message {
-    height: auto;
-    margin-bottom: 1;
-}
-
-.dialog-actions {
-    height: 3;
-    align-horizontal: right;
-}
-
-.dialog-actions Button {
-    margin-left: 1;
-}
-
-#dialog-options {
-    height: auto;
-    max-height: 20;
-}
-
-#resource-form {
-    height: 1fr;
-    padding: 0 2 1 2;
-}
-
-#launch-form {
-    height: 1fr;
-    padding: 0 2 1 2;
-}
-
-#launch-form Label {
-    margin-top: 1;
-}
-
-#launch-form-help, #launch-form-error {
-    color: $text-muted;
-}
-
-#connected-fields, #execution-fields, #backtest-fields, #live-fields {
-    height: auto;
-}
-
-#execution-order-form {
-    height: 1fr;
-    padding: 0 2 1 2;
-}
-
-#execution-order-form Label {
-    margin-top: 1;
-}
-
-#execution-order-error {
-    color: $text-muted;
-}
-
-#standalone-order-form {
-    height: 1fr;
-    padding: 0 2 1 2;
-}
-
-#standalone-order-form Label {
-    margin-top: 1;
-}
-
-#standalone-order-error {
-    color: $text-muted;
-}
-
-#resource-form Label {
-    margin-top: 1;
-}
-
-#resource-form-help, #resource-form-error, #observe-status {
-    color: $text-muted;
-}
-
-.form-actions {
-    height: 3;
-    align-horizontal: right;
-    margin-top: 1;
-}
-
-.form-actions Button {
-    margin-left: 1;
-}
-
-#observe-summary, #observe-status {
-    height: 2;
-    padding: 0 2;
-}
-
-#attach-result {
-    height: 2fr;
-}
-
-#attach-python {
-    height: 1fr;
-    min-height: 6;
-    margin: 0 1;
-}
-
-#attach-python-run {
-    dock: bottom;
-    margin: 0 2 1 2;
-}
-
-#observe-body {
-    height: 1fr;
-    padding: 0 1;
-}
-
-#observe-components-panel {
-    width: 2fr;
-    border: round $surface-lighten-2;
-}
-
-#observe-side {
-    width: 1fr;
-    margin-left: 1;
-    border: round $surface-lighten-2;
-}
-
-.panel-title {
-    height: 1;
-    padding: 0 1;
-    color: $primary;
-    text-style: bold;
-}
-"""
-
-
 class KairosWorkbenchApp(App[int]):
     """One application shell for every guided Kairos workflow."""
 
-    CSS = WORKBENCH_CSS
+    CSS_PATH = "styles/workbench.tcss"
     TITLE = "Kairos"
     ENABLE_COMMAND_PALETTE = True
     BINDINGS = [
         Binding("q", "quit", "退出"),
+        Binding("ctrl+q", "quit", "退出", show=False),
         Binding("question_mark", "help", "帮助"),
         Binding("ctrl+p", "command_palette", "命令", show=False),
         Binding("ctrl+c", "cancel_operation", "取消操作", show=False),
@@ -226,8 +44,9 @@ class KairosWorkbenchApp(App[int]):
         initial_launch_attach: str | None = None,
         initial_launch_setup: tuple[str, Path | None] | None = None,
         observe_refresh_seconds: float = 2.0,
+        watch_css: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(watch_css=watch_css)
         self.state = state
         self.initial_section = initial_section
         self.initial_launch_attach = initial_launch_attach
@@ -235,9 +54,9 @@ class KairosWorkbenchApp(App[int]):
         self.observe_refresh_seconds = observe_refresh_seconds
 
     def on_mount(self) -> None:
-        self.push_screen(HomeScreen())
+        self.push_screen(CommandLineScreen())
         if self.initial_section is not None:
-            self.open_section(self.initial_section)
+            self._submit_initial_section(self.initial_section)
         if self.initial_launch_attach is not None:
             from .screens.strategy import LaunchAttachScreen
 
@@ -249,6 +68,19 @@ class KairosWorkbenchApp(App[int]):
             launch_id, source = self.initial_launch_setup
             self.state.selected_launch = launch_id
             self.push_screen(LaunchSetupScreen(launch_id, source))
+
+    def _submit_initial_section(self, section: str) -> None:
+        screen = self.screen
+        if not isinstance(screen, CommandLineScreen):
+            return
+        command = {
+            "observe": "observe",
+            "market": "market",
+        }.get(section)
+        if command is None:
+            self.open_section(section)
+        else:
+            screen.submit(command)
 
     def open_section(self, section: str) -> None:
         """Open an explicit product screen as it becomes available."""
@@ -283,6 +115,9 @@ class KairosWorkbenchApp(App[int]):
 
     def action_help(self) -> None:
         screen = self.screen
+        if isinstance(screen, CommandLineScreen):
+            screen.submit("help")
+            return
         bindings = tuple(
             binding
             for binding in getattr(screen, "BINDINGS", ())

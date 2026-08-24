@@ -117,7 +117,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v5_open_invalidates_legacy_reference_catalog_tables() {
+    async fn open_rejects_unsupported_legacy_schema_version() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let initialized = SqlxCatalogStore::open(&path).await.unwrap();
@@ -146,26 +146,14 @@ mod tests {
         .unwrap();
         legacy.close().await;
 
-        let store = SqlxCatalogStore::open(&path).await.unwrap();
-        for removed in [
-            "reference_market_data_accesses_current",
-            "reference_execution_accesses_current",
-        ] {
-            let count = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-            )
-            .bind(removed)
-            .fetch_one(&store.pool)
-            .await
-            .unwrap();
-            assert_eq!(count, 0, "obsolete table remains: {removed}");
-        }
-        let canonical_count =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reference_markets_current")
-                .fetch_one(&store.pool)
-                .await
-                .unwrap();
-        assert_eq!(canonical_count, 0);
+        let error = match SqlxCatalogStore::open(&path).await {
+            Ok(_) => panic!("legacy schema unexpectedly opened"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            error.contains("unsupported Reference SQLite schema version 1; expected 6"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]

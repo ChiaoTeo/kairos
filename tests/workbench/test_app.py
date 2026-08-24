@@ -23,7 +23,6 @@ from kairospy.investment.apps.reference.application.models import (
 )
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
-from kairospy.surface.workbench.dialogs import HelpDialog
 from kairospy.surface.workbench.dialogs import ConfirmDialog
 from kairospy.surface.workbench.screens.business_tools import (
     BusinessToolsScreen,
@@ -31,11 +30,13 @@ from kairospy.surface.workbench.screens.business_tools import (
     IntegrationCapabilitiesScreen,
     RiskToolsScreen,
 )
+from kairospy.surface.workbench.screens.command_line import CommandLineScreen
 from kairospy.surface.workbench.screens.execution import ExecutionSubmitScreen
 from kairospy.surface.workbench.screens.market import (
     MarketDetailScreen,
     MarketHistoryScreen,
     MarketScreen,
+    _observation_renderable,
 )
 from kairospy.surface.workbench.screens.launch_setup import LaunchSetupScreen
 from kairospy.surface.workbench.screens.operations import (
@@ -60,9 +61,9 @@ from kairospy.surface.workbench.screens.strategy import (
     StrategyScreen,
 )
 from kairospy.surface.console.models import ObserveSnapshot
-from kairospy.surface.workbench.widgets import ActionList
+from kairospy.surface.workbench.widgets import ActionList, WorkbenchCommandInput
 from textual.containers import Vertical
-from textual.widgets import Button, DataTable, Input, Label, RichLog, Select
+from textual.widgets import Button, DataTable, Input, Label, RichLog, Select, Static
 
 
 def _state() -> WorkbenchState:
@@ -89,46 +90,68 @@ def _market() -> Market:
     )
 
 
-def test_home_is_one_textual_screen_with_six_product_actions() -> None:
-    async def run() -> tuple[int, str, str]:
+def _log_text(log: RichLog) -> str:
+    return "\n".join(line.text for line in log.lines)
+
+
+def test_workbench_starts_as_one_guided_command_screen() -> None:
+    async def run() -> tuple[bool, str, str, bool]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            actions = app.screen.query_one("#home-actions", ActionList)
-            workspace = str(app.screen.query_one("#workspace-summary").render())
-            return actions.option_count, app.screen.sub_title or "", workspace
+            command_input = app.screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            )
+            output = _log_text(app.screen.query_one("#command-output", RichLog))
+            return (
+                isinstance(app.screen, CommandLineScreen),
+                app.screen.sub_title or "",
+                output,
+                command_input.has_focus,
+            )
 
-    count, subtitle, workspace = asyncio.run(run())
+    is_command_screen, subtitle, output, input_focused = asyncio.run(run())
 
-    assert count == 6
-    assert subtitle == "首页"
-    assert "trader" in workspace
+    assert is_command_screen
+    assert subtitle == "命令"
+    assert "Kairos Workbench" in output
+    assert "trader" in output
+    assert input_focused
+
+
+def test_external_workbench_stylesheet_is_loaded_and_watchable() -> None:
+    normal_app = KairosWorkbenchApp(_state())
+    app = KairosWorkbenchApp(_state(), watch_css=True)
+
+    assert [path.name for path in app.css_path] == ["workbench.tcss"]
+    assert normal_app.css_monitor is None
+    assert app.css_monitor is not None
 
 
 @pytest.mark.parametrize("theme", ("textual-dark", "textual-light"))
-def test_home_renders_in_supported_terminal_themes(theme: str) -> None:
-    async def run() -> int:
+def test_command_screen_renders_in_supported_terminal_themes(theme: str) -> None:
+    async def run() -> str:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(80, 24)) as pilot:
             app.theme = theme
             await pilot.pause()
-            return app.screen.query_one("#home-actions", ActionList).option_count
+            return _log_text(app.screen.query_one("#command-output", RichLog))
 
-    assert asyncio.run(run()) == 6
+    assert "Kairos Workbench" in asyncio.run(run())
 
 
-def test_home_renders_when_no_color_is_requested(
+def test_command_screen_renders_when_no_color_is_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
 
-    async def run() -> int:
+    async def run() -> str:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(60, 20)) as pilot:
             await pilot.pause()
-            return app.screen.query_one("#home-actions", ActionList).option_count
+            return _log_text(app.screen.query_one("#command-output", RichLog))
 
-    assert asyncio.run(run()) == 6
+    assert "Kairos Workbench" in asyncio.run(run())
 
 
 def test_workspace_identity_is_visible_in_shared_header_context() -> None:
@@ -141,28 +164,136 @@ def test_workspace_identity_is_visible_in_shared_header_context() -> None:
     assert asyncio.run(run()) == "Kairos · trader"
 
 
-def test_home_numeric_shortcut_dispatches_selected_product() -> None:
-    async def run() -> list[str]:
-        app = KairosWorkbenchApp(_state())
-        opened: list[str] = []
-        app.open_section = opened.append  # type: ignore[method-assign]
-        async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.press("1")
+def test_existing_setup_entry_can_still_open_its_explicit_screen() -> None:
+    async def run() -> type[object]:
+        app = KairosWorkbenchApp(_state(), initial_section="resources")
+        async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-        return opened
+            return type(app.screen)
 
-    assert asyncio.run(run()) == ["market"]
+    assert asyncio.run(run()) is ResourcesScreen
 
 
-def test_home_layout_runs_at_supported_terminal_sizes() -> None:
-    async def run(size: tuple[int, int]) -> int:
+def test_command_input_executes_help_and_keeps_focus() -> None:
+    async def run() -> tuple[str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("h", "e", "l", "p", "enter")
+            await pilot.pause()
+            command_input = app.screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            )
+            return (
+                _log_text(app.screen.query_one("#command-output", RichLog)),
+                command_input.has_focus,
+            )
+
+    output, input_focused = asyncio.run(run())
+    assert "market [代码]" in output
+    assert input_focused
+
+
+def test_market_command_guides_missing_argument_and_escape_cancels() -> None:
+    async def run() -> tuple[str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("m", "a", "r", "k", "e", "t", "enter")
+            await pilot.pause()
+            command_input = app.screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            )
+            guided_placeholder = command_input.placeholder or ""
+            guided_status = str(
+                app.screen.query_one("#command-status", Static).render()
+            )
+            await pilot.press("escape")
+            await pilot.pause()
+            ready_status = str(
+                app.screen.query_one("#command-status", Static).render()
+            )
+            return guided_placeholder, guided_status, ready_status
+
+    placeholder, guided_status, ready_status = asyncio.run(run())
+
+    assert placeholder == "请输入市场代码或名称"
+    assert guided_status == "等待输入 · market"
+    assert ready_status == "就绪"
+
+
+def test_command_input_keeps_shell_style_history() -> None:
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("h", "e", "l", "p", "enter")
+            await pilot.press("c", "l", "e", "a", "r", "enter")
+            await pilot.press("up")
+            command_input = app.screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            )
+            latest = command_input.value
+            await pilot.press("up")
+            previous = command_input.value
+            return latest, previous
+
+    assert asyncio.run(run()) == ("clear", "help")
+
+
+def test_market_command_runs_in_worker_and_renders_result() -> None:
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen._find_markets = lambda query: (_market(),)  # type: ignore[method-assign]
+            screen.submit("market AAPL")
+            await pilot.pause(0.1)
+            return (
+                _log_text(screen.query_one("#command-output", RichLog)),
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    output, status = asyncio.run(run())
+
+    assert "找到 1 个标的" in output
+    assert "AAPL" in output
+    assert status == "就绪"
+
+
+def test_worker_error_is_rendered_and_input_remains_usable() -> None:
+    def fail(_: str) -> tuple[Market, ...]:
+        raise RuntimeError("reference database unavailable")
+
+    async def run() -> tuple[str, str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen._find_markets = fail  # type: ignore[method-assign]
+            screen.submit("market AAPL")
+            await pilot.pause(0.1)
+            command_input = screen.query_one("#command-input", WorkbenchCommandInput)
+            return (
+                _log_text(screen.query_one("#command-output", RichLog)),
+                str(screen.query_one("#command-status", Static).render()),
+                command_input.has_focus,
+            )
+
+    output, status, input_focused = asyncio.run(run())
+
+    assert "reference database unavailable" in output
+    assert status == "失败 · 可继续输入"
+    assert input_focused
+
+
+def test_command_layout_runs_at_supported_terminal_sizes() -> None:
+    async def run(size: tuple[int, int]) -> str:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
-            return app.screen.query_one("#home-actions", ActionList).option_count
+            return _log_text(app.screen.query_one("#command-output", RichLog))
 
     for size in ((60, 20), (80, 24), (120, 30), (160, 40)):
-        assert asyncio.run(run(size)) == 6
+        assert "Kairos Workbench" in asyncio.run(run(size))
 
 
 def test_market_search_stays_inside_screen_and_opens_selected_market() -> None:
@@ -172,7 +303,7 @@ def test_market_search_stays_inside_screen_and_opens_selected_market() -> None:
         MarketScreen._find_markets = lambda self, query: (_market(),)  # type: ignore[method-assign]
         try:
             async with app.run_test(size=(100, 30)) as pilot:
-                await pilot.press("1")
+                app.open_section("market")
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, MarketScreen)
@@ -224,6 +355,44 @@ def test_market_observation_uses_application_result_in_current_screen() -> None:
     assert asyncio.run(run()) == "行情已更新"
 
 
+def test_market_empty_routes_show_requested_capability_diagnostics() -> None:
+    async def run() -> str:
+        app = KairosWorkbenchApp(_state())
+        original_routes = MarketDetailScreen._load_routes
+        MarketDetailScreen._load_routes = lambda self, kind: ()  # type: ignore[method-assign]
+        try:
+            async with app.run_test(size=(100, 30)) as pilot:
+                app.push_screen(MarketDetailScreen(_market()))
+                await pilot.pause()
+                app.screen.query_one("#observation-actions", ActionList).focus()
+                await pilot.press("enter")
+                await pilot.pause(0.2)
+                return str(
+                    app.screen.query_one("#observation-status", Label).render()
+                )
+        finally:
+            MarketDetailScreen._load_routes = original_routes
+
+    assert asyncio.run(run()) == "没有可用数据源 · equity / quote"
+
+
+def test_quote_observation_uses_a_structured_panel() -> None:
+    from rich.panel import Panel
+
+    rendered = _observation_renderable(
+        {
+            "symbol": "AAPL",
+            "data_type": "quote",
+            "provider": "massive",
+            "bid_price": "310.50",
+            "ask_price": "310.67",
+            "observed_at_unix_nanos": 1_787_565_281_275_725_727,
+        }
+    )
+
+    assert isinstance(rendered, Panel)
+
+
 def test_reference_asset_search_and_detail_stay_in_screen_stack() -> None:
     asset = Asset(
         id="asset:usd",
@@ -239,7 +408,7 @@ def test_reference_asset_search_and_detail_stay_in_screen_stack() -> None:
         ReferenceScreen._find_records = lambda self, query: (asset,)  # type: ignore[method-assign]
         try:
             async with app.run_test(size=(100, 30)) as pilot:
-                await pilot.press("2")
+                app.open_section("reference")
                 await pilot.pause()
                 screen = app.screen
                 assert isinstance(screen, ReferenceScreen)
@@ -415,25 +584,21 @@ def test_text_input_consumes_global_shortcuts_as_text() -> None:
     assert running
 
 
-def test_help_is_contextual_modal_and_escape_returns_to_current_screen() -> None:
-    async def run() -> tuple[bool, bool, str]:
+def test_help_action_writes_into_command_output_without_opening_a_modal() -> None:
+    async def run() -> tuple[bool, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(80, 24)) as pilot:
-            home = app.screen
-            await pilot.press("?")
+            screen = app.screen
+            app.action_help()
             await pilot.pause()
-            opened = isinstance(app.screen, HelpDialog)
-            content = str(app.screen.query_one("#help-content").render())
-            await pilot.press("escape")
-            await pilot.pause()
-            return opened, app.screen is home, content
+            content = _log_text(app.screen.query_one("#command-output", RichLog))
+            return app.screen is screen, content
 
-    opened, returned, content = asyncio.run(run())
+    stayed_inline, content = asyncio.run(run())
 
-    assert opened
-    assert returned
-    assert "首页入口" in content
-    assert "Ctrl+P" in content
+    assert stayed_inline
+    assert "observe" in content
+    assert "market [代码]" in content
 
 
 def test_observe_recommendation_opens_launch_in_shared_screen_stack() -> None:

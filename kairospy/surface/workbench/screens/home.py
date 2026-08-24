@@ -30,9 +30,15 @@ class HomeScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield WorkspaceHeader()
-        yield Label("你想做什么？", id="page-title")
+        yield Static("KAIROS  /  TRADING WORKBENCH", id="home-kicker")
+        yield Label("交易，从这里开始", id="page-title")
         yield Static(self._workspace_text(), id="workspace-summary")
-        yield ActionList(*HOME_ACTIONS, id="home-actions")
+        yield ActionList(
+            *HOME_ACTIONS,
+            id="home-actions",
+            classes="action-cards",
+            spacious=True,
+        )
         yield Footer()
 
     def _workspace_text(self) -> str:

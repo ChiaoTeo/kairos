@@ -3108,6 +3108,27 @@ def test_interactive_opens_workbench_even_before_workspace_exists(monkeypatch) -
     assert seen == [state]
 
 
+def test_interactive_enables_css_watching_only_in_textual_dev_mode(
+    monkeypatch,
+) -> None:
+    from kairospy.surface.cli import app as cli_module
+
+    state = SimpleNamespace(owner=None, load_error="workspace not found")
+    watched: list[bool] = []
+    monkeypatch.setattr(cli_module, "load_workbench_state", lambda *args, **kwargs: state)
+    monkeypatch.setattr(
+        cli_module.KairosWorkbenchApp,
+        "run",
+        lambda self: watched.append(self.css_monitor is not None),
+    )
+
+    cli_module._interactive_command(None, False, False, False)
+    monkeypatch.setenv("KAIROS_TEXTUAL_DEV", "1")
+    cli_module._interactive_command(None, False, False, False)
+
+    assert watched == [False, True]
+
+
 
 
 

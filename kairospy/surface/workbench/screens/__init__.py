@@ -1,6 +1,7 @@
 """Workbench screens."""
 
 from .home import HomeScreen
+from .command_line import CommandLineScreen
 from .business_tools import BusinessToolsScreen
 from .market import MarketScreen
 from .observe import ObserveScreen
@@ -12,6 +13,7 @@ from .strategy import StrategyScreen
 
 __all__ = [
     "HomeScreen",
+    "CommandLineScreen",
     "BusinessToolsScreen",
     "MarketScreen",
     "ObserveScreen",

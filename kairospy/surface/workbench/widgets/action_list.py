@@ -26,12 +26,13 @@ class ActionList(OptionList):
         *items: ActionItem,
         id: str | None = None,
         classes: str | None = None,
+        spacious: bool = False,
     ) -> None:
         self.items = items
         super().__init__(
             *(
                 Option(
-                    _action_prompt(item),
+                    _action_prompt(item, spacious=spacious),
                     id=item.id,
                     disabled=item.disabled,
                 )
@@ -49,10 +50,13 @@ class ActionList(OptionList):
         return False
 
 
-def _action_prompt(item: ActionItem) -> Text:
+def _action_prompt(item: ActionItem, *, spacious: bool = False) -> Text:
     prompt = Text()
     if item.shortcut:
-        prompt.append(f"{item.shortcut}  ", style="bold")
+        prompt.append(f"[{item.shortcut}]  ", style="bold cyan")
     prompt.append(item.label, style="bold")
-    prompt.append(f"  ·  {item.description}", style="dim")
+    if spacious:
+        prompt.append(f"\n     {item.description}", style="dim")
+    else:
+        prompt.append(f"  ·  {item.description}", style="dim")
     return prompt

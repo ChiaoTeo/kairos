@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import sys
 import os
 import shutil
+import sys
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -321,7 +321,10 @@ def _interactive_command(
         no_exec=no_exec,
         yes=yes,
     )
-    KairosWorkbenchApp(state).run()
+    KairosWorkbenchApp(
+        state,
+        watch_css=os.environ.get("KAIROS_TEXTUAL_DEV") == "1",
+    ).run()
 
 
 @app.command("interactive", rich_help_panel="Getting started")

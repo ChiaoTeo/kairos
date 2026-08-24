@@ -6,7 +6,11 @@ from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+from rich.console import Group, RenderableType
+from rich.panel import Panel
 from rich.pretty import Pretty
+from rich.table import Table
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
@@ -246,7 +250,11 @@ class MarketDetailScreen(Screen[None]):
             id="workspace-summary",
         )
         yield ActionList(*self._observation_actions(), id="observation-actions")
-        yield Label("选择要查看的行情。", id="observation-status")
+        yield Label(
+            "选择要查看的行情。",
+            id="observation-status",
+            classes="status-line",
+        )
         yield RichLog(id="observation-result", wrap=True, highlight=False)
         yield Footer()
 
@@ -342,9 +350,7 @@ class MarketDetailScreen(Screen[None]):
             result = event.worker.result
             self._routes = tuple(result) if result is not None else ()
             if not self._routes:
-                self.query_one("#observation-status", Label).update(
-                    "当前没有支持这种行情的已配置数据源。"
-                )
+                self._show_route_diagnostics()
             elif len(self._routes) == 1:
                 self._request_observation(str(self._routes[0].get("provider")))
             else:
@@ -364,7 +370,31 @@ class MarketDetailScreen(Screen[None]):
             self.query_one("#observation-status", Label).update("行情已更新")
             log = self.query_one("#observation-result", RichLog)
             log.clear()
-            log.write(Pretty(event.worker.result, expand_all=True))
+            log.write(_observation_renderable(event.worker.result))
+
+    def _show_route_diagnostics(self) -> None:
+        market_type = str(self.market.instrument_kind)
+        observation_kind = self._pending_observation or "quote"
+        state = self.app.state  # type: ignore[attr-defined]
+        manifest = getattr(getattr(state.owner, "paths", None), "manifest", None)
+        if manifest is None:
+            manifest = getattr(getattr(state.owner, "paths", None), "root", "—")
+        self.query_one("#observation-status", Label).update(
+            f"没有可用数据源 · {market_type} / {observation_kind}"
+        )
+        details = Table.grid(padding=(0, 1))
+        details.add_column(style="bold cyan", no_wrap=True)
+        details.add_column()
+        details.add_row("请求", f"{market_type} / {observation_kind}")
+        details.add_row("Workspace", str(manifest))
+        details.add_row(
+            "检查",
+            "确认 [[market.providers]] 已启用，且 provider 支持该行情类型。",
+        )
+        details.add_row("下一步", "返回首页 → 管理运行资源 → 行情数据")
+        log = self.query_one("#observation-result", RichLog)
+        log.clear()
+        log.write(Panel(details, title="数据源诊断", border_style="yellow"))
 
     def _provider_selected(self, provider: str | None) -> None:
         if provider is not None:
@@ -382,6 +412,60 @@ class MarketDetailScreen(Screen[None]):
             exclusive=True,
             exit_on_error=False,
         )
+
+
+def _observation_renderable(value: Any) -> RenderableType:
+    if not isinstance(value, Mapping):
+        return Pretty(value, expand_all=True)
+    data_type = str(value.get("data_type") or "行情")
+    symbol = str(value.get("symbol") or "—")
+    provider = str(value.get("provider") or "—")
+    rows = Table.grid(padding=(0, 2))
+    rows.add_column(style="dim", no_wrap=True)
+    rows.add_column(style="bold")
+    fields = {
+        "quote": (
+            ("买价", "bid_price"),
+            ("买量", "bid_quantity"),
+            ("卖价", "ask_price"),
+            ("卖量", "ask_quantity"),
+            ("最新", "last_price"),
+        ),
+        "trade": (("成交价", "price"), ("成交量", "quantity")),
+        "bar": (
+            ("开", "open"),
+            ("高", "high"),
+            ("低", "low"),
+            ("收", "close"),
+            ("成交量", "volume"),
+        ),
+    }.get(data_type)
+    if fields is None:
+        return Pretty(dict(value), expand_all=True)
+    for label, key in fields:
+        field = value.get(key)
+        if field is not None:
+            rows.add_row(label, str(field))
+    heading = Text()
+    heading.append(symbol, style="bold cyan")
+    heading.append(f"   {data_type.upper()}", style="dim")
+    metadata = Text(f"{provider}  ·  {_observation_time(value)}", style="dim")
+    return Panel(
+        Group(heading, Text(""), rows, Text(""), metadata),
+        border_style="cyan",
+        padding=(1, 2),
+    )
+
+
+def _observation_time(value: Mapping[str, Any]) -> str:
+    raw = value.get("observed_at_unix_nanos") or value.get("event_at_unix_nanos")
+    if raw is None:
+        return "时间未知"
+    try:
+        instant = datetime.fromtimestamp(int(raw) / 1_000_000_000, tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return str(raw)
+    return instant.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 class MarketResultScreen(Screen[None]):

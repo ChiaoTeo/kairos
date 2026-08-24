@@ -401,6 +401,46 @@ description or design note:
 
 ## Verification before handoff
 
+### Workbench TUI development
+
+The Workbench is a keyboard-first Textual command line. Its normal layout is a
+`RichLog` output region above one guided `Input`; do not reintroduce a button
+menu, a chat transcript, a second App, or a UI-specific business facade.
+
+For UI work, create the ignored, credential-free fixture with:
+
+```text
+uv run python scripts/maintenance/create_workbench_fixture.py
+```
+
+Always launch Agent-driven sessions with that fixture and both safety flags:
+
+```text
+TEXTUAL=debug,devtools KAIROS_TEXTUAL_DEV=1 uv run kairos interactive \
+  --workspace .agent-work/textual-agent-workflow/fixture/.kairos \
+  --dry-run --no-exec
+```
+
+Run `uv run textual console` in another terminal when message and CSS-error
+diagnostics are needed; CSS hot reload itself is controlled by
+`KAIROS_TEXTUAL_DEV`.
+
+Install the pinned real-terminal driver with
+`sh scripts/maintenance/install_tui_test.sh`. When Codex drives it, keep a
+persistent PTY shell alive, run the CLI from
+`.agent-work/textual-agent-workflow/bin/tui-test`, use one named session, wait
+for `idle` instead of sleeping, and close the session on success or failure.
+Inspect `text --json` and `cells ... --json` before requesting an SVG. A
+developer can attach to the same named session with `monitor`.
+
+Run the fast UI layers with:
+
+```text
+uv run pytest -q tests/workbench/test_app.py
+uv run pytest -q tests/workbench/test_snapshots.py
+uv run pytest -q tests/workbench/test_binary.py
+```
+
 Run focused tests for changed modules and then the repository checks relevant
 to the change:
 

@@ -345,4 +345,28 @@ credential_id = "massive"
             vec!["massive"]
         );
     }
+
+    #[test]
+    fn legacy_named_sources_fail_with_an_actionable_configuration_error() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("workspace.toml"),
+            r#"version = 1
+workspace_id = "test"
+
+[market.sources.massive-equity]
+type = "massive"
+product = "equity"
+credential_id = "massive"
+"#,
+        )
+        .unwrap();
+
+        let error =
+            standalone_market_routes(Some(directory.path()), "equity", ObservationKind::Quote)
+                .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field `sources`"));
+        assert!(error.to_string().contains("providers"));
+    }
 }
