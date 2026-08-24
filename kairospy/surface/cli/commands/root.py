@@ -9,7 +9,7 @@ from typing import Any
 import typer
 
 from kairospy.application.agent import AgentResourceApplication
-from kairospy.application.credential import (
+from kairospy.application.workspace.credentials import (
     CredentialConfigurationApplication,
     SecretRef,
 )
@@ -44,6 +44,14 @@ from kairospy.application.notification.composition import (
 from kairospy.application.notification import NotificationAdminApplication
 from kairospy.application.reference import ReferenceProviderConfigurationApplication
 from kairospy.application.workspace import WorkspaceApplication
+from kairospy.surface.cli.guided_setup import (
+    cancel_setup,
+    confirm_summary,
+    configure_credential_material,
+    print_step,
+    prompt_choice,
+    prompt_credential_material,
+)
 from kairospy.surface.cli.options import OutputFormat, effective_output, render
 
 
@@ -733,9 +741,10 @@ def credential_config_setup(
     owner = WorkspaceApplication().open(workspace)
     application = CredentialConfigurationApplication(owner)
     schema = application.schema(provider)
+    print_step("安全凭据", 1, 3, "连接名称")
     selected_id = (
         credential_id
-        or typer.prompt("连接 id", default=f"{provider.strip().lower()}-main").strip()
+        or typer.prompt("连接名称", default=f"{provider.strip().lower()}-main").strip()
     )
     try:
         existing = application.show(selected_id)
@@ -745,10 +754,7 @@ def credential_config_setup(
         references = ConfigurationReferenceApplication(owner).credential_references(
             selected_id
         )
-        typer.echo(
-            f"当前连接：{selected_id} · provider={existing.get('provider')} · "
-            f"SecretRef={existing.get('secret_refs') or {}}"
-        )
+        typer.echo(f"将更新现有连接 {selected_id}；直接回车可以沿用当前安全凭据。")
         typer.echo(
             "受影响引用："
             + (
@@ -756,33 +762,38 @@ def credential_config_setup(
                 or "无"
             )
         )
-        if not typer.confirm(
-            "替换 SecretRef 元数据吗？配置变化后相关资源需要重新手动测试",
-            default=False,
-        ):
-            _emit({**existing, "status": "unchanged"}, output)
-            return
-    fields: dict[str, SecretRef] = {}
-    for field in schema["required_fields"]:
-        source = (
-            typer.prompt(f"{field} Secret 来源 [env/file]", default="env")
-            .strip()
-            .lower()
-        )
-        default_reference = (
-            application.default_environment(selected_id, str(field))
-            if source == "env"
-            else str(owner.paths.root / "secrets" / selected_id / str(field))
-        )
-        reference = typer.prompt(
-            f"{field} SecretRef id", default=default_reference
-        ).strip()
-        fields[str(field)] = SecretRef(source, reference)  # type: ignore[arg-type]
+    print_step("安全凭据", 2, 3, "提供凭据")
+    material = prompt_credential_material(
+        application,
+        selected_id,
+        provider,
+        existing=existing,
+    )
+    field_names = ", ".join(str(value) for value in schema["required_fields"])
+    storage = (
+        "Workspace 私有 Secret 文件"
+        if material.values is not None
+        else "外部 Secret 引用"
+    )
+    print_step("安全凭据", 3, 3, "确认保存")
+    if not confirm_summary(
+        "即将保存：",
+        (
+            ("连接名称", selected_id),
+            ("Provider", provider.strip().lower()),
+            ("凭据字段", field_names or "无需凭据"),
+            ("保存方式", storage),
+            ("当前操作", "只保存凭据，不调用外部服务"),
+        ),
+    ):
+        _emit({**(existing or {}), "status": "unchanged"}, output)
+        return
     _emit(
-        application.configure(
+        configure_credential_material(
+            application,
             selected_id,
-            provider=provider,
-            fields=fields,
+            provider,
+            material,
             overwrite=existing is not None,
         ),
         output,
@@ -851,6 +862,24 @@ def data_config_setup(
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
     credentials = CredentialConfigurationApplication(owner)
+    application = ReferenceProviderConfigurationApplication(owner)
+    print_step("市场数据", 1, 5, "选择数据来源")
+    typer.echo("  1. Massive · 美股标的信息和行情")
+    typer.echo("已选择 Massive。")
+    print_step("市场数据", 2, 5, "使用范围")
+    include_options = options
+    if not options:
+        include_options = (
+            prompt_choice(
+                "请选择数据范围：",
+                (
+                    ("1", "股票信息和实时/历史行情（推荐）"),
+                    ("2", "股票、行情和期权数据"),
+                ),
+                default="1",
+            )
+            == "2"
+        )
     massive_credentials = [
         str(value["credential_id"])
         for value in credentials.list()
@@ -859,37 +888,58 @@ def data_config_setup(
     selected = (
         credential_id
         or typer.prompt(
-            "Massive 安全凭据 id",
+            "连接名称",
             default=massive_credentials[0]
             if massive_credentials
             else "massive-readonly",
         ).strip()
     )
-    if selected not in massive_credentials:
-        source = (
-            typer.prompt("API Key Secret 来源 [env/file]", default="env")
-            .strip()
-            .lower()
+    existing = credentials.show(selected) if selected in massive_credentials else None
+    material = None
+    print_step("市场数据", 3, 5, "安全凭据")
+    if existing is not None:
+        replace = (
+            prompt_choice(
+                f"检测到已有安全凭据 {selected}：",
+                (("1", "沿用现有凭据（推荐）"), ("2", "重新填写凭据")),
+                default="1",
+            )
+            == "2"
         )
-        reference = typer.prompt(
-            "API Key SecretRef id",
-            default=(
-                credentials.default_environment(selected, "api_key")
-                if source == "env"
-                else str(owner.paths.root / "secrets" / selected / "api_key")
-            ),
-        ).strip()
-        credentials.configure(
-            selected,
-            provider="massive",
-            fields={"api_key": SecretRef(source, reference)},  # type: ignore[arg-type]
-        )
+        if replace:
+            material = prompt_credential_material(
+                credentials, selected, "massive", existing=existing
+            )
+    else:
+        material = prompt_credential_material(credentials, selected, "massive")
+    selected_endpoint = typer.prompt(
+        "API endpoint", default=endpoint, show_default=True
+    ).strip()
     capabilities = ["reference", "equity_market"]
-    if options:
+    if include_options:
         capabilities.append("options")
-    value = ReferenceProviderConfigurationApplication(owner).configure_massive(
+    if not confirm_summary(
+        "即将保存 Massive 市场数据：",
+        (
+            ("连接名称", selected),
+            ("用途", "股票、行情、期权" if include_options else "股票信息和行情"),
+            ("Endpoint", selected_endpoint),
+            ("安全凭据", "已填写" if material is not None else "沿用现有凭据"),
+            ("当前操作", "只保存配置，不读取外部数据"),
+        ),
+    ):
+        cancel_setup()
+    if material is not None:
+        configure_credential_material(
+            credentials,
+            selected,
+            "massive",
+            material,
+            overwrite=existing is not None,
+        )
+    value = application.configure_massive(
         credential_id=selected,
-        endpoint=endpoint,
+        endpoint=selected_endpoint,
         capabilities=capabilities,
     )
     if value.get("configured") is not True:
@@ -897,7 +947,20 @@ def data_config_setup(
             "Massive SecretRef 已保存但当前进程尚不可解析；若使用环境变量，"
             "请设置后重新进入 kairos i，再主动执行读取测试。"
         )
-    _emit(value, output)
+    print_step("市场数据", 4, 5, "读取测试")
+    verification: dict[str, object] | None = None
+    if value.get("configured") is True and typer.confirm(
+        "现在读取少量股票信息和历史行情进行测试吗？（推荐）",
+        default=True,
+    ):
+        verification = application.test_connection("massive")
+    print_step("市场数据", 5, 5, "完成")
+    typer.echo(
+        "✓ Massive 市场数据已可用"
+        if verification and verification.get("verification_status") == "verified"
+        else "Massive 市场数据已保存，需要测试后才能用于要求已验证数据的运行方案。"
+    )
+    _emit({**value, "test": verification}, output)
 
 
 @data_config_app.command("test")
@@ -929,6 +992,21 @@ def data_config_disable(
     owner = WorkspaceApplication().open(workspace)
     references = ConfigurationReferenceApplication(owner).data_provider_references(
         connection_id
+    )
+
+
+@data_config_app.command("enable")
+def data_config_enable(
+    connection_id: str = typer.Argument("massive"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        ReferenceProviderConfigurationApplication(owner).set_enabled(
+            connection_id, enabled=True
+        ),
+        output,
     )
     if references and not force:
         locations = ", ".join(
@@ -990,7 +1068,7 @@ def data_config_delete(
 
 agent_config_app = typer.Typer(
     no_args_is_help=True,
-    help="Prepare and manually test Workspace OpenAI model connections",
+    help="Configure and test Workspace AI model connections",
 )
 config_app.add_typer(agent_config_app, name="agent")
 
@@ -1006,54 +1084,229 @@ def agent_config_status(
 
 @agent_config_app.command("setup")
 def agent_config_setup(
+    provider: str | None = typer.Option(None, "--provider"),
+    connection_id: str | None = typer.Option(None, "--connection-id"),
     credential_id: str | None = typer.Option(None, "--credential-id"),
+    api_mode: str | None = typer.Option(None, "--api-mode"),
+    base_url: str | None = typer.Option(None, "--base-url"),
     model: str | None = typer.Option(None, "--model"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Configure an OpenAI SecretRef; Profile and MCP are Launch-owned."""
+    """Configure one provider connection; Agent behavior remains Launch-owned."""
     owner = WorkspaceApplication().open(workspace)
     resources = AgentResourceApplication(owner)
-    existing_credentials = resources.credential_ids()
-    selected_credential = credential_id or typer.prompt(
-        "OpenAI credential id",
-        default=existing_credentials[0] if existing_credentials else "openai-agent",
+    catalog = {str(item["provider"]): item for item in resources.provider_catalog()}
+
+    print_step("AI 模型连接", 1, 7, "选择提供商")
+    detected = resources.detect_local_model_providers()
+    if detected:
+        labels = "、".join(
+            f"{item['label']}（{item['model_count']} 个模型）" for item in detected
+        )
+        typer.echo(
+            f"检测到本机服务：{labels}。这里只读取状态，不会下载模型或修改配置。"
+        )
+    provider_routes = {
+        "1": ("openai", None),
+        "2": ("anthropic", None),
+        "3": ("openrouter", None),
+        "4": ("ollama", None),
+        "5": ("lmstudio", None),
+        "6": ("custom", "openai-chat-completions"),
+        "7": ("custom", "anthropic-messages"),
+    }
+    route_by_provider = {
+        "openai": "1",
+        "anthropic": "2",
+        "openrouter": "3",
+        "ollama": "4",
+        "lmstudio": "5",
+        "custom": "6",
+    }
+    requested_provider = (provider or "").strip().lower()
+    if requested_provider and requested_provider not in route_by_provider:
+        raise typer.BadParameter(
+            "provider must be openai, anthropic, openrouter, ollama, lmstudio, or custom"
+        )
+    route = route_by_provider.get(requested_provider) or prompt_choice(
+        "连接哪一种模型服务？",
+        (
+            ("1", "OpenAI"),
+            ("2", "Anthropic"),
+            ("3", "OpenRouter"),
+            ("4", "Ollama（本机）"),
+            ("5", "LM Studio（本机）"),
+            ("6", "其他 OpenAI 兼容服务"),
+            ("7", "其他 Anthropic 兼容服务"),
+        ),
+        default="4" if any(item["provider"] == "ollama" for item in detected) else "1",
     )
-    configured: dict[str, object] | None = None
-    if selected_credential not in existing_credentials:
-        source = typer.prompt("Secret 来源 [env/file]", default="env").strip().lower()
-        credentials = CredentialConfigurationApplication(owner)
-        default_reference = (
-            credentials.default_environment(selected_credential, "api_key")
-            if source == "env"
-            else str(owner.paths.root / "secrets" / selected_credential / "api_key")
+    selected_provider, route_mode = provider_routes[route]
+    defaults = catalog.get(selected_provider, {})
+    selected_mode = api_mode or route_mode or str(defaults.get("api_mode") or "")
+    provider_label = str(defaults.get("label") or "自定义模型服务")
+
+    print_step("AI 模型连接", 2, 7, "连接名称")
+    default_connection = (
+        f"{selected_provider}-main"
+        if selected_provider != "custom"
+        else "compatible-main"
+    )
+    selected_connection = (
+        connection_id or typer.prompt("连接名称", default=default_connection).strip()
+    )
+    existing_connections = {
+        str(item["connection_id"]): item for item in resources.model_connections()
+    }
+    existing_connection = existing_connections.get(selected_connection)
+    if existing_connection is not None:
+        typer.echo("将更新这个模型连接；保存后需要重新测试。")
+
+    print_step("AI 模型连接", 3, 7, "认证方式")
+    credentials = CredentialConfigurationApplication(owner)
+    auth_required = bool(defaults.get("auth_required", selected_provider == "custom"))
+    selected_credential: str | None = None
+    credential_material = None
+    credential_provider = str(defaults.get("credential_provider") or "custom-model")
+    existing_credential: Mapping[str, object] | None = None
+    if auth_required:
+        selected_credential = (
+            credential_id
+            or typer.prompt("凭据名称", default=f"{selected_connection}-auth").strip()
         )
-        reference = typer.prompt("SecretRef id", default=default_reference).strip()
-        configured = resources.configure_openai_credential(
+        try:
+            existing_credential = credentials.show(selected_credential)
+        except KeyError:
+            existing_credential = None
+        credential_material = prompt_credential_material(
+            credentials,
             selected_credential,
-            SecretRef(source, reference),  # type: ignore[arg-type]
+            credential_provider,
+            existing=existing_credential,
         )
-        if configured.get("configured") is not True:
-            typer.echo(
-                "SecretRef 尚不可解析。若使用环境变量，请设置后重新进入 kairos i 再测试。"
-            )
+    else:
+        typer.echo("这个本机连接默认不需要 API Key。")
+
+    print_step("AI 模型连接", 4, 7, "接口地址与模式")
+    default_endpoint = str(defaults.get("base_url") or "http://127.0.0.1:8000/v1")
+    selected_endpoint = (
+        base_url or typer.prompt("接口地址", default=default_endpoint).strip()
+    )
+    if selected_provider == "custom" and api_mode is None and route_mode is None:
+        selected_mode = prompt_choice(
+            "接口模式",
+            (
+                ("1", "OpenAI Responses"),
+                ("2", "OpenAI Chat Completions"),
+                ("3", "Anthropic Messages"),
+                ("4", "Ollama Native"),
+            ),
+            default="2",
+        )
+        selected_mode = {
+            "1": "openai-responses",
+            "2": "openai-chat-completions",
+            "3": "anthropic-messages",
+            "4": "ollama-native",
+        }[selected_mode]
+    typer.echo(f"接口模式：{selected_mode}")
+
+    print_step("AI 模型连接", 5, 7, "选择模型")
     selected_model = (
         model
         or typer.prompt(
-            "用于手动测试的固定模型 snapshot", default="gpt-5.4-2026-08-01"
+            "模型 ID（保存后可从服务重新发现）",
+            default="gpt-5" if selected_provider == "openai" else "",
+            show_default=selected_provider == "openai",
         ).strip()
     )
+    if not selected_model:
+        typer.echo("可以先只保存连接，之后再发现或填写模型。")
+
+    print_step("AI 模型连接", 6, 7, "确认配置")
+    if not confirm_summary(
+        "将保存以下内容（安全凭据不会显示）：",
+        (
+            ("连接名称", selected_connection),
+            ("提供商", provider_label),
+            ("接口模式", selected_mode),
+            ("接口地址", selected_endpoint),
+            ("认证", "已提供安全凭据" if auth_required else "无需认证"),
+            ("模型", selected_model or "稍后选择"),
+        ),
+    ):
+        cancel_setup()
+
+    newly_created_credential = auth_required and existing_credential is None
+    configured_credential: dict[str, object] | None = None
+    try:
+        if auth_required:
+            assert selected_credential is not None
+            assert credential_material is not None
+            configured_credential = configure_credential_material(
+                credentials,
+                selected_credential,
+                credential_provider,
+                credential_material,
+                role="model-inference",
+                overwrite=existing_credential is not None,
+            )
+        configured = resources.configure_model_connection(
+            selected_connection,
+            provider=selected_provider,
+            api_mode=selected_mode,
+            base_url=selected_endpoint,
+            credential_id=selected_credential,
+            models=(selected_model,) if selected_model else (),
+            overwrite=existing_connection is not None,
+        )
+    except Exception:
+        if newly_created_credential and selected_credential is not None:
+            credentials.delete(selected_credential)
+        raise
+
     verification: dict[str, object] | None = None
-    if typer.confirm("立即执行一次最小模型调用测试（可能产生少量费用）", default=False):
-        verification = resources.test_openai_model(selected_credential, selected_model)
+    discovered: tuple[dict[str, object], ...] = ()
+    if typer.confirm("现在从服务读取可用模型？这会连接上面的接口", default=False):
+        try:
+            discovered = resources.discover_models(selected_connection)
+            if discovered:
+                typer.echo(
+                    "发现模型："
+                    + "、".join(str(item["id"]) for item in discovered[:10])
+                )
+            else:
+                typer.echo("服务可访问，但没有返回可用模型。")
+        except Exception as error:
+            typer.echo(f"暂时无法读取模型列表：{type(error).__name__}")
+    if selected_model and typer.confirm(
+        "立即执行一次最小文本调用测试？云端服务可能产生少量费用",
+        default=False,
+    ):
+        verification = resources.test_model_connection(
+            selected_connection, selected_model
+        )
+
+    print_step("AI 模型连接", 7, 7, "完成")
+    state = configured.get("verification_status", "pending")
+    typer.echo(
+        "模型连接已保存。"
+        + ("最小调用测试已完成。" if verification else "使用前请完成一次最小调用测试。")
+    )
     _emit(
         {
             **resources.status(),
+            "connection": configured,
+            "configured_credential": configured_credential,
+            "selected_provider": selected_provider,
+            "selected_connection": selected_connection,
             "selected_credential": selected_credential,
             "selected_model": selected_model,
-            "configured": configured,
+            "discovered_models": list(discovered),
             "verification": verification,
-            "next_steps": ["在 Launch 中配置 Agent Profile 与 MCP"],
+            "verification_status": state,
+            "next_steps": ["完成连接测试", "在 Launch 中选择模型与 Agent 策略"],
         },
         output,
     )
@@ -1061,7 +1314,7 @@ def agent_config_setup(
 
 @agent_config_app.command("test")
 def agent_config_test(
-    credential_id: str,
+    connection_id: str,
     model: str = typer.Option(..., "--model"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
@@ -1069,8 +1322,83 @@ def agent_config_test(
     """Perform a user-triggered minimum model call and store secret-safe evidence."""
 
     owner = WorkspaceApplication().open(workspace)
+    resources = AgentResourceApplication(owner)
+    explicit = {
+        str(item["connection_id"])
+        for item in resources.model_connections()
+        if item.get("api_mode") is not None
+    }
+    result = (
+        resources.test_model_connection(connection_id, model)
+        if connection_id in explicit
+        else resources.test_openai_model(connection_id, model)
+    )
+    _emit(result, output)
+
+
+@agent_config_app.command("enable")
+def agent_config_enable(
+    connection_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
     _emit(
-        AgentResourceApplication(owner).test_openai_model(credential_id, model),
+        AgentResourceApplication(owner).set_model_connection_enabled(
+            connection_id, enabled=True
+        ),
+        output,
+    )
+
+
+@agent_config_app.command("disable")
+def agent_config_disable(
+    connection_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(
+        AgentResourceApplication(owner).set_model_connection_enabled(
+            connection_id, enabled=False
+        ),
+        output,
+    )
+
+
+@agent_config_app.command("delete")
+def agent_config_delete(
+    connection_id: str,
+    force: bool = typer.Option(False, "--force"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    resources = AgentResourceApplication(owner)
+    connection = next(
+        (
+            value
+            for value in resources.model_connections()
+            if value.get("connection_id") == connection_id
+        ),
+        None,
+    )
+    if connection is None:
+        raise typer.BadParameter(f"model connection does not exist: {connection_id}")
+    references = ConfigurationReferenceApplication(owner).model_connection_references(
+        connection_id
+    )
+    if references and not force:
+        raise typer.BadParameter(
+            "model connection is referenced by Launch configuration; "
+            "replace those references or use --force"
+        )
+    _emit(
+        {
+            **resources.delete_model_connection(connection_id),
+            "references": references,
+            "forced": force,
+        },
         output,
     )
 

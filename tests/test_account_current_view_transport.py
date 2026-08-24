@@ -5,7 +5,7 @@ from pathlib import Path
 
 import flatbuffers
 
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.infrastructure.contracts.account import AccountCurrentViewReader
 from kairospy.infrastructure.transport.native import native
 from kairospy.infrastructure.transport.generated.kairos.account.v2 import (

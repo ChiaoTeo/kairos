@@ -8,7 +8,7 @@ from kairospy.application.system.clients import ExecutionSystemClient
 from kairospy.application.workspace import InstanceWorkspace
 from kairospy.infrastructure.transport.commands import ExecutionCommandClient
 from kairospy.infrastructure.transport.execution import AeronExecutionEventSource
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
 
 from .application import ExecutionApplication

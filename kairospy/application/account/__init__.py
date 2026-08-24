@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..credential import CredentialConfigurationApplication, SecretRef
+from ..workspace.credentials import CredentialConfigurationApplication, SecretRef
 from ..workspace import Workspace
 from .application import AccountApplication
 from .errors import (
@@ -899,7 +899,15 @@ from .cli import AccountCliApplication  # noqa: E402
 # configuration-boundary vocabulary.
 AccountAdminApplication = AccountConfigurationApplication
 
+from .draft import (  # noqa: E402
+    AccountConfigurationDraft,
+    AccountConfigurationDraftApplication,
+)
+
+
 __all__ = [
+    "AccountConfigurationDraft",
+    "AccountConfigurationDraftApplication",
     "AccountApplication",
     "AccountAdminApplication",
     "AccountConfigurationApplication",

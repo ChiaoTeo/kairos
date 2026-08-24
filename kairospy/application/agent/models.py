@@ -8,7 +8,7 @@ import json
 from types import MappingProxyType
 from typing import Mapping, TypeAlias
 
-from kairospy.domain_types import DataEvent
+from kairospy.application.events import DataEvent
 
 
 JsonScalar: TypeAlias = str | int | float | bool | None

@@ -7,7 +7,13 @@ import typer
 from kairospy.application.config import ConfigurationReferenceApplication
 from kairospy.application.notification import NotificationAdminApplication
 
-from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
+from ...models import (
+    CommandExecution,
+    GuidedCommand,
+    InteractiveContext,
+    ShellAction,
+    ShellControl,
+)
 
 
 RESOURCE_ROOT = ("resources", "notifications")
@@ -17,17 +23,15 @@ def print_menu(context: InteractiveContext) -> None:
     if context.shell_path[:2] == RESOURCE_ROOT:
         destinations = _destinations(context)
         if len(context.shell_path) == 2:
-            typer.echo("通知渠道：")
+            typer.echo("通知提醒：")
             if not destinations:
-                typer.echo("  尚未配置通知渠道。添加并验证后，策略才能向外发送通知。")
+                typer.echo("  尚未配置通知提醒（可选）。")
             for index, value in enumerate(destinations, start=1):
                 typer.echo(
-                    f"  {index}. {value['destination_id']} · {value.get('provider')} · "
+                    f"  {index}. {value['destination_id']} · {_provider_label(value.get('provider'))} · "
                     f"{_status_label(str(value.get('verification_status') or 'pending'))}"
                 )
-            typer.echo("  n. 添加 Telegram 或飞书渠道")
-            if destinations:
-                typer.echo("  t. 向已配置渠道发送真实测试消息")
+            typer.echo(f"  {len(destinations) + 1}. 添加通知提醒")
             return
         _print_resource_detail(context, context.shell_path[2])
         return
@@ -46,7 +50,7 @@ def print_menu(context: InteractiveContext) -> None:
 
 def print_help(context: InteractiveContext) -> None:
     if context.shell_path[:2] == RESOURCE_ROOT:
-        typer.echo("可用命令：<序号>/new/test/list/disable/delete/references/back/home")
+        typer.echo("输入序号打开提醒或添加新提醒；b 返回运行准备。")
         return
     typer.echo("可用命令：feishu/telegram/list/attach/validate/test/disable/delete")
 
@@ -60,12 +64,14 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
         return GuidedCommand(
             ("notifications", "setup", "--provider", "feishu"),
             "引导配置飞书通知",
+            execution=CommandExecution.INTERACTIVE,
             show_command=False,
         )
     if parts[0] in {"2", "telegram"}:
         return GuidedCommand(
             ("notifications", "setup", "--provider", "telegram"),
             "引导配置 Telegram 通知",
+            execution=CommandExecution.INTERACTIVE,
             show_command=False,
         )
     if parts[0] in {"3", "list", "status"}:
@@ -124,7 +130,7 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
 def _handle_resource(context: InteractiveContext, key: str) -> ShellAction:
     destinations = _destinations(context)
     if len(context.shell_path) == 2:
-        if key in {"n", "new", "setup"}:
+        if key in {"n", "new", "setup", str(len(destinations) + 1)}:
             typer.echo("选择通知渠道：\n  1. Telegram\n  2. 飞书\n  b. 返回")
             choice = typer.prompt("请输入序号", default="1").strip().lower()
             if choice in {"b", "back"}:
@@ -136,13 +142,14 @@ def _handle_resource(context: InteractiveContext, key: str) -> ShellAction:
             return GuidedCommand(
                 ("notifications", "setup", "--provider", provider),
                 f"添加 {'Telegram' if provider == 'telegram' else '飞书'} 通知渠道",
+                execution=CommandExecution.INTERACTIVE,
                 show_command=False,
             )
         if key in {"t", "test"}:
             if not destinations:
-                typer.echo("尚无可测试的通知渠道。请先输入 n 完成添加。")
+                typer.echo("尚无可测试的通知提醒。请先添加一个提醒。")
                 return ShellControl.HANDLED
-            destination_id = typer.prompt("Destination id").strip()
+            destination_id = typer.prompt("通知名称").strip()
             return _test_command(destination_id)
         if key in {"list", "ls"}:
             print_menu(context)
@@ -159,23 +166,23 @@ def _handle_resource(context: InteractiveContext, key: str) -> ShellAction:
             return ShellControl.HANDLED
         return None
     destination_id = context.shell_path[2]
-    if key in {"t", "test"}:
+    if key in {"1", "t", "test"}:
         return _test_command(destination_id)
-    if key in {"disable"}:
+    if key in {"2", "references", "uses", "advanced"}:
+        _print_advanced(context, destination_id)
+        return ShellControl.HANDLED
+    if key in {"3", "disable"}:
         return GuidedCommand(
             ("notifications", "disable", destination_id, "--format", "text"),
             f"禁用通知渠道 {destination_id}",
             dangerous=True,
         )
-    if key in {"delete"}:
+    if key in {"4", "delete"}:
         return GuidedCommand(
             ("notifications", "delete", destination_id, "--format", "text"),
             f"删除未被 Launch 引用的通知渠道 {destination_id}",
             dangerous=True,
         )
-    if key in {"references", "uses"}:
-        _print_references(context, destination_id)
-        return ShellControl.HANDLED
     return None
 
 
@@ -206,30 +213,47 @@ def _print_resource_detail(context: InteractiveContext, destination_id: str) -> 
         ),
         {"destination_id": destination_id},
     )
-    references = _references(context, destination_id)
     typer.echo(
         "\n".join(
             (
-                f"通知渠道：{destination_id}",
-                f"类型：{value.get('provider') or '-'} · {'启用' if value.get('enabled', False) else '禁用'}",
+                f"通知提醒：{destination_id}",
+                f"类型：{_provider_label(value.get('provider'))} · {'启用' if value.get('enabled', False) else '禁用'}",
                 f"状态：{_status_label(str(value.get('verification_status') or 'pending'))}",
-                f"安全凭据：{value.get('credential_id') or '-'}（值不显示）",
-                f"最近测试：{value.get('last_tested_at') or '-'}",
-                f"当前配置版本：{_hash_label(value.get('current_configuration_hash'))} · 测试版本：{_hash_label(value.get('tested_configuration_hash'))}",
-                f"测试结果：{value.get('last_test_detail') or '-'}",
-                f"已测试：{', '.join(str(item) for item in value.get('tested') or ()) or '-'}",
-                f"未测试：{', '.join(str(item) for item in value.get('not_tested') or ()) or '-'}",
-                "策略配置引用："
-                + (
-                    "；".join(
-                        f"{item['source']}:{item['location']}" for item in references
-                    )
-                    or "无"
-                ),
-                "  t. 发送真实测试消息",
-                "  disable. 禁用",
-                "  delete. 删除（有引用时默认拒绝）",
+                f"最近测试：{value.get('last_tested_at') or '尚未测试'}",
+                f"测试结果：{value.get('last_test_detail') or '尚无结果'}",
+                "",
+                "建议操作：",
+                "  1. 发送真实测试消息",
+                "  2. 安全与高级信息",
+                "  3. 禁用",
+                "  4. 删除",
             )
+        )
+    )
+
+
+def _print_advanced(context: InteractiveContext, destination_id: str) -> None:
+    value = next(
+        (
+            destination
+            for destination in _destinations(context)
+            if destination.get("destination_id") == destination_id
+        ),
+        {"destination_id": destination_id},
+    )
+    references = _references(context, destination_id)
+    typer.echo(
+        "安全与高级信息：\n"
+        f"  Destination ID：{destination_id}\n"
+        f"  认证资料：{value.get('credential_id') or '-'}（值不显示）\n"
+        f"  配置版本：{_hash_label(value.get('current_configuration_hash'))}\n"
+        f"  测试版本：{_hash_label(value.get('tested_configuration_hash'))}\n"
+        f"  已测试：{', '.join(str(item) for item in value.get('tested') or ()) or '-'}\n"
+        f"  未测试：{', '.join(str(item) for item in value.get('not_tested') or ()) or '-'}\n"
+        "  运行方案引用："
+        + (
+            "；".join(f"{item['source']}:{item['location']}" for item in references)
+            or "无"
         )
     )
 
@@ -255,11 +279,16 @@ def _references(
 
 def _status_label(status: str) -> str:
     return {
-        "verified": "已验证",
-        "pending": "未验证（尚未测试）",
-        "retest_required": "需重新测试",
-        "failed": "测试失败",
+        "verified": "可用",
+        "pending": "需要测试",
+        "retest_required": "配置已变化",
+        "failed": "连接失败",
+        "disabled": "已禁用",
     }.get(status, status)
+
+
+def _provider_label(value: object) -> str:
+    return {"telegram": "Telegram", "feishu": "飞书"}.get(str(value), str(value or "-"))
 
 
 def _hash_label(value: object) -> str:

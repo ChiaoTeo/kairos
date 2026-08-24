@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from kairospy.application.observability import (
+from kairospy.infrastructure.observability import (
     configure_from_environment,
     record_counter,
     record_gauge,

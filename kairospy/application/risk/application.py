@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 
 from .models import RiskStatus
 from .events import (

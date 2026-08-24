@@ -4,7 +4,7 @@ import json
 from io import StringIO
 from pathlib import Path
 
-from kairospy.application.credential import (
+from kairospy.application.workspace.credentials import (
     CredentialConfigurationApplication,
     SecretRef,
 )
@@ -57,6 +57,76 @@ def test_file_secret_ref_is_workspace_relative_and_summary_is_secret_safe(
     assert "telegram-secret" not in repr(summary)
 
 
+def test_direct_secret_values_switch_atomically_to_private_workspace_files(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
+    application = CredentialConfigurationApplication(workspace)
+
+    summary = application.configure_secret_values(
+        "okx-trade",
+        provider="okx",
+        role="trade",
+        values={
+            "api_key": "key-one",
+            "api_secret": "secret-one",
+            "passphrase": "phrase-one",
+        },
+    )
+
+    config_path = workspace.paths.credential_config().parent / "okx-trade.toml"
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "key-one" not in config_text
+    assert "secret-one" not in config_text
+    assert "phrase-one" not in config_text
+    assert summary["secret_storage"] == "workspace-private-files"
+    for field, expected in {
+        "api_key": "key-one",
+        "api_secret": "secret-one",
+        "passphrase": "phrase-one",
+    }.items():
+        assert application.resolve_field("okx-trade", field) == expected
+        reference = summary["secret_refs"][field]
+        secret_path = workspace.paths.root / reference["id"]
+        assert secret_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_replacing_private_values_removes_retired_version_only_after_switch(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
+    application = CredentialConfigurationApplication(workspace)
+    first = application.configure_secret_values(
+        "openai-main", provider="openai", values={"api_key": "first"}
+    )
+    old_path = workspace.paths.root / first["secret_refs"]["api_key"]["id"]
+
+    second = application.configure_secret_values(
+        "openai-main",
+        provider="openai",
+        values={"api_key": "second"},
+        overwrite=True,
+    )
+
+    new_path = workspace.paths.root / second["secret_refs"]["api_key"]["id"]
+    assert old_path.exists() is False
+    assert new_path.read_text(encoding="utf-8").strip() == "second"
+    assert application.resolve_field("openai-main", "api_key") == "second"
+
+
+def test_deleting_credential_removes_managed_private_values(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
+    application = CredentialConfigurationApplication(workspace)
+    application.configure_secret_values(
+        "telegram-main", provider="telegram", values={"bot_token": "token"}
+    )
+    secret_root = workspace.paths.root / "secrets" / "telegram-main"
+
+    application.delete("telegram-main")
+
+    assert secret_root.exists() is False
+
+
 def test_legacy_plaintext_is_readable_but_never_ready(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
     path = workspace.paths.credential_config().parent / "legacy.toml"
@@ -83,6 +153,8 @@ def test_credential_setup_requires_explicit_secret_ref_replacement_confirmation(
         provider="openai",
         fields={"api_key": SecretRef("env", "OPENAI_OLD")},
     )
+    prompts = iter(("2", "OPENAI_REPLACEMENT"))
+    monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: next(prompts))
     monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: False)
     output = StringIO()
 
@@ -108,4 +180,48 @@ def test_credential_setup_requires_explicit_secret_ref_replacement_confirmation(
     assert json.loads(output.getvalue().splitlines()[-1])["status"] == "unchanged"
     assert application.show("openai-main")["secret_refs"]["api_key"]["id"] == (
         "OPENAI_OLD"
+    )
+
+
+def test_credential_setup_accepts_hidden_direct_secret_input(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="demo")
+    prompts = iter(("1", "sk-direct-input"))
+    prompt_options: list[dict[str, object]] = []
+
+    def prompt(*_args, **kwargs):
+        prompt_options.append(kwargs)
+        return next(prompts)
+
+    monkeypatch.setattr("typer.prompt", prompt)
+    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: True)
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "config",
+                "credential",
+                "setup",
+                "--provider",
+                "openai",
+                "--credential-id",
+                "openai-main",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert "sk-direct-input" not in output.getvalue()
+    assert prompt_options[-1]["hide_input"] is True
+    assert (
+        CredentialConfigurationApplication(workspace).resolve_field(
+            "openai-main", "api_key"
+        )
+        == "sk-direct-input"
     )

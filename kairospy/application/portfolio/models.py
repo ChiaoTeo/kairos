@@ -11,7 +11,7 @@ from kairospy.application.account import (
     SegmentCompleteness,
 )
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import AccountId, SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
 
 
 class PortfolioFreshness(StrEnum):

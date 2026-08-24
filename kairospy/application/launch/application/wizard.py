@@ -649,7 +649,7 @@ def prompt_agent_config(
         {
             "enabled": True,
             "required": required,
-            "runtime": "fixture" if mode == "backtest" else "openai-agents",
+            "runtime": "fixture" if mode == "backtest" else "model-agent",
             "profile": profile_config,
         }
     )
@@ -661,9 +661,7 @@ def prompt_agent_config(
         ).strip()
     else:
         if workspace is None:
-            raise typer.BadParameter(
-                "OpenAI Agent requires a Workspace model connection"
-            )
+            raise typer.BadParameter("Agent requires a Workspace AI model connection")
         agent.pop("fixture_path", None)
         resources = AgentResourceApplication(workspace)
         connections = tuple(
@@ -673,7 +671,7 @@ def prompt_agent_config(
         )
         if not connections:
             typer.echo(
-                "当前没有已手动验证的 OpenAI 模型连接；"
+                "当前没有可用的 AI 模型连接；"
                 "将保留 Agent 启用意图并把草稿标记为需要处理。"
             )
             agent.pop("model", None)
@@ -682,24 +680,31 @@ def prompt_agent_config(
         model: Mapping[str, Any] = (
             model_value if isinstance(model_value, Mapping) else {}
         )
-        by_id = {str(item["credential_id"]): item for item in connections}
-        credentials = tuple(by_id)
-        current_credential = model.get("credential")
-        credential = _wizard_prompt(
-            f"OpenAI credential ({', '.join(credentials)})",
+        by_id = {str(item["connection_id"]): item for item in connections}
+        connection_ids = tuple(by_id)
+        current_connection = model.get("connection", model.get("credential"))
+        typer.echo("可用模型连接：")
+        for index, connection_id in enumerate(connection_ids, start=1):
+            item = by_id[connection_id]
+            typer.echo(
+                f"  {index}. {connection_id} · "
+                f"{item.get('provider_label') or item.get('provider')}"
+            )
+        connection = _wizard_prompt(
+            f"模型连接（{', '.join(connection_ids)}）",
             default=(
-                str(current_credential)
-                if isinstance(current_credential, str)
-                and current_credential in credentials
-                else credentials[0]
+                str(current_connection)
+                if isinstance(current_connection, str)
+                and current_connection in connection_ids
+                else connection_ids[0]
             ),
         ).strip()
-        if credential not in credentials:
+        if connection not in connection_ids:
             raise typer.BadParameter(
-                f"OpenAI model connection is not verified: {credential}"
+                f"AI model connection is not available: {connection}"
             )
         current_model = model.get("model")
-        verified_model = by_id[credential].get("model")
+        verified_model = by_id[connection].get("model")
         model_id = (
             _wizard_prompt("固定模型 snapshot", default=str(current_model)).strip()
             if isinstance(current_model, str) and current_model.strip()
@@ -708,20 +713,21 @@ def prompt_agent_config(
             ).strip()
         )
         if (
-            resources.model_verification(credential, model=model_id).get(
+            resources.model_verification(connection, model=model_id).get(
                 "verification_status"
             )
             != "verified"
         ):
             raise typer.BadParameter(
-                f"OpenAI model {model_id} has not been manually tested with {credential}"
+                f"AI model {connection}/{model_id} has not been manually tested"
             )
         model_config = _copy_mapping(model)
+        model_config.pop("provider", None)
+        model_config.pop("credential", None)
         model_config.update(
             {
-                "provider": "openai",
+                "connection": connection,
                 "model": model_id,
-                "credential": credential,
             }
         )
         agent["model"] = model_config
@@ -1017,7 +1023,7 @@ def draft_preview(values: Mapping[str, Any]) -> str:
                 "  Agent        关闭"
                 if not agent.get("enabled", False)
                 else "  Agent        开启 · "
-                f"{model.get('credential') or 'fixture'} / {model.get('model') or agent.get('runtime') or ''}"
+                f"{model.get('connection') or model.get('credential') or 'fixture'} / {model.get('model') or agent.get('runtime') or ''}"
                 f" · Profile v{profile.get('version') or '?'}"
             ),
             (

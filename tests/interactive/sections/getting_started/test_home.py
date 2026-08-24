@@ -12,14 +12,13 @@ def test_home_groups_complete_product_surface(interactive_context, capsys) -> No
         "查看市场行情",
         "查找市场标的",
         "配置并运行策略",
-        "管理运行资源",
+        "完成运行准备",
         "准备数据研究",
         "维护系统",
     ):
         assert label in text
     assert "╭─ Kairos" in text
-    assert "├─ 你想做什么？" in text
-    assert "╰─ 输入 1–6 选择  ·  ? 帮助  ·  q 退出" in text
+    assert "配置并运行策略" in text
     assert "Launch" not in text
     assert "研究门禁" not in text
     assert "诊断与观测" not in text

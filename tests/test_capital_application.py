@@ -20,7 +20,7 @@ from kairospy.application.capital import (
     FundingObjectiveReceipt,
     FundingObjectiveStatus,
 )
-from kairospy.domain_types import AccountId, SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.infrastructure.contracts.capital.view import (
     CapitalViewKey,
     _recovery_alert,

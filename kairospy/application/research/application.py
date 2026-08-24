@@ -11,13 +11,13 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, TYPE_CHECKING
 
-from .data import DataTrustGateApplication, DatasetCatalogApplication
-from .workspace import Workspace
-from ..research.protocol import ResearchSpec
+from ..data import DataTrustGateApplication, DatasetCatalogApplication
+from ..workspace import Workspace
+from ...research.protocol import ResearchSpec
 
 if TYPE_CHECKING:
-    from .launch.application.backtests import BacktestApplication
-    from ..research.experiments import (
+    from ..launch.application.backtests import BacktestApplication
+    from ...research.experiments import (
         BacktestBatchResult,
         BacktestCase,
         BacktestCaseResult,
@@ -176,7 +176,7 @@ class ResearchApplication:
         semaphore = asyncio.Semaphore(concurrency)
         backtests = self._backtests
         if backtests is None:
-            from .launch.application.backtests import BacktestApplication
+            from ..launch.application.backtests import BacktestApplication
 
             backtests = BacktestApplication(self.workspace)
 

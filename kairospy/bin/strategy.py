@@ -12,7 +12,10 @@ from decimal import Decimal
 from typing import Any, Mapping
 
 from kairospy.application.strategy.composition import compose_strategy_process
-from kairospy.application.observability import configure_from_environment, record_gauge
+from kairospy.infrastructure.observability import (
+    configure_from_environment,
+    record_gauge,
+)
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.strategy import StrategyOutput
 

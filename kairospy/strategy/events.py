@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Mapping, TypeAlias
 
-from kairospy.domain_types import DataEvent, EventMetadata
+from kairospy.application.events import DataEvent, EventMetadata
 
 from .clock import TimerEvent
 

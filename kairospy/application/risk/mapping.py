@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
-from kairospy.domain_types import AccountId
-from kairospy.domain_types import EventMetadata, datetime_from_unix_nanos
+from kairospy.primitives.account import AccountId
+from kairospy.application.events import EventMetadata
+from kairospy.primitives.time import datetime_from_unix_nanos
 
 from .events import (
     ReservationChangedEvent,

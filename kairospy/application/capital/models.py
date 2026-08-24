@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.domain_types import AccountId, SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
 
 
 class FundingPriority(StrEnum):

@@ -19,7 +19,8 @@ from kairospy.application.market import (
 )
 from kairospy.application.market.events import MarketEventRecord
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import InstrumentId, datetime_from_unix_nanos
+from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.time import datetime_from_unix_nanos
 from kairospy.infrastructure.contracts.market import (
     MarketViewKey,
     MarketViewKind,

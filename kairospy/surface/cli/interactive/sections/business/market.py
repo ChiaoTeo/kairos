@@ -12,7 +12,13 @@ import typer
 from kairospy.application.launch.application import LaunchRegistryApplication
 from kairospy.application.market.cli import MarketCliApplication
 
-from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
+from ...models import (
+    CommandExecution,
+    GuidedCommand,
+    InteractiveContext,
+    ShellAction,
+    ShellControl,
+)
 from . import reference
 
 
@@ -117,7 +123,7 @@ def print_menu(context: InteractiveContext) -> None:
                 (
                     "当前 Market：workspace 共享服务（连接模式）",
                     "  1. 查看状态",
-                        "  2. 查看数据路由",
+                    "  2. 查看数据路由",
                     "  3. Quote 快照",
                     "  4. K 线快照",
                     "  5. Greeks 快照",
@@ -231,7 +237,11 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
             "logs": "查看 workspace Market 日志",
         }[action],
         dangerous=action in {"up", "down", "restart"},
-        streaming=action == "logs",
+        execution=(
+            CommandExecution.STREAMING
+            if action == "logs"
+            else CommandExecution.ACTIVITY
+        ),
     )
 
 
@@ -545,9 +555,7 @@ def _select_direct_provider(
             None,
         )
         if selected is not None:
-            typer.echo(
-                f"继续使用当前 Provider：{selected.get('provider')}"
-            )
+            typer.echo(f"继续使用当前 Provider：{selected.get('provider')}")
             context.selected_market_provider = selected
             return selected
     if len(routes) == 1:
@@ -656,8 +664,7 @@ def _direct_download_command(context: InteractiveContext) -> ShellAction:
         typer.echo("开始日期必须早于结束日期。")
         return ShellControl.HANDLED
     default_file = (
-        "market-history/"
-        f"{_safe_filename(descriptor['symbol'])}-{data_kind}.jsonl"
+        f"market-history/{_safe_filename(descriptor['symbol'])}-{data_kind}.jsonl"
     )
     destination = typer.prompt("保存位置", default=default_file).strip()
     if not destination:
@@ -953,8 +960,7 @@ def _select_provider(
 
     current = context.selected_market_provider
     if current is not None and any(
-        str(value.get("provider")) == str(current.get("provider"))
-        for value in routes
+        str(value.get("provider")) == str(current.get("provider")) for value in routes
     ):
         typer.echo(f"继续使用当前 Provider：{current['provider']}")
         return current

@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import Any, AsyncContextManager, Mapping, cast
 
-from kairospy.application.credential import CredentialConfigurationApplication
+from kairospy.application.workspace.credentials import (
+    CredentialConfigurationApplication,
+)
 from kairospy.application.workspace import Workspace
 
 from ..configuration import READ_ONLY_AGENT_TOOLS

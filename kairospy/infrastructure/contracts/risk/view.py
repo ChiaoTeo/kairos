@@ -9,7 +9,7 @@ import sys
 from typing import Any, cast
 
 from kairospy.application.risk.models import RiskStatus
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 

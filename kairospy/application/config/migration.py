@@ -10,7 +10,7 @@ import tomllib
 from typing import Any
 
 from ..agent import AgentResourceApplication
-from ..credential import CredentialConfigurationApplication
+from ..workspace.credentials import CredentialConfigurationApplication
 from ..workspace import Workspace
 from .references import ConfigurationReferenceApplication
 

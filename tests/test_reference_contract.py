@@ -17,7 +17,7 @@ from kairospy.application.reference import (
     ReferenceNotFoundError,
     validate_reference_runtime,
 )
-from kairospy.domain_types import InstrumentId, ListingId, MarketId
+from kairospy.primitives.reference import InstrumentId, ListingId, MarketId
 from kairospy.infrastructure.contracts.reference import ReferenceClient
 from kairospy.surface.cli.commands.reference import _observe_reference_stream
 

@@ -67,6 +67,23 @@ def test_question_mark_opens_global_help(
     assert "输入 1-6 选择产品入口" in capsys.readouterr().out
 
 
+def test_ctrl_c_at_shell_prompt_cancels_only_current_input(
+    interactive_context, monkeypatch, capsys
+) -> None:
+    calls = iter((KeyboardInterrupt(), "exit"))
+
+    def read(_prompt=""):
+        value = next(calls)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr("builtins.input", read)
+
+    assert _run_shell(interactive_context, execute=lambda _argv: 0, yes=False) == 0
+    assert "已取消当前输入" in capsys.readouterr().out
+
+
 def test_top_level_market_enters_standalone_scope(interactive_context) -> None:
     assert shell_command(interactive_context, "market") is ShellControl.HANDLED
     assert interactive_context.shell_path == ("market",)
@@ -95,7 +112,7 @@ def test_cancelled_provider_selection_does_not_execute_a_command(
                 {
                     "provider": "massive",
                     "state": "ready",
-                }
+                },
             ]
         },
     )

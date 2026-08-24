@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from ..workspace import Workspace
 from .references import ConfigurationReferenceApplication
 from .migration import ConfigurationMigrationApplication
+from .resource_lifecycle import WorkspaceResourceLifecycleApplication
 
 
 _SECRET_KEYS = frozenset(
@@ -247,4 +248,5 @@ __all__ = [
     "ConfigApplication",
     "ConfigurationMigrationApplication",
     "ConfigurationReferenceApplication",
+    "WorkspaceResourceLifecycleApplication",
 ]

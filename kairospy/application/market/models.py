@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import InstrumentId, MarketId
+from kairospy.primitives.reference import InstrumentId, MarketId
 
 
 class AggressorSide(StrEnum):

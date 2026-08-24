@@ -7,14 +7,9 @@ from enum import StrEnum
 from typing import TypeAlias
 
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import (
-    AccountId,
-    FillId,
-    InstrumentId,
-    IntentId,
-    OrderId,
-    SegmentKey,
-)
+from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.execution import FillId, IntentId, OrderId
+from kairospy.primitives.reference import InstrumentId
 
 
 class OrderSide(StrEnum):

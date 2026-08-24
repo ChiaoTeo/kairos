@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.application.account import AccountApplication, SegmentCompleteness
-from kairospy.application.credential import CredentialConfigurationApplication
+from kairospy.application.workspace.credentials import (
+    CredentialConfigurationApplication,
+)
 from kairospy.application.execution.intents import TargetPositionRequest
 from kairospy.application.workspace import InstanceWorkspace, Workspace
-from kairospy.domain_types import InstrumentId
+from kairospy.primitives.reference import InstrumentId
 
 from .application import AgentApplication
 from .configuration import AgentLaunchConfig
@@ -22,7 +24,8 @@ from .services.controlled_execution import (
 )
 from .services.events import AgentEventStream
 from .services.fixture_runtime import FixtureDecisionRuntime
-from .services.openai_runtime import OpenAIDecisionRuntime
+from .resources import AgentResourceApplication
+from .services.openai_runtime import ModelDecisionRuntime
 from .services.records import DecisionRecordStore
 from .services.tools import AgentToolScope, build_mcp_servers
 from .services.worker import AgentDecisionWorker
@@ -184,17 +187,25 @@ def _compose_enabled_agent(
     else:
         model = config.model
         if model is None:
-            raise ValueError("OpenAI Agent requires model configuration")
-        api_key = _text(
-            CredentialConfigurationApplication(workspace).resolve_field(
-                model.credential, "api_key"
-            ),
-            "Agent credential api_key",
+            raise ValueError("Agent requires model configuration")
+        connection = AgentResourceApplication(workspace).model_connection(
+            model.connection
         )
-        runtime = OpenAIDecisionRuntime(
+        credential_id = connection.get("credential_id")
+        api_key = (
+            CredentialConfigurationApplication(workspace).resolve_field(
+                str(credential_id), "api_key"
+            )
+            if credential_id
+            else None
+        )
+        runtime = ModelDecisionRuntime(
             instructions=_profile_instructions(profile),
             model=model.model,
             api_key=api_key,
+            provider=str(connection.get("provider") or "custom"),
+            api_mode=str(connection.get("api_mode") or "openai-chat-completions"),
+            base_url=str(connection.get("base_url") or "") or None,
             max_turns=model.max_turns,
             max_tool_calls=model.max_tool_calls,
             max_input_tokens=model.max_input_tokens,

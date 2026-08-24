@@ -22,7 +22,8 @@ from kairospy.application.account import (
 )
 from kairospy.application.reference import InstrumentRef
 from kairospy.application.account.mapping import map_accounts_snapshot
-from kairospy.domain_types import AccountId, InstrumentId, SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.reference import InstrumentId
 
 
 def _segment(

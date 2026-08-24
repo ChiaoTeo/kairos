@@ -12,7 +12,10 @@ from kairospy.application.account import (
     CredentialApplication,
     TradeLeaseApplication,
 )
-from kairospy.application.credential import SecretRef
+from kairospy.application.workspace.credentials import (
+    CredentialConfigurationApplication,
+    SecretRef,
+)
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch import (
@@ -41,7 +44,7 @@ def test_guided_paper_account_setup_configures_and_manually_tests(
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="account"
     )
-    answers = iter(("paper", "paper-main", "spot", "USDT=1000"))
+    answers = iter(("1", "paper-main", "1", "USDT=1000"))
     monkeypatch.setattr("typer.prompt", lambda *_args, **_kwargs: next(answers))
     monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: True)
     output = StringIO()
@@ -53,10 +56,58 @@ def test_guided_paper_account_setup_configures_and_manually_tests(
         == 0
     )
 
-    value = json.loads(output.getvalue())
+    value = json.loads(output.getvalue().splitlines()[-1])
     assert value["account"]["account_id"] == "paper-main"
     assert value["verification"]["verification_status"] == "verified"
     assert "order submission" in value["verification"]["not_tested"]
+
+
+def test_guided_live_account_setup_accepts_hidden_direct_credentials(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="account"
+    )
+    answers = iter(
+        (
+            "2",
+            "live-main",
+            "1",
+            "1",
+            "1",
+            "1",
+            "binance-key",
+            "binance-secret",
+        )
+    )
+    prompt_options: list[dict[str, object]] = []
+
+    def prompt(*_args, **kwargs):
+        prompt_options.append(kwargs)
+        return next(answers)
+
+    confirmations = iter((True, False))
+    monkeypatch.setattr("typer.prompt", prompt)
+    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: next(confirmations))
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            ["account", "--workspace", str(workspace.paths.root), "setup"], output
+        )
+        == 0
+    )
+
+    value = json.loads(output.getvalue().splitlines()[-1])
+    assert value["account"]["account_id"] == "live-main"
+    assert value["verification"] is None
+    assert "binance-key" not in output.getvalue()
+    assert prompt_options[-1]["hide_input"] is True
+    credentials = CredentialConfigurationApplication(workspace)
+    assert (
+        credentials.resolve_field("live-main-credential", "api_secret")
+        == "binance-secret"
+    )
 
 
 def test_live_account_requires_credential_unless_forced(tmp_path, monkeypatch) -> None:
@@ -188,7 +239,9 @@ def test_account_secret_ref_identity_invalidates_verification_without_leaking_se
     app.connect("main", broker="paper", environment="paper", credential="paper-key")
     assert app.test_connection("main")["verification_status"] == "verified"
 
-    from kairospy.application.credential import CredentialConfigurationApplication
+    from kairospy.application.workspace.credentials import (
+        CredentialConfigurationApplication,
+    )
 
     CredentialConfigurationApplication(workspace).configure(
         "paper-key",

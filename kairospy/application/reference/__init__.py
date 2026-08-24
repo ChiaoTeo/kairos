@@ -8,6 +8,7 @@ from .application import (
     ReferenceNotFoundError,
 )
 from .configuration import ReferenceProviderConfigurationApplication
+from .provider_draft import ReferenceProviderDraft, ReferenceProviderDraftApplication
 from .cli import ReferenceCliApplication
 from .events import ReferenceEventRecord
 from .models import (
@@ -30,6 +31,8 @@ from .validation import (
 
 __all__ = [
     "ReferenceProviderConfigurationApplication",
+    "ReferenceProviderDraft",
+    "ReferenceProviderDraftApplication",
     "MASSIVE_REFERENCE_SOURCES",
     "PUBLIC_REFERENCE_SOURCES",
     "ReferenceCliApplication",

@@ -22,8 +22,8 @@ def print_menu(context: InteractiveContext) -> None:
                 "  7. 列出 profiles",
                 "  8. 创建 profile",
                 "  9. 切换 profile",
-                "  10. 查看 OpenAI 模型连接",
-                "  11. 配置 OpenAI 模型连接",
+                "  10. 查看 AI 模型连接",
+                "  11. 配置 AI 模型连接",
                 "      Agent Profile、MCP 与工具策略请在具体 Launch 中配置",
             )
         )
@@ -77,12 +77,12 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> GuidedCommand
     if key in {"10", "agent"}:
         return GuidedCommand(
             ("config", "agent", "status", "--format", "text"),
-            "查看 Workspace OpenAI 模型连接",
+            "查看 Workspace AI 模型连接",
         )
     if key in {"11", "agent-setup"}:
         return GuidedCommand(
             ("config", "agent", "setup"),
-            "配置 Workspace OpenAI 模型连接；Profile/MCP 归具体 Launch",
+            "配置 Workspace AI 模型连接；Agent 策略和工具权限归具体运行方案",
             dangerous=True,
         )
     return None

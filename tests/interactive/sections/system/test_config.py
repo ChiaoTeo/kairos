@@ -30,10 +30,10 @@ def test_agent_resource_commands_are_exposed_from_system_config_menu(
 
     assert status == GuidedCommand(
         ("config", "agent", "status", "--format", "text"),
-        "查看 Workspace OpenAI 模型连接",
+        "查看 Workspace AI 模型连接",
     )
     assert setup == GuidedCommand(
         ("config", "agent", "setup"),
-        "配置 Workspace OpenAI 模型连接；Profile/MCP 归具体 Launch",
+        "配置 Workspace AI 模型连接；Agent 策略和工具权限归具体运行方案",
         dangerous=True,
     )

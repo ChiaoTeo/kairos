@@ -1440,36 +1440,34 @@ def _workspace_agent_resource_issues(
         return []
     issues: list[str] = []
     if agent.model is not None:
-        credential_id = agent.model.credential
-        if not _safe_agent_resource_id(credential_id):
-            issues.append("Agent credential id is invalid")
+        connection_id = agent.model.connection
+        if not _safe_agent_resource_id(connection_id):
+            issues.append("Agent model connection id is invalid")
         else:
             try:
                 from kairospy.application.agent import AgentResourceApplication
-                from kairospy.application.credential import (
-                    CredentialConfigurationApplication,
-                )
                 from kairospy.application.workspace import WorkspaceApplication
 
                 workspace = WorkspaceApplication().open(workspace_root)
-                credential = CredentialConfigurationApplication(workspace).show(
-                    credential_id
+                resources = AgentResourceApplication(workspace)
+                connection = next(
+                    value
+                    for value in resources.model_connections()
+                    if value.get("connection_id") == connection_id
                 )
-                if credential.get("provider") != "openai":
-                    issues.append("Agent credential provider must be openai")
-                elif credential.get("configured") is not True:
+                if connection.get("configured") is not True:
                     issues.append(
-                        "Agent credential api_key SecretRef is unavailable or requires migration"
+                        "Agent model connection is disabled, incomplete, or missing credentials"
                     )
-                verification = AgentResourceApplication(workspace).model_verification(
-                    credential_id, model=agent.model.model
+                verification = resources.model_verification(
+                    connection_id, model=agent.model.model
                 )
                 if verification.get("verification_status") != "verified":
                     issues.append(
                         "Agent model connection test is missing, failed, or stale"
                     )
             except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
-                issues.append(f"Agent credential does not exist: {credential_id}")
+                issues.append(f"Agent model connection does not exist: {connection_id}")
     return issues
 
 
@@ -1768,7 +1766,9 @@ def _workspace_mcp_credential_issues(
         return ()
     if not agent.enabled:
         return ()
-    from kairospy.application.credential import CredentialConfigurationApplication
+    from kairospy.application.workspace.credentials import (
+        CredentialConfigurationApplication,
+    )
     from kairospy.application.workspace import WorkspaceApplication
 
     workspace = WorkspaceApplication().open(workspace_root)
@@ -1957,14 +1957,16 @@ def _workspace_resource_snapshots(
     agent = AgentLaunchConfig.from_mapping(config.agent, launch_mode=config.mode)
     if agent.enabled and agent.model is not None:
         try:
-            model_snapshots[agent.model.credential] = AgentResourceApplication(
+            model_snapshots[agent.model.connection] = AgentResourceApplication(
                 workspace
-            ).resource_snapshot(agent.model.credential, model=agent.model.model)
+            ).resource_snapshot(agent.model.connection, model=agent.model.model)
         except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
             if agent.required:
                 raise
 
-    from kairospy.application.credential import CredentialConfigurationApplication
+    from kairospy.application.workspace.credentials import (
+        CredentialConfigurationApplication,
+    )
 
     credential_owner = CredentialConfigurationApplication(workspace)
     mcp_credential_snapshots: dict[str, Any] = {}
@@ -2017,7 +2019,9 @@ def _current_resource_hashes(
     from kairospy.application.agent import AgentResourceApplication
     from kairospy.application.notification import NotificationAdminApplication
     from kairospy.application.reference import ReferenceProviderConfigurationApplication
-    from kairospy.application.credential import CredentialConfigurationApplication
+    from kairospy.application.workspace.credentials import (
+        CredentialConfigurationApplication,
+    )
     from kairospy.application.workspace import WorkspaceApplication
 
     workspace = WorkspaceApplication().open(workspace_root)

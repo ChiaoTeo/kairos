@@ -20,7 +20,7 @@ from kairospy.application.system.clients import (
     RiskSystemClient,
     system_client,
 )
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.application.workspace import InstanceWorkspace, Workspace
 
 from .application.connections import InstanceConnections, resolve_instance_connections

@@ -1821,7 +1821,7 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
     tmp_path: Path, monkeypatch
 ) -> None:
     from kairospy.application.account import AccountSnapshot
-    from kairospy.domain_types import AccountId
+    from kairospy.primitives.account import AccountId
 
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="launch-account-component"
@@ -1997,7 +1997,7 @@ def test_launch_instance_component_account_refresh_uses_owner_cli_scope(
 def test_launch_instance_component_account_open_orders_is_scoped_component_result(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from kairospy.domain_types import AccountId
+    from kairospy.primitives.account import AccountId
 
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="launch-account-open-orders"
@@ -3751,7 +3751,7 @@ def test_interactive_reference_selects_type_searches_and_shows_compact_detail(
     tmp_path, monkeypatch
 ) -> None:
     from kairospy.application.reference import Instrument
-    from kairospy.domain_types import InstrumentId
+    from kairospy.primitives.reference import InstrumentId
     from kairospy.surface.cli.interactive import run_interactive
 
     workspace = WorkspaceApplication().init_project(
@@ -3816,7 +3816,7 @@ def test_interactive_reference_market_search_does_not_render_raw_wide_table(
     tmp_path, monkeypatch
 ) -> None:
     from kairospy.application.reference import InstrumentRef, Market
-    from kairospy.domain_types import InstrumentId, MarketId
+    from kairospy.primitives.reference import InstrumentId, MarketId
     from kairospy.surface.cli.interactive import run_interactive
 
     workspace = WorkspaceApplication().init_project(

@@ -128,10 +128,17 @@ def test_destination_write_failure_rolls_back_credential(
     previous = credential.read_text(encoding="utf-8")
     application = NotificationAdminApplication(workspace)
 
-    def fail(_self, _records):
-        raise OSError("simulated destination commit failure")
+    from kairospy.application.workspace import transaction as transaction_module
 
-    monkeypatch.setattr(NotificationAdminApplication, "_write_destinations", fail)
+    original_replace = transaction_module._replace_file
+    destination_config = workspace.paths.notification_config()
+
+    def fail(source: Path, target: Path) -> None:
+        if target == destination_config and source.parent.name == "staged":
+            raise OSError("simulated destination commit failure")
+        original_replace(source, target)
+
+    monkeypatch.setattr(transaction_module, "_replace_file", fail)
     with pytest.raises(OSError, match="simulated"):
         application.configure(
             "feishu-alerts",
@@ -308,7 +315,7 @@ def test_telegram_setup_client_validates_bot_and_discovers_unique_chats(
     ]
 
 
-def test_guided_feishu_setup_uses_secret_ref_and_never_prompts_for_secret(
+def test_guided_feishu_setup_can_use_environment_secret_reference(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init_project(
@@ -318,7 +325,7 @@ def test_guided_feishu_setup_uses_secret_ref_and_never_prompts_for_secret(
     monkeypatch.setenv(
         env_name, "https://open.feishu.cn/open-apis/bot/v2/hook/test-token"
     )
-    answers = iter(("feishu-alerts", "feishu-alerts", "1", env_name))
+    answers = iter(("feishu-alerts", "2", env_name))
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
     confirmations = iter((True, False))
     monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: next(confirmations))
@@ -340,7 +347,7 @@ def test_guided_notification_setup_can_cancel_before_persisting(
     workspace = WorkspaceApplication().init_project(
         tmp_path / "project", workspace_id="n"
     )
-    answers = iter(("feishu-alerts", "feishu-alerts", "1", "FEISHU_WEBHOOK"))
+    answers = iter(("feishu-alerts", "2", "FEISHU_WEBHOOK"))
     monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
     monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: False)
 

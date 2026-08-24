@@ -20,6 +20,14 @@ class ShellControl(Enum):
     HANDLED = "handled"
 
 
+class CommandExecution(Enum):
+    """How a guided command owns terminal input and output."""
+
+    ACTIVITY = "activity"
+    INTERACTIVE = "interactive"
+    STREAMING = "streaming"
+
+
 @dataclass(frozen=True, slots=True)
 class GuidedCommand:
     """One existing CLI command selected through the interactive surface."""
@@ -29,7 +37,7 @@ class GuidedCommand:
     dangerous: bool = False
     confirmation: str | None = None
     needs_workspace: bool = True
-    streaming: bool = False
+    execution: CommandExecution = CommandExecution.ACTIVITY
     show_command: bool = True
 
 
@@ -64,6 +72,7 @@ class InteractiveContext:
 
 __all__ = [
     "ExecuteCommand",
+    "CommandExecution",
     "GuidedCommand",
     "InteractiveContext",
     "ShellAction",

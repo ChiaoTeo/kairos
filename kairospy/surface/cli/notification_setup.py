@@ -5,12 +5,20 @@ from typing import Literal
 
 import typer
 
-from kairospy.application.notification import (
-    NotificationAdminApplication,
-    NotificationSecretRef,
+from kairospy.application.workspace.credentials import (
+    CredentialConfigurationApplication,
+    SecretRef,
 )
+from kairospy.application.notification import NotificationAdminApplication
 from kairospy.application.notification.composition import test_notification_destination
 from kairospy.application.workspace import Workspace
+from kairospy.surface.cli.guided_setup import (
+    CredentialMaterial,
+    confirm_summary,
+    configure_credential_material,
+    print_step,
+    prompt_credential_material,
+)
 from kairospy.surface.cli.options import OutputFormat, render
 
 
@@ -24,10 +32,13 @@ def run_notification_setup(
 
     selected = _provider(provider)
     admin = NotificationAdminApplication(workspace)
+    credentials = CredentialConfigurationApplication(workspace)
     default_id = "feishu-alerts" if selected == "feishu" else "telegram-alerts"
+    print_step("通知提醒", 1, 6, "准备渠道")
     _print_primer(selected)
-    destination_id = typer.prompt("Destination ID", default=default_id).strip()
-    credential_id = typer.prompt("Credential ID", default=destination_id).strip()
+    print_step("通知提醒", 2, 6, "通知名称")
+    destination_id = typer.prompt("名称", default=default_id).strip()
+    credential_id = destination_id
 
     try:
         existing = admin.show(destination_id)
@@ -36,22 +47,44 @@ def run_notification_setup(
     if existing is not None:
         typer.echo(f"已存在通知渠道 {destination_id}，本次保存将更新它的配置。")
 
-    secret_ref = _secret_reference(admin, credential_id, selected)
+    try:
+        existing_credential = credentials.show(credential_id)
+    except KeyError:
+        existing_credential = None
+    print_step("通知提醒", 3, 6, "安全凭据")
+    material = prompt_credential_material(
+        credentials,
+        credential_id,
+        selected,
+        existing=existing_credential,
+    )
+    secret = _material_secret(credentials, material, selected)
     chat_id: str | None = None
     if selected == "telegram":
-        chat_id = _telegram_chat(admin, secret_ref)
+        print_step("通知提醒", 4, 6, "验证并选择接收位置")
+        if secret is None:
+            typer.echo("当前无法读取 Bot Token，将跳过机器人验证和会话发现。")
+            chat_id = typer.prompt("Telegram chat_id").strip()
+        elif typer.confirm(
+            "将调用 Telegram getMe/getUpdates；不会发送消息。开始验证吗？",
+            default=True,
+        ):
+            chat_id = _telegram_chat(admin, secret)
+        else:
+            chat_id = typer.prompt("Telegram chat_id").strip()
 
     action = "更新" if existing is not None else "添加"
     provider_label = "Telegram" if selected == "telegram" else "飞书"
-    typer.echo()
-    typer.echo(f"即将{action}通知渠道：")
-    typer.echo(f"  渠道名称   {destination_id}")
-    typer.echo(f"  渠道类型   {provider_label}")
+    print_step("通知提醒", 5, 6, "确认保存")
+    rows = [
+        ("名称", destination_id),
+        ("渠道", provider_label),
+        ("安全凭据", "已填写" if secret is not None else "外部引用"),
+        ("当前操作", "只保存配置，不发送消息"),
+    ]
     if chat_id is not None:
-        typer.echo(f"  接收目标   {chat_id}")
-    typer.echo(f"  凭据引用   {secret_ref.source}:{secret_ref.id}（不保存凭据值）")
-    typer.echo("  运行影响   不会启动、停止或修改任何策略")
-    if not typer.confirm("确认保存这个通知渠道吗？", default=True):
+        rows.insert(2, ("接收位置", chat_id))
+    if not confirm_summary(f"即将{action}通知提醒：", tuple(rows)):
         typer.echo("已取消，未修改通知配置。")
         return {
             "destination_id": destination_id,
@@ -60,6 +93,18 @@ def run_notification_setup(
             "status": "cancelled",
         }
 
+    credential = configure_credential_material(
+        credentials,
+        credential_id,
+        selected,
+        material,
+        role="notification-send",
+        overwrite=existing_credential is not None,
+    )
+    raw_reference = credential["secret_refs"][
+        "bot_token" if selected == "telegram" else "webhook_url"
+    ]
+    secret_ref = SecretRef(str(raw_reference["source"]), str(raw_reference["id"]))  # type: ignore[arg-type]
     result = admin.configure(
         destination_id,
         provider=selected,
@@ -80,8 +125,10 @@ def run_notification_setup(
         "next_action": "select this Destination while editing a Launch",
     }
     typer.echo("下一步：可将此通知渠道绑定到策略配置，并选择要接收的通知类型。")
+    print_step("通知提醒", 6, 6, "真实消息测试")
     if result["secret_available"] and typer.confirm(
-        "现在发送一条真实测试消息以完成验证吗？（推荐）", default=True
+        f"现在向 {chat_id or provider_label} 发送一条真实测试消息吗？（推荐）",
+        default=True,
     ):
         import asyncio
 
@@ -119,36 +166,11 @@ def _print_primer(provider: str) -> None:
     typer.echo("3. Kairos 会尝试通过 getMe/getUpdates 验证机器人并发现 chat_id。")
 
 
-def _secret_reference(
-    admin: NotificationAdminApplication, credential_id: str, provider: str
-) -> NotificationSecretRef:
-    source = typer.prompt(
-        "Secret 来源（1=环境变量，推荐；2=文件）", default="1"
-    ).strip()
-    source = {"1": "env", "2": "file"}.get(source, source.lower())
-    if source == "env":
-        default = admin.default_secret_environment(credential_id, provider)
-        identifier = typer.prompt("环境变量名", default=default).strip()
-        return NotificationSecretRef("env", identifier)
-    if source == "file":
-        identifier = typer.prompt(
-            "Secret 文件路径（绝对路径或相对 .kairos 的路径）"
-        ).strip()
-        return NotificationSecretRef("file", identifier)
-    raise typer.BadParameter("Secret source must be env or file")
-
-
-def _telegram_chat(
-    admin: NotificationAdminApplication, reference: NotificationSecretRef
-) -> str:
-    secret = admin.resolve_secret(reference)
-    if secret is None:
-        typer.echo("当前无法解析 Bot Token，将跳过在线验证和 chat 自动发现。")
-        return typer.prompt("Telegram chat_id").strip()
-    identity = admin.probe_telegram_reference(reference)
+def _telegram_chat(admin: NotificationAdminApplication, secret: str) -> str:
+    identity = admin.probe_telegram_secret(secret)
     bot_label = f"@{identity.username}" if identity.username else identity.display_name
     typer.echo(f"已验证 Telegram Bot：{bot_label}（id={identity.bot_id}）")
-    chats = admin.discover_telegram_chats_from_reference(reference)
+    chats = admin.discover_telegram_chats_from_secret(secret)
     if not chats:
         typer.echo(
             "没有发现 chat。请先向机器人或目标群发送消息，然后重试；也可手动输入。"
@@ -161,6 +183,20 @@ def _telegram_chat(
     if choice.isdigit() and 1 <= int(choice) <= len(chats):
         return chats[int(choice) - 1].chat_id
     return choice
+
+
+def _material_secret(
+    application: CredentialConfigurationApplication,
+    material: CredentialMaterial,
+    provider: str,
+) -> str | None:
+    field = "bot_token" if provider == "telegram" else "webhook_url"
+    if material.values is not None:
+        return material.values.get(field)
+    if material.references is None:
+        return None
+    reference = material.references.get(field)
+    return application.resolve(reference) if reference is not None else None
 
 
 __all__ = ["run_notification_setup"]

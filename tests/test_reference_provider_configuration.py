@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 import tomllib
 
-from kairospy.application.credential import (
+from kairospy.application.workspace.credentials import (
     CredentialConfigurationApplication,
     SecretRef,
 )
 from kairospy.application.reference import ReferenceProviderConfigurationApplication
 from kairospy.application.workspace import WorkspaceApplication
+from kairospy.surface.cli import execute_argv
 
 
 def _workspace(tmp_path, monkeypatch):
@@ -76,6 +78,55 @@ def test_massive_configuration_can_be_saved_before_secret_is_visible(
     assert configured["verification_status"] == "pending"
     assert configured["credential_id"] == "massive-readonly"
     assert "KAIROS_MASSIVE_API_KEY" not in workspace.paths.manifest.read_text()
+
+
+def test_guided_massive_setup_accepts_hidden_direct_api_key(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="data-provider"
+    )
+    answers = iter(("1", "1", "massive-direct-key", "https://api.massive.com"))
+    prompt_options: list[dict[str, object]] = []
+
+    def prompt(*_args, **kwargs):
+        prompt_options.append(kwargs)
+        return next(answers)
+
+    confirmations = iter((True, False))
+    monkeypatch.setattr("typer.prompt", prompt)
+    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: next(confirmations))
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "config",
+                "data",
+                "setup",
+                "--credential-id",
+                "massive-readonly",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+
+    payload = json.loads(output.getvalue().splitlines()[-1])
+    assert payload["connection_id"] == "massive"
+    assert payload["verification_status"] == "pending"
+    assert "massive-direct-key" not in output.getvalue()
+    assert any(options.get("hide_input") is True for options in prompt_options)
+    assert (
+        CredentialConfigurationApplication(workspace).resolve_field(
+            "massive-readonly", "api_key"
+        )
+        == "massive-direct-key"
+    )
 
 
 def test_massive_disable_and_delete_preserve_the_workspace_credential(

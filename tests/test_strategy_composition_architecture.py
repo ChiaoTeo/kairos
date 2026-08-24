@@ -14,7 +14,7 @@ from kairospy.application.launch.application.strategy_runtime import (
 )
 from kairospy.application.system.clients import MarketSystemClient
 from kairospy.application.workspace import WorkspaceApplication
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
 from kairospy.application.market.composition import (
     MarketAccessConfig,

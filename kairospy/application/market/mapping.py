@@ -16,11 +16,9 @@ from . import (
     TradeEvent,
 )
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import (
-    EventMetadata,
-    InstrumentId,
-    datetime_from_unix_nanos,
-)
+from kairospy.application.events import EventMetadata
+from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.time import datetime_from_unix_nanos
 
 
 def map_market_event(raw) -> MarketEvent:

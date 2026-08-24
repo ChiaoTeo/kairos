@@ -54,7 +54,7 @@ def test_request_injects_w3c_context_when_telemetry_is_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pytest.importorskip("opentelemetry.sdk")
-    from kairospy.application.observability import configure_telemetry, start_span
+    from kairospy.infrastructure.observability import configure_telemetry, start_span
 
     received: list[tuple[str, bytes]] = []
 

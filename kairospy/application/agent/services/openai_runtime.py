@@ -20,15 +20,18 @@ from ..models import (
 from .tools import MCPServerBinding, MCPToolPolicy
 
 
-class OpenAIDecisionRuntime:
-    """Thin optional OpenAI Agents SDK adapter with structured output."""
+class ModelDecisionRuntime:
+    """Agent SDK runtime over one explicit model-provider connection."""
 
     def __init__(
         self,
         *,
         instructions: str,
         model: str,
-        api_key: str,
+        api_key: str | None,
+        provider: str = "openai",
+        api_mode: str = "openai-responses",
+        base_url: str | None = None,
         max_turns: int,
         max_tool_calls: int,
         max_input_tokens: int,
@@ -36,8 +39,8 @@ class OpenAIDecisionRuntime:
         request_timeout_seconds: float,
         mcp_servers: tuple[MCPServerBinding, ...] = (),
     ) -> None:
-        if not instructions.strip() or not model.strip() or not api_key.strip():
-            raise ValueError("Agent instructions, model and credential are required")
+        if not instructions.strip() or not model.strip():
+            raise ValueError("Agent instructions and model are required")
         try:
             sdk = importlib.import_module("agents")
         except ImportError as error:
@@ -46,24 +49,48 @@ class OpenAIDecisionRuntime:
             ) from error
         self._sdk = sdk
         self._instructions = instructions
-        self._model = model
+        self._model: object = model
         self._max_turns = max_turns
         self._max_tool_calls = max_tool_calls
         self._max_input_tokens = max_input_tokens
         self._mcp_servers = mcp_servers
-        provider_type = getattr(sdk, "OpenAIProvider")
         settings_type = getattr(sdk, "ModelSettings")
         run_config_type = getattr(sdk, "RunConfig")
-        self._run_config = run_config_type(
-            model_provider=provider_type(api_key=api_key),
-            model_settings=settings_type(
+        run_config: dict[str, object] = {
+            "model_settings": settings_type(
                 max_tokens=max_output_tokens,
                 timeout=request_timeout_seconds,
                 store=False,
             ),
-            trace_include_sensitive_data=False,
-            workflow_name="Kairos Decision Agent",
-        )
+            "trace_include_sensitive_data": False,
+            "tracing_disabled": provider != "openai",
+            "workflow_name": "Kairos Decision Agent",
+        }
+        if api_mode in {"openai-responses", "openai-chat-completions"}:
+            provider_type = getattr(sdk, "OpenAIProvider")
+            run_config["model_provider"] = provider_type(
+                api_key=api_key or "local-no-auth",
+                base_url=base_url,
+                use_responses=api_mode == "openai-responses",
+                buffer_streamed_tool_calls=api_mode == "openai-chat-completions",
+            )
+        else:
+            try:
+                any_llm = importlib.import_module(
+                    "agents.extensions.models.any_llm_model"
+                )
+            except ImportError as error:
+                raise RuntimeError(
+                    "This model interface requires the optional any-llm Agent adapter"
+                ) from error
+            adapter_provider = "ollama" if api_mode == "ollama-native" else "anthropic"
+            self._model = any_llm.AnyLLMModel(
+                f"{adapter_provider}/{model}",
+                base_url=base_url,
+                api_key=api_key,
+                api="chat_completions",
+            )
+        self._run_config = run_config_type(**run_config)
 
     def decide(self, candidate: IntentCandidate) -> DecisionRuntimeOutput:
         return asyncio.run(self._decide(candidate))
@@ -119,7 +146,7 @@ class OpenAIDecisionRuntime:
             )
         output = result.final_output
         if not isinstance(output, DecisionResult):
-            raise TypeError("OpenAI Agents SDK returned an invalid DecisionResult")
+            raise TypeError("Agent model returned an invalid DecisionResult")
         return DecisionRuntimeOutput(
             output,
             tuple(unavailable_evidence)
@@ -415,4 +442,7 @@ def _jsonable(value: object) -> object:
     raise ValueError(f"Agent model input cannot encode {type(value).__name__}")
 
 
-__all__ = ["OpenAIDecisionRuntime"]
+OpenAIDecisionRuntime = ModelDecisionRuntime
+
+
+__all__ = ["ModelDecisionRuntime", "OpenAIDecisionRuntime"]

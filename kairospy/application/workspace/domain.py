@@ -160,6 +160,9 @@ class WorkspacePaths(ResourceScopePaths):
     def agent_mcp_config(self) -> Path:
         return self.child("config", "agents", "mcp.toml")
 
+    def model_connections_root(self) -> Path:
+        return self.child("config", "model-connections")
+
     def account_state(self) -> Path:
         return self.child("state", "account", "account-state.json")
 

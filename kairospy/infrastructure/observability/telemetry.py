@@ -1,4 +1,4 @@
-"""Optional OpenTelemetry bootstrap and propagation for Python processes."""
+"""Optional OpenTelemetry bootstrap and propagation infrastructure."""
 
 from __future__ import annotations
 

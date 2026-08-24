@@ -9,12 +9,13 @@ from pathlib import Path
 import shlex
 import sys
 
+import click
 import typer
 
 from kairospy.surface.cli.activity import TerminalActivity
 
 from .context import refresh_context
-from .models import ExecuteCommand, GuidedCommand, InteractiveContext
+from .models import CommandExecution, ExecuteCommand, GuidedCommand, InteractiveContext
 
 
 def execute_guided_command(
@@ -31,28 +32,47 @@ def execute_guided_command(
     if command.show_command:
         typer.echo(f"准备执行：{display}")
         typer.echo(f"用途：{command.summary}")
-    if command.dangerous and not yes:
-        typer.echo(command.confirmation or "此操作会修改配置、调用外部服务或影响运行。")
-        if not typer.confirm("确认继续吗？", default=True):
-            typer.echo("已取消。")
-            typer.echo("── 已取消 ──")
-            typer.echo()
-            context.last_command = display
-            context.last_status = 0
-            return
+    try:
+        if command.dangerous and not yes:
+            typer.echo(
+                command.confirmation or "此操作会修改配置、调用外部服务或影响运行。"
+            )
+            if not typer.confirm("确认继续吗？", default=True):
+                _record_cancellation(context, display)
+                return
+    except (KeyboardInterrupt, click.Abort):
+        _record_cancellation(context, display)
+        return
     context.last_command = display
-    status = _execute_with_activity(
-        execute,
-        argv,
-        label=command.summary,
-        enabled=not command.streaming,
-    )
+    try:
+        status = _execute_with_activity(
+            execute,
+            argv,
+            label=command.summary,
+            enabled=command.execution is CommandExecution.ACTIVITY,
+        )
+    except (KeyboardInterrupt, click.Abort):
+        _record_cancellation(context, display)
+        return
+    if status == 130:
+        _record_cancellation(context, display)
+        return
     context.last_status = status
     result = "完成" if status == 0 else "失败"
     typer.echo()
     typer.echo(f"── {result} · status={status} ──")
     typer.echo()
     refresh_context(context)
+
+
+def _record_cancellation(
+    context: InteractiveContext, display: str, *, saved: bool = False
+) -> None:
+    typer.echo("已取消当前操作。" if saved else "已取消当前操作，未保存任何修改。")
+    typer.echo("── 已取消 ──")
+    typer.echo()
+    context.last_command = display
+    context.last_status = 0
 
 
 def _execute_with_activity(

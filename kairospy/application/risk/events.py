@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
-from kairospy.domain_types import DataEvent
+from kairospy.application.events import DataEvent
 
 from .models import ReservationChange, RiskCircuitChange, RiskDecisionChange
 

@@ -35,7 +35,7 @@ from kairospy.application.notification import NotificationApplication
 from kairospy.application.portfolio import PortfolioApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication
-from kairospy.domain_types import SegmentKey
+from kairospy.primitives.account import SegmentKey
 from ..services.context import StrategyContext
 from ..services.callbacks import StrategyCallbackHost
 from ..services.ingress import StrategyEventIngress

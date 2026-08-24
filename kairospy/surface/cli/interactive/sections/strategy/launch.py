@@ -16,7 +16,13 @@ from kairospy.application.launch.application.wizard import load_values
 from kairospy.surface.console.models import ObserveSnapshot
 
 from ...context import unique_launches
-from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
+from ...models import (
+    CommandExecution,
+    GuidedCommand,
+    InteractiveContext,
+    ShellAction,
+    ShellControl,
+)
 
 
 _ACTIONS = {
@@ -569,7 +575,13 @@ def build_command(launch_id: str, action: str) -> GuidedCommand:
         command_argv,
         summary,
         dangerous=dangerous,
-        streaming=streaming,
+        execution=(
+            CommandExecution.STREAMING
+            if streaming
+            else CommandExecution.INTERACTIVE
+            if action == "edit"
+            else CommandExecution.ACTIVITY
+        ),
     )
 
 

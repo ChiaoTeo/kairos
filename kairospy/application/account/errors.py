@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from kairospy.domain_types import AccountId, InstrumentId, SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.reference import InstrumentId
 
 
 class AccountLookupError(LookupError):

@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from .system.binaries import reject_owned_options, resolve_binary
+from ..system.binaries import reject_owned_options, resolve_binary
 
 
 @dataclass(frozen=True, slots=True)

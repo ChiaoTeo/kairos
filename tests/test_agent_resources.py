@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from kairospy.application.agent import AgentResourceApplication
-from kairospy.application.credential import (
+from kairospy.application.workspace.credentials import (
     CredentialConfigurationApplication,
     SecretRef,
 )
@@ -101,6 +101,115 @@ def test_agent_status_cli_is_secret_safe(
     assert "sk-secret-never-persist" not in output.getvalue()
 
 
+def test_agent_setup_cli_accepts_direct_secret_for_hosted_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    monkeypatch.setattr(
+        AgentResourceApplication,
+        "detect_local_model_providers",
+        lambda self: (),
+    )
+    prompts = iter(("1", "sk-hosted-direct"))
+    prompt_calls: list[dict[str, object]] = []
+
+    def prompt(*_args, **kwargs):
+        prompt_calls.append(kwargs)
+        return next(prompts)
+
+    confirmations = iter((True, False, False))
+    monkeypatch.setattr("typer.prompt", prompt)
+    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: next(confirmations))
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "config",
+                "agent",
+                "setup",
+                "--provider",
+                "openai",
+                "--connection-id",
+                "openai-main",
+                "--credential-id",
+                "openai-main-auth",
+                "--base-url",
+                "https://api.openai.com/v1",
+                "--model",
+                "gpt-5",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert "sk-hosted-direct" not in output.getvalue()
+    assert prompt_calls[-1]["hide_input"] is True
+    assert (
+        CredentialConfigurationApplication(workspace).resolve_field(
+            "openai-main-auth", "api_key"
+        )
+        == "sk-hosted-direct"
+    )
+    connection = AgentResourceApplication(workspace).model_connections()[0]
+    assert connection["provider"] == "openai"
+    assert connection["credential_id"] == "openai-main-auth"
+
+
+def test_agent_setup_cli_configures_local_provider_without_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    monkeypatch.setattr(
+        AgentResourceApplication,
+        "detect_local_model_providers",
+        lambda self: (
+            {
+                "provider": "ollama",
+                "label": "Ollama",
+                "base_url": "http://127.0.0.1:11434",
+                "models": ["qwen3:8b"],
+                "model_count": 1,
+            },
+        ),
+    )
+    confirmations = iter((True, False, False))
+    monkeypatch.setattr("typer.confirm", lambda *_args, **_kwargs: next(confirmations))
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "config",
+                "agent",
+                "setup",
+                "--provider",
+                "ollama",
+                "--connection-id",
+                "ollama-local",
+                "--base-url",
+                "http://127.0.0.1:11434",
+                "--model",
+                "qwen3:8b",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    connection = AgentResourceApplication(workspace).model_connections()[0]
+    assert connection["provider"] == "ollama"
+    assert connection["api_mode"] == "openai-chat-completions"
+    assert connection.get("credential_id") is None
+
+
 def test_paper_launch_agent_guide_builds_inline_profile_and_mcp_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -117,14 +226,13 @@ def test_paper_launch_agent_guide_builds_inline_profile_and_mcp_policy(
 
     agent = prompt_agent_config({}, mode="paper", workspace=workspace)
 
-    assert agent["runtime"] == "openai-agents"
+    assert agent["runtime"] == "model-agent"
     assert agent["profile"]["version"] == "1"
     assert agent["profile"]["goal"]
     assert agent["mcp"] == []
     assert agent["model"] == {
-        "provider": "openai",
+        "connection": "openai-prod",
         "model": MODEL,
-        "credential": "openai-prod",
     }
     assert "sk-secret-never-persist" not in repr(agent)
 
@@ -218,9 +326,7 @@ def test_launch_validation_pins_inline_agent_and_verified_model(
     degraded = build_and_validate(path, values, workspace.paths.root)
     assert degraded["valid"] is True
     assert degraded["issues"] == []
-    assert any(
-        "Agent credential does not exist" in warning for warning in degraded["warnings"]
-    )
+    assert any("Agent model connection" in warning for warning in degraded["warnings"])
     assert degraded["diagnostics"][0]["severity"] == "warning"
     assert "no Agent review" in degraded["diagnostics"][0]["action"]
 

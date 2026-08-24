@@ -1,6 +1,7 @@
 from .application import AgentApplication
 from .configuration import AgentLaunchConfig, AgentModelConfig, IntentReviewConfig
 from .resources import AgentResourceApplication
+from .model_draft import ModelConnectionDraft, ModelConnectionDraftApplication
 from .models import (
     AgentDecisionNotice,
     AgentEvent,
@@ -45,6 +46,8 @@ __all__ = [
     "AgentModeReceipt",
     "AgentModeStatus",
     "AgentResourceApplication",
+    "ModelConnectionDraft",
+    "ModelConnectionDraftApplication",
     "DecisionAgentHealth",
     "DecisionKind",
     "DecisionReceipt",

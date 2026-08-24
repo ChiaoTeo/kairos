@@ -23,6 +23,7 @@ from kairospy.application.agent.services.fixture_runtime import (
     fixture_key,
 )
 from kairospy.application.agent.services.openai_runtime import (
+    ModelDecisionRuntime,
     OpenAIDecisionRuntime,
     _ToolLimitHooks,
     _tool_evidence,
@@ -189,8 +190,89 @@ def test_openai_runtime_uses_structured_output_and_disables_sensitive_trace(
     assert agent_values["output_type"] is DecisionResult
     assert run_config["trace_include_sensitive_data"] is False
     assert settings["store"] is False
+    provider_values = cast(Mapping[str, object], captured["provider"])
+    assert provider_values["use_responses"] is True
+    assert provider_values["api_key"] == "not-logged"
     assert "hooks" in cast(Mapping[str, object], captured["run"])
     assert "not-logged" not in str(captured["input"])
+
+
+def test_model_runtime_routes_openai_compatible_and_native_interfaces(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Provider:
+        def __init__(self, **values) -> None:
+            captured["provider"] = values
+
+    class Settings:
+        def __init__(self, **values) -> None:
+            captured.setdefault("settings", []).append(values)
+
+    class Config:
+        def __init__(self, **values) -> None:
+            captured.setdefault("configs", []).append(values)
+
+    class AnyModel:
+        def __init__(self, model: str, **values) -> None:
+            captured["any_model"] = (model, values)
+
+    sdk = SimpleNamespace(
+        OpenAIProvider=Provider,
+        ModelSettings=Settings,
+        RunConfig=Config,
+    )
+    any_llm = SimpleNamespace(AnyLLMModel=AnyModel)
+
+    def import_module(name: str):
+        return any_llm if name.endswith("any_llm_model") else sdk
+
+    monkeypatch.setattr(
+        "kairospy.application.agent.services.openai_runtime.importlib.import_module",
+        import_module,
+    )
+    ModelDecisionRuntime(
+        instructions="Review risk",
+        model="company/model",
+        api_key="gateway-key",
+        provider="custom",
+        api_mode="openai-chat-completions",
+        base_url="https://gateway.example/v1",
+        max_turns=2,
+        max_tool_calls=1,
+        max_input_tokens=1000,
+        max_output_tokens=100,
+        request_timeout_seconds=3,
+    )
+    assert captured["provider"] == {
+        "api_key": "gateway-key",
+        "base_url": "https://gateway.example/v1",
+        "use_responses": False,
+        "buffer_streamed_tool_calls": True,
+    }
+
+    ModelDecisionRuntime(
+        instructions="Review risk",
+        model="claude-model",
+        api_key="anthropic-key",
+        provider="anthropic",
+        api_mode="anthropic-messages",
+        base_url="https://api.anthropic.example/v1",
+        max_turns=2,
+        max_tool_calls=1,
+        max_input_tokens=1000,
+        max_output_tokens=100,
+        request_timeout_seconds=3,
+    )
+    assert captured["any_model"] == (
+        "anthropic/claude-model",
+        {
+            "base_url": "https://api.anthropic.example/v1",
+            "api_key": "anthropic-key",
+            "api": "chat_completions",
+        },
+    )
 
 
 def test_openai_runtime_enforces_tool_call_budget() -> None:

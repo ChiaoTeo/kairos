@@ -10,6 +10,8 @@ TData_co = TypeVar("TData_co", covariant=True)
 
 @dataclass(frozen=True, slots=True)
 class EventMetadata:
+    """Application event context mapped from an owning module's contract."""
+
     stream_id: str
     sequence: int
     schema_version: int = 1
@@ -29,5 +31,10 @@ class EventMetadata:
 
 @dataclass(frozen=True, slots=True)
 class DataEvent(Generic[TData_co]):
+    """Base shape used by module-owned application events."""
+
     data: TData_co
     metadata: EventMetadata
+
+
+__all__ = ["DataEvent", "EventMetadata"]

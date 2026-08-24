@@ -24,7 +24,7 @@ from kairospy.strategy import StrategyLogger
 from kairospy.strategy import NotificationReceipt as StrategyNotificationReceipt
 from kairospy.strategy import NotificationRequest as StrategyNotificationRequest
 from io import StringIO
-from kairospy.application.observability import redact_http_url
+from kairospy.infrastructure.observability import redact_http_url
 
 
 class _Sender:

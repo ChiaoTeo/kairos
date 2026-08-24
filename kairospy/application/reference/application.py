@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from decimal import Decimal
 from typing import Any, TypeVar, overload
 
-from kairospy.domain_types import ExchangeId, InstrumentId, ListingId, MarketId
+from kairospy.primitives.reference import ExchangeId, InstrumentId, ListingId, MarketId
 
 from .models import (
     Asset,

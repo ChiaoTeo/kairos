@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import shlex
+import sys
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.styles import Style
 import typer
 
 from .context import create_context, go_back, go_home, print_context, refresh_context
@@ -65,14 +69,18 @@ def _run_one_shot_preview(context: InteractiveContext) -> int:
 def _run_shell(
     context: InteractiveContext, *, execute: ExecuteCommand, yes: bool
 ) -> int:
-    _print_global_context(context)
+    prompt_session: PromptSession[str] | None = None
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        prompt_session = PromptSession()
     while True:
         _print_menu(context)
         if context.shell_path:
             typer.echo("  b. 返回上一级")
         try:
-            prompt = f"{prompt_path(context)}> " if context.shell_path else "›"
-            line = input(f"{_prompt_label(context)} {prompt} ").strip()
+            line = _read_shell_input(context, prompt_session).strip()
+        except KeyboardInterrupt:
+            typer.echo("\n已取消当前输入。")
+            continue
         except EOFError:
             typer.echo()
             return context.last_status or 0
@@ -110,6 +118,39 @@ def _run_shell(
         execute_guided_command(context, command, execute=execute, yes=yes)
 
 
+_PROMPT_STYLE = Style.from_dict(
+    {
+        "context": "bold",
+        "marker": "bold",
+        "shortcuts": "fg:ansibrightblack",
+    }
+)
+
+
+def _read_shell_input(
+    context: InteractiveContext, prompt_session: PromptSession[str] | None
+) -> str:
+    label = _prompt_label(context)
+    marker = f" {prompt_path(context)}> " if context.shell_path else " › "
+    if prompt_session is None:
+        return input(f"{label}{marker}")
+    shortcuts = (
+        "b 返回 · ? 帮助 · q 退出"
+        if context.shell_path
+        else "1–6 选择 · ? 帮助 · q 退出"
+    )
+    return prompt_session.prompt(
+        FormattedText(
+            (
+                ("class:context", label),
+                ("class:marker", marker),
+            )
+        ),
+        rprompt=FormattedText((("class:shortcuts", shortcuts),)),
+        style=_PROMPT_STYLE,
+    )
+
+
 def prompt_path(context: InteractiveContext) -> str:
     return "/" + "/".join(context.shell_path)
 
@@ -124,12 +165,12 @@ def _prompt_label(context: InteractiveContext) -> str:
         "launch": "策略运行",
         "observe": "诊断与观测",
         "trade": "交易管理",
-        "resources": "运行资源",
+        "resources": "运行准备",
         "accounts": "交易账户",
-        "models": "模型连接",
-        "notifications": "通知渠道",
+        "models": "AI 模型",
+        "notifications": "通知提醒",
         "data-research": "数据与研究",
-        "data": "数据",
+        "data": "市场数据",
         "research": "研究",
         "operations": "系统与配置",
         "system": "系统服务",

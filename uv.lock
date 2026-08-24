@@ -188,6 +188,42 @@ wheels = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "docstring-parser" },
+    { name = "httpx2" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/aa/4978e58035bd6c638c7b483450a68b7ef2d732ab78885e27bb9db0cff1a2/anthropic-1.0.0.tar.gz", hash = "sha256:42be3c97604af7252c5898413aee076ace6c46e9bca0d0d90ceb77c7d3719027", size = 1077769, upload-time = "2026-08-20T19:59:00.565Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ad/5b/db4a854aebf5d33a5ab714c46af6eb85ee44f390ed29b7b325c00b9f11ed/anthropic-1.0.0-py3-none-any.whl", hash = "sha256:32dd52e9e1d774393b27182f451398ba4262287a4d0eab30887f89f1481b3ae4", size = 1171725, upload-time = "2026-08-20T19:58:58.725Z" },
+]
+
+[[package]]
+name = "any-llm-sdk"
+version = "1.26.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anthropic" },
+    { name = "httpx" },
+    { name = "openai" },
+    { name = "openresponses-types" },
+    { name = "pydantic" },
+    { name = "rich" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f8/23/abf2deede89c7293467e1a62565c3b4b6a3272785ca6c4d3e784e03ea255/any_llm_sdk-1.26.0.tar.gz", hash = "sha256:a2458bce7601e7761ed067ffa784473a83f610fb011862baf3e9eea1cf84cd35", size = 199609, upload-time = "2026-08-17T10:13:41.608Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/6d/1b3eff49eb77851ac525e62d48b305364de87a72e697cdb156325a03479f/any_llm_sdk-1.26.0-py3-none-any.whl", hash = "sha256:b65c5521c79ee974b39d837863532d41f024b768336e797817b2c310a33c73d6", size = 254205, upload-time = "2026-08-17T10:13:40.224Z" },
+]
+
+[[package]]
 name = "anyio"
 version = "4.14.2"
 source = { registry = "https://pypi.org/simple" }
@@ -745,6 +781,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
+name = "docstring-parser"
+version = "0.18.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/4d/f332313098c1de1b2d2ff91cf2674415cc7cddab2ca1b01ae29774bd5fdf/docstring_parser-0.18.0.tar.gz", hash = "sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015", size = 29341, upload-time = "2026-04-14T04:09:19.867Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl", hash = "sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b", size = 22484, upload-time = "2026-04-14T04:09:18.638Z" },
 ]
 
 [[package]]
@@ -1652,7 +1697,7 @@ dependencies = [
 
 [package.optional-dependencies]
 agent = [
-    { name = "openai-agents" },
+    { name = "openai-agents", extra = ["any-llm"] },
 ]
 crypto-realtime = [
     { name = "python-socks" },
@@ -1709,7 +1754,7 @@ requires-dist = [
     { name = "jupyterlab", marker = "extra == 'notebook'", specifier = ">=4,<5" },
     { name = "matplotlib", marker = "extra == 'notebook'", specifier = ">=3.8,<4" },
     { name = "mplfinance", marker = "extra == 'notebook'", specifier = ">=0.12.10b0,<1" },
-    { name = "openai-agents", marker = "extra == 'agent'", specifier = ">=0.7,<1" },
+    { name = "openai-agents", extras = ["any-llm"], marker = "extra == 'agent'", specifier = ">=0.7,<1" },
     { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.30,<2" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'observability'", specifier = ">=1.30,<2" },
     { name = "opentelemetry-instrumentation-aiohttp-client", marker = "extra == 'observability'", specifier = ">=0.51b0,<1" },
@@ -2524,6 +2569,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/23/8a/c05a23ead7c349971505c4364e5dac139c26373c60609ce44d0fe450c2da/openai_agents-0.21.1.tar.gz", hash = "sha256:7d6519bed92542b2a7160cd50edca0721c64d5f06616d85c6de477f237b8423c", size = 6352641, upload-time = "2026-08-16T22:29:35.173Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5f/af/a219a1f020ffa6bed3332c7bc4023ce5d0a1a922c843361b62f368286692/openai_agents-0.21.1-py3-none-any.whl", hash = "sha256:47cdc36c70aa1c0bd4337d040b605b1ea4ac598f178b59f4040208884785f0d0", size = 1107970, upload-time = "2026-08-16T22:29:33.011Z" },
+]
+
+[package.optional-dependencies]
+any-llm = [
+    { name = "any-llm-sdk" },
+]
+
+[[package]]
+name = "openresponses-types"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/db/eb/cb4a855a27c6cf04af2d47c896b6549040a86bb75e6a59cb687a8bcf19aa/openresponses_types-2.4.0.tar.gz", hash = "sha256:cd55e7fa17230d8edd46e254ef34666ca6f250b7efa3712a110aac546c7dc8d5", size = 22101, upload-time = "2026-08-05T12:22:46.167Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/ef/2605d7219b0fa648e66ab15043bae492f4e8d3c4de4fdad85fc5eadb95a3/openresponses_types-2.4.0-py3-none-any.whl", hash = "sha256:186406592bc115bf12d9ee88320f8051ab1ade0a8fa8941fd1e44b0be16684f1", size = 15097, upload-time = "2026-08-05T12:22:45.044Z" },
 ]
 
 [[package]]

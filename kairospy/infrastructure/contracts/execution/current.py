@@ -21,14 +21,9 @@ from kairospy.application.execution.models import (
 )
 from kairospy.application.reference import InstrumentRef
 from kairospy.application.workspace import InstanceWorkspace
-from kairospy.domain_types import (
-    AccountId,
-    FillId,
-    InstrumentId,
-    IntentId,
-    OrderId,
-    SegmentKey,
-)
+from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.execution import FillId, IntentId, OrderId
+from kairospy.primitives.reference import InstrumentId
 
 from .view import ExecutionViewKey, ExecutionViewKind, ExecutionViewReader
 

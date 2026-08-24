@@ -17,12 +17,23 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from ..credential import CredentialConfigurationApplication
+from ..workspace.credentials import CredentialConfigurationApplication
 from ..workspace import Workspace
+from ..workspace.transaction import WorkspaceConfigurationTransaction
 
 
 _MASSIVE_DEFAULT_ENDPOINT = "https://api.massive.com"
 _CAPABILITIES = frozenset({"reference", "equity_market", "options"})
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedReferenceProvider:
+    workspace: Workspace
+    connection: Mapping[str, object]
+    document: str
+
+    def stage(self, transaction: WorkspaceConfigurationTransaction) -> None:
+        transaction.stage_text(self.workspace.paths.manifest, self.document)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +86,22 @@ class ReferenceProviderConfigurationApplication:
         endpoint: str = _MASSIVE_DEFAULT_ENDPOINT,
         capabilities: Sequence[str] = ("reference", "equity_market"),
     ) -> dict[str, Any]:
+        prepared = self.prepare_massive(
+            credential_id=credential_id,
+            endpoint=endpoint,
+            capabilities=capabilities,
+        )
+        _write_atomic(self.workspace.paths.manifest, prepared.document)
+        return self.show("massive")
+
+    def prepare_massive(
+        self,
+        *,
+        credential_id: str,
+        endpoint: str = _MASSIVE_DEFAULT_ENDPOINT,
+        capabilities: Sequence[str] = ("reference", "equity_market"),
+        credential_provider: str | None = None,
+    ) -> PreparedReferenceProvider:
         credential_id = credential_id.strip()
         endpoint = endpoint.strip().rstrip("/")
         selected = tuple(dict.fromkeys(str(value).strip() for value in capabilities))
@@ -87,18 +114,22 @@ class ReferenceProviderConfigurationApplication:
             raise ValueError(f"unsupported Massive capabilities: {', '.join(unknown)}")
         if "reference" not in selected:
             raise ValueError("Massive connection must enable Reference catalog access")
-        credential = CredentialConfigurationApplication(self.workspace).show(
-            credential_id
-        )
-        if credential.get("provider") != "massive":
+        credential: Mapping[str, object] | None = None
+        if credential_provider is None:
+            credential = CredentialConfigurationApplication(self.workspace).show(
+                credential_id
+            )
+            credential_provider = str(credential.get("provider") or "")
+        if credential_provider != "massive":
             raise ValueError("Massive connection requires a massive credential")
-        secret_refs = credential.get("secret_refs")
-        if (
-            credential.get("legacy_plaintext", False)
-            or not isinstance(secret_refs, Mapping)
-            or "api_key" not in secret_refs
-        ):
-            raise ValueError("Massive credential requires an api_key SecretRef")
+        if credential is not None:
+            secret_refs = credential.get("secret_refs")
+            if (
+                credential.get("legacy_plaintext", False)
+                or not isinstance(secret_refs, Mapping)
+                or "api_key" not in secret_refs
+            ):
+                raise ValueError("Massive credential requires an api_key SecretRef")
 
         document = self.workspace.paths.manifest.read_text(encoding="utf-8")
         common = {
@@ -136,8 +167,20 @@ class ReferenceProviderConfigurationApplication:
                 }
             )
         document = _replace_massive_market_providers(document, market_providers)
-        _write_atomic(self.workspace.paths.manifest, document)
-        return self.show("massive")
+        return PreparedReferenceProvider(
+            self.workspace,
+            {
+                "connection_id": "massive",
+                "provider": "massive",
+                "enabled": True,
+                "credential_id": credential_id,
+                "endpoint": endpoint,
+                "capabilities": list(selected),
+                "configured": True,
+                "issues": [],
+            },
+            document,
+        )
 
     def test_connection(
         self,
@@ -157,11 +200,42 @@ class ReferenceProviderConfigurationApplication:
         )
         if not api_key:
             raise ValueError("Massive API key SecretRef is unavailable")
-        tested_at = datetime.now(timezone.utc).isoformat()
+        result = self.probe(connection, secret=api_key, probe=probe)
+        return self.record_probe(connection_id, result)
+
+    def probe(
+        self,
+        connection: Mapping[str, object],
+        *,
+        secret: str,
+        probe: Callable[[str, str], Mapping[str, Any]] | None = None,
+    ) -> dict[str, object]:
+        """Test saved or staged Massive settings without persisting evidence."""
+
+        if not secret.strip():
+            return {
+                "succeeded": False,
+                "error_category": "credential_missing",
+                "facts": {},
+            }
         try:
-            facts = dict(
-                (probe or _probe_massive)(str(connection["endpoint"]), api_key)
-            )
+            facts = dict((probe or _probe_massive)(str(connection["endpoint"]), secret))
+        except Exception as error:
+            return {
+                "succeeded": False,
+                "error_category": _probe_error_category(error),
+                "facts": {},
+            }
+        return {"succeeded": True, "error_category": None, "facts": facts}
+
+    def record_probe(
+        self, connection_id: str, result: Mapping[str, object]
+    ) -> dict[str, Any]:
+        connection = self.show(connection_id)
+        tested_at = datetime.now(timezone.utc).isoformat()
+        facts_value = result.get("facts")
+        facts = facts_value if isinstance(facts_value, Mapping) else {}
+        if result.get("succeeded") is True:
             evidence = {
                 "schema_version": 1,
                 "connection_id": connection_id,
@@ -185,7 +259,7 @@ class ReferenceProviderConfigurationApplication:
                     "bar_count": int(facts.get("bar_count") or 1),
                 },
             }
-        except Exception as error:
+        else:
             evidence = {
                 "schema_version": 1,
                 "connection_id": connection_id,
@@ -199,7 +273,7 @@ class ReferenceProviderConfigurationApplication:
                 ],
                 "not_tested": ["Options catalog and market data"],
                 "capabilities": [],
-                "error_category": _probe_error_category(error),
+                "error_category": result.get("error_category") or "provider_response",
             }
         _write_json_atomic(self._evidence_path(connection_id), evidence)
         return self.verification(connection_id)

@@ -8,13 +8,15 @@ import typer
 
 from kairospy.surface.console.models import recommended_action
 
-from ...models import GuidedCommand, InteractiveContext
+from ...models import CommandExecution, GuidedCommand, InteractiveContext
 from .launch import launch_ids
 
 
 def print_menu(context: InteractiveContext) -> None:
     del context
-    typer.echo("诊断与观测：\n  1. 打开观测台\n  2. 输出一次快照\n  3. 推荐下一步诊断动作")
+    typer.echo(
+        "诊断与观测：\n  1. 打开观测台\n  2. 输出一次快照\n  3. 推荐下一步诊断动作"
+    )
 
 
 def print_help(context: InteractiveContext) -> None:
@@ -22,13 +24,15 @@ def print_help(context: InteractiveContext) -> None:
     typer.echo("可用命令：open/once/diagnose")
 
 
-def handle(
-    context: InteractiveContext, parts: tuple[str, ...]
-) -> GuidedCommand | None:
+def handle(context: InteractiveContext, parts: tuple[str, ...]) -> GuidedCommand | None:
     if len(parts) != 1:
         return None
     if parts[0] in {"1", "open", "observe"}:
-        return GuidedCommand(("observe",), "打开项目观测台", streaming=True)
+        return GuidedCommand(
+            ("observe",),
+            "打开项目观测台",
+            execution=CommandExecution.STREAMING,
+        )
     if parts[0] in {"2", "once"}:
         return GuidedCommand(("observe", "--once"), "输出一次项目观察快照")
     if parts[0] in {"3", "diagnose", "doctor"}:
@@ -58,4 +62,8 @@ def diagnose(context: InteractiveContext) -> GuidedCommand:
 
 
 def choose() -> GuidedCommand:
-    return GuidedCommand(("observe",), "打开项目观测台", streaming=True)
+    return GuidedCommand(
+        ("observe",),
+        "打开项目观测台",
+        execution=CommandExecution.STREAMING,
+    )

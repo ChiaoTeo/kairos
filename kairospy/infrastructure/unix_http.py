@@ -8,7 +8,7 @@ import socket
 from pathlib import Path
 from typing import Any, Mapping
 
-from kairospy.application.observability import inject_trace_headers, start_span
+from kairospy.infrastructure.observability import inject_trace_headers, start_span
 
 
 def request_sync(

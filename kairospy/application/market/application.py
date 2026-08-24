@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from kairospy.application.reference import Instrument, InstrumentRef, Market
-from kairospy.domain_types import InstrumentId, MarketId
+from kairospy.primitives.reference import InstrumentId, MarketId
 
 from .events import BarEvent, MarketEvent, TradeEvent
 from .models import Bar, ObservationScope, OptionGreeks, Quote, Trade

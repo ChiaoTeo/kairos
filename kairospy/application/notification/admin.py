@@ -11,11 +11,11 @@ import tempfile
 import tomllib
 from typing import Literal, Mapping
 
-from kairospy.application.credential import (
+from kairospy.application.workspace.credentials import (
     CredentialConfigurationApplication,
     SecretRef,
 )
-from kairospy.application.workspace import Workspace
+from kairospy.application.workspace import Workspace, WorkspaceConfigurationTransaction
 
 from .services.setup import TelegramBotIdentity, TelegramChat, TelegramSetupClient
 
@@ -23,6 +23,18 @@ from .services.setup import TelegramBotIdentity, TelegramChat, TelegramSetupClie
 NotificationProvider = Literal["feishu", "telegram"]
 SecretSource = Literal["env", "file"]
 NotificationSecretRef = SecretRef
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedNotificationDestination:
+    workspace: Workspace
+    destination: Mapping[str, object]
+    document: str
+
+    def stage(self, transaction: WorkspaceConfigurationTransaction) -> None:
+        transaction.stage_text(
+            self.workspace.paths.notification_config(), self.document
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +65,39 @@ class NotificationAdminApplication:
         secret_ref: NotificationSecretRef,
         chat_id: str | None = None,
     ) -> dict[str, object]:
+        prepared = self.prepare(
+            destination_id,
+            provider=provider,
+            credential_id=credential_id,
+            secret_ref=secret_ref,
+            chat_id=chat_id,
+        )
+        field = "webhook_url" if provider == "feishu" else "bot_token"
+        credential = CredentialConfigurationApplication(self.workspace).prepare(
+            str(prepared.destination["credential_id"]),
+            provider=provider,
+            role="notification-send",
+            fields={field: secret_ref},
+        )
+        transaction = WorkspaceConfigurationTransaction(
+            self.workspace, f"notification:{destination_id}"
+        )
+        credential.stage(transaction)
+        prepared.stage(transaction)
+        transaction.commit()
+        return self.show(destination_id)
+
+    def prepare(
+        self,
+        destination_id: str,
+        *,
+        provider: NotificationProvider,
+        credential_id: str | None = None,
+        secret_ref: NotificationSecretRef,
+        chat_id: str | None = None,
+    ) -> PreparedNotificationDestination:
+        """Validate and render a Destination without changing active config."""
+
         destination_id = _safe_id(destination_id, "destination_id")
         credential_id = _safe_id(credential_id or destination_id, "credential_id")
         if provider not in {"feishu", "telegram"}:
@@ -72,7 +117,6 @@ class NotificationAdminApplication:
             raise ValueError(
                 f"credential {credential_id} belongs to provider {configured_provider!r}"
             )
-        field = "webhook_url" if provider == "feishu" else "bot_token"
         destinations = self._load_destinations()
         record: dict[str, object] = {
             "sender": provider,
@@ -82,29 +126,18 @@ class NotificationAdminApplication:
         if normalized_chat_id is not None:
             record["chat_id"] = normalized_chat_id
         destinations[destination_id] = record
-        previous_credential = (
-            credential_path.read_text(encoding="utf-8")
-            if credential_path.is_file()
-            else None
+        return PreparedNotificationDestination(
+            self.workspace,
+            {
+                "destination_id": destination_id,
+                "provider": provider,
+                "credential_id": credential_id,
+                "enabled": True,
+                "chat_id": normalized_chat_id,
+                "configured": True,
+            },
+            _destinations_document(destinations),
         )
-        try:
-            # The credential is committed first so a concurrently starting
-            # process never observes a Destination whose credential is absent.
-            CredentialConfigurationApplication(self.workspace).configure(
-                credential_id,
-                provider=provider,
-                role="notification-send",
-                fields={field: secret_ref},
-                overwrite=True,
-            )
-            self._write_destinations(destinations)
-        except BaseException:
-            if previous_credential is None:
-                credential_path.unlink(missing_ok=True)
-            else:
-                _atomic_write(credential_path, previous_credential, mode=0o600)
-            raise
-        return self.show(destination_id)
 
     def set_enabled(self, destination_id: str, enabled: bool) -> dict[str, object]:
         destination_id = _safe_id(destination_id, "destination_id")
@@ -191,6 +224,12 @@ class NotificationAdminApplication:
         _validate_provider_secret("telegram", secret)
         return TelegramSetupClient(secret).identity()
 
+    def probe_telegram_secret(self, secret: str) -> TelegramBotIdentity:
+        """Probe a staged token without persisting it first."""
+
+        _validate_provider_secret("telegram", secret)
+        return TelegramSetupClient(secret).identity()
+
     def discover_telegram_chats(self, credential_id: str) -> tuple[TelegramChat, ...]:
         secret = self._resolved_credential_secret(credential_id, "telegram")
         return TelegramSetupClient(secret).chats()
@@ -201,6 +240,14 @@ class NotificationAdminApplication:
         secret = self.resolve_secret(reference)
         if secret is None:
             return ()
+        _validate_provider_secret("telegram", secret)
+        return TelegramSetupClient(secret).chats()
+
+    def discover_telegram_chats_from_secret(
+        self, secret: str
+    ) -> tuple[TelegramChat, ...]:
+        """Discover chats with a staged token that has not been saved."""
+
         _validate_provider_secret("telegram", secret)
         return TelegramSetupClient(secret).chats()
 
@@ -367,17 +414,9 @@ class NotificationAdminApplication:
         )
 
     def _write_destinations(self, records: Mapping[str, Mapping[str, object]]) -> None:
-        lines = ["version = 1", "", "[destinations]"]
-        for destination_id, record in sorted(records.items()):
-            lines.extend(("", f"[destinations.{json.dumps(destination_id)}]"))
-            for key in ("sender", "credential_id", "enabled", "chat_id"):
-                if key in record:
-                    lines.append(f"{key} = {_toml_scalar(record[key])}")
-            for key, value in sorted(record.items()):
-                if key not in {"sender", "credential_id", "enabled", "chat_id"}:
-                    lines.append(f"{key} = {_toml_scalar(value)}")
         _atomic_write(
-            self.workspace.paths.notification_config(), "\n".join(lines) + "\n"
+            self.workspace.paths.notification_config(),
+            _destinations_document(records),
         )
 
     def _write_credential(self, path: Path, credential: Mapping[str, object]) -> None:
@@ -475,6 +514,21 @@ def _toml_scalar(value: object) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+def _destinations_document(
+    records: Mapping[str, Mapping[str, object]],
+) -> str:
+    lines = ["version = 1", "", "[destinations]"]
+    for destination_id, record in sorted(records.items()):
+        lines.extend(("", f"[destinations.{json.dumps(destination_id)}]"))
+        for key in ("sender", "credential_id", "enabled", "chat_id"):
+            if key in record:
+                lines.append(f"{key} = {_toml_scalar(record[key])}")
+        for key, value in sorted(record.items()):
+            if key not in {"sender", "credential_id", "enabled", "chat_id"}:
+                lines.append(f"{key} = {_toml_scalar(value)}")
+    return "\n".join(lines) + "\n"
+
+
 def _atomic_write(path: Path, content: str, *, mode: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -502,6 +556,7 @@ def _atomic_write(path: Path, content: str, *, mode: int | None = None) -> None:
 
 __all__ = [
     "NotificationAdminApplication",
+    "PreparedNotificationDestination",
     "NotificationProvider",
     "NotificationSecretRef",
     "SecretSource",

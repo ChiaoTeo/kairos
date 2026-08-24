@@ -10,7 +10,7 @@ from pathlib import Path
 import time
 from typing import TYPE_CHECKING, Mapping
 
-from kairospy.application.observability import (
+from kairospy.infrastructure.observability import (
     record_counter,
     record_duration_ms,
     record_gauge,

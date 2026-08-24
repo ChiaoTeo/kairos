@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kairospy.application.agent import AgentResourceApplication
-from kairospy.application.credential import SecretRef
+from kairospy.application.workspace.credentials import SecretRef
 from kairospy.application.notification import (
     NotificationAdminApplication,
     NotificationSecretRef,
@@ -21,7 +21,7 @@ def test_resource_center_exposes_all_workspace_connection_types(
     resources.print_menu(interactive_context)
 
     text = capsys.readouterr().out
-    for label in ("交易账户", "数据连接", "模型连接", "通知渠道", "检查全部资源"):
+    for label in ("交易账户", "市场数据", "AI 模型", "通知提醒", "检查所有连接"):
         assert label in text
 
 
@@ -93,7 +93,7 @@ def test_data_connection_detail_exposes_owner_lifecycle_actions(
     assert data_connections.handle(interactive_context, ("1",)) is ShellControl.HANDLED
     assert interactive_context.shell_path == ("resources", "data", "massive")
     data_connections.print_menu(interactive_context)
-    assert "删除连接（有引用时默认拒绝）" in capsys.readouterr().out
+    assert "5. 删除" in capsys.readouterr().out
     disabled = data_connections.handle(interactive_context, ("disable",))
     deleted = data_connections.handle(interactive_context, ("delete",))
     assert isinstance(disabled, GuidedCommand) and disabled.dangerous is True

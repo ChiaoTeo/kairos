@@ -14,11 +14,13 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Mapping
 
-from kairospy.application.credential import (
+from kairospy.application.workspace.credentials import (
     CredentialConfigurationApplication,
     SecretRef,
 )
 from kairospy.application.workspace import Workspace
+
+from .model_connections import ModelProviderConnectionApplication
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,31 +28,146 @@ class AgentResourceApplication:
     workspace: Workspace
 
     def credential_ids(self) -> tuple[str, ...]:
-        credentials = CredentialConfigurationApplication(self.workspace).list()
         return tuple(
-            str(value["credential_id"])
-            for value in credentials
-            if value.get("provider") == "openai" and value.get("configured") is True
+            dict.fromkeys(
+                str(value["credential_id"])
+                for value in self.model_connections()
+                if value.get("credential_id") and value.get("configured") is True
+            )
         )
 
     def model_connections(self) -> tuple[dict[str, object], ...]:
+        configured = list(ModelProviderConnectionApplication(self.workspace).list())
+        configured_ids = {str(value["connection_id"]) for value in configured}
         credentials = CredentialConfigurationApplication(self.workspace)
-        result: list[dict[str, object]] = []
+        # Preserve read compatibility for workspaces that predate explicit model
+        # connection records. The first edit or test materializes the new record.
         for credential in credentials.list():
-            if credential.get("provider") != "openai":
+            if (
+                credential.get("provider") != "openai"
+                or str(credential["credential_id"]) in configured_ids
+            ):
                 continue
             credential_id = str(credential["credential_id"])
-            result.append(
+            configured.append(
                 {
                     "connection_id": credential_id,
                     "provider": "openai",
+                    "provider_label": "OpenAI",
+                    "api_mode": "openai-responses",
+                    "base_url": "https://api.openai.com/v1",
                     "credential_id": credential_id,
+                    "models": [],
                     "configured": credential.get("configured") is True,
                     "issues": list(credential.get("issues", ())),
                     **self.model_verification(credential_id),
                 }
             )
-        return tuple(result)
+        return tuple(sorted(configured, key=lambda value: str(value["connection_id"])))
+
+    def provider_catalog(self) -> tuple[dict[str, object], ...]:
+        return ModelProviderConnectionApplication(self.workspace).provider_catalog()
+
+    def model_connection(self, connection_id: str) -> dict[str, object]:
+        try:
+            return ModelProviderConnectionApplication(self.workspace).show(
+                connection_id
+            )
+        except KeyError:
+            for value in self.model_connections():
+                if value.get("connection_id") == connection_id:
+                    return value
+            raise
+
+    def detect_local_model_providers(
+        self,
+        *,
+        probe: Callable[[str, str], tuple[Mapping[str, object], ...]] | None = None,
+    ) -> tuple[dict[str, object], ...]:
+        return ModelProviderConnectionApplication(self.workspace).detect_local(
+            probe=probe
+        )
+
+    def configure_model_connection(
+        self,
+        connection_id: str,
+        *,
+        provider: str,
+        api_mode: str | None = None,
+        base_url: str | None = None,
+        credential_id: str | None = None,
+        models: tuple[str, ...] = (),
+        timeout_seconds: float = 60.0,
+        enabled: bool = True,
+        overwrite: bool = False,
+    ) -> dict[str, object]:
+        return ModelProviderConnectionApplication(self.workspace).configure(
+            connection_id,
+            provider=provider,
+            api_mode=api_mode,
+            base_url=base_url,
+            credential_id=credential_id,
+            models=models,
+            timeout_seconds=timeout_seconds,
+            enabled=enabled,
+            overwrite=overwrite,
+        )
+
+    def set_model_connection_enabled(
+        self, connection_id: str, *, enabled: bool
+    ) -> dict[str, object]:
+        return ModelProviderConnectionApplication(self.workspace).set_enabled(
+            connection_id, enabled=enabled
+        )
+
+    def delete_model_connection(self, connection_id: str) -> dict[str, str]:
+        return ModelProviderConnectionApplication(self.workspace).delete(connection_id)
+
+    def discover_models(
+        self,
+        connection_id: str,
+        *,
+        probe: Callable[
+            [Mapping[str, object], str | None], tuple[Mapping[str, object], ...]
+        ]
+        | None = None,
+    ) -> tuple[dict[str, object], ...]:
+        return ModelProviderConnectionApplication(self.workspace).discover_models(
+            connection_id, probe=probe
+        )
+
+    def test_model_connection(
+        self,
+        connection_id: str,
+        model: str,
+        *,
+        probe: Callable[[Mapping[str, object], str | None, str], object] | None = None,
+    ) -> dict[str, object]:
+        return ModelProviderConnectionApplication(self.workspace).test(
+            connection_id, model, probe=probe
+        )
+
+    def probe_model_connection(
+        self,
+        connection: Mapping[str, object],
+        model: str,
+        *,
+        secret: str | None,
+        probe: Callable[[Mapping[str, object], str | None, str], object] | None = None,
+    ) -> dict[str, object]:
+        return ModelProviderConnectionApplication(self.workspace).probe(
+            connection, model, secret=secret, probe=probe
+        )
+
+    def record_model_probe(
+        self,
+        connection_id: str,
+        model: str,
+        result: Mapping[str, object],
+    ) -> dict[str, object]:
+        return ModelProviderConnectionApplication(self.workspace).record_probe(
+            connection_id, model, result
+        )
 
     def profile_ids(self) -> tuple[str, ...]:
         root = self.workspace.paths.agent_profiles_root()
@@ -122,13 +239,26 @@ class AgentResourceApplication:
         *,
         overwrite: bool = False,
     ) -> dict[str, object]:
-        return CredentialConfigurationApplication(self.workspace).configure(
+        result = CredentialConfigurationApplication(self.workspace).configure(
             credential_id,
             provider="openai",
             role="model-inference",
             fields={"api_key": secret_ref},
             overwrite=overwrite,
         )
+        connections = ModelProviderConnectionApplication(self.workspace)
+        try:
+            connections.show(credential_id)
+            connection_exists = True
+        except KeyError:
+            connection_exists = False
+        connections.configure(
+            credential_id,
+            provider="openai",
+            credential_id=credential_id,
+            overwrite=connection_exists,
+        )
+        return result
 
     def test_openai_model(
         self,
@@ -139,49 +269,34 @@ class AgentResourceApplication:
     ) -> dict[str, object]:
         credential_id = _resource_id(credential_id, "OpenAI credential")
         model = _required_text(model, "OpenAI model")
-        credentials = CredentialConfigurationApplication(self.workspace)
-        summary = credentials.show(credential_id)
-        if summary.get("provider") != "openai" or summary.get("configured") is not True:
-            raise ValueError(f"OpenAI credential is not ready: {credential_id}")
-        api_key = credentials.resolve_field(credential_id, "api_key")
-        if api_key is None:
-            raise ValueError(
-                f"OpenAI credential SecretRef is unavailable: {credential_id}"
-            )
-        succeeded = False
-        detail = "model call failed"
+        connections = ModelProviderConnectionApplication(self.workspace)
         try:
-            (probe or _probe_openai_model)(api_key, model)
-            succeeded = True
-            detail = "minimal model response completed"
-        finally:
-            evidence = {
-                "version": 1,
-                "connection_id": credential_id,
-                "provider": "openai",
-                "model": model,
-                "credential_hash": _credential_hash(summary),
-                "tested_at": datetime.now(timezone.utc).isoformat(),
-                "succeeded": succeeded,
-                "detail": detail,
-                "tested": ["credential authentication", "fixed model minimum call"],
-                "not_tested": [
-                    "MCP tool calls",
-                    "streaming responses",
-                    "production throughput",
-                ],
-                "capabilities": ["model_inference"] if succeeded else [],
-            }
-            _write_private_atomic(
-                self._model_verification_path(credential_id),
-                json.dumps(evidence, indent=2, sort_keys=True) + "\n",
-                overwrite=True,
+            connections.show(credential_id)
+        except KeyError:
+            connections.configure(
+                credential_id,
+                provider="openai",
+                credential_id=credential_id,
             )
-        return self.model_verification(credential_id, model=model)
+        adapted = (
+            None
+            if probe is None
+            else lambda _connection, api_key, selected_model: probe(
+                str(api_key or ""), selected_model
+            )
+        )
+        return connections.test(credential_id, model, probe=adapted)
 
     def model_verification(
         self, credential_id: str, *, model: str | None = None
     ) -> dict[str, object]:
+        connections = ModelProviderConnectionApplication(self.workspace)
+        try:
+            connections.show(credential_id)
+        except KeyError:
+            pass
+        else:
+            return connections.verification(credential_id, model=model)
         credentials = CredentialConfigurationApplication(self.workspace)
         try:
             credential = credentials.show(credential_id)
@@ -247,9 +362,23 @@ class AgentResourceApplication:
         }
 
     def resource_snapshot(self, credential_id: str, *, model: str) -> dict[str, object]:
+        connections = ModelProviderConnectionApplication(self.workspace)
+        try:
+            connection = connections.resource_snapshot(credential_id, model=model)
+        except KeyError:
+            connection = None
         credential = CredentialConfigurationApplication(self.workspace).show(
             credential_id
         )
+        if connection is not None:
+            return {
+                **connection,
+                "credential_identity": {
+                    "provider": credential.get("provider"),
+                    "role": credential.get("role"),
+                    "secret_refs": credential.get("secret_refs", {}),
+                },
+            }
         verification = self.model_verification(credential_id, model=model)
         payload: dict[str, object] = {
             "connection_id": credential_id,

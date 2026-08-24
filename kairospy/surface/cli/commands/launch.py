@@ -878,7 +878,7 @@ def _instance_account_snapshot(
     instance: str | None,
     account_id: str,
 ) -> tuple[dict[str, Any], str, str]:
-    from kairospy.domain_types import AccountId
+    from kairospy.primitives.account import AccountId
 
     resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
     instance_workspace = owner.instance(mode, launch_id, resolved_instance)
@@ -901,7 +901,7 @@ def _instance_account_client(
     instance: str | None,
     account_id: str,
 ):
-    from kairospy.domain_types import AccountId
+    from kairospy.primitives.account import AccountId
 
     resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
     instance_workspace = owner.instance(mode, launch_id, resolved_instance)
@@ -1270,7 +1270,7 @@ def launch_instance_component_account_open_orders(
     client, resolved_instance, mode = _instance_account_client(
         owner, launch_id=launch_id, instance=instance, account_id=account_id
     )
-    from kairospy.domain_types import AccountId
+    from kairospy.primitives.account import AccountId
 
     account_key = AccountId(account_id)
     _emit(

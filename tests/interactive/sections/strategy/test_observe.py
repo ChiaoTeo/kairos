@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.surface.cli.interactive.models import GuidedCommand
+from kairospy.surface.cli.interactive.models import CommandExecution, GuidedCommand
 from kairospy.surface.cli.interactive.sections.strategy import observe
 
 
@@ -12,5 +12,5 @@ def test_observe_menu_help_and_aliases(interactive_context, capsys) -> None:
     assert isinstance(numeric, GuidedCommand)
     assert isinstance(text, GuidedCommand)
     assert numeric == text
-    assert numeric.streaming is True
+    assert numeric.execution is CommandExecution.STREAMING
     assert "诊断与观测" in capsys.readouterr().out

@@ -185,7 +185,7 @@ def test_launch_normalizes_agent_without_secret_material(tmp_path: Path) -> None
         "shadow",
         "gate",
     ]
-    assert agent["model"]["credential"] == "openai-agent"
+    assert agent["model"]["connection"] == "openai-agent"
     assert "secret" not in repr(agent).lower()
     assert normalized["agent_profile"]["goal"] == "Review mean-reversion intents"
     assert len(normalized["agent_profile"]["content_hash"]) == 64
@@ -255,13 +255,19 @@ def test_launch_rejects_agent_secrets_and_remote_backtest_runtime(
     assert any("must be fixture" in issue for issue in backtest.report().issues)
 
 
-def test_agent_model_rejects_floating_alias() -> None:
-    with pytest.raises(ValueError, match="dated OpenAI snapshot"):
+def test_agent_model_accepts_provider_specific_id_and_rejects_whitespace() -> None:
+    value = AgentModelConfig.from_mapping(
+        {
+            "connection": "ollama-local",
+            "model": "qwen3:8b",
+        }
+    )
+    assert value.connection == "ollama-local"
+    with pytest.raises(ValueError, match="without whitespace"):
         AgentModelConfig.from_mapping(
             {
-                "provider": "openai",
-                "model": "gpt-5.4",
-                "credential": "agent-key",
+                "connection": "ollama-local",
+                "model": "qwen 3",
             }
         )
 

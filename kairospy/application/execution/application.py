@@ -6,7 +6,9 @@ from decimal import Decimal
 from typing import Any, cast, overload
 
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import AccountId, InstrumentId, IntentId, OrderId, SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.execution import IntentId, OrderId
+from kairospy.primitives.reference import InstrumentId
 
 from .errors import (
     ExecutionAccountNotEnabledError,

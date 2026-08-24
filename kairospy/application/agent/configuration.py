@@ -7,7 +7,7 @@ from typing import Mapping
 from .models import AgentMode, _normalize_context_key
 
 
-_RUNTIMES = frozenset({"openai-agents", "fixture"})
+_RUNTIMES = frozenset({"model-agent", "openai-agents", "fixture"})
 _FAILURE_POLICIES = frozenset({"reject_new_exposure"})
 _OPERATIONS = frozenset(
     {
@@ -39,9 +39,8 @@ _FORBIDDEN_SECRET_KEYS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class AgentModelConfig:
-    provider: str
+    connection: str
     model: str
-    credential: str
     request_timeout_seconds: float
     max_turns: int
     max_tool_calls: int
@@ -53,6 +52,7 @@ class AgentModelConfig:
         _reject_unknown(
             value,
             {
+                "connection",
                 "provider",
                 "model",
                 "credential",
@@ -65,18 +65,16 @@ class AgentModelConfig:
             "agent.model",
         )
         _reject_secrets(value, "agent.model")
-        provider = _text(value.get("provider"), "agent.model.provider")
-        if provider != "openai":
-            raise ValueError("agent.model.provider must be openai")
+        # provider/credential are accepted only as a read-compatible shape for
+        # Launch files created before Workspace model connections were explicit.
+        connection_value = value.get("connection", value.get("credential"))
+        connection = _text(connection_value, "agent.model.connection")
         model = _text(value.get("model"), "agent.model.model")
-        if not _is_pinned_openai_model(model):
-            raise ValueError(
-                "agent.model.model must be a dated OpenAI snapshot or stable fine-tuned model id"
-            )
+        if len(model) > 256 or any(character.isspace() for character in model):
+            raise ValueError("agent.model.model must be a model id without whitespace")
         return cls(
-            provider=provider,
+            connection=connection,
             model=model,
-            credential=_text(value.get("credential"), "agent.model.credential"),
             request_timeout_seconds=_number(
                 value.get("request_timeout_seconds", 5),
                 "agent.model.request_timeout_seconds",
@@ -111,15 +109,20 @@ class AgentModelConfig:
 
     def normalized(self) -> dict[str, object]:
         return {
-            "provider": self.provider,
+            "connection": self.connection,
             "model": self.model,
-            "credential": self.credential,
             "request_timeout_seconds": self.request_timeout_seconds,
             "max_turns": self.max_turns,
             "max_tool_calls": self.max_tool_calls,
             "max_input_tokens": self.max_input_tokens,
             "max_output_tokens": self.max_output_tokens,
         }
+
+    @property
+    def credential(self) -> str:
+        """Legacy alias for callers migrating to explicit model connections."""
+
+        return self.connection
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +248,7 @@ class AgentLaunchConfig:
         return cls(
             False,
             False,
-            "openai-agents",
+            "model-agent",
             None,
             None,
             128,
@@ -289,9 +292,9 @@ class AgentLaunchConfig:
             },
             "agent",
         )
-        runtime = _text(value.get("runtime", "openai-agents"), "agent.runtime")
+        runtime = _text(value.get("runtime", "model-agent"), "agent.runtime")
         if runtime not in _RUNTIMES:
-            raise ValueError("agent.runtime must be openai-agents or fixture")
+            raise ValueError("agent.runtime must be model-agent or fixture")
         if launch_mode == "backtest" and runtime != "fixture":
             raise ValueError("backtest agent.runtime must be fixture")
         if launch_mode != "backtest" and runtime == "fixture":
@@ -400,25 +403,35 @@ def _normalize_mcp(value: object, index: int) -> Mapping[str, object]:
     if transport not in {"stdio", "streamable_http"}:
         raise ValueError(f"{name}.transport must be stdio or streamable_http")
     allowed = tuple(
-        dict.fromkeys(_string_list(mapping.get("allowed_tools", ()), f"{name}.allowed_tools"))
+        dict.fromkeys(
+            _string_list(mapping.get("allowed_tools", ()), f"{name}.allowed_tools")
+        )
     )
     if not allowed:
         raise ValueError(f"{name}.allowed_tools is required")
     forbidden = sorted(set(allowed) - READ_ONLY_AGENT_TOOLS)
     if forbidden:
-        raise ValueError(f"{name}.allowed_tools contains non-approved tool: {forbidden[0]}")
+        raise ValueError(
+            f"{name}.allowed_tools contains non-approved tool: {forbidden[0]}"
+        )
     if mapping.get("scope_enforced", True) is not True:
         raise ValueError(f"{name}.scope_enforced must be true")
     result: dict[str, object] = {
         "id": _text(mapping.get("id"), f"{name}.id"),
         "transport": transport,
         "timeout_seconds": _number(
-            mapping.get("timeout_seconds", 5), f"{name}.timeout_seconds", minimum=0.1, maximum=300
+            mapping.get("timeout_seconds", 5),
+            f"{name}.timeout_seconds",
+            minimum=0.1,
+            maximum=300,
         ),
         "allowed_tools": list(allowed),
         "scope_enforced": True,
         "max_result_bytes": _integer(
-            mapping.get("max_result_bytes", 65_536), f"{name}.max_result_bytes", minimum=1, maximum=65_536
+            mapping.get("max_result_bytes", 65_536),
+            f"{name}.max_result_bytes",
+            minimum=1,
+            maximum=65_536,
         ),
         "max_rows": _integer(
             mapping.get("max_rows", 200), f"{name}.max_rows", minimum=1, maximum=10_000
@@ -431,16 +444,22 @@ def _normalize_mcp(value: object, index: int) -> Mapping[str, object]:
         if mapping.get("cwd") is not None:
             result["cwd"] = _text(mapping.get("cwd"), f"{name}.cwd")
         if mapping.get("url") is not None or mapping.get("credential") is not None:
-            raise ValueError(f"{name} stdio transport cannot configure url or credential")
+            raise ValueError(
+                f"{name} stdio transport cannot configure url or credential"
+            )
     else:
         url = _text(mapping.get("url"), f"{name}.url")
         if not url.startswith(("https://", "http://127.0.0.1", "http://localhost")):
             raise ValueError(f"{name}.url must use HTTPS")
         result["url"] = url
         if mapping.get("credential") is not None:
-            result["credential"] = _text(mapping.get("credential"), f"{name}.credential")
+            result["credential"] = _text(
+                mapping.get("credential"), f"{name}.credential"
+            )
         if mapping.get("command") is not None or mapping.get("args"):
-            raise ValueError(f"{name} streamable_http transport cannot configure command or args")
+            raise ValueError(
+                f"{name} streamable_http transport cannot configure command or args"
+            )
     freshness = tuple(
         dict.fromkeys(
             _string_list(
@@ -454,7 +473,10 @@ def _normalize_mcp(value: object, index: int) -> Mapping[str, object]:
     if freshness:
         result["freshness_required_tools"] = list(freshness)
         result["max_age_seconds"] = _number(
-            mapping.get("max_age_seconds"), f"{name}.max_age_seconds", minimum=0.1, maximum=86_400
+            mapping.get("max_age_seconds"),
+            f"{name}.max_age_seconds",
+            minimum=0.1,
+            maximum=86_400,
         )
     return result
 
@@ -463,7 +485,14 @@ def _normalize_profile(value: object) -> Mapping[str, object]:
     profile = _mapping(value, "agent.profile")
     _reject_unknown(
         profile,
-        {"version", "goal", "rubric", "invalidation_rules", "reason_codes", "risk_flags"},
+        {
+            "version",
+            "goal",
+            "rubric",
+            "invalidation_rules",
+            "reason_codes",
+            "risk_flags",
+        },
         "agent.profile",
     )
     rubric = _string_list(profile.get("rubric", ()), "agent.profile.rubric")

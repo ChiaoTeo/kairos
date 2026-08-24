@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from kairospy.surface.cli.interactive.models import GuidedCommand, ShellControl
+from kairospy.surface.cli.interactive.models import (
+    CommandExecution,
+    GuidedCommand,
+    ShellControl,
+)
 from kairospy.surface.cli.interactive.sections.business import notifications
 
 
@@ -47,7 +51,7 @@ def test_resource_notification_center_lists_status_and_opens_detail(
     monkeypatch.setattr(notifications, "_references", lambda *_args: [])
 
     notifications.print_menu(interactive_context)
-    assert "telegram-ops · telegram · 已验证" in capsys.readouterr().out
+    assert "telegram-ops · Telegram · 可用" in capsys.readouterr().out
     assert notifications.handle(interactive_context, ("1",)) is ShellControl.HANDLED
     assert interactive_context.shell_path == (
         "resources",
@@ -57,7 +61,8 @@ def test_resource_notification_center_lists_status_and_opens_detail(
     notifications.print_menu(interactive_context)
     detail = capsys.readouterr().out
     assert "最近测试：2026-08-24T00:00:00Z" in detail
-    assert "策略配置引用：无" in detail
+    assert notifications.handle(interactive_context, ("2",)) is ShellControl.HANDLED
+    assert "运行方案引用：无" in capsys.readouterr().out
 
 
 def test_empty_notification_center_hides_test_action(
@@ -68,10 +73,10 @@ def test_empty_notification_center_hides_test_action(
 
     notifications.print_menu(interactive_context)
     output = capsys.readouterr().out
-    assert "尚未配置通知渠道" in output
+    assert "尚未配置通知提醒（可选）" in output
     assert "发送真实测试消息" not in output
     assert notifications.handle(interactive_context, ("test",)) is ShellControl.HANDLED
-    assert "请先输入 n 完成添加" in capsys.readouterr().out
+    assert "请先添加一个提醒" in capsys.readouterr().out
 
 
 def test_resource_notification_setup_uses_product_choice_without_outer_warning(
@@ -86,6 +91,7 @@ def test_resource_notification_setup_uses_product_choice_without_outer_warning(
     assert isinstance(command, GuidedCommand)
     assert command.argv[-1] == "telegram"
     assert command.dangerous is False
+    assert command.execution is CommandExecution.INTERACTIVE
     assert command.show_command is False
 
 

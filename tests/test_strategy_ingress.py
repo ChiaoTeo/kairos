@@ -10,7 +10,7 @@ from kairospy.application.agent import (
     AgentEventStatus,
 )
 from kairospy.application.strategy.services.ingress import StrategyEventIngress
-from kairospy.domain_types import EventMetadata
+from kairospy.application.events import EventMetadata
 from kairospy.strategy import SystemEvent, SystemNotice
 
 

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 from kairospy.application.system.clients import AccountSystemClient
 from kairospy.application.workspace import InstanceWorkspace
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.infrastructure.transport.account import AeronAccountEventSource
 
 from .application import AccountApplication

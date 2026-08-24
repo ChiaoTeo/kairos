@@ -14,7 +14,7 @@ from kairospy.application.account.events import (
     BalanceChangedEvent,
     EquityChangedEvent,
 )
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.infrastructure.transport.account import decode_account_event
 from kairospy.infrastructure.transport.generated.kairos.account.v2 import (
     AccountFactProvenance,

@@ -19,7 +19,7 @@ from kairospy.application.capital.models import (
     CapitalRecoveryAlert,
     FundingLocation,
 )
-from kairospy.domain_types import AccountId, SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 

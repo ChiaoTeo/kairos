@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from kairospy.application.system.clients import CapitalSystemClient
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
 
 from .application import CapitalApplication

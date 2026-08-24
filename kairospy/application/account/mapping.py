@@ -4,7 +4,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal
 
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import AccountId, EventMetadata, InstrumentId, SegmentKey
+from kairospy.application.events import EventMetadata
+from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.reference import InstrumentId
 
 from .events import (
     AccountEvent,

@@ -30,7 +30,7 @@ observability = [
     "opentelemetry-instrumentation-aiohttp-client>=0.51b0,<1",
     "opentelemetry-instrumentation-logging>=0.51b0,<1",
 ]
-agent = ["openai-agents>=0.7,<1"]
+agent = ["openai-agents[any-llm]>=0.7,<1"]
 
 [dependency-groups]
 dev = ["hypothesis>=6,<7", "pytest>=8,<9", "ruff>=0.12,<1", "pyright>=1.1.400,<2"]

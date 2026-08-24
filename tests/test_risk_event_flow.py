@@ -11,7 +11,7 @@ from kairospy.application.risk import (
     RiskCircuitChangedEvent,
     RiskDecisionEvent,
 )
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.infrastructure.transport.risk import RiskEventRecord
 
 

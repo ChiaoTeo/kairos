@@ -87,8 +87,9 @@ def test_migrate_command_and_home_banner_expose_preview_only(
     context = InteractiveContext(owner=workspace, snapshot=None, workspace_arg=None)
     home.print_menu(context)
     text = capsys.readouterr().out
-    assert "├─ 提示" in text
-    assert "│  有 1 项配置可升级，不影响当前使用。输入 migrate 查看" in text
+    assert "提示" in text
+    assert "1 项配置可升级，不影响当前使用" in text
+    assert "migrate 查看" in text
     command = home.handle(context, ("migrate",))
     assert command is not None
     assert command.argv == ("config", "migrate")

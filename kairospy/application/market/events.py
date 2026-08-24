@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, TypeAlias
 
-from kairospy.domain_types import DataEvent
+from kairospy.application.events import DataEvent
 
 from .models import Bar, OptionGreeks, Quote, Trade
 

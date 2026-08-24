@@ -28,12 +28,9 @@ from kairospy.application.portfolio import (
     PortfolioFreshness,
 )
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import (
-    AccountId,
-    EventMetadata,
-    InstrumentId,
-    MarketId,
-)
+from kairospy.application.events import EventMetadata
+from kairospy.primitives.account import AccountId
+from kairospy.primitives.reference import InstrumentId, MarketId
 
 
 class _CurrentView:

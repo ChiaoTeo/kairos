@@ -5,7 +5,7 @@ from __future__ import annotations
 from kairospy.application.system.clients import RiskSystemClient
 from kairospy.application.workspace import InstanceWorkspace
 from kairospy.infrastructure.transport.risk import AeronRiskEventSource
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 
 from .application import RiskApplication
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.domain_types import ExchangeId, InstrumentId, ListingId, MarketId
+from kairospy.primitives.reference import ExchangeId, InstrumentId, ListingId, MarketId
 
 
 class MarketStatus(StrEnum):

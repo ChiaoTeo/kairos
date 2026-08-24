@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from ...workspace import InstanceWorkspace
-from ....domain_types import AccountId
+from ....primitives.account import AccountId
 
 
 @dataclass(frozen=True, slots=True)

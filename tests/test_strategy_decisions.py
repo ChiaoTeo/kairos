@@ -23,14 +23,10 @@ from kairospy.application.strategy.application.decisions import (
 from kairospy.application.strategy.services.decision_journal import (
     StrategyDecisionJournal,
 )
-from kairospy.domain_types import (
-    AccountId,
-    EventMetadata,
-    FillId,
-    InstrumentId,
-    IntentId,
-    OrderId,
-)
+from kairospy.application.events import EventMetadata
+from kairospy.primitives.account import AccountId
+from kairospy.primitives.execution import FillId, IntentId, OrderId
+from kairospy.primitives.reference import InstrumentId
 from kairospy.strategy.clock import DeterministicTimerQueue, StrategyClock
 
 

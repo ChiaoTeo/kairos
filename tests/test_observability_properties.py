@@ -4,10 +4,8 @@ import json
 from hypothesis import given, strategies as st
 import pytest
 
-from kairospy.application.observability import (
-    _trace_sample_ratio,
-    resolve_otlp_endpoint,
-)
+from kairospy.infrastructure.observability import resolve_otlp_endpoint
+from kairospy.infrastructure.observability.telemetry import _trace_sample_ratio
 from kairospy.strategy.logging import StrategyLogger
 
 

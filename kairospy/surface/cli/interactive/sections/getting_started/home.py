@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import typer
+from rich import box
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from kairospy.application.config import ConfigurationMigrationApplication
-from kairospy.surface.cli.interactive.context import print_home_header
+from kairospy.surface.cli.interactive.context import unique_launches
 
 from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
 
@@ -69,32 +74,100 @@ def print_menu(context: InteractiveContext) -> None:
             "系统维护：\n  1. 项目工作区\n  2. 系统服务\n  3. 系统诊断\n  4. 高级配置"
         )
         return
-    print_home_header(context)
-    migration_notice = ""
+    migration_count = 0
     if context.owner is not None:
-        count = ConfigurationMigrationApplication(context.owner).preview()[
+        value = ConfigurationMigrationApplication(context.owner).preview()[
             "migration_count"
         ]
-        if count:
-            migration_notice = (
-                "\n" + "├─ 提示\n"
-                f"│  有 {count} 项配置可升级，不影响当前使用。输入 migrate 查看"
-            )
-    typer.echo(
-        "\n".join(
-            (
-                "├─ 你想做什么？",
-                "│  1  查看市场行情       当前报价、历史行情与行情回放",
-                "│  2  查找市场标的       搜索股票、期货、期权及交易市场",
-                "│  3  配置并运行策略     选择策略、填写参数并启动",
-                "│  4  管理运行资源       配置账户、行情数据、模型与通知",
-                "│  5  准备数据研究       准备研究或回测所需的数据",
-                "│  6  维护系统           管理工作区、后台进程与问题排查",
+        migration_count = value if isinstance(value, int) else 0
+    console = Console()
+    console.print(
+        _home_panel(
+            context,
+            migration_count=migration_count,
+            width=min(console.width, 78),
+        )
+    )
+
+
+def _home_panel(
+    context: InteractiveContext, *, migration_count: int, width: int
+) -> Panel:
+    title = Text("Kairos", style="bold")
+    if context.owner is not None:
+        title.append("  ·  ", style="dim")
+        title.append(context.owner.workspace_id, style="bold")
+
+    content: list[Group | Table | Text] = [
+        _workspace_summary(context),
+        _action_grid(),
+    ]
+    if migration_count:
+        content.append(
+            Text.assemble(
+                ("提示  ", "bold yellow"),
+                f"{migration_count} 项配置可升级，不影响当前使用  ",
+                ("migrate 查看", "bold"),
             )
         )
-        + migration_notice
-        + "\n╰─ 输入 1–6 选择  ·  ? 帮助  ·  q 退出"
+    return Panel(
+        Group(*content),
+        title=title,
+        title_align="left",
+        box=box.ROUNDED,
+        border_style="dim",
+        padding=(0, 1),
+        width=width,
     )
+
+
+def _workspace_summary(context: InteractiveContext) -> Group:
+    owner = context.owner
+    if owner is None:
+        return Group(Text("未选择工作区", style="yellow"))
+    lines: list[Text] = [Text(str(owner.paths.project_root), style="dim")]
+    snapshot = context.snapshot
+    if snapshot is None:
+        lines.append(Text("暂时无法读取运行状态，输入 6 检查系统状态", style="yellow"))
+        return Group(*lines)
+    launches = unique_launches(snapshot)
+    active_states = {"starting", "running", "degraded", "stopping"}
+    running = sum(
+        str(value.get("state")).lower() in active_states for value in launches
+    )
+    if not running:
+        return Group(*lines)
+    lines.append(Text(f"{running} 个策略正在运行", style="green"))
+    unavailable = sum(
+        snapshot.components.get(name, {}).get("status")
+        not in {"ok", "ready", "running", "degraded"}
+        for name in ("reference", "market")
+    )
+    if unavailable:
+        lines.append(
+            Text(
+                f"{unavailable} 个运行所需服务不可用，输入 fix 检查",
+                style="yellow",
+            )
+        )
+    return Group(*lines)
+
+
+def _action_grid() -> Table:
+    table = Table.grid(expand=True, padding=(0, 1))
+    table.add_column(width=2, justify="right", style="bold", no_wrap=True)
+    table.add_column(min_width=16, style="bold", no_wrap=True)
+    table.add_column(ratio=1, style="dim")
+    for number, label, description in (
+        ("1", "查看市场行情", "报价 · 历史行情 · 行情回放"),
+        ("2", "查找市场标的", "股票 · 期货 · 期权 · 交易市场"),
+        ("3", "配置并运行策略", "选择策略 · 配置参数 · 启动"),
+        ("4", "完成运行准备", "账户 · 市场数据 · AI 模型 · 通知提醒"),
+        ("5", "准备数据研究", "研究数据 · 回测数据"),
+        ("6", "维护系统", "工作区 · 后台进程 · 问题排查"),
+    ):
+        table.add_row(number, label, description)
+    return table
 
 
 def print_help(context: InteractiveContext) -> None:

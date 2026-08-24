@@ -32,9 +32,9 @@ from .commands.root import (
 from .interactive import run_interactive
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.application.system import ComponentProcessApplication
-from kairospy.surface.console import ObserveApp
 from kairospy.surface.console.data import SystemObserveReader
 from kairospy.surface.console.models import recommended_action
+from kairospy.surface.workbench import KairosWorkbenchApp, load_workbench_state
 from .options import OutputFormat, render, reset_command_output, set_command_output
 
 
@@ -279,11 +279,13 @@ def observe(
     ),
 ) -> None:
     """Open the project, launch, runtime, and market observation console."""
-    value = WorkspaceApplication().resolve(workspace)
-    reader = SystemObserveReader(ComponentProcessApplication(value), value.workspace_id)
     if once:
         import json
 
+        value = WorkspaceApplication().resolve(workspace)
+        reader = SystemObserveReader(
+            ComponentProcessApplication(value), value.workspace_id
+        )
         snapshot = reader.read()
         typer.echo(
             json.dumps(
@@ -298,7 +300,14 @@ def observe(
             )
         )
         return
-    ObserveApp(reader, refresh_seconds=refresh).run()
+    state = load_workbench_state(Path(workspace) if workspace is not None else None)
+    if state.owner is None:
+        raise typer.BadParameter(state.load_error or "当前没有可用的 workspace")
+    KairosWorkbenchApp(
+        state,
+        initial_section="observe",
+        observe_refresh_seconds=refresh,
+    ).run()
 
 
 def _interactive_command(
@@ -321,12 +330,8 @@ def _interactive_command(
 @app.command("interactive", rich_help_panel="Getting started")
 def interactive(
     workspace: str | None = typer.Option(None, "--workspace"),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="只展示选中的动作，不执行。"
-    ),
-    no_exec: bool = typer.Option(
-        False, "--no-exec", help="只展示选中的动作，不执行。"
-    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只展示选中的动作，不执行。"),
+    no_exec: bool = typer.Option(False, "--no-exec", help="只展示选中的动作，不执行。"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认提示。"),
 ) -> None:
     """打开 Kairos 交互式操作入口（引导式菜单）。"""
@@ -460,6 +465,8 @@ def execute_argv(
     except click.ClickException as error:
         error.show(file=stdout)
         return error.exit_code
+    except click.Abort:
+        return 130
     except SystemExit as error:
         return error.code if isinstance(error.code, int) else 1
     except Exception as error:

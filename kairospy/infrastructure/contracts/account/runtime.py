@@ -22,7 +22,8 @@ from kairospy.application.account import (
     SegmentSyncMode,
 )
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import AccountId, InstrumentId, SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.reference import InstrumentId
 from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
 from .view_contract import (
     AccountViewKey,

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from kairospy.application.launch.application import LaunchRegistryApplication
 from kairospy.application.workspace import WorkspaceApplication
-from kairospy.surface.cli.interactive.models import GuidedCommand, ShellControl
+from kairospy.surface.cli.interactive.models import (
+    CommandExecution,
+    GuidedCommand,
+    ShellControl,
+)
 from kairospy.surface.cli.interactive.sections.business import execution_component
 from kairospy.surface.cli.interactive.sections.strategy import launch
 from kairospy.surface.cli.interactive import session
@@ -28,7 +32,9 @@ def test_launch_shell_and_preview_share_command_builder(
 
 def test_launch_dangerous_and_streaming_attributes() -> None:
     assert launch.build_command("demo", "stop").dangerous is True
-    assert launch.build_command("demo", "attach").streaming is True
+    assert (
+        launch.build_command("demo", "attach").execution is CommandExecution.STREAMING
+    )
 
 
 def test_new_launch_keeps_identity_for_resource_setup_return(

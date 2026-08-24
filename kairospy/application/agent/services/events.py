@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from queue import Empty, Full, Queue
 from threading import Lock
 
-from kairospy.domain_types import EventMetadata
+from kairospy.application.events import EventMetadata
 
 from ..models import (
     AgentDecisionNotice,

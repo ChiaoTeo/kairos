@@ -170,6 +170,8 @@ def execute_data_argv(argv: Sequence[str], stdout: TextIO) -> int:
     except click.ClickException as error:
         error.show(file=stdout)
         return error.exit_code
+    except click.Abort:
+        return 130
     except SystemExit as error:
         return error.code if isinstance(error.code, int) else 1
     except Exception as error:

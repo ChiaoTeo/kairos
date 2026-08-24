@@ -216,36 +216,3 @@ def print_context(context: InteractiveContext) -> None:
             f"{context.last_command}"
         )
     typer.echo()
-
-
-def print_home_header(context: InteractiveContext) -> None:
-    """Render the framed workspace region at the top of the home page."""
-
-    owner = context.owner
-    snapshot = context.snapshot
-    if owner is None:
-        typer.echo("╭─ Kairos")
-        typer.echo("│  未选择工作区")
-        return
-    typer.echo(f"╭─ Kairos  ·  {owner.workspace_id}")
-    typer.echo(f"│  {owner.paths.project_root}")
-    if snapshot is None:
-        typer.echo("│  注意：暂时无法读取运行状态，输入 6 检查系统状态")
-        return
-    launches = unique_launches(snapshot)
-    active_states = {"starting", "running", "degraded", "stopping"}
-    running_launches = sum(
-        str(value.get("state")).lower() in active_states for value in launches
-    )
-    if not running_launches:
-        return
-    unavailable_services = sum(
-        snapshot.components.get(name, {}).get("status")
-        not in {"ok", "ready", "running", "degraded"}
-        for name in ("reference", "market")
-    )
-    typer.echo(f"│  运行：{running_launches} 个策略正在运行")
-    if unavailable_services:
-        typer.echo(
-            f"│  注意：{unavailable_services} 个运行所需服务不可用，输入 fix 检查"
-        )

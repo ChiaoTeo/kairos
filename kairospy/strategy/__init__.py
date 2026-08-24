@@ -164,16 +164,14 @@ from kairospy.application.risk import (
     RiskStatus,
     RiskViolation,
 )
-from kairospy.domain_types import (
-    AccountId,
-    DataEvent,
-    EventMetadata,
+from kairospy.application.events import DataEvent, EventMetadata
+from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.execution import FillId
+from kairospy.primitives.reference import (
     ExchangeId,
-    FillId,
     InstrumentId,
     ListingId,
     MarketId,
-    SegmentKey,
 )
 
 from .clock import DeterministicTimerQueue, StrategyClock, TimerEvent

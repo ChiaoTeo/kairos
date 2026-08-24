@@ -22,7 +22,8 @@ from kairospy.application.agent.services.controlled_execution import (
 )
 from kairospy.application.agent.services.tools import AgentToolScope
 from kairospy.application.workspace import WorkspaceApplication
-from kairospy.domain_types import AccountId, InstrumentId
+from kairospy.primitives.account import AccountId
+from kairospy.primitives.reference import InstrumentId
 from kairospy.application.reference import InstrumentRef
 from kairospy.application.execution import TargetPositionRequest
 

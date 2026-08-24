@@ -709,6 +709,58 @@ class LaunchRuntimeApplication:
             raise LaunchRuntimeError(f"backtest report must be an object: {path}")
         return value
 
+    def logs(
+        self, launch_id: str, *, instance: str | None = None, lines: int = 200
+    ) -> dict[str, Any]:
+        """Read recent logs from the resolved Launch instance."""
+
+        if lines < 0:
+            raise ValueError("log line count cannot be negative")
+        resolved_instance, mode = self.resolve_target(launch_id, instance=instance)
+        root = self.workspace.instance(mode, launch_id, resolved_instance).root / "logs"
+        files = (
+            sorted(path for path in root.rglob("*") if path.is_file())
+            if root.is_dir()
+            else []
+        )
+        payload: dict[str, Any] = {
+            "path": str(root),
+            "exists": root.exists(),
+            "files": [str(path) for path in files],
+        }
+        if files:
+            strategy_log = root / "strategy" / "process.log"
+            latest = strategy_log if strategy_log.is_file() else files[-1]
+            payload["latest"] = str(latest)
+            content = latest.read_text(encoding="utf-8", errors="replace").splitlines()
+            payload["lines"] = content[-lines:] if lines else []
+        return payload
+
+    def restart(
+        self,
+        launch_id: str,
+        *,
+        instance: str | None = None,
+        config_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Stop a Launch fully, then start a new instance from its current config."""
+
+        stopped = self.stop(launch_id, instance=instance)
+        if stopped.get("status") != "stopped":
+            raise LaunchRuntimeError(
+                f"launch {launch_id} was not fully stopped; restart aborted: "
+                f"{stopped.get('stop_issues') or {}}"
+            )
+        path = (
+            Path(config_path)
+            if config_path is not None
+            else self.workspace.paths.launch_config(launch_id)
+        )
+        config = LaunchConfigurationApplication().load(
+            path, workspace_root=self.workspace.paths.root
+        )
+        return {"stopped": stopped, "started": self.start(config)}
+
     def wait(
         self,
         launch_id: str,

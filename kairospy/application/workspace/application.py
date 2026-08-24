@@ -174,7 +174,13 @@ class WorkspaceApplication:
             manifest=manifest,
             launches=root_path / "launches",
         )
-        return Workspace(identity, paths, cli_format=cli_format)
+        workspace = Workspace(identity, paths, cli_format=cli_format)
+        # A process may have stopped between two files in a configuration
+        # commit. Recover before exposing the Workspace to any reader.
+        from .transaction import recover_configuration_transactions
+
+        recover_configuration_transactions(workspace)
+        return workspace
 
     def market_connection(
         self, workspace: Workspace, connection_id: str

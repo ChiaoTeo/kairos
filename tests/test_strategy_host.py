@@ -23,7 +23,7 @@ from kairospy.application.strategy import StrategyApplication, StrategyLifecycle
 from kairospy.application.strategy.services.ingress import StrategyEventIngress
 from kairospy.application.account import AccountSegmentSnapshot, DataFreshness, SPOT
 from kairospy.application.execution import ExecutionBacktestResult
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 from kairospy.application.market import MarketSnapshot, ObservationScope, Quote
 from kairospy.application.market.events import MarketEventRecord
 from kairospy.application.market.mapping import map_market_event

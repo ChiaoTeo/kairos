@@ -11,7 +11,9 @@ import tomllib
 from typing import Mapping
 
 from kairospy.application.workspace import InstanceWorkspace, Workspace
-from kairospy.application.credential import CredentialConfigurationApplication
+from kairospy.application.workspace.credentials import (
+    CredentialConfigurationApplication,
+)
 from kairospy.strategy import StrategyIdentity, StrategyLogger
 
 from .application import NotificationApplication

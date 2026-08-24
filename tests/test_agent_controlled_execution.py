@@ -30,7 +30,7 @@ from kairospy.application.execution import (
     SubmissionStatus,
     TargetPositionRequest,
 )
-from kairospy.domain_types import InstrumentId
+from kairospy.primitives.reference import InstrumentId
 from kairospy.strategy import CommandResult
 
 

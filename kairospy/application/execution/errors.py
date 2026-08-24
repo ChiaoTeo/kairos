@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from kairospy.domain_types import AccountId, IntentId, OrderId
+from kairospy.primitives.account import AccountId
+from kairospy.primitives.execution import IntentId, OrderId
 
 
 class ExecutionLookupError(LookupError):

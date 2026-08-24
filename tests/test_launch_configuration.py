@@ -25,7 +25,7 @@ from kairospy.application.launch.application.wizard import (
 )
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.application.account import AccountConfigurationApplication
-from kairospy.application.credential import (
+from kairospy.application.workspace.credentials import (
     CredentialConfigurationApplication,
     SecretRef,
 )

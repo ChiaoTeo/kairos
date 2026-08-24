@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import typer
 
-from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
+from ...models import (
+    CommandExecution,
+    GuidedCommand,
+    InteractiveContext,
+    ShellAction,
+    ShellControl,
+)
 
 
 _COMPONENTS = ("reference", "market")
@@ -129,7 +135,11 @@ def _handle_component(
         argv,
         summary,
         dangerous=action in {"up", "down", "restart"},
-        streaming=action == "logs",
+        execution=(
+            CommandExecution.STREAMING
+            if action == "logs"
+            else CommandExecution.ACTIVITY
+        ),
     )
 
 

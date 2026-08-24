@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 
 
 @dataclass(frozen=True, slots=True)

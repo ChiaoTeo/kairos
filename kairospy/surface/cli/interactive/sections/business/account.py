@@ -10,7 +10,13 @@ import typer
 from kairospy.application.account import AccountConfigurationApplication
 from kairospy.application.config import ConfigurationReferenceApplication
 
-from ...models import GuidedCommand, InteractiveContext, ShellAction, ShellControl
+from ...models import (
+    CommandExecution,
+    GuidedCommand,
+    InteractiveContext,
+    ShellAction,
+    ShellControl,
+)
 
 
 ACCOUNT_LIST_PATH = ("trade", "accounts")
@@ -38,7 +44,10 @@ def print_menu(context: InteractiveContext) -> None:
     if context.shell_path in ACCOUNT_LIST_PATHS:
         typer.echo("交易账户：")
         _print_account_list(context)
-        typer.echo("n. 添加 paper/live 账户；输入序号选择；refresh 刷新列表。")
+        if context.shell_path == RESOURCE_ACCOUNT_LIST_PATH:
+            typer.echo(f"  {len(records(context)) + 1}. 添加交易账户")
+        else:
+            typer.echo("n. 添加 paper/live 账户；输入序号选择；refresh 刷新列表。")
         return
     account_id = context.selected_account or context.shell_path[2]
     if len(context.shell_path) == 4:
@@ -55,6 +64,9 @@ def print_menu(context: InteractiveContext) -> None:
         typer.echo(f"{labels.get(view, view)} · {account_id}\n  r. 刷新/重新打开")
         return
     account = _selected_account_record(context)
+    if context.shell_path[:2] == RESOURCE_ACCOUNT_LIST_PATH:
+        _print_resource_account_detail(context, account_id, account)
+        return
     provider = (
         account.get("integration_provider")
         or account.get("exchange")
@@ -156,11 +168,15 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
     key = parts[0]
     if context.shell_path in ACCOUNT_LIST_PATHS:
         accounts = records(context)
-        if key in {"n", "new", "setup"}:
+        if key in {"n", "new", "setup"} or (
+            context.shell_path == RESOURCE_ACCOUNT_LIST_PATH
+            and key == str(len(accounts) + 1)
+        ):
             return GuidedCommand(
                 ("account", "setup"),
                 "配置 Workspace 交易账户并可选择执行安全的手动读取测试",
-                dangerous=True,
+                execution=CommandExecution.INTERACTIVE,
+                show_command=False,
             )
         if key.isdigit():
             index = int(key)
@@ -192,6 +208,50 @@ def handle(context: InteractiveContext, parts: tuple[str, ...]) -> ShellAction:
             return _transfer_action(context)
         if view == "settings":
             return _account_settings_command(context)
+        return None
+    if context.shell_path[:2] == RESOURCE_ACCOUNT_LIST_PATH:
+        account = _selected_account_record(context)
+        if key in {"1", "t", "test", "verify"}:
+            return GuidedCommand(
+                ("account", "test", account_id, "--format", "text"),
+                "验证账户认证、读取与权限；不会提交订单或划转资金",
+                dangerous=True,
+            )
+        if key in {"2", "edit", "settings"}:
+            return _account_settings_command(context)
+        if key in {"3", "advanced", "status"}:
+            _print_account_advanced(context, account_id, account)
+            return ShellControl.HANDLED
+        if key in {"4", "enable", "disable"}:
+            disabled = str(account.get("status") or "").lower() == "disabled"
+            enabling = key == "enable" or (key == "4" and disabled)
+            return GuidedCommand(
+                (
+                    "account",
+                    "modify",
+                    "--account-id",
+                    account_id,
+                    "--status",
+                    "configured" if enabling else "disabled",
+                    "--format",
+                    "text",
+                ),
+                f"{'启用' if enabling else '停用'}交易账户 {account_id}",
+                dangerous=not enabling,
+            )
+        if key in {"5", "delete", "remove"}:
+            return GuidedCommand(
+                (
+                    "account",
+                    "remove",
+                    "--account-id",
+                    account_id,
+                    "--format",
+                    "text",
+                ),
+                "删除交易账户；存在运行方案引用时会拒绝",
+                dangerous=True,
+            )
         return None
     if key in {"1", "summary", "overview"}:
         return _enter_fact_view(context, "overview")
@@ -415,11 +475,58 @@ def _connection_availability(status: str) -> str:
 
 def _verification_label(status: str) -> str:
     return {
-        "verified": "已验证",
-        "pending": "未验证（尚未测试）",
-        "retest_required": "需重新测试",
-        "failed": "测试失败",
+        "verified": "可用",
+        "pending": "需要测试",
+        "retest_required": "配置已变化",
+        "failed": "连接失败",
+        "disabled": "已禁用",
     }.get(status, status)
+
+
+def _print_resource_account_detail(
+    context: InteractiveContext, account_id: str, account: dict[str, Any]
+) -> None:
+    provider = (
+        account.get("integration_provider")
+        or account.get("exchange")
+        or account.get("broker")
+        or "本地模拟"
+    )
+    status = str(account.get("verification_status") or "pending")
+    disabled = str(account.get("status") or "").lower() == "disabled"
+    typer.echo(
+        f"交易账户：{account.get('alias') or account_id}\n\n"
+        f"状态：{_verification_label('disabled' if disabled else status)}\n"
+        f"类型：{_account_risk_label(account)}\n"
+        f"服务商：{provider}\n"
+        f"最近测试：{account.get('last_tested_at') or '尚未测试'}\n\n"
+        "建议操作：\n"
+        "  1. 测试连接\n"
+        "  2. 修改配置\n"
+        "  3. 安全与高级信息\n"
+        + ("  4. 启用\n" if disabled else "  4. 停用\n")
+        + "  5. 删除"
+    )
+
+
+def _print_account_advanced(
+    context: InteractiveContext, account_id: str, account: dict[str, Any]
+) -> None:
+    references = (
+        ConfigurationReferenceApplication(context.owner).account_references(account_id)
+        if context.owner is not None
+        else []
+    )
+    typer.echo(
+        "安全与高级信息：\n"
+        f"  Account ID：{account_id}\n"
+        f"  认证资料：{account.get('credential_id') or '-'}（值不显示）\n"
+        f"  配置版本：{_hash_label(account.get('current_configuration_hash'))}\n"
+        f"  测试版本：{_hash_label(account.get('tested_configuration_hash'))}\n"
+        f"  已测试：{', '.join(str(item) for item in account.get('tested') or ()) or '-'}\n"
+        f"  未测试：{', '.join(str(item) for item in account.get('not_tested') or ()) or '-'}\n"
+        f"  运行方案引用：{_reference_label(references)}"
+    )
 
 
 def _account_risk_label(account: dict[str, Any]) -> str:

@@ -12,6 +12,11 @@ from kairospy.application.workspace import WorkspaceApplication
 ROOT = Path(__file__).parents[1]
 
 
+def test_application_root_contains_only_the_package_boundary() -> None:
+    application_root = ROOT / "kairospy" / "application"
+    assert {path.name for path in application_root.glob("*.py")} == {"__init__.py"}
+
+
 def test_clients_are_implemented_only_in_the_client_surface() -> None:
     assert Kairos.__module__ == "kairospy.surface.client.project"
     assert DataClient.__module__ == "kairospy.surface.client.data"

@@ -17,6 +17,37 @@ class ConfigurationReferenceApplication:
 
     workspace: Workspace
 
+    def resource_references(
+        self, resource_kind: str, resource_id: str
+    ) -> list[dict[str, str]]:
+        """Return a stable cross-resource reference projection for surfaces."""
+
+        resolvers = {
+            "account": self.account_references,
+            "market_data": self.data_provider_references,
+            "ai_model": self.model_connection_references,
+            "notification": self.destination_references,
+            "credential": self.credential_references,
+        }
+        try:
+            resolver = resolvers[resource_kind]
+        except KeyError as error:
+            raise ValueError(f"unsupported resource kind: {resource_kind}") from error
+        return resolver(resource_id)
+
+    def deletion_impact(
+        self, resource_kind: str, resource_id: str
+    ) -> dict[str, object]:
+        references = self.resource_references(resource_kind, resource_id)
+        return {
+            "resource_kind": resource_kind,
+            "resource_id": _required_id(resource_id),
+            "allowed": not references,
+            "references": references,
+            "reference_count": len(references),
+            "reason": None if not references else "resource_is_referenced",
+        }
+
     def credential_references(self, credential_id: str) -> list[dict[str, str]]:
         credential_id = _required_id(credential_id)
         result: list[dict[str, str]] = []
@@ -53,6 +84,24 @@ class ConfigurationReferenceApplication:
                                 self.workspace.paths.root,
                             )
                         )
+        return _deduplicate(result)
+
+    def model_connection_references(self, connection_id: str) -> list[dict[str, str]]:
+        connection_id = _required_id(connection_id)
+        result: list[dict[str, str]] = []
+        for path in self._launch_documents():
+            value = _read(path)
+            agent = value.get("agent")
+            model = agent.get("model") if isinstance(agent, Mapping) else None
+            if not isinstance(model, Mapping):
+                continue
+            if model.get("connection", model.get("credential")) == connection_id:
+                location = (
+                    ("agent", "model", "connection")
+                    if "connection" in model
+                    else ("agent", "model", "credential")
+                )
+                result.append(_reference(path, location, self.workspace.paths.root))
         return _deduplicate(result)
 
     def destination_references(self, destination_id: str) -> list[dict[str, str]]:
@@ -157,7 +206,11 @@ def _reference(path: Path, location: tuple[str, ...], root: Path) -> dict[str, s
         source = str(path.relative_to(root))
     except ValueError:
         source = str(path)
-    return {"source": source, "location": ".".join(location)}
+    return {
+        "source": source,
+        "location": ".".join(location),
+        "document_state": "draft" if "/.drafts/" in f"/{source}" else "published",
+    }
 
 
 def _deduplicate(values: list[dict[str, str]]) -> list[dict[str, str]]:

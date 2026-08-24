@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from kairospy.application.agent import AgentResourceApplication
-from kairospy.application.credential import SecretRef
+from kairospy.application.workspace.credentials import SecretRef
 from kairospy.application.workspace import WorkspaceApplication
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
-from kairospy.domain_types import AccountId
+from kairospy.primitives.account import AccountId
 
 from .errors import AccountNotEnabledError
 from .events import AccountEvent

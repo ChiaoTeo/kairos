@@ -18,7 +18,7 @@ from kairospy.application.notification import (
     NotificationApplication,
     NotificationSeverity,
 )
-from kairospy.domain_types import EventMetadata
+from kairospy.application.events import EventMetadata
 from kairospy.strategy.clock import StrategyClock, TimerEvent, parse_duration
 
 from ..services.decision_journal import StrategyDecisionJournal

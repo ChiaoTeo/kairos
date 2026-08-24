@@ -16,7 +16,7 @@ from kairospy.infrastructure.unix_http import request_sync
 
 if TYPE_CHECKING:
     from kairospy.application.workspace import InstanceWorkspace
-    from kairospy.domain_types import AccountId
+    from kairospy.primitives.account import AccountId
     from kairospy.infrastructure.contracts.account.runtime import (
         AccountContractClient,
     )

@@ -22,7 +22,9 @@ from kairospy.application.execution.events import (
     ExecutionEventRecord,
 )
 from kairospy.application.execution.services import ExecutionEventCursorCheckpoint
-from kairospy.domain_types import AccountId, InstrumentId, IntentId, OrderId
+from kairospy.primitives.account import AccountId
+from kairospy.primitives.execution import IntentId, OrderId
+from kairospy.primitives.reference import InstrumentId
 from kairospy.strategy import CommandResult
 
 

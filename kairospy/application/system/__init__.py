@@ -510,6 +510,20 @@ class ComponentProcessApplication:
                     status["status"] = "unhealthy" if process["alive"] else "stale"
         return cast(dict[str, dict[str, Any]], result)
 
+    def logs(self, component: str, *, limit: int = 200) -> tuple[str, ...]:
+        """Read recent workspace-component logs for operator surfaces."""
+
+        if component not in SYSTEM_COMPONENTS:
+            raise ValueError(f"unsupported workspace component: {component}")
+        if limit <= 0:
+            raise ValueError("log line limit must be positive")
+        path = self.workspace.paths.logs / component / "process.log"
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except FileNotFoundError:
+            return ()
+        return tuple(lines[-limit:])
+
     def doctor(self) -> dict[str, Any]:
         """Inspect runtime resources without mutating the workspace."""
         report: dict[str, Any] = {

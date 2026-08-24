@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.surface.cli.interactive.models import GuidedCommand
+from kairospy.surface.cli.interactive.models import CommandExecution, GuidedCommand
 from kairospy.surface.cli.interactive.sections.business import account
 
 
@@ -31,7 +31,9 @@ def test_resource_account_list_exposes_guided_setup(interactive_context) -> None
 
     assert isinstance(command, GuidedCommand)
     assert command.argv == ("account", "setup")
-    assert command.dangerous is True
+    assert command.dangerous is False
+    assert command.execution is CommandExecution.INTERACTIVE
+    assert command.show_command is False
 
 
 def test_account_list_makes_live_readonly_risk_visible(

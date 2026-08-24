@@ -1,41 +1,22 @@
-"""Workspace credential configuration owned by the Integration capability."""
+"""Workspace-owned credential configuration and secret-reference storage."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
 import tomllib
-from typing import Literal, Mapping
+from typing import Mapping
+import uuid
 
-from kairospy.application.workspace import Workspace
-
-
-SecretSource = Literal["env", "file"]
-
-
-@dataclass(frozen=True, slots=True)
-class SecretRef:
-    source: SecretSource
-    id: str
-
-    def __post_init__(self) -> None:
-        identifier = self.id.strip()
-        if self.source == "env":
-            if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", identifier):
-                raise ValueError(
-                    "environment SecretRef id must use uppercase letters, numbers, and underscores"
-                )
-        elif self.source == "file":
-            if not identifier or "\x00" in identifier:
-                raise ValueError("file SecretRef id must be a non-empty path")
-        else:
-            raise ValueError(f"unsupported SecretRef source: {self.source}")
-        object.__setattr__(self, "id", identifier)
+from ..domain import Workspace
+from ..transaction import WorkspaceConfigurationTransaction
+from .models import SecretRef, SecretSource
 
 
 _PROVIDER_FIELDS: Mapping[str, tuple[str, ...]] = {
@@ -46,9 +27,66 @@ _PROVIDER_FIELDS: Mapping[str, tuple[str, ...]] = {
     "binance": ("api_key", "api_secret"),
     "okx": ("api_key", "api_secret", "passphrase"),
     "openai": ("api_key",),
+    "anthropic": ("api_key",),
+    "openrouter": ("api_key",),
+    "custom-model": ("api_key",),
+    "ollama": (),
+    "lmstudio": (),
     "feishu": ("webhook_url",),
     "telegram": ("bot_token",),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedCredential:
+    """Secret-safe credential metadata plus unreferenced staged secret files."""
+
+    workspace: Workspace
+    credential_id: str
+    provider: str
+    role: str
+    references: Mapping[str, SecretRef]
+    document: str = field(init=False, repr=False)
+    staged_secret_root: Path | None = None
+    retired_secret_paths: tuple[Path, ...] = ()
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        credential_id: str,
+        provider: str,
+        role: str,
+        references: Mapping[str, SecretRef],
+        *,
+        staged_secret_root: Path | None = None,
+        retired_secret_paths: tuple[Path, ...] = (),
+    ) -> None:
+        object.__setattr__(self, "workspace", workspace)
+        object.__setattr__(self, "credential_id", credential_id)
+        object.__setattr__(self, "provider", provider)
+        object.__setattr__(self, "role", role)
+        object.__setattr__(self, "references", dict(references))
+        object.__setattr__(
+            self,
+            "document",
+            _credential_document(credential_id, provider, role, references),
+        )
+        object.__setattr__(self, "staged_secret_root", staged_secret_root)
+        object.__setattr__(self, "retired_secret_paths", retired_secret_paths)
+
+    def stage(self, transaction: WorkspaceConfigurationTransaction) -> None:
+        target = self.workspace.paths.credential_config().parent / (
+            f"{self.credential_id}.toml"
+        )
+        transaction.stage_text(target, self.document)
+        if self.staged_secret_root is not None:
+            transaction.cleanup_on_rollback(self.staged_secret_root)
+        for path in self.retired_secret_paths:
+            transaction.cleanup_on_commit(path)
+
+    def discard(self) -> None:
+        if self.staged_secret_root is not None:
+            shutil.rmtree(self.staged_secret_root, ignore_errors=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,23 +135,125 @@ class CredentialConfigurationApplication:
         path = self.root / f"{credential_id}.toml"
         if path.exists() and not overwrite:
             raise FileExistsError(path)
-        document = [
-            "[credential]",
-            f"id = {_toml_string(credential_id)}",
-            f"provider = {_toml_string(provider)}",
-            f"role = {_toml_string(role.strip() or 'readonly')}",
-        ]
-        for name, reference in sorted(normalized.items()):
-            document.extend(
-                (
-                    "",
-                    f"[credential.fields.{name}]",
-                    f"source = {_toml_string(reference.source)}",
-                    f"id = {_toml_string(reference.id)}",
-                )
-            )
-        _write_private_atomic(path, "\n".join((*document, "")))
+        _write_private_atomic(
+            path,
+            _credential_document(
+                credential_id, provider, role.strip() or "readonly", normalized
+            ),
+        )
         return self.show(credential_id)
+
+    def prepare(
+        self,
+        credential_id: str,
+        *,
+        provider: str,
+        fields: Mapping[str, SecretRef],
+        role: str = "readonly",
+    ) -> PreparedCredential:
+        credential_id, provider, normalized = self._validate_fields(
+            credential_id, provider, fields
+        )
+        return PreparedCredential(
+            self.workspace,
+            credential_id,
+            provider,
+            role.strip() or "readonly",
+            normalized,
+        )
+
+    def prepare_secret_values(
+        self,
+        credential_id: str,
+        *,
+        provider: str,
+        values: Mapping[str, str],
+        role: str = "readonly",
+    ) -> PreparedCredential:
+        credential_id = _safe_id(credential_id, "credential_id")
+        provider = provider.strip().lower()
+        schema = self.schema(provider)
+        normalized = {
+            _field_name(name): value.strip() for name, value in values.items()
+        }
+        missing = [
+            name
+            for name in schema["required_fields"]
+            if not normalized.get(str(name), "")
+        ]
+        if missing:
+            raise ValueError(
+                f"credential {credential_id} is missing required secret values: "
+                + ", ".join(str(name) for name in missing)
+            )
+        version = uuid.uuid4().hex
+        relative_root = Path("secrets") / credential_id / version
+        absolute_root = self.workspace.paths.root / relative_root
+        references: dict[str, SecretRef] = {}
+        try:
+            for name, value in normalized.items():
+                relative_path = relative_root / name
+                _write_private_atomic(
+                    self.workspace.paths.root / relative_path, value + "\n"
+                )
+                references[name] = SecretRef("file", str(relative_path))
+        except BaseException:
+            shutil.rmtree(absolute_root, ignore_errors=True)
+            raise
+        root = self.workspace.paths.root / "secrets" / credential_id
+        retired = (
+            tuple(path for path in root.iterdir() if path != absolute_root)
+            if root.is_dir()
+            else ()
+        )
+        return PreparedCredential(
+            self.workspace,
+            credential_id,
+            provider,
+            role.strip() or "readonly",
+            references,
+            staged_secret_root=absolute_root,
+            retired_secret_paths=retired,
+        )
+
+    def configure_secret_values(
+        self,
+        credential_id: str,
+        *,
+        provider: str,
+        values: Mapping[str, str],
+        role: str = "readonly",
+        overwrite: bool = False,
+    ) -> dict[str, object]:
+        """Atomically switch a credential to private Workspace secret files.
+
+        Secret values are first written to an unreferenced version directory. The
+        credential metadata is then replaced atomically so active readers observe
+        either every old reference or every new reference, never a partial set.
+        """
+
+        path = self.root / f"{_safe_id(credential_id, 'credential_id')}.toml"
+        if path.exists() and not overwrite:
+            raise FileExistsError(path)
+        prepared = self.prepare_secret_values(
+            credential_id,
+            provider=provider,
+            values=values,
+            role=role,
+        )
+        try:
+            transaction = WorkspaceConfigurationTransaction(
+                self.workspace, f"credential:{prepared.credential_id}"
+            )
+            prepared.stage(transaction)
+            transaction.commit()
+        except BaseException:
+            prepared.discard()
+            raise
+        return {
+            **self.show(prepared.credential_id),
+            "secret_storage": "workspace-private-files",
+        }
 
     def list(self) -> list[dict[str, object]]:
         if not self.root.is_dir():
@@ -147,6 +287,10 @@ class CredentialConfigurationApplication:
         if not path.is_file():
             raise KeyError(f"credential does not exist: {credential_id}")
         path.unlink()
+        shutil.rmtree(
+            self.workspace.paths.root / "secrets" / credential_id,
+            ignore_errors=True,
+        )
         return {"credential_id": credential_id, "status": "deleted"}
 
     def resource_snapshot(self, credential_id: str) -> dict[str, object]:
@@ -198,6 +342,38 @@ class CredentialConfigurationApplication:
             return path.read_text(encoding="utf-8").strip() or None
         except FileNotFoundError:
             return None
+
+    def _validate_fields(
+        self,
+        credential_id: str,
+        provider: str,
+        fields: Mapping[str, SecretRef],
+    ) -> tuple[str, str, dict[str, SecretRef]]:
+        credential_id = _safe_id(credential_id, "credential_id")
+        provider = provider.strip().lower()
+        schema = self.schema(provider)
+        normalized = {
+            _field_name(name): reference for name, reference in fields.items()
+        }
+        missing = [name for name in schema["required_fields"] if name not in normalized]
+        if missing:
+            raise ValueError(
+                f"credential {credential_id} is missing required fields: {', '.join(missing)}"
+            )
+        return credential_id, provider, normalized
+
+    def _remove_retired_managed_secrets(
+        self, credential_id: str, *, keep: Path
+    ) -> None:
+        root = self.workspace.paths.root / "secrets" / credential_id
+        if not root.is_dir():
+            return
+        for path in root.iterdir():
+            if path != keep:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
 
     def _summary(self, path: Path) -> dict[str, object]:
         value = _credential_table(path)
@@ -289,6 +465,30 @@ def _toml_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _credential_document(
+    credential_id: str,
+    provider: str,
+    role: str,
+    references: Mapping[str, SecretRef],
+) -> str:
+    document = [
+        "[credential]",
+        f"id = {_toml_string(credential_id)}",
+        f"provider = {_toml_string(provider)}",
+        f"role = {_toml_string(role)}",
+    ]
+    for name, reference in sorted(references.items()):
+        document.extend(
+            (
+                "",
+                f"[credential.fields.{name}]",
+                f"source = {_toml_string(reference.source)}",
+                f"id = {_toml_string(reference.id)}",
+            )
+        )
+    return "\n".join((*document, ""))
+
+
 def _write_private_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -314,6 +514,7 @@ def _write_private_atomic(path: Path, content: str) -> None:
 
 __all__ = [
     "CredentialConfigurationApplication",
+    "PreparedCredential",
     "SecretRef",
     "SecretSource",
 ]
