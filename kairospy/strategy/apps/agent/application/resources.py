@@ -16,7 +16,6 @@ from typing import Any, Mapping, cast
 
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
-    SecretRef,
 )
 from kairospy.system.apps.workspace.application import Workspace
 
@@ -235,7 +234,7 @@ class AgentResourceApplication:
     def configure_openai_credential(
         self,
         credential_id: str,
-        secret_ref: SecretRef,
+        api_key: str,
         *,
         overwrite: bool = False,
     ) -> dict[str, object]:
@@ -243,7 +242,7 @@ class AgentResourceApplication:
             credential_id,
             provider="openai",
             role="model-inference",
-            fields={"api_key": secret_ref},
+            values={"api_key": api_key},
             overwrite=overwrite,
         )
         connections = ModelProviderConnectionApplication(self.workspace)
@@ -376,7 +375,7 @@ class AgentResourceApplication:
                 "credential_identity": {
                     "provider": credential.get("provider"),
                     "role": credential.get("role"),
-                    "secret_refs": credential.get("secret_refs", {}),
+                    "fields": credential.get("fields", []),
                 },
             }
         verification = self.model_verification(credential_id, model=model)
@@ -388,7 +387,7 @@ class AgentResourceApplication:
             "credential_identity": {
                 "provider": credential.get("provider"),
                 "role": credential.get("role"),
-                "secret_refs": credential.get("secret_refs", {}),
+                "fields": credential.get("fields", []),
             },
             "verification": verification,
         }
@@ -412,10 +411,8 @@ class AgentResourceApplication:
     def create_openai_credential(
         self, credential_id: str, api_key: str, *, overwrite: bool = False
     ) -> Path:
-        del credential_id, api_key, overwrite
-        raise ValueError(
-            "plaintext OpenAI credential writes are disabled; configure a SecretRef"
-        )
+        self.configure_openai_credential(credential_id, api_key, overwrite=overwrite)
+        return self.workspace.paths.credentials_root() / f"{credential_id}.toml"
 
     def create_profile(
         self,
@@ -479,7 +476,7 @@ def _credential_hash(value: Mapping[str, object]) -> str:
         "credential_id": value.get("credential_id"),
         "provider": value.get("provider"),
         "role": value.get("role"),
-        "secret_refs": value.get("secret_refs"),
+        "fields": value.get("fields"),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

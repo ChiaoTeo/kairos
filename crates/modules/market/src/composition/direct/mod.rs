@@ -5,8 +5,9 @@ use std::path::Path;
 use kairos_conflux::{
     BinanceCredential, BinanceOptionsRestConnection, BinanceRestConfig, BinanceSpotRestConnection,
     BinanceStocksRestConnection, ConnectionKey, MassiveInstrumentQuery, MassiveRestConfig,
-    MassiveRestConnection, load_workspace_credential,
+    MassiveRestConnection,
 };
+use kairos_credentials::CredentialStore;
 use kairos_primitives::market::{ObservationKind, Provider};
 use kairos_workspace::Workspace;
 
@@ -112,18 +113,16 @@ pub fn compose_standalone_market(
             else {
                 return Err("selected Market source is not Binance equity".into());
             };
-            let credentials_root =
-                workspace.existing_path(&["config", "credentials"], &["credentials"])?;
             let requested_credential = request.credential_id.as_deref().unwrap_or(&credential_id);
-            let credential = load_workspace_credential(
-                &credentials_root,
-                "binance",
-                Some(requested_credential),
-            )?
-            .ok_or("Binance equity workspace credential does not exist")?;
-            if credential.api_key.is_empty() {
-                return Err("Binance equity workspace credential has no API key".into());
-            }
+            let credentials = CredentialStore::for_workspace(&workspace)?;
+            let credential = credentials
+                .find_provider("binance", Some(requested_credential))
+                .ok_or("Binance equity workspace credential does not exist")?;
+            let api_key = credential
+                .value("api_key")
+                .cloned()
+                .ok_or("Binance equity workspace credential has no API key")?;
+            let secret = credential.value("api_secret").cloned().unwrap_or_default();
             DirectMarketConnection::BinanceEquity(BinanceStocksRestConnection::new(
                 key,
                 BinanceRestConfig {
@@ -135,8 +134,8 @@ pub fn compose_standalone_market(
                         .unwrap_or_else(|| "https://api.binance.com".into()),
                     credential: Some(BinanceCredential {
                         principal_id: requested_credential.into(),
-                        api_key: secrecy::SecretString::from(credential.api_key),
-                        secret: credential.secret,
+                        api_key,
+                        secret,
                     }),
                 },
             )?)
@@ -180,15 +179,14 @@ pub fn compose_standalone_market(
             else {
                 return Err("selected Market source is not Massive equity".into());
             };
-            let credentials_root =
-                workspace.existing_path(&["config", "credentials"], &["credentials"])?;
-            let api_key = load_workspace_credential(
-                &credentials_root,
-                "massive",
-                request.credential_id.as_deref().or(Some(&credential_id)),
-            )?
-            .ok_or("Massive workspace credential does not exist")?
-            .api_key;
+            let credentials = CredentialStore::for_workspace(&workspace)?;
+            let api_key = credentials
+                .find_provider(
+                    "massive",
+                    request.credential_id.as_deref().or(Some(&credential_id)),
+                )
+                .and_then(|credential| credential.value("api_key").cloned())
+                .ok_or("Massive workspace credential does not exist")?;
             DirectMarketConnection::MassiveEquity(MassiveRestConnection::new(
                 key,
                 MassiveRestConfig {
@@ -198,7 +196,7 @@ pub fn compose_standalone_market(
                         .clone()
                         .or(endpoint)
                         .unwrap_or_else(|| "https://api.massive.com".into()),
-                    api_key: secrecy::SecretString::new(api_key.into()),
+                    api_key,
                     instrument_query: MassiveInstrumentQuery::equities(),
                 },
             )?)

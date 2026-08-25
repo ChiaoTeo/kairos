@@ -19,14 +19,19 @@ from kairospy.system.apps.launch.application import (
     LaunchRuntimeError,
 )
 from kairospy.system.apps.launch.application import new_instance_id
-from kairospy.system.apps.workspace.application import InstanceWorkspace, WorkspaceApplication
+from kairospy.system.apps.workspace.application import (
+    InstanceWorkspace,
+    WorkspaceApplication,
+)
 from kairospy.surface.cli import execute_argv
-from kairospy.surface.cli.commands.launch import (
+from kairospy.surface.cli.commands.launch.support import (
     _decorate_launch_status,
     _resolve_launch_target,
     _resolve_stop_instance,
-    _requires_reference_runtime,
-    _stop_component_safely,
+)
+from kairospy.system.apps.launch.application.runtime import (
+    requires_reference_runtime as _requires_reference_runtime,
+    stop_component_safely as _stop_component_safely,
 )
 from kairospy.system.apps.components.application import (
     ComponentProcessApplication,
@@ -180,7 +185,9 @@ def test_launch_instance_component_market_snapshot_uses_manifest_view_root(
         seen["arguments"] = list(arguments)
         return {"status": "view_not_found", "code": "view_not_found"}
 
-    monkeypatch.setattr("kairospy.system.apps.components.application.NativeCliApplication.run", run)
+    monkeypatch.setattr(
+        "kairospy.system.apps.components.application.NativeCliApplication.run", run
+    )
     output = StringIO()
 
     assert (
@@ -245,7 +252,7 @@ def test_launch_instance_component_execution_orders_uses_connected_owner_cli(
         return {"orders": []}
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.NativeCliApplication.run",
+        "kairospy.surface.cli.commands.launch.support.NativeCliApplication.run",
         run,
     )
     output = StringIO()
@@ -317,7 +324,7 @@ def test_launch_instance_component_risk_latest_uses_connected_owner_cli(
         return {"kind": "latest", "generation": 7}
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.NativeCliApplication.run",
+        "kairospy.surface.cli.commands.launch.support.NativeCliApplication.run",
         run,
     )
     output = StringIO()
@@ -510,11 +517,11 @@ def test_launch_instance_component_capital_current_uses_instance_client(
         return FakeClients()
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.resolve_instance_connections",
+        "kairospy.surface.cli.commands.launch.support.resolve_instance_connections",
         lambda instance: {"instance": instance.paths.root},
     )
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.InstanceSystemClients.from_connections",
+        "kairospy.surface.cli.commands.launch.support.InstanceSystemClients.from_connections",
         staticmethod(from_connections),
     )
     output = StringIO()
@@ -762,7 +769,7 @@ def test_launch_instance_component_capital_controls_use_owner_cli_scope(
         return {"status": "ok"}
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.resolve_instance_connections",
+        "kairospy.surface.cli.commands.launch.support.resolve_instance_connections",
         lambda instance: {"instance": instance.paths.root},
     )
     monkeypatch.setattr(NativeCliApplication, "run", run)
@@ -1369,7 +1376,7 @@ def test_system_component_reference_option_coverage_uses_workspace_client(
             return {"underlying": underlying, "enabled": enabled}
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.root._workspace_reference_client",
+        "kairospy.surface.cli.commands.system.reference._workspace_reference_client",
         lambda owner: ReferenceClient(),
     )
 
@@ -1662,6 +1669,7 @@ def test_order_live_write_requires_confirmation_or_yes(
         "kairospy.surface.cli.commands.order.AccountCliApplication.run",
         lambda _self, _arguments: binding,
     )
+
     class Result:
         returncode = 0
         stdout = '{"outcome":{"status":"confirmed"}}'
@@ -1783,7 +1791,7 @@ def test_launch_instance_component_reference_health_uses_manifest_client(
         reference = ReferenceClient()
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.InstanceSystemClients.from_connections",
+        "kairospy.surface.cli.commands.launch.support.InstanceSystemClients.from_connections",
         lambda connections: Clients(),
     )
     output = StringIO()
@@ -1853,7 +1861,7 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
         accounts = {AccountId("main"): AccountClient()}
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.InstanceSystemClients.from_connections",
+        "kairospy.surface.cli.commands.launch.support.InstanceSystemClients.from_connections",
         lambda connections: Clients(),
     )
     output = StringIO()
@@ -1889,7 +1897,9 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
 
 
 def test_launch_account_balances_table_uses_balance_columns() -> None:
-    from kairospy.surface.cli.commands.launch import _render_launch_account_balances
+    from kairospy.surface.cli.commands.launch.support import (
+        _render_launch_account_balances,
+    )
 
     output = _render_launch_account_balances(
         {
@@ -2028,7 +2038,7 @@ def test_launch_instance_component_account_open_orders_is_scoped_component_resul
         accounts = {AccountId("main"): AccountClient()}
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.launch.InstanceSystemClients.from_connections",
+        "kairospy.surface.cli.commands.launch.support.InstanceSystemClients.from_connections",
         lambda connections: Clients(),
     )
 
@@ -3094,58 +3104,55 @@ def test_interactive_is_discoverable_from_top_level_help() -> None:
 def test_interactive_opens_workbench_even_before_workspace_exists(monkeypatch) -> None:
     from kairospy.surface.cli import app as cli_module
 
-    state = SimpleNamespace(owner=None, load_error="workspace not found")
     seen: list[object] = []
-    monkeypatch.setattr(cli_module, "load_workbench_state", lambda *args, **kwargs: state)
     monkeypatch.setattr(
-        cli_module.KairosWorkbenchApp,
-        "run",
-        lambda self: seen.append(self.state),
+        cli_module,
+        "run_workbench",
+        lambda request: seen.append(request) or SimpleNamespace(transcript_path=None),
     )
 
     cli_module._interactive_command(None, False, False, False)
 
-    assert seen == [state]
+    assert len(seen) == 1
+    request = seen[0]
+    assert request.workspace is None
+    assert request.require_workspace is False
 
 
-def test_interactive_enables_css_watching_only_in_textual_dev_mode(
+def test_interactive_passes_safety_flags_to_public_workbench_launcher(
     monkeypatch,
 ) -> None:
     from kairospy.surface.cli import app as cli_module
 
-    state = SimpleNamespace(owner=None, load_error="workspace not found")
-    watched: list[bool] = []
-    monkeypatch.setattr(cli_module, "load_workbench_state", lambda *args, **kwargs: state)
+    seen: list[object] = []
     monkeypatch.setattr(
-        cli_module.KairosWorkbenchApp,
-        "run",
-        lambda self: watched.append(self.css_monitor is not None),
+        cli_module,
+        "run_workbench",
+        lambda request: seen.append(request) or SimpleNamespace(transcript_path=None),
     )
 
-    cli_module._interactive_command(None, False, False, False)
-    monkeypatch.setenv("KAIROS_TEXTUAL_DEV", "1")
-    cli_module._interactive_command(None, False, False, False)
+    cli_module._interactive_command("workspace", True, True, True)
 
-    assert watched == [False, True]
+    request = seen[0]
+    assert request.workspace == Path("workspace")
+    assert request.dry_run is True
+    assert request.no_exec is True
+    assert request.yes is True
 
 
 def test_interactive_can_preserve_the_terminal_screen(monkeypatch) -> None:
     from kairospy.surface.cli import app as cli_module
 
-    state = SimpleNamespace(owner=None, load_error="workspace not found")
-    runs: list[dict[str, object]] = []
+    seen: list[object] = []
     monkeypatch.setattr(
-        cli_module, "load_workbench_state", lambda *args, **kwargs: state
-    )
-    monkeypatch.setattr(
-        cli_module.KairosWorkbenchApp,
-        "run",
-        lambda self, **kwargs: runs.append(kwargs),
+        cli_module,
+        "run_workbench",
+        lambda request: seen.append(request) or SimpleNamespace(transcript_path=None),
     )
 
     cli_module._interactive_command(None, False, False, False, no_alt_screen=True)
 
-    assert runs == [{"inline": True, "inline_no_clear": True}]
+    assert seen[0].inline is True
 
 
 def test_account_query_balance_uses_top_level_standalone_mode(

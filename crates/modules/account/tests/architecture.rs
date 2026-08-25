@@ -402,13 +402,16 @@ fn binance_derivatives_account_streams_are_native_async_in_production_compositio
 }
 
 #[test]
-fn integration_owns_credential_records_and_environment_conventions() {
+fn platform_credentials_owns_credential_records_and_storage() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let registry =
         fs::read_to_string(root.join("composition/registry.rs")).expect("read Account registry");
     assert!(!registry.contains("struct CredentialRecord"));
     assert!(!registry.contains("struct CredentialStore"));
     assert!(!registry.contains("API_KEY\""));
+    let application =
+        fs::read_to_string(root.join("application/cli.rs")).expect("read Account CLI application");
+    assert!(application.contains("use kairos_credentials::{CredentialRecord, CredentialStore}"));
 }
 
 #[test]

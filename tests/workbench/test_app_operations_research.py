@@ -24,9 +24,9 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.flows import operations_research
-from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
-from kairospy.surface.console.models import ObserveSnapshot
+from kairospy.surface.workbench.screens.flows import operations, research
+from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
+from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
     ConfirmInteraction,
@@ -141,7 +141,7 @@ def test_risk_preview_collects_legacy_arguments_in_one_input(
         )
         return {"decision": "allow"}
 
-    monkeypatch.setattr(operations_research, "execute_business", execute)
+    monkeypatch.setattr(operations, "execute_business", execute)
 
     async def run() -> tuple[type[object], str, str, bool]:
         app = KairosWorkbenchApp(_state())
@@ -176,7 +176,7 @@ def test_integration_capability_and_nested_back_use_one_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        operations_research,
+        operations,
         "execute_business",
         lambda state, prompt: {"capability": getattr(prompt, "action")},
     )
@@ -205,7 +205,7 @@ def test_operations_service_selection_actions_and_back_use_one_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        operations_research,
+        operations,
         "list_services",
         lambda state: ({"component": "market", "status": "ready", "pid": 42},),
     )
@@ -272,7 +272,7 @@ def test_research_read_flow_uses_nested_single_input_menu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        operations_research,
+        research,
         "execute_research",
         lambda state, action, value=None, extra=None: {
             "action": action,

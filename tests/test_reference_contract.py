@@ -637,7 +637,7 @@ def test_reference_validate_cli_returns_nonzero_when_a_required_gate_fails(
             raise AssertionError("zero watermark must not query the event tail")
 
     monkeypatch.setattr(
-        "kairospy.surface.cli.commands.root._workspace_reference_client",
+        "kairospy.surface.cli.commands.system.reference._workspace_reference_client",
         lambda workspace: Client(),
     )
     from kairospy.surface.cli.app import execute_argv

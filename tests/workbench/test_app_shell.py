@@ -28,11 +28,11 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.flows import market_reference
+from kairospy.surface.workbench.screens.flows import market
 from kairospy.surface.workbench.screens.operation import OperationSpec
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
-from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
-from kairospy.surface.console.models import ObserveSnapshot
+from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
+from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
     ConfirmInteraction,
@@ -392,7 +392,7 @@ def test_bare_native_command_uses_owner_cli_application(
         return {"schema": "risk-v1"}
 
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.guided.kairos_command.NativeCliApplication.run",
+        "kairospy.surface.workbench.screens.commands.NativeCliApplication.run",
         run_native,
     )
 
@@ -544,7 +544,7 @@ def test_market_worker_error_keeps_search_prompt_usable_for_retry(
         raise RuntimeError("reference database unavailable")
 
     monkeypatch.setattr(
-        market_reference,
+        market,
         "load_records",
         lambda *args, **kwargs: fail(str(args[2])),
     )

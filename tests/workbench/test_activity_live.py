@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
+from rich.text import Text
 
 from kairospy.surface.workbench.screens.activity import (
     ActivityKind,
@@ -12,12 +13,26 @@ from kairospy.surface.workbench.screens.activity import (
     ActivityRecord,
 )
 from kairospy.surface.workbench.screens.live import LiveBuffer
-from kairospy.surface.workbench.widgets import ActivityStream
+from kairospy.surface.workbench.widgets import (
+    ActivityStream,
+    ChoiceInteraction,
+    InteractionRegion,
+    interaction_copy_text,
+)
 
 
 class _ActivityApp(App[None]):
     def compose(self) -> ComposeResult:
         yield ActivityStream(id="activities")
+
+
+class _InteractionApp(App[None]):
+    def __init__(self, interaction: ChoiceInteraction) -> None:
+        super().__init__()
+        self.interaction = interaction
+
+    def compose(self) -> ComposeResult:
+        yield InteractionRegion(self.interaction, id="interaction")
 
 
 def test_activity_stream_retains_typed_terminal_records() -> None:
@@ -67,6 +82,79 @@ def test_clear_visible_activity_does_not_need_a_persistent_owner() -> None:
 
     assert activities == ()
     assert exported == ""
+
+
+def test_activity_stream_redacts_visible_and_retained_content() -> None:
+    secret = "123456789:abcdefghijklmnopqrstuvwxyz0123456789"
+
+    async def run() -> tuple[str, str, str]:
+        app = _ActivityApp()
+        async with app.run_test() as pilot:
+            stream = app.query_one(ActivityStream)
+            stream.append_activity(
+                ActivityRecord(
+                    activity_id="failure-1",
+                    kind=ActivityKind.OPERATION,
+                    outcome=ActivityOutcome.FAILURE,
+                    title=f"token={secret}",
+                    body=Text(f"provider rejected {secret}"),
+                    copy_text=f"token={secret}",
+                )
+            )
+            await pilot.pause()
+            retained = stream.activities[0]
+            return (
+                stream.plain_text,
+                stream.export_plain_text(),
+                retained.copy_text or "",
+            )
+
+    visible, exported, retained = asyncio.run(run())
+
+    assert secret not in visible
+    assert secret not in exported
+    assert secret not in retained
+    assert "<redacted>" in visible
+
+
+def test_activity_stream_redacts_direct_rich_log_writes() -> None:
+    async def run() -> str:
+        app = _ActivityApp()
+        async with app.run_test() as pilot:
+            stream = app.query_one(ActivityStream)
+            stream.write("api_key=should-not-be-visible")
+            await pilot.pause()
+            return stream.plain_text
+
+    visible = asyncio.run(run())
+
+    assert "should-not-be-visible" not in visible
+    assert "api_key=<redacted>" in visible
+
+
+def test_interaction_region_redacts_visible_and_copyable_content() -> None:
+    interaction = ChoiceInteraction(
+        title="Provider error",
+        summary=Text(
+            "webhook https://open.feishu.cn/open-apis/bot/v2/hook/private-hook"
+        ),
+    )
+
+    async def run() -> str:
+        app = _InteractionApp(interaction)
+        async with app.run_test() as pilot:
+            app.query_one(InteractionRegion).present(interaction)
+            await pilot.pause()
+            content = app.query_one("#interaction-content")
+            return str(content.content)
+
+    visible = asyncio.run(run())
+    copied = interaction_copy_text(interaction)
+
+    assert "private-hook" not in visible
+    assert "private-hook" not in copied
+    assert "<redacted>" in visible
+    assert "<redacted>" in copied
 
 
 def test_activity_stream_follows_bottom_until_user_browses_history() -> None:

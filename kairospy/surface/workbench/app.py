@@ -13,7 +13,9 @@ from textual.worker import Worker
 
 from .screens import CommandLineScreen
 from .state import WorkbenchState
-from .transcript import WorkbenchTranscript, redact_text
+from kairospy.surface.presentation import redact_text
+
+from .transcript import WorkbenchTranscript
 from .widgets import ActivityStream
 
 
@@ -62,7 +64,6 @@ class KairosWorkbenchApp(App[int]):
         if self.initial_section is not None:
             self._submit_initial_section(self.initial_section)
         if self.initial_launch_attach is not None:
-            self.state.selected_launch = self.initial_launch_attach
             screen.call_after_refresh(
                 screen.enter_launch_workflow,
                 self.initial_launch_attach,
@@ -71,7 +72,6 @@ class KairosWorkbenchApp(App[int]):
             )
         elif self.initial_launch_setup is not None:
             launch_id, source = self.initial_launch_setup
-            self.state.selected_launch = launch_id
             screen.call_after_refresh(
                 screen.enter_launch_workflow,
                 launch_id,

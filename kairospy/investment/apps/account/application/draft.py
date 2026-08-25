@@ -13,7 +13,6 @@ from typing import Any
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     PreparedCredential,
-    SecretRef,
 )
 from kairospy.system.apps.workspace.application import (
     Workspace,
@@ -81,29 +80,19 @@ class AccountConfigurationDraftApplication:
         credential_id: str,
         credential_provider: str | None = None,
         credential_values: Mapping[str, str] | None = None,
-        credential_refs: Mapping[str, SecretRef] | None = None,
         credential_role: str = "readonly",
         alias: str | None = None,
         account_model: str | None = None,
     ) -> AccountConfigurationDraft:
-        if credential_values is not None and credential_refs is not None:
-            raise ValueError("credential values and SecretRefs are mutually exclusive")
         provider = (credential_provider or integration_provider or broker).lower()
         credentials = CredentialConfigurationApplication(self.workspace)
         prepared_credential: PreparedCredential | None = None
         if credential_values is not None:
-            prepared_credential = credentials.prepare_secret_values(
-                credential_id,
-                provider=provider,
-                role=credential_role,
-                values=credential_values,
-            )
-        elif credential_refs is not None:
             prepared_credential = credentials.prepare(
                 credential_id,
                 provider=provider,
                 role=credential_role,
-                fields=credential_refs,
+                values=credential_values,
             )
         else:
             credentials.show(credential_id)
@@ -241,19 +230,14 @@ class AccountConfigurationDraftApplication:
                 draft_workspace.paths.account_config().parent,
             ),
             (
-                self.workspace.paths.credential_config().parent,
-                draft_workspace.paths.credential_config().parent,
+                self.workspace.paths.credentials_root(),
+                draft_workspace.paths.credentials_root(),
             ),
         ):
             if source.is_dir():
                 shutil.copytree(source, target, dirs_exist_ok=True)
-        active_secrets = self.workspace.paths.root / "secrets"
-        if active_secrets.exists():
-            (draft_workspace.paths.root / "secrets").symlink_to(
-                active_secrets, target_is_directory=True
-            )
         if prepared_credential is not None:
-            target = draft_workspace.paths.credential_config().parent / (
+            target = draft_workspace.paths.credentials_root() / (
                 f"{prepared_credential.credential_id}.toml"
             )
             target.write_text(prepared_credential.document, encoding="utf-8")

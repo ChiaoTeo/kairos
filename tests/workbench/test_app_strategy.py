@@ -24,9 +24,13 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.flows import strategy_execution
-from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
-from kairospy.surface.console.models import ObserveSnapshot
+from kairospy.surface.workbench.screens.flows.launch import (
+    execution,
+    market as launch_market,
+    runtime as strategy,
+)
+from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
+from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
     ControlInteraction,
@@ -49,7 +53,7 @@ def test_strategy_launch_list_detail_and_back_stay_in_command_screen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: (
             {
@@ -80,7 +84,7 @@ def test_strategy_launch_list_detail_and_back_stay_in_command_screen(
                 type(app.screen),
                 selected,
                 launches,
-                app.state.selected_launch or "",
+                str(screen.session.strategy.selected_record["launch_id"]),
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
             )
 
@@ -96,12 +100,12 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_instances",
         lambda state, launch_id: (
             {
@@ -112,7 +116,7 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
         ),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_components",
         lambda state, launch_id, instance_id, mode: (
             {"component": "risk", "status": "healthy", "pid": 42},
@@ -159,19 +163,19 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
 ) -> None:
     calls: list[tuple[str, dict[str, str]]] = []
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_instances",
         lambda state, launch_id: (
             {"instance_id": "run-1", "mode": "paper", "state": "running"},
         ),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_components",
         lambda state, launch_id, instance_id, mode: (
             {"component": "execution", "status": "healthy"},
@@ -183,7 +187,7 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
         return {"status": "ok"}
 
     monkeypatch.setattr(
-        strategy_execution,
+        execution,
         "execute_execution",
         execute,
     )
@@ -232,19 +236,19 @@ def test_launch_market_snapshot_and_replay_pause_use_one_input(
 ) -> None:
     calls: list[tuple[str, dict[str, str]]] = []
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: ({"launch_id": "backtest-demo", "mode": "backtest"},),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_instances",
         lambda state, launch_id: (
             {"instance_id": "run-1", "mode": "backtest", "state": "running"},
         ),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_components",
         lambda state, launch_id, instance_id, mode: (
             {"component": "market", "status": "healthy"},
@@ -256,7 +260,7 @@ def test_launch_market_snapshot_and_replay_pause_use_one_input(
         return {"status": "ok"}
 
     monkeypatch.setattr(
-        strategy_execution,
+        launch_market,
         "execute_launch_market",
         execute,
     )
@@ -301,24 +305,24 @@ def test_launch_timeline_export_uses_argument_and_inline_confirmation(
 ) -> None:
     exports: list[str] = []
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_instances",
         lambda state, launch_id: (
             {"instance_id": "run-1", "mode": "paper", "state": "stopped"},
         ),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_timeline",
         lambda state, launch_id, instance_id, mode: ({"event": "stopped"},),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "export_timeline",
         lambda state, launch_id, instance_id, mode, destination: (
             exports.append(destination) or destination
@@ -360,16 +364,17 @@ def test_launch_attach_python_uses_same_input_and_inline_confirmation(
 ) -> None:
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_attach_snapshot",
+        strategy,
+        "load_launch_attach_snapshot",
         lambda state, launch_id: {"status": "running", "logs": {"lines": []}},
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "send_python",
         lambda state, launch_id, source: (
             calls.append((launch_id, source)) or {"status": "accepted"}
@@ -410,7 +415,7 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
 ) -> None:
     refreshes: list[str] = []
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
@@ -424,14 +429,11 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
                 "latest": "/workspace/logs/strategy/process.log",
                 "lines": [
                     f"strategy-log-{index}" for index in range(1, len(refreshes) + 1)
-                ]
+                ],
             },
         }
 
-    monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_attach_snapshot",
-        snapshot,
-    )
+    monkeypatch.setattr(strategy, "load_launch_attach_snapshot", snapshot)
 
     async def run() -> tuple[int, int, int, int, str, str, ControlInteraction]:
         app = KairosWorkbenchApp(_state())
@@ -489,12 +491,13 @@ def test_launch_attach_clear_only_removes_visible_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_attach_snapshot",
+        strategy,
+        "load_launch_attach_snapshot",
         lambda *args: {
             "instance": {"instance_id": "run-1"},
             "status": {"state": "running"},
@@ -533,17 +536,17 @@ def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
 ) -> None:
     saved: list[tuple[str, bool]] = []
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "load_launches",
         lambda state: (),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "open_new_launch_wizard",
         lambda state, launch_id: LaunchWizardState(launch_id),
     )
     monkeypatch.setattr(
-        strategy_execution,
+        strategy,
         "save_launch_wizard",
         lambda state, wizard, publish: (
             saved.append((wizard.launch_id, publish))
@@ -684,7 +687,7 @@ def test_launch_deep_links_enter_same_command_screen(
             return (
                 type(screen),
                 str(screen.query_one("#command-context", Static).render()),
-                app.state.selected_launch or "",
+                str(screen.session.strategy.selected_record["launch_id"]),
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
             )
 

@@ -9,7 +9,6 @@ from typing import Any
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     PreparedCredential,
-    SecretRef,
 )
 from kairospy.system.apps.workspace.application import (
     Workspace,
@@ -57,31 +56,19 @@ class ReferenceProviderDraftApplication:
         *,
         credential_id: str,
         credential_values: Mapping[str, str] | None = None,
-        credential_refs: Mapping[str, SecretRef] | None = None,
         endpoint: str = "https://api.massive.com",
         capabilities: Sequence[str] = ("reference", "equity_market"),
     ) -> ReferenceProviderDraft:
-        if credential_values is not None and credential_refs is not None:
-            raise ValueError("credential values and SecretRefs are mutually exclusive")
         credentials = CredentialConfigurationApplication(self.workspace)
         prepared_credential: PreparedCredential | None = None
         if credential_values is not None:
-            prepared_credential = credentials.prepare_secret_values(
+            prepared_credential = credentials.prepare(
                 credential_id,
                 provider="massive",
                 role="readonly",
                 values=credential_values,
             )
             secret = credential_values.get("api_key")
-        elif credential_refs is not None:
-            prepared_credential = credentials.prepare(
-                credential_id,
-                provider="massive",
-                role="readonly",
-                fields=credential_refs,
-            )
-            reference = credential_refs.get("api_key")
-            secret = credentials.resolve(reference) if reference is not None else None
         else:
             secret = credentials.resolve_field(credential_id, "api_key")
         try:

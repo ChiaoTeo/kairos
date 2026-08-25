@@ -12,10 +12,7 @@ from kairospy.system.apps.launch.application import (
     LaunchConfigurationApplication,
     LaunchNotificationConfigurationApplication,
 )
-from kairospy.strategy.apps.notification.application import (
-    NotificationAdminApplication,
-    NotificationSecretRef,
-)
+from kairospy.strategy.apps.notification.application import NotificationAdminApplication
 from kairospy.strategy.apps.notification.composition import (
     NotificationConfigError,
     compose_notifications,
@@ -29,7 +26,7 @@ from kairospy.surface.cli.options import OutputFormat
 from kairospy.strategy import StrategyIdentity, StrategyLogger
 
 
-def test_admin_persists_secret_ref_without_secret(tmp_path: Path, monkeypatch) -> None:
+def test_admin_persists_private_credential_value(tmp_path: Path, monkeypatch) -> None:
     workspace = WorkspaceApplication().init_project(
         tmp_path / "project", workspace_id="n"
     )
@@ -43,34 +40,27 @@ def test_admin_persists_secret_ref_without_secret(tmp_path: Path, monkeypatch) -
         "feishu-alerts",
         provider="feishu",
         credential_id="feishu-alerts",
-        secret_ref=NotificationSecretRef(
-            "env", "KAIROS_CREDENTIAL_FEISHU_ALERTS_WEBHOOK_URL"
-        ),
+        secret="https://open.feishu.cn/open-apis/bot/v2/hook/test-token",
     )
 
-    credential_path = workspace.paths.credential_config().parent / "feishu-alerts.toml"
+    credential_path = workspace.paths.credentials_root() / "feishu-alerts.toml"
     raw = credential_path.read_text(encoding="utf-8")
     credential = tomllib.loads(raw)["credential"]
-    assert credential["fields"]["webhook_url"] == {
-        "source": "env",
-        "id": "KAIROS_CREDENTIAL_FEISHU_ALERTS_WEBHOOK_URL",
-    }
-    assert "test-token" not in raw
+    assert credential["values"]["webhook_url"].endswith("test-token")
+    assert "test-token" not in repr(result)
     assert stat.S_IMODE(credential_path.stat().st_mode) == 0o600
     assert result["configured"] is True
     assert result["verification_status"] == "pending"
     assert result["secret_available"] is True
 
 
-def test_file_secret_ref_and_disabled_destination_validation(tmp_path: Path) -> None:
+def test_private_value_and_disabled_destination_validation(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="n")
-    secret_path = workspace.paths.root / "telegram-token"
-    secret_path.write_text("123456:test-token\n", encoding="utf-8")
     application = NotificationAdminApplication(workspace)
     application.configure(
         "telegram-ops",
         provider="telegram",
-        secret_ref=NotificationSecretRef("file", "telegram-token"),
+        secret="123456:test-token",
         chat_id="-10042",
     )
     assert application.show("telegram-ops")["configured"] is True
@@ -89,13 +79,13 @@ def test_file_secret_ref_and_disabled_destination_validation(tmp_path: Path) -> 
     assert issues == ("notification destination is disabled: telegram-ops",)
 
 
-def test_structured_secret_ref_is_authoritative(tmp_path: Path, monkeypatch) -> None:
+def test_environment_fallback_is_not_used(tmp_path: Path, monkeypatch) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="n")
     application = NotificationAdminApplication(workspace)
     application.configure(
         "feishu-alerts",
         provider="feishu",
-        secret_ref=NotificationSecretRef("env", "CUSTOM_FEISHU_WEBHOOK"),
+        secret="https://open.feishu.cn/open-apis/bot/v2/hook/local-value",
     )
     monkeypatch.setenv(
         "KAIROS_CREDENTIAL_FEISHU_ALERTS_WEBHOOK_URL",
@@ -112,14 +102,14 @@ def test_structured_secret_ref_is_authoritative(tmp_path: Path, monkeypatch) -> 
         mode="paper",
         resolve_secrets=True,
     )
-    assert issues == ("notification credential feishu-alerts is missing webhook_url",)
+    assert issues == ()
 
 
 def test_destination_write_failure_rolls_back_credential(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="n")
-    credential = workspace.paths.credential_config().parent / "feishu-alerts.toml"
+    credential = workspace.paths.credentials_root() / "feishu-alerts.toml"
     credential.write_text(
         '[credential]\nid = "feishu-alerts"\nprovider = "feishu"\nrole = "old"\n',
         encoding="utf-8",
@@ -144,7 +134,7 @@ def test_destination_write_failure_rolls_back_credential(
         application.configure(
             "feishu-alerts",
             provider="feishu",
-            secret_ref=NotificationSecretRef("env", "FEISHU_WEBHOOK"),
+            secret="https://open.feishu.cn/open-apis/bot/v2/hook/test-token",
         )
     assert credential.read_text(encoding="utf-8") == previous
 
@@ -161,9 +151,7 @@ def test_launch_attachment_is_owner_validated_and_instance_pins_hash(
     notifications.configure(
         "feishu-alerts",
         provider="feishu",
-        secret_ref=NotificationSecretRef(
-            "env", "KAIROS_CREDENTIAL_FEISHU_ALERTS_WEBHOOK_URL"
-        ),
+        secret="https://open.feishu.cn/open-apis/bot/v2/hook/test-token",
     )
     notifications.record_test("feishu-alerts", succeeded=True)
     launch = workspace.paths.launch_config("signals")
@@ -317,10 +305,6 @@ def test_telegram_setup_client_validates_bot_and_discovers_unique_chats(
     ]
 
 
-
-
-
-
 def test_manual_delivery_evidence_is_invalidated_by_destination_change(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -329,11 +313,11 @@ def test_manual_delivery_evidence_is_invalidated_by_destination_change(
     )
     monkeypatch.setenv("KAIROS_CREDENTIAL_TELEGRAM_OPS_BOT_TOKEN", "12345:test-token")
     application = NotificationAdminApplication(workspace)
-    reference = NotificationSecretRef("env", "KAIROS_CREDENTIAL_TELEGRAM_OPS_BOT_TOKEN")
+    secret = "12345:test-token"
     application.configure(
         "telegram-ops",
         provider="telegram",
-        secret_ref=reference,
+        secret=secret,
         chat_id="100",
     )
 
@@ -341,7 +325,7 @@ def test_manual_delivery_evidence_is_invalidated_by_destination_change(
     changed = application.configure(
         "telegram-ops",
         provider="telegram",
-        secret_ref=reference,
+        secret=secret,
         chat_id="200",
     )
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -285,51 +284,13 @@ def validate_workspace_notifications(
 async def test_notification_destination(
     workspace: Workspace, destination_id: str
 ) -> dict[str, object]:
-    destination_id = destination_id.strip()
-    if not destination_id:
-        raise ValueError("notification destination_id is required")
-    instance = workspace.instance("paper", "notification-test", "cli")
-    identity = StrategyIdentity("notification-test", "notification-test", "cli")
-    composition = compose_notifications(
-        workspace=workspace,
-        instance=instance,
-        identity=identity,
-        mode="paper",
-        config={
-            "enabled": True,
-            "required": True,
-            "default_routes": ["test"],
-            "queue_capacity": 1,
-            "shutdown_grace_seconds": 10,
-            "routes": {"test": [destination_id]},
-        },
-        logger=StrategyLogger(
-            fields={
-                "workspace_id": workspace.identity.workspace_id,
-                "component": "notification-test",
-            }
-        ),
+    """Compatibility entry point for callers not yet using the admin application."""
+
+    from ..application.admin import NotificationAdminApplication
+
+    return await NotificationAdminApplication(workspace).test_destination(
+        destination_id
     )
-    await composition.runtime.start()
-    try:
-        sent_at = datetime.now(timezone.utc).isoformat()
-        receipt = composition.application.publish(
-            title="Kairos 测试通知",
-            body=(
-                f"Kairos 测试 · Workspace {workspace.identity.workspace_id} · "
-                f"发送时间 {sent_at}"
-            ),
-            routes=("test",),
-        )
-        await composition.runtime.flush(timeout=10)
-        return {
-            "notification_id": receipt.notification_id,
-            "publish_status": receipt.status,
-            "destination_id": destination_id,
-            "health": composition.application.health(),
-        }
-    finally:
-        await composition.runtime.close()
 
 
 def _load_destinations(path: Path) -> tuple[dict[str, _DestinationRecord], str]:
@@ -475,7 +436,7 @@ def _load_credential(workspace: Workspace, credential_id: str) -> Mapping[str, o
 
 def _credential_file(workspace: Workspace, credential_id: str) -> Path:
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", credential_id) or "unnamed"
-    return workspace.paths.credential_config().parent / f"{safe}.toml"
+    return workspace.paths.credentials_root() / f"{safe}.toml"
 
 
 def _credential_value(
@@ -486,53 +447,12 @@ def _credential_value(
     *,
     required: bool = True,
 ) -> str:
-    aliases = {
-        "webhook_url": ("webhook_url", "api_key"),
-        "signing_secret": ("signing_secret", "api_secret", "secret"),
-        "bot_token": ("bot_token", "api_key"),
-    }.get(field, (field,))
-    value = ""
-    reference_configured = False
-    secret_refs = values.get("fields", values.get("secrets"))
-    if isinstance(secret_refs, Mapping):
-        for alias in aliases:
-            reference = secret_refs.get(alias)
-            if not isinstance(reference, Mapping):
-                continue
-            reference_configured = True
-            source = str(reference.get("source", "")).strip().lower()
-            identifier = str(reference.get("id", "")).strip()
-            if source == "env" and re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", identifier):
-                value = os.environ.get(identifier, "").strip()
-            elif source == "file" and identifier:
-                path = Path(identifier).expanduser()
-                if not path.is_absolute():
-                    path = workspace.paths.root / path
-                try:
-                    value = path.read_text(encoding="utf-8").strip()
-                except FileNotFoundError:
-                    value = ""
-            elif source:
-                raise NotificationConfigError(
-                    f"notification credential {credential_id} has unsupported "
-                    f"SecretRef source: {source}"
-                )
-            if value:
-                break
-    if not value and not reference_configured:
-        for alias in aliases:
-            stored = values.get(alias)
-            if isinstance(stored, str) and stored.strip():
-                value = stored.strip()
-                break
-    if not value and not reference_configured:
-        prefix = re.sub(r"[^A-Za-z0-9]", "_", credential_id).upper()
-        for alias in aliases:
-            value = os.environ.get(
-                f"KAIROS_CREDENTIAL_{prefix}_{alias.upper()}", ""
-            ).strip()
-            if value:
-                break
+    del workspace
+    credential_values = values.get("values")
+    raw = (
+        credential_values.get(field) if isinstance(credential_values, Mapping) else None
+    )
+    value = raw.strip() if isinstance(raw, str) else ""
     if required and not value:
         raise NotificationConfigError(
             f"notification credential {credential_id} is missing {field}"
@@ -563,20 +483,9 @@ def _notification_resources_hash(
             resources.append((f"credential:{destination_id}", "missing"))
             continue
         try:
-            summary = credentials.show(record.credential_id)
-            value = hashlib.sha256(
-                json.dumps(
-                    {
-                        "credential_id": record.credential_id,
-                        "provider": summary.get("provider"),
-                        "role": summary.get("role"),
-                        "secret_refs": summary.get("secret_refs", {}),
-                        "legacy_plaintext": summary.get("legacy_plaintext", False),
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
+            value = str(
+                credentials.resource_snapshot(record.credential_id)["resource_hash"]
+            )
         except KeyError:
             value = "missing"
         resources.append((f"credential:{record.credential_id}", value))

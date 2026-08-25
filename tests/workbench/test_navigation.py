@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from kairospy.surface.workbench.screens.guided.models import GuidedSession
+from kairospy.surface.workbench.screens.session import GuidedSession
 from kairospy.surface.workbench.screens.navigation import context_label, go_back
 
 

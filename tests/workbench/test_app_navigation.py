@@ -24,8 +24,9 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
-from kairospy.surface.console.models import ObserveSnapshot
+from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
+from kairospy.surface.workbench.screens.selection import SelectionRecord
+from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
     Feature,
@@ -141,7 +142,10 @@ def test_slash_back_returns_from_result_to_section_then_home() -> None:
             assert isinstance(screen, CommandLineScreen)
             screen.enter_section("reference")
             screen.session.context = ("reference", "markets")
-            screen.session.visible_records = (_market(),)
+            market = _market()
+            screen.session.visible_records = (
+                SelectionRecord(str(market.id), "AAPL", "NASDAQ · stock", market),
+            )
             screen._show_context()
 
             await pilot.press("slash", "b", "a", "c", "k", "enter")

@@ -6,10 +6,7 @@ from pathlib import Path
 from kairospy.strategy.apps.agent.application.model_connections import (
     ModelProviderConnectionApplication,
 )
-from kairospy.system.apps.credentials.application import (
-    CredentialConfigurationApplication,
-    SecretRef,
-)
+from kairospy.system.apps.credentials.application import CredentialConfigurationApplication
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
@@ -17,12 +14,11 @@ def test_hosted_provider_separates_connection_credential_and_model(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ai")
-    monkeypatch.setenv("ANTHROPIC_KAIROS_KEY", "secret-never-record")
     CredentialConfigurationApplication(workspace).configure(
         "anthropic-work",
         provider="anthropic",
         role="model-inference",
-        fields={"api_key": SecretRef("env", "ANTHROPIC_KAIROS_KEY")},
+        values={"api_key": "secret-never-record"},
     )
     application = ModelProviderConnectionApplication(workspace)
 
@@ -127,11 +123,10 @@ def test_custom_openai_compatible_provider_requires_explicit_mode_and_endpoint(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ai")
-    monkeypatch.setenv("CUSTOM_MODEL_KEY", "custom-secret")
     CredentialConfigurationApplication(workspace).configure(
         "company-auth",
         provider="custom-model",
-        fields={"api_key": SecretRef("env", "CUSTOM_MODEL_KEY")},
+        values={"api_key": "custom-secret"},
     )
     application = ModelProviderConnectionApplication(workspace)
 

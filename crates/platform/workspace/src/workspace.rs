@@ -556,6 +556,12 @@ impl Workspace {
     pub fn config_root(&self) -> PathBuf {
         self.paths().config_root()
     }
+    pub fn credentials_root(&self) -> PathBuf {
+        self.config_root().join("credentials")
+    }
+    pub fn existing_credentials_root(&self) -> io::Result<PathBuf> {
+        self.existing_path(&["config", "credentials"], &["credentials"])
+    }
     pub fn state_root(&self) -> PathBuf {
         self.paths().state_root()
     }

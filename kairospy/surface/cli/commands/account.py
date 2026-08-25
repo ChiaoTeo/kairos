@@ -13,7 +13,9 @@ from kairospy.investment.apps.account.application import (
     AccountConfigurationApplication,
     CredentialApplication,
 )
-from kairospy.system.apps.configuration.application import ConfigurationReferenceApplication
+from kairospy.system.apps.configuration.application import (
+    ConfigurationReferenceApplication,
+)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
@@ -22,7 +24,7 @@ HELP = """Account standalone commands are owned by kairos-account-cli.
 Canonical commands include:
   list, show, overview, assets, positions, earn-holdings, open-orders, fees
   connect, register, modify, simulate, schemas, schema, doctor
-  setup (guided paper/live account configuration using SecretRefs)
+  setup (guided paper/live account configuration using private credential values)
   test ACCOUNT_ID (user-triggered connection and permission verification)
   credential-list, credential-create, credential-show, credential-delete
 
@@ -135,10 +137,15 @@ def account_passthrough(ctx: typer.Context) -> None:
             "`kairos launch instance component account ...`"
         )
     if arguments and arguments[0] == "setup":
-        from kairospy.surface.workbench import KairosWorkbenchApp, load_workbench_state
+        from kairospy.surface.workbench import WorkbenchLaunchRequest, run_workbench
 
-        state = load_workbench_state(Path(owner.paths.root))
-        KairosWorkbenchApp(state, initial_section="resources").run()
+        run_workbench(
+            WorkbenchLaunchRequest(
+                workspace=Path(owner.paths.root),
+                initial_section="resources",
+                require_workspace=True,
+            )
+        )
         return
     if arguments and arguments[0] == "test":
         values = [
@@ -234,7 +241,6 @@ def _option_value(arguments: list[str], name: str) -> str | None:
         if item.startswith(name + "="):
             return item.split("=", 1)[1]
     return None
-
 
 
 __all__ = ["HELP", "account_passthrough"]

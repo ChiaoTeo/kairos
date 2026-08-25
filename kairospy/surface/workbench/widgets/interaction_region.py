@@ -14,6 +14,8 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
 
+from ..safety import redact_renderable
+from kairospy.surface.presentation import redact_text
 from .action_list import ActionItem
 from .guided_action_list import GuidedActionList
 
@@ -139,7 +141,7 @@ def interaction_copy_text(interaction: InteractionState, *, width: int = 100) ->
         for item in interaction.actions:
             shortcut = f"[{item.shortcut}] " if item.shortcut else ""
             console.print(f"{shortcut}{item.label} — {item.description}")
-    return output.getvalue().strip()
+    return redact_text(output.getvalue()).strip()
 
 
 class InteractionRegion(Vertical):
@@ -180,7 +182,7 @@ class InteractionRegion(Vertical):
         actions.replace_items(items)
         actions.display = bool(items)
         renderable = _interaction_renderable(interaction)
-        content.update(renderable or "")
+        content.update(redact_renderable(renderable) if renderable is not None else "")
         content.display = renderable is not None
 
 

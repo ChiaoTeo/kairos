@@ -148,8 +148,8 @@ class WorkspacePaths(ResourceScopePaths):
     def account_config(self) -> Path:
         return self.child("config", "accounts", "accounts.toml")
 
-    def credential_config(self) -> Path:
-        return self.child("config", "credentials", "credentials.toml")
+    def credentials_root(self) -> Path:
+        return self.child("config", "credentials")
 
     def notification_config(self) -> Path:
         return self.child("config", "notifications", "notifications.toml")

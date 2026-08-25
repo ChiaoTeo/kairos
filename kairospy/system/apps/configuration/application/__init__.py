@@ -9,7 +9,6 @@ from typing import Any, Mapping
 
 from kairospy.system.domain.workspace import Workspace
 from .references import ConfigurationReferenceApplication
-from .migration import ConfigurationMigrationApplication
 from .resource_lifecycle import WorkspaceResourceLifecycleApplication
 
 
@@ -248,7 +247,6 @@ def _redact_secrets(value: Any) -> Any:
 
 __all__ = [
     "ConfigApplication",
-    "ConfigurationMigrationApplication",
     "ConfigurationReferenceApplication",
     "WorkspaceResourceLifecycleApplication",
 ]

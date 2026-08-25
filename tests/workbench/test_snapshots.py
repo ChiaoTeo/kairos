@@ -11,10 +11,10 @@ from kairospy.investment.apps.reference.application.models import (
     MarketStatus,
 )
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
-from kairospy.surface.console.models import ObserveSnapshot
+from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.flows import market_reference
+from kairospy.surface.workbench.screens.flows import market
 from kairospy.surface.workbench.screens.operation import OperationSpec
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
 
@@ -95,7 +95,7 @@ def test_command_market_results(snap_compare: Any) -> None:
             operation=lambda: None,
             running_status="正在搜索市场标的…",
         )
-        effects = market_reference.handle_success(
+        effects = market.handle_success(
             pilot.app.state, screen.session, spec, (_market(),)
         )
         assert effects is not None

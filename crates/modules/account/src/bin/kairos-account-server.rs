@@ -15,9 +15,10 @@ use kairos_account_contract::{
     AccountControlRpcServer, AccountViewKey, AccountViewKind, AccountViewPublisher, AeronEndpoint,
 };
 use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, CredentialStore,
-    JsonRpcRuntimeConfig, MmapOutputDeclaration,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, JsonRpcRuntimeConfig,
+    MmapOutputDeclaration,
 };
+use kairos_credentials::CredentialStore;
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_workspace::Workspace;
 
@@ -55,11 +56,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &["accounts", "accounts.toml"],
     )?)
     .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-    let credential_store = CredentialStore::load(workspace.existing_path(
-        &["config", "credentials", "credentials.toml"],
-        &["credentials", "credentials.toml"],
-    )?)
-    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+    let credential_store = CredentialStore::load(workspace.existing_credentials_root()?)
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
     let record = registry
         .accounts
         .iter()

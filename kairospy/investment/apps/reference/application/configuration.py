@@ -59,9 +59,9 @@ class ReferenceProviderConfigurationApplication:
         issues: list[str] = []
         credential: Mapping[str, Any] = {}
         try:
-            credential = CredentialConfigurationApplication(self.workspace).show(
-                credential_id
-            )
+            credential = CredentialConfigurationApplication(
+                self.workspace
+            ).resource_snapshot(credential_id)
         except (KeyError, OSError, ValueError):
             issues.append(f"credential does not exist: {credential_id}")
         if credential and credential.get("provider") != "massive":
@@ -120,20 +120,16 @@ class ReferenceProviderConfigurationApplication:
             raise ValueError("Massive connection must enable Reference catalog access")
         credential: Mapping[str, object] | None = None
         if credential_provider is None:
-            credential = CredentialConfigurationApplication(self.workspace).show(
-                credential_id
-            )
+            credential = CredentialConfigurationApplication(
+                self.workspace
+            ).resource_snapshot(credential_id)
             credential_provider = str(credential.get("provider") or "")
         if credential_provider != "massive":
             raise ValueError("Massive connection requires a massive credential")
         if credential is not None:
-            secret_refs = credential.get("secret_refs")
-            if (
-                credential.get("legacy_plaintext", False)
-                or not isinstance(secret_refs, Mapping)
-                or "api_key" not in secret_refs
-            ):
-                raise ValueError("Massive credential requires an api_key SecretRef")
+            fields = credential.get("fields")
+            if not isinstance(fields, list) or "api_key" not in fields:
+                raise ValueError("Massive credential requires an api_key value")
 
         document = self.workspace.paths.manifest.read_text(encoding="utf-8")
         common = {
@@ -203,7 +199,7 @@ class ReferenceProviderConfigurationApplication:
             credential_id, "api_key"
         )
         if not api_key:
-            raise ValueError("Massive API key SecretRef is unavailable")
+            raise ValueError("Massive API key is unavailable")
         result = self.probe(connection, secret=api_key, probe=probe)
         return self.record_probe(connection_id, result)
 
@@ -285,7 +281,7 @@ class ReferenceProviderConfigurationApplication:
     def set_enabled(
         self, connection_id: str = "massive", *, enabled: bool
     ) -> dict[str, Any]:
-        """Enable or disable the shared connection without changing its SecretRef."""
+        """Enable or disable the shared connection without changing its credential."""
 
         _require_massive_id(connection_id)
         current = dict(self._massive_config())
@@ -394,7 +390,7 @@ class ReferenceProviderConfigurationApplication:
         safe["credential_identity"] = {
             "provider": credential.get("provider"),
             "role": credential.get("role"),
-            "secret_refs": credential.get("secret_refs", {}),
+            "fields": credential.get("fields", []),
         }
         safe["resource_hash"] = self._configuration_fingerprint(connection)
         return safe
@@ -430,8 +426,9 @@ class ReferenceProviderConfigurationApplication:
             "credential": {
                 "provider": credential.get("provider"),
                 "role": credential.get("role"),
-                "secret_refs": credential.get("secret_refs", {}),
-                "legacy_plaintext": credential.get("legacy_plaintext", False),
+                "fields": credential.get("fields", []),
+                "resource_hash": credential.get("resource_hash"),
+                "resource_hash": credential.get("resource_hash"),
             },
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))

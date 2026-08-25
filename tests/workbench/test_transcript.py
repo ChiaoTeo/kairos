@@ -9,7 +9,7 @@ import pytest
 
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.flows import market_reference
+from kairospy.surface.workbench.screens.flows import market
 from kairospy.surface.workbench.transcript import WorkbenchTranscript
 from kairospy.surface.workbench.widgets import interaction_copy_text
 
@@ -83,7 +83,7 @@ def test_observe_records_reproducible_non_interactive_command(tmp_path: Path) ->
 def test_guided_arguments_produce_one_semantic_action(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(market_reference, "load_records", lambda *args, **kwargs: ())
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: ())
 
     async def run() -> tuple[dict[str, object], ...]:
         app = KairosWorkbenchApp(

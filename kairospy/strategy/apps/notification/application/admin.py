@@ -13,16 +13,19 @@ from typing import Literal, Mapping
 
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
-    SecretRef,
 )
-from kairospy.system.apps.workspace.application import Workspace, WorkspaceConfigurationTransaction
+from kairospy.system.apps.workspace.application import (
+    Workspace,
+    WorkspaceConfigurationTransaction,
+)
 
+from ..services import AppriseSender, NotificationDeliveryRuntime
 from ..services.setup import TelegramBotIdentity, TelegramChat, TelegramSetupClient
+from .application import NotificationApplication
+from .models import NotificationDestination
 
 
 NotificationProvider = Literal["feishu", "telegram"]
-SecretSource = Literal["env", "file"]
-NotificationSecretRef = SecretRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,9 +52,65 @@ class NotificationAdminApplication:
         return validate_workspace_notifications(self.workspace, mode=mode)
 
     async def test_destination(self, destination_id: str) -> dict[str, object]:
-        from ..composition import test_notification_destination
+        destination_id = _safe_id(destination_id, "destination_id")
+        configured = self.show(destination_id)
+        if not configured.get("enabled", False):
+            raise ValueError(f"notification destination is disabled: {destination_id}")
 
-        return await test_notification_destination(self.workspace, destination_id)
+        provider = str(configured.get("provider", ""))
+        credential_id = str(configured.get("credential_id", ""))
+        secret = self._resolved_credential_secret(credential_id, provider)
+        settings = (
+            {"chat_id": str(configured.get("chat_id", ""))}
+            if provider == "telegram"
+            else {}
+        )
+        destination = NotificationDestination(
+            destination_id,
+            provider,  # type: ignore[arg-type]
+            credential_id=credential_id,
+            settings=settings,
+            secrets={"webhook_url" if provider == "feishu" else "bot_token": secret},
+        )
+        runtime = NotificationDeliveryRuntime(
+            identity={
+                "workspace_id": self.workspace.identity.workspace_id,
+                "launch_id": "notification-test",
+                "instance_id": "cli",
+                "strategy_id": "notification-test",
+                "mode": "paper",
+            },
+            routes={"test": (destination_id,)},
+            default_routes=("test",),
+            destinations={destination_id: destination},
+            senders={destination_id: AppriseSender(destination)},
+            queue_capacity=1,
+            shutdown_grace_seconds=10,
+            journal_path=self.workspace.instance(
+                "paper", "notification-test", "cli"
+            ).log("notification", "delivery.jsonl"),
+        )
+        application = NotificationApplication(runtime)
+        await runtime.start()
+        try:
+            sent_at = datetime.now(timezone.utc).isoformat()
+            receipt = application.publish(
+                title="Kairos 测试通知",
+                body=(
+                    f"Kairos 测试 · Workspace {self.workspace.identity.workspace_id} · "
+                    f"发送时间 {sent_at}"
+                ),
+                routes=("test",),
+            )
+            await runtime.flush(timeout=10)
+            return {
+                "notification_id": receipt.notification_id,
+                "publish_status": receipt.status,
+                "destination_id": destination_id,
+                "health": application.health(),
+            }
+        finally:
+            await runtime.close()
 
     def config_hash(self, *, mode: str = "paper") -> str:
         from ..composition import notification_config_hash
@@ -93,22 +152,22 @@ class NotificationAdminApplication:
         *,
         provider: NotificationProvider,
         credential_id: str | None = None,
-        secret_ref: NotificationSecretRef,
+        secret: str,
         chat_id: str | None = None,
     ) -> dict[str, object]:
         prepared = self.prepare(
             destination_id,
             provider=provider,
             credential_id=credential_id,
-            secret_ref=secret_ref,
             chat_id=chat_id,
         )
         field = "webhook_url" if provider == "feishu" else "bot_token"
+        _validate_provider_secret(provider, secret)
         credential = CredentialConfigurationApplication(self.workspace).prepare(
             str(prepared.destination["credential_id"]),
             provider=provider,
             role="notification-send",
-            fields={field: secret_ref},
+            values={field: secret},
         )
         transaction = WorkspaceConfigurationTransaction(
             self.workspace, f"notification:{destination_id}"
@@ -124,7 +183,6 @@ class NotificationAdminApplication:
         *,
         provider: NotificationProvider,
         credential_id: str | None = None,
-        secret_ref: NotificationSecretRef,
         chat_id: str | None = None,
     ) -> PreparedNotificationDestination:
         """Validate and render a Destination without changing active config."""
@@ -136,10 +194,6 @@ class NotificationAdminApplication:
         normalized_chat_id: str | None = None
         if provider == "telegram":
             normalized_chat_id = _telegram_chat_id(chat_id)
-
-        secret = self.resolve_secret(secret_ref)
-        if secret is not None:
-            _validate_provider_secret(provider, secret)
 
         credential_path = self._credential_path(credential_id)
         credential = self._load_credential(credential_path)
@@ -224,35 +278,14 @@ class NotificationAdminApplication:
                 "provider",
                 "enabled",
                 "credential_id",
-                "secret_ref",
                 "chat_id",
                 "verification_status",
                 "last_tested_at",
             )
         } | {"resource_hash": _destination_config_hash(destination)}
 
-    def default_secret_environment(self, credential_id: str, provider: str) -> str:
-        credential_id = _safe_id(credential_id, "credential_id")
-        field = "WEBHOOK_URL" if provider == "feishu" else "BOT_TOKEN"
-        prefix = re.sub(r"[^A-Za-z0-9]", "_", credential_id).upper()
-        return f"KAIROS_CREDENTIAL_{prefix}_{field}"
-
-    def resolve_secret(self, reference: NotificationSecretRef) -> str | None:
-        return CredentialConfigurationApplication(self.workspace).resolve(reference)
-
     def probe_telegram(self, credential_id: str) -> TelegramBotIdentity:
         secret = self._resolved_credential_secret(credential_id, "telegram")
-        return TelegramSetupClient(secret).identity()
-
-    def probe_telegram_reference(
-        self, reference: NotificationSecretRef
-    ) -> TelegramBotIdentity:
-        secret = self.resolve_secret(reference)
-        if secret is None:
-            raise ValueError(
-                f"Telegram SecretRef is unavailable: {reference.source}:{reference.id}"
-            )
-        _validate_provider_secret("telegram", secret)
         return TelegramSetupClient(secret).identity()
 
     def probe_telegram_secret(self, secret: str) -> TelegramBotIdentity:
@@ -263,15 +296,6 @@ class NotificationAdminApplication:
 
     def discover_telegram_chats(self, credential_id: str) -> tuple[TelegramChat, ...]:
         secret = self._resolved_credential_secret(credential_id, "telegram")
-        return TelegramSetupClient(secret).chats()
-
-    def discover_telegram_chats_from_reference(
-        self, reference: NotificationSecretRef
-    ) -> tuple[TelegramChat, ...]:
-        secret = self.resolve_secret(reference)
-        if secret is None:
-            return ()
-        _validate_provider_secret("telegram", secret)
         return TelegramSetupClient(secret).chats()
 
     def discover_telegram_chats_from_secret(
@@ -289,7 +313,6 @@ class NotificationAdminApplication:
         credential_id = str(record.get("credential_id", "")).strip()
         enabled = record.get("enabled", True) is True
         credential = self._load_credential(self._credential_path(credential_id))
-        reference = _credential_secret_ref(credential, provider)
         try:
             secret_available = bool(
                 self._resolved_credential_secret(credential_id, provider)
@@ -301,11 +324,6 @@ class NotificationAdminApplication:
             "provider": provider,
             "enabled": enabled,
             "credential_id": credential_id,
-            "secret_ref": (
-                {"source": reference.source, "id": reference.id}
-                if reference is not None
-                else None
-            ),
             "secret_available": secret_available,
         }
         if provider == "telegram":
@@ -372,33 +390,12 @@ class NotificationAdminApplication:
             raise ValueError(
                 f"notification credential {credential_id} is not configured for {provider}"
             )
-        reference = _credential_secret_ref(credential, provider)
-        if reference is None:
-            # Backward-compatible literal credentials remain readable but are never
-            # produced by the administrative application.
-            aliases = (
-                ("webhook_url", "api_key")
-                if provider == "feishu"
-                else ("bot_token", "api_key")
-            )
-            for field in aliases:
-                value = credential.get(field)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-            derived = self.default_secret_environment(credential_id, provider)
-            value = os.environ.get(derived, "").strip()
-            if value:
-                _validate_provider_secret(provider, value)
-                return value
-            raise ValueError(
-                f"notification credential {credential_id} has no SecretRef"
-            )
-        value = self.resolve_secret(reference)
+        field = "webhook_url" if provider == "feishu" else "bot_token"
+        value = CredentialConfigurationApplication(self.workspace).resolve_field(
+            credential_id, field
+        )
         if value is None:
-            raise ValueError(
-                f"notification credential {credential_id} SecretRef is unavailable: "
-                f"{reference.source}:{reference.id}"
-            )
+            raise ValueError(f"notification credential {credential_id} has no {field}")
         _validate_provider_secret(provider, value)
         return value
 
@@ -437,7 +434,7 @@ class NotificationAdminApplication:
 
     def _credential_path(self, credential_id: str) -> Path:
         safe = re.sub(r"[^A-Za-z0-9_-]", "_", credential_id) or "unnamed"
-        return self.workspace.paths.credential_config().parent / f"{safe}.toml"
+        return self.workspace.paths.credentials_root() / f"{safe}.toml"
 
     def _verification_path(self, destination_id: str) -> Path:
         return self.workspace.paths.child(
@@ -449,26 +446,6 @@ class NotificationAdminApplication:
             self.workspace.paths.notification_config(),
             _destinations_document(records),
         )
-
-    def _write_credential(self, path: Path, credential: Mapping[str, object]) -> None:
-        secrets = credential.get("secrets", {})
-        lines = ["[credential]"]
-        for key in ("id", "provider", "role"):
-            if key in credential:
-                lines.append(f"{key} = {_toml_scalar(credential[key])}")
-        for key, value in sorted(credential.items()):
-            if key not in {"id", "provider", "role", "secrets"}:
-                lines.append(f"{key} = {_toml_scalar(value)}")
-        if isinstance(secrets, Mapping):
-            for field, raw_reference in sorted(secrets.items()):
-                if not isinstance(raw_reference, Mapping):
-                    continue
-                lines.extend(("", f"[credential.secrets.{field}]"))
-                lines.append(
-                    f"source = {_toml_scalar(raw_reference.get('source', ''))}"
-                )
-                lines.append(f"id = {_toml_scalar(raw_reference.get('id', ''))}")
-        _atomic_write(path, "\n".join(lines) + "\n", mode=0o600)
 
 
 def _safe_id(value: str, name: str) -> str:
@@ -493,23 +470,6 @@ def _telegram_chat_id(value: str | None) -> str:
     return normalized
 
 
-def _credential_secret_ref(
-    credential: Mapping[str, object], provider: str
-) -> NotificationSecretRef | None:
-    secrets = credential.get("fields", credential.get("secrets"))
-    if not isinstance(secrets, Mapping):
-        return None
-    field = "webhook_url" if provider == "feishu" else "bot_token"
-    raw = secrets.get(field)
-    if not isinstance(raw, Mapping):
-        return None
-    source = str(raw.get("source", ""))
-    identifier = str(raw.get("id", ""))
-    if source not in {"env", "file"}:
-        raise ValueError(f"unsupported notification SecretRef source: {source}")
-    return NotificationSecretRef(source, identifier)  # type: ignore[arg-type]
-
-
 def _validate_provider_secret(provider: str, value: str) -> None:
     if provider == "feishu":
         from ..services.senders import _feishu_webhook_token
@@ -528,7 +488,6 @@ def _destination_config_hash(destination: Mapping[str, object]) -> str:
             "provider",
             "enabled",
             "credential_id",
-            "secret_ref",
             "chat_id",
         )
     }
@@ -589,6 +548,4 @@ __all__ = [
     "NotificationAdminApplication",
     "PreparedNotificationDestination",
     "NotificationProvider",
-    "NotificationSecretRef",
-    "SecretSource",
 ]

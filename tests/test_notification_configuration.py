@@ -15,7 +15,6 @@ from kairospy.strategy.apps.notification.composition import (
     NotificationConfigError,
     compose_notifications,
     notification_config_hash,
-    test_notification_destination as _test_notification_destination,
     validate_notification_resources,
 )
 from kairospy.strategy.apps.notification.application import NotificationAdminApplication
@@ -41,18 +40,22 @@ chat_id = "-10042"
 """,
         encoding="utf-8",
     )
-    (workspace.paths.credential_config().parent / "feishu-options.toml").write_text(
+    (workspace.paths.credentials_root() / "feishu-options.toml").write_text(
         """[credential]
 id = "feishu-options"
 provider = "feishu"
+
+[credential.values]
 webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/feishu-test-token"
 """,
         encoding="utf-8",
     )
-    (workspace.paths.credential_config().parent / "telegram-options.toml").write_text(
+    (workspace.paths.credentials_root() / "telegram-options.toml").write_text(
         """[credential]
 id = "telegram-options"
 provider = "telegram"
+
+[credential.values]
 bot_token = "123456:test-token"
 """,
         encoding="utf-8",
@@ -76,10 +79,13 @@ def _config() -> dict[str, object]:
 def test_real_notification_test_is_unambiguously_labeled(
     tmp_path: Path, monkeypatch
 ) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ws")
+    workspace = _workspace(tmp_path)
     published: dict[str, object] = {}
 
     class Runtime:
+        def __init__(self, **_values) -> None:
+            pass
+
         async def start(self) -> None:
             pass
 
@@ -90,6 +96,9 @@ def test_real_notification_test_is_unambiguously_labeled(
             pass
 
     class Application:
+        def __init__(self, _runtime) -> None:
+            pass
+
         def publish(self, **values):
             published.update(values)
             return type(
@@ -100,13 +109,21 @@ def test_real_notification_test_is_unambiguously_labeled(
             return {"status": "ready"}
 
     monkeypatch.setattr(
-        "kairospy.strategy.apps.notification.composition.compose_notifications",
-        lambda **_kwargs: type(
-            "Composition", (), {"runtime": Runtime(), "application": Application()}
-        )(),
+        "kairospy.strategy.apps.notification.application.admin.NotificationDeliveryRuntime",
+        Runtime,
+    )
+    monkeypatch.setattr(
+        "kairospy.strategy.apps.notification.application.admin.NotificationApplication",
+        Application,
+    )
+    monkeypatch.setattr(
+        "kairospy.strategy.apps.notification.application.admin.AppriseSender",
+        lambda _destination: object(),
     )
 
-    asyncio.run(_test_notification_destination(workspace, "telegram-ops"))
+    asyncio.run(
+        NotificationAdminApplication(workspace).test_destination("telegram-personal")
+    )
 
     assert published["title"] == "Kairos 测试通知"
     assert "Kairos 测试" in str(published["body"])
@@ -133,7 +150,7 @@ def test_workspace_resources_resolve_without_exposing_secrets(tmp_path: Path) ->
 
 def test_required_and_degraded_resource_behavior(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
-    (workspace.paths.credential_config().parent / "telegram-options.toml").unlink()
+    (workspace.paths.credentials_root() / "telegram-options.toml").unlink()
     with pytest.raises(NotificationConfigError, match="credential not found"):
         compose_notifications(
             workspace=workspace,
@@ -161,7 +178,7 @@ def test_feishu_signing_is_rejected_until_the_component_supports_it(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
-    credential = workspace.paths.credential_config().parent / "feishu-options.toml"
+    credential = workspace.paths.credentials_root() / "feishu-options.toml"
     credential.write_text(
         credential.read_text(encoding="utf-8") + 'signing_secret = "secret"\n',
         encoding="utf-8",
@@ -182,7 +199,7 @@ def test_feishu_signing_is_rejected_until_the_component_supports_it(
 def test_backtest_records_without_resolving_credentials(tmp_path: Path) -> None:
     async def scenario() -> tuple[dict[str, object], Path]:
         workspace = _workspace(tmp_path)
-        for credential in workspace.paths.credential_config().parent.glob("*.toml"):
+        for credential in workspace.paths.credentials_root().glob("*.toml"):
             credential.unlink()
         instance = workspace.instance("backtest", "launch", "instance")
         composition = compose_notifications(
@@ -347,7 +364,7 @@ def test_static_resource_validation_does_not_require_backtest_secrets(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
-    for credential in workspace.paths.credential_config().parent.glob("*.toml"):
+    for credential in workspace.paths.credentials_root().glob("*.toml"):
         credential.unlink()
     assert (
         validate_notification_resources(
@@ -365,11 +382,13 @@ def test_workspace_validation_rejects_provider_configuration_apprise_cannot_use(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
-    credential = workspace.paths.credential_config().parent / "feishu-options.toml"
+    credential = workspace.paths.credentials_root() / "feishu-options.toml"
     credential.write_text(
         """[credential]
 id = "feishu-options"
 provider = "feishu"
+
+[credential.values]
 webhook_url = "https://example.test/not-a-feishu-hook"
 """,
         encoding="utf-8",

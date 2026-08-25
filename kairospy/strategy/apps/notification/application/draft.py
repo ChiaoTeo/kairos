@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     PreparedCredential,
-    SecretRef,
 )
 from kairospy.system.apps.workspace.application import Workspace, WorkspaceConfigurationTransaction
 
@@ -61,59 +60,33 @@ class NotificationDestinationDraftApplication:
         provider: NotificationProvider,
         credential_id: str | None = None,
         credential_values: Mapping[str, str] | None = None,
-        credential_refs: Mapping[str, SecretRef] | None = None,
         chat_id: str | None = None,
     ) -> NotificationDestinationDraft:
-        if credential_values is not None and credential_refs is not None:
-            raise ValueError("credential values and SecretRefs are mutually exclusive")
         credential_id = credential_id or destination_id
         field = "webhook_url" if provider == "feishu" else "bot_token"
         credentials = CredentialConfigurationApplication(self.workspace)
         prepared_credential: PreparedCredential | None = None
         if credential_values is not None:
-            prepared_credential = credentials.prepare_secret_values(
+            prepared_credential = credentials.prepare(
                 credential_id,
                 provider=provider,
                 role="notification-send",
                 values=credential_values,
             )
             secret = credential_values.get(field)
-        elif credential_refs is not None:
-            prepared_credential = credentials.prepare(
-                credential_id,
-                provider=provider,
-                role="notification-send",
-                fields=credential_refs,
-            )
-            reference = credential_refs.get(field)
-            secret = credentials.resolve(reference) if reference is not None else None
         else:
             secret = credentials.resolve_field(credential_id, field)
-            shown = credentials.show(credential_id)
-            refs = shown.get("secret_refs")
-            raw_ref = refs.get(field) if isinstance(refs, Mapping) else None
-            if not isinstance(raw_ref, Mapping):
-                raise ValueError(f"notification credential requires {field} SecretRef")
-            reference = SecretRef(str(raw_ref["source"]), str(raw_ref["id"]))  # type: ignore[arg-type]
-            credential_refs = {field: reference}
 
         if not secret:
             if prepared_credential is not None:
                 prepared_credential.discard()
-            raise ValueError("notification SecretRef is unavailable")
+            raise ValueError(f"notification credential requires {field}")
         _validate_provider_secret(provider, secret)
-        if prepared_credential is not None:
-            reference = prepared_credential.references[field]
-        elif credential_refs is not None:
-            reference = credential_refs[field]
-        else:  # pragma: no cover - guarded by preparation above
-            raise RuntimeError("notification credential reference was not prepared")
         try:
             prepared_destination = NotificationAdminApplication(self.workspace).prepare(
                 destination_id,
                 provider=provider,
                 credential_id=credential_id,
-                secret_ref=reference,
                 chat_id=chat_id,
             )
         except BaseException:

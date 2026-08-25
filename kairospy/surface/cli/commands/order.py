@@ -140,7 +140,10 @@ def order_passthrough(ctx: typer.Context) -> None:
     except RuntimeError as error:
         raise typer.BadParameter(str(error)) from error
 
-    if command in WRITE_COMMANDS and str(binding.get("environment", "")).lower() == "live":
+    if (
+        command in WRITE_COMMANDS
+        and str(binding.get("environment", "")).lower() == "live"
+    ):
         typer.echo(
             f"目标：account={account_id} · provider={binding.get('provider', 'unknown')} · "
             "environment=live · scope=direct-provider"

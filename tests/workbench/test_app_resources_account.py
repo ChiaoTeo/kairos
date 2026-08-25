@@ -24,15 +24,28 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.flows import resources_account
-from kairospy.surface.workbench.screens.guided.account import execute as execute_account
-from kairospy.surface.workbench.screens.guided.resource_wizard import (
+from kairospy.surface.workbench.screens.flows.resources import (
+    account,
+    configuration as resources,
+)
+from kairospy.surface.workbench.screens.flows.resources.account_actions import (
+    execute as execute_account,
+)
+import kairospy.surface.workbench.screens.flows.resources.account_actions as account_actions
+import kairospy.surface.workbench.screens.flows.resources.wizard as resource_wizard
+from kairospy.surface.workbench.screens.flows.resources.wizard import (
     ResourceWizardState,
     save_resource_wizard,
 )
-from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
-from kairospy.surface.console.models import ObserveSnapshot
-from kairospy.surface.workbench.widgets import ActionList, WorkbenchCommandInput
+from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
+from kairospy.system.apps.observe.application import ObserveSnapshot
+from kairospy.surface.workbench.widgets import (
+    ActionList,
+    ChoiceInteraction,
+    InputInteraction,
+    WorkbenchCommandInput,
+    renderable_plain_text,
+)
 from textual.app import App
 from textual.containers import Vertical
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Select, Static
@@ -49,7 +62,7 @@ def test_resource_list_detail_and_back_stay_in_command_screen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (
             {
@@ -79,7 +92,7 @@ def test_resource_list_detail_and_back_stay_in_command_screen(
                 type(app.screen),
                 selected,
                 results,
-                app.state.selected_account or "",
+                str(screen.session.resources.selected["account_id"]),
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
             )
 
@@ -105,7 +118,7 @@ def test_account_resource_list_uses_a_human_summary_instead_of_raw_json(
         "tested_configuration_hash": None,
     }
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (record,),
     )
@@ -149,7 +162,7 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
         "notifications": "通知提醒",
     }
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (records[kind],),
     )
@@ -188,7 +201,7 @@ def test_check_all_connections_renders_all_resource_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "summary",
         lambda state: {
             "accounts": (1, 1),
@@ -222,7 +235,7 @@ def test_empty_resource_groups_offer_new_configuration_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (),
     )
@@ -268,12 +281,12 @@ def test_account_runtime_queries_and_fee_argument_stay_in_resource_context(
         "verification_status": "verified",
     }
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (record,),
     )
     monkeypatch.setattr(
-        resources_account,
+        account,
         "execute_account",
         lambda state, selected, action, value=None: (
             calls.append((action, value)) or {"action": action, "account": "paper-main"}
@@ -314,7 +327,8 @@ def test_account_runtime_queries_bind_selected_account_as_a_global_cli_option(
 ) -> None:
     calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.guided.account.AccountCliApplication.run",
+        account_actions.AccountCliApplication,
+        "run",
         lambda application, arguments: calls.append(tuple(arguments)) or {},
     )
     state = _state()
@@ -346,7 +360,7 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
         "verification_status": "verified",
     }
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (record,),
     )
@@ -357,7 +371,7 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
         calls.append((action, values))
         return {"action": action, "orders": []}
 
-    monkeypatch.setattr(resources_account, "execute_order", execute)
+    monkeypatch.setattr(account, "execute_order", execute)
 
     async def run() -> tuple[type[object], str, str, bool]:
         app = KairosWorkbenchApp(_state())
@@ -406,12 +420,12 @@ def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
         "verification_status": "verified",
     }
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (record,),
     )
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "execute_action",
         lambda state, kind, selected, action, **kwargs: (
             calls.append((kind, action)) or {**selected, "enabled": False}
@@ -457,7 +471,7 @@ def test_notification_attach_collects_launch_and_route_before_confirmation(
         "verification_status": "verified",
     }
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (record,),
     )
@@ -475,7 +489,7 @@ def test_notification_attach_collects_launch_and_route_before_confirmation(
         return {"status": "attached"}
 
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "execute_action",
         execute,
     )
@@ -516,7 +530,7 @@ def test_existing_notification_can_enter_identity_preserving_edit_wizard(
         "enabled": True,
     }
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (record,),
     )
@@ -540,8 +554,165 @@ def test_existing_notification_can_enter_identity_preserving_edit_wizard(
 
     context, placeholder, has_wizard = asyncio.run(run())
     assert context == "首页 / 运行准备 / 配置向导 · 通知提醒 · ops-alerts  ›"
-    assert placeholder == "通知渠道（feishu / telegram）"
+    assert placeholder == "输入编号或命令；Enter 提交"
     assert has_wizard
+
+
+def test_notification_wizard_uses_numbered_choices_and_automatic_identity() -> None:
+    wizard = ResourceWizardState("notifications")
+
+    name, label, detail, secret = wizard.next_prompt() or ("", "", "", False)
+
+    assert name == "notification-provider"
+    assert label == "请选择通知渠道（输入 1 或 2）"
+    assert "通过选项选择通知渠道" in detail
+    assert not secret
+
+    wizard.accept(name, "2")
+    wizard.generated_id = "telegram-alerts"
+
+    assert wizard.answers == {"notification-provider": "telegram"}
+    assert wizard.next_prompt() == (
+        "secret-primary",
+        "Telegram Bot Token",
+        "从 BotFather 获取；内容会安全保存，不会显示或进入命令历史。",
+        True,
+    )
+    assert "resource-id" not in wizard._steps()
+
+
+def test_notification_provider_uses_standard_action_cards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: ())
+
+    async def run() -> tuple[list[str], str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "4", "/new"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            prompts = [
+                str(option.prompt)
+                for option in screen.query_one("#guided-actions", ActionList)._options
+            ]
+            summary = renderable_plain_text(interaction.summary)
+            screen.submit("telegram")
+            await pilot.pause()
+            return (
+                prompts,
+                summary,
+                screen.query_one("#command-input", WorkbenchCommandInput).placeholder,
+            )
+
+    prompts, summary, placeholder = asyncio.run(run())
+    assert prompts == [
+        "[1]  飞书（推荐）  ·  使用群机器人 Webhook",
+        "[2]  Telegram  ·  使用机器人令牌和 Chat ID",
+    ]
+    assert "创建通知提醒" in summary
+    assert "<redacted>" not in "".join(prompts)
+    assert placeholder == "Telegram Bot Token"
+
+
+def test_notification_wizard_back_returns_to_previous_step() -> None:
+    wizard = ResourceWizardState(
+        "notifications",
+        answers={"notification-provider": "telegram", "secret-primary": "token"},
+        generated_id="telegram-alerts",
+    )
+
+    assert wizard.next_prompt()[0] == "chat-id"  # type: ignore[index]
+    assert wizard.go_back()
+    assert wizard.next_prompt()[0] == "secret-primary"  # type: ignore[index]
+    assert wizard.go_back()
+    assert wizard.next_prompt()[0] == "notification-provider"  # type: ignore[index]
+    assert wizard.generated_id is None
+
+
+def test_notification_wizard_selects_unique_automatic_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        resources,
+        "list_records",
+        lambda state, kind: (
+            {"destination_id": "feishu-alerts"},
+            {"destination_id": "feishu-alerts-2"},
+        ),
+    )
+
+    async def run() -> tuple[str, str, dict[str, Any], str | None]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("4")
+            screen.submit("4")
+            await pilot.pause(0.1)
+            screen.submit("/new")
+            await pilot.pause(0.1)
+            screen.submit("1")
+            await pilot.pause()
+            wizard = screen.session.resources.wizard
+            assert isinstance(wizard, ResourceWizardState)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, InputInteraction)
+            return (
+                screen.query_one("#command-input", WorkbenchCommandInput).placeholder,
+                renderable_plain_text(interaction.value_summary),
+                wizard.redacted_summary(),
+                wizard.generated_id,
+            )
+
+    placeholder, content, summary, generated_id = asyncio.run(run())
+    assert placeholder == "飞书机器人 Webhook 地址"
+    assert "创建通知提醒" in content
+    assert "系统自动生成" in content
+    assert summary["notification-provider"] == "feishu"
+    assert generated_id == "feishu-alerts-3"
+
+
+def test_notification_wizard_back_preserves_flow_and_cancel_discards_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: ())
+
+    async def run() -> tuple[str, str, object, tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "4", "/new", "2"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            screen.submit("/back")
+            await pilot.pause()
+            back_placeholder = screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            ).placeholder
+            wizard = screen.session.resources.wizard
+            assert isinstance(wizard, ResourceWizardState)
+            assert wizard.answers == {}
+            screen.submit("2")
+            screen.submit("/cancel")
+            await pilot.pause()
+            return (
+                back_placeholder,
+                screen.query_one("#command-input", WorkbenchCommandInput).placeholder,
+                screen.session.resources.wizard,
+                screen.session.context,
+            )
+
+    back_placeholder, cancelled_placeholder, wizard, context = asyncio.run(run())
+    assert back_placeholder == "输入编号或命令；Enter 提交"
+    assert cancelled_placeholder == "输入编号或命令；Enter 提交"
+    assert wizard is None
+    assert context == ("resources", "notifications")
 
 
 def test_model_wizard_changes_provider_specific_defaults() -> None:
@@ -570,7 +741,7 @@ def test_editing_market_data_preserves_its_credential_identity(
         def __init__(self, owner: object) -> None:
             pass
 
-        def configure_secret_values(self, credential_id: str, **kwargs: object) -> None:
+        def configure(self, credential_id: str, **kwargs: object) -> None:
             configured_credentials.append(credential_id)
 
     class Reference:
@@ -584,12 +755,10 @@ def test_editing_market_data_preserves_its_credential_identity(
             return {"connection_id": "massive", "credential_id": credential_id}
 
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.guided.resource_wizard.CredentialConfigurationApplication",
-        Credentials,
+        resource_wizard, "CredentialConfigurationApplication", Credentials
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.guided.resource_wizard.ReferenceProviderConfigurationApplication",
-        Reference,
+        resource_wizard, "ReferenceProviderConfigurationApplication", Reference
     )
     wizard = ResourceWizardState(
         "data",
@@ -622,7 +791,7 @@ def test_resource_delete_dry_run_previews_without_executing(
         "verification_status": "verified",
     }
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (record,),
     )
@@ -631,7 +800,7 @@ def test_resource_delete_dry_run_previews_without_executing(
         raise AssertionError("dry-run must not execute the resource deletion")
 
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "execute_action",
         unexpected,
     )
@@ -664,7 +833,7 @@ def test_resource_setup_uses_masked_single_input_and_never_records_secret(
 ) -> None:
     saved: list[str] = []
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (),
     )
@@ -679,7 +848,7 @@ def test_resource_setup_uses_masked_single_input_and_never_records_secret(
         }
 
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "save_resource_wizard",
         save,
     )
@@ -727,7 +896,7 @@ def test_ctrl_c_during_resource_secret_prompt_clears_staged_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        resources_account,
+        resources,
         "list_records",
         lambda state, kind: (),
     )

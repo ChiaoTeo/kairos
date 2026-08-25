@@ -20,7 +20,6 @@ from typing import Any
 
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
-    SecretRef,
 )
 from kairospy.system.apps.workspace.application import Workspace
 from .application import AccountApplication
@@ -73,15 +72,6 @@ def _text(value: str, name: str) -> str:
     if not value:
         raise ValueError(f"{name} is required")
     return value
-
-
-def _credential_environment_names(
-    credential_id: str, fields: tuple[str, ...]
-) -> dict[str, str]:
-    prefix = "KAIROS_CREDENTIAL_" + "".join(
-        character if character.isalnum() else "_" for character in credential_id.upper()
-    )
-    return {field.upper(): f"{prefix}_{field.upper()}" for field in fields}
 
 
 def _cli(workspace: Workspace) -> "AccountCliApplication":
@@ -320,7 +310,7 @@ class AccountConfigurationApplication:
         owner = CredentialConfigurationApplication(self.workspace)
         for credential_id in sorted(credential_ids):
             try:
-                value = owner.show(credential_id)
+                value = owner.resource_snapshot(credential_id)
             except (KeyError, OSError, ValueError):
                 value = {"credential_id": credential_id, "missing": True}
             credentials.append(
@@ -328,8 +318,8 @@ class AccountConfigurationApplication:
                     "credential_id": credential_id,
                     "provider": value.get("provider"),
                     "role": value.get("role"),
-                    "secret_refs": value.get("secret_refs", {}),
-                    "legacy_plaintext": value.get("legacy_plaintext", False),
+                    "fields": value.get("fields", []),
+                    "resource_hash": value.get("resource_hash"),
                 }
             )
         payload = {
@@ -383,7 +373,7 @@ class AccountConfigurationApplication:
                     "credential_id": credential_id,
                     "provider": value.get("provider"),
                     "role": value.get("role"),
-                    "secret_refs": value.get("secret_refs", {}),
+                    "fields": value.get("fields", []),
                 }
             )
         return result
@@ -605,7 +595,7 @@ class CredentialApplication:
 
     @property
     def path(self) -> Path:
-        return self.workspace.paths.credential_config()
+        return self.workspace.paths.credentials_root()
 
     def list(self) -> list[dict[str, Any]]:
         value = _cli(self.workspace).run(["credential-list"])
@@ -620,20 +610,17 @@ class CredentialApplication:
         credential_id: str,
         *,
         provider: str,
-        fields: tuple[str, ...] = (),
+        values: Mapping[str, str] | None = None,
         kind: str | None = None,
         force: bool = True,
     ) -> dict[str, Any]:
         credential_id = _text(credential_id, "credential_id")
         provider = _text(provider, "provider")
-        environment = _credential_environment_names(credential_id, fields)
-        references = {
-            field: SecretRef("env", environment[field.upper()]) for field in fields
-        }
+        normalized_values = dict(values or {})
         CredentialConfigurationApplication(self.workspace).configure(
             credential_id,
             provider=provider,
-            fields=references,
+            values=normalized_values,
             role=kind or "readonly",
             overwrite=force,
         )
@@ -641,12 +628,8 @@ class CredentialApplication:
             "credential_id": credential_id,
             "provider": provider,
             "kind": kind or "api",
-            "fields": list(fields),
-            "secret_refs": {
-                field: {"source": "env", "id": environment[field.upper()]}
-                for field in fields
-            },
-            "secret_storage": "environment-or-external-secret-store",
+            "fields": sorted(normalized_values),
+            "secret_storage": "credential-values",
         }
 
     def show(self, credential_id: str) -> dict[str, Any]:
@@ -679,24 +662,6 @@ class CredentialApplication:
         if not force and not value.get("removed"):
             raise FileNotFoundError(f"credential does not exist: {credential_id}")
         return {"credential_id": credential_id, "status": "deleted"}
-
-    def environment(self, credential_id: str) -> dict[str, str]:
-        entry = self.show(credential_id)
-        provider = str(entry.get("provider", "")).lower()
-        fields = {
-            "feishu": ("webhook_url", "signing_secret", "api_key", "api_secret"),
-            "telegram": ("bot_token", "api_key"),
-            "okx": ("api_key", "api_secret", "passphrase"),
-            "okex": ("api_key", "api_secret", "passphrase"),
-        }.get(provider, ("api_key", "api_secret"))
-        prefix = "KAIROS_CREDENTIAL_" + "".join(
-            c if c.isalnum() else "_" for c in credential_id.upper()
-        )
-        return {
-            field.upper(): os.environ[name]
-            for field in fields
-            if (name := f"{prefix}_{field.upper()}") in os.environ
-        }
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:

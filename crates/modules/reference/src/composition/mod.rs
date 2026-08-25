@@ -9,9 +9,8 @@ pub use config::{
     PublicReferenceProvider, ReferenceConfig, ReferenceProviders, ReferenceRuntimeConfig,
     ReferenceTickBudgetConfig,
 };
-use kairos_conflux::{
-    AeronOutputDeclaration, BinanceCredential, CredentialStore, load_workspace_credential,
-};
+use kairos_conflux::{AeronOutputDeclaration, BinanceCredential};
+use kairos_credentials::CredentialStore;
 
 use crate::ReferenceApplication;
 use crate::domain::ReferenceResult;
@@ -117,15 +116,14 @@ async fn build_source_plan(
         .unwrap_or_default();
     let credentials_root = workspace
         .as_ref()
-        .map(|workspace| workspace.config_root().join("credentials"));
+        .map(|workspace| workspace.existing_credentials_root())
+        .transpose()
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
     let credential_resolver = credentials_root
         .as_ref()
-        .map(|root| {
-            CredentialStore::load(root.join("credentials.toml"))
-                .map(ReferenceCredentialResolver::from_store)
-        })
+        .map(|root| CredentialStore::load(root).map(ReferenceCredentialResolver::from_store))
         .transpose()
-        .map_err(crate::domain::ReferenceError::Provider)?
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?
         .unwrap_or_default();
 
     let mut providers = Vec::new();
@@ -251,22 +249,22 @@ fn load_required_credential(
     label: &str,
 ) -> ReferenceResult<(String, secrecy::SecretString)> {
     let credential = credentials_root
-        .and_then(|root| {
-            load_workspace_credential(root, provider, credential_id)
-                .ok()
-                .flatten()
-        })
+        .map(CredentialStore::load)
+        .transpose()
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?
+        .and_then(|store| store.find_provider(provider, credential_id).cloned())
         .ok_or_else(|| {
             crate::domain::ReferenceError::Provider(format!(
                 "Reference {label} source is enabled but its credential is missing"
             ))
         })?;
-    if credential.api_key.trim().is_empty() {
-        return Err(crate::domain::ReferenceError::Provider(format!(
+    let api_key = credential.api_key_value().ok_or_else(|| {
+        crate::domain::ReferenceError::Provider(format!(
             "Reference {label} source is enabled but its API key is missing"
-        )));
-    }
-    Ok((credential.api_key, credential.secret))
+        ))
+    })?;
+    let secret = credential.value("api_secret").cloned().unwrap_or_default();
+    Ok((api_key, secret))
 }
 
 pub fn declare_reference_changes_output(

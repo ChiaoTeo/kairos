@@ -103,7 +103,7 @@ def test_untested_draft_requires_explicit_unverified_commit(tmp_path: Path) -> N
     assert result["verification_status"] == "pending"
 
 
-def test_discard_removes_unreferenced_staged_secret(tmp_path: Path) -> None:
+def test_discard_does_not_persist_model_credential(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     draft = ModelConnectionDraftApplication(workspace).prepare(
         "hosted",
@@ -112,9 +112,8 @@ def test_discard_removes_unreferenced_staged_secret(tmp_path: Path) -> None:
         credential_values={"api_key": "discard-me"},
     )
     staged = draft.prepared_credential
-    assert staged is not None and staged.staged_secret_root is not None
-    secret_root = staged.staged_secret_root
+    assert staged is not None
 
     draft.discard()
 
-    assert secret_root.exists() is False
+    assert not (workspace.paths.credentials_root() / "hosted-auth.toml").exists()

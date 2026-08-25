@@ -16,6 +16,7 @@ flatbuffers.workspace = true
 futures-util = { workspace = true, features = ["alloc"] }
 kairos-account-contract.workspace = true
 kairos-conflux.workspace = true
+kairos-credentials.workspace = true
 kairos-execution-contract.workspace = true
 kairos-market-contract.workspace = true
 kairos-primitives.workspace = true

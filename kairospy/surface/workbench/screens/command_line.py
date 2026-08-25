@@ -19,13 +19,7 @@ from textual.screen import Screen
 from textual.widgets import Input, Static
 from textual.worker import Worker
 
-from kairospy.surface.console.models import (
-    ObserveSnapshot,
-    component_rows,
-    recommended_action,
-)
-
-from ..transcript import redact_text
+from kairospy.surface.presentation import redact_text, redact_value
 from ..widgets import (
     ActionToken,
     ActivityStream,
@@ -52,12 +46,10 @@ from .effects import (
     SetInteraction,
     SetStatus,
 )
-from .flows import (
-    market_reference,
-    operations_research,
-    resources_account,
-    strategy_execution,
-)
+from . import flows as product_flows
+from .flows.launch import runtime as launch_flow
+from .flows.resources import configuration as resources_flow
+from .flows.operations.observe_view import observe_renderable
 from .navigation import (
     action_id,
     context_items,
@@ -70,20 +62,12 @@ from .results import ResultKind, ResultRoute
 
 if TYPE_CHECKING:
     from ..app import KairosWorkbenchApp
-from .guided.catalog import HOME_ACTIONS, SECTION_ACTIONS
-from .guided.market import (
-    load_observation as load_market_observation,
-    observation_renderable as market_observation_renderable,
-)
-from .guided.models import GuidedSession
-from .guided.kairos_command import (
+from .catalog import HOME_ACTIONS, SECTION_ACTIONS
+from .session import GuidedSession
+from .commands import (
     is_dangerous as is_dangerous_kairos_command,
     preview as preview_kairos_command,
     run as run_kairos_command,
-)
-from .guided.strategy import (
-    ATTACH_ACTIONS as STRATEGY_ATTACH_ACTIONS,
-    attach_snapshot as load_launch_attach_snapshot,
 )
 
 
@@ -217,10 +201,18 @@ class CommandLineScreen(Screen[None]):
                 return
             if (
                 is_workbench_command
-                and pending_command in {"back", "b", "cancel"}
+                and pending_command in {"back", "b"}
                 and not pending_arguments
             ):
                 self.action_back()
+                self.app.set_focus(self._input())
+                return
+            if (
+                is_workbench_command
+                and pending_command == "cancel"
+                and not pending_arguments
+            ):
+                self.action_cancel_pending()
                 self.app.set_focus(self._input())
                 return
             if (
@@ -250,6 +242,15 @@ class CommandLineScreen(Screen[None]):
             self._dispatch_input(pending, value)
             self.app.set_focus(self._input())
             return
+        if (
+            not value.startswith("/")
+            and not value.isdecimal()
+            and self.session.context == ("resources", "setup")
+            and value.lower() in {"feishu", "telegram"}
+        ):
+            self._dispatch(value.lower(), ())
+            self.app.set_focus(self._input())
+            return
         if not value.startswith("/") and not value.isdecimal():
             self._dispatch_kairos(value)
             return
@@ -262,25 +263,9 @@ class CommandLineScreen(Screen[None]):
     def _dispatch_input(self, token: ActionToken, value: str) -> None:
         """Route a typed continuation to its owning product flow."""
 
-        effects: tuple[ScreenEffect, ...] | None
-        if token.feature in {Feature.MARKET, Feature.REFERENCE}:
-            effects = market_reference.handle_input(
-                self.workbench_app.state, self.session, token, value
-            )
-        elif token.feature in {Feature.OPERATIONS, Feature.RESEARCH}:
-            effects = operations_research.handle_input(
-                self.workbench_app.state, self.session, token, value
-            )
-        elif token.feature is Feature.RESOURCES:
-            effects = resources_account.handle_input(
-                self.workbench_app.state, self.session, token, value
-            )
-        elif token.feature is Feature.STRATEGY:
-            effects = strategy_execution.handle_input(
-                self.workbench_app.state, self.session, token, value
-            )
-        else:
-            effects = None
+        effects = product_flows.handle_input(
+            self.workbench_app.state, self.session, token, value
+        )
         if effects is None:
             self._set_status("输入上下文已经失效 · 请返回后重试")
             self._show_context()
@@ -353,34 +338,7 @@ class CommandLineScreen(Screen[None]):
             self._interaction().present(self.session.interaction)
             self._set_status("Transcript 位置已显示")
         elif (
-            effects := market_reference.handle_command(
-                self.workbench_app.state,
-                self.session,
-                command,
-                arguments,
-            )
-        ) is not None:
-            self._apply_effects(effects)
-        elif (
-            effects := operations_research.handle_command(
-                self.workbench_app.state,
-                self.session,
-                command,
-                arguments,
-            )
-        ) is not None:
-            self._apply_effects(effects)
-        elif (
-            effects := resources_account.handle_command(
-                self.workbench_app.state,
-                self.session,
-                command,
-                arguments,
-            )
-        ) is not None:
-            self._apply_effects(effects)
-        elif (
-            effects := strategy_execution.handle_command(
+            effects := product_flows.handle_command(
                 self.workbench_app.state,
                 self.session,
                 command,
@@ -410,48 +368,15 @@ class CommandLineScreen(Screen[None]):
             self.enter_section(section)
             return True
 
-        section = self.session.context[0]
-        if section in {"market", "reference"}:
-            effects = market_reference.handle_context(
-                self.workbench_app.state,
-                self.session,
-                command,
-            )
-            if effects is None:
-                return False
-            self._apply_effects(effects)
-            return True
-        if section in {"operations", "research"}:
-            effects = operations_research.handle_context(
-                self.workbench_app.state,
-                self.session,
-                command,
-            )
-            if effects is None:
-                return False
-            self._apply_effects(effects)
-            return True
-        if section == "strategy":
-            effects = strategy_execution.handle_context(
-                self.workbench_app.state,
-                self.session,
-                command,
-            )
-            if effects is None:
-                return False
-            self._apply_effects(effects)
-            return True
-        if section == "resources":
-            effects = resources_account.handle_context(
-                self.workbench_app.state,
-                self.session,
-                command,
-            )
-            if effects is None:
-                return False
-            self._apply_effects(effects)
-            return True
-        return False
+        effects = product_flows.handle_context(
+            self.workbench_app.state,
+            self.session,
+            command,
+        )
+        if effects is None:
+            return False
+        self._apply_effects(effects)
+        return True
 
     def enter_section(self, section: str) -> None:
         """Enter one product context without replacing the command screen."""
@@ -473,7 +398,7 @@ class CommandLineScreen(Screen[None]):
     ) -> None:
         """Translate launch CLI deep links into this screen's session context."""
 
-        effects = strategy_execution.enter_deep_link(
+        effects = launch_flow.enter_deep_link(
             self.workbench_app.state,
             self.session,
             launch_id,
@@ -484,7 +409,40 @@ class CommandLineScreen(Screen[None]):
 
     def action_back(self) -> None:
         if isinstance(self.session.interaction, (InputInteraction, ConfirmInteraction)):
+            interaction = self.session.interaction
+            token = (
+                interaction.action
+                if isinstance(interaction, InputInteraction)
+                else None
+            )
+            if (
+                isinstance(interaction, ConfirmInteraction)
+                and interaction.operation.route.kind is ResultKind.RESOURCE_WIZARD
+            ):
+                token = ActionToken(Feature.RESOURCES, "resource:setup")
+            effects = (
+                resources_flow.back_wizard(
+                    self.workbench_app.state, self.session, token
+                )
+                if token is not None
+                else None
+            )
+            if effects is not None:
+                self._input().password = False
+                self._apply_effects(effects)
+                return
             self.action_cancel_pending()
+            return
+        if (
+            self.session.context == ("resources", "setup")
+            and self.session.resources.wizard is not None
+        ):
+            resources_flow.cancel_input(
+                self.session,
+                ActionToken(Feature.RESOURCES, "resource:setup"),
+            )
+            self.session.reset_prompt()
+            self._show_context()
             return
         if not go_back(self.session):
             self._show_context()
@@ -575,22 +533,22 @@ class CommandLineScreen(Screen[None]):
             self._show_context()
             return
         if isinstance(interaction, ConfirmInteraction):
-            result_kind = interaction.operation.route.kind
             self._interrupt_exit_pending = False
-            if result_kind is ResultKind.RESOURCE_WIZARD:
-                resources_account.cancel_input(
-                    self.session,
-                    ActionToken(Feature.RESOURCES, "resource:setup"),
-                )
-            elif result_kind is ResultKind.STRATEGY_WIZARD:
-                strategy_execution.cancel_input(
-                    self.session,
-                    ActionToken(Feature.STRATEGY, "strategy:launch"),
-                )
-            else:
-                self.session.clear_result_flow(result_kind)
+            product_flows.cancel_confirmation(self.session, interaction.operation)
             self.session.reset_prompt()
             self._set_status("就绪")
+            self._show_context()
+            return
+        if (
+            self.session.context == ("resources", "setup")
+            and self.session.resources.wizard is not None
+        ):
+            resources_flow.cancel_input(
+                self.session,
+                ActionToken(Feature.RESOURCES, "resource:setup"),
+            )
+            self.session.reset_prompt()
+            self._set_status("向导已取消")
             self._show_context()
             return
         cancelled = self.workers.cancel_node(self)
@@ -602,14 +560,7 @@ class CommandLineScreen(Screen[None]):
         self._set_status("当前没有可取消的输入或任务")
 
     def _cancel_input(self, token: ActionToken) -> None:
-        if token.feature in {Feature.MARKET, Feature.REFERENCE}:
-            market_reference.cancel_input(self.session, token)
-        elif token.feature in {Feature.OPERATIONS, Feature.RESEARCH}:
-            operations_research.cancel_input(self.session, token)
-        elif token.feature is Feature.RESOURCES:
-            resources_account.cancel_input(self.session, token)
-        elif token.feature is Feature.STRATEGY:
-            strategy_execution.cancel_input(self.session, token)
+        product_flows.cancel_input(self.session, token)
 
     def action_interrupt(self) -> None:
         """Cancel active work, or ask before exiting when completely idle."""
@@ -821,7 +772,7 @@ class CommandLineScreen(Screen[None]):
                 "数字选择  ·  /back 返回  ·  /help 更多操作  ·  /exit 退出"
             )
 
-    def _read_observe(self) -> ObserveSnapshot | None:
+    def _read_observe(self) -> object | None:
         return self.workbench_app.state.refresh_snapshot()
 
     def _observe_command(self) -> tuple[str, ...]:
@@ -849,18 +800,13 @@ class CommandLineScreen(Screen[None]):
             return
         if self._market_refresh_worker is not None:
             return
-        market = self.workbench_app.state.selected_market
-        observation = self.session.market.observation
-        provider = self.session.market.provider
-        if market is None or observation is None or provider is None:
+        operation = product_flows.market.live_observation_operation(
+            self.workbench_app.state, self.session
+        )
+        if operation is None:
             return
         self._market_refresh_worker = self.run_worker(
-            lambda: load_market_observation(
-                self.workbench_app.state,
-                market,
-                observation,
-                provider,
-            ),
+            operation,
             name="market-control-stream",
             group="market-control-stream",
             thread=True,
@@ -871,13 +817,13 @@ class CommandLineScreen(Screen[None]):
     def _present_market_control(self) -> None:
         if self.session.context != ("market", "selected"):
             return
-        market = self.workbench_app.state.selected_market
+        market = self.session.market.selected
         snapshot = self.session.market.snapshot
         if market is None or snapshot is None:
             return
         self.session.control(
-            _market_identity_label(market),
-            market_observation_renderable(snapshot),
+            product_flows.market.selected_title(self.session) or record_label(market),
+            snapshot,
             context_items(self.session, self.workbench_app.state),
             refreshing=self.session.market.refresh_enabled,
         )
@@ -888,12 +834,11 @@ class CommandLineScreen(Screen[None]):
             return
         if self._attach_refresh_worker is not None:
             return
-        record = self.session.strategy.selected_record
-        if record is None:
+        operation = launch_flow.attach_operation(self.workbench_app.state, self.session)
+        if operation is None:
             return
-        launch_id = str(record["launch_id"])
         self._attach_refresh_worker = self.run_worker(
-            lambda: load_launch_attach_snapshot(self.workbench_app.state, launch_id),
+            operation,
             name="launch-attach-stream",
             group="launch-attach-stream",
             thread=True,
@@ -962,7 +907,9 @@ class CommandLineScreen(Screen[None]):
         full_log = (
             Text(f"完整日志 {live_buffer.full_log_path}", style="dim")
             if live_buffer is not None and live_buffer.full_log_path is not None
-            else Text("完整日志 当前数据源未提供路径 · /copy 仅复制当前窗口", style="dim")
+            else Text(
+                "完整日志 当前数据源未提供路径 · /copy 仅复制当前窗口", style="dim"
+            )
         )
         snapshot = Group(
             *(
@@ -974,7 +921,7 @@ class CommandLineScreen(Screen[None]):
         self.session.control(
             f"Launch {launch_id}",
             snapshot,
-            STRATEGY_ATTACH_ACTIONS,
+            launch_flow.ATTACH_ACTIONS,
             refreshing=not self.session.strategy.attach_paused,
         )
         self._interaction().present(self.session.interaction)
@@ -987,7 +934,9 @@ class CommandLineScreen(Screen[None]):
             if self.session.context != ("market", "selected"):
                 return
             if event.state.name == "SUCCESS":
-                self.session.market.snapshot = event.worker.result
+                self.session.market.snapshot = (
+                    product_flows.market.observation_renderable(event.worker.result)
+                )
                 if self.session.market.refresh_enabled:
                     self._present_market_control()
                 else:
@@ -1034,34 +983,7 @@ class CommandLineScreen(Screen[None]):
             self._set_status("就绪")
             self._running_task = None
             self._restore_navigation_input()
-            effects = market_reference.handle_success(
-                self.workbench_app.state,
-                self.session,
-                running_task.spec,
-                event.worker.result,
-            )
-            if effects is not None:
-                self._apply_effects(effects)
-                return
-            effects = operations_research.handle_success(
-                self.workbench_app.state,
-                self.session,
-                running_task.spec,
-                event.worker.result,
-            )
-            if effects is not None:
-                self._apply_effects(effects)
-                return
-            effects = resources_account.handle_success(
-                self.workbench_app.state,
-                self.session,
-                running_task.spec,
-                event.worker.result,
-            )
-            if effects is not None:
-                self._apply_effects(effects)
-                return
-            effects = strategy_execution.handle_success(
+            effects = product_flows.handle_success(
                 self.workbench_app.state,
                 self.session,
                 running_task.spec,
@@ -1081,7 +1003,7 @@ class CommandLineScreen(Screen[None]):
             error = str(event.worker.error)
             self._running_task = None
             self._restore_navigation_input()
-            effects = market_reference.handle_failure(
+            effects = product_flows.handle_failure(
                 self.workbench_app.state,
                 self.session,
                 running_task.spec,
@@ -1090,47 +1012,20 @@ class CommandLineScreen(Screen[None]):
             if effects is not None:
                 self._apply_effects(effects)
             else:
-                effects = operations_research.handle_failure(
-                    self.workbench_app.state,
-                    self.session,
+                self._append_terminal_activity(
                     running_task.spec,
-                    error,
+                    ActivityOutcome.FAILURE,
+                    body=Text(error, style="red"),
+                    copy_text=error,
                 )
-                if effects is not None:
-                    self._apply_effects(effects)
-                else:
-                    effects = resources_account.handle_failure(
-                        self.workbench_app.state,
-                        self.session,
-                        running_task.spec,
-                        error,
-                    )
-                    if effects is not None:
-                        self._apply_effects(effects)
-                    else:
-                        effects = strategy_execution.handle_failure(
-                            self.workbench_app.state,
-                            self.session,
-                            running_task.spec,
-                            error,
-                        )
-                        if effects is not None:
-                            self._apply_effects(effects)
-                        else:
-                            self._append_terminal_activity(
-                                running_task.spec,
-                                ActivityOutcome.FAILURE,
-                                body=Text(error, style="red"),
-                                copy_text=error,
-                            )
-                            self._show_context()
-                            self._set_status("操作失败 · 可重试、返回或查看帮助")
-                            self._report_unseen_activity()
+                self._show_context()
+                self._set_status("操作失败 · 可重试、返回或查看帮助")
+                self._report_unseen_activity()
         elif event.state.name == "CANCELLED":
             self._set_status("已取消 · 可继续输入")
             self._running_task = None
             self._restore_navigation_input()
-            effects = market_reference.handle_cancel(
+            effects = product_flows.handle_cancel(
                 self.workbench_app.state,
                 self.session,
                 running_task.spec,
@@ -1138,39 +1033,15 @@ class CommandLineScreen(Screen[None]):
             if effects is not None:
                 self._apply_effects(effects)
             else:
-                effects = operations_research.handle_cancel(
-                    self.workbench_app.state,
-                    self.session,
+                self._append_terminal_activity(
                     running_task.spec,
+                    ActivityOutcome.CANCELLED,
+                    body=Text("操作在开始执行后被取消。", style="yellow"),
+                    copy_text="操作在开始执行后被取消。",
                 )
-                if effects is not None:
-                    self._apply_effects(effects)
-                else:
-                    effects = resources_account.handle_cancel(
-                        self.workbench_app.state,
-                        self.session,
-                        running_task.spec,
-                    )
-                    if effects is not None:
-                        self._apply_effects(effects)
-                    else:
-                        effects = strategy_execution.handle_cancel(
-                            self.workbench_app.state,
-                            self.session,
-                            running_task.spec,
-                        )
-                        if effects is not None:
-                            self._apply_effects(effects)
-                        else:
-                            self._append_terminal_activity(
-                                running_task.spec,
-                                ActivityOutcome.CANCELLED,
-                                body=Text("操作在开始执行后被取消。", style="yellow"),
-                                copy_text="操作在开始执行后被取消。",
-                            )
-                            self._show_context()
-                            self._set_status("操作已取消 · 可继续输入")
-                            self._report_unseen_activity()
+                self._show_context()
+                self._set_status("操作已取消 · 可继续输入")
+                self._report_unseen_activity()
 
     def _restore_navigation_input(self) -> None:
         self.session.finish_prompt()
@@ -1199,7 +1070,7 @@ class CommandLineScreen(Screen[None]):
             self._interaction().present(self.session.interaction)
         self.query_one("#command-context", Static).update(f"{context}  ›")
         self._input().placeholder = "输入编号或命令；Enter 提交"
-        empty_resource_label = resources_account.empty_resource_label(self.session)
+        empty_resource_label = resources_flow.empty_resource_label(self.session)
         if empty_resource_label is not None:
             self._set_hints("输入 /new 开始配置  ·  Esc 返回")
         else:
@@ -1229,11 +1100,12 @@ class CommandLineScreen(Screen[None]):
     def _context_label(self) -> str:
         context = context_label(self.session.context)
         if self.session.context == ("market", "selected"):
-            market = self.workbench_app.state.selected_market
+            market = self.session.market.selected
             if market is not None:
-                return f"{context} · {_market_identity_label(market)}"
+                title = product_flows.market.selected_title(self.session)
+                return f"{context} · {title or record_label(market)}"
         if self.session.context[:1] == ("resources",):
-            return resources_account.context_title(self.session, context)
+            return resources_flow.context_title(self.session, context)
         return context
 
     def _write_error(self, value: str) -> None:
@@ -1336,7 +1208,7 @@ def _shell_result_body(kind: ResultKind, result: Any) -> RenderableType:
         return (
             Text("当前没有可用的系统观察结果。", style="dim")
             if result is None
-            else _observe_renderable(result)
+            else observe_renderable(result)
         )
     if kind is ResultKind.KAIROS_COMMAND:
         return Panel(
@@ -1348,30 +1220,15 @@ def _shell_result_body(kind: ResultKind, result: Any) -> RenderableType:
 def _redact_result(value: Any) -> Any:
     """Redact nested shell results before they become a visible Rich renderable."""
 
-    if isinstance(value, str):
-        return redact_text(value)
     if isinstance(value, Mapping):
-        redacted: dict[str, Any] = {}
-        for key, item in value.items():
-            name = str(key)
-            normalized = name.casefold().replace("-", "_")
-            if any(
-                marker in normalized
-                for marker in ("token", "secret", "password", "api_key", "credential")
-            ):
-                redacted[name] = "<redacted>"
-            elif name == "command" and isinstance(item, (list, tuple)):
-                redacted[name] = list(
-                    _redact_arguments(tuple(str(part) for part in item))
-                )
-            else:
-                redacted[name] = _redact_result(item)
+        redacted = redact_value(value)
+        command = value.get("command")
+        if isinstance(command, (list, tuple)):
+            redacted["command"] = list(
+                _redact_arguments(tuple(str(part) for part in command))
+            )
         return redacted
-    if isinstance(value, tuple):
-        return tuple(_redact_result(item) for item in value)
-    if isinstance(value, list):
-        return [_redact_result(item) for item in value]
-    return value
+    return redact_value(value)
 
 
 def _help_table(context: tuple[str, ...] = ()) -> Table:
@@ -1401,35 +1258,6 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_row("Alt+PgUp / PgDn", "滚动内容超出高度上限的交互区")
     table.add_row("/help", "显示这份帮助")
     return table
-
-
-def _market_identity_label(market: Any) -> str:
-    """Return the stable identity needed to distinguish a selected market."""
-    values = [record_label(market)]
-    exchange_id = getattr(market, "exchange_id", None)
-    if exchange_id:
-        values.append(str(exchange_id).rsplit(":", 1)[-1])
-    instrument_kind = getattr(market, "instrument_kind", None)
-    if instrument_kind:
-        values.append(str(instrument_kind))
-    return " · ".join(values)
-
-
-def _observe_renderable(snapshot: ObserveSnapshot) -> RenderableType:
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("组件")
-    table.add_column("状态")
-    table.add_column("新鲜度")
-    table.add_column("详情")
-    for row in component_rows(snapshot):
-        table.add_row(*(str(value) for value in row))
-    summary = Text(
-        f"{snapshot.workspace_id} · {snapshot.overall_status} · "
-        f"{len(snapshot.launches)} 个 Launch\n",
-        style="bold",
-    )
-    summary.append(f"下一步：{recommended_action(snapshot)}", style="dim")
-    return Panel(Group(summary, table), title="系统状态", border_style="cyan")
 
 
 def _running_status(kind: ResultKind) -> str:

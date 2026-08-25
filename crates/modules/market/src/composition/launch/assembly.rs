@@ -376,7 +376,7 @@ pub async fn build_market_host(
     };
     let source_plans = if profile.scope != MarketRuntimeScope::Replay {
         let credentials_root = workspace
-            .existing_path(&["config", "credentials"], &["credentials"])
+            .existing_credentials_root()
             .map_err(MarketStartupError::new)?;
         super::super::sources::install_connections(
             &mut system,

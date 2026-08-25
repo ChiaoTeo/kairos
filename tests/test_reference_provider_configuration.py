@@ -4,10 +4,7 @@ import json
 from io import StringIO
 import tomllib
 
-from kairospy.system.apps.credentials.application import (
-    CredentialConfigurationApplication,
-    SecretRef,
-)
+from kairospy.system.apps.credentials.application import CredentialConfigurationApplication
 from kairospy.investment.apps.reference.application import ReferenceProviderConfigurationApplication
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
@@ -17,11 +14,10 @@ def _workspace(tmp_path, monkeypatch):
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="data-provider"
     )
-    monkeypatch.setenv("KAIROS_MASSIVE_API_KEY", "do-not-persist")
     CredentialConfigurationApplication(workspace).configure(
         "massive-readonly",
         provider="massive",
-        fields={"api_key": SecretRef("env", "KAIROS_MASSIVE_API_KEY")},
+        values={"api_key": "do-not-persist"},
     )
     return workspace
 
@@ -57,27 +53,18 @@ def test_massive_configuration_owns_reference_and_market_sections(
     assert "do-not-persist" not in workspace.paths.manifest.read_text()
 
 
-def test_massive_configuration_can_be_saved_before_secret_is_visible(
+def test_massive_configuration_rejects_missing_api_key(
     tmp_path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="data-provider"
     )
-    monkeypatch.delenv("KAIROS_MASSIVE_API_KEY", raising=False)
-    CredentialConfigurationApplication(workspace).configure(
-        "massive-readonly",
-        provider="massive",
-        fields={"api_key": SecretRef("env", "KAIROS_MASSIVE_API_KEY")},
-    )
+    import pytest
 
-    configured = ReferenceProviderConfigurationApplication(workspace).configure_massive(
-        credential_id="massive-readonly"
-    )
-
-    assert configured["configured"] is False
-    assert configured["verification_status"] == "pending"
-    assert configured["credential_id"] == "massive-readonly"
-    assert "KAIROS_MASSIVE_API_KEY" not in workspace.paths.manifest.read_text()
+    with pytest.raises(ValueError, match="api_key"):
+        CredentialConfigurationApplication(workspace).configure(
+            "massive-readonly", provider="massive", values={}
+        )
 
 
 

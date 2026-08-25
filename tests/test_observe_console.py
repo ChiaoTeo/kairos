@@ -4,12 +4,12 @@ import json
 from io import StringIO
 
 from kairospy.surface.cli import execute_argv
-from kairospy.surface.console.models import (
-    ObserveSnapshot,
-    component_rows,
-    launch_rows,
-    recommended_action,
+from kairospy.surface.cli.observe_rendering import recommended_action
+from kairospy.surface.workbench.screens.flows.operations.observe_view import (
+    observe_renderable,
 )
+from kairospy.surface.workbench.widgets import renderable_plain_text
+from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.system.apps.launch.application import LaunchRegistryApplication
 
@@ -25,9 +25,9 @@ def test_observe_snapshot_aggregates_component_health_and_freshness() -> None:
     )
 
     assert snapshot.overall_status == "partial"
-    rows = dict((row[0], row[1:]) for row in component_rows(snapshot))
-    assert rows["market"][:2] == ("running", "1.2s ago")
-    assert rows["account"][:2] == ("not_running", "-")
+    rendered = renderable_plain_text(observe_renderable(snapshot))
+    assert "market" in rendered and "running" in rendered and "1.2s ago" in rendered
+    assert "account" in rendered and "not_running" in rendered
 
 
 def test_observe_snapshot_presents_latest_launch_first() -> None:
@@ -52,12 +52,6 @@ def test_observe_snapshot_presents_latest_launch_first() -> None:
         ),
     )
 
-    assert launch_rows(snapshot)[0] == (
-        "demo-backtest",
-        "backtest",
-        "completed",
-        "two",
-    )
     assert recommended_action(snapshot) == "kairos launch report demo-backtest"
 
 

@@ -276,36 +276,12 @@ enum StandaloneCommand {
         provider: String,
         #[arg(long, default_value = "readonly")]
         role: String,
-        #[arg(
-            long,
-            hide = true,
-            help = "Legacy plaintext input; new writes reject it"
-        )]
+        #[arg(long)]
         api_key: Option<String>,
-        #[arg(
-            long,
-            hide = true,
-            help = "Legacy plaintext input; new writes reject it"
-        )]
+        #[arg(long)]
         secret: Option<String>,
-        #[arg(
-            long,
-            hide = true,
-            help = "Legacy plaintext input; new writes reject it"
-        )]
+        #[arg(long)]
         passphrase: Option<String>,
-        #[arg(long, value_parser = ["env", "file"])]
-        api_key_source: Option<String>,
-        #[arg(long)]
-        api_key_ref: Option<String>,
-        #[arg(long, value_parser = ["env", "file"])]
-        api_secret_source: Option<String>,
-        #[arg(long)]
-        api_secret_ref: Option<String>,
-        #[arg(long, value_parser = ["env", "file"])]
-        passphrase_source: Option<String>,
-        #[arg(long)]
-        passphrase_ref: Option<String>,
     },
     CredentialShow {
         #[arg(long)]
@@ -715,12 +691,6 @@ async fn run_standalone(
             api_key,
             secret,
             passphrase,
-            api_key_source,
-            api_key_ref,
-            api_secret_source,
-            api_secret_ref,
-            passphrase_source,
-            passphrase_ref,
         } => {
             print_json(app.create_credential(CreateCredentialRequest {
                 credential_id: credential_id.clone(),
@@ -729,12 +699,6 @@ async fn run_standalone(
                 api_key: api_key.clone(),
                 secret: secret.clone(),
                 passphrase: passphrase.clone(),
-                api_key_source: api_key_source.clone(),
-                api_key_ref: api_key_ref.clone(),
-                secret_source: api_secret_source.clone(),
-                secret_ref: api_secret_ref.clone(),
-                passphrase_source: passphrase_source.clone(),
-                passphrase_ref: passphrase_ref.clone(),
             })?);
             return Ok(());
         },

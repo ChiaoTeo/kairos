@@ -12,14 +12,15 @@ use kairos_conflux::{
     BinanceCapitalRestConfig, BinanceCapitalRestConnection, BinanceCredential, BinanceRestConfig,
     BinanceSimpleEarnRestConnection, BinanceSubAccountCapitalRestConfig,
     BinanceSubAccountCapitalRestConnection, BinanceSubAccountIdentity, BinanceTransferAccount,
-    CommandResult, ConnectionKey, CredentialStore, EarnActionKind, EarnActionQuery,
-    EarnActionState, EarnActionStatus, EarnActionStatusQuery, EarnCommand, EarnLiquidity, EarnPage,
-    EarnPosition, EarnPositionsRequest, EarnProduct, EarnProductQuery, EarnProductsRequest,
-    EarnRateObservation, EarnRatesRequest, EarnRedeemRequest, EarnRedemptionAmount,
-    EarnRedemptionChannel, EarnReward, EarnRewardsRequest, EarnSubmission, EarnSubscribeRequest,
-    EarnSubscriptionEligibility, EarnSubscriptionPreviewRequest, ExternalAccountIdentity,
-    IndeterminateCommand, IntegrationError, ParticipantRejection,
+    CommandResult, ConnectionKey, EarnActionKind, EarnActionQuery, EarnActionState,
+    EarnActionStatus, EarnActionStatusQuery, EarnCommand, EarnLiquidity, EarnPage, EarnPosition,
+    EarnPositionsRequest, EarnProduct, EarnProductQuery, EarnProductsRequest, EarnRateObservation,
+    EarnRatesRequest, EarnRedeemRequest, EarnRedemptionAmount, EarnRedemptionChannel, EarnReward,
+    EarnRewardsRequest, EarnSubmission, EarnSubscribeRequest, EarnSubscriptionEligibility,
+    EarnSubscriptionPreviewRequest, ExternalAccountIdentity, IndeterminateCommand,
+    IntegrationError, ParticipantRejection,
 };
+use kairos_credentials::CredentialStore;
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::decimal::Quantity;
 use kairos_primitives::reference::Currency;
@@ -522,7 +523,8 @@ pub fn compose_capital_integration_connections(
             simulated_accounts,
         });
     }
-    let credential_store = CredentialStore::load(credential_config)?;
+    let credential_store =
+        CredentialStore::load(credential_config).map_err(|error| error.to_string())?;
     let mut binance = BTreeMap::new();
     let mut binance_earn = BTreeMap::new();
     for account in &accounts {
@@ -1086,7 +1088,7 @@ mod tests {
         let mut system = conflux_system();
         let connections = compose_capital_integration_connections(
             &mut system,
-            Path::new("/definitely/missing/credentials.toml"),
+            Path::new("/definitely/missing/credentials"),
             "paper",
             [simulated_account()],
         )
@@ -1103,7 +1105,7 @@ mod tests {
         let mut system = conflux_system();
         let error = compose_capital_integration_connections(
             &mut system,
-            Path::new("/definitely/missing/credentials.toml"),
+            Path::new("/definitely/missing/credentials"),
             "live",
             [simulated_account()],
         )
@@ -1126,7 +1128,7 @@ mod tests {
         let mut system = conflux_system();
         let mut connections = compose_capital_integration_connections(
             &mut system,
-            Path::new("/definitely/missing/credentials.toml"),
+            Path::new("/definitely/missing/credentials"),
             "backtest",
             [
                 account_with_socket("source", source_socket),

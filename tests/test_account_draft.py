@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.investment.apps.account.application import AccountConfigurationDraftApplication
+from kairospy.investment.apps.account.application import (
+    AccountConfigurationDraftApplication,
+)
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
 )
@@ -93,7 +95,9 @@ def test_untested_account_draft_requires_explicit_unverified_commit(
     )
 
 
-def test_discard_cleans_account_sandbox_and_staged_secret(tmp_path: Path) -> None:
+def test_discard_cleans_account_sandbox_without_persisting_credential(
+    tmp_path: Path,
+) -> None:
     workspace = _workspace(tmp_path)
     draft = AccountConfigurationDraftApplication(workspace).prepare_live(
         "live-main",
@@ -103,10 +107,9 @@ def test_discard_cleans_account_sandbox_and_staged_secret(tmp_path: Path) -> Non
     )
     sandbox = draft.draft_workspace.paths.root
     staged = draft.prepared_credential
-    assert staged is not None and staged.staged_secret_root is not None
-    secret_root = staged.staged_secret_root
+    assert staged is not None
 
     draft.discard()
 
     assert sandbox.exists() is False
-    assert secret_root.exists() is False
+    assert not (workspace.paths.credentials_root() / "binance-main.toml").exists()

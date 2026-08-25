@@ -1,4 +1,5 @@
-use kairos_conflux::{BinanceCredential, CredentialStore};
+use kairos_conflux::BinanceCredential;
+use kairos_credentials::CredentialStore;
 
 use crate::domain::{ReferenceError, ReferenceResult};
 

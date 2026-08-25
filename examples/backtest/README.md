@@ -28,6 +28,8 @@ uv run kairos launch wait massive-spy-hourly-bar-backtest \
 正式历史回测应把 launch 配置的 `events` 替换为 Market CLI 下载并校验过的数据集。
 
 真实历史 Bar 数据的下载入口是 `kairospy market data download`（不是一次性
-`kairos-market-cli`）；Massive 需要 `MASSIVE_API_KEY`，Binance Spot 不需要 API key。
+`kairos-market-cli`）；Massive 的 API key 从对应
+`.kairos/config/credentials/<id>.toml` 的 `[credential.values]` 读取，Binance Spot
+不需要 API key。
 Binance 历史接口当前提供 Kline/Bar，Quote 策略的盘口回测仍应使用真实 bid/ask
 数据集，或明确标记为 synthetic quote。

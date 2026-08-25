@@ -401,13 +401,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             segment_products: account.segment_products.clone(),
         })
         .collect::<Vec<_>>();
-    let credential_config = workspace.existing_path(
-        &["config", "credentials", "credentials.toml"],
-        &["credentials", "credentials.toml"],
-    )?;
+    let credentials_root = workspace.existing_credentials_root()?;
     let connections = compose_capital_integration_connections(
         &mut system,
-        &credential_config,
+        &credentials_root,
         &args.launch_mode,
         connection_accounts,
     )?;

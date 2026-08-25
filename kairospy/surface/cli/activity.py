@@ -56,9 +56,7 @@ class TerminalActivity:
         frame_index = 0
         while not self._stop.is_set():
             elapsed = max(time.monotonic() - self._started_at, 0.0)
-            self.stream.write(
-                f"\r\x1b[2K{self._line(_FRAMES[frame_index], elapsed)}"
-            )
+            self.stream.write(f"\r\x1b[2K{self._line(_FRAMES[frame_index], elapsed)}")
             self.stream.flush()
             self._rendered = True
             frame_index = (frame_index + 1) % len(_FRAMES)

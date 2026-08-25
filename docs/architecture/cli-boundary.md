@@ -1485,9 +1485,9 @@ Execution、Capital 或 Account owner。文档和检查脚本必须登记这些�
 Python CLI 只能有三类业务入口：
 
 - `surface/cli/commands/<business>.py`：顶层业务独立入口。
-- `surface/cli/commands/root.py` 或后续拆出的 `system.py`：workspace-scoped component
+- `surface/cli/commands/system/`：workspace-scoped component
   连接入口。
-- `surface/cli/commands/launch.py`：launch-scoped component 连接入口。
+- `surface/cli/commands/launch/`：launch-scoped component 连接入口。
 
 不允许再出现这些形态：
 
@@ -1528,7 +1528,7 @@ crates/modules/<module>/src/bin/kairos-<module>-cli.rs
 - `application/<module>/cli.py`：独立模式 subprocess adapter。
 - `infrastructure/contracts/<module>`：连接模式 contract client。
 - `surface/cli/commands/system.py`：当前系统组件连接入口。
-- `surface/cli/commands/launch.py`：launch instance 组件连接入口。
+- `surface/cli/commands/launch/`：launch instance 组件连接入口。
 - `surface/cli/commands/<module>.py`：业务模块独立入口。
 
 ## 修复计划

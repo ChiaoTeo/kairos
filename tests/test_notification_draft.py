@@ -111,7 +111,7 @@ def test_untested_notification_draft_requires_explicit_unverified_commit(
     )
 
 
-def test_discard_removes_unreferenced_notification_secret(tmp_path: Path) -> None:
+def test_discard_does_not_persist_notification_credential(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     draft = NotificationDestinationDraftApplication(workspace).prepare(
         "ops",
@@ -120,9 +120,8 @@ def test_discard_removes_unreferenced_notification_secret(tmp_path: Path) -> Non
         chat_id="-1001",
     )
     staged = draft.prepared_credential
-    assert staged is not None and staged.staged_secret_root is not None
-    secret_root = staged.staged_secret_root
+    assert staged is not None
 
     draft.discard()
 
-    assert secret_root.exists() is False
+    assert not (workspace.paths.credentials_root() / "ops.toml").exists()

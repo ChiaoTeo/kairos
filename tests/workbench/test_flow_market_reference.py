@@ -5,11 +5,11 @@ from kairospy.surface.workbench.screens.effects import (
     SetInteraction,
     SetStatus,
 )
-from kairospy.surface.workbench.screens.flows import market_reference
-from kairospy.surface.workbench.screens.guided.models import GuidedSession
+from kairospy.surface.workbench.screens.flows import market
+from kairospy.surface.workbench.screens.session import GuidedSession
 from kairospy.surface.workbench.screens.operation import OperationSpec
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
-from kairospy.surface.workbench.widgets import ChoiceInteraction
+from kairospy.surface.workbench.widgets import ChoiceInteraction, renderable_plain_text
 
 from app_support import market as _market
 from app_support import workbench_state as _state
@@ -28,7 +28,7 @@ def _spec(kind: ResultKind, qualifier: str | None = None) -> OperationSpec:
 def test_market_search_flow_returns_choices_without_activity() -> None:
     session = GuidedSession(context=("market",))
 
-    effects = market_reference.handle_success(
+    effects = market.handle_success(
         _state(),
         session,
         _spec(ResultKind.MARKET),
@@ -47,8 +47,8 @@ def test_market_search_flow_returns_choices_without_activity() -> None:
 
 def test_explicit_market_observation_returns_one_terminal_activity() -> None:
     state = _state()
-    state.selected_market = _market()
     session = GuidedSession(context=("market", "selected"))
+    session.market.selected = _market()
     session.market.observation = "quote"
     result = {
         "symbol": "AAPL",
@@ -58,7 +58,7 @@ def test_explicit_market_observation_returns_one_terminal_activity() -> None:
         "ask_price": "226.75",
     }
 
-    effects = market_reference.handle_success(
+    effects = market.handle_success(
         state,
         session,
         _spec(ResultKind.MARKET_OBSERVATION),
@@ -72,4 +72,4 @@ def test_explicit_market_observation_returns_one_terminal_activity() -> None:
     assert len(activities) == 1
     assert "226.50" in (activities[0].copy_text or "")
     assert any(isinstance(effect, SetStatus) for effect in effects)
-    assert session.market.snapshot == result
+    assert "226.50" in renderable_plain_text(session.market.snapshot)

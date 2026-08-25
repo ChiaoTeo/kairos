@@ -1,13 +1,9 @@
 """Public workspace boundary for the Python application."""
 
 from .application import WorkspaceApplication
-from kairospy.system.apps.credentials.application import (
-    CredentialConfigurationApplication,
-    PreparedCredential,
-    SecretRef,
-    SecretSource,
+from kairospy.system.apps.workspace.services.templates import (
+    SUPPORTED_PROJECT_TEMPLATES,
 )
-from kairospy.system.apps.workspace.services.templates import SUPPORTED_PROJECT_TEMPLATES
 from kairospy.system.domain.workspace import (
     InstanceWorkspace,
     ResourceScopePaths,
@@ -22,12 +18,8 @@ from kairospy.system.apps.configuration.services.transactions import (
 )
 
 __all__ = [
-    "CredentialConfigurationApplication",
     "InstanceWorkspace",
     "OperationJournal",
-    "PreparedCredential",
-    "SecretRef",
-    "SecretSource",
     "ResourceScopePaths",
     "Workspace",
     "WorkspaceApplication",

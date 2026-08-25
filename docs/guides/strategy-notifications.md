@@ -9,7 +9,7 @@ Kairos Strategy 可以通过 `ctx.notifications` 发布逻辑通知。策略只�
 
 推荐运行 `kairos i`，进入“管理运行资源 → 通知提醒”。该页面会：
 
-1. 显示现有 Destination、Credential 和 SecretRef 可用状态；
+1. 显示现有 Destination 和 Credential 可用状态；
 2. 分渠道引导配置飞书自定义机器人或 Telegram Bot；
 3. 使用 Telegram `getMe` 验证 Bot，并通过 `getUpdates` 发现可选 chat；
 4. 把 Destination 绑定到 Launch-owned route；
@@ -51,10 +51,11 @@ chat_id = "-1001234567890"
 
 Webhook 和 Bot Token 不能写在该文件中。
 
-## 2. 声明 credential 和 SecretRef
+## 2. 声明 credential values
 
-Credential 文件声明 identity、provider 和结构化 SecretRef。向导只保存引用，不把
-Webhook 或 Bot Token 写入通知配置、命令参数、日志或 Instance 配置：
+Credential 文件同时保存 identity、provider 和私有认证值。Webhook 或 Bot Token
+不会写入通知配置、日志或 Instance 配置；Credential 文件和目录分别使用 `0600`
+和 `0700` 权限：
 
 ```text
 .kairos/config/credentials/feishu-options.toml
@@ -66,9 +67,8 @@ id = "feishu-options"
 provider = "feishu"
 role = "notification-send"
 
-[credential.secrets.webhook_url]
-source = "env"
-id = "KAIROS_CREDENTIAL_FEISHU_OPTIONS_WEBHOOK_URL"
+[credential.values]
+webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
 ```
 
 ```text
@@ -81,30 +81,12 @@ id = "telegram-options"
 provider = "telegram"
 role = "notification-send"
 
-[credential.secrets.bot_token]
-source = "env"
-id = "KAIROS_CREDENTIAL_TELEGRAM_OPTIONS_BOT_TOKEN"
+[credential.values]
+bot_token = "123456:..."
 ```
 
-`source = "env"` 从运行环境读取 secret：
-
-```text
-KAIROS_CREDENTIAL_FEISHU_OPTIONS_WEBHOOK_URL
-KAIROS_CREDENTIAL_TELEGRAM_OPTIONS_BOT_TOKEN
-```
-
-兼容现有 credential 命名时，飞书 Webhook 和 Telegram Bot Token 也可以分别使用 `API_KEY`。
-
-也支持文件 SecretRef，适合容器 Secret mount。相对路径从 `.kairos` Workspace 根目录解析：
-
-```toml
-[credential.secrets.bot_token]
-source = "file"
-id = "/run/secrets/kairos-telegram-token"
-```
-
-Credential 文件由向导以 `0600` 权限原子写入。当前不支持把 Secret 明文写入向导生成的
-Credential；旧的明文字段仍保持只读兼容。
+Credential 以整文件方式校验和原子替换，多字段认证不会出现部分更新。运行时只接受
+`[credential.values]`，不从环境变量、外部文件或旧版字段回退读取。
 
 ## 3. 在 Launch 中选择 routes
 

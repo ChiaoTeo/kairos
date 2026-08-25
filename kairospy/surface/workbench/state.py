@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kairospy.system.apps.components.application import ComponentProcessApplication
+from kairospy.system.apps.observe.application import (
+    ObserveSnapshot,
+    SystemObserveApplication,
+)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
-from kairospy.surface.console.data import SystemObserveReader
-from kairospy.surface.console.models import ObserveSnapshot
 
 
 @dataclass(slots=True)
@@ -23,12 +24,6 @@ class WorkbenchState:
     dry_run: bool = False
     no_exec: bool = False
     yes: bool = False
-    selected_launch: str | None = None
-    selected_launch_instance: str | None = None
-    selected_launch_mode: str | None = None
-    selected_account: str | None = None
-    selected_market: Any | None = None
-    selected_reference: Any | None = None
 
     @property
     def workspace_id(self) -> str:
@@ -49,9 +44,7 @@ class WorkbenchState:
             self.snapshot = None
             return None
         try:
-            self.snapshot = SystemObserveReader(
-                ComponentProcessApplication(self.owner), self.owner.workspace_id
-            ).read()
+            self.snapshot = SystemObserveApplication(self.owner).read()
             self.load_error = None
         except Exception as error:
             self.snapshot = None

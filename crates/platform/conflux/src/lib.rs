@@ -25,9 +25,6 @@ pub use event::{
 pub use kairos_integration::blocking::{
     OrderCommand as BlockingOrderCommand, OrderQuery as BlockingOrderQuery,
 };
-pub use kairos_integration::composition::credentials::{
-    CredentialRecord, CredentialStore, credential_secret_ref, load_workspace_credential,
-};
 pub use kairos_integration::participants::binance::advanced::portfolio::BinancePortfolioMarginRestConnection;
 pub use kairos_integration::participants::binance::advanced::portfolio::pro::BinancePortfolioMarginProRestConnection;
 pub use kairos_integration::participants::binance::advanced::stocks::{

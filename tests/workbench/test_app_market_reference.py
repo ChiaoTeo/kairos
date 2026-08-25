@@ -25,10 +25,12 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.flows import market_reference
-from kairospy.surface.workbench.screens.guided.market import observation_renderable
-from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
-from kairospy.surface.console.models import ObserveSnapshot
+from kairospy.surface.workbench.screens.flows import market, reference
+from kairospy.surface.workbench.screens.flows.market.actions import (
+    observation_renderable,
+)
+from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
+from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
     ChoiceInteraction,
@@ -53,9 +55,7 @@ from app_support import (
 def test_market_command_runs_in_worker_and_presents_result_choices(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
 
     async def run() -> tuple[str, str, int, str]:
         app = KairosWorkbenchApp(_state())
@@ -85,9 +85,7 @@ def test_market_command_runs_in_worker_and_presents_result_choices(
 def test_guided_market_search_records_intent_without_persisting_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
 
     async def run() -> tuple[str, str, tuple[dict[str, object], ...]]:
         app = KairosWorkbenchApp(_state())
@@ -121,9 +119,7 @@ def test_guided_market_search_records_intent_without_persisting_candidates(
 def test_reference_search_and_numbered_result_stay_in_one_input_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
+    monkeypatch.setattr(reference, "load_records", lambda *args, **kwargs: (_market(),))
 
     async def run() -> tuple[type[object], str, int, bool, str, str]:
         app = KairosWorkbenchApp(_state())
@@ -166,9 +162,7 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream(
 def test_market_search_owns_action_area_until_results_are_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
 
     async def run() -> tuple[str, bool, str, str, int, bool, str]:
         app = KairosWorkbenchApp(_state())
@@ -225,7 +219,7 @@ def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
 ) -> None:
     observations: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        market_reference,
+        market,
         "load_routes",
         lambda state, market, observation: (
             {"provider": "first"},
@@ -256,13 +250,11 @@ def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
         }
 
     monkeypatch.setattr(
-        market_reference,
+        market,
         "load_observation",
         observation,
     )
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
 
     async def run() -> tuple[
         type[object], str, str, tuple[str, ...], ControlInteraction, bool
@@ -327,16 +319,14 @@ def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
 def test_single_market_route_appends_quote_to_activity_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
     monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
-    monkeypatch.setattr(
-        market_reference,
+        market,
         "load_routes",
         lambda *args, **kwargs: ({"provider": "massive"},),
     )
     monkeypatch.setattr(
-        market_reference,
+        market,
         "load_observation",
         lambda *args, **kwargs: {
             "symbol": "AAPL",
@@ -374,16 +364,14 @@ def test_single_market_route_appends_quote_to_activity_stream(
 def test_market_snapshot_is_only_appended_when_user_saves_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
     monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
-    monkeypatch.setattr(
-        market_reference,
+        market,
         "load_routes",
         lambda *args, **kwargs: ({"provider": "massive"},),
     )
     monkeypatch.setattr(
-        market_reference,
+        market,
         "load_observation",
         lambda *args, **kwargs: {
             "symbol": "AAPL",
@@ -418,9 +406,7 @@ def test_market_snapshot_is_only_appended_when_user_saves_it(
 def test_selecting_market_enters_named_context_without_printing_raw_record(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
 
     async def run() -> tuple[str, str, tuple[str, ...]]:
         app = KairosWorkbenchApp(_state())
@@ -468,9 +454,7 @@ def test_order_book_observation_has_a_readable_two_sided_table() -> None:
 def test_market_history_download_is_a_single_input_redacted_scope_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
 
     async def run() -> tuple[type[object], str, str, bool]:
         state = _state()
@@ -502,9 +486,7 @@ def test_market_history_download_is_a_single_input_redacted_scope_preview(
 def test_market_replay_collects_multiple_files_and_confirms_inline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (_market(),)
-    )
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
 
     async def run() -> tuple[str, str, str, bool]:
         app = KairosWorkbenchApp(_state())
@@ -545,9 +527,7 @@ def test_guided_reference_detail_technical_and_back_preserve_results(
         asset_class="currency",
         status=ReferenceStatus.ACTIVE,
     )
-    monkeypatch.setattr(
-        market_reference, "load_records", lambda *args, **kwargs: (asset,)
-    )
+    monkeypatch.setattr(reference, "load_records", lambda *args, **kwargs: (asset,))
 
     async def run() -> tuple[str, str, str, bool]:
         app = KairosWorkbenchApp(_state())

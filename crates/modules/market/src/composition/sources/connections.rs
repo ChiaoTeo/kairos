@@ -3,8 +3,9 @@ use std::path::Path;
 use kairos_conflux::{
     BinanceCredential, BinanceRestConfig, BinanceWebSocketConfig, ConfluxSystem, ConnectionKey,
     HyperliquidRestConfig, HyperliquidWebSocketConfig, IbkrMarketDataConfig,
-    MassiveWebSocketConfig, OkxRestConfig, OkxWebSocketConfig, load_workspace_credential,
+    MassiveWebSocketConfig, OkxRestConfig, OkxWebSocketConfig,
 };
+use kairos_credentials::CredentialStore;
 
 use super::super::config::{
     BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
@@ -99,11 +100,18 @@ fn install_one(
             snapshot_interval_ms,
             ..
         } => {
-            let credential =
-                load_workspace_credential(credentials_root, "binance", Some(credential_id))?
-                    .ok_or_else(|| {
-                        format!("Market source {source_id} requires a Binance credential")
-                    })?;
+            let credentials =
+                CredentialStore::load(credentials_root).map_err(|error| error.to_string())?;
+            let credential = credentials
+                .find_provider("binance", Some(credential_id))
+                .ok_or_else(|| {
+                    format!("Market source {source_id} requires a Binance credential")
+                })?;
+            let api_key = credential
+                .value("api_key")
+                .cloned()
+                .ok_or_else(|| format!("Market source {source_id} requires a Binance API key"))?;
+            let secret = credential.value("api_secret").cloned().unwrap_or_default();
             system
                 .connections()
                 .binance_stocks_rest
@@ -116,8 +124,8 @@ fn install_one(
                             .unwrap_or_else(|| default_endpoint("binance-equity").into()),
                         credential: Some(BinanceCredential {
                             principal_id: credential_id.clone(),
-                            api_key: secrecy::SecretString::from(credential.api_key),
-                            secret: credential.secret,
+                            api_key,
+                            secret,
                         }),
                     },
                 )
@@ -375,11 +383,14 @@ fn install_one(
             endpoint,
             ..
         } => {
-            let credential =
-                load_workspace_credential(credentials_root, "massive", Some(credential_id))?
-                    .ok_or_else(|| {
-                        format!("Market source {source_id} requires a Massive credential")
-                    })?;
+            let credentials =
+                CredentialStore::load(credentials_root).map_err(|error| error.to_string())?;
+            let api_key = credentials
+                .find_provider("massive", Some(credential_id))
+                .and_then(|credential| credential.value("api_key").cloned())
+                .ok_or_else(|| {
+                    format!("Market source {source_id} requires a Massive credential")
+                })?;
             let (product_name, endpoint_key) = match product {
                 MassiveMarketProduct::Equity => ("equity", "massive-equity-websocket"),
                 MassiveMarketProduct::Options => ("options", "massive-options-websocket"),
@@ -389,7 +400,7 @@ fn install_one(
                 endpoint: endpoint
                     .clone()
                     .unwrap_or_else(|| default_endpoint(endpoint_key).into()),
-                api_key: secrecy::SecretString::new(credential.api_key.into()),
+                api_key,
                 event_capacity: 4_096,
             };
             let connection_key = ConnectionKey::new(key.clone())?;

@@ -2,15 +2,22 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from kairospy.surface.workbench.screens.guided.models import (
+from kairospy.surface.workbench.screens.session import (
+    AccountSession,
+    ExecutionSession,
     GuidedSession,
     MarketSession,
+    LaunchMarketSession,
     OperationsSession,
     ResourcesSession,
     StrategySession,
 )
 from kairospy.surface.workbench.screens.operation import OperationSpec
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
+from kairospy.surface.workbench.screens.selection import (
+    selected_value,
+    selection_records,
+)
 from kairospy.surface.workbench.widgets import (
     ActionToken,
     ChoiceInteraction,
@@ -30,6 +37,22 @@ def _operation(summary: str, operation: Callable[[], object]) -> OperationSpec:
         operation=operation,
         running_status=f"正在执行：{summary}",
     )
+
+
+def test_numbered_selection_keeps_navigation_independent_of_payload_shape() -> None:
+    payload = {"launch_id": "demo", "status": "ready"}
+    records = selection_records(
+        (payload,),
+        key=lambda value: str(value["launch_id"]),
+        label=lambda value: str(value["launch_id"]),
+        description=lambda value: str(value["status"]),
+    )
+
+    assert records[0].key == "demo"
+    assert records[0].label == "demo"
+    assert records[0].description == "ready"
+    assert selected_value(records, "1") is payload
+    assert selected_value(records, "2") is None
 
 
 def test_prompt_state_has_one_active_variant() -> None:
@@ -111,11 +134,11 @@ def test_worker_terminal_cleanup_is_owned_by_the_session() -> None:
             project_prompt=marker,
             profile_action="create",
         ),
-        resources=ResourcesSession(order_prompt=marker),
-        strategy=StrategySession(
-            execution_prompt=marker,
-            launch_market_prompt=marker,
-        ),
+        resources=ResourcesSession(),
+        account=AccountSession(order_prompt=marker),
+        strategy=StrategySession(),
+        execution=ExecutionSession(prompt=marker),
+        launch_market=LaunchMarketSession(prompt=marker),
     )
 
     for kind in (
@@ -131,9 +154,9 @@ def test_worker_terminal_cleanup_is_owned_by_the_session() -> None:
         session.clear_result_flow(kind)
 
     assert session.operations.business_prompt is None
-    assert session.resources.order_prompt is None
-    assert session.strategy.execution_prompt is None
-    assert session.strategy.launch_market_prompt is None
+    assert session.account.order_prompt is None
+    assert session.execution.prompt is None
+    assert session.launch_market.prompt is None
     assert session.market.file_prompt is None
     assert session.operations.project_prompt is None
     assert session.operations.profile_action is None

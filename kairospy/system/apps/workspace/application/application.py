@@ -5,7 +5,11 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from kairospy.system.domain.workspace import Workspace, WorkspaceIdentity, WorkspacePaths
+from kairospy.system.domain.workspace import (
+    Workspace,
+    WorkspaceIdentity,
+    WorkspacePaths,
+)
 from kairospy.system.apps.workspace.services.templates import (
     install_project_template,
     project_template_paths,
@@ -63,7 +67,7 @@ class WorkspaceApplication:
             workspace.paths.operations_journal().parent,
             workspace.paths.launch_index().parent,
             workspace.paths.account_config().parent,
-            workspace.paths.credential_config().parent,
+            workspace.paths.credentials_root(),
             workspace.paths.notification_config().parent,
             workspace.paths.account_state().parent,
             workspace.paths.account_log().parent,
@@ -124,7 +128,7 @@ class WorkspaceApplication:
             workspace.paths.market_connections_root(),
             workspace.paths.orders_root(),
             workspace.paths.account_config().parent,
-            workspace.paths.credential_config().parent,
+            workspace.paths.credentials_root(),
             workspace.paths.notification_config().parent,
             workspace.paths.account_state().parent,
             workspace.paths.account_log().parent,

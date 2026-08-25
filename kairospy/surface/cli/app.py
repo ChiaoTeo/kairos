@@ -14,6 +14,9 @@ from typer.core import TyperGroup
 from typer.main import get_command
 
 from .commands.launch import launch_app
+from .commands.project import project_app
+from .commands.notifications import notifications_app
+from .commands.config import config_app
 from .commands.data import data_app
 from .commands.research import research_app
 from .commands.reference import reference_passthrough
@@ -23,18 +26,16 @@ from .commands.integration import integration_passthrough
 from .commands.market import market_passthrough
 from .commands.order import order_passthrough
 from .commands.risk import risk_passthrough
-from .commands.root import (
-    config_app,
-    notifications_app,
-    project_app,
-    system_app,
-)
+from .commands.system import system_app
 from kairospy.system.apps.workspace.application import WorkspaceApplication
-from kairospy.system.apps.components.application import ComponentProcessApplication
-from kairospy.surface.console.data import SystemObserveReader
-from kairospy.surface.console.models import recommended_action
-from kairospy.surface.workbench import KairosWorkbenchApp, load_workbench_state
+from kairospy.system.apps.observe.application import SystemObserveApplication
+from kairospy.surface.workbench import (
+    WorkbenchLaunchRequest,
+    WorkbenchWorkspaceError,
+    run_workbench,
+)
 from .options import OutputFormat, render, reset_command_output, set_command_output
+from .observe_rendering import observe_payload
 
 
 _HELP_PANEL_ORDER = {
@@ -282,31 +283,20 @@ def observe(
         import json
 
         value = WorkspaceApplication().resolve(workspace)
-        reader = SystemObserveReader(
-            ComponentProcessApplication(value), value.workspace_id
-        )
-        snapshot = reader.read()
-        typer.echo(
-            json.dumps(
-                {
-                    "workspace_id": snapshot.workspace_id,
-                    "components": snapshot.components,
-                    "launches": snapshot.launches,
-                    "market_snapshot": snapshot.market_snapshot,
-                    "next_action": recommended_action(snapshot),
-                },
-                default=str,
+        snapshot = SystemObserveApplication(value).read()
+        typer.echo(json.dumps(observe_payload(snapshot), default=str))
+        return
+    try:
+        run_workbench(
+            WorkbenchLaunchRequest(
+                workspace=Path(workspace) if workspace is not None else None,
+                initial_section="observe",
+                observe_refresh_seconds=refresh,
+                require_workspace=True,
             )
         )
-        return
-    state = load_workbench_state(Path(workspace) if workspace is not None else None)
-    if state.owner is None:
-        raise typer.BadParameter(state.load_error or "当前没有可用的 workspace")
-    KairosWorkbenchApp(
-        state,
-        initial_section="observe",
-        observe_refresh_seconds=refresh,
-    ).run()
+    except WorkbenchWorkspaceError as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 def _interactive_command(
@@ -317,23 +307,18 @@ def _interactive_command(
     no_alt_screen: bool = False,
     transcript: str | None = None,
 ) -> None:
-    state = load_workbench_state(
-        Path(workspace) if workspace is not None else None,
-        dry_run=dry_run,
-        no_exec=no_exec,
-        yes=yes,
+    result = run_workbench(
+        WorkbenchLaunchRequest(
+            workspace=Path(workspace) if workspace is not None else None,
+            dry_run=dry_run,
+            no_exec=no_exec,
+            yes=yes,
+            inline=no_alt_screen,
+            transcript_path=Path(transcript) if transcript is not None else None,
+        )
     )
-    workbench = KairosWorkbenchApp(
-        state,
-        watch_css=os.environ.get("KAIROS_TEXTUAL_DEV") == "1",
-        transcript_path=Path(transcript) if transcript is not None else None,
-    )
-    if no_alt_screen:
-        workbench.run(inline=True, inline_no_clear=True)
-    else:
-        workbench.run()
-    if workbench.transcript.path is not None:
-        typer.echo(f"Workbench transcript: {workbench.transcript.path}")
+    if result.transcript_path is not None:
+        typer.echo(f"Workbench transcript: {result.transcript_path}")
 
 
 @app.command("interactive", rich_help_panel="Getting started")

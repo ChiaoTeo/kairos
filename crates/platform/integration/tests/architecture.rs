@@ -33,6 +33,16 @@ fn integration_uses_the_target_top_level_layers() {
 }
 
 #[test]
+fn credential_storage_is_not_owned_by_integration() {
+    let root = source_root();
+    assert!(!root.join("composition/credentials.rs").exists());
+    let composition = std::fs::read_to_string(root.join("composition/mod.rs"))
+        .expect("read Integration composition root");
+    assert!(!composition.contains("CredentialStore"));
+    assert!(!composition.contains("CredentialRecord"));
+}
+
+#[test]
 fn services_have_only_participant_implementation_axes() {
     let services = source_root().join("services");
     for axis in ["participants"] {

@@ -1,7 +1,7 @@
 use kairos_conflux::{
-    BinanceCredential, BinanceRestConfig, ConnectionKey, CredentialStore, IbkrOrderConfig,
-    OkxCredential,
+    BinanceCredential, BinanceRestConfig, ConnectionKey, IbkrOrderConfig, OkxCredential,
 };
+use kairos_credentials::{CredentialRecord, CredentialStore};
 use kairos_workspace::Workspace;
 use secrecy::SecretString;
 
@@ -206,10 +206,7 @@ fn load_credential(
         .credential_id
         .as_deref()
         .ok_or_else(|| format!("account {} has no credential binding", binding.account_id))?;
-    let path = workspace.existing_path(
-        &["config", "credentials", "credentials.toml"],
-        &["credentials", "credentials.toml"],
-    )?;
+    let path = workspace.existing_credentials_root()?;
     let store = CredentialStore::load(path)?;
     let credential = store
         .credentials
@@ -232,7 +229,7 @@ fn load_credential(
 }
 
 fn validate_credential(
-    credential: &kairos_conflux::CredentialRecord,
+    credential: &CredentialRecord,
     binding: &StandaloneExecutionBinding,
     provider: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -273,6 +270,8 @@ fn validate_credential(
 
 #[cfg(test)]
 mod tests {
+    use kairos_credentials::CredentialRecord;
+
     use super::{
         effective_execution_channel, validate_credential, validate_direct_capability,
         validate_environment_endpoint, validate_ibkr_environment_port,
@@ -367,14 +366,16 @@ mod tests {
 
     #[test]
     fn direct_write_revalidates_credential_permission_and_required_secrets() {
-        let credential = kairos_conflux::CredentialRecord {
-            credential_id: "credential-main".into(),
-            provider: "binance".into(),
-            role: "readonly".into(),
-            api_key: "key".into(),
-            secret: "secret".into(),
-            passphrase: String::new(),
-        };
+        let credential = CredentialRecord::new(
+            "credential-main",
+            "binance",
+            "readonly",
+            [
+                ("api_key".to_owned(), "key".to_owned()),
+                ("api_secret".to_owned(), "secret".to_owned()),
+            ],
+        )
+        .unwrap();
         assert!(
             validate_credential(&credential, &binding("trade"), "binance")
                 .unwrap_err()
@@ -382,11 +383,13 @@ mod tests {
                 .contains("trade permission")
         );
 
-        let missing_secret = kairos_conflux::CredentialRecord {
-            role: "trade".into(),
-            secret: String::new(),
-            ..credential
-        };
+        let missing_secret = CredentialRecord::new(
+            "credential-main",
+            "binance",
+            "trade",
+            [("api_key".to_owned(), "key".to_owned())],
+        )
+        .unwrap();
         assert!(
             validate_credential(&missing_secret, &binding("trade"), "binance")
                 .unwrap_err()

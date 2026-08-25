@@ -25,13 +25,10 @@ from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.investment.apps.account.application import AccountConfigurationApplication
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
-    SecretRef,
 )
 from kairospy.surface.cli import execute_argv
-from kairospy.surface.cli.commands.launch import (
-    _launch_config_path,
-    _live_start_confirmation,
-)
+from kairospy.surface.cli.commands.launch.support import _launch_config_path
+from kairospy.surface.cli.commands.launch.lifecycle import _live_start_confirmation
 from io import StringIO
 
 
@@ -147,12 +144,6 @@ def test_live_execution_requires_explicit_side_effect_and_notional_bound(
     assert LaunchConfigurationApplication().validate(path)["valid"] is True
 
 
-
-
-
-
-
-
 def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
     tmp_path: Path,
 ) -> None:
@@ -186,8 +177,6 @@ def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
             "action": "configure and manually test the selected data connection",
         }
     ]
-
-
 
 
 def _write_config(path: Path, *, mode: str = "paper") -> Path:
@@ -566,7 +555,7 @@ def test_instance_resource_drift_uses_secret_ref_identity_not_secret_value(
     credentials.configure(
         "paper-credential",
         provider="paper",
-        fields={"note": SecretRef("env", "KAIROS_PAPER_NOTE")},
+        values={"note": "paper-note"},
     )
     accounts = AccountConfigurationApplication(workspace)
     accounts.connect(
@@ -593,7 +582,7 @@ def test_instance_resource_drift_uses_secret_ref_identity_not_secret_value(
     credentials.configure(
         "paper-credential",
         provider="paper",
-        fields={"note": SecretRef("env", "KAIROS_PAPER_NOTE_V2")},
+        values={"note": "paper-note-v2"},
         overwrite=True,
     )
     drift = application.instance_resource_drift(
@@ -672,7 +661,7 @@ def test_backtest_instance_does_not_parse_workspace_live_secrets(
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="backtest-secret-isolation"
     )
-    credential = workspace.paths.credential_config().parent / "broken-openai.toml"
+    credential = workspace.paths.credentials_root() / "broken-openai.toml"
     credential.parent.mkdir(parents=True, exist_ok=True)
     credential.write_text(
         '[credential]\nid = "broken-openai"\nprovider = "openai"\n'

@@ -9,7 +9,6 @@ from typing import Any, cast
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
     PreparedCredential,
-    SecretRef,
 )
 from kairospy.system.apps.workspace.application import (
     Workspace,
@@ -72,13 +71,10 @@ class ModelConnectionDraftApplication:
         base_url: str | None = None,
         credential_id: str | None = None,
         credential_values: Mapping[str, str] | None = None,
-        credential_refs: Mapping[str, SecretRef] | None = None,
         models: Sequence[str] = (),
         timeout_seconds: float = 60.0,
         enabled: bool = True,
     ) -> ModelConnectionDraft:
-        if credential_values is not None and credential_refs is not None:
-            raise ValueError("credential values and SecretRefs are mutually exclusive")
         connections = ModelProviderConnectionApplication(self.workspace)
         defaults = (
             connections.provider_defaults(provider)
@@ -102,27 +98,16 @@ class ModelConnectionDraftApplication:
                     "authenticated model connection requires credential_id"
                 )
             if credential_values is not None:
-                prepared_credential = credentials.prepare_secret_values(
+                prepared_credential = credentials.prepare(
                     credential_id,
                     provider=credential_provider,
                     role="model-inference",
                     values=credential_values,
                 )
                 secret = credential_values.get("api_key")
-            elif credential_refs is not None:
-                prepared_credential = credentials.prepare(
-                    credential_id,
-                    provider=credential_provider,
-                    role="model-inference",
-                    fields=credential_refs,
-                )
-                reference = credential_refs.get("api_key")
-                secret = (
-                    credentials.resolve(reference) if reference is not None else None
-                )
             else:
                 secret = credentials.resolve_field(credential_id, "api_key")
-        elif credential_id is not None or credential_values or credential_refs:
+        elif credential_id is not None or credential_values:
             raise ValueError("this local model connection does not require credentials")
 
         try:

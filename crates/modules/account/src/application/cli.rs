@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use kairos_conflux::{
-    CredentialRecord, CredentialStore, ExternalAccountCredentialProfile, ExternalFeeComponent,
-    ExternalFeeSchedule, ExternalOrder, credential_secret_ref,
+    ExternalAccountCredentialProfile, ExternalFeeComponent, ExternalFeeSchedule, ExternalOrder,
 };
+use kairos_credentials::{CredentialRecord, CredentialStore};
 use kairos_primitives::DomainTypeError;
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::DecimalParts;
@@ -22,17 +22,6 @@ use crate::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
 };
 use crate::domain::AccountModel;
-
-fn secret_ref_value(
-    source: Option<String>,
-    id: Option<String>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    match (source, id) {
-        (None, None) => Ok(String::new()),
-        (Some(source), Some(id)) => credential_secret_ref(&source, &id).map_err(Into::into),
-        _ => Err("credential SecretRef requires both source and id".into()),
-    }
-}
 
 /// Operational adapter selection for an Account connection.
 ///
@@ -705,11 +694,8 @@ impl CliAccountApplication {
             &["accounts", "accounts.toml"],
         )?;
         let mut registry = AccountRegistry::load(&registry_read_path)?;
-        let credentials_path = workspace.child(&["config", "credentials", "credentials.toml"])?;
-        let credentials_read_path = workspace.existing_path(
-            &["config", "credentials", "credentials.toml"],
-            &["credentials", "credentials.toml"],
-        )?;
+        let credentials_path = workspace.credentials_root();
+        let credentials_read_path = workspace.existing_credentials_root()?;
         let credential_store = CredentialStore::load(&credentials_read_path)?;
         for account in &mut registry.accounts {
             if account.credentials.is_empty() {
@@ -2103,7 +2089,7 @@ impl CliAccountApplication {
                 credential_id: record.credential_id.clone(),
                 provider: record.provider.clone(),
                 role: record.role.clone(),
-                api_key: redact(&record.api_key),
+                api_key: redact(&record.api_key_value().unwrap_or_default()),
             })
             .collect();
         Ok(values)
@@ -2537,21 +2523,22 @@ impl CliAccountApplication {
         &mut self,
         request: CreateCredentialRequest,
     ) -> Result<CredentialMutationResult, Box<dyn std::error::Error>> {
-        if request.api_key.is_some() || request.secret.is_some() || request.passphrase.is_some() {
-            return Err(
-                "credential plaintext fields are read-only legacy input; use field-level SecretRef options"
-                    .into(),
-            );
-        }
-        self.credential_store.upsert(CredentialRecord {
-            credential_id: request.credential_id.clone(),
-            provider: request.provider,
-            role: request.role,
-            api_key: secret_ref_value(request.api_key_source, request.api_key_ref)?,
-            secret: secret_ref_value(request.secret_source, request.secret_ref)?,
-            passphrase: secret_ref_value(request.passphrase_source, request.passphrase_ref)?,
-        });
-        self.credential_store.save(&self.credentials_path)?;
+        let values = [
+            ("api_key".to_owned(), request.api_key.unwrap_or_default()),
+            ("api_secret".to_owned(), request.secret.unwrap_or_default()),
+            (
+                "passphrase".to_owned(),
+                request.passphrase.unwrap_or_default(),
+            ),
+        ];
+        let record = CredentialRecord::new(
+            request.credential_id.clone(),
+            request.provider,
+            request.role,
+            values,
+        )?;
+        CredentialStore::put(&self.credentials_path, &record, true)?;
+        self.credential_store = CredentialStore::load(&self.credentials_path)?;
         Ok(CredentialMutationResult {
             credential_id: request.credential_id,
             status: Some("created"),
@@ -2576,8 +2563,8 @@ impl CliAccountApplication {
             )
             .into());
         }
-        let removed = self.credential_store.remove(credential_id);
-        self.credential_store.save(&self.credentials_path)?;
+        let removed = CredentialStore::delete(&self.credentials_path, credential_id)?;
+        self.credential_store = CredentialStore::load(&self.credentials_path)?;
         Ok(CredentialMutationResult {
             credential_id: credential_id.to_owned(),
             status: None,
@@ -2603,7 +2590,7 @@ impl CliAccountApplication {
             api_key: if reveal_secrets {
                 credential.api_key_value().unwrap_or_default()
             } else {
-                redact(&credential.api_key)
+                redact(&credential.api_key_value().unwrap_or_default())
             },
             secret: if reveal_secrets {
                 credential.secret_value().unwrap_or_default()
@@ -3254,12 +3241,6 @@ pub struct CreateCredentialRequest {
     pub api_key: Option<String>,
     pub secret: Option<String>,
     pub passphrase: Option<String>,
-    pub api_key_source: Option<String>,
-    pub api_key_ref: Option<String>,
-    pub secret_source: Option<String>,
-    pub secret_ref: Option<String>,
-    pub passphrase_source: Option<String>,
-    pub passphrase_ref: Option<String>,
 }
 
 pub struct BindCredentialRequest {

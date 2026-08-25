@@ -5,8 +5,8 @@ use kairos_conflux::{
     HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery, HistoricalWindow, MarketBar,
     MarketEvent, MarketEventKind, MarketGreeks, MarketOrderBook, MarketQuote, MarketTrade,
     MassiveInstrumentQuery as InstrumentQuery, MassiveRestConfig, MassiveRestConnection,
-    load_workspace_credential,
 };
+use kairos_credentials::CredentialStore;
 use kairos_primitives::decimal::{Price, Quantity, Rate};
 use kairos_primitives::market::{ObservationKind, Provider};
 use kairos_primitives::reference::InstrumentId;
@@ -446,15 +446,10 @@ impl CliMarketApplication {
                         "Massive download requires --workspace or the deprecated --api-key",
                     )?;
                     let workspace = Workspace::open(workspace_root)?;
-                    let credentials_root =
-                        workspace.existing_path(&["config", "credentials"], &["credentials"])?;
-                    load_workspace_credential(
-                        &credentials_root,
-                        "massive",
-                        request.credential_id.as_deref(),
-                    )?
-                    .ok_or("Massive workspace credential does not exist")?
-                    .api_key
+                    CredentialStore::for_workspace(&workspace)?
+                        .find_provider("massive", request.credential_id.as_deref())
+                        .and_then(|credential| credential.api_key_value())
+                        .ok_or("Massive workspace credential does not exist")?
                 };
                 let key = ConnectionKey::new("market-history")?;
                 let mut provider = MassiveRestConnection::new(

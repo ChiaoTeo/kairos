@@ -14,13 +14,12 @@ from kairospy.investment.apps.account.application import (
 )
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
-    SecretRef,
 )
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
-from kairospy.surface.cli.commands.launch import (
-    _acquire_launch_leases,
-    _release_launch_leases,
+from kairospy.system.apps.launch.application.runtime import (
+    acquire_launch_leases as _acquire_launch_leases,
+    release_launch_leases as _release_launch_leases,
 )
 
 
@@ -38,10 +37,6 @@ def test_account_modify_persists_model_and_other_fields(tmp_path) -> None:
     assert app.show("main")["environment"] == "paper"
 
 
-
-
-
-
 def test_live_account_requires_credential_unless_forced(tmp_path, monkeypatch) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="account"
@@ -52,14 +47,10 @@ def test_live_account_requires_credential_unless_forced(tmp_path, monkeypatch) -
         app.connect("live")
 
     credential = CredentialApplication(workspace).add(
-        "binance-live", provider="binance", fields=("api_key", "api_secret")
+        "binance-live",
+        provider="binance",
+        values={"api_key": "key", "api_secret": "secret"},
     )
-    monkeypatch.setenv("KAIROS_CREDENTIAL_BINANCE_LIVE_API_KEY", "key")
-    monkeypatch.setenv("KAIROS_CREDENTIAL_BINANCE_LIVE_API_SECRET", "secret")
-    assert CredentialApplication(workspace).environment("binance-live") == {
-        "API_KEY": "key",
-        "API_SECRET": "secret",
-    }
     account = app.connect("live", credential=credential["credential_id"])
     assert account["credential"] == "binance-live"
     record = tomllib.loads(
@@ -159,7 +150,7 @@ def test_account_manual_verification_records_scope_and_becomes_stale(tmp_path) -
     assert app.show("paper-account")["verification_status"] == "retest_required"
 
 
-def test_account_secret_ref_identity_invalidates_verification_without_leaking_secret(
+def test_account_credential_identity_invalidates_verification_without_leaking_secret(
     tmp_path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init(
@@ -178,10 +169,9 @@ def test_account_secret_ref_identity_invalidates_verification_without_leaking_se
     CredentialConfigurationApplication(workspace).configure(
         "paper-key",
         provider="paper",
-        fields={"note": SecretRef("env", "KAIROS_PAPER_NOTE")},
+        values={"note": "never-print-this"},
         overwrite=True,
     )
-    monkeypatch.setenv("KAIROS_PAPER_NOTE", "never-print-this")
 
     assert app.show("main")["verification_status"] == "retest_required"
     evidence = workspace.paths.child(

@@ -47,7 +47,7 @@ use kairos_account::{
     AccountApplication, AccountCurrentView, AccountRuntimeMode, MarkToMarket, ReconcileAccount,
     RefreshAccount,
 };
-use kairos_conflux::{CredentialRecord, CredentialStore};
+use kairos_credentials::{CredentialRecord, CredentialStore};
 
 fn segment(key: &str) -> AccountSegment {
     AccountSegment {
@@ -271,40 +271,37 @@ fn position(instrument_id: &str, quantity: SignedQuantity) -> Position {
 }
 
 #[test]
-fn credential_can_resolve_secret_from_namespaced_environment() {
-    let name = "KAIROS_CREDENTIAL_TEST_ACCOUNT_API_SECRET";
-    std::env::set_var(name, "secret-from-env");
-    let credential = CredentialRecord {
-        credential_id: "test-account".into(),
-        provider: "binance".into(),
-        role: "readonly".into(),
-        api_key: String::new(),
-        secret: String::new(),
-        passphrase: String::new(),
-    };
-    assert_eq!(
-        credential.secret_value().as_deref(),
-        Some("secret-from-env")
-    );
-    std::env::remove_var(name);
+fn credential_uses_only_its_stored_values() {
+    let credential = CredentialRecord::new(
+        "test-account",
+        "binance",
+        "readonly",
+        [("api_secret".to_owned(), "stored-secret".to_owned())],
+    )
+    .unwrap();
+    assert_eq!(credential.secret_value().as_deref(), Some("stored-secret"));
 }
 
 #[test]
 fn credential_store_persists_toml_records() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("credentials/credentials.toml");
-    let credentials = vec![CredentialRecord {
-        credential_id: "binance-live".into(),
-        provider: "binance".into(),
-        role: "readonly".into(),
-        api_key: "stored-key".into(),
-        secret: "stored-secret".into(),
-        passphrase: String::new(),
-    }];
-    let store = CredentialStore { credentials };
-    store.save(&path).unwrap();
-    let loaded = CredentialStore::load(&path).unwrap();
-    assert_eq!(loaded.credentials, store.credentials);
+    let root = directory.path().join("credentials");
+    let credential = CredentialRecord::new(
+        "binance-live",
+        "binance",
+        "readonly",
+        [
+            ("api_key".to_owned(), "stored-key".to_owned()),
+            ("api_secret".to_owned(), "stored-secret".to_owned()),
+        ],
+    )
+    .unwrap();
+    CredentialStore::put(&root, &credential, false).unwrap();
+    let loaded = CredentialStore::load(&root).unwrap();
+    assert_eq!(
+        loaded.credentials[0].api_key_value().as_deref(),
+        Some("stored-key")
+    );
     assert!(
         directory
             .path()
@@ -341,7 +338,9 @@ role = "trade"
         credentials.join("binance-read.toml"),
         r#"[credential]
 id = "binance-read"
-broker = "binance"
+provider = "binance"
+
+[credential.values]
 api_key = "key"
 api_secret = "secret"
 "#,
@@ -355,9 +354,9 @@ api_secret = "secret"
         Some("trade")
     );
     assert_eq!(registry.accounts[0].credentials[0].role, "trade");
-    let store = CredentialStore::load(credentials.join("credentials.toml")).unwrap();
+    let store = CredentialStore::load(&credentials).unwrap();
     assert_eq!(store.credentials[0].credential_id, "binance-read");
-    assert_eq!(store.credentials[0].api_key, "key");
+    assert_eq!(store.credentials[0].api_key_value().as_deref(), Some("key"));
 }
 
 #[test]

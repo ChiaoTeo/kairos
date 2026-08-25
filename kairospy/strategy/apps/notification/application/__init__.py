@@ -1,4 +1,4 @@
-from .admin import NotificationAdminApplication, NotificationSecretRef
+from .admin import NotificationAdminApplication
 from .application import NotificationApplication
 from .draft import (
     NotificationDestinationDraft,
@@ -13,6 +13,5 @@ __all__ = [
     "NotificationDestinationDraftApplication",
     "NotificationReceipt",
     "NotificationRequest",
-    "NotificationSecretRef",
     "NotificationSeverity",
 ]

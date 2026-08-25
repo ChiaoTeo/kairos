@@ -54,6 +54,7 @@ CATALOG_MUTATION_COMMANDS = {
     ("catalog", "listings", "add"),
 }
 
+
 def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str]]:
     values: list[str] = []
     result: list[str] = []

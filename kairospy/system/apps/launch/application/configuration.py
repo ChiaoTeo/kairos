@@ -1710,7 +1710,7 @@ def _workspace_resource_diagnostics(
             (reason,),
             severity="blocker" if required else "warning",
             action=(
-                "configure the MCP credential SecretRef; optional failure disables that MCP server"
+                "configure the MCP credential values; optional failure disables that MCP server"
             ),
         )
     return diagnostics
@@ -1803,7 +1803,7 @@ def _workspace_mcp_credential_issues(
                 (
                     credential_id,
                     required,
-                    f"MCP credential SecretRef is unavailable or requires migration: {credential_id}",
+                    f"MCP credential is unavailable or incomplete: {credential_id}",
                 )
             )
     return tuple(result)

@@ -40,8 +40,23 @@ def test_workbench_does_not_route_actions_through_typer_or_cli_executor() -> Non
             assert token not in source, f"{token} leaked into {path}"
 
 
-def test_guided_command_modules_do_not_own_process_or_terminal_boundaries() -> None:
-    guided = WORKBENCH / "screens" / "guided"
+def test_cli_depends_only_on_the_public_workbench_launcher() -> None:
+    cli = PACKAGE / "surface" / "cli"
+    forbidden = (
+        "KairosWorkbenchApp",
+        "load_workbench_state",
+        "surface.workbench.app",
+        "surface.workbench.screens",
+        "surface.workbench.state",
+    )
+    for path in _python_files(cli):
+        source = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            assert token not in source, f"{token} leaked into {path}"
+
+
+def test_product_modules_do_not_own_process_or_terminal_boundaries() -> None:
+    products = WORKBENCH / "screens" / "flows"
     forbidden = (
         "subprocess",
         "prompt_toolkit",
@@ -50,7 +65,7 @@ def test_guided_command_modules_do_not_own_process_or_terminal_boundaries() -> N
         "execute_argv",
         "redirect_stdout",
     )
-    for path in _python_files(guided):
+    for path in _python_files(products):
         source = path.read_text(encoding="utf-8")
         for token in forbidden:
             assert token not in source, f"{token} leaked into {path}"
@@ -131,6 +146,33 @@ def test_command_screen_composes_one_activity_stream_and_one_input() -> None:
     assert source.count("yield WorkbenchCommandInput(") == 1
 
 
+def test_command_screen_is_only_a_textual_and_product_router_boundary() -> None:
+    source = (WORKBENCH / "screens" / "command_line.py").read_text(encoding="utf-8")
+    for prefix in (
+        "kairospy.investment.apps",
+        "kairospy.strategy.apps",
+        "kairospy.system.apps",
+        "kairospy.surface.cli",
+    ):
+        assert prefix not in source
+
+
+def test_workbench_state_owns_no_product_selection() -> None:
+    path = WORKBENCH / "state.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    state = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "WorkbenchState"
+    )
+    fields = {
+        node.target.id
+        for node in state.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert not {name for name in fields if name.startswith("selected_")}
+
+
 def test_workbench_has_one_product_screen_and_no_dialog_package() -> None:
     screen_subclasses: list[tuple[Path, str]] = []
     for path in _python_files(WORKBENCH):
@@ -193,9 +235,7 @@ def test_command_screen_has_no_parallel_operation_or_prompt_compatibility_state(
     None
 ):
     screen = (WORKBENCH / "screens" / "command_line.py").read_text(encoding="utf-8")
-    session = (WORKBENCH / "screens" / "guided" / "models.py").read_text(
-        encoding="utf-8"
-    )
+    session = (WORKBENCH / "screens" / "session.py").read_text(encoding="utf-8")
     for token in (
         "_pending_operation",
         "_pending_action_name",
@@ -217,8 +257,8 @@ def test_command_screen_has_no_parallel_operation_or_prompt_compatibility_state(
         assert compatibility not in session
 
 
-def test_guided_session_composes_owned_product_state() -> None:
-    path = WORKBENCH / "screens" / "guided" / "models.py"
+def test_workbench_session_composes_owned_product_state() -> None:
+    path = WORKBENCH / "screens" / "session.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     guided = next(
         node
@@ -236,7 +276,10 @@ def test_guided_session_composes_owned_product_state() -> None:
         "operations",
         "research",
         "resources",
+        "account",
         "strategy",
+        "execution",
+        "launch_market",
     } <= fields
     assert not fields & {
         "resource_wizard",
@@ -246,6 +289,24 @@ def test_guided_session_composes_owned_product_state() -> None:
         "launch_wizard",
         "execution_prompt",
     }
+
+
+def test_product_sessions_do_not_retain_untyped_result_payloads() -> None:
+    path = WORKBENCH / "screens" / "session.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    product_sessions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name.endswith("Session")
+    }
+
+    for name, session in product_sessions.items():
+        for node in session.body:
+            if not isinstance(node, ast.AnnAssign):
+                continue
+            annotation = ast.unparse(node.annotation)
+            assert "Any" not in annotation, f"Any state leaked into {name}"
+            assert "dict[" not in annotation, f"dict state leaked into {name}"
 
 
 def test_shared_input_uses_typed_action_tokens() -> None:
@@ -288,3 +349,31 @@ def test_screen_does_not_import_product_orchestration_symbols() -> None:
         'command.startswith("order:field:")',
     ):
         assert prefix not in source
+    for lifecycle in (
+        "market.handle_input",
+        "operations.handle_input",
+        "resources.handle_input",
+        "strategy.handle_input",
+        "market.handle_command",
+        "operations.handle_command",
+        "resources.handle_command",
+        "strategy.handle_command",
+        "market.handle_success",
+        "operations.handle_success",
+        "resources.handle_success",
+        "strategy.handle_success",
+        "market.handle_failure",
+        "operations.handle_failure",
+        "resources.handle_failure",
+        "strategy.handle_failure",
+        "market.handle_cancel",
+        "operations.handle_cancel",
+        "resources.handle_cancel",
+        "strategy.handle_cancel",
+    ):
+        assert lifecycle not in source
+
+
+def test_parallel_guided_product_tree_has_been_removed() -> None:
+    guided = WORKBENCH / "screens" / "guided"
+    assert not guided.exists() or not tuple(guided.glob("*.py"))

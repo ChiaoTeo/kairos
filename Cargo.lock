@@ -2987,6 +2987,7 @@ dependencies = [
  "jsonrpsee",
  "kairos-account-contract",
  "kairos-conflux",
+ "kairos-credentials",
  "kairos-primitives",
  "kairos-protocol",
  "kairos-reference-contract",
@@ -3031,6 +3032,7 @@ dependencies = [
  "kairos-account-contract",
  "kairos-capital-contract",
  "kairos-conflux",
+ "kairos-credentials",
  "kairos-primitives",
  "kairos-protocol",
  "kairos-risk-contract",
@@ -3088,6 +3090,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairos-credentials"
+version = "0.2.0"
+dependencies = [
+ "kairos-workspace",
+ "secrecy",
+ "tempfile",
+ "thiserror 2.0.19",
+ "toml",
+]
+
+[[package]]
 name = "kairos-execution"
 version = "0.2.0"
 dependencies = [
@@ -3097,6 +3110,7 @@ dependencies = [
  "jsonrpsee",
  "kairos-account-contract",
  "kairos-conflux",
+ "kairos-credentials",
  "kairos-execution-contract",
  "kairos-market-contract",
  "kairos-primitives",
@@ -3175,6 +3189,7 @@ dependencies = [
  "futures-util",
  "jsonrpsee",
  "kairos-conflux",
+ "kairos-credentials",
  "kairos-market-contract",
  "kairos-primitives",
  "kairos-protocol",
@@ -3268,6 +3283,7 @@ dependencies = [
  "futures-util",
  "jsonrpsee",
  "kairos-conflux",
+ "kairos-credentials",
  "kairos-primitives",
  "kairos-protocol",
  "kairos-reference-contract",

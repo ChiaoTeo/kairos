@@ -1,10 +1,9 @@
 use clap::Parser;
-use kairos_conflux::load_workspace_credential;
+use kairos_credentials::CredentialStore;
 use kairos_execution::composition::{
     ExecutionConnectionOptions, ExecutionHostConfig, ExecutionWriterFence, build_execution_host,
 };
 use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
-use secrecy::ExposeSecret;
 use serde::Deserialize;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -306,13 +305,8 @@ impl Args {
                     .into(),
             );
         }
-        let credentials_root =
-            workspace.existing_path(&["config", "credentials"], &["credentials"])?;
-        let stored = load_workspace_credential(
-            &credentials_root,
-            &route.broker_id,
-            route.credential_id.as_deref(),
-        )?;
+        let credentials = CredentialStore::for_workspace(workspace)?;
+        let stored = credentials.find_provider(&route.broker_id, route.credential_id.as_deref());
         let (default_base_url, default_websocket_url) =
             provider_endpoints(&route.broker_id, &route.execution_channel);
         Ok(ExecutionConnectionOptions {
@@ -324,20 +318,14 @@ impl Args {
             execution_channel: route.execution_channel,
             trading_mode: route.trading_mode,
             api_key: stored
-                .as_ref()
-                .map(|value| value.api_key.clone())
-                .unwrap_or_default()
-                .into(),
+                .and_then(|value| value.value("api_key").cloned())
+                .unwrap_or_default(),
             secret: stored
-                .as_ref()
-                .map(|value| value.secret.expose_secret().to_owned())
-                .unwrap_or_default()
-                .into(),
+                .and_then(|value| value.value("api_secret").cloned())
+                .unwrap_or_default(),
             passphrase: stored
-                .as_ref()
-                .map(|value| value.passphrase.clone())
-                .unwrap_or_default()
-                .into(),
+                .and_then(|value| value.value("passphrase").cloned())
+                .unwrap_or_default(),
             base_url: route.base_url.unwrap_or_else(|| default_base_url.into()),
             websocket_url: route
                 .websocket_url

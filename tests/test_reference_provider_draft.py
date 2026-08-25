@@ -7,7 +7,9 @@ import pytest
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
 )
-from kairospy.investment.apps.reference.application import ReferenceProviderDraftApplication
+from kairospy.investment.apps.reference.application import (
+    ReferenceProviderDraftApplication,
+)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
@@ -107,16 +109,15 @@ def test_untested_reference_draft_requires_explicit_unverified_commit(
     )
 
 
-def test_discard_removes_unreferenced_reference_secret(tmp_path: Path) -> None:
+def test_discard_does_not_persist_reference_credential(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     draft = ReferenceProviderDraftApplication(workspace).prepare_massive(
         credential_id="massive-readonly",
         credential_values={"api_key": "discard-me"},
     )
     staged = draft.prepared_credential
-    assert staged is not None and staged.staged_secret_root is not None
-    secret_root = staged.staged_secret_root
+    assert staged is not None
 
     draft.discard()
 
-    assert secret_root.exists() is False
+    assert not (workspace.paths.credentials_root() / "massive-readonly.toml").exists()

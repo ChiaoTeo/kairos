@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/primitives",
+    "crates/platform/credentials",
     "crates/platform/integration",
     "crates/platform/conflux",
     "crates/platform/network",
@@ -60,6 +61,7 @@ kairos-account-contract = { path = "crates/modules/account/contract" }
 kairos-capital = { path = "crates/modules/capital" }
 kairos-capital-contract = { path = "crates/modules/capital/contract" }
 kairos-conflux = { path = "crates/platform/conflux" }
+kairos-credentials = { path = "crates/platform/credentials" }
 kairos-execution = { path = "crates/modules/execution" }
 kairos-execution-contract = { path = "crates/modules/execution/contract" }
 kairos-integration = { path = "crates/platform/integration" }

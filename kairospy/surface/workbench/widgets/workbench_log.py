@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from io import StringIO
+from dataclasses import replace
 from typing import Any
 
-from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from textual.widgets import RichLog
 
+from ..safety import redact_renderable, renderable_plain_text
 from ..screens.activity import ActivityOutcome, ActivityRecord
+from kairospy.surface.presentation import redact_text
 
 
 class ActivityStream(RichLog):
@@ -39,6 +40,7 @@ class ActivityStream(RichLog):
     def append_activity(self, activity: ActivityRecord) -> None:
         """Append one terminal activity and preserve an explicitly scrolled view."""
 
+        activity = _redact_activity(activity)
         self._activities.append(activity)
         super().write(_activity_renderable(activity), scroll_end=self._following)
         if self._following:
@@ -85,6 +87,26 @@ class ActivityStream(RichLog):
 
         self._following = False
 
+    def write(
+        self,
+        content: Any,
+        width: int | None = None,
+        expand: bool = False,
+        shrink: bool = True,
+        scroll_end: bool | None = None,
+        animate: bool = False,
+    ) -> "ActivityStream":
+        """Redact content even when infrastructure writes outside ActivityRecord."""
+
+        return super().write(
+            redact_renderable(content),
+            width=width,
+            expand=expand,
+            shrink=shrink,
+            scroll_end=scroll_end,
+            animate=animate,
+        )
+
 
 def _activity_renderable(activity: ActivityRecord) -> Panel:
     marker, border = {
@@ -97,19 +119,17 @@ def _activity_renderable(activity: ActivityRecord) -> Panel:
     return Panel(body, title=f"{marker} {activity.title}", border_style=border)
 
 
-def renderable_plain_text(content: Any, width: int = 100) -> str:
-    """Render a Rich value to stable plain text for copy/transcript boundaries."""
-
-    output = StringIO()
-    console = Console(
-        file=output,
-        record=True,
-        width=width,
-        color_system=None,
-        force_terminal=False,
+def _redact_activity(activity: ActivityRecord) -> ActivityRecord:
+    body = redact_renderable(activity.body) if activity.body is not None else None
+    return replace(
+        activity,
+        title=redact_text(activity.title),
+        body=body,
+        copy_text=(redact_text(activity.copy_text) if activity.copy_text else None),
+        audit_summary=(
+            redact_text(activity.audit_summary) if activity.audit_summary else None
+        ),
     )
-    console.print(content, markup=False, highlight=False)
-    return output.getvalue()
 
 
 __all__ = ["ActivityStream", "renderable_plain_text"]

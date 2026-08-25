@@ -6,6 +6,8 @@ import json
 
 from prettytable import PrettyTable
 
+from kairospy.surface.presentation import redact_value
+
 
 class OutputFormat(StrEnum):
     TEXT = "text"
@@ -16,31 +18,6 @@ class OutputFormat(StrEnum):
 _command_output: ContextVar[OutputFormat | None] = ContextVar(
     "kairos_command_output", default=None
 )
-
-_SECRET_KEYS = frozenset(
-    {
-        "api_key",
-        "api_secret",
-        "secret",
-        "passphrase",
-        "access_token",
-        "private_key",
-        "token",
-    }
-)
-
-
-def _redact_output(value: object) -> object:
-    if isinstance(value, dict):
-        return {
-            key: "[REDACTED]"
-            if str(key).lower() in _SECRET_KEYS
-            else _redact_output(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return type(value)(_redact_output(item) for item in value)
-    return value
 
 
 def set_command_output(output: OutputFormat) -> object:
@@ -58,7 +35,7 @@ def effective_output(output: OutputFormat) -> OutputFormat:
 
 def render(value: object, output: OutputFormat) -> str:
     output = effective_output(output)
-    value = _redact_output(value)
+    value = redact_value(value, placeholder="[REDACTED]")
     if output is OutputFormat.JSON:
         return json.dumps(value, default=str, sort_keys=True)
     if output is OutputFormat.TABLE:

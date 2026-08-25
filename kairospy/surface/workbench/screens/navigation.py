@@ -10,38 +10,51 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..widgets import ActionItem
-from .guided.account import ACCOUNT_ACTIONS as RESOURCE_ACCOUNT_ACTIONS
-from .guided.business import actions as business_actions
-from .guided.catalog import HOME_ACTIONS, SECTION_ACTIONS, SECTION_LABELS
-from .guided.execution import EXECUTION_ACTIONS as STRATEGY_EXECUTION_ACTIONS
-from .guided.launch_market import MARKET_COMPONENT_ACTIONS as STRATEGY_MARKET_ACTIONS
-from .guided.models import GuidedSession
-from .guided.operations import (
+from .flows.resources.account_actions import ACCOUNT_ACTIONS as RESOURCE_ACCOUNT_ACTIONS
+from .flows.operations.business import actions as business_actions
+from .catalog import HOME_ACTIONS, SECTION_ACTIONS, SECTION_LABELS
+from .flows.launch.execution_actions import (
+    EXECUTION_ACTIONS as STRATEGY_EXECUTION_ACTIONS,
+)
+from .flows.launch.market_actions import (
+    MARKET_COMPONENT_ACTIONS as STRATEGY_MARKET_ACTIONS,
+)
+from .session import GuidedSession
+from .flows.operations.actions import (
     BUSINESS_ACTIONS as OPERATIONS_BUSINESS_ACTIONS,
     CONFIG_ACTIONS as OPERATIONS_CONFIG_ACTIONS,
     PROFILE_ACTIONS as OPERATIONS_PROFILE_ACTIONS,
     PROJECT_ACTIONS as OPERATIONS_PROJECT_ACTIONS,
     SERVICE_ACTIONS as OPERATIONS_SERVICE_ACTIONS,
 )
-from .guided.orders import ORDER_ACTIONS as ACCOUNT_ORDER_ACTIONS
-from .guided.research import (
+from .flows.launch.orders import ORDER_ACTIONS as ACCOUNT_ORDER_ACTIONS
+from .flows.research.actions import (
     DATA_ACTIONS as RESEARCH_DATA_ACTIONS,
     RESEARCH_ACTIONS as RESEARCH_WORKFLOW_ACTIONS,
 )
-from .guided.resources import detail_actions as resource_detail_actions
-from .guided.resource_rendering import RESOURCE_LABELS, identity, record_summary
-from .guided.strategy import (
+from .flows.resources.actions import detail_actions as resource_detail_actions
+from .flows.resources.views import RESOURCE_LABELS, identity, record_summary
+from .flows.launch.actions import (
     ATTACH_ACTIONS as STRATEGY_ATTACH_ACTIONS,
     INSTANCE_ACTIONS as STRATEGY_INSTANCE_ACTIONS,
     LAUNCH_ACTIONS as STRATEGY_LAUNCH_ACTIONS,
     TIMELINE_ACTIONS as STRATEGY_TIMELINE_ACTIONS,
 )
-from .guided.workspace_market import WORKSPACE_MARKET_ACTIONS
-from .guided.market import (
+from .flows.market.workspace import WORKSPACE_MARKET_ACTIONS
+from .flows.market.actions import (
     MARKET_CONTROL_ACTIONS,
     provider_actions as market_provider_actions,
     selected_market_actions,
 )
+from .selection import SelectionRecord, selection_records
+
+
+def _visible(records: tuple[Any, ...]) -> tuple[SelectionRecord, ...]:
+    return selection_records(
+        records,
+        label=record_label,
+        description=record_description,
+    )
 
 
 def go_back(session: GuidedSession) -> bool:
@@ -51,14 +64,14 @@ def go_back(session: GuidedSession) -> bool:
         return False
     if session.context == ("market", "providers"):
         session.context = ("market", "selected")
-        session.visible_records = session.market.records
+        session.visible_records = _visible(session.market.records)
     elif session.context == ("market", "connected"):
         session.enter("market")
     elif session.context == ("market", "selected"):
         session.context = (
             ("market", "results") if session.market.records else ("market",)
         )
-        session.visible_records = session.market.records
+        session.visible_records = _visible(session.market.records)
     elif session.context == ("reference", "selected"):
         kind = session.reference.kind
         session.context = (
@@ -98,12 +111,12 @@ def go_back(session: GuidedSession) -> bool:
             if session.strategy.launch_records
             else ("strategy",)
         )
-        session.visible_records = session.strategy.launch_records
+        session.visible_records = _visible(session.strategy.launch_records)
     elif session.context in {("strategy", "attach"), ("strategy", "instances")}:
         if session.context == ("strategy", "attach"):
             session.strategy.attach_paused = True
         session.context = ("strategy", "selected")
-        session.visible_records = session.strategy.launch_records
+        session.visible_records = _visible(session.strategy.launch_records)
     elif session.context in {
         ("strategy", "instance"),
         ("strategy", "components"),
@@ -116,16 +129,16 @@ def go_back(session: GuidedSession) -> bool:
             ("strategy", "timeline"),
         }:
             session.context = ("strategy", "instance")
-            session.visible_records = session.strategy.instance_records
+            session.visible_records = _visible(session.strategy.instance_records)
         elif session.context in {
             ("strategy", "execution"),
             ("strategy", "market"),
         }:
             session.context = ("strategy", "components")
-            session.visible_records = session.strategy.component_records
+            session.visible_records = _visible(session.strategy.component_records)
         else:
             session.context = ("strategy", "instances")
-            session.visible_records = session.strategy.instance_records
+            session.visible_records = _visible(session.strategy.instance_records)
     elif len(session.context) > 1 and session.context[0] == "strategy":
         session.enter("strategy")
     elif len(session.context) > 1 and session.context[0] == "reference":
@@ -156,7 +169,7 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
     if not session.context:
         return HOME_ACTIONS
     if session.context == ("market", "selected"):
-        market = getattr(state, "selected_market", None)
+        market = session.market.selected
         if market is None:
             return ()
         actions = selected_market_actions(market)
@@ -197,8 +210,8 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
             return tuple(
                 ActionItem(
                     str(index),
-                    identity(kind, record),
-                    record_summary(kind, record),
+                    record.label,
+                    record.description,
                     str(index),
                 )
                 for index, record in enumerate(session.visible_records, 1)
@@ -227,8 +240,8 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
         return tuple(
             ActionItem(
                 str(index),
-                record_label(record),
-                record_description(record),
+                record.label,
+                record.description,
                 str(index),
             )
             for index, record in enumerate(session.visible_records, 1)

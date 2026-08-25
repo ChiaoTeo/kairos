@@ -6,19 +6,12 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
-import re
 from tempfile import gettempdir
 from threading import Lock
 from typing import Any
 from uuid import uuid4
 
-
-_SENSITIVE_LINE = re.compile(
-    r"(?i)(?:--)?"
-    r"(api[_ -]?key|authorization|bearer|credential|password|secret|token)"
-    r"(?:\s*[:=]\s*|\s+)([^\s,;]+)"
-)
-_AUTHORIZATION_LINE = re.compile(r"(?im)(authorization\s*[:=]\s*)[^\r\n]+")
+from kairospy.surface.presentation import redact_text, redact_value
 
 
 class WorkbenchTranscript:
@@ -86,7 +79,7 @@ class WorkbenchTranscript:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_id": self.session_id,
             "event": event,
-            **{key: _sanitize(value) for key, value in fields.items()},
+            **{key: redact_value(value) for key, value in fields.items()},
         }
         encoded = json.dumps(item, ensure_ascii=False, default=str)
         with self._lock:
@@ -120,21 +113,4 @@ class WorkbenchTranscript:
             return tuple(dict(item) for item in self._events)
 
 
-def redact_text(value: str) -> str:
-    """Remove common credential assignments from user-shareable output."""
-
-    value = _AUTHORIZATION_LINE.sub(r"\1<redacted>", value)
-    return _SENSITIVE_LINE.sub(lambda match: f"{match.group(1)}=<redacted>", value)
-
-
-def _sanitize(value: Any) -> Any:
-    if isinstance(value, str):
-        return redact_text(value)
-    if isinstance(value, dict):
-        return {str(key): _sanitize(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_sanitize(item) for item in value]
-    return value
-
-
-__all__ = ["WorkbenchTranscript", "redact_text"]
+__all__ = ["WorkbenchTranscript"]
