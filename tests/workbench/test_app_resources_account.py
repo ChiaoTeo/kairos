@@ -362,7 +362,7 @@ def test_market_data_failed_test_uses_failure_activity(
 
     outcome, output, status = asyncio.run(run())
     assert outcome is ActivityOutcome.FAILURE
-    assert "✗" in output
+    assert "×" in output
     assert "连接验证失败" in output
     assert status == "连接验证失败 · 请检查结果"
 

@@ -318,12 +318,38 @@ def system_doctor(
 
 @system_app.command("repair")
 def system_repair(
+    component: str | None = typer.Option(None, "--component"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     """Remove only confirmed stale runtime resources."""
     owner = WorkspaceApplication().open(workspace)
-    _emit(ComponentProcessApplication(owner).repair(), output)
+    if component is None:
+        result = ComponentProcessApplication(owner).repair()
+    else:
+        _require_workspace_service(component, "repair")
+        result = WorkspaceServiceApplication(owner).repair(component, start=False)
+    _emit(result, output)
+
+
+@system_app.command("repair-start")
+def system_repair_start(
+    component: str = typer.Option(..., "--component"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Remove one service's confirmed stale resources and start it."""
+    _require_workspace_service(component, "repair-start")
+    owner = WorkspaceApplication().open(workspace)
+    _emit(WorkspaceServiceApplication(owner).repair(component, start=True), output)
+
+
+def _require_workspace_service(component: str, action: str) -> None:
+    if component not in {"reference", "market"}:
+        raise typer.BadParameter(
+            f"system {action} manages only workspace services: reference and market; "
+            "launch owns instance components"
+        )
 
 
 @system_app.command("supervise")

@@ -150,16 +150,13 @@ impl ExecutionApplication {
         Ok(())
     }
 
-    async fn advance_due_algorithm_runs_managed(
+    pub(crate) async fn advance_due_algorithm_runs_managed(
         &mut self,
         now_unix_nanos: u64,
         limit: usize,
         context: &mut Context<'_, Self>,
     ) -> Result<usize, ExecutionError> {
-        let due = self.due_algorithm_intents(now_unix_nanos, limit);
-        for intent_id in &due {
-            self.drive_maker_taker_hedge(intent_id, now_unix_nanos)?;
-        }
+        let due = self.prepare_due_algorithm_runs(now_unix_nanos, limit)?;
         if !due.is_empty() {
             self.advance_due_intent_orders_managed(now_unix_nanos, usize::MAX, context)
                 .await?;

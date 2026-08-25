@@ -4,6 +4,7 @@ pub type ReferenceResult<T> = Result<T, ReferenceError>;
 
 #[derive(Debug)]
 pub enum ReferenceError {
+    Configuration(String),
     Invalid(String),
     DuplicateId {
         record_kind: String,
@@ -20,6 +21,9 @@ pub enum ReferenceError {
 impl std::fmt::Display for ReferenceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Configuration(value) => {
+                write!(f, "invalid reference configuration: {value}")
+            },
             Self::Invalid(value) => write!(f, "invalid reference data: {value}"),
             Self::DuplicateId {
                 record_kind,
@@ -43,6 +47,7 @@ impl std::fmt::Display for ReferenceError {
 impl ReferenceError {
     pub fn code(&self) -> &'static str {
         match self {
+            Self::Configuration(_) => "reference.invalid_configuration",
             Self::Invalid(_) => "reference.invalid_data",
             Self::DuplicateId { .. } => "reference.duplicate_id",
             Self::SyncInProgress { .. } => "reference.sync_in_progress",
@@ -82,5 +87,22 @@ impl std::error::Error for ReferenceError {}
 impl From<kairos_primitives::DomainTypeError> for ReferenceError {
     fn from(error: kairos_primitives::DomainTypeError) -> Self {
         Self::Invalid(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReferenceError;
+
+    #[test]
+    fn configuration_errors_are_not_reported_as_provider_failures() {
+        let error = ReferenceError::Configuration("unknown field `products`".into());
+
+        assert_eq!(error.code(), "reference.invalid_configuration");
+        assert_eq!(
+            error.to_string(),
+            "invalid reference configuration: unknown field `products`"
+        );
+        assert!(!error.retryable());
     }
 }

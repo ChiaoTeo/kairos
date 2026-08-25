@@ -3,14 +3,18 @@
 //! These tests intentionally exercise private application wiring. Keeping them in
 //! the crate avoids turning test doubles into a public Application API.
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use kairos_conflux::{
     BlockingOrderCommand as OrderCommand, BlockingOrderQuery as OrderQuery, CommandOutcome,
-    ExternalOrder, ExternalOrderQuery, IndeterminateCommand, IntegrationError, OrderEntryEvent,
+    Conflux, ConfluxConfig, ConfluxSystem, ConnectionKey, ExternalOrder, ExternalOrderQuery,
+    IndeterminateCommand, IntegrationError, MmapOutputDeclaration, OrderEntryEvent,
     OrderEntryRequest, OrderEntryStatus, OrderType as ConnectionOrderType,
     ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
-    TimeInForce,
+    ShutdownMode, TimeInForce,
 };
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
@@ -25,8 +29,9 @@ use kairos_execution::composition::{
 use kairos_execution::{
     AlgorithmActionKind, AlgorithmActionStatus, AlgorithmExecutionStyle, AlgorithmRunStatus,
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
-    MarketObservation, OrderSide, OrderType, Quote, UnknownRemoteOrderResolution,
+    MarketObservation, OrderSide, OrderType, Quote, SplitOrderPolicy, UnknownRemoteOrderResolution,
 };
+use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher};
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::execution::{
@@ -34,7 +39,10 @@ use kairos_primitives::execution::{
 };
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId, Symbol};
 use kairos_primitives::time::{DurationNanos, UnixNanos};
+use secrecy::SecretString;
 
+use crate::services::audit::{ExecutionAudit, MemoryExecutionAudit};
+use crate::services::gateway::ExecutionConnectionPlan;
 use crate::services::persistence::ExecutionStateStore;
 
 fn fill_report(
@@ -2580,6 +2588,242 @@ fn twap_uses_persisted_business_deadlines_and_restores_the_next_slice() {
         restored.intent("intent:twap-schedule").unwrap().status,
         kairos_execution::IntentStatus::Satisfied
     );
+}
+
+#[test]
+fn twap_rejects_a_second_split_quantity_path() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let mut intent = strategy_intent("intent:twap-with-split", 6, Some(100));
+    intent.algorithm =
+        kairos_execution::ExecutionAlgorithmPolicy::Twap(kairos_execution::TwapPolicy {
+            slice_count: 3,
+            slice_interval: DurationNanos::new(10),
+        });
+    intent.order_options.split = Some(SplitOrderPolicy {
+        max_child_quantity: None,
+        child_count: Some(2),
+        min_child_quantity: None,
+    });
+
+    let error = app.submit_intent(intent).unwrap_err();
+    assert!(matches!(
+        error,
+        ExecutionError::Invalid(message)
+            if message == "TWAP owns slice quantity and cannot be combined with split order options"
+    ));
+}
+
+#[test]
+fn shared_algorithm_preparation_routes_twap_to_the_due_order_path() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let mut intent = strategy_intent("intent:twap-shared-decision", 4, Some(100));
+    intent.source_event_time_unix_nanos = Some(UnixNanos::new(100));
+    intent.algorithm =
+        kairos_execution::ExecutionAlgorithmPolicy::Twap(kairos_execution::TwapPolicy {
+            slice_count: 2,
+            slice_interval: DurationNanos::new(10),
+        });
+
+    app.submit_intent(intent).unwrap();
+    let due = app.prepare_due_algorithm_runs(110, 8).unwrap();
+    assert_eq!(due, vec!["intent:twap-shared-decision"]);
+    let run = &app.algorithm_runs()[0];
+    assert_eq!(run.next_wake_at, Some(UnixNanos::new(110)));
+    assert_eq!(
+        run.actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::TwapSlice,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(app.orders(None).len(), 1);
+
+    app.advance_due_intent_orders(110, 8).unwrap();
+    assert_eq!(app.orders(None).len(), 2);
+    let run = &app.algorithm_runs()[0];
+    assert_eq!(run.next_wake_at, None);
+    assert_eq!(
+        run.actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::TwapSlice,
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener
+        .set_nonblocking(false)
+        .expect("test listener accepts blocking connections");
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        for expected_path in ["/api/v3/time", "/api/v3/order"] {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = [0_u8; 16 * 1024];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_line = request.lines().next().unwrap_or_default();
+            assert!(
+                request_line.contains(expected_path),
+                "expected {expected_path}, received {request_line}"
+            );
+            let body = if expected_path.ends_with("/time") {
+                r#"{"serverTime":1700000000000}"#
+            } else {
+                r#"{"orderId":42}"#
+            };
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+
+    let directory = tempfile::tempdir().unwrap();
+    let state_path = directory.path().join("execution.json");
+    let application = application(&state_path);
+    let identity = kairos_primitives::runtime::InstanceIdentity::new(
+        "workspace:test",
+        "launch:test",
+        "instance:test",
+    )
+    .unwrap();
+    let entry_key = ConnectionKey::new("execution.test.spot.command").unwrap();
+    let mut system = ConfluxSystem::new();
+    system
+        .connections()
+        .binance_spot_rest
+        .create(
+            entry_key.clone(),
+            kairos_conflux::BinanceRestConfig {
+                environment: "test".into(),
+                endpoint,
+                credential: Some(kairos_conflux::BinanceCredential {
+                    principal_id: "test".into(),
+                    api_key: SecretString::from("test-api-key".to_owned()),
+                    secret: SecretString::from("test-secret".to_owned()),
+                }),
+            },
+        )
+        .unwrap();
+    for kind in [
+        ExecutionViewKind::ActiveOrders,
+        ExecutionViewKind::CurrentExecution,
+        ExecutionViewKind::ActiveIntents,
+    ] {
+        let key = ExecutionViewKey::from_identity(&identity, kind);
+        system
+            .outputs()
+            .mmap
+            .declare(
+                key.canonical_key(),
+                MmapOutputDeclaration {
+                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
+                    slot_capacity: 1024 * 1024,
+                    revision: 1,
+                },
+            )
+            .unwrap();
+    }
+    let (conflux, handle) = Conflux::new(application, system, ConfluxConfig::default()).unwrap();
+
+    tokio::task::LocalSet::new()
+        .run_until(async move {
+            let process = tokio::task::spawn_local(conflux.run());
+            handle
+                .rpc_actor_invocation(Duration::from_secs(5))
+                .call(move |application, context| {
+                    Box::pin(async move {
+                        application
+                            .configure_conflux(
+                                vec![ExecutionConnectionPlan {
+                                    route_id: "test".into(),
+                                    required: true,
+                                    account_id: AccountId::new("main").unwrap(),
+                                    segment_key: SegmentKey::new("spot").unwrap(),
+                                    instrument_type: ParticipantInstrumentTypeRef::new("spot")
+                                        .unwrap(),
+                                    entry_key: entry_key.to_string(),
+                                    query_key: "execution.test.spot.query".into(),
+                                    stream_key: "execution.test.spot.stream".into(),
+                                }],
+                                Vec::new(),
+                                identity,
+                                ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+                                None,
+                            )
+                            .unwrap();
+                        let mut intent =
+                            strategy_intent("intent:twap-conflux-managed", 4, Some(100));
+                        intent.source_event_time_unix_nanos = Some(UnixNanos::new(100));
+                        intent.algorithm = kairos_execution::ExecutionAlgorithmPolicy::Twap(
+                            kairos_execution::TwapPolicy {
+                                slice_count: 2,
+                                slice_interval: DurationNanos::new(10),
+                            },
+                        );
+                        application.submit_intent(intent).unwrap();
+                        application
+                            .advance_due_algorithm_runs_managed(110, 8, context)
+                            .await
+                            .unwrap();
+                        assert_eq!(application.orders(None).len(), 2);
+                        assert_eq!(
+                            application.algorithm_runs()[0]
+                                .actions
+                                .iter()
+                                .filter(|action| matches!(
+                                    action.kind,
+                                    AlgorithmActionKind::SubmitChild {
+                                        execution_style: AlgorithmExecutionStyle::TwapSlice,
+                                        ..
+                                    }
+                                ))
+                                .count(),
+                            2
+                        );
+                        assert!(
+                            application
+                                .orders(None)
+                                .iter()
+                                .any(|order| order.remote_order_id.as_deref() == Some("42"))
+                        );
+                        while application.pending_business_event().is_some() {
+                            application.acknowledge_business_event();
+                        }
+                        Ok(())
+                    })
+                })
+                .await
+                .unwrap();
+            handle.shutdown(ShutdownMode::Drain);
+            process.await.unwrap().unwrap();
+        })
+        .await;
+    server.join().unwrap();
 }
 
 #[test]

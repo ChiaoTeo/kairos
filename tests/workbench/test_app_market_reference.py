@@ -84,6 +84,32 @@ def test_market_command_runs_in_worker_and_presents_result_choices(
     assert option_count == 1
 
 
+def test_market_result_can_be_focused_and_opened_with_keyboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
+
+    async def run() -> tuple[tuple[str, ...], bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("/market AAPL")
+            await pilot.pause(0.1)
+
+            await pilot.press("tab", "enter")
+            await pilot.pause()
+            return (
+                screen.session.context,
+                screen.query_one("#guided-actions", ActionList).has_focus,
+            )
+
+    context, actions_focused = asyncio.run(run())
+
+    assert context == ("market", "selected")
+    assert actions_focused
+
+
 def test_guided_market_search_records_intent_without_persisting_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -206,10 +232,9 @@ def test_market_search_owns_action_area_until_results_are_ready(
     ) = asyncio.run(run())
     assert prompt_context == "trader / 市场行情  ›"
     assert not prompt_actions_visible
-    assert prompt_hints.splitlines() == [
-        "Enter 搜索  ·  Esc 返回",
-        "Alt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新",
-    ]
+    assert prompt_hints == (
+        "Enter 搜索  ·  Esc 返回  ·  Alt+↑↓  ·  PgUp/PgDn  ·  Ctrl+End"
+    )
     assert context == "trader / 市场行情 / 查询结果  ›"
     assert option_count == 1
     assert input_focused

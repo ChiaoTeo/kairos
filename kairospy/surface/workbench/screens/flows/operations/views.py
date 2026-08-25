@@ -441,6 +441,11 @@ def service_status_view(value: object) -> ServiceStatusView:
         ServiceDisplayState.START_FAILED: "查看启动日志后重新启动服务。",
         ServiceDisplayState.UNKNOWN: "重新检查状态并查看技术诊断。",
     }[state]
+    if (
+        state is ServiceDisplayState.START_FAILED
+        and raw.get("startup_failure_kind") == "configuration"
+    ):
+        recommendation = "修正 Workspace 的 Reference 配置后重新启动服务。"
     return ServiceStatusView(
         component=component,
         state=state,

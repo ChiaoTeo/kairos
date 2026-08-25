@@ -15,6 +15,7 @@ from textual.containers import Vertical
 from textual.widgets import Static
 
 from ..safety import redact_renderable
+from ..theme import PRIMARY, WARNING
 from kairospy.surface.presentation import redact_text
 from .action_list import ActionItem
 from .guided_action_list import GuidedActionList
@@ -209,26 +210,28 @@ def _interaction_renderable(interaction: InteractionState) -> RenderableType | N
         )
         if interaction.error:
             body.extend((Text(), Text(interaction.error, style="bold red")))
-        return Panel(Group(*body), title=interaction.title, border_style="cyan")
+        return Panel(Group(*body), title=interaction.title, border_style=PRIMARY)
     if isinstance(interaction, ConfirmInteraction):
         commands = Text()
-        commands.append(f"[/y] {interaction.confirm_label}", style="bold yellow")
+        commands.append(
+            f"[/y] {interaction.confirm_label}", style=f"bold {WARNING}"
+        )
         commands.append("    ")
         commands.append(f"[/n] {interaction.cancel_label}", style="bold")
         parts: list[RenderableType] = [interaction.summary, Text(), commands]
         if interaction.force_hint:
             parts.append(Text(interaction.force_hint, style="dim"))
-        return Panel(Group(*parts), title=interaction.title, border_style="yellow")
+        return Panel(Group(*parts), title=interaction.title, border_style=WARNING)
     if isinstance(interaction, RunningInteraction):
         detail = Text(interaction.message)
         if interaction.progress is not None:
-            detail.append(f"\n进度 {interaction.progress:.0%}", style="cyan")
+            detail.append(f"\n进度 {interaction.progress:.0%}", style=PRIMARY)
         if interaction.cancellable:
             detail.append("\nCtrl+C 取消当前任务", style="dim")
-        return Panel(detail, title=interaction.title, border_style="cyan")
+        return Panel(detail, title=interaction.title, border_style=PRIMARY)
     state = "自动刷新中" if interaction.refreshing else "自动刷新已关闭"
     return Group(
-        Text(interaction.title, style="bold cyan"),
+        Text(interaction.title, style=f"bold {PRIMARY}"),
         interaction.snapshot,
         Text(state, style="dim"),
     )

@@ -333,6 +333,25 @@ def handle_failure(
         "support-diagnostics",
     }:
         current = session.operations.selected_service_status
+        if spec.route.qualifier == "service-status" and spec.action_name.rsplit(
+            ".", 1
+        )[-1] in {"start", "restart", "repair-start"}:
+            raw = dict(current.raw) if current is not None else {}
+            raw.update(
+                {
+                    "component": session.operations.selected_service or "unknown",
+                    "status": "start_failed",
+                    "pid_alive": False,
+                    "last_error": error,
+                    "startup_failure_kind": (
+                        "configuration"
+                        if "invalid reference configuration:" in error
+                        else "process"
+                    ),
+                }
+            )
+            current = service_status_view(raw)
+            session.operations.selected_service_status = current
         suggestion = (
             current.recommendation
             if current is not None
@@ -346,8 +365,7 @@ def handle_failure(
             *_choice(
                 state,
                 session,
-                body,
-                "操作失败 · 请选择恢复动作",
+                status="操作失败 · 请选择恢复动作",
             ),
         )
     return (

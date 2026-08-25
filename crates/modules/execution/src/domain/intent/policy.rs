@@ -1,12 +1,14 @@
 //! Split, maker, and hedge policy values.
 
-use super::*;
 use kairos_primitives::execution::ExecutionRouteId;
+
+use super::*;
 
 /// Controls how one logical leg is materialized into exchange child orders.
 /// Quantities use the leg's quantity scale; the planner never rounds away
 /// quantity and always preserves the exact requested total.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SplitOrderPolicy {
     #[serde(default)]
     pub max_child_quantity: Option<Quantity>,
@@ -34,6 +36,7 @@ impl SplitOrderPolicy {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TwapPolicy {
     pub slice_count: u32,
     pub slice_interval: DurationNanos,
@@ -168,7 +171,12 @@ impl HedgePolicy {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "policy", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    content = "policy",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExecutionAlgorithmPolicy {
     Immediate,
     Twap(TwapPolicy),

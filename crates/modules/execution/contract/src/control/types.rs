@@ -143,6 +143,7 @@ pub enum FailurePolicy {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SplitOrderPolicyRequest {
     pub max_child_quantity: Option<Quantity>,
     pub child_count: Option<u32>,
@@ -150,6 +151,7 @@ pub struct SplitOrderPolicyRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TwapPolicyRequest {
     pub slice_count: u32,
     pub slice_interval: DurationNanos,
@@ -209,7 +211,12 @@ pub struct HedgePolicyRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "policy", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    content = "policy",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ExecutionAlgorithmPolicyRequest {
     Immediate,
     Twap(TwapPolicyRequest),
@@ -217,6 +224,7 @@ pub enum ExecutionAlgorithmPolicyRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionIntentRequest {
     pub intent_id: IntentId,
     pub strategy_decision_id: Option<DecisionId>,

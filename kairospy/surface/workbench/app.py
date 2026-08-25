@@ -16,6 +16,7 @@ from .state import WorkbenchState
 from kairospy.surface.presentation import redact_text
 
 from .transcript import WorkbenchTranscript
+from .theme import KAIROS_THEME
 from .widgets import ActivityStream
 
 
@@ -45,6 +46,8 @@ class KairosWorkbenchApp(App[int]):
         transcript_path: Path | None = None,
     ) -> None:
         super().__init__(watch_css=watch_css)
+        self.register_theme(KAIROS_THEME)
+        self.theme = KAIROS_THEME.name
         self.state = state
         self.transcript = WorkbenchTranscript.create(state, transcript_path)
         self.initial_section = initial_section

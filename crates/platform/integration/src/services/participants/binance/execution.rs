@@ -392,8 +392,10 @@ pub(crate) fn decimal(v: DecimalValue) -> String {
 
 #[cfg(test)]
 mod native_order_tests {
-    use super::{amend_params, batch_order_parameter, cancel_id_parameter, canceled, submitted};
-    use super::{canceled_batch_outcome, submitted_batch_outcome};
+    use super::{
+        amend_params, batch_order_parameter, cancel_id_parameter, canceled, canceled_batch_outcome,
+        submitted, submitted_batch_outcome,
+    };
 
     fn order(id: &str) -> crate::OrderEntryRequest {
         crate::OrderEntryRequest {

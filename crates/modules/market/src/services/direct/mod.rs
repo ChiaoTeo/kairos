@@ -2,15 +2,16 @@
 
 use kairos_conflux::{
     BinanceOptionsRestConnection, BinanceSpotRestConnection, BinanceStocksRestConnection,
-    MarketBar, MarketBarQuery, MarketBarRequest, MarketGreeks, MarketGreeksQuery, MarketOrderBook,
-    MarketOrderBookQuery, MarketOrderBookRequest, MarketQuote, MarketQuoteQuery, MarketTrade,
-    MarketTradeQuery, MassiveRestConnection,
+    BinanceUsdMRestConnection, MarketBar, MarketBarQuery, MarketBarRequest, MarketGreeks,
+    MarketGreeksQuery, MarketOrderBook, MarketOrderBookQuery, MarketOrderBookRequest, MarketQuote,
+    MarketQuoteQuery, MarketTrade, MarketTradeQuery, MassiveRestConnection,
 };
 use kairos_primitives::integration::ParticipantSymbol;
 use kairos_primitives::market::ObservationKind;
 
 pub(crate) enum DirectMarketConnection {
     BinanceSpot(BinanceSpotRestConnection),
+    BinanceUsdM(BinanceUsdMRestConnection),
     BinanceEquity(BinanceStocksRestConnection),
     BinanceOptions(BinanceOptionsRestConnection),
     MassiveEquity(MassiveRestConnection),
@@ -34,6 +35,9 @@ impl DirectMarketConnection {
     ) -> Result<DirectMarketSnapshot, Box<dyn std::error::Error>> {
         match self {
             Self::BinanceSpot(connection) => {
+                fetch_standard(connection, symbol, kind, interval, depth).await
+            },
+            Self::BinanceUsdM(connection) => {
                 fetch_standard(connection, symbol, kind, interval, depth).await
             },
             Self::BinanceEquity(connection) if kind == ObservationKind::Quote => {

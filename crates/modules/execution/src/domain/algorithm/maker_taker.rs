@@ -1,9 +1,10 @@
+use kairos_primitives::decimal::Quantity;
+
 use super::{
     AlgorithmActionKind, AlgorithmDecision, AlgorithmExecutionStyle, AlgorithmInput,
     AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus, ExecutionAlgorithmSpec,
     NormalizedExposureLedger,
 };
-use kairos_primitives::decimal::Quantity;
 
 impl AlgorithmRun {
     /// Rebuild the normalized exposure ledger from the run's per-leg filled

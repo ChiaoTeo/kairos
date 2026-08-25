@@ -112,6 +112,7 @@ pub struct ExecutionFillReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecuteStrategyIntent {
     pub intent_id: IntentId,
     /// Opaque identity of the Strategy-owned decision that caused this Intent.

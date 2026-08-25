@@ -98,10 +98,10 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
     assert is_command_screen
     assert subtitle == "命令"
     assert output == ""
-    assert workspace_title == "KAIROS  /  trader"
+    assert workspace_title == "◆ KAIROS  /  trader"
     assert context == "trader  ›"
     assert option_count == 7
-    assert not actions_can_focus
+    assert actions_can_focus
     assert input_focused
 
 
@@ -331,9 +331,7 @@ def test_output_paging_keeps_input_focus_and_ctrl_end_resumes_follow() -> None:
     assert browsing_focus
     assert resumed_y == initial_end
     assert resumed_focus
-    assert "Alt+↑↓ 滚动" in hints
-    assert "PgUp/PgDn 翻页" in hints
-    assert "Ctrl+End 最新" in hints
+    assert hints == "Tab 聚焦选项  ·  ↑↓ 选择  ·  Enter 执行  ·  可输入编号"
 
 
 def test_ctrl_c_cancels_idle_exit_confirmation() -> None:
@@ -493,6 +491,7 @@ def test_external_workbench_stylesheet_is_loaded_and_watchable() -> None:
     app = KairosWorkbenchApp(_state(), watch_css=True)
 
     assert [path.name for path in app.css_path] == ["workbench.tcss"]
+    assert normal_app.theme == "kairos-nord"
     assert normal_app.css_monitor is None
     assert app.css_monitor is not None
 
@@ -506,7 +505,7 @@ def test_command_screen_renders_in_supported_terminal_themes(theme: str) -> None
             await pilot.pause()
             return str(app.screen.query_one("#workspace-title", Static).render())
 
-    assert asyncio.run(run()) == "KAIROS  /  trader"
+    assert asyncio.run(run()) == "◆ KAIROS  /  trader"
 
 
 def test_command_screen_renders_when_no_color_is_requested(
@@ -520,7 +519,7 @@ def test_command_screen_renders_when_no_color_is_requested(
             await pilot.pause()
             return str(app.screen.query_one("#workspace-title", Static).render())
 
-    assert asyncio.run(run()) == "KAIROS  /  trader"
+    assert asyncio.run(run()) == "◆ KAIROS  /  trader"
 
 
 def test_workspace_identity_is_visible_in_shared_header_context() -> None:
@@ -656,7 +655,7 @@ def test_command_layout_runs_at_supported_terminal_sizes() -> None:
             return str(app.screen.query_one("#workspace-title", Static).render())
 
     for size in ((60, 20), (80, 24), (120, 30), (160, 40)):
-        assert asyncio.run(run(size)) == "KAIROS  /  trader"
+        assert asyncio.run(run(size)) == "◆ KAIROS  /  trader"
 
 
 def test_command_screen_applies_responsive_modes_during_terminal_resize() -> None:

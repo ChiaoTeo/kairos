@@ -37,7 +37,10 @@ from .models import (
 )
 from .intents import (
     ArbitrageLegRequest,
+    ExecutionAlgorithmPolicy,
     HedgePolicy,
+    ImmediateAlgorithm,
+    MakerTakerHedgeAlgorithm,
     MakerExecutionPolicy,
     OptionSpreadLegRequest,
     OptionSpreadRequest,
@@ -48,6 +51,7 @@ from .intents import (
     QuoteRefreshRequest,
     SplitOrderPolicy,
     TargetPositionRequest,
+    TwapAlgorithm,
 )
 
 __all__ = [
@@ -56,6 +60,7 @@ __all__ = [
     "ArbitrageLegRequest",
     "DeliveryCertainty",
     "ExecutionApplication",
+    "ExecutionAlgorithmPolicy",
     "IntentAdmissionEvidence",
     "ExecutionAccountNotEnabledError",
     "ExecutionBacktestResult",
@@ -72,9 +77,11 @@ __all__ = [
     "IntentStatus",
     "IntentUpdateEvent",
     "HedgePolicy",
+    "ImmediateAlgorithm",
     "LimitOrderRequest",
     "MarketOrderRequest",
     "MakerExecutionPolicy",
+    "MakerTakerHedgeAlgorithm",
     "OptionSpreadLegRequest",
     "OptionSpreadRequest",
     "Order",
@@ -95,4 +102,5 @@ __all__ = [
     "SplitOrderPolicy",
     "TargetPositionRequest",
     "TimeInForce",
+    "TwapAlgorithm",
 ]

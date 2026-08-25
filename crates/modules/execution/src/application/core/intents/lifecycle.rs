@@ -46,6 +46,21 @@ impl ExecutionApplication {
         now_unix_nanos: u64,
         limit: usize,
     ) -> Result<usize, ExecutionError> {
+        let due = self.prepare_due_algorithm_runs(now_unix_nanos, limit)?;
+        if !due.is_empty() {
+            self.advance_due_intent_orders(now_unix_nanos, usize::MAX)?;
+        }
+        Ok(due.len())
+    }
+
+    /// Perform the provider-neutral preparation required by due algorithms.
+    /// Direct and managed runtimes share this method and differ only in how
+    /// the resulting durable due orders reach Integration.
+    pub(crate) fn prepare_due_algorithm_runs(
+        &mut self,
+        now_unix_nanos: u64,
+        limit: usize,
+    ) -> Result<Vec<String>, ExecutionError> {
         let due = self.due_algorithm_intents(now_unix_nanos, limit);
         for intent_id in &due {
             if self
@@ -56,15 +71,12 @@ impl ExecutionApplication {
                 self.drive_maker_taker_hedge(intent_id, now_unix_nanos)?;
             }
         }
-        if !due.is_empty() {
-            self.advance_due_intent_orders(now_unix_nanos, usize::MAX)?;
-        }
-        Ok(due.len())
+        Ok(due)
     }
 
     /// Submit due child orders from durable Intent scheduling state.  The
     /// state loop calls this frequently; command submission therefore never
-    /// blocks on a maker cadence or split interval.
+    /// blocks on maker cadence or an algorithm-owned wake time.
     pub fn advance_due_intent_orders(
         &mut self,
         now_unix_nanos: u64,

@@ -8,6 +8,8 @@ from rich.text import Text
 from textual.widgets import OptionList
 from textual.widgets.option_list import Option
 
+from ..theme import PRIMARY
+
 
 @dataclass(frozen=True, slots=True)
 class ActionItem:
@@ -54,7 +56,7 @@ class ActionList(OptionList):
 def _action_prompt(item: ActionItem, *, spacious: bool = False) -> Text:
     prompt = Text()
     if item.shortcut:
-        prompt.append(f"[{item.shortcut}]  ", style="bold cyan")
+        prompt.append(f"[{item.shortcut}]  ", style=f"bold {PRIMARY}")
     prompt.append(item.label, style="bold")
     if spacious:
         prompt.append(f"\n     {item.description}", style="dim")

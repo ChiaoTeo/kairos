@@ -19,7 +19,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.events import Resize
 from textual.screen import Screen
-from textual.widgets import Input, Static
+from textual.widgets import Input, OptionList, Static
 from textual.worker import Worker
 
 from kairospy.surface.presentation import (
@@ -34,6 +34,7 @@ from ..widgets import (
     ConfirmInteraction,
     ControlInteraction,
     Feature,
+    GuidedActionList,
     InputInteraction,
     InteractionRegion,
     InteractionState,
@@ -112,6 +113,13 @@ class CommandLineScreen(Screen[None]):
             "交互区向下滚动",
             show=False,
         ),
+        Binding(
+            "tab,shift+tab",
+            "toggle_interaction_focus",
+            "切换交互区焦点",
+            show=False,
+            priority=True,
+        ),
     ]
 
     def __init__(self) -> None:
@@ -134,7 +142,7 @@ class CommandLineScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield WorkspaceHeader()
         yield Static(
-            "终端空间不足；建议至少使用 60×20。命令输入仍可用。",
+            "⚠ 终端空间不足；建议至少使用 60×20。命令输入仍可用。",
             id="viewport-warning",
         )
         yield ActivityStream(
@@ -153,8 +161,8 @@ class CommandLineScreen(Screen[None]):
                 yield Static("首页  /", id="command-context")
                 yield WorkbenchCommandInput(id="command-input")
         yield Static(
-            "数字选择  ·  /b 或 /back 返回  ·  /help 帮助\n"
-            "Alt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新",
+            "数字选择  ·  /b 或 /back 返回  ·  /help 帮助  ·  "
+            "Alt+↑↓  ·  PgUp/PgDn  ·  Ctrl+End",
             id="command-hints",
         )
 
@@ -231,6 +239,40 @@ class CommandLineScreen(Screen[None]):
             ):
                 return
         self._restore_back_preview()
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        """Execute a focused interaction choice through the normal input path."""
+
+        if event.option_list.id != "guided-actions":
+            return
+        event.stop()
+        option_id = event.option.id
+        if option_id is None:
+            return
+        actions = self.query_one("#guided-actions", GuidedActionList)
+        selected = next((item for item in actions.items if item.id == option_id), None)
+        if selected is None or selected.disabled:
+            return
+        self.submit(selected.shortcut or selected.id)
+        self.call_after_refresh(self._focus_actions_if_available)
+
+    def action_toggle_interaction_focus(self) -> None:
+        """Move focus between the shared input and available interaction choices."""
+
+        actions = self.query_one("#guided-actions", GuidedActionList)
+        if self.app.focused is actions or not actions.display or not actions.option_count:
+            self.app.set_focus(self._input())
+            return
+        self.app.set_focus(actions)
+
+    def _focus_actions_if_available(self) -> None:
+        """Keep a direct-selection workflow in the interaction region."""
+
+        actions = self.query_one("#guided-actions", GuidedActionList)
+        if actions.display and actions.option_count:
+            self.app.set_focus(actions)
 
     def submit(self, value: str) -> None:
         """Execute input through the same path used by the visible prompt."""
@@ -1068,9 +1110,9 @@ class CommandLineScreen(Screen[None]):
             self._set_hints(f"Enter {verb}  ·  Esc 返回")
             return
         if len(self.session.context) > 1 and self.session.visible_records:
-            self._set_hints("输入结果编号查看详情  ·  Esc 返回")
+            self._set_hints("Tab 聚焦结果  ·  ↑↓ 选择  ·  Enter 查看  ·  Esc 返回")
         else:
-            self._set_hints("数字选择  ·  /b 或 /back 返回  ·  /help 更多操作")
+            self._set_hints("Tab 聚焦选项  ·  ↑↓ 选择  ·  Enter 执行  ·  可输入编号")
 
     def _resource_wizard_active(self) -> bool:
         return (
@@ -1490,7 +1532,7 @@ class CommandLineScreen(Screen[None]):
         if empty_resource_label is not None:
             self._set_hints("输入 /new 开始配置  ·  Esc 返回")
         else:
-            self._set_hints("数字选择  ·  /b 或 /back 返回  ·  /help 更多操作")
+            self._set_hints("Tab 聚焦选项  ·  ↑↓ 选择  ·  Enter 执行  ·  可输入编号")
         if (
             self.session.context == ("market", "selected")
             and self.session.market.snapshot is not None
@@ -1587,12 +1629,11 @@ class CommandLineScreen(Screen[None]):
         hints = self.query_one("#command-hints", Static)
         if self.has_class("viewport-too-small"):
             hints.update("/help 帮助  ·  /exit 退出")
-        elif self.has_class("viewport-narrow") or self.has_class("viewport-short"):
+        elif self.has_class("viewport-compact") or self.has_class("viewport-short"):
             hints.update(self._primary_hint)
         else:
             hints.update(
-                f"{self._primary_hint}\n"
-                "Alt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新"
+                f"{self._primary_hint}  ·  Alt+↑↓  ·  PgUp/PgDn  ·  Ctrl+End"
             )
 
 
@@ -1696,6 +1737,8 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_row("PgUp / PgDn", "翻阅内容区；输入焦点保持在命令框")
     table.add_row("Ctrl+End", "回到内容区底部并继续跟随新输出")
     table.add_row("Alt+PgUp / PgDn", "滚动内容超出高度上限的交互区")
+    table.add_row("Tab / Shift+Tab", "在交互选项和命令输入之间切换焦点")
+    table.add_row("↑ / ↓, Enter", "在聚焦的交互区移动并执行选中项")
     table.add_row("/help", "显示这份帮助")
     return table
 

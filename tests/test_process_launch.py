@@ -371,6 +371,26 @@ def test_component_repair_removes_dead_health_metadata_without_socket(
     assert not health.exists()
 
 
+def test_workspace_repair_start_is_idempotent_for_a_clean_stopped_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="clean-repair-start"
+    )
+    starts: list[str] = []
+
+    def start(_self, component: str, **_options):
+        starts.append(component)
+        return {"component": component, "status": "ready"}
+
+    monkeypatch.setattr(WorkspaceServiceApplication, "start_and_keep_running", start)
+
+    result = WorkspaceServiceApplication(workspace).repair("reference", start=True)
+
+    assert result == {"component": "reference", "status": "ready"}
+    assert starts == ["reference"]
+
+
 def test_system_repair_does_not_remove_lock_owned_socket(tmp_path: Path) -> None:
     import shutil
 

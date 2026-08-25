@@ -86,7 +86,13 @@ class WorkspaceServiceApplication:
         processes = ComponentProcessApplication(self.workspace)
         repaired = processes.repair_component(component)
         if repaired.get("status") != "repaired":
-            raise RuntimeError(str(repaired.get("reason") or "运行资源不可安全清理"))
+            current = processes.list_status()[component]
+            if current.get("status") not in {"not_running", "stopped"} or current.get(
+                "pid_alive"
+            ):
+                raise RuntimeError(
+                    str(repaired.get("reason") or "运行资源不可安全清理")
+                )
         if start:
             return self.start_and_keep_running(component)
         return processes.list_status()[component]

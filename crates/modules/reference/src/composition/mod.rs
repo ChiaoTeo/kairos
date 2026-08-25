@@ -112,7 +112,7 @@ async fn build_source_plan(
         .as_ref()
         .map(ReferenceConfig::load)
         .transpose()
-        .map_err(crate::domain::ReferenceError::Provider)?
+        .map_err(crate::domain::ReferenceError::Configuration)?
         .unwrap_or_default();
     let credentials_root = workspace
         .as_ref()
@@ -503,7 +503,7 @@ pub async fn build_application(
         .as_ref()
         .map(ReferenceConfig::load)
         .transpose()
-        .map_err(crate::domain::ReferenceError::Provider)?
+        .map_err(crate::domain::ReferenceError::Configuration)?
         .map(|reference| reference.runtime)
         .unwrap_or_default();
     let tick_budget = runtime_config.tick_budget.to_domain()?;

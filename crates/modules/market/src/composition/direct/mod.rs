@@ -4,8 +4,8 @@ use std::path::Path;
 
 use kairos_conflux::{
     BinanceCredential, BinanceOptionsRestConnection, BinanceRestConfig, BinanceSpotRestConnection,
-    BinanceStocksRestConnection, ConnectionKey, MassiveInstrumentQuery, MassiveRestConfig,
-    MassiveRestConnection,
+    BinanceStocksRestConnection, BinanceUsdMRestConnection, ConnectionKey, MassiveInstrumentQuery,
+    MassiveRestConfig, MassiveRestConnection,
 };
 use kairos_credentials::CredentialStore;
 use kairos_primitives::market::{ObservationKind, Provider};
@@ -100,6 +100,36 @@ pub fn compose_standalone_market(
                         .clone()
                         .or(configured_endpoint)
                         .unwrap_or_else(|| "https://api.binance.com".into()),
+                    credential: None,
+                },
+            )?)
+        },
+        CliMarketOnceProvider::BinanceUsdMRest => {
+            let configured = configured_binding(workspace_root, request.connection)?;
+            let configured_endpoint = match configured {
+                Some(MarketProviderBinding::BinanceDerivatives {
+                    product: BinanceDerivativeProduct::UsdMFutures,
+                    connection_id,
+                    endpoint,
+                    ..
+                }) => provider_profile(workspace_root, connection_id.as_deref())?
+                    .and_then(|value| {
+                        value
+                            .endpoint_for("market-query", Some("usd-m-futures"))
+                            .map(str::to_owned)
+                    })
+                    .or(endpoint),
+                _ => None,
+            };
+            DirectMarketConnection::BinanceUsdM(BinanceUsdMRestConnection::new(
+                key,
+                BinanceRestConfig {
+                    environment: "public".into(),
+                    endpoint: request
+                        .endpoint
+                        .clone()
+                        .or(configured_endpoint)
+                        .unwrap_or_else(|| "https://fapi.binance.com".into()),
                     credential: None,
                 },
             )?)
@@ -280,6 +310,7 @@ fn provider_profile(
 fn provider_name(binding: &MarketProviderBinding) -> Option<&'static str> {
     direct_source(binding).map(|(connection, _, _)| match connection {
         CliMarketOnceProvider::BinanceSpotRest
+        | CliMarketOnceProvider::BinanceUsdMRest
         | CliMarketOnceProvider::BinanceEquityRest
         | CliMarketOnceProvider::BinanceOptionsRest => "binance",
         CliMarketOnceProvider::MassiveRest => "massive",
@@ -309,6 +340,14 @@ fn direct_source(
         MarketProviderBinding::BinanceEquity { .. } => Some((
             CliMarketOnceProvider::BinanceEquityRest,
             "equity",
+            vec![ObservationKind::Quote],
+        )),
+        MarketProviderBinding::BinanceDerivatives {
+            product: BinanceDerivativeProduct::UsdMFutures,
+            ..
+        } => Some((
+            CliMarketOnceProvider::BinanceUsdMRest,
+            "perpetual",
             vec![ObservationKind::Quote],
         )),
         MarketProviderBinding::BinanceDerivatives {
@@ -395,6 +434,35 @@ credential_id = "massive"
                 .collect::<Vec<_>>(),
             vec!["massive"]
         );
+    }
+
+    #[test]
+    fn perpetual_quote_route_discovers_enabled_binance_usdm_provider() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("workspace.toml"),
+            r#"version = 1
+workspace_id = "test"
+
+[[market.providers]]
+type = "binance-derivatives"
+product = "usd-m-futures"
+transport = "rest"
+"#,
+        )
+        .unwrap();
+
+        let quotes =
+            standalone_market_routes(Some(directory.path()), "perpetual", ObservationKind::Quote)
+                .unwrap();
+        let trades =
+            standalone_market_routes(Some(directory.path()), "perpetual", ObservationKind::Trade)
+                .unwrap();
+
+        assert_eq!(quotes.len(), 1);
+        assert_eq!(quotes[0].provider.as_str(), "binance");
+        assert_eq!(quotes[0].connection, CliMarketOnceProvider::BinanceUsdMRest);
+        assert!(trades.is_empty());
     }
 
     #[test]

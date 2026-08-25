@@ -1,4 +1,4 @@
-"""A current-action display that never competes with the command input."""
+"""A keyboard-selectable current-action list beside the command input."""
 
 from __future__ import annotations
 
@@ -6,14 +6,23 @@ from rich.text import Text
 from textual.events import Resize
 from textual.widgets.option_list import Option
 
+from ..theme import PRIMARY
 from .action_list import ActionItem, ActionList
 
 
 class GuidedActionList(ActionList):
-    """Render HomeScreen-style actions while leaving input ownership below."""
+    """Render actions that may be selected directly or by typed shortcut."""
 
-    can_focus = False
-    can_focus_children = False
+    def on_focus(self) -> None:
+        """Give keyboard navigation a deterministic starting point."""
+
+        if self.highlighted is None:
+            self.action_first()
+
+    def on_blur(self) -> None:
+        """Remove the selection marker when input owns the keyboard again."""
+
+        self.highlighted = None
 
     def replace_items(self, items: tuple[ActionItem, ...]) -> None:
         self.items = items
@@ -35,6 +44,7 @@ class GuidedActionList(ActionList):
             Option(
                 _compact_prompt(item) if compact else _guided_action_prompt(item),
                 id=item.id,
+                disabled=item.disabled,
             )
             for item in self.items
         )
@@ -44,7 +54,9 @@ class GuidedActionList(ActionList):
 def _compact_prompt(item: ActionItem) -> Text:
     prompt = Text()
     if item.shortcut:
-        prompt.append(f"[{_display_shortcut(item.shortcut)}]  ", style="bold cyan")
+        prompt.append(
+            f"[{_display_shortcut(item.shortcut)}]  ", style=f"bold {PRIMARY}"
+        )
     prompt.append(item.label, style="bold")
     return prompt
 
@@ -52,7 +64,9 @@ def _compact_prompt(item: ActionItem) -> Text:
 def _guided_action_prompt(item: ActionItem) -> Text:
     prompt = Text()
     if item.shortcut:
-        prompt.append(f"[{_display_shortcut(item.shortcut)}]  ", style="bold cyan")
+        prompt.append(
+            f"[{_display_shortcut(item.shortcut)}]  ", style=f"bold {PRIMARY}"
+        )
     prompt.append(item.label, style="bold")
     if item.spacious:
         prompt.append(f"\n     {item.description}", style="dim")

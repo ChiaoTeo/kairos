@@ -11,6 +11,7 @@ class TargetPositionRequest:
 
     instrument_id: str
     quantity: Decimal
+    algorithm: "ExecutionAlgorithmPolicy" = field(kw_only=True)
     account_id: str | None = None
     account_ids: tuple[str, ...] = ()
     segment_key: str = "spot"
@@ -26,6 +27,10 @@ class TargetPositionRequest:
     execution_route_id: str | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.algorithm, MakerTakerHedgeAlgorithm):
+            raise ValueError("maker-taker hedge requires a pair arbitrage Intent")
+        if isinstance(self.algorithm, TwapAlgorithm) and self.split is not None:
+            raise ValueError("TWAP cannot be combined with split order policy")
         if not self.instrument_id.strip():
             raise ValueError("instrument_id is required")
         if self.account_id is not None and not self.account_id.strip():
@@ -83,6 +88,7 @@ class ArbitrageLegRequest:
 class PairArbitrageRequest:
     first: ArbitrageLegRequest
     second: ArbitrageLegRequest
+    algorithm: "ExecutionAlgorithmPolicy" = field(kw_only=True)
     reason: str = ""
     intent_id: str | None = None
     strategy_decision_id: str | None = None
@@ -92,9 +98,10 @@ class PairArbitrageRequest:
     min_edge_bps: int | None = None
     max_slippage_bps: int | None = None
     estimated_fee_bps: int | None = None
-    hedge_policy: "HedgePolicy | None" = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.algorithm, TwapAlgorithm):
+            raise ValueError("TWAP requires a single-leg Intent")
         if self.intent_id is not None and not self.intent_id.strip():
             raise ValueError("intent_id cannot be blank")
         if (
@@ -137,6 +144,7 @@ class OptionSpreadRequest:
     long_leg: OptionSpreadLegRequest
     minimum_net_credit: Decimal
     maximum_loss: Decimal
+    algorithm: "ExecutionAlgorithmPolicy" = field(kw_only=True)
     account_id: str = "main"
     reason: str = ""
     intent_id: str | None = None
@@ -150,6 +158,8 @@ class OptionSpreadRequest:
     failure_policy: str = "CancelRemaining"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.algorithm, ImmediateAlgorithm):
+            raise ValueError("option spread currently requires Immediate algorithm")
         if not self.account_id.strip():
             raise ValueError("option spread account_id is required")
         if self.short_leg.instrument_id == self.long_leg.instrument_id:
@@ -194,7 +204,6 @@ class SplitOrderPolicy:
     max_child_quantity: Decimal | None = None
     child_count: int | None = None
     min_child_quantity: Decimal | None = None
-    interval_millis: int | None = None
 
     def __post_init__(self) -> None:
         if self.max_child_quantity is not None and self.max_child_quantity <= 0:
@@ -203,8 +212,6 @@ class SplitOrderPolicy:
             raise ValueError("min_child_quantity must be positive")
         if self.child_count is not None and self.child_count <= 0:
             raise ValueError("child_count must be positive")
-        if self.interval_millis is not None and self.interval_millis < 0:
-            raise ValueError("interval_millis cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +247,8 @@ class HedgePolicy:
     contract_multiplier_numerator: int = 1
     contract_multiplier_denominator: int = 1
     max_unhedged_quantity: Decimal = Decimal("0")
+    max_unhedged_duration_nanos: int | None = None
+    fallback_execution_route_ids: tuple[str, ...] = ()
     compensate_on_failure: bool = True
     max_compensation_attempts: int = 3
 
@@ -257,8 +266,51 @@ class HedgePolicy:
             raise ValueError("contract multiplier must be positive")
         if self.max_unhedged_quantity < 0:
             raise ValueError("max_unhedged_quantity cannot be negative")
+        if (
+            self.max_unhedged_duration_nanos is not None
+            and self.max_unhedged_duration_nanos <= 0
+        ):
+            raise ValueError("max_unhedged_duration_nanos must be positive")
+        if any(not route.strip() for route in self.fallback_execution_route_ids):
+            raise ValueError("fallback execution route ids cannot be blank")
+        if len(set(self.fallback_execution_route_ids)) != len(
+            self.fallback_execution_route_ids
+        ):
+            raise ValueError("fallback execution route ids must be unique")
+        object.__setattr__(
+            self,
+            "fallback_execution_route_ids",
+            tuple(self.fallback_execution_route_ids),
+        )
         if self.max_compensation_attempts <= 0:
             raise ValueError("max_compensation_attempts must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class ImmediateAlgorithm:
+    """Explicit action-first execution of already planned children."""
+
+
+@dataclass(frozen=True, slots=True)
+class TwapAlgorithm:
+    slice_count: int
+    slice_interval_nanos: int
+
+    def __post_init__(self) -> None:
+        if self.slice_count <= 0:
+            raise ValueError("TWAP slice_count must be positive")
+        if self.slice_interval_nanos <= 0:
+            raise ValueError("TWAP slice_interval_nanos must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class MakerTakerHedgeAlgorithm:
+    hedge: HedgePolicy
+
+
+ExecutionAlgorithmPolicy = (
+    ImmediateAlgorithm | TwapAlgorithm | MakerTakerHedgeAlgorithm
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +322,7 @@ class QuoteProvisioningRequest:
     bid_quantity: Decimal
     ask_price: Decimal
     ask_quantity: Decimal
+    algorithm: "ExecutionAlgorithmPolicy" = field(kw_only=True)
     account_id: str = ""
     segment_key: str = "spot"
     market_id: str | None = None
@@ -280,6 +333,8 @@ class QuoteProvisioningRequest:
     execution_route_id: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.algorithm, ImmediateAlgorithm):
+            raise ValueError("quote provisioning currently requires Immediate algorithm")
         if (
             not self.instrument_id.strip()
             or not self.segment_key.strip()
@@ -350,6 +405,7 @@ class PortfolioRebalanceTarget:
 @dataclass(frozen=True, slots=True)
 class PortfolioRebalanceRequest:
     targets: tuple[PortfolioRebalanceTarget, ...]
+    algorithm: "ExecutionAlgorithmPolicy" = field(kw_only=True)
     reason: str = ""
     intent_id: str | None = None
     strategy_decision_id: str | None = None
@@ -357,6 +413,8 @@ class PortfolioRebalanceRequest:
     failure_policy: str = "ContinueOtherLegs"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.algorithm, ImmediateAlgorithm):
+            raise ValueError("portfolio rebalance currently requires Immediate algorithm")
         if not self.targets:
             raise ValueError("portfolio rebalance requires at least one target")
         object.__setattr__(self, "targets", tuple(self.targets))

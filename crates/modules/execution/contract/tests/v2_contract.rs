@@ -1,12 +1,16 @@
 use kairos_execution_contract::event::decode_event;
 use kairos_execution_contract::{
-    ExecutionRouteCandidateResponse, ExecutionViewKey, ExecutionViewKind, execution_view_path,
+    CompletionPolicy, ExecutionAlgorithmPolicyRequest, ExecutionIntentRequest,
+    ExecutionOrderOptionsRequest, ExecutionRouteCandidateResponse, ExecutionViewKey,
+    ExecutionViewKind, FailurePolicy, IntentType, SplitOrderPolicyRequest, execution_view_path,
 };
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
+use kairos_primitives::decimal::Quantity;
 use kairos_primitives::execution::{
-    ExecutionChannelCode, ExecutionRouteId, OrderEntrySymbol, OrderOptionCode, OrderType,
+    ExecutionChannelCode, ExecutionRouteId, IntentId, OrderEntrySymbol, OrderOptionCode, OrderType,
 };
 use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::runtime::{InstanceId, LaunchId, StrategyId};
 
 #[test]
 fn active_view_resources_are_partitioned_by_workspace_and_kind() {
@@ -147,4 +151,67 @@ fn route_contract_rejects_invalid_semantic_identity() {
         "ready": true
     });
     assert!(serde_json::from_value::<ExecutionRouteCandidateResponse>(raw).is_err());
+}
+
+#[test]
+fn intent_algorithm_has_one_explicit_tagged_api() {
+    let immediate = serde_json::json!({"type": "immediate"});
+    assert_eq!(
+        serde_json::from_value::<ExecutionAlgorithmPolicyRequest>(immediate).unwrap(),
+        ExecutionAlgorithmPolicyRequest::Immediate
+    );
+
+    let legacy_implicit_timing = serde_json::json!({"slice_count": 3, "interval": 10});
+    assert!(
+        serde_json::from_value::<ExecutionAlgorithmPolicyRequest>(legacy_implicit_timing).is_err()
+    );
+
+    let legacy_hedge_field = serde_json::json!({"hedge_policy": {}});
+    assert!(serde_json::from_value::<ExecutionAlgorithmPolicyRequest>(legacy_hedge_field).is_err());
+
+    let tagged_immediate_with_legacy_hedge =
+        serde_json::json!({"type": "immediate", "hedge_policy": {}});
+    assert!(
+        serde_json::from_value::<ExecutionAlgorithmPolicyRequest>(
+            tagged_immediate_with_legacy_hedge
+        )
+        .is_err()
+    );
+
+    let split_with_legacy_interval = serde_json::json!({"child_count": 3, "interval": 10});
+    assert!(serde_json::from_value::<SplitOrderPolicyRequest>(split_with_legacy_interval).is_err());
+
+    let mut intent = serde_json::to_value(ExecutionIntentRequest {
+        intent_id: IntentId::new("intent:explicit-algorithm").unwrap(),
+        strategy_decision_id: None,
+        strategy_id: StrategyId::new("strategy:test").unwrap(),
+        launch_id: LaunchId::new("launch:test").unwrap(),
+        instance_id: InstanceId::new("instance:test").unwrap(),
+        instrument_id: InstrumentId::new("instrument:test").unwrap(),
+        market_id: None,
+        execution_route_id: None,
+        account_ids: vec![AccountId::new("account:test").unwrap()],
+        segment_key: SegmentKey::new("spot").unwrap(),
+        target_quantity: Quantity::new(1, 0).unwrap(),
+        limit_price: None,
+        source_snapshot_id: None,
+        source_event_sequence: None,
+        source_event_time_unix_nanos: None,
+        reason: "test".into(),
+        intent_type: IntentType::SingleOrder,
+        algorithm: ExecutionAlgorithmPolicyRequest::Immediate,
+        completion_policy: CompletionPolicy::AllLegsSatisfied,
+        failure_policy: FailurePolicy::CancelRemaining,
+        legs: Vec::new(),
+        deadline_unix_nanos: None,
+        min_edge_bps: None,
+        max_slippage_bps: None,
+        estimated_fee_bps: None,
+        minimum_net_credit: None,
+        maximum_loss: None,
+        order_options: ExecutionOrderOptionsRequest::default(),
+    })
+    .unwrap();
+    intent["hedge_policy"] = serde_json::json!({});
+    assert!(serde_json::from_value::<ExecutionIntentRequest>(intent).is_err());
 }

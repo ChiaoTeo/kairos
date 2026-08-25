@@ -26,6 +26,7 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0019 | [模型服务端点与可用模型](0019-model-endpoints-and-available-models.md) | Accepted |
 | 0020 | [Durable Execution algorithm runs and action-first dispatch](0020-durable-execution-algorithm-runs.md) | Accepted |
 | 0021 | [Fill-driven maker-first and taker-hedge execution](0021-maker-first-taker-hedge.md) | Accepted |
+| 0022 | [Explicit single-path Execution algorithm selection](0022-explicit-execution-algorithm-selection.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

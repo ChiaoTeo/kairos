@@ -37,6 +37,7 @@ from kairospy.system.apps.components.application import (
     ComponentProcessApplication,
     SystemRuntimeSupervisor,
 )
+from kairospy.system.apps.workspace_services import WorkspaceServiceApplication
 from kairospy.investment.apps.account.application import AccountAdminApplication
 from kairospy.system.apps.launch import StrategyProcessController
 from kairospy.surface.cli.options import OutputFormat, render
@@ -3318,6 +3319,41 @@ def test_readme_local_links_resolve() -> None:
 
     missing = [target for target in targets if not (root / target).exists()]
     assert missing == []
+
+
+def test_system_repair_commands_support_the_workbench_service_actions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="repair-service"
+    )
+    calls: list[tuple[str, bool]] = []
+
+    def repair(_self, component: str, *, start: bool):
+        calls.append((component, start))
+        return {"component": component, "status": "ready" if start else "repaired"}
+
+    monkeypatch.setattr(WorkspaceServiceApplication, "repair", repair)
+    for command, start in (("repair", False), ("repair-start", True)):
+        output = StringIO()
+        assert (
+            execute_argv(
+                [
+                    "system",
+                    command,
+                    "--component",
+                    "reference",
+                    "--workspace",
+                    str(workspace.paths.root),
+                    "--format",
+                    "json",
+                ],
+                output,
+            )
+            == 0
+        )
+        assert json.loads(output.getvalue())["component"] == "reference"
+        assert calls[-1] == ("reference", start)
 
 
 def test_cli_exposes_canonical_business_command_surfaces() -> None:

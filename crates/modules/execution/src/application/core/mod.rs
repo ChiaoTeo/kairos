@@ -14,9 +14,9 @@ use crate::domain::{
     AlgorithmActionKind, AlgorithmActionStatus, AlgorithmChildCandidate, AlgorithmExecutionStyle,
     AlgorithmInput, AlgorithmRun, CommitmentBasis, CommitmentResource, CommitmentStatus,
     CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionAlgorithmSpec, ExecutionFill,
-    ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy,
-    IntentType, MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderSide, OrderType,
-    RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy, TwapPolicy, TwapSpec,
+    ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, IntentType,
+    MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderSide, OrderType,
+    RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy, TwapSpec,
     decide_immediate, decide_maker_taker_hedge, decide_twap, split_quantity,
 };
 use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
@@ -668,9 +668,10 @@ fn expand_child_orders(
 
 fn intent_leg_id(intent: &ExecuteStrategyIntent, order: &SubmitOrder) -> String {
     if let Some(leg) = intent.legs.iter().find(|leg| {
-        order
-            .order_id
-            .starts_with(&format!("{}:order:{}", intent.intent_id, leg.leg_id))
+        let base = format!("{}:order:{}", intent.intent_id, leg.leg_id);
+        order.order_id.as_str() == base
+            || order.order_id.starts_with(&format!("{base}:child:"))
+            || order.order_id.starts_with(&format!("{base}:slice:"))
     }) {
         return leg.leg_id.to_string();
     }
@@ -678,7 +679,12 @@ fn intent_leg_id(intent: &ExecuteStrategyIntent, order: &SubmitOrder) -> String 
     let ordinal = order
         .order_id
         .strip_prefix(&prefix)
-        .and_then(|value| value.split(":child:").next())
+        .map(|value| {
+            value
+                .split_once(":child:")
+                .or_else(|| value.split_once(":slice:"))
+                .map_or(value, |(leg_id, _)| leg_id)
+        })
         .unwrap_or("0");
     format!("{}:leg:{}", intent.intent_id, ordinal)
 }

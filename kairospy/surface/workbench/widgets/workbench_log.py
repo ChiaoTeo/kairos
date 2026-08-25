@@ -16,6 +16,7 @@ from textual.widgets import RichLog
 
 from ..safety import redact_renderable, renderable_plain_text
 from ..screens.activity import ActivityOutcome, ActivityRecord
+from ..theme import ERROR, PRIMARY, SUCCESS, WARNING
 from kairospy.surface.presentation import redact_cli_arguments, redact_text
 
 
@@ -353,10 +354,10 @@ def _activity_renderable(
     activity: ActivityRecord, *, separated: bool
 ) -> RenderableType:
     marker, border = {
-        ActivityOutcome.SUCCESS: ("✓", "green"),
-        ActivityOutcome.FAILURE: ("✗", "red"),
-        ActivityOutcome.CANCELLED: ("■", "yellow"),
-        ActivityOutcome.NOTICE: ("•", "cyan"),
+        ActivityOutcome.SUCCESS: ("✓", SUCCESS),
+        ActivityOutcome.FAILURE: ("×", ERROR),
+        ActivityOutcome.CANCELLED: ("■", WARNING),
+        ActivityOutcome.NOTICE: ("•", PRIMARY),
     }[activity.outcome]
     header = Text()
     header.append(marker, style=f"bold {border}")
@@ -372,7 +373,7 @@ def _activity_renderable(
         command = Text()
         command.append("重新执行\n", style="dim")
         command.append("$ ", style="dim")
-        command.append(shlex.join(activity.equivalent_command), style="cyan")
+        command.append(shlex.join(activity.equivalent_command), style=PRIMARY)
         values.extend((Text(""), command))
     return Group(*values)
 
@@ -382,7 +383,7 @@ def _live_header(title: str, *, separated: bool = True) -> RenderableType:
     if separated:
         values.append(Rule(style="grey37"))
     header = Text()
-    header.append("●", style="bold cyan")
+    header.append("●", style=f"bold {PRIMARY}")
     header.append(f" {title}", style="bold")
     values.append(header)
     return Group(*values)

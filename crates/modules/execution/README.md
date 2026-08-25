@@ -28,8 +28,10 @@ typed actions; it never sees provider clients, wire payloads, remote authenticat
 
 ## AlgorithmRun and durable actions
 
-Every newly accepted non-empty Intent receives one `AlgorithmRun`. Immediate is the default; a two-leg
-PairArbitrage Intent with `HedgePolicy` selects MakerTakerHedge. A run owns:
+Every newly accepted non-empty Intent receives one `AlgorithmRun`. The caller must select exactly one
+required `ExecutionAlgorithmPolicy`: `Immediate`, `Twap`, or `MakerTakerHedge`. Intent type validates
+whether that algorithm is legal; it does not infer an algorithm. There is no default algorithm,
+standalone `hedge_policy`, split-timing alias, or compatibility dispatch path. A run owns:
 
 - an algorithm identity and version;
 - a monotonic decision sequence and last business time;
@@ -57,9 +59,23 @@ the recovered snapshot. A missing `algorithm_runs` field remains readable for pr
 backfilling historical active Intent runs belongs to the migration that enables those snapshots for new
 algorithm decisions.
 
+## Immediate and TWAP
+
+`Immediate` authorizes each already-planned child through the durable action-first path. Ordinary
+`SplitOrderPolicy` controls quantity subdivision only; it has no interval or algorithm-selection
+semantics.
+
+`Twap` is an explicit single-leg algorithm with `slice_count` and `slice_interval`. Admission rejects a
+TWAP Intent that also supplies split options, because TWAP alone owns slice quantity and cadence. The
+planner preserves the exact requested total across deterministic slice identities. `TwapSpec` persists
+the business-time start and derives every due time from the slice index, so restart resumes the same
+schedule rather than reading wall clock or reconstructing timing from order options. Each due slice is
+authorized and persisted as a `TwapSlice` action before venue dispatch.
+
 ## Maker-first / taker-hedge
 
-A MakerTakerHedge run requires exactly one leader and one hedge leg. The leader requires a limit price,
+A `MakerTakerHedge` algorithm policy requires a PairArbitrage Intent with exactly one leader and one
+hedge leg. The leader requires a limit price,
 is forced to post-only, and is the only leg initially eligible for dispatch. The hedge request remains a
 durable dormant template and has no order identity until actual leader fills create exposure.
 
@@ -79,7 +95,7 @@ decision, action, and reconstructable child request are persisted before submiss
 the same due-order path in direct and managed runtimes. An indeterminate hedge blocks further execution
 and requires reconciliation.
 
-`HedgePolicy.fallback_execution_route_ids` may name an ordered set of alternative taker routes. Admission
+The algorithm's `HedgePolicy.fallback_execution_route_ids` may name an ordered set of alternative taker routes. Admission
 rejects unknown, duplicate, primary-route, or statically incompatible alternatives. A route is selected
 only after the preceding hedge is proven not sent or explicitly rejected; the selected route is part of
 the durable action and request. Runtime readiness is evaluated at dispatch, so temporary unavailability
@@ -108,11 +124,10 @@ did not complete. An indeterminate hedge or unwind remains reconciliation-only a
 
 ## Current scope
 
-Immediate and the maker-first, taker-hedge, ordered hedge-route fallback, and price-protected
-emergency-unwind vertical slices are
-implemented. Split and maker scheduling still produce durable child templates before the algorithm
-authorizes each dispatch. TWAP and provider transaction certification remain pending. They must not be
-inferred from the presence of action or role vocabulary.
+Immediate, deterministic TWAP, and the maker-first/taker-hedge path with ordered route fallback and
+price-protected emergency unwind are implemented behind the single explicit algorithm policy. Split and
+maker options may still shape child templates and guardrails, but cannot select an algorithm or create a
+second dispatch path. Provider transaction certification remains pending.
 
 ## Verification boundary
 

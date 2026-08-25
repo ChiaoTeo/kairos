@@ -24,6 +24,12 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.activity import ActivityOutcome
+from kairospy.surface.workbench.screens.effects import (
+    AppendActivity,
+    SetInteraction,
+    SetStatus,
+)
 from kairospy.surface.workbench.screens.flows import operations, research
 from kairospy.surface.workbench.screens.flows.operations.views import (
     ServiceDisplayState,
@@ -35,6 +41,9 @@ from kairospy.surface.workbench.screens.flows.operations.views import (
     service_summary,
 )
 from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
+from kairospy.surface.workbench.screens.operation import OperationSpec
+from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
+from kairospy.surface.workbench.screens.session import GuidedSession
 from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
@@ -123,6 +132,63 @@ def test_stale_service_uses_action_only_interaction() -> None:
     assert option_count == 4
     assert not content_displayed
     assert status == "标的服务 · 资源残留 · 无活动运行实例"
+
+
+def test_service_start_failure_moves_detail_to_activity_and_marks_start_failed() -> None:
+    session = GuidedSession(
+        root_label="trader",
+        context=("operations", "service", "reference"),
+    )
+    session.operations.selected_service = "reference"
+    session.operations.selected_service_status = service_status_view(
+        {
+            "component": "reference",
+            "status": "stale",
+            "control_socket_exists": True,
+            "logs_available": True,
+        }
+    )
+    spec = OperationSpec.create(
+        action_name="operations.service.repair-start",
+        audit_summary="清理并启动标的服务",
+        route=ResultRoute(ResultKind.OPERATIONS, "service-status"),
+        operation=lambda: None,
+        running_status="正在清理并启动标的服务…",
+    )
+
+    effects = operations.handle_failure(
+        _state(), session, spec, "invalid reference configuration: unknown field products"
+    )
+
+    assert effects is not None
+    activity = next(effect for effect in effects if isinstance(effect, AppendActivity))
+    interaction = next(
+        effect for effect in effects if isinstance(effect, SetInteraction)
+    )
+    status = next(effect for effect in effects if isinstance(effect, SetStatus))
+    assert activity.activity.outcome is ActivityOutcome.FAILURE
+    assert activity.activity.copy_text is not None
+    assert "unknown field products" in activity.activity.copy_text
+    assert isinstance(interaction.interaction, ChoiceInteraction)
+    assert interaction.interaction.summary is None
+    assert status.message == "操作失败 · 请选择恢复动作"
+    assert session.operations.selected_service_status is not None
+    assert (
+        session.operations.selected_service_status.state
+        is ServiceDisplayState.START_FAILED
+    )
+    assert (
+        session.operations.selected_service_status.recommendation
+        == "修正 Workspace 的 Reference 配置后重新启动服务。"
+    )
+    assert {item.id for item in interaction.interaction.actions} >= {
+        "start",
+        "logs",
+        "diagnostics",
+    }
+    assert "repair-start" not in {
+        item.id for item in interaction.interaction.actions
+    }
 
 
 def test_project_init_collects_each_field_in_the_shared_bottom_input() -> None:

@@ -9,7 +9,10 @@ from typing import Any, Mapping
 
 from kairospy.strategy import CommandHandle, CommandEnvelope
 from kairospy.investment.apps.execution.application import (
+    ExecutionAlgorithmPolicy,
     HedgePolicy,
+    ImmediateAlgorithm,
+    MakerTakerHedgeAlgorithm,
     MakerExecutionPolicy,
     OptionSpreadRequest,
     PairArbitrageRequest,
@@ -18,6 +21,7 @@ from kairospy.investment.apps.execution.application import (
     QuoteRefreshRequest,
     SplitOrderPolicy,
     TargetPositionRequest,
+    TwapAlgorithm,
     LimitOrderRequest,
     MarketOrderRequest,
     OrderRequest,
@@ -116,6 +120,7 @@ class ExecutionCommandClient:
             "instrument_id": request.instrument_id,
             "execution_route_id": request.execution_route_id,
             "intent_type": "TargetPosition",
+            "algorithm": _execution_algorithm(request.algorithm),
             "target_quantity": _decimal(request.quantity),
             "limit_price": None
             if request.limit_price is None
@@ -297,6 +302,7 @@ class ExecutionCommandClient:
             "source_event_sequence": None,
             "reason": request.reason,
             "intent_type": "PairArbitrage",
+            "algorithm": _execution_algorithm(request.algorithm),
             "completion_policy": request.completion_policy,
             "failure_policy": request.failure_policy,
             "legs": payload_legs,
@@ -306,7 +312,6 @@ class ExecutionCommandClient:
             "min_edge_bps": request.min_edge_bps,
             "max_slippage_bps": request.max_slippage_bps,
             "estimated_fee_bps": request.estimated_fee_bps,
-            "hedge_policy": _hedge_policy(request.hedge_policy),
         }
         envelope = CommandEnvelope(
             command_id=request_id,
@@ -359,6 +364,7 @@ class ExecutionCommandClient:
             "source_event_time_unix_nanos": request.source_event_time_unix_nanos,
             "reason": request.reason,
             "intent_type": "OptionSpread",
+            "algorithm": _execution_algorithm(request.algorithm),
             "completion_policy": request.completion_policy,
             "failure_policy": request.failure_policy,
             "minimum_net_credit": _decimal(request.minimum_net_credit),
@@ -443,6 +449,7 @@ class ExecutionCommandClient:
             "source_event_sequence": None,
             "reason": request.reason,
             "intent_type": "PortfolioRebalance",
+            "algorithm": _execution_algorithm(request.algorithm),
             "completion_policy": request.completion_policy,
             "failure_policy": request.failure_policy,
             "legs": payload_legs,
@@ -500,6 +507,7 @@ class ExecutionCommandClient:
             "source_event_sequence": None,
             "reason": request.reason,
             "intent_type": "QuoteProvisioning",
+            "algorithm": _execution_algorithm(request.algorithm),
             "completion_policy": "BestEffort",
             "failure_policy": "ContinueOtherLegs",
             "legs": [
@@ -622,6 +630,7 @@ def _single_order_intent(
         "launch_id": launch_id or "",
         "instance_id": instance_id,
         "intent_type": "SingleOrder",
+        "algorithm": _execution_algorithm(ImmediateAlgorithm()),
         "completion_policy": "AllLegsSatisfied",
         "failure_policy": "CancelRemaining",
         "reason": "",
@@ -706,9 +715,6 @@ def _execution_options(
             "min_child_quantity": None
             if split.min_child_quantity is None
             else _decimal(split.min_child_quantity),
-            "interval": None
-            if split.interval_millis is None
-            else split.interval_millis * 1_000_000,
         }
     if maker is not None:
         options["maker"] = {
@@ -801,9 +807,30 @@ def _hedge_policy(policy: HedgePolicy | None) -> dict[str, object] | None:
             "denominator": policy.contract_multiplier_denominator,
         },
         "max_unhedged_quantity": _decimal(policy.max_unhedged_quantity),
+        "max_unhedged_duration": policy.max_unhedged_duration_nanos,
+        "fallback_execution_route_ids": list(policy.fallback_execution_route_ids),
         "compensate_on_failure": policy.compensate_on_failure,
         "max_compensation_attempts": policy.max_compensation_attempts,
     }
+
+
+def _execution_algorithm(policy: ExecutionAlgorithmPolicy) -> dict[str, object]:
+    if isinstance(policy, ImmediateAlgorithm):
+        return {"type": "immediate"}
+    if isinstance(policy, TwapAlgorithm):
+        return {
+            "type": "twap",
+            "policy": {
+                "slice_count": policy.slice_count,
+                "slice_interval": policy.slice_interval_nanos,
+            },
+        }
+    if isinstance(policy, MakerTakerHedgeAlgorithm):
+        hedge = _hedge_policy(policy.hedge)
+        if hedge is None:
+            raise ValueError("maker-taker hedge algorithm requires hedge policy")
+        return {"type": "maker_taker_hedge", "policy": hedge}
+    raise TypeError(f"Unsupported execution algorithm: {type(policy).__name__}")
 
 
 def _handle(request_id: str, status: int, value: Mapping[str, Any]) -> CommandHandle:

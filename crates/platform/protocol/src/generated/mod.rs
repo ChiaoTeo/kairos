@@ -274,6 +274,8 @@ pub mod kairos {
             pub use current_execution_view_generated::*;
             mod delivery_certainty_generated;
             pub use delivery_certainty_generated::*;
+            mod execution_algorithm_generated;
+            pub use execution_algorithm_generated::*;
             mod execution_attempt_generated;
             pub use execution_attempt_generated::*;
             mod execution_funding_requirement_generated;
@@ -294,6 +296,8 @@ pub mod kairos {
             pub use fill_recorded_generated::*;
             mod hedge_policy_generated;
             pub use hedge_policy_generated::*;
+            mod immediate_algorithm_generated;
+            pub use immediate_algorithm_generated::*;
             mod intent_accepted_generated;
             pub use intent_accepted_generated::*;
             mod intent_leg_generated;
@@ -360,6 +364,8 @@ pub mod kairos {
             pub use split_order_policy_generated::*;
             mod time_in_force_generated;
             pub use time_in_force_generated::*;
+            mod twap_policy_generated;
+            pub use twap_policy_generated::*;
             mod unknown_remote_order_state_generated;
             pub use unknown_remote_order_state_generated::*;
         }

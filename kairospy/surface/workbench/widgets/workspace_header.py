@@ -9,6 +9,8 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Static
 
+from ..theme import ERROR, PRIMARY, SUCCESS, WARNING
+
 if TYPE_CHECKING:
     from ..app import KairosWorkbenchApp
 
@@ -34,10 +36,10 @@ class WorkspaceHeader(Horizontal):
 
         app = cast("KairosWorkbenchApp", self.app)
         state = app.state
-        title = Text("KAIROS", style="bold cyan")
+        title = Text("◆ KAIROS", style=f"bold {PRIMARY}")
         title.append("  /  ", style="dim")
         if state.owner is None:
-            title.append("未打开项目", style="bold yellow")
+            title.append("未打开项目", style=f"bold {WARNING}")
         else:
             title.append(state.workspace_id, style="bold")
         self.query_one("#workspace-title", Static).update(title)
@@ -46,18 +48,18 @@ class WorkspaceHeader(Horizontal):
     def set_status(self, value: str) -> None:
         """Render an activity value with a small semantic status marker."""
 
-        style = _status_style(value)
-        self.query_one("#status-indicator", Static).update(Text("●", style=style))
+        marker, style = _status_presentation(value)
+        self.query_one("#status-indicator", Static).update(Text(marker, style=style))
         self.query_one("#command-status", Static).update(Text(value, style=style))
 
 
-def _status_style(value: str) -> str:
+def _status_presentation(value: str) -> tuple[str, str]:
     if "失败" in value or "错误" in value:
-        return "red"
+        return "×", ERROR
     if "正在" in value or "刷新中" in value:
-        return "cyan"
+        return "●", PRIMARY
     if "完成" in value or "成功" in value:
-        return "green"
+        return "✓", SUCCESS
     if "取消" in value:
-        return "yellow"
-    return "dim"
+        return "■", WARNING
+    return "●", "dim"

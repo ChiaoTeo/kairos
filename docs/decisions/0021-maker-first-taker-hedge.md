@@ -16,7 +16,8 @@ These facts are sufficient to make the hedge decision without introducing a sepa
 
 ## Decision
 
-A two-leg PairArbitrage Intent with `HedgePolicy` creates one MakerTakerHedge AlgorithmRun. The policy
+A two-leg PairArbitrage Intent with an explicit `MakerTakerHedge(HedgePolicy)` algorithm creates one
+MakerTakerHedge AlgorithmRun. The policy
 identifies one leader maker leg and one dormant hedge leg. Acceptance requires a leader limit price,
 forces the leader request to post-only, persists the hedge request as a dormant application template,
 and dispatches only the leader.
@@ -62,7 +63,7 @@ residual exposure while the compensation breaker permits it.
 
 ## Consequences
 
-- Pair acceptance no longer creates simultaneous leader and hedge orders when HedgePolicy is present.
+- Pair acceptance no longer creates simultaneous leader and hedge orders when MakerTakerHedge is selected.
 - Hedge size follows incremental fills rather than the original requested hedge template quantity.
 - Hedge actions remain deterministic and crash recoverable through the same action-first protocol as
   Immediate.
@@ -71,7 +72,8 @@ residual exposure while the compensation breaker permits it.
 - Market taker execution is the normal hedge implementation; bounded limit IOC is reserved for emergency
   leader unwind in the current slice.
 - Hedge-route failover is explicit policy, ordered, action-audited, and forbidden after an uncertain send.
-- PairArbitrage Intents without HedgePolicy retain the existing Immediate multi-leg behavior.
+- Algorithm selection is explicit under Decision 0022; Intent type and the presence of policy-shaped
+  fields never imply MakerTakerHedge or Immediate behavior.
 
 ## Implementation anchors
 

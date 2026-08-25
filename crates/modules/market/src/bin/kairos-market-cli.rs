@@ -1055,6 +1055,7 @@ fn direct_connection_for(
 ) -> Result<CliMarketOnceProvider, Box<dyn std::error::Error>> {
     match (provider, market_type) {
         ("binance", "spot") => Ok(CliMarketOnceProvider::BinanceSpotRest),
+        ("binance", "perpetual") => Ok(CliMarketOnceProvider::BinanceUsdMRest),
         ("binance", "equity") => Ok(CliMarketOnceProvider::BinanceEquityRest),
         ("binance", "option" | "options") => Ok(CliMarketOnceProvider::BinanceOptionsRest),
         ("massive", "equity") => Ok(CliMarketOnceProvider::MassiveRest),

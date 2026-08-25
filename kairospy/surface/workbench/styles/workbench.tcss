@@ -56,12 +56,13 @@ Screen {
 #operation-dock {
     height: auto;
     margin: 0 2;
-    border: round $primary-muted;
+    border: none;
+    border-top: solid $surface-lighten-2;
     background: $surface-darken-2;
 }
 
 #operation-dock:focus-within {
-    border: round $primary;
+    border-top: solid $surface-lighten-2;
 }
 
 #interaction-region {
@@ -69,8 +70,14 @@ Screen {
     min-height: 1;
     max-height: 40vh;
     margin: 0;
+    border: none;
     overflow-y: auto;
     scrollbar-size: 1 1;
+}
+
+#interaction-region:focus-within {
+    border: none;
+    background: $primary 4%;
 }
 
 #interaction-content {
@@ -88,20 +95,25 @@ Screen {
     background: $surface-darken-2;
 }
 
+#guided-actions:focus {
+    background: $primary 4%;
+}
+
 #guided-actions > .option-list--option {
     padding: 0 1;
 }
 
 #command-bar {
-    height: 2;
+    height: 4;
     margin: 0;
     border: none;
-    border-top: solid $primary-muted;
+    border-top: solid $surface-lighten-2;
     background: $surface-darken-2;
 }
 
 #command-bar:focus-within {
-    border-top: solid $primary-muted;
+    border: none;
+    border-top: solid $surface-lighten-2;
 }
 
 #command-context {
@@ -109,7 +121,7 @@ Screen {
     height: 1fr;
     padding: 0 1;
     content-align: center middle;
-    color: $accent;
+    color: $primary;
     text-style: bold;
     background: $surface-darken-2;
 }
@@ -118,13 +130,18 @@ Screen {
     width: 1fr;
     height: 1fr;
     margin: 0;
-    padding: 0 1;
+    padding: 1 1;
     border: none;
     background: $surface-darken-2;
 }
 
+#command-input:focus {
+    color: $text;
+    background: $primary 6%;
+}
+
 #command-hints {
-    height: 2;
+    height: 1;
     padding: 0 3;
     color: $text-muted;
 }

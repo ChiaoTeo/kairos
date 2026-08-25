@@ -188,6 +188,7 @@ pub struct CliMarketDatasetsResult {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CliMarketOnceProvider {
     BinanceSpotRest,
+    BinanceUsdMRest,
     BinanceEquityRest,
     BinanceOptionsRest,
     MassiveRest,

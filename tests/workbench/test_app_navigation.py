@@ -78,6 +78,46 @@ def test_home_number_enters_product_context_without_replacing_input(
     assert input_focused
 
 
+def test_tab_focuses_actions_and_keeps_focus_for_the_next_choice() -> None:
+    async def run() -> tuple[tuple[str, ...], bool, int | None]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.press("tab", "down", "enter")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            return (
+                screen.session.context,
+                screen.query_one("#guided-actions", ActionList).has_focus,
+                screen.query_one("#guided-actions", ActionList).highlighted,
+            )
+
+    context, actions_focused, highlighted = asyncio.run(run())
+
+    assert context == ("reference",)
+    assert actions_focused
+    assert highlighted == 0
+
+
+def test_returning_focus_to_input_clears_the_action_highlight() -> None:
+    async def run() -> tuple[bool, int | None]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.press("tab", "down", "tab")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            return (
+                screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
+                screen.query_one("#guided-actions", ActionList).highlighted,
+            )
+
+    input_focused, highlighted = asyncio.run(run())
+
+    assert input_focused
+    assert highlighted is None
+
+
 def test_missing_project_enters_project_start_before_business_home() -> None:
     async def run() -> tuple[str, str, int, tuple[str, ...], str]:
         state = WorkbenchState(
@@ -149,7 +189,7 @@ def test_workspace_header_remains_project_identity_during_navigation() -> None:
     operations_header, operations_context = asyncio.run(run("6"))
     project_header, project_context = asyncio.run(run("p"))
 
-    assert operations_header == project_header == "KAIROS  /  trader"
+    assert operations_header == project_header == "◆ KAIROS  /  trader"
     assert operations_context == "trader / 运行中心 / 运行概览  ›"
     assert project_context == "trader / 项目管理  ›"
 
