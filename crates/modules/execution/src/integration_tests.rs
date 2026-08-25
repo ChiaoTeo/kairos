@@ -114,6 +114,7 @@ fn strategy_intent(
         source_event_time_unix_nanos: None,
         reason: String::new(),
         intent_type: Default::default(),
+        algorithm: kairos_execution::ExecutionAlgorithmPolicy::Immediate,
         completion_policy: Default::default(),
         failure_policy: Default::default(),
         legs: Vec::new(),
@@ -123,7 +124,6 @@ fn strategy_intent(
         estimated_fee_bps: None,
         minimum_net_credit: None,
         maximum_loss: None,
-        hedge_policy: None,
         order_options: Default::default(),
     }
 }
@@ -2426,7 +2426,7 @@ fn maker_taker_pair_intent(
     intent.intent_type = kairos_execution::IntentType::PairArbitrage;
     intent.completion_policy = kairos_execution::CompletionPolicy::HedgeWithinTolerance;
     intent.failure_policy = kairos_execution::FailurePolicy::Compensate;
-    intent.hedge_policy = Some(HedgePolicy {
+    intent.algorithm = kairos_execution::ExecutionAlgorithmPolicy::MakerTakerHedge(HedgePolicy {
         leader_leg_id: LegId::new("leader").unwrap(),
         hedge_leg_id: LegId::new("hedge").unwrap(),
         ratio: kairos_primitives::decimal::Ratio::new(ratio_numerator, 1).unwrap(),
@@ -2463,12 +2463,123 @@ fn maker_taker_pair_intent(
 }
 
 fn add_fallback_route(intent: &mut ExecuteStrategyIntent) {
-    intent
-        .hedge_policy
-        .as_mut()
-        .expect("maker-taker fixture has a hedge policy")
-        .fallback_execution_route_ids =
+    let kairos_execution::ExecutionAlgorithmPolicy::MakerTakerHedge(policy) = &mut intent.algorithm
+    else {
+        panic!("maker-taker fixture has a hedge policy");
+    };
+    policy.fallback_execution_route_ids =
         vec![ExecutionRouteId::new("execution-route:fallback").unwrap()];
+}
+
+#[test]
+fn twap_uses_persisted_business_deadlines_and_restores_the_next_slice() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let mut intent = strategy_intent("intent:twap-schedule", 6, Some(100));
+    intent.source_event_time_unix_nanos = Some(UnixNanos::new(100));
+    intent.algorithm =
+        kairos_execution::ExecutionAlgorithmPolicy::Twap(kairos_execution::TwapPolicy {
+            slice_count: 3,
+            slice_interval: DurationNanos::new(10),
+        });
+
+    let state = app.submit_intent(intent).unwrap();
+    let run = app.algorithm_runs().pop().unwrap();
+    assert!(matches!(
+        run.spec,
+        kairos_execution::ExecutionAlgorithmSpec::Twap(_)
+    ));
+    assert_eq!(run.next_wake_at, Some(UnixNanos::new(110)));
+    assert_eq!(app.orders(None).len(), 1);
+    assert_eq!(state.pending_orders.len(), 2);
+    assert_eq!(
+        run.actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::TwapSlice,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+
+    assert_eq!(app.advance_due_algorithm_runs(109, 8).unwrap(), 0);
+    assert_eq!(app.orders(None).len(), 1);
+    assert_eq!(app.advance_due_algorithm_runs(110, 8).unwrap(), 1);
+    assert_eq!(app.orders(None).len(), 2);
+    assert_eq!(
+        app.algorithm_runs()[0].next_wake_at,
+        Some(UnixNanos::new(120))
+    );
+    drop(app);
+
+    let mut restored = application(&path);
+    assert_eq!(
+        restored.algorithm_runs()[0].next_wake_at,
+        Some(UnixNanos::new(120))
+    );
+    assert_eq!(
+        restored
+            .intent("intent:twap-schedule")
+            .unwrap()
+            .pending_orders
+            .len(),
+        1
+    );
+    assert_eq!(restored.advance_due_algorithm_runs(119, 8).unwrap(), 0);
+    assert_eq!(restored.advance_due_algorithm_runs(120, 8).unwrap(), 1);
+    let orders = restored.orders(None);
+    assert_eq!(orders.len(), 3);
+    assert_eq!(
+        orders
+            .iter()
+            .map(|order| order.quantity)
+            .collect::<Vec<_>>(),
+        vec![
+            Quantity::new(2, 0).unwrap(),
+            Quantity::new(2, 0).unwrap(),
+            Quantity::new(2, 0).unwrap(),
+        ]
+    );
+    assert_eq!(
+        restored.algorithm_runs()[0]
+            .actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::TwapSlice,
+                    ..
+                }
+            ))
+            .count(),
+        3
+    );
+
+    for (index, order) in orders.into_iter().enumerate() {
+        restored
+            .record_fill(fill_report(
+                format!("twap-fill-{index}"),
+                order.order_id.to_string(),
+                2,
+                100,
+                0,
+                Some(121 + index as u64),
+            ))
+            .unwrap();
+    }
+    assert_eq!(
+        restored.algorithm_runs()[0].status,
+        AlgorithmRunStatus::Completed
+    );
+    assert_eq!(
+        restored.intent("intent:twap-schedule").unwrap().status,
+        kairos_execution::IntentStatus::Satisfied
+    );
 }
 
 #[test]
@@ -2482,17 +2593,18 @@ fn pair_fills_create_compensation_from_actual_leader_quantity() {
             intent.intent_type = kairos_execution::IntentType::PairArbitrage;
             intent.completion_policy = kairos_execution::CompletionPolicy::HedgeWithinTolerance;
             intent.failure_policy = kairos_execution::FailurePolicy::Compensate;
-            intent.hedge_policy = Some(HedgePolicy {
-                leader_leg_id: LegId::new("leader").unwrap(),
-                hedge_leg_id: LegId::new("hedge").unwrap(),
-                ratio: kairos_primitives::decimal::Ratio::new(2, 1).unwrap(),
-                contract_multiplier: kairos_primitives::decimal::Ratio::new(1, 1).unwrap(),
-                max_unhedged_quantity: Quantity::new(0, 0).unwrap(),
-                max_unhedged_duration: None,
-                fallback_execution_route_ids: Vec::new(),
-                compensate_on_failure: true,
-                max_compensation_attempts: 3,
-            });
+            intent.algorithm =
+                kairos_execution::ExecutionAlgorithmPolicy::MakerTakerHedge(HedgePolicy {
+                    leader_leg_id: LegId::new("leader").unwrap(),
+                    hedge_leg_id: LegId::new("hedge").unwrap(),
+                    ratio: kairos_primitives::decimal::Ratio::new(2, 1).unwrap(),
+                    contract_multiplier: kairos_primitives::decimal::Ratio::new(1, 1).unwrap(),
+                    max_unhedged_quantity: Quantity::new(0, 0).unwrap(),
+                    max_unhedged_duration: None,
+                    fallback_execution_route_ids: Vec::new(),
+                    compensate_on_failure: true,
+                    max_compensation_attempts: 3,
+                });
             intent.legs = vec![
                 intent_leg(
                     "leader",
@@ -2666,7 +2778,11 @@ fn maker_taker_tail_hedge_is_driven_by_persisted_business_time_deadline() {
     app.advance_time(100).unwrap();
     let mut intent = maker_taker_pair_intent("intent:timed-tail-hedge", 1, 1, 1);
     intent.source_event_time_unix_nanos = Some(UnixNanos::new(100));
-    intent.hedge_policy.as_mut().unwrap().max_unhedged_duration = Some(DurationNanos::new(10));
+    let kairos_execution::ExecutionAlgorithmPolicy::MakerTakerHedge(policy) = &mut intent.algorithm
+    else {
+        panic!("maker-taker fixture has a hedge policy");
+    };
+    policy.max_unhedged_duration = Some(DurationNanos::new(10));
     let state = app.submit_intent(intent).unwrap();
     app.record_fill(fill_report(
         "timed-tail-leader-fill",

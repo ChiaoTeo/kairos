@@ -93,7 +93,13 @@ table SplitOrderPolicy {
   max_child_quantity:kairos.common.v2.Decimal64;
   child_count:uint = null;
   min_child_quantity:kairos.common.v2.Decimal64;
-  interval_nanos:ulong = null;
+}
+
+table ImmediateAlgorithm {}
+
+table TwapPolicy {
+  slice_count:uint;
+  slice_interval_nanos:ulong;
 }
 
 table MakerExecutionPolicy {
@@ -129,6 +135,12 @@ table HedgePolicy {
   max_compensation_attempts:uint;
 }
 
+union ExecutionAlgorithm {
+  ImmediateAlgorithm,
+  TwapPolicy,
+  HedgePolicy
+}
+
 table IntentLeg {
   leg_id:string (required);
   account_id:string (required);
@@ -149,10 +161,10 @@ table ExecutionIntent {
   launch_id:string (required);
   instance_id:string (required);
   intent_type:IntentType = UNSPECIFIED;
+  algorithm:ExecutionAlgorithm (required);
   legs:[IntentLeg] (required);
   completion_policy:CompletionPolicy = UNSPECIFIED;
   failure_policy:FailurePolicy = UNSPECIFIED;
-  hedge_policy:HedgePolicy;
   deadline_unix_nanos:ulong = null;
   min_edge_bps:uint = null;
   max_slippage_bps:uint = null;

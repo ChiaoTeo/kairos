@@ -13,11 +13,11 @@ use super::model::*;
 use crate::domain::{
     AlgorithmActionKind, AlgorithmActionStatus, AlgorithmChildCandidate, AlgorithmExecutionStyle,
     AlgorithmInput, AlgorithmRun, CommitmentBasis, CommitmentResource, CommitmentStatus,
-    CompletionPolicy, ExecutionAlgorithmSpec, ExecutionFill, ExecutionLeg, ExecutionOrder,
-    ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy, IntentType,
-    MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderSide, OrderType,
-    RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy, decide_immediate,
-    decide_maker_taker_hedge, split_quantity,
+    CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionAlgorithmSpec, ExecutionFill,
+    ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy,
+    IntentType, MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderSide, OrderType,
+    RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy, TwapPolicy, TwapSpec,
+    decide_immediate, decide_maker_taker_hedge, decide_twap, split_quantity,
 };
 use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 use crate::services::dependencies::{ExecutionOrderAdmissionService, QueuedExecutionIntentPlanner};
@@ -604,6 +604,34 @@ fn expand_child_orders(
     intent: &ExecuteStrategyIntent,
     orders: Vec<SubmitOrder>,
 ) -> Result<Vec<SubmitOrder>, ExecutionError> {
+    if let ExecutionAlgorithmPolicy::Twap(policy) = &intent.algorithm {
+        if orders.len() != 1 || orders[0].options.split.is_some() {
+            return Err(ExecutionError::Invalid(
+                "TWAP owns slice quantity and cannot be combined with split order options".into(),
+            ));
+        }
+        let order = &orders[0];
+        let chunks = split_quantity(
+            order.quantity,
+            &SplitOrderPolicy {
+                max_child_quantity: None,
+                child_count: Some(policy.slice_count),
+                min_child_quantity: None,
+            },
+        )
+        .map_err(|error| ExecutionError::Invalid(format!("TWAP {}: {error}", order.order_id)))?;
+        return chunks
+            .into_iter()
+            .enumerate()
+            .map(|(index, quantity)| {
+                let mut child = order.clone();
+                child.order_id = OrderId::new(format!("{}:slice:{index}", order.order_id))
+                    .expect("validated TWAP slice order ID");
+                child.quantity = quantity;
+                Ok(child)
+            })
+            .collect();
+    }
     let mut expanded = Vec::with_capacity(orders.len());
     for order in orders {
         let Some(policy) = order.options.split.as_ref() else {
@@ -658,24 +686,31 @@ fn intent_leg_id(intent: &ExecuteStrategyIntent, order: &SubmitOrder) -> String 
 fn scheduled_order_due(
     intent: &ExecuteStrategyIntent,
     orders: &[SubmitOrder],
+    algorithm_run: &AlgorithmRun,
     now_unix_nanos: u64,
 ) -> BTreeMap<OrderId, UnixNanos> {
+    if let ExecutionAlgorithmSpec::Twap(spec) = &algorithm_run.spec {
+        return orders
+            .iter()
+            .enumerate()
+            .map(|(index, order)| {
+                let index = u32::try_from(index).expect("TWAP slice count is bounded by u32");
+                (
+                    order.order_id.clone(),
+                    spec.due_at(index).expect("validated TWAP schedule"),
+                )
+            })
+            .collect();
+    }
     let mut last_due: BTreeMap<String, u64> = BTreeMap::new();
     let mut due = BTreeMap::new();
     for order in orders {
         let leg_id = intent_leg_id(intent, order);
         let interval = order
             .options
-            .split
+            .maker
             .as_ref()
-            .and_then(|policy| policy.interval)
-            .or_else(|| {
-                order
-                    .options
-                    .maker
-                    .as_ref()
-                    .and_then(|policy| policy.min_interval)
-            })
+            .and_then(|policy| policy.min_interval)
             .unwrap_or(DurationNanos::new(0));
         let window_cadence = order
             .options

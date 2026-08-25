@@ -8,9 +8,10 @@ use kairos_execution::application::{
 use kairos_execution::composition::compose_standalone_execution;
 use kairos_execution::{ConnectedExecutionApplication, ConnectedExecutionOutput};
 use kairos_execution_contract::{
-    CancelOrderRequest, CommandEnvelope, CompletionPolicy, ExecutionIntentRequest,
-    ExecutionOrderOptionsRequest, ExecutionRoutesQuery, FailurePolicy, IntentLegRequest,
-    IntentType, ReconcileExecutionRequest, ReplaceOrderRequest, SubmitIntentRequest,
+    CancelOrderRequest, CommandEnvelope, CompletionPolicy, ExecutionAlgorithmPolicyRequest,
+    ExecutionIntentRequest, ExecutionOrderOptionsRequest, ExecutionRoutesQuery, FailurePolicy,
+    IntentLegRequest, IntentType, ReconcileExecutionRequest, ReplaceOrderRequest,
+    SubmitIntentRequest,
 };
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::execution::{ExecutionRouteId, IntentId, OrderId};
@@ -711,7 +712,7 @@ fn submit_intent_request(
             estimated_fee_bps: None,
             minimum_net_credit: None,
             maximum_loss: None,
-            hedge_policy: None,
+            algorithm: ExecutionAlgorithmPolicyRequest::Immediate,
             order_options: control_options(request.options),
         },
         admission_evidence: None,

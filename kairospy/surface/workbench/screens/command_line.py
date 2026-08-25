@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import replace
@@ -84,6 +85,11 @@ from .commands import (
 _COMMAND_ALIASES = {
     "b": "back",
 }
+_BACK_ALIAS_PATTERN = re.compile(r"^/(?:b|back)$", re.IGNORECASE)
+_BACK_ALIAS_PREFIX_PATTERN = re.compile(r"^/b(?:a(?:c(?:k)?)?)?$", re.IGNORECASE)
+_BACK_SELECTION_PATTERN = re.compile(
+    r"^/(?:b|back)\s+(?P<selection>\d*)$", re.IGNORECASE
+)
 
 
 class CommandLineScreen(Screen[None]):
@@ -190,11 +196,13 @@ class CommandLineScreen(Screen[None]):
         self.submit(value)
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Preview back destinations while a back alias exactly matches."""
+        """Consume a back alias and hand subsequent input to its picker."""
 
         if event.input.id != "command-input":
             return
-        matches_back = event.value.strip().lower() in {"/b", "/back"}
+        raw_value = event.value.lstrip()
+        value = raw_value.strip()
+        matches_back = _BACK_ALIAS_PATTERN.fullmatch(value) is not None
         if matches_back:
             if self._resource_wizard_active():
                 return
@@ -211,6 +219,17 @@ class CommandLineScreen(Screen[None]):
             self._back_preview_hint = self._primary_hint
             self._present_back_targets()
             return
+        if self._back_preview_interaction is not None and self._is_back_target_picker():
+            selection = _BACK_SELECTION_PATTERN.fullmatch(raw_value)
+            if selection is not None:
+                event.input.value = selection.group("selection")
+                return
+            if (
+                _BACK_ALIAS_PREFIX_PATTERN.fullmatch(raw_value) is not None
+                or not value
+                or value.isdecimal()
+            ):
+                return
         self._restore_back_preview()
 
     def submit(self, value: str) -> None:
@@ -631,8 +650,7 @@ class CommandLineScreen(Screen[None]):
         targets = back_target_items(self.session)
         if self._is_back_target_picker():
             if self._back_preview_interaction is not None:
-                self._discard_back_preview()
-                self._set_status("请选择要返回的层级")
+                self._navigate_back(1)
                 return
             self.action_back()
             return
@@ -668,6 +686,7 @@ class CommandLineScreen(Screen[None]):
         )
 
     def _navigate_back(self, steps: int) -> None:
+        self._discard_back_preview()
         if self.session.context[:2] == ("operations", "service-logs"):
             self._finish_operations_logs()
         for _ in range(steps):

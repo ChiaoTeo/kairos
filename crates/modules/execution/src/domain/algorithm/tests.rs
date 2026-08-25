@@ -109,6 +109,97 @@ fn maker_taker_run() -> AlgorithmRun {
     .unwrap()
 }
 
+fn twap_run() -> AlgorithmRun {
+    AlgorithmRun::twap(
+        IntentId::new("intent:twap").unwrap(),
+        TwapSpec {
+            leg_id: LegId::new("leg:twap").unwrap(),
+            start_at: UnixNanos::new(100),
+            slice_interval: DurationNanos::new(10),
+            slice_count: 3,
+        },
+        Quantity::new(6, 0).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn twap_waits_for_business_time_and_persists_the_next_slice_deadline() {
+    let run = twap_run();
+    let before = decide_twap(
+        &run,
+        AlgorithmInput {
+            business_time: UnixNanos::new(99),
+            ready_children: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(before.next_status, AlgorithmRunStatus::Waiting);
+    assert_eq!(before.next_wake_at, Some(UnixNanos::new(100)));
+    assert!(before.actions.is_empty());
+
+    let due = decide_twap(
+        &run,
+        AlgorithmInput {
+            business_time: UnixNanos::new(100),
+            ready_children: vec![AlgorithmChildCandidate {
+                order_id: OrderId::new("order:twap:1").unwrap(),
+                leg_id: LegId::new("leg:twap").unwrap(),
+                quantity: Quantity::new(2, 0).unwrap(),
+                execution_style: AlgorithmExecutionStyle::TwapSlice,
+                execution_route_id: None,
+            }],
+        },
+    )
+    .unwrap();
+    assert_eq!(due.next_wake_at, Some(UnixNanos::new(110)));
+    assert!(matches!(
+        due.actions.as_slice(),
+        [AlgorithmActionKind::SubmitChild {
+            quantity,
+            execution_style: AlgorithmExecutionStyle::TwapSlice,
+            ..
+        }] if *quantity == Quantity::new(2, 0).unwrap()
+    ));
+}
+
+#[test]
+fn twap_slice_sequence_is_deterministic_and_cannot_run_early() {
+    let mut left = twap_run();
+    let mut right = twap_run();
+    let input = AlgorithmInput {
+        business_time: UnixNanos::new(100),
+        ready_children: vec![AlgorithmChildCandidate {
+            order_id: OrderId::new("order:twap:1").unwrap(),
+            leg_id: LegId::new("leg:twap").unwrap(),
+            quantity: Quantity::new(2, 0).unwrap(),
+            execution_style: AlgorithmExecutionStyle::TwapSlice,
+            execution_route_id: None,
+        }],
+    };
+    let left_decision = decide_twap(&left, input.clone()).unwrap();
+    let right_decision = decide_twap(&right, input).unwrap();
+    assert_eq!(left_decision, right_decision);
+    left.apply_decision(left_decision).unwrap();
+    right.apply_decision(right_decision).unwrap();
+    assert_eq!(left, right);
+    let action_id = left.actions[0].action_id.clone();
+    left.set_action_status(&action_id, AlgorithmActionStatus::Completed)
+        .unwrap();
+    left.legs[0].committed_quantity = Quantity::new(2, 0).unwrap();
+
+    let early = decide_twap(
+        &left,
+        AlgorithmInput {
+            business_time: UnixNanos::new(109),
+            ready_children: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(early.next_wake_at, Some(UnixNanos::new(110)));
+    assert!(early.actions.is_empty());
+}
+
 #[test]
 fn maker_taker_tail_exposure_waits_for_business_deadline_then_hedges() {
     let mut run = maker_taker_run();

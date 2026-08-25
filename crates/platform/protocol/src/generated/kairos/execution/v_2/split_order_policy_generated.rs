@@ -23,7 +23,6 @@ impl<'a> SplitOrderPolicy<'a> {
     pub const VT_MAX_CHILD_QUANTITY: ::flatbuffers::VOffsetT = 4;
     pub const VT_CHILD_COUNT: ::flatbuffers::VOffsetT = 6;
     pub const VT_MIN_CHILD_QUANTITY: ::flatbuffers::VOffsetT = 8;
-    pub const VT_INTERVAL_NANOS: ::flatbuffers::VOffsetT = 10;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -40,9 +39,6 @@ impl<'a> SplitOrderPolicy<'a> {
         args: &'args SplitOrderPolicyArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<SplitOrderPolicy<'bldr>> {
         let mut builder = SplitOrderPolicyBuilder::new(_fbb);
-        if let Some(x) = args.interval_nanos {
-            builder.add_interval_nanos(x);
-        }
         if let Some(x) = args.min_child_quantity {
             builder.add_min_child_quantity(x);
         }
@@ -86,16 +82,6 @@ impl<'a> SplitOrderPolicy<'a> {
             )
         }
     }
-    #[inline]
-    pub fn interval_nanos(&self) -> Option<u64> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<u64>(SplitOrderPolicy::VT_INTERVAL_NANOS, None)
-        }
-    }
 }
 
 impl ::flatbuffers::Verifiable for SplitOrderPolicy<'_> {
@@ -116,7 +102,6 @@ impl ::flatbuffers::Verifiable for SplitOrderPolicy<'_> {
                 Self::VT_MIN_CHILD_QUANTITY,
                 false,
             )?
-            .visit_field::<u64>("interval_nanos", Self::VT_INTERVAL_NANOS, false)?
             .finish();
         Ok(())
     }
@@ -125,7 +110,6 @@ pub struct SplitOrderPolicyArgs<'a> {
     pub max_child_quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub child_count: Option<u32>,
     pub min_child_quantity: Option<&'a super::super::common::v_2::Decimal64>,
-    pub interval_nanos: Option<u64>,
 }
 impl<'a> Default for SplitOrderPolicyArgs<'a> {
     #[inline]
@@ -134,7 +118,6 @@ impl<'a> Default for SplitOrderPolicyArgs<'a> {
             max_child_quantity: None,
             child_count: None,
             min_child_quantity: None,
-            interval_nanos: None,
         }
     }
 }
@@ -172,11 +155,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> SplitOrderPolicyBuilder<'a, '
             );
     }
     #[inline]
-    pub fn add_interval_nanos(&mut self, interval_nanos: u64) {
-        self.fbb_
-            .push_slot_always::<u64>(SplitOrderPolicy::VT_INTERVAL_NANOS, interval_nanos);
-    }
-    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> SplitOrderPolicyBuilder<'a, 'b, A> {
@@ -199,7 +177,6 @@ impl ::core::fmt::Debug for SplitOrderPolicy<'_> {
         ds.field("max_child_quantity", &self.max_child_quantity());
         ds.field("child_count", &self.child_count());
         ds.field("min_child_quantity", &self.min_child_quantity());
-        ds.field("interval_nanos", &self.interval_nanos());
         ds.finish()
     }
 }

@@ -40,11 +40,12 @@ pub use crate::domain::{
     AlgorithmDecision, AlgorithmExecutionStyle, AlgorithmInput, AlgorithmLegLifecycle,
     AlgorithmLegRole, AlgorithmLegState, AlgorithmRun, AlgorithmRunId, AlgorithmRunStatus,
     CommitmentBasis, CommitmentResource, CommitmentStatus, CompletionPolicy,
-    ExecutionAlgorithmSpec, ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus,
-    ExecutionPlan, FailurePolicy, HedgePolicy, IntentLifecycle, IntentType, LegLifecycle,
-    MakerExecutionPolicy, MakerTakerHedgeSpec, NormalizedExposureLedger, OrderCommitment,
-    OrderSide, OrderType, RiskReservationSagaStatus, SelectedExecutionRoute, SplitOrderPolicy,
-    decide_immediate, decide_maker_taker_hedge,
+    ExecutionAlgorithmPolicy, ExecutionAlgorithmSpec, ExecutionFill, ExecutionLeg, ExecutionOrder,
+    ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy, IntentLifecycle, IntentType,
+    LegLifecycle, MakerExecutionPolicy, MakerTakerHedgeSpec, NormalizedExposureLedger,
+    OrderCommitment, OrderSide, OrderType, RiskReservationSagaStatus, SelectedExecutionRoute,
+    SplitOrderPolicy, TwapPolicy, TwapSpec, decide_immediate, decide_maker_taker_hedge,
+    decide_twap,
 };
 pub use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

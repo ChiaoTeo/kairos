@@ -147,7 +147,12 @@ pub struct SplitOrderPolicyRequest {
     pub max_child_quantity: Option<Quantity>,
     pub child_count: Option<u32>,
     pub min_child_quantity: Option<Quantity>,
-    pub interval: Option<DurationNanos>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TwapPolicyRequest {
+    pub slice_count: u32,
+    pub slice_interval: DurationNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -204,6 +209,14 @@ pub struct HedgePolicyRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "policy", rename_all = "snake_case")]
+pub enum ExecutionAlgorithmPolicyRequest {
+    Immediate,
+    Twap(TwapPolicyRequest),
+    MakerTakerHedge(HedgePolicyRequest),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionIntentRequest {
     pub intent_id: IntentId,
     pub strategy_decision_id: Option<DecisionId>,
@@ -222,6 +235,7 @@ pub struct ExecutionIntentRequest {
     pub source_event_time_unix_nanos: Option<UnixNanos>,
     pub reason: String,
     pub intent_type: IntentType,
+    pub algorithm: ExecutionAlgorithmPolicyRequest,
     pub completion_policy: CompletionPolicy,
     pub failure_policy: FailurePolicy,
     pub legs: Vec<IntentLegRequest>,
@@ -231,7 +245,6 @@ pub struct ExecutionIntentRequest {
     pub estimated_fee_bps: Option<u32>,
     pub minimum_net_credit: Option<kairos_primitives::decimal::Money>,
     pub maximum_loss: Option<kairos_primitives::decimal::Money>,
-    pub hedge_policy: Option<HedgePolicyRequest>,
     pub order_options: ExecutionOrderOptionsRequest,
 }
 

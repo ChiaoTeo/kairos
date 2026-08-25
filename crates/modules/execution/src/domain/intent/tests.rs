@@ -76,7 +76,6 @@ mod tests {
                 max_child_quantity: None,
                 child_count: Some(3),
                 min_child_quantity: Some(Quantity::new(3, 0).unwrap()),
-                interval: Some(DurationNanos::new(100_000_000)),
             },
         )
         .unwrap();
@@ -99,7 +98,6 @@ mod tests {
                 max_child_quantity: None,
                 child_count: Some(2),
                 min_child_quantity: None,
-                interval: None,
             },
         )
         .unwrap();

@@ -136,6 +136,7 @@ pub struct ExecuteStrategyIntent {
     pub source_event_time_unix_nanos: Option<UnixNanos>,
     pub reason: String,
     pub intent_type: IntentType,
+    pub algorithm: ExecutionAlgorithmPolicy,
     pub completion_policy: CompletionPolicy,
     pub failure_policy: FailurePolicy,
     pub legs: Vec<IntentLegRequest>,
@@ -150,7 +151,6 @@ pub struct ExecuteStrategyIntent {
     pub minimum_net_credit: Option<Money>,
     #[serde(default)]
     pub maximum_loss: Option<Money>,
-    pub hedge_policy: Option<HedgePolicy>,
     pub order_options: ExecutionOrderOptions,
 }
 
@@ -165,27 +165,29 @@ pub struct IntentAdmissionEvidence {
     pub effective_hash: String,
 }
 
-impl Default for ExecuteStrategyIntent {
-    fn default() -> Self {
+#[cfg(test)]
+impl ExecuteStrategyIntent {
+    pub(crate) fn test_fixture() -> Self {
         Self {
-            intent_id: IntentId::new("intent:default").expect("valid default intent ID"),
+            intent_id: IntentId::new("intent:default").expect("valid fixture intent ID"),
             strategy_decision_id: None,
             strategy_id: String::new(),
             launch_id: String::new(),
             instance_id: String::new(),
             instrument_id: InstrumentId::new("instrument:default")
-                .expect("valid default instrument ID"),
+                .expect("valid fixture instrument ID"),
             market_id: None,
             execution_route_id: None,
             account_ids: Vec::new(),
-            segment_key: SegmentKey::new("segment:default").expect("valid default segment key"),
-            target_quantity: Quantity::new(0, 0).expect("valid default quantity"),
+            segment_key: SegmentKey::new("segment:default").expect("valid fixture segment key"),
+            target_quantity: Quantity::new(0, 0).expect("valid fixture quantity"),
             limit_price: None,
             source_snapshot_id: None,
             source_event_sequence: None,
             source_event_time_unix_nanos: None,
             reason: String::new(),
             intent_type: IntentType::default(),
+            algorithm: ExecutionAlgorithmPolicy::Immediate,
             completion_policy: CompletionPolicy::default(),
             failure_policy: FailurePolicy::default(),
             legs: Vec::new(),
@@ -195,7 +197,6 @@ impl Default for ExecuteStrategyIntent {
             estimated_fee_bps: None,
             minimum_net_credit: None,
             maximum_loss: None,
-            hedge_policy: None,
             order_options: ExecutionOrderOptions::default(),
         }
     }

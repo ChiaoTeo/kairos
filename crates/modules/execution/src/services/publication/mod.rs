@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn lifecycle_event_preserves_correlation_previous_state_and_evidence() {
-        let mut intent = ExecuteStrategyIntent::default();
+        let mut intent = ExecuteStrategyIntent::test_fixture();
         intent.intent_id = kairos_primitives::execution::IntentId::new("intent-1").unwrap();
         intent.strategy_id = "strategy-a".into();
         intent.strategy_decision_id = Some("strategy-a:decision:1".into());

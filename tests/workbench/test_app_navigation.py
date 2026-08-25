@@ -297,13 +297,9 @@ def test_slash_back_returns_from_result_to_section_then_home() -> None:
 
             await pilot.press("slash", "b", "a", "c", "k", "enter")
             await pilot.pause()
-            await pilot.press("1", "enter")
-            await pilot.pause()
             section_context = str(screen.query_one("#command-context", Static).render())
 
             await pilot.press("slash", "b", "a", "c", "k", "enter")
-            await pilot.pause()
-            await pilot.press("1", "enter")
             await pilot.pause()
             home_context = str(screen.query_one("#command-context", Static).render())
             return (
@@ -354,10 +350,10 @@ def test_back_aliases_offer_the_same_return_level_picker(
     "keys",
     (("slash", "b"), ("slash", "b", "a", "c", "k")),
 )
-def test_back_aliases_preview_while_typing_and_commit_on_enter(
+def test_back_aliases_preview_while_typing_and_return_one_level_on_enter(
     keys: tuple[str, ...],
 ) -> None:
-    async def run() -> tuple[str, str, tuple[str, ...]]:
+    async def run() -> tuple[str, tuple[str, ...]]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -369,14 +365,10 @@ def test_back_aliases_preview_while_typing_and_commit_on_enter(
             preview = interaction_copy_text(screen.session.interaction)
             await pilot.press("enter")
             await pilot.pause()
-            committed = interaction_copy_text(screen.session.interaction)
-            await pilot.press("1", "enter")
-            await pilot.pause()
-            return preview, committed, screen.session.context
+            return preview, screen.session.context
 
-    preview, committed, context = asyncio.run(run())
+    preview, context = asyncio.run(run())
     assert "选择返回层级" in preview
-    assert "选择返回层级" in committed
     assert context == ()
 
 
@@ -464,6 +456,32 @@ def test_back_rejects_arguments_and_keeps_the_current_context() -> None:
     context, status = asyncio.run(run())
     assert context == ("market",)
     assert status == "/b 不接受参数 · 请先输入 /b，再选择目标层级"
+
+
+def test_back_alias_is_consumed_before_return_level_selection() -> None:
+    async def run() -> tuple[str, str, tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.session.context = ("strategy", "execution")
+            screen._show_context()
+
+            await pilot.press("slash", "b", "space", "5")
+            await pilot.pause()
+            preview = interaction_copy_text(screen.session.interaction)
+            selection_value = screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            ).value
+            await pilot.press("enter")
+            await pilot.pause()
+            return preview, selection_value, screen.session.context
+
+    preview, selection_value, context = asyncio.run(run())
+    assert "选择返回层级" in preview
+    assert "[5] trader" in preview
+    assert selection_value == "5"
+    assert context == ("strategy",)
 
 
 def test_slash_back_cancels_pending_argument_before_leaving_section() -> None:

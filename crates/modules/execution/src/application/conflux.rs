@@ -9,8 +9,8 @@ use kairos_conflux::{
 };
 use kairos_execution_contract::{
     AdvanceExecutionTimeRequest, AdvanceExecutionTimeResponse, CancelOrderRequest,
-    CompletionPolicy as ContractCompletionPolicy, ExecutionBacktestBar,
-    ExecutionBacktestMarketObservation, ExecutionBacktestMarketRequest,
+    CompletionPolicy as ContractCompletionPolicy, ExecutionAlgorithmPolicyRequest,
+    ExecutionBacktestBar, ExecutionBacktestMarketObservation, ExecutionBacktestMarketRequest,
     ExecutionBacktestMarketResponse, ExecutionBacktestMetrics, ExecutionBacktestObservationScope,
     ExecutionBacktestOrder, ExecutionBacktestOrderRequest, ExecutionBacktestOrderStatus,
     ExecutionBacktestRequest, ExecutionBacktestRunResponse, ExecutionBacktestSimulationConfig,
@@ -28,9 +28,10 @@ use sha2::{Digest, Sha256};
 
 use super::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest, Bar,
-    CancelOrder, ExecuteStrategyIntent, ExecutionApplication, ExecutionError,
-    ExecutionOrderOptions, ExecutionRouteQuery, ExecutionRpcActor, IntentAdmissionEvidence,
-    MarketObservation, ObservationScope, Quote, QuoteBar, RemoteOrderQuery, SubmitOrder, TradeBar,
+    CancelOrder, ExecuteStrategyIntent, ExecutionAlgorithmPolicy, ExecutionApplication,
+    ExecutionError, ExecutionOrderOptions, ExecutionRouteQuery, ExecutionRpcActor,
+    IntentAdmissionEvidence, MarketObservation, ObservationScope, Quote, QuoteBar,
+    RemoteOrderQuery, SubmitOrder, TradeBar,
 };
 use crate::domain::{AlgorithmExecutionStyle, ExecutionAlgorithmSpec};
 use crate::services::actor::RemoteOrderEvent;
@@ -1412,19 +1413,29 @@ fn decode_contract_intent(
             FailurePolicy::MarkReconciliationRequired
         },
     };
-    let hedge_policy = request
-        .hedge_policy
-        .map(|value: HedgePolicyRequest| HedgePolicy {
-            leader_leg_id: value.leader_leg_id,
-            hedge_leg_id: value.hedge_leg_id,
-            ratio: value.ratio,
-            contract_multiplier: value.contract_multiplier,
-            max_unhedged_quantity: value.max_unhedged_quantity,
-            max_unhedged_duration: value.max_unhedged_duration,
-            fallback_execution_route_ids: value.fallback_execution_route_ids,
-            compensate_on_failure: value.compensate_on_failure,
-            max_compensation_attempts: value.max_compensation_attempts,
-        });
+    let hedge_policy = |value: HedgePolicyRequest| HedgePolicy {
+        leader_leg_id: value.leader_leg_id,
+        hedge_leg_id: value.hedge_leg_id,
+        ratio: value.ratio,
+        contract_multiplier: value.contract_multiplier,
+        max_unhedged_quantity: value.max_unhedged_quantity,
+        max_unhedged_duration: value.max_unhedged_duration,
+        fallback_execution_route_ids: value.fallback_execution_route_ids,
+        compensate_on_failure: value.compensate_on_failure,
+        max_compensation_attempts: value.max_compensation_attempts,
+    };
+    let algorithm = match request.algorithm {
+        ExecutionAlgorithmPolicyRequest::Immediate => ExecutionAlgorithmPolicy::Immediate,
+        ExecutionAlgorithmPolicyRequest::Twap(policy) => {
+            ExecutionAlgorithmPolicy::Twap(crate::domain::TwapPolicy {
+                slice_count: policy.slice_count,
+                slice_interval: policy.slice_interval,
+            })
+        },
+        ExecutionAlgorithmPolicyRequest::MakerTakerHedge(policy) => {
+            ExecutionAlgorithmPolicy::MakerTakerHedge(hedge_policy(policy))
+        },
+    };
     Ok(ExecuteStrategyIntent {
         intent_id: request.intent_id,
         strategy_decision_id: request.strategy_decision_id.map(|value| value.to_string()),
@@ -1443,6 +1454,7 @@ fn decode_contract_intent(
         source_event_time_unix_nanos: request.source_event_time_unix_nanos,
         reason: request.reason,
         intent_type,
+        algorithm,
         completion_policy,
         failure_policy,
         legs: request.legs.into_iter().map(leg).collect(),
@@ -1452,7 +1464,6 @@ fn decode_contract_intent(
         estimated_fee_bps: request.estimated_fee_bps,
         minimum_net_credit: request.minimum_net_credit,
         maximum_loss: request.maximum_loss,
-        hedge_policy,
         order_options: options(request.order_options),
     })
 }
@@ -1471,7 +1482,6 @@ fn decode_contract_options(value: ExecutionOrderOptionsRequest) -> ExecutionOrde
             max_child_quantity: split.max_child_quantity,
             child_count: split.child_count,
             min_child_quantity: split.min_child_quantity,
-            interval: split.interval,
         }),
         maker: value
             .maker

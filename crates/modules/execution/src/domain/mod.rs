@@ -6,12 +6,13 @@ pub use algorithm::{
     AlgorithmAction, AlgorithmActionKind, AlgorithmActionStatus, AlgorithmChildCandidate,
     AlgorithmDecision, AlgorithmExecutionStyle, AlgorithmInput, AlgorithmLegLifecycle,
     AlgorithmLegRole, AlgorithmLegState, AlgorithmRun, AlgorithmRunId, AlgorithmRunStatus,
-    ExecutionAlgorithmSpec, MakerTakerHedgeSpec, NormalizedExposureLedger, decide_immediate,
-    decide_maker_taker_hedge,
+    ExecutionAlgorithmSpec, MakerTakerHedgeSpec, NormalizedExposureLedger, TwapSpec,
+    decide_immediate, decide_maker_taker_hedge, decide_twap,
 };
 pub use intent::{
-    CompletionPolicy, ExecutionLeg, ExecutionPlan, FailurePolicy, HedgePolicy, IntentLifecycle,
-    IntentType, LegLifecycle, MakerExecutionPolicy, SplitOrderPolicy, split_quantity,
+    CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionLeg, ExecutionPlan, FailurePolicy,
+    HedgePolicy, IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy, SplitOrderPolicy,
+    TwapPolicy, split_quantity,
 };
 pub use order::{
     CommitmentBasis, CommitmentResource, CommitmentStatus, DeliveryCertainty, ExecutionAttempt,

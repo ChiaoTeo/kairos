@@ -22,10 +22,12 @@ impl ExecutionApplication {
         self.actor
             .algorithm_runs()
             .filter(|run| {
-                matches!(run.spec, ExecutionAlgorithmSpec::MakerTakerHedge(_))
-                    && run
-                        .next_wake_at
-                        .is_some_and(|wake| wake.get() <= now_unix_nanos)
+                matches!(
+                    run.spec,
+                    ExecutionAlgorithmSpec::MakerTakerHedge(_) | ExecutionAlgorithmSpec::Twap(_)
+                ) && run
+                    .next_wake_at
+                    .is_some_and(|wake| wake.get() <= now_unix_nanos)
                     && !matches!(
                         run.status,
                         AlgorithmRunStatus::Completed
@@ -46,7 +48,13 @@ impl ExecutionApplication {
     ) -> Result<usize, ExecutionError> {
         let due = self.due_algorithm_intents(now_unix_nanos, limit);
         for intent_id in &due {
-            self.drive_maker_taker_hedge(intent_id, now_unix_nanos)?;
+            if self
+                .actor
+                .algorithm_run(intent_id)
+                .is_some_and(|run| matches!(run.spec, ExecutionAlgorithmSpec::MakerTakerHedge(_)))
+            {
+                self.drive_maker_taker_hedge(intent_id, now_unix_nanos)?;
+            }
         }
         if !due.is_empty() {
             self.advance_due_intent_orders(now_unix_nanos, usize::MAX)?;
@@ -191,6 +199,7 @@ impl ExecutionApplication {
             .ok_or_else(|| ExecutionError::Invalid("intent has no algorithm run".into()))?;
         let execution_style = match &run.spec {
             ExecutionAlgorithmSpec::Immediate => AlgorithmExecutionStyle::Immediate,
+            ExecutionAlgorithmSpec::Twap(_) => AlgorithmExecutionStyle::TwapSlice,
             ExecutionAlgorithmSpec::MakerTakerHedge(_) => AlgorithmExecutionStyle::MakerPostOnly,
         };
         let input = AlgorithmInput {
@@ -206,6 +215,7 @@ impl ExecutionApplication {
         };
         let decision = match &run.spec {
             ExecutionAlgorithmSpec::Immediate => decide_immediate(&run, input),
+            ExecutionAlgorithmSpec::Twap(_) => decide_twap(&run, input),
             ExecutionAlgorithmSpec::MakerTakerHedge(_) => decide_maker_taker_hedge(&run, input),
         }
         .map_err(ExecutionError::Invalid)?;
@@ -284,6 +294,7 @@ impl ExecutionApplication {
                 AlgorithmExecutionStyle::TakerImmediate => {
                     "leader fill triggered taker hedge".into()
                 },
+                AlgorithmExecutionStyle::TwapSlice => "TWAP slice created".into(),
                 AlgorithmExecutionStyle::UnwindImmediate => "emergency unwind order created".into(),
                 _ => "child order created".into(),
             },

@@ -60,8 +60,25 @@ class ExecutionIntent(object):
         return 0
 
     # ExecutionIntent
-    def Legs(self, j):
+    def AlgorithmType(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
+    # ExecutionIntent
+    def Algorithm(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        if o != 0:
+            from flatbuffers.table import Table
+            obj = Table(bytearray(), 0)
+            self._tab.Union(obj, o)
+            return obj
+        return None
+
+    # ExecutionIntent
+    def Legs(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -74,72 +91,61 @@ class ExecutionIntent(object):
 
     # ExecutionIntent
     def LegsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # ExecutionIntent
     def LegsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         return o == 0
 
     # ExecutionIntent
     def CompletionPolicy(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # ExecutionIntent
     def FailurePolicy(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # ExecutionIntent
-    def HedgePolicy(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
-        if o != 0:
-            x = self._tab.Indirect(o + self._tab.Pos)
-            from kairos.execution.v2.HedgePolicy import HedgePolicy
-            obj = HedgePolicy()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # ExecutionIntent
     def DeadlineUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return None
 
     # ExecutionIntent
     def MinEdgeBps(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
-        return None
-
-    # ExecutionIntent
-    def MaxSlippageBps(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return None
 
     # ExecutionIntent
-    def EstimatedFeeBps(self):
+    def MaxSlippageBps(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return None
 
     # ExecutionIntent
-    def Evidence(self, j):
+    def EstimatedFeeBps(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
+        return None
+
+    # ExecutionIntent
+    def Evidence(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -152,32 +158,32 @@ class ExecutionIntent(object):
 
     # ExecutionIntent
     def EvidenceLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # ExecutionIntent
     def EvidenceIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         return o == 0
 
     # ExecutionIntent
     def Reason(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionIntent
     def StrategyDecisionId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
 def ExecutionIntentStart(builder):
-    builder.StartObject(16)
+    builder.StartObject(17)
 
 def Start(builder):
     ExecutionIntentStart(builder)
@@ -212,8 +218,20 @@ def ExecutionIntentAddIntentType(builder, intentType):
 def AddIntentType(builder, intentType):
     ExecutionIntentAddIntentType(builder, intentType)
 
+def ExecutionIntentAddAlgorithmType(builder, algorithmType):
+    builder.PrependUint8Slot(5, algorithmType, 0)
+
+def AddAlgorithmType(builder, algorithmType):
+    ExecutionIntentAddAlgorithmType(builder, algorithmType)
+
+def ExecutionIntentAddAlgorithm(builder, algorithm):
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(algorithm), 0)
+
+def AddAlgorithm(builder, algorithm):
+    ExecutionIntentAddAlgorithm(builder, algorithm)
+
 def ExecutionIntentAddLegs(builder, legs):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(legs), 0)
+    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(legs), 0)
 
 def AddLegs(builder, legs):
     ExecutionIntentAddLegs(builder, legs)
@@ -225,49 +243,43 @@ def StartLegsVector(builder, numElems):
     return ExecutionIntentStartLegsVector(builder, numElems)
 
 def ExecutionIntentAddCompletionPolicy(builder, completionPolicy):
-    builder.PrependUint8Slot(6, completionPolicy, 0)
+    builder.PrependUint8Slot(8, completionPolicy, 0)
 
 def AddCompletionPolicy(builder, completionPolicy):
     ExecutionIntentAddCompletionPolicy(builder, completionPolicy)
 
 def ExecutionIntentAddFailurePolicy(builder, failurePolicy):
-    builder.PrependUint8Slot(7, failurePolicy, 0)
+    builder.PrependUint8Slot(9, failurePolicy, 0)
 
 def AddFailurePolicy(builder, failurePolicy):
     ExecutionIntentAddFailurePolicy(builder, failurePolicy)
 
-def ExecutionIntentAddHedgePolicy(builder, hedgePolicy):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(hedgePolicy), 0)
-
-def AddHedgePolicy(builder, hedgePolicy):
-    ExecutionIntentAddHedgePolicy(builder, hedgePolicy)
-
 def ExecutionIntentAddDeadlineUnixNanos(builder, deadlineUnixNanos):
-    builder.PrependUint64Slot(9, deadlineUnixNanos, None)
+    builder.PrependUint64Slot(10, deadlineUnixNanos, None)
 
 def AddDeadlineUnixNanos(builder, deadlineUnixNanos):
     ExecutionIntentAddDeadlineUnixNanos(builder, deadlineUnixNanos)
 
 def ExecutionIntentAddMinEdgeBps(builder, minEdgeBps):
-    builder.PrependUint32Slot(10, minEdgeBps, None)
+    builder.PrependUint32Slot(11, minEdgeBps, None)
 
 def AddMinEdgeBps(builder, minEdgeBps):
     ExecutionIntentAddMinEdgeBps(builder, minEdgeBps)
 
 def ExecutionIntentAddMaxSlippageBps(builder, maxSlippageBps):
-    builder.PrependUint32Slot(11, maxSlippageBps, None)
+    builder.PrependUint32Slot(12, maxSlippageBps, None)
 
 def AddMaxSlippageBps(builder, maxSlippageBps):
     ExecutionIntentAddMaxSlippageBps(builder, maxSlippageBps)
 
 def ExecutionIntentAddEstimatedFeeBps(builder, estimatedFeeBps):
-    builder.PrependUint32Slot(12, estimatedFeeBps, None)
+    builder.PrependUint32Slot(13, estimatedFeeBps, None)
 
 def AddEstimatedFeeBps(builder, estimatedFeeBps):
     ExecutionIntentAddEstimatedFeeBps(builder, estimatedFeeBps)
 
 def ExecutionIntentAddEvidence(builder, evidence):
-    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(evidence), 0)
+    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(evidence), 0)
 
 def AddEvidence(builder, evidence):
     ExecutionIntentAddEvidence(builder, evidence)
@@ -279,13 +291,13 @@ def StartEvidenceVector(builder, numElems):
     return ExecutionIntentStartEvidenceVector(builder, numElems)
 
 def ExecutionIntentAddReason(builder, reason):
-    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(reason), 0)
+    builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(reason), 0)
 
 def AddReason(builder, reason):
     ExecutionIntentAddReason(builder, reason)
 
 def ExecutionIntentAddStrategyDecisionId(builder, strategyDecisionId):
-    builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(strategyDecisionId), 0)
+    builder.PrependUOffsetTRelativeSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(strategyDecisionId), 0)
 
 def AddStrategyDecisionId(builder, strategyDecisionId):
     ExecutionIntentAddStrategyDecisionId(builder, strategyDecisionId)

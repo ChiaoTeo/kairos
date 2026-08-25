@@ -195,10 +195,10 @@ def test_available_model_list_uses_compact_actions_without_duplicate_table(
     summary, prompts, status = asyncio.run(run())
     assert summary is None
     assert prompts == (
-        "[1]  gpt5.5  ·  gpt-5.4 · ikun · 待验证",
+        "[1]  gpt5.5\n     gpt-5.4 · ikun · 待验证",
         "[/n]  添加可用模型  ·  启动安全的单输入配置向导",
     )
-    assert status == "找到 1 个结果 · 请选择"
+    assert status == "1 个可用模型 · 请选择"
 
 
 def test_saved_available_model_emphasizes_status_and_next_step() -> None:
@@ -218,8 +218,7 @@ def test_saved_available_model_emphasizes_status_and_next_step() -> None:
     ).rstrip()
 
     assert content == (
-        "gpt-5.4 · 模型服务 ikun · 已启用 · 待验证\n"
-        "下一步：选择该模型，开始对话验证。"
+        "gpt-5.4 · 模型服务 ikun · 已启用 · 待验证\n下一步：选择该模型，开始对话验证。"
     )
     assert "配置状态" not in content
 

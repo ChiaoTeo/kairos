@@ -290,7 +290,7 @@ mod tests {
     fn admission_audit_updates_only_the_result_for_identical_evidence() {
         let directory = tempfile::tempdir().unwrap();
         let mut audit = SqlxExecutionAudit::new(directory.path().join("audit.sqlite")).unwrap();
-        let intent = ExecuteStrategyIntent::default();
+        let intent = ExecuteStrategyIntent::test_fixture();
         let evidence = IntentAdmissionEvidence {
             source: "decision_agent".into(),
             decision_id: "decision-1".into(),

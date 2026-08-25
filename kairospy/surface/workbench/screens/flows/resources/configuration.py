@@ -618,6 +618,7 @@ def _enter_resource_list(
                     record.label,
                     record.description,
                     str(index),
+                    spacious=resource_kind == "models",
                 )
                 for index, record in enumerate(visible, 1)
             ),
@@ -628,7 +629,11 @@ def _enter_resource_list(
                 "n",
             ),
         )
-        resolved_status = status or f"找到 {len(records)} 个结果 · 请选择"
+        resolved_status = status or (
+            f"{len(records)} 个可用模型 · 请选择"
+            if resource_kind == "models"
+            else f"找到 {len(records)} 个结果 · 请选择"
+        )
     else:
         actions = (
             ActionItem(

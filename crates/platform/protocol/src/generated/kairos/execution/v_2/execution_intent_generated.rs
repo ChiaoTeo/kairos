@@ -25,17 +25,18 @@ impl<'a> ExecutionIntent<'a> {
     pub const VT_LAUNCH_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_INSTANCE_ID: ::flatbuffers::VOffsetT = 10;
     pub const VT_INTENT_TYPE: ::flatbuffers::VOffsetT = 12;
-    pub const VT_LEGS: ::flatbuffers::VOffsetT = 14;
-    pub const VT_COMPLETION_POLICY: ::flatbuffers::VOffsetT = 16;
-    pub const VT_FAILURE_POLICY: ::flatbuffers::VOffsetT = 18;
-    pub const VT_HEDGE_POLICY: ::flatbuffers::VOffsetT = 20;
-    pub const VT_DEADLINE_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
-    pub const VT_MIN_EDGE_BPS: ::flatbuffers::VOffsetT = 24;
-    pub const VT_MAX_SLIPPAGE_BPS: ::flatbuffers::VOffsetT = 26;
-    pub const VT_ESTIMATED_FEE_BPS: ::flatbuffers::VOffsetT = 28;
-    pub const VT_EVIDENCE: ::flatbuffers::VOffsetT = 30;
-    pub const VT_REASON: ::flatbuffers::VOffsetT = 32;
-    pub const VT_STRATEGY_DECISION_ID: ::flatbuffers::VOffsetT = 34;
+    pub const VT_ALGORITHM_TYPE: ::flatbuffers::VOffsetT = 14;
+    pub const VT_ALGORITHM: ::flatbuffers::VOffsetT = 16;
+    pub const VT_LEGS: ::flatbuffers::VOffsetT = 18;
+    pub const VT_COMPLETION_POLICY: ::flatbuffers::VOffsetT = 20;
+    pub const VT_FAILURE_POLICY: ::flatbuffers::VOffsetT = 22;
+    pub const VT_DEADLINE_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_MIN_EDGE_BPS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_MAX_SLIPPAGE_BPS: ::flatbuffers::VOffsetT = 28;
+    pub const VT_ESTIMATED_FEE_BPS: ::flatbuffers::VOffsetT = 30;
+    pub const VT_EVIDENCE: ::flatbuffers::VOffsetT = 32;
+    pub const VT_REASON: ::flatbuffers::VOffsetT = 34;
+    pub const VT_STRATEGY_DECISION_ID: ::flatbuffers::VOffsetT = 36;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -73,11 +74,11 @@ impl<'a> ExecutionIntent<'a> {
         if let Some(x) = args.min_edge_bps {
             builder.add_min_edge_bps(x);
         }
-        if let Some(x) = args.hedge_policy {
-            builder.add_hedge_policy(x);
-        }
         if let Some(x) = args.legs {
             builder.add_legs(x);
+        }
+        if let Some(x) = args.algorithm {
+            builder.add_algorithm(x);
         }
         if let Some(x) = args.instance_id {
             builder.add_instance_id(x);
@@ -93,6 +94,7 @@ impl<'a> ExecutionIntent<'a> {
         }
         builder.add_failure_policy(args.failure_policy);
         builder.add_completion_policy(args.completion_policy);
+        builder.add_algorithm_type(args.algorithm_type);
         builder.add_intent_type(args.intent_type);
         builder.finish()
     }
@@ -156,6 +158,34 @@ impl<'a> ExecutionIntent<'a> {
         }
     }
     #[inline]
+    pub fn algorithm_type(&self) -> ExecutionAlgorithm {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<ExecutionAlgorithm>(
+                    ExecutionIntent::VT_ALGORITHM_TYPE,
+                    Some(ExecutionAlgorithm::NONE),
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn algorithm(&self) -> ::flatbuffers::Table<'a> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Table<'a>>>(
+                    ExecutionIntent::VT_ALGORITHM,
+                    None,
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn legs(&self) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<IntentLeg<'a>>> {
         // Safety:
         // Created from valid Table for this object
@@ -194,19 +224,6 @@ impl<'a> ExecutionIntent<'a> {
                     Some(FailurePolicy::UNSPECIFIED),
                 )
                 .unwrap()
-        }
-    }
-    #[inline]
-    pub fn hedge_policy(&self) -> Option<HedgePolicy<'a>> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<HedgePolicy>>(
-                    ExecutionIntent::VT_HEDGE_POLICY,
-                    None,
-                )
         }
     }
     #[inline]
@@ -289,6 +306,47 @@ impl<'a> ExecutionIntent<'a> {
             )
         }
     }
+    #[inline]
+    #[allow(non_snake_case)]
+    pub fn algorithm_as_immediate_algorithm(&self) -> Option<ImmediateAlgorithm<'a>> {
+        if self.algorithm_type() == ExecutionAlgorithm::ImmediateAlgorithm {
+            let u = self.algorithm();
+            // Safety:
+            // Created from a valid Table for this object
+            // Which contains a valid union in this slot
+            Some(unsafe { ImmediateAlgorithm::init_from_table(u) })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    #[allow(non_snake_case)]
+    pub fn algorithm_as_twap_policy(&self) -> Option<TwapPolicy<'a>> {
+        if self.algorithm_type() == ExecutionAlgorithm::TwapPolicy {
+            let u = self.algorithm();
+            // Safety:
+            // Created from a valid Table for this object
+            // Which contains a valid union in this slot
+            Some(unsafe { TwapPolicy::init_from_table(u) })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    #[allow(non_snake_case)]
+    pub fn algorithm_as_hedge_policy(&self) -> Option<HedgePolicy<'a>> {
+        if self.algorithm_type() == ExecutionAlgorithm::HedgePolicy {
+            let u = self.algorithm();
+            // Safety:
+            // Created from a valid Table for this object
+            // Which contains a valid union in this slot
+            Some(unsafe { HedgePolicy::init_from_table(u) })
+        } else {
+            None
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for ExecutionIntent<'_> {
@@ -319,6 +377,31 @@ impl ::flatbuffers::Verifiable for ExecutionIntent<'_> {
                 true,
             )?
             .visit_field::<IntentType>("intent_type", Self::VT_INTENT_TYPE, false)?
+            .visit_union::<ExecutionAlgorithm, _>(
+                "algorithm_type",
+                Self::VT_ALGORITHM_TYPE,
+                "algorithm",
+                Self::VT_ALGORITHM,
+                true,
+                |key, v, pos| match key {
+                    ExecutionAlgorithm::ImmediateAlgorithm => v
+                        .verify_union_variant::<::flatbuffers::ForwardsUOffset<ImmediateAlgorithm>>(
+                            "ExecutionAlgorithm::ImmediateAlgorithm",
+                            pos,
+                        ),
+                    ExecutionAlgorithm::TwapPolicy => v
+                        .verify_union_variant::<::flatbuffers::ForwardsUOffset<TwapPolicy>>(
+                            "ExecutionAlgorithm::TwapPolicy",
+                            pos,
+                        ),
+                    ExecutionAlgorithm::HedgePolicy => v
+                        .verify_union_variant::<::flatbuffers::ForwardsUOffset<HedgePolicy>>(
+                            "ExecutionAlgorithm::HedgePolicy",
+                            pos,
+                        ),
+                    _ => Ok(()),
+                },
+            )?
             .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<IntentLeg>>,
             >>("legs", Self::VT_LEGS, true)?
@@ -328,11 +411,6 @@ impl ::flatbuffers::Verifiable for ExecutionIntent<'_> {
                 false,
             )?
             .visit_field::<FailurePolicy>("failure_policy", Self::VT_FAILURE_POLICY, false)?
-            .visit_field::<::flatbuffers::ForwardsUOffset<HedgePolicy>>(
-                "hedge_policy",
-                Self::VT_HEDGE_POLICY,
-                false,
-            )?
             .visit_field::<u64>("deadline_unix_nanos", Self::VT_DEADLINE_UNIX_NANOS, false)?
             .visit_field::<u32>("min_edge_bps", Self::VT_MIN_EDGE_BPS, false)?
             .visit_field::<u32>("max_slippage_bps", Self::VT_MAX_SLIPPAGE_BPS, false)?
@@ -359,6 +437,8 @@ pub struct ExecutionIntentArgs<'a> {
     pub launch_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instance_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub intent_type: IntentType,
+    pub algorithm_type: ExecutionAlgorithm,
+    pub algorithm: Option<::flatbuffers::WIPOffset<::flatbuffers::UnionWIPOffset>>,
     pub legs: Option<
         ::flatbuffers::WIPOffset<
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<IntentLeg<'a>>>,
@@ -366,7 +446,6 @@ pub struct ExecutionIntentArgs<'a> {
     >,
     pub completion_policy: CompletionPolicy,
     pub failure_policy: FailurePolicy,
-    pub hedge_policy: Option<::flatbuffers::WIPOffset<HedgePolicy<'a>>>,
     pub deadline_unix_nanos: Option<u64>,
     pub min_edge_bps: Option<u32>,
     pub max_slippage_bps: Option<u32>,
@@ -391,10 +470,11 @@ impl<'a> Default for ExecutionIntentArgs<'a> {
             launch_id: None,   // required field
             instance_id: None, // required field
             intent_type: IntentType::UNSPECIFIED,
-            legs: None, // required field
+            algorithm_type: ExecutionAlgorithm::NONE,
+            algorithm: None, // required field
+            legs: None,      // required field
             completion_policy: CompletionPolicy::UNSPECIFIED,
             failure_policy: FailurePolicy::UNSPECIFIED,
-            hedge_policy: None,
             deadline_unix_nanos: None,
             min_edge_bps: None,
             max_slippage_bps: None,
@@ -448,6 +528,24 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionIntentBuilder<'a, 'b
         );
     }
     #[inline]
+    pub fn add_algorithm_type(&mut self, algorithm_type: ExecutionAlgorithm) {
+        self.fbb_.push_slot::<ExecutionAlgorithm>(
+            ExecutionIntent::VT_ALGORITHM_TYPE,
+            algorithm_type,
+            ExecutionAlgorithm::NONE,
+        );
+    }
+    #[inline]
+    pub fn add_algorithm(
+        &mut self,
+        algorithm: ::flatbuffers::WIPOffset<::flatbuffers::UnionWIPOffset>,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            ExecutionIntent::VT_ALGORITHM,
+            algorithm,
+        );
+    }
+    #[inline]
     pub fn add_legs(
         &mut self,
         legs: ::flatbuffers::WIPOffset<
@@ -472,14 +570,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionIntentBuilder<'a, 'b
             failure_policy,
             FailurePolicy::UNSPECIFIED,
         );
-    }
-    #[inline]
-    pub fn add_hedge_policy(&mut self, hedge_policy: ::flatbuffers::WIPOffset<HedgePolicy<'b>>) {
-        self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<HedgePolicy>>(
-                ExecutionIntent::VT_HEDGE_POLICY,
-                hedge_policy,
-            );
     }
     #[inline]
     pub fn add_deadline_unix_nanos(&mut self, deadline_unix_nanos: u64) {
@@ -552,6 +642,8 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionIntentBuilder<'a, 'b
             .required(o, ExecutionIntent::VT_LAUNCH_ID, "launch_id");
         self.fbb_
             .required(o, ExecutionIntent::VT_INSTANCE_ID, "instance_id");
+        self.fbb_
+            .required(o, ExecutionIntent::VT_ALGORITHM, "algorithm");
         self.fbb_.required(o, ExecutionIntent::VT_LEGS, "legs");
         self.fbb_
             .required(o, ExecutionIntent::VT_EVIDENCE, "evidence");
@@ -567,10 +659,46 @@ impl ::core::fmt::Debug for ExecutionIntent<'_> {
         ds.field("launch_id", &self.launch_id());
         ds.field("instance_id", &self.instance_id());
         ds.field("intent_type", &self.intent_type());
+        ds.field("algorithm_type", &self.algorithm_type());
+        match self.algorithm_type() {
+            ExecutionAlgorithm::ImmediateAlgorithm => {
+                if let Some(x) = self.algorithm_as_immediate_algorithm() {
+                    ds.field("algorithm", &x)
+                } else {
+                    ds.field(
+                        "algorithm",
+                        &"InvalidFlatbuffer: Union discriminant does not match value.",
+                    )
+                }
+            },
+            ExecutionAlgorithm::TwapPolicy => {
+                if let Some(x) = self.algorithm_as_twap_policy() {
+                    ds.field("algorithm", &x)
+                } else {
+                    ds.field(
+                        "algorithm",
+                        &"InvalidFlatbuffer: Union discriminant does not match value.",
+                    )
+                }
+            },
+            ExecutionAlgorithm::HedgePolicy => {
+                if let Some(x) = self.algorithm_as_hedge_policy() {
+                    ds.field("algorithm", &x)
+                } else {
+                    ds.field(
+                        "algorithm",
+                        &"InvalidFlatbuffer: Union discriminant does not match value.",
+                    )
+                }
+            },
+            _ => {
+                let x: Option<()> = None;
+                ds.field("algorithm", &x)
+            },
+        };
         ds.field("legs", &self.legs());
         ds.field("completion_policy", &self.completion_policy());
         ds.field("failure_policy", &self.failure_policy());
-        ds.field("hedge_policy", &self.hedge_policy());
         ds.field("deadline_unix_nanos", &self.deadline_unix_nanos());
         ds.field("min_edge_bps", &self.min_edge_bps());
         ds.field("max_slippage_bps", &self.max_slippage_bps());

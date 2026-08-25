@@ -64,9 +64,7 @@ def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
         )
     if kind == "models":
         return (
-            ActionItem(
-                "test", "验证并对话", "发送消息；成功回复后标记为已验证", "1"
-            ),
+            ActionItem("test", "验证并对话", "发送消息；成功回复后标记为已验证", "1"),
             ActionItem("delete", "删除", "移除模型配置和验证记录", "2"),
             ActionItem("edit", "修改", "更新模型服务或服务商模型 ID", "3"),
         )

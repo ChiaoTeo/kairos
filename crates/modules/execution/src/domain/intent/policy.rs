@@ -14,8 +14,6 @@ pub struct SplitOrderPolicy {
     pub child_count: Option<u32>,
     #[serde(default)]
     pub min_child_quantity: Option<Quantity>,
-    #[serde(default)]
-    pub interval: Option<DurationNanos>,
 }
 
 impl SplitOrderPolicy {
@@ -30,6 +28,21 @@ impl SplitOrderPolicy {
             if minimum > maximum {
                 return Err("split policy minimum exceeds maximum child quantity".into());
             }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TwapPolicy {
+    pub slice_count: u32,
+    pub slice_interval: DurationNanos,
+}
+
+impl TwapPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.slice_count < 2 || self.slice_interval.get() == 0 {
+            return Err("TWAP requires at least two slices and a positive interval".into());
         }
         Ok(())
     }
@@ -150,6 +163,31 @@ impl HedgePolicy {
             required
                 .checked_sub(hedge_filled)
                 .map_err(|error| error.to_string())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "policy", rename_all = "snake_case")]
+pub enum ExecutionAlgorithmPolicy {
+    Immediate,
+    Twap(TwapPolicy),
+    MakerTakerHedge(HedgePolicy),
+}
+
+impl ExecutionAlgorithmPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Immediate => Ok(()),
+            Self::Twap(policy) => policy.validate(),
+            Self::MakerTakerHedge(policy) => policy.validate(),
+        }
+    }
+
+    pub fn hedge_policy(&self) -> Option<&HedgePolicy> {
+        match self {
+            Self::MakerTakerHedge(policy) => Some(policy),
+            Self::Immediate | Self::Twap(_) => None,
         }
     }
 }

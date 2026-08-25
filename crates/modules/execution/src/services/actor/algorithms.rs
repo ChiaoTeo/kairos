@@ -143,7 +143,7 @@ impl ExecutionActor {
             .get(intent_id)
             .and_then(|run| match &run.spec {
                 ExecutionAlgorithmSpec::MakerTakerHedge(spec) => Some(spec.leader_leg_id.clone()),
-                ExecutionAlgorithmSpec::Immediate => None,
+                ExecutionAlgorithmSpec::Immediate | ExecutionAlgorithmSpec::Twap(_) => None,
             });
         let leader_order_ids = leader_leg_id
             .as_ref()
@@ -313,7 +313,9 @@ impl ExecutionActor {
                 && exposure.unhedged_filled_quantity
                     <= match &run.spec {
                         ExecutionAlgorithmSpec::MakerTakerHedge(spec) => spec.max_unhedged_quantity,
-                        ExecutionAlgorithmSpec::Immediate => Quantity::ZERO,
+                        ExecutionAlgorithmSpec::Immediate | ExecutionAlgorithmSpec::Twap(_) => {
+                            Quantity::ZERO
+                        },
                     }
                 && exposure.hedge_committed_quantity.is_zero()
                 && exposure.unwind_committed_quantity.is_zero()

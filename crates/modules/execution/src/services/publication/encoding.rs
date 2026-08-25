@@ -924,6 +924,59 @@ pub(super) fn encode_execution_intent<'a>(
     let evidence = builder.create_vector::<flatbuffers::WIPOffset<
         kairos_protocol::generated::kairos::common::v_2::EvidenceRef,
     >>(&[]);
+    let (algorithm_type, algorithm) = match &intent.algorithm {
+        crate::domain::ExecutionAlgorithmPolicy::Immediate => {
+            let value =
+                fb::ImmediateAlgorithm::create(builder, &fb::ImmediateAlgorithmArgs::default());
+            (
+                fb::ExecutionAlgorithm::ImmediateAlgorithm,
+                value.as_union_value(),
+            )
+        },
+        crate::domain::ExecutionAlgorithmPolicy::Twap(policy) => {
+            let value = fb::TwapPolicy::create(
+                builder,
+                &fb::TwapPolicyArgs {
+                    slice_count: policy.slice_count,
+                    slice_interval_nanos: policy.slice_interval.get(),
+                },
+            );
+            (fb::ExecutionAlgorithm::TwapPolicy, value.as_union_value())
+        },
+        crate::domain::ExecutionAlgorithmPolicy::MakerTakerHedge(policy) => {
+            let leader_leg_id = builder.create_string(policy.leader_leg_id.as_str());
+            let hedge_leg_id = builder.create_string(policy.hedge_leg_id.as_str());
+            let fallback_routes = policy
+                .fallback_execution_route_ids
+                .iter()
+                .map(|route_id| builder.create_string(route_id.as_str()))
+                .collect::<Vec<_>>();
+            let fallback_execution_route_ids = builder.create_vector(&fallback_routes);
+            let ratio = fb::Ratio::new(policy.ratio.numerator(), policy.ratio.denominator());
+            let contract_multiplier = fb::Ratio::new(
+                policy.contract_multiplier.numerator(),
+                policy.contract_multiplier.denominator(),
+            );
+            let max_unhedged_quantity = decimal(policy.max_unhedged_quantity);
+            let value = fb::HedgePolicy::create(
+                builder,
+                &fb::HedgePolicyArgs {
+                    leader_leg_id: Some(leader_leg_id),
+                    hedge_leg_id: Some(hedge_leg_id),
+                    ratio: Some(&ratio),
+                    contract_multiplier: Some(&contract_multiplier),
+                    max_unhedged_quantity: Some(&max_unhedged_quantity),
+                    max_unhedged_duration_nanos: policy
+                        .max_unhedged_duration
+                        .map(|duration| duration.get()),
+                    fallback_execution_route_ids: Some(fallback_execution_route_ids),
+                    compensate_on_failure: policy.compensate_on_failure,
+                    max_compensation_attempts: policy.max_compensation_attempts,
+                },
+            );
+            (fb::ExecutionAlgorithm::HedgePolicy, value.as_union_value())
+        },
+    };
     Ok(fb::ExecutionIntent::create(
         builder,
         &fb::ExecutionIntentArgs {
@@ -932,10 +985,11 @@ pub(super) fn encode_execution_intent<'a>(
             launch_id: Some(launch_id),
             instance_id: Some(instance_id),
             intent_type: intent_type(intent.intent_type),
+            algorithm_type,
+            algorithm: Some(algorithm),
             legs: Some(legs),
             completion_policy: completion_policy(intent.completion_policy),
             failure_policy: failure_policy(intent.failure_policy),
-            hedge_policy: None,
             deadline_unix_nanos: intent.deadline_unix_nanos.map(|value| value.get()),
             min_edge_bps: intent.min_edge_bps,
             max_slippage_bps: intent.max_slippage_bps,

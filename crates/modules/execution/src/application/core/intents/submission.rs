@@ -65,10 +65,8 @@ impl ExecutionApplication {
             ));
         }
         intent
-            .hedge_policy
-            .as_ref()
-            .map(HedgePolicy::validate)
-            .transpose()
+            .algorithm
+            .validate()
             .map_err(ExecutionError::Invalid)?;
         intent
             .order_options
@@ -93,7 +91,7 @@ impl ExecutionApplication {
                     "pair arbitrage requires at least one buy leg and one sell leg".into(),
                 ));
             }
-            if let Some(policy) = intent.hedge_policy.as_ref() {
+            if let ExecutionAlgorithmPolicy::MakerTakerHedge(policy) = &intent.algorithm {
                 if !intent
                     .legs
                     .iter()
@@ -108,6 +106,13 @@ impl ExecutionApplication {
                     ));
                 }
             }
+        } else if matches!(
+            intent.algorithm,
+            ExecutionAlgorithmPolicy::MakerTakerHedge(_)
+        ) {
+            return Err(ExecutionError::Invalid(
+                "maker-taker hedge requires a pair-arbitrage intent".into(),
+            ));
         }
         if intent.intent_type == IntentType::OptionSpread {
             if intent.legs.len() != 2 {
@@ -249,7 +254,7 @@ impl ExecutionApplication {
         let (algorithm_run, pending_orders, dormant_orders) = if intent.intent_type
             == IntentType::PairArbitrage
         {
-            if let Some(policy) = intent.hedge_policy.as_ref() {
+            if let ExecutionAlgorithmPolicy::MakerTakerHedge(policy) = &intent.algorithm {
                 if plan.legs.len() != 2 {
                     return Err(ExecutionError::Invalid(
                         "maker-taker pair execution requires exactly two plan legs".into(),
@@ -341,26 +346,14 @@ impl ExecutionApplication {
                 (run, pending, dormant)
             } else {
                 (
-                    AlgorithmRun::immediate(
-                        intent.intent_id.clone(),
-                        plan.legs
-                            .iter()
-                            .map(|leg| (leg.leg_id.clone(), leg.target_quantity)),
-                    )
-                    .map_err(ExecutionError::Invalid)?,
+                    standard_algorithm_run(&intent, &plan, &planned_orders, now)?,
                     planned_orders.clone(),
                     Vec::new(),
                 )
             }
         } else {
             (
-                AlgorithmRun::immediate(
-                    intent.intent_id.clone(),
-                    plan.legs
-                        .iter()
-                        .map(|leg| (leg.leg_id.clone(), leg.target_quantity)),
-                )
-                .map_err(ExecutionError::Invalid)?,
+                standard_algorithm_run(&intent, &plan, &planned_orders, now)?,
                 planned_orders.clone(),
                 Vec::new(),
             )
@@ -380,7 +373,12 @@ impl ExecutionApplication {
                 .unwrap_or_default(),
             pending_orders: pending_orders.clone(),
             dormant_orders,
-            pending_order_due_unix_nanos: scheduled_order_due(&intent, &pending_orders, now),
+            pending_order_due_unix_nanos: scheduled_order_due(
+                &intent,
+                &pending_orders,
+                &algorithm_run,
+                now,
+            ),
             quote_version: 0,
             last_quote_refresh_unix_nanos: None,
             compensation_attempts: 0,
@@ -520,5 +518,45 @@ impl ExecutionApplication {
             reason,
             dependency_watermarks: state.dependency_watermarks,
         })
+    }
+}
+
+fn standard_algorithm_run(
+    intent: &ExecuteStrategyIntent,
+    plan: &ExecutionPlan,
+    planned_orders: &[SubmitOrder],
+    start_at: u64,
+) -> Result<AlgorithmRun, ExecutionError> {
+    match &intent.algorithm {
+        ExecutionAlgorithmPolicy::Immediate => AlgorithmRun::immediate(
+            intent.intent_id.clone(),
+            plan.legs
+                .iter()
+                .map(|leg| (leg.leg_id.clone(), leg.target_quantity)),
+        )
+        .map_err(ExecutionError::Invalid),
+        ExecutionAlgorithmPolicy::Twap(policy) => {
+            if plan.legs.len() != 1 || planned_orders.len() != policy.slice_count as usize {
+                return Err(ExecutionError::Invalid(
+                    "TWAP requires one leg and exactly its configured number of child slices"
+                        .into(),
+                ));
+            }
+            let leg = &plan.legs[0];
+            AlgorithmRun::twap(
+                intent.intent_id.clone(),
+                TwapSpec {
+                    leg_id: leg.leg_id.clone(),
+                    start_at: start_at.into(),
+                    slice_interval: policy.slice_interval,
+                    slice_count: policy.slice_count,
+                },
+                leg.target_quantity,
+            )
+            .map_err(ExecutionError::Invalid)
+        },
+        ExecutionAlgorithmPolicy::MakerTakerHedge(_) => Err(ExecutionError::Invalid(
+            "maker-taker hedge must use the pair-arbitrage construction path".into(),
+        )),
     }
 }

@@ -53,15 +53,8 @@ class SplitOrderPolicy(object):
             return obj
         return None
 
-    # SplitOrderPolicy
-    def IntervalNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
-        return None
-
 def SplitOrderPolicyStart(builder):
-    builder.StartObject(4)
+    builder.StartObject(3)
 
 def Start(builder):
     SplitOrderPolicyStart(builder)
@@ -83,12 +76,6 @@ def SplitOrderPolicyAddMinChildQuantity(builder, minChildQuantity):
 
 def AddMinChildQuantity(builder, minChildQuantity):
     SplitOrderPolicyAddMinChildQuantity(builder, minChildQuantity)
-
-def SplitOrderPolicyAddIntervalNanos(builder, intervalNanos):
-    builder.PrependUint64Slot(3, intervalNanos, None)
-
-def AddIntervalNanos(builder, intervalNanos):
-    SplitOrderPolicyAddIntervalNanos(builder, intervalNanos)
 
 def SplitOrderPolicyEnd(builder):
     return builder.EndObject()

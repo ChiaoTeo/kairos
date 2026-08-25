@@ -54,7 +54,10 @@ def _guided_action_prompt(item: ActionItem) -> Text:
     if item.shortcut:
         prompt.append(f"[{_display_shortcut(item.shortcut)}]  ", style="bold cyan")
     prompt.append(item.label, style="bold")
-    prompt.append(f"  ·  {item.description}", style="dim")
+    if item.spacious:
+        prompt.append(f"\n     {item.description}", style="dim")
+    else:
+        prompt.append(f"  ·  {item.description}", style="dim")
     return prompt
 
 

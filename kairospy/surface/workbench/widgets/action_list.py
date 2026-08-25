@@ -16,6 +16,7 @@ class ActionItem:
     description: str
     shortcut: str | None = None
     disabled: bool = False
+    spacious: bool = False
 
 
 class ActionList(OptionList):
@@ -32,7 +33,7 @@ class ActionList(OptionList):
         super().__init__(
             *(
                 Option(
-                    _action_prompt(item, spacious=spacious),
+                    _action_prompt(item, spacious=spacious or item.spacious),
                     id=item.id,
                     disabled=item.disabled,
                 )

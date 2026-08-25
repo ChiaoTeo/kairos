@@ -66,7 +66,7 @@ impl ExecutionApplication {
         let Some(state) = self.actor.intent(intent_id) else {
             return Err(ExecutionError::Invalid("unknown intent".into()));
         };
-        let Some(policy) = state.intent.hedge_policy.as_ref() else {
+        let Some(policy) = state.intent.algorithm.hedge_policy() else {
             return Ok(None);
         };
         let Some(plan) = state.plan.as_ref() else {
@@ -329,7 +329,7 @@ impl ExecutionApplication {
             .intent(intent_id)
             .cloned()
             .ok_or_else(|| ExecutionError::Invalid("unwind intent disappeared".into()))?;
-        let Some(policy) = state.intent.hedge_policy.as_ref() else {
+        let Some(policy) = state.intent.algorithm.hedge_policy() else {
             return Ok(false);
         };
         if state.intent.failure_policy != FailurePolicy::Compensate
@@ -487,7 +487,7 @@ impl ExecutionApplication {
         let Some(state) = self.actor.intent(intent_id).cloned() else {
             return Ok(None);
         };
-        let Some(policy) = state.intent.hedge_policy.clone() else {
+        let Some(policy) = state.intent.algorithm.hedge_policy().cloned() else {
             return Ok(None);
         };
         let Some(plan) = state.plan.clone() else {
