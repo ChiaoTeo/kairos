@@ -4,7 +4,9 @@ use kairos_primitives::integration::ParticipantSymbol;
 use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
-use crate::{Bar, IntegrationError, MarketDataKind, MarketEvent, MarketEventKind, MarketFeed};
+use crate::{
+    Bar, Greeks, IntegrationError, MarketDataKind, MarketEvent, MarketEventKind, MarketFeed,
+};
 
 pub(crate) fn stream_name(feed: &MarketFeed, family: &str) -> Result<String, IntegrationError> {
     if family == "stocks" && feed.kind == MarketDataKind::Trade {
@@ -47,10 +49,19 @@ pub(crate) fn stream_name(feed: &MarketFeed, family: &str) -> Result<String, Int
 }
 
 pub(crate) fn normalize(value: &Value) -> Result<VecDeque<MarketEvent>, IntegrationError> {
+    if let Some(values) = value.as_array() {
+        let mut events = VecDeque::new();
+        for value in values {
+            events.extend(normalize(value)?);
+        }
+        return Ok(events);
+    }
     if value.get("result").is_some() || value.get("id").is_some() && value.get("e").is_none() {
         return Ok(VecDeque::new());
     }
-    let value = value.get("data").unwrap_or(value);
+    if let Some(data) = value.get("data") {
+        return normalize(data);
+    }
     let event_name = text(value, "e")
         .or_else(|| text(value, "eventType"))
         .unwrap_or_default();
@@ -67,6 +78,10 @@ pub(crate) fn normalize(value: &Value) -> Result<VecDeque<MarketEvent>, Integrat
             .or_else(|| value.get("timestamp")),
     );
     let mut event = empty(symbol, observed)?;
+    let option_ticker = event_name == "24hrTicker"
+        && ["d", "g", "v", "vo"]
+            .into_iter()
+            .any(|field| value.get(field).is_some());
     match event_name {
         "trade" | "aggTrade" | "price" => {
             event.kind = MarketEventKind::Trade;
@@ -91,9 +106,9 @@ pub(crate) fn normalize(value: &Value) -> Result<VecDeque<MarketEvent>, Integrat
             event.sequence = event.last_sequence;
         },
         "kline" => normalize_kline(&mut event, value.get("k").unwrap_or(value))?,
-        "markPriceUpdate" => {
+        "markPriceUpdate" | "optionMarkPrice" | "markPrice" => {
             event.kind = MarketEventKind::MarkPrice;
-            event.price = parse(value.get("p"))?;
+            event.price = parse(value.get("p").or_else(|| value.get("mp")))?;
             event.rate = parse(value.get("r"))?;
         },
         "indexPriceUpdate" => {
@@ -109,35 +124,89 @@ pub(crate) fn normalize(value: &Value) -> Result<VecDeque<MarketEvent>, Integrat
                 value
                     .get("c")
                     .or_else(|| value.get("lastPrice"))
+                    .or_else(|| value.get("mp"))
                     .or_else(|| value.get("price")),
             )?;
-            event.ask_price = parse(value.get("a").or_else(|| value.get("askPrice")))?;
+            event.ask_price = parse(if option_ticker {
+                value.get("ao")
+            } else {
+                value.get("a").or_else(|| value.get("askPrice"))
+            })?;
             event.ask_price = event.ask_price.or(parse(value.get("ap"))?);
-            event.ask_quantity = parse(
+            event.ask_quantity = parse(if option_ticker {
+                value.get("aq")
+            } else {
                 value
                     .get("A")
                     .or_else(|| value.get("askQty"))
-                    .or_else(|| value.get("as")),
-            )?;
+                    .or_else(|| value.get("as"))
+            })?;
             if let (Some(price), Some(quantity)) = (
-                parse(
+                parse(if option_ticker {
+                    value.get("bo")
+                } else {
                     value
                         .get("b")
                         .or_else(|| value.get("bidPrice"))
-                        .or_else(|| value.get("bp")),
-                )?,
-                parse(
+                        .or_else(|| value.get("bp"))
+                })?,
+                parse(if option_ticker {
+                    value.get("bq")
+                } else {
                     value
                         .get("B")
                         .or_else(|| value.get("bidQty"))
-                        .or_else(|| value.get("bs")),
-                )?,
+                        .or_else(|| value.get("bs"))
+                })?,
             ) {
                 event.bids.push((price, quantity));
             }
         },
     }
-    Ok(VecDeque::from([event]))
+    let option_mark = event_name == "markPrice"
+        && ["d", "g", "v", "vo"]
+            .into_iter()
+            .any(|field| value.get(field).is_some());
+    if option_mark {
+        let mut greeks = empty(symbol, observed)?;
+        greeks.kind = MarketEventKind::Greeks;
+        greeks.price = parse(value.get("mp"))?;
+        greeks.greeks = Some(option_greeks(value)?);
+        return Ok(VecDeque::from([event, greeks]));
+    }
+    if event_name == "markPriceUpdate" && value.get("r").is_some() {
+        let mut funding = event.clone();
+        funding.kind = MarketEventKind::FundingRate;
+        funding.price = None;
+        return Ok(VecDeque::from([event, funding]));
+    }
+    if event_name != "24hrTicker" {
+        return Ok(VecDeque::from([event]));
+    }
+    if !option_ticker {
+        event.kind = MarketEventKind::Ticker24h;
+        return Ok(VecDeque::from([event]));
+    }
+    let mut ticker = event.clone();
+    ticker.kind = MarketEventKind::Ticker24h;
+    let mut greeks = empty(symbol, observed)?;
+    greeks.kind = MarketEventKind::Greeks;
+    greeks.price = parse(value.get("mp"))?;
+    greeks.greeks = Some(option_greeks(value)?);
+    Ok(VecDeque::from([event, ticker, greeks]))
+}
+
+fn option_greeks(value: &Value) -> Result<Greeks, IntegrationError> {
+    Ok(Greeks {
+        expiry_unix_nanos: None,
+        strike: None,
+        delta: parse(value.get("d"))?,
+        gamma: parse(value.get("g"))?,
+        vega: parse(value.get("v"))?,
+        theta: parse(value.get("t"))?,
+        implied_volatility: parse(value.get("vo"))?,
+        derivation: "participant".into(),
+    })
 }
 
 fn normalize_kline(event: &mut MarketEvent, row: &Value) -> Result<(), IntegrationError> {
@@ -272,5 +341,66 @@ mod tests {
         assert_eq!(spot.last_sequence.unwrap().get(), 42);
         assert_eq!(futures.first_sequence.unwrap().get(), 43);
         assert_eq!(futures.last_sequence.unwrap().get(), 44);
+    }
+
+    #[test]
+    fn options_ticker_emits_quote_ticker_and_greeks_observations() {
+        let events = normalize(&json!({
+            "e":"24hrTicker","E":1,"s":"BTC-260925-100000-C",
+            "c":"100","bo":"99","bq":"2","ao":"101","aq":"3",
+            "mp":"100.5","d":"0.5","g":"0.01","v":"12","t":"-4","vo":"0.6"
+        }))
+        .unwrap();
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].kind, MarketEventKind::Quote);
+        assert_eq!(events[1].kind, MarketEventKind::Ticker24h);
+        assert_eq!(events[2].kind, MarketEventKind::Greeks);
+        assert_eq!(events[0].ask_price.as_ref().unwrap().to_string(), "101");
+        let values = events[2].greeks.as_ref().unwrap();
+        assert_eq!(values.delta.as_ref().unwrap().to_string(), "0.5");
+        assert_eq!(
+            values.implied_volatility.as_ref().unwrap().to_string(),
+            "0.6"
+        );
+    }
+
+    #[test]
+    fn options_mark_price_array_emits_mark_and_greeks_per_contract() {
+        let events = normalize(&json!([{
+            "s":"BTC-260925-100000-C","mp":"100.5","E":1,"e":"markPrice",
+            "d":"0.5","g":"0.01","v":"12","t":"-4","vo":"0.6"
+        }]))
+        .unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, MarketEventKind::MarkPrice);
+        assert_eq!(events[1].kind, MarketEventKind::Greeks);
+        assert_eq!(events[0].price.as_ref().unwrap().to_string(), "100.5");
+        assert_eq!(
+            events[1]
+                .greeks
+                .as_ref()
+                .unwrap()
+                .delta
+                .as_ref()
+                .unwrap()
+                .to_string(),
+            "0.5"
+        );
+    }
+
+    #[test]
+    fn futures_mark_price_emits_funding_rate_from_the_shared_stream() {
+        let events = normalize(&json!({
+            "e":"markPriceUpdate","E":1,"s":"BTCUSDT",
+            "p":"79000.5","r":"0.0001","T":2
+        }))
+        .unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, MarketEventKind::MarkPrice);
+        assert_eq!(events[1].kind, MarketEventKind::FundingRate);
+        assert_eq!(events[1].rate.as_ref().unwrap().to_string(), "0.0001");
     }
 }

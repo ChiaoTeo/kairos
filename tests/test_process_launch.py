@@ -16,6 +16,7 @@ from kairospy.system.apps.components.application import (
     SystemRuntimeSupervisor,
 )
 from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.system.apps.workspace_services import WorkspaceServiceApplication
 
 
 def test_component_process_application_starts_bin_and_waits_for_health(
@@ -541,3 +542,75 @@ def test_component_status_and_stop_use_instance_workspace(tmp_path: Path) -> Non
 
     assert status["control_socket"] == str(instance.socket("execution"))
     assert stopped["control_socket"] == str(instance.socket("execution"))
+
+
+def test_workspace_service_start_registers_desired_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="service-start"
+    )
+    monkeypatch.setattr(
+        ComponentProcessApplication,
+        "ensure_running",
+        lambda *_args, **_kwargs: type(
+            "Control", (), {"status": lambda _self: {"status": "running"}}
+        )(),
+    )
+    monkeypatch.setattr(SystemRuntimeSupervisor, "start_background", lambda _self: None)
+
+    result = WorkspaceServiceApplication(workspace).start_and_keep_running("reference")
+
+    desired = json.loads(
+        (workspace.paths.run / "supervisor" / "desired.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert result["status"] == "running"
+    assert desired == {"reference": {}}
+
+
+def test_workspace_service_restart_preserves_on_demand_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="service-restart"
+    )
+    monkeypatch.setattr(
+        ComponentProcessApplication,
+        "restart",
+        lambda *_args, **_kwargs: type(
+            "Control", (), {"status": lambda _self: {"status": "running"}}
+        )(),
+    )
+
+    result = WorkspaceServiceApplication(workspace).restart("market")
+
+    desired_path = workspace.paths.run / "supervisor" / "desired.json"
+    assert result["status"] == "running"
+    assert (
+        not desired_path.exists()
+        or json.loads(desired_path.read_text(encoding="utf-8")) == {}
+    )
+
+
+def test_workspace_service_stop_removes_desired_state_before_stopping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="service-stop"
+    )
+    supervisor = SystemRuntimeSupervisor(ComponentProcessApplication(workspace))
+    supervisor.register("market")
+
+    def stop(_self, component: str) -> dict[str, str]:
+        desired = json.loads(supervisor.desired_path.read_text(encoding="utf-8"))
+        assert component not in desired
+        return {"status": "not_running"}
+
+    monkeypatch.setattr(ComponentProcessApplication, "stop", stop)
+
+    result = WorkspaceServiceApplication(workspace).stop("market")
+
+    assert result["status"] == "not_running"
+    assert json.loads(supervisor.desired_path.read_text(encoding="utf-8")) == {}

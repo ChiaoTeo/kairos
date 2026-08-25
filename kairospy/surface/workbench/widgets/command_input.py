@@ -12,8 +12,8 @@ COMMAND_SUGGESTIONS = (
     "clear",
     "observe",
     "market ",
-    "confirm",
-    "cancel",
+    "y",
+    "n",
 )
 
 

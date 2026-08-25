@@ -90,14 +90,16 @@ def handle_input(
     return None
 
 
-def cancel_input(session: GuidedSession, token: ActionToken) -> None:
+def cancel_input(session: GuidedSession, token: ActionToken) -> bool:
     """Clear only the Market prompt owned by the token."""
 
-    if token.feature is Feature.MARKET:
-        if token.action == "file-field":
-            session.market.file_prompt = None
-        elif token.action == "workspace-field":
-            session.market.workspace_prompt = None
+    if token.feature is not Feature.MARKET:
+        return False
+    if token.action == "file-field":
+        session.market.file_prompt = None
+    elif token.action == "workspace-field":
+        session.market.workspace_prompt = None
+    return True
 
 
 def live_observation_operation(
@@ -506,8 +508,8 @@ def _handle_market_context(
             return None
         selected_market = session.market.selected
         default_market = (
-            str(selected_market.id)
-            if selected_market is not None and hasattr(selected_market, "id")
+            str(getattr(selected_market, "id", ""))
+            if selected_market is not None
             else ""
         )
         prompt = WorkspaceMarketPromptState(action, default_market)

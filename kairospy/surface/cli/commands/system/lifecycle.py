@@ -19,10 +19,10 @@ from kairospy.system.apps.components.application.process_logging import (
     parse_since,
 )
 from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.system.apps.workspace_services import WorkspaceServiceApplication
 
 from . import (
     _emit,
-    _ensure_no_active_component_dependents,
     system_app,
     system_component_app,
 )
@@ -76,17 +76,13 @@ def system_up(
             "launch starts instance-owned components"
         )
     owner = WorkspaceApplication().open(workspace)
-    process = ComponentProcessApplication(owner)
-    control = process.ensure_running(
+    result = WorkspaceServiceApplication(owner).start_and_keep_running(
         component,
         account_id=account_id,
         stream_startup_logs=component == "reference"
         and effective_output(output) is OutputFormat.TEXT,
     )
-    supervisor = SystemRuntimeSupervisor(process)
-    supervisor.register(component, {"account_id": account_id} if account_id else {})
-    supervisor.start_background()
-    _emit(control.status(), output)
+    _emit(result, output)
 
 
 @system_app.command("down")
@@ -101,11 +97,7 @@ def system_down(
             "use launch stop for instance-owned components"
         )
     owner = WorkspaceApplication().open(workspace)
-    _ensure_no_active_component_dependents(owner, component, "down")
-    process = ComponentProcessApplication(owner)
-    supervisor = SystemRuntimeSupervisor(process)
-    supervisor.unregister(component)
-    _emit(process.stop(component), output)
+    _emit(WorkspaceServiceApplication(owner).stop(component), output)
 
 
 @system_app.command("restart")
@@ -121,19 +113,14 @@ def system_restart(
             "use launch start/stop for instance-owned components"
         )
     owner = WorkspaceApplication().open(workspace)
-    _ensure_no_active_component_dependents(owner, component, "restart")
-    process = ComponentProcessApplication(owner)
     text_output = effective_output(output) is OutputFormat.TEXT
-    control = process.restart(
+    result = WorkspaceServiceApplication(owner).restart(
         component,
         account_id=account_id,
         stream_startup_logs=component == "reference" and text_output,
         progress=typer.echo if text_output else None,
     )
-    supervisor = SystemRuntimeSupervisor(process)
-    supervisor.register(component, {"account_id": account_id} if account_id else {})
-    supervisor.start_background()
-    _emit(control.status(), output)
+    _emit(result, output)
 
 
 @system_app.command("status")

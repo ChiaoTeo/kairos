@@ -551,12 +551,12 @@ fn descriptor(
 
 fn resolved_endpoint(
     connection: Option<&kairos_integration::composition::ProviderConnectionProfile>,
-    legacy: &Option<String>,
+    source_endpoint: &Option<String>,
     default: &str,
 ) -> String {
-    connection
-        .map(|value| value.endpoint.clone())
-        .or_else(|| legacy.clone())
+    source_endpoint
+        .clone()
+        .or_else(|| connection.map(|value| value.endpoint.clone()))
         .unwrap_or_else(|| default.to_owned())
 }
 
@@ -614,5 +614,57 @@ fn connection_requirement(
         ),
         MarketProviderBinding::Hyperliquid { .. } => ("hyperliquid", None, "market-query"),
         MarketProviderBinding::Ibkr { .. } => ("ibkr", None, "market-query"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kairos_integration::composition::ProviderConnectionProfile;
+
+    use super::resolved_endpoint;
+
+    fn connection(endpoint: &str) -> ProviderConnectionProfile {
+        ProviderConnectionProfile {
+            connection_id: "provider-main".into(),
+            provider: "provider".into(),
+            environment: "production".into(),
+            endpoint: endpoint.into(),
+            credential_id: "provider-readonly".into(),
+            enabled: true,
+            products: vec!["equity".into()],
+            purposes: vec!["market-stream".into()],
+        }
+    }
+
+    #[test]
+    fn source_endpoint_overrides_connection_endpoint() {
+        let connection = connection("https://api.provider.example");
+
+        assert_eq!(
+            resolved_endpoint(
+                Some(&connection),
+                &Some("wss://stream.provider.example/equity".into()),
+                "wss://default.provider.example",
+            ),
+            "wss://stream.provider.example/equity"
+        );
+    }
+
+    #[test]
+    fn connection_endpoint_precedes_provider_default() {
+        let connection = connection("https://api.provider.example");
+
+        assert_eq!(
+            resolved_endpoint(Some(&connection), &None, "wss://default.provider.example",),
+            "https://api.provider.example"
+        );
+    }
+
+    #[test]
+    fn provider_default_is_used_without_configured_endpoint() {
+        assert_eq!(
+            resolved_endpoint(None, &None, "wss://default.provider.example"),
+            "wss://default.provider.example"
+        );
     }
 }

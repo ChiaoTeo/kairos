@@ -1932,9 +1932,12 @@ def _workspace_data_provider_issues(
         return (
             f"Data connection requires a successful manual read test: {profile}",
         )
-    verified = {
-        str(value) for value in connection.get("capabilities_verified") or ()
-    }
+    capabilities = connection.get("capabilities_verified")
+    verified = (
+        {str(value) for value in capabilities}
+        if isinstance(capabilities, list)
+        else set()
+    )
     if "market-query" not in verified:
         return (f"Data connection has not verified market-query: {profile}",)
     return ()

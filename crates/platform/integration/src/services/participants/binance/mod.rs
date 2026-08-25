@@ -4,6 +4,7 @@ pub(crate) mod account;
 pub(crate) mod api;
 pub(crate) mod execution;
 pub(crate) mod market;
+pub(crate) mod market_stream;
 pub(crate) mod rest;
 pub(crate) mod signing;
 pub(crate) mod socket;

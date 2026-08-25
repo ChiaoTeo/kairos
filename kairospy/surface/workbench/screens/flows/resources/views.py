@@ -36,6 +36,9 @@ _FIELD_LABELS = {
     "base_url": "Base URL",
     "api_mode": "API 模式",
     "models": "模型",
+    "model": "模型",
+    "message": "你的消息",
+    "response": "模型回复",
     "verified_models": "已验证模型",
     "failed_models": "验证失败模型",
     "stale_models": "需要重测模型",
@@ -294,6 +297,18 @@ def action_result_renderable(
         return _data_test_renderable(result, title=title)
     if kind == "notifications" and action == "test":
         return _notification_test_renderable(result, title=title)
+    if kind == "models" and action == "test" and "message" in result:
+        return mapping_renderable(
+            result,
+            title=title,
+            preferred_fields=(
+                "succeeded",
+                "model",
+                "message",
+                "response",
+                "error_category",
+            ),
+        )
     return mapping_renderable(result, title=title)
 
 

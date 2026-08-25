@@ -360,7 +360,7 @@ def handle_context(
         )
     if context == ("strategy", "components") and session.visible_records:
         component = _record_choice(session.visible_records, command)
-        if component is None:
+        if not isinstance(component, Mapping):
             return None
         name = str(component.get("component") or "")
         if name in {"market", "execution"}:
@@ -374,10 +374,11 @@ def handle_context(
         )
     if context == ("strategy", "instances") and session.visible_records:
         instance = _record_choice(session.visible_records, command)
-        if instance is None:
+        if not isinstance(instance, Mapping):
             return None
         selected = (record or LaunchRecordView({})).merged(instance)
         session.strategy.selected_record = selected
+        session.strategy.instance_entered_from_operations = False
         session.context = ("strategy", "instance")
         body = Panel(Pretty(instance, expand_all=True), title="运行实例")
         return _standalone(f"运行实例 · {instance['instance_id']}", body), *_choice(
@@ -433,15 +434,9 @@ def handle_context(
         )
     if context == ("strategy", "launches") and session.visible_records:
         chosen = _record_choice(session.visible_records, command)
-        if chosen is None:
+        if not isinstance(chosen, Mapping):
             return None
-        selected = LaunchRecordView.from_mapping(chosen)
-        session.strategy.selected_record = selected
-        session.context = ("strategy", "selected")
-        return _standalone(
-            f"Launch · {selected['launch_id']}",
-            Panel(Pretty(selected, expand_all=True), title="Launch"),
-        ), *_choice(state, session)
+        return enter_selected_record(state, session, chosen)
     action = action_id(SECTION_ACTIONS["strategy"], command)
     if action is None:
         return None
@@ -458,12 +453,42 @@ def handle_context(
         return (
             _run(
                 "strategy.launches",
-                "查看 Launch 列表",
+                "查看运行方案",
                 ResultKind.STRATEGY_LAUNCHES,
                 lambda: load_launches(state),
             ),
         )
     return None
+
+
+def enter_selected_record(
+    state: Any, session: GuidedSession, value: Mapping[str, object]
+) -> tuple[ScreenEffect, ...]:
+    """Enter the one shared Launch detail from any product entry."""
+
+    selected = LaunchRecordView.from_mapping(value)
+    session.strategy.selected_record = selected
+    session.context = ("strategy", "selected")
+    session.visible_records = ()
+    return _choice(state, session, Pretty(selected, expand_all=True))
+
+
+def enter_selected_instance(
+    state: Any, session: GuidedSession, value: Mapping[str, object]
+) -> tuple[ScreenEffect, ...]:
+    """Enter the shared instance detail from the project Operations Center."""
+
+    selected = LaunchRecordView.from_mapping(value)
+    session.strategy.selected_record = selected
+    session.strategy.instance_records = (selected,)
+    session.strategy.instance_entered_from_operations = True
+    session.context = ("strategy", "instance")
+    session.visible_records = ()
+    return _choice(
+        state,
+        session,
+        Panel(Pretty(selected, expand_all=True), title="活动运行实例"),
+    )
 
 
 def handle_success(
@@ -718,7 +743,7 @@ def _advance_wizard(
                             state.owner
                         ).list()
                         if item.get("enabled")
-                        and "market-query" in item.get("purposes", [])
+                        and "market-query" in _strings(item.get("purposes"))
                     )
                 except (OSError, ValueError):
                     wizard.provider_connections = ()
@@ -826,7 +851,8 @@ def _market_connection_actions(wizard: LaunchWizardState) -> tuple[ActionItem, .
         ActionItem(
             f"connection-{index}",
             str(record.get("connection_id")),
-            f"{record.get('provider')} · {', '.join(record.get('products', []))} · "
+            f"{record.get('provider')} · "
+            f"{', '.join(_strings(record.get('products')))} · "
             f"{record.get('verification_status') or 'pending'}",
             str(index),
         )
@@ -999,6 +1025,12 @@ def _choice(
 
 def _record_choice(records: tuple[SelectionRecord, ...], value: str) -> object | None:
     return selected_value(records, value)
+
+
+def _strings(value: object) -> tuple[str, ...]:
+    """Validate and normalize a list retained in a presentation record."""
+
+    return tuple(str(item) for item in value) if isinstance(value, list) else ()
 
 
 def _activity(

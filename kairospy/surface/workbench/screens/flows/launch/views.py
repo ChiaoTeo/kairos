@@ -11,10 +11,10 @@ from rich.table import Table
 
 def records_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
     if not records:
-        return Panel("没有 Launch 配置。输入 /new 开始创建。", title="Launch")
+        return Panel("没有运行方案。输入 /new 开始创建。", title="运行方案")
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", justify="right", style="bold cyan")
-    table.add_column("Launch")
+    table.add_column("运行方案")
     table.add_column("模式")
     table.add_column("状态")
     table.add_column("实例")
@@ -28,7 +28,7 @@ def records_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
             str(item.get("instance_id") or "—"),
             "已配置" if item.get("config") else "未找到",
         )
-    return Panel(table, title=f"{len(records)} 个 Launch", border_style="cyan")
+    return Panel(table, title=f"{len(records)} 个运行方案", border_style="cyan")
 
 
 def instances_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:

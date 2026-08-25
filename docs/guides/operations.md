@@ -46,8 +46,9 @@ uv run kairos launch wait demo-backtest
 uv run kairos observe --workspace my-project
 ```
 
-观测台不会自动启动业务进程；它读取 launch、System health、组件状态和可用的
-Market snapshot，并根据最近状态提示下一条安全命令。无界面或脚本场景可以使用一次性 JSON 输出：
+运行中心不会自动启动业务进程；它只读取当前活动运行实例、项目共享服务和支撑进程。历史实例与报告
+仍从具体运行方案进入，Market 业务快照仍从 Market 入口读取。无界面或脚本场景可以使用一次性 JSON
+输出：
 
 ```bash
 uv run kairos observe --workspace my-project --once

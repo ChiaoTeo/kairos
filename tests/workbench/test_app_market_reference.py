@@ -204,7 +204,7 @@ def test_market_search_owns_action_area_until_results_are_ready(
         input_focused,
         output,
     ) = asyncio.run(run())
-    assert prompt_context == "搜索市场  ›"
+    assert prompt_context == "首页 / 市场行情  ›"
     assert not prompt_actions_visible
     assert prompt_hints.splitlines() == [
         "Enter 搜索  ·  Esc 返回",
@@ -371,6 +371,8 @@ def test_single_market_route_appends_quote_to_activity_stream(
     assert "重新执行" in output
     command = activities[0].equivalent_command
     assert command is not None
+    assert command[:2] == ("kairos", "market")
+    assert "kairos-market-cli" not in command
     assert command[-4:] == (
         "--provider",
         "massive",

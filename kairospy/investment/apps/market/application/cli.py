@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Sequence
 
 from kairospy.system.apps.components.application.binaries import (
@@ -12,6 +13,50 @@ from kairospy.system.apps.components.application.binaries import (
     resolve_binary,
 )
 from kairospy.system.apps.workspace.application import Workspace
+
+
+@dataclass(frozen=True, slots=True)
+class MarketCommandLine:
+    """Public `kairos market` options separated from owner CLI arguments."""
+
+    workspace: Path | None
+    output: str | None
+    arguments: tuple[str, ...]
+
+
+def parse_market_command_line(arguments: Sequence[str]) -> MarketCommandLine:
+    """Parse the public `kairos market` adapter options once for every surface."""
+
+    workspace: Path | None = None
+    output: str | None = None
+    result: list[str] = []
+    index = 0
+    while index < len(arguments):
+        item = arguments[index]
+        option, separator, inline_value = item.partition("=")
+        if option not in {"--workspace", "--format", "--output"}:
+            result.append(item)
+            index += 1
+            continue
+        if separator:
+            value = inline_value
+            index += 1
+        else:
+            if index + 1 >= len(arguments):
+                raise ValueError(f"{option} requires a value")
+            value = arguments[index + 1]
+            index += 2
+        if not value:
+            raise ValueError(f"{option} requires a value")
+        if option == "--workspace":
+            if workspace is not None:
+                raise ValueError("--workspace may be specified only once")
+            workspace = Path(value)
+        else:
+            if output is not None:
+                raise ValueError("--format/--output may be specified only once")
+            output = value
+    return MarketCommandLine(workspace, output, tuple(result))
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +77,26 @@ class MarketCliApplication:
         if output is not None:
             command.extend(("--output", output))
         command.extend(arguments)
+        return command
+
+    def shell_command(
+        self, arguments: Sequence[str], *, output: str | None = None
+    ) -> list[str]:
+        """Build the stable public command accepted by Shell and Workbench."""
+
+        parsed = parse_market_command_line(arguments)
+        if parsed.workspace is not None:
+            raise ValueError("shell command arguments must not repeat --workspace")
+        if parsed.output is not None:
+            raise ValueError(
+                "shell command arguments must not repeat --format/--output"
+            )
+        command = ["kairos", "market"]
+        if self.workspace is not None:
+            command.extend(("--workspace", str(self.workspace.paths.root)))
+        if output is not None:
+            command.extend(("--format", output))
+        command.extend(parsed.arguments)
         return command
 
     def invoke(self, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -295,4 +360,8 @@ class MarketCliApplication:
         )
 
 
-__all__ = ["MarketCliApplication"]
+__all__ = [
+    "MarketCliApplication",
+    "MarketCommandLine",
+    "parse_market_command_line",
+]

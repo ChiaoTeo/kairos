@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from .flows.market.workspace import WorkspaceMarketPromptState
     from .flows.operations.actions import ProjectPromptState
     from .flows.operations.business import BusinessPromptState
-    from .flows.operations.views import ServiceStatusView
+    from .flows.operations.views import ServiceStatusView, SupportStatusView
     from .flows.resources.wizard import ResourceWizardState
 
 
@@ -86,7 +86,11 @@ class OperationsSession:
 
     selected_service: str | None = None
     selected_service_status: ServiceStatusView | None = None
+    selected_support: str | None = None
+    selected_support_status: SupportStatusView | None = None
     service_records: tuple[SelectionRecord, ...] = ()
+    inventory_records: tuple[SelectionRecord, ...] = ()
+    group_records: tuple[SelectionRecord, ...] = ()
     live_buffer: LiveBuffer | None = None
     source_tail: tuple[str, ...] = ()
     log_generation: str | None = None
@@ -101,7 +105,11 @@ class OperationsSession:
     def reset(self) -> None:
         self.selected_service = None
         self.selected_service_status = None
+        self.selected_support = None
+        self.selected_support_status = None
         self.service_records = ()
+        self.inventory_records = ()
+        self.group_records = ()
         self.reset_logs()
         self.project_prompt = None
         self.profile_action = None
@@ -186,6 +194,7 @@ class StrategySession:
     instance_records: tuple[LaunchRecordView, ...] = ()
     component_records: tuple[LaunchRecordView, ...] = ()
     selected_record: LaunchRecordView | None = None
+    instance_entered_from_operations: bool = False
     wizard: LaunchWizardState | None = None
     attach_snapshot: RenderableType | None = None
     live_buffer: LiveBuffer | None = None
@@ -213,6 +222,7 @@ class StrategySession:
         self.instance_records = ()
         self.component_records = ()
         self.selected_record = None
+        self.instance_entered_from_operations = False
         self.wizard = None
         self.attach_snapshot = None
         self.live_buffer = None

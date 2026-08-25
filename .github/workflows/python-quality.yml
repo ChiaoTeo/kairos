@@ -34,7 +34,7 @@ jobs:
         run: uv run ruff format --check kairospy tests
 
       - name: Check Python types
-        run: uv run pyright
+        run: make python-type-check
 
       - name: Run Python tests
         run: uv run pytest -q

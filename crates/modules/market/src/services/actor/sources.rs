@@ -4,31 +4,70 @@ use tokio::sync::mpsc;
 
 use super::MarketActor;
 use crate::domain::freshness::FeedStatus;
+use crate::domain::market::{ProviderSegmentCode, ResolvedMarket};
 use crate::domain::source::{
     FeedDescriptor, MarketFeedId, MarketReadiness, SourceEpoch, SourceFailureKind, SourceState,
     SourceStatus, derive_readiness,
 };
-use crate::domain::subscription::SubscriptionId;
 use crate::services::source::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};
 
-pub(crate) type BusinessSubscriptionKey = (SubscriptionId, String);
+/// Stable identity for one provider-side subscription desired by Market.
+///
+/// Logical subscription owners deliberately do not participate in this key:
+/// multiple strategies requiring the same source route share one physical
+/// handle. Route identity does participate so a Reference/provider change is
+/// reconciled as a replacement rather than silently reusing a stale handle.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct PhysicalSubscriptionKey {
+    source_id: MarketFeedId,
+    member_id: String,
+    provider: Option<kairos_primitives::market::Provider>,
+    provider_segment: Option<ProviderSegmentCode>,
+    subscription_symbol: Option<kairos_primitives::market::SubscriptionSymbol>,
+    observation_requirements:
+        std::collections::BTreeSet<crate::domain::subscription::ObservationSelector>,
+}
+
+impl PhysicalSubscriptionKey {
+    pub(crate) fn for_source(descriptor: &FeedDescriptor, market: &ResolvedMarket) -> Option<Self> {
+        let (provider, provider_segment, subscription_symbol) = match descriptor.provider.as_ref() {
+            Some(provider) => {
+                let attachment = market.attach_route(&descriptor.id, provider)?;
+                (
+                    Some(attachment.route.provider),
+                    Some(attachment.provider_segment),
+                    Some(attachment.subscription_symbol),
+                )
+            },
+            None => (None, None, None),
+        };
+        Some(Self {
+            source_id: descriptor.id.clone(),
+            member_id: market.member_id(),
+            provider,
+            provider_segment,
+            subscription_symbol,
+            observation_requirements: market.observation_requirements(),
+        })
+    }
+}
 
 pub(crate) struct AttachedSource {
     pub(crate) descriptor: FeedDescriptor,
     pub(crate) commands: mpsc::Sender<SourceCommand>,
     pub(crate) inputs: Option<mpsc::Receiver<SourceInput>>,
     pub(crate) task: Option<tokio::task::JoinHandle<()>>,
-    pub(crate) confirmed: BTreeMap<BusinessSubscriptionKey, ProviderSubscriptionId>,
+    pub(crate) confirmed: BTreeMap<PhysicalSubscriptionKey, ProviderSubscriptionId>,
 }
 
 pub(crate) enum PendingSourceRequest {
     Subscribe {
         source_id: MarketFeedId,
-        key: BusinessSubscriptionKey,
+        key: PhysicalSubscriptionKey,
     },
     Unsubscribe {
         source_id: MarketFeedId,
-        key: BusinessSubscriptionKey,
+        key: PhysicalSubscriptionKey,
     },
     ResyncOrderBook {
         source_id: MarketFeedId,

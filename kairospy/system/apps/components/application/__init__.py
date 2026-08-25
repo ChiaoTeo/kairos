@@ -35,6 +35,7 @@ from .process_logging import start_logged_process
 # and Execution are owned by a launch instance and are inspected through that
 # instance rather than the workspace inventory.
 SYSTEM_COMPONENTS = ("reference", "market")
+SUPPORT_COMPONENTS = ("system-supervisor", "aeron")
 
 
 def _lock_is_held(path: Path) -> bool:
@@ -533,7 +534,7 @@ class ComponentProcessApplication:
     def logs(self, component: str, *, limit: int = 200) -> tuple[str, ...]:
         """Read recent workspace-component logs for operator surfaces."""
 
-        if component not in SYSTEM_COMPONENTS:
+        if component not in {*SYSTEM_COMPONENTS, *SUPPORT_COMPONENTS}:
             raise ValueError(f"unsupported workspace component: {component}")
         if limit <= 0:
             raise ValueError("log line limit must be positive")

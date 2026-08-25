@@ -26,14 +26,22 @@ class WorkspaceHeader(Horizontal):
             yield Static(id="command-status")
 
     def on_mount(self) -> None:
+        self.refresh_project()
+        self.set_status("就绪")
+
+    def refresh_project(self) -> None:
+        """Refresh the global project identity after opening or creating a project."""
+
         app = cast("KairosWorkbenchApp", self.app)
         state = app.state
         title = Text("KAIROS", style="bold cyan")
         title.append("  /  ", style="dim")
-        title.append(state.workspace_id, style="bold")
+        if state.owner is None:
+            title.append("未打开项目", style="bold yellow")
+        else:
+            title.append(state.workspace_id, style="bold")
         self.query_one("#workspace-title", Static).update(title)
         self.screen.title = f"Kairos · {state.workspace_id}"
-        self.set_status("就绪")
 
     def set_status(self, value: str) -> None:
         """Render an activity value with a small semantic status marker."""

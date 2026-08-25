@@ -89,6 +89,37 @@ def test_verified_model_refs_are_concrete_launch_choices(tmp_path: Path) -> None
     )
 
 
+def test_model_conversation_returns_reply_and_updates_verification(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    resources = AgentResourceApplication(workspace)
+    resources.configure_model_connection(
+        "ollama-local",
+        provider="ollama",
+        models=("qwen3:8b",),
+    )
+
+    result = resources.converse_with_model(
+        "ollama-local",
+        "qwen3:8b",
+        "你好，请简单介绍自己",
+        probe=lambda connection, secret, model, message: {
+            "choices": [{"message": {"content": "你好，我是测试模型。"}}]
+        },
+    )
+
+    assert result["succeeded"] is True
+    assert result["message"] == "你好，请简单介绍自己"
+    assert result["response"] == "你好，我是测试模型。"
+    assert result["verification_status"] == "verified"
+    evidence = workspace.paths.child(
+        "state", "configuration", "models", "ollama-local.json"
+    ).read_text(encoding="utf-8")
+    assert "你好，请简单介绍自己" not in evidence
+    assert "你好，我是测试模型" not in evidence
+
+
 def test_refresh_model_catalog_preserves_existing_model_verification(
     tmp_path: Path,
 ) -> None:

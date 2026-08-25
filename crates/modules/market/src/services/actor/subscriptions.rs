@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use super::sources::PhysicalSubscriptionKey;
 use super::universe::diff_members;
 use super::{MarketActor, PendingSourceRequest};
 use crate::domain::market::{MarketSelectionQuery, ResolvedMarket};
@@ -239,8 +240,7 @@ impl MarketActor {
             .map(|subscription| self.with_subscription_status(subscription))
             .collect::<Vec<_>>();
         subscriptions.extend(self.dynamic_intents.iter().map(|(id, intent)| {
-            let member_status =
-                self.subscription_member_status(id, &intent.members, &intent.member_requirements);
+            let member_status = self.subscription_member_status(&intent.members, &intent.selectors);
             SubscriptionState {
                 id: id.clone(),
                 owner_id: intent.owner_id.clone(),
@@ -258,11 +258,8 @@ impl MarketActor {
     }
 
     fn with_subscription_status(&self, subscription: &SubscriptionState) -> SubscriptionState {
-        let member_status = self.subscription_member_status(
-            &subscription.id,
-            &subscription.members,
-            &subscription.member_requirements,
-        );
+        let member_status =
+            self.subscription_member_status(&subscription.members, &subscription.selectors);
         SubscriptionState {
             member_status: member_status.clone(),
             status: derive_subscription_status(&subscription.member_requirements, &member_status),
@@ -272,28 +269,48 @@ impl MarketActor {
 
     fn subscription_member_status(
         &self,
-        subscription_id: &SubscriptionId,
         members: &BTreeMap<String, ResolvedMarket>,
-        _requirements: &BTreeMap<String, SubscriptionMemberRequirement>,
+        selectors: &[ObservationSelector],
     ) -> BTreeMap<String, SubscriptionMemberStatus> {
         members
             .iter()
             .map(|(market_id, market)| {
-                let matches = self
+                let mut matches = self
                     .attached_sources
                     .iter()
                     .filter(|(_, source)| {
                         crate::application::source_accepts(&source.descriptor, market)
+                            && crate::application::source_supports_selectors(
+                                &source.descriptor,
+                                selectors,
+                            )
                     })
                     .collect::<Vec<_>>();
-                let status = match matches.as_slice() {
-                    [] => SubscriptionMemberStatus::Unavailable,
-                    [(_, source)] => {
-                        let confirmed = source
-                            .confirmed
-                            .contains_key(&(subscription_id.clone(), market_id.clone()));
-                        let pending =
-                            self.pending_for_subscription_market(subscription_id, market_id);
+                matches.sort_by_key(|(source_id, _)| {
+                    (
+                        self.sources.get(*source_id).is_none_or(|state| {
+                            state.status != crate::domain::source::SourceStatus::Ready
+                        }),
+                        (*source_id).clone(),
+                    )
+                });
+                let status = match matches.first() {
+                    None => SubscriptionMemberStatus::Unavailable,
+                    Some((_, source)) => {
+                        let mut selected_market = market.clone();
+                        if source.descriptor.provider.is_some()
+                            && selected_market.select_observations(selectors).is_err()
+                        {
+                            return (market_id.clone(), SubscriptionMemberStatus::Rejected);
+                        }
+                        let Some(physical_key) = PhysicalSubscriptionKey::for_source(
+                            &source.descriptor,
+                            &selected_market,
+                        ) else {
+                            return (market_id.clone(), SubscriptionMemberStatus::Rejected);
+                        };
+                        let confirmed = source.confirmed.contains_key(&physical_key);
+                        let pending = self.pending_for_physical_subscription(&physical_key);
                         let source_status = self
                             .sources
                             .get(&source.descriptor.id)
@@ -324,20 +341,15 @@ impl MarketActor {
                             SubscriptionMemberStatus::Unavailable
                         }
                     },
-                    _ => SubscriptionMemberStatus::Rejected,
                 };
                 (market_id.clone(), status)
             })
             .collect()
     }
 
-    fn pending_for_subscription_market(
-        &self,
-        subscription_id: &SubscriptionId,
-        market_id: &str,
-    ) -> bool {
+    fn pending_for_physical_subscription(&self, physical_key: &PhysicalSubscriptionKey) -> bool {
         self.pending_source_requests.values().any(|pending| {
-            matches!(pending, PendingSourceRequest::Subscribe { key, .. } if key.0 == *subscription_id && key.1 == market_id)
+            matches!(pending, PendingSourceRequest::Subscribe { key, .. } if key == physical_key)
         })
     }
 }

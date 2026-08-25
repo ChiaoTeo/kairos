@@ -129,7 +129,7 @@ class ResourceWizardState:
         entered = raw.strip()
         value = entered or self._default(name)
         if name == "endpoint" and self.kind == "models" and not entered:
-            value = self.model_provider_default("base_url")
+            value = str(self.model_provider_default("base_url"))
         if name == "account-mode":
             value = {"1": "paper", "2": "live"}.get(value.lower(), value.lower())
         if name == "account-provider":

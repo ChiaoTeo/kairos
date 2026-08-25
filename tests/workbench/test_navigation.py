@@ -10,8 +10,8 @@ from kairospy.surface.workbench.screens.navigation import context_label, go_back
     ("context", "parent"),
     [
         (("market", "connected"), ("market",)),
-        (("operations", "profiles"), ("operations", "config")),
-        (("operations", "business", "risk"), ("operations", "business")),
+        (("operations", "service", "market"), ("operations", "services")),
+        (("operations", "support", "aeron"), ("operations", "supports")),
         (("resources", "account-orders"), ("resources", "account-operations")),
         (("research", "data"), ("research",)),
         (("strategy", "execution"), ("strategy", "components")),
@@ -39,6 +39,6 @@ def test_context_labels_are_derived_from_the_same_navigation_context() -> None:
     assert context_label(()) == "首页"
     assert context_label(("market", "selected")) == "首页 / 市场行情 / 已选标的"
     assert (
-        context_label(("operations", "business", "integration"))
-        == "首页 / 系统维护 / Provider 集成"
+        context_label(("operations", "support", "system-supervisor"))
+        == "首页 / 运行中心 / System Supervisor"
     )

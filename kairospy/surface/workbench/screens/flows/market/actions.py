@@ -224,9 +224,7 @@ def file_command(state: Any, prompt: MarketFilePromptState) -> tuple[str, ...]:
             arguments.extend(("--market-id", str(market.id)))
         if data_kind == "bar":
             arguments.extend(("--interval", "1d"))
-    return tuple(
-        MarketCliApplication(state.owner, binary="kairos-market-cli").command(arguments)
-    )
+    return tuple(MarketCliApplication(state.owner).shell_command(arguments))
 
 
 def preview_file_action(prompt: MarketFilePromptState) -> dict[str, Any]:
@@ -344,7 +342,7 @@ def route_command(state: Any, market: Any, observation_kind: str) -> tuple[str, 
     """Return the canonical CLI command for standalone route discovery."""
 
     return tuple(
-        MarketCliApplication(state.owner, binary="kairos-market-cli").command(
+        MarketCliApplication(state.owner).shell_command(
             (
                 "standalone",
                 "routes",
@@ -408,9 +406,7 @@ def observation_command(
         "--observation-kind",
         observation_kind,
     )
-    return tuple(
-        MarketCliApplication(state.owner, binary="kairos-market-cli").command(arguments)
-    )
+    return tuple(MarketCliApplication(state.owner).shell_command(arguments))
 
 
 def run_diagnostic(state: Any, market: Any) -> dict[str, Any]:
@@ -441,9 +437,7 @@ def diagnostic_command(state: Any, market: Any) -> tuple[str, ...]:
         "--symbol",
         str(symbol),
     )
-    return tuple(
-        MarketCliApplication(state.owner, binary="kairos-market-cli").command(arguments)
-    )
+    return tuple(MarketCliApplication(state.owner).shell_command(arguments))
 
 
 def load_datasets(state: Any) -> dict[str, Any]:

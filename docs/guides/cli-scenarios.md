@@ -41,7 +41,7 @@ kairos observe
 - `config agent setup` 准备 Workspace 级 Agent credential、Profile 和只读 MCP 资源；
   API Key 不进入 launch 配置。
 - `launch` 管一次策略运行：配置、实例、日志、报告、生命周期。
-- `observe` 是运行中的总览，不替代 `launch` 或 `system`。
+- `observe` 是当前项目运行中心的只读投影；它不包含历史实例，也不替代 `launch` 或 `system`。
 - `quickstart` 是不知道从哪开始时的入口。
 
 这条线应该排在 CLI 帮助的最前面，因为它是新用户和策略开发者最常走的路径。

@@ -29,6 +29,7 @@ from kairospy.surface.workbench.screens.flows.operations.views import (
     ServiceDisplayState,
     diagnostics_renderable,
     service_actions,
+    service_status_line,
     service_status_view,
     service_summary,
 )
@@ -36,6 +37,7 @@ from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardS
 from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
+    ChoiceInteraction,
     ConfirmInteraction,
     WorkbenchCommandInput,
     interaction_copy_text,
@@ -53,27 +55,73 @@ from app_support import (
 )
 
 
-def test_operations_nested_menus_never_replace_command_screen() -> None:
-    async def run() -> tuple[type[object], str, int, bool]:
+def test_operations_center_opens_current_runtime_inventory_directly() -> None:
+    async def run() -> tuple[type[object], str, str, int, bool]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
             screen.submit("6")
-            screen.submit("1")
             await pilot.pause()
             return (
                 type(app.screen),
                 str(screen.query_one("#command-context", Static).render()),
+                interaction_copy_text(screen.session.interaction),
                 screen.query_one("#guided-actions", ActionList).option_count,
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
             )
 
-    screen_type, context, option_count, focused = asyncio.run(run())
+    screen_type, context, copy, option_count, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 系统维护 / 工作区管理  ›"
-    assert option_count == 4
+    assert context == "首页 / 运行中心 / 运行概览  ›"
+    assert option_count == 3
+    assert "项目共享服务" in copy
+    assert "活动运行实例" in copy
+    assert "支撑进程" in copy
+    assert "选择具体对象查看状态" not in copy
+    assert "运行状态" not in copy
+    assert "高级设置" not in copy
     assert focused
+
+
+def test_stale_service_uses_action_only_interaction() -> None:
+    async def run() -> tuple[str, int, bool, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 20)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            view = service_status_view(
+                {
+                    "component": "reference",
+                    "status": "stale",
+                    "operating_mode": "stopped",
+                    "logs_available": True,
+                    "dependents": (),
+                }
+            )
+            screen.session.operations.selected_service = "reference"
+            screen.session.operations.selected_service_status = view
+            screen.session.context = ("operations", "service", "reference")
+            screen.session.choose(
+                service_actions(view),
+                title="首页 / 运行中心 / 标的服务",
+            )
+            screen._interaction().present(screen.session.interaction)
+            await pilot.pause()
+            actions = screen.query_one("#guided-actions", ActionList)
+            return (
+                interaction_copy_text(screen.session.interaction),
+                actions.option_count,
+                screen.query_one("#interaction-content", Static).display,
+                service_status_line(view),
+            )
+
+    copy, option_count, content_displayed, status = asyncio.run(run())
+    assert "清理并启动" in copy
+    assert "仅清理失效资源" in copy
+    assert option_count == 4
+    assert not content_displayed
+    assert status == "标的服务 · 资源残留 · 无活动运行实例"
 
 
 def test_project_init_collects_each_field_in_the_shared_bottom_input() -> None:
@@ -84,7 +132,7 @@ def test_project_init_collects_each_field_in_the_shared_bottom_input() -> None:
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("6", "1", "2", "demo-project", "", "none"):
+            for value in ("7", "4", "demo-project", "", "none"):
                 screen.submit(value)
                 await pilot.pause(0.03)
             await pilot.pause(0.1)
@@ -97,141 +145,37 @@ def test_project_init_collects_each_field_in_the_shared_bottom_input() -> None:
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 系统维护 / 工作区管理  ›"
+    assert context == "首页  ›"
     assert "demo-project" in output
     assert "项目操作结果" in output
     assert "preview" in output
     assert focused
 
 
-def test_profile_create_uses_inline_confirmation_and_back_returns_to_config() -> None:
-    async def run() -> tuple[str, str, ConfirmInteraction, str, bool]:
+def test_operations_service_selection_actions_and_back_use_one_input() -> None:
+    async def run() -> tuple[type[object], str, str, str, bool, bool, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("6", "5", "7", "2", "paper"):
-                screen.submit(value)
+            screen.submit("6")
+            await pilot.pause(0.1)
+            assert screen.session.context == ("operations", "overview")
+            screen.submit("1")
             await pilot.pause()
-            status = str(screen.query_one("#command-status", Static).render())
-            output = _log_text(screen.query_one("#command-output", RichLog))
-            interaction = screen.session.interaction
-            assert isinstance(interaction, ConfirmInteraction)
-            screen.submit("/cancel")
-            screen.submit("/back")
-            return (
-                status,
-                output,
-                interaction,
-                str(screen.query_one("#command-context", Static).render()),
-                screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
-            )
-
-    status, output, interaction, context, focused = asyncio.run(run())
-    assert status == "等待确认"
-    assert output == ""
-    assert "create Profile paper" in str(interaction.summary)
-    assert context == "首页 / 系统维护 / 高级设置  ›"
-    assert focused
-
-
-def test_risk_preview_collects_legacy_arguments_in_one_input(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, str, dict[str, str]]] = []
-
-    def execute(state: object, prompt: object) -> dict[str, str]:
-        calls.append(
-            (
-                getattr(prompt, "tool"),
-                getattr(prompt, "action"),
-                dict(getattr(prompt, "values")),
-            )
-        )
-        return {"decision": "allow"}
-
-    monkeypatch.setattr(operations, "execute_business", execute)
-
-    async def run() -> tuple[type[object], str, str, bool]:
-        app = KairosWorkbenchApp(_state())
-        async with app.run_test(size=(100, 30)) as pilot:
-            screen = app.screen
-            assert isinstance(screen, CommandLineScreen)
-            for value in ("6", "6", "1", "3", "policy.json", "request.json"):
-                screen.submit(value)
-            await pilot.pause(0.1)
-            return (
-                type(app.screen),
-                str(screen.query_one("#command-context", Static).render()),
-                _log_text(screen.query_one("#command-output", RichLog)),
-                screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
-            )
-
-    screen_type, context, output, focused = asyncio.run(run())
-    assert screen_type is CommandLineScreen
-    assert calls == [
-        (
-            "risk",
-            "preview",
-            {"policy": "policy.json", "request": "request.json"},
-        )
-    ]
-    assert context == "首页 / 系统维护 / Risk  ›"
-    assert "allow" in output
-    assert focused
-
-
-def test_integration_capability_and_nested_back_use_one_input(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        operations,
-        "execute_business",
-        lambda state, prompt: {"capability": getattr(prompt, "action")},
-    )
-
-    async def run() -> tuple[str, str]:
-        app = KairosWorkbenchApp(_state())
-        async with app.run_test(size=(100, 30)) as pilot:
-            screen = app.screen
-            assert isinstance(screen, CommandLineScreen)
-            for value in ("6", "6", "3", "2"):
-                screen.submit(value)
-            await pilot.pause(0.1)
-            result_context = str(screen.query_one("#command-context", Static).render())
-            screen.submit("/back")
-            return (
-                result_context,
-                str(screen.query_one("#command-context", Static).render()),
-            )
-
-    result_context, after_back = asyncio.run(run())
-    assert result_context == "首页 / 系统维护 / Provider 集成  ›"
-    assert after_back == "首页 / 系统维护 / 风控与集成工具  ›"
-
-
-def test_operations_service_selection_actions_and_back_use_one_input(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        operations,
-        "list_services",
-        lambda state: ({"component": "market", "status": "ready", "pid": 42},),
-    )
-
-    async def run() -> tuple[type[object], str, str, bool]:
-        app = KairosWorkbenchApp(_state())
-        async with app.run_test(size=(100, 30)) as pilot:
-            screen = app.screen
-            assert isinstance(screen, CommandLineScreen)
-            for value in ("6", "3"):
-                screen.submit(value)
-                await pilot.pause(0.1)
             assert screen.session.context == ("operations", "services")
             screen.submit("1")
             await pilot.pause()
             selected = str(screen.query_one("#command-context", Static).render())
             selected_actions = interaction_copy_text(screen.session.interaction)
+            interaction = screen.session.interaction
+            has_summary = (
+                isinstance(interaction, ChoiceInteraction)
+                and interaction.summary is not None
+            )
+            selected_status = str(
+                screen.query_one("#command-status", Static).render()
+            )
             screen.submit("/back")
             await pilot.pause()
             services = str(screen.query_one("#command-context", Static).render())
@@ -241,16 +185,113 @@ def test_operations_service_selection_actions_and_back_use_one_input(
                 selected_actions,
                 services,
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
+                has_summary,
+                selected_status,
             )
 
-    screen_type, selected, selected_actions, services, focused = asyncio.run(run())
+    (
+        screen_type,
+        selected,
+        selected_actions,
+        services,
+        focused,
+        has_summary,
+        selected_status,
+    ) = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert selected == "首页 / 系统维护 / market  ›"
+    assert selected == "首页 / 运行中心 / 标的服务  ›"
     assert "停止" in selected_actions
     assert "重启" in selected_actions
-    assert "reference" not in selected_actions
-    assert services == "首页 / 系统维护 / 后台服务  ›"
+    assert "行情服务" not in selected_actions
+    assert not has_summary
+    assert "标的服务 · 运行中" in selected_status
+    assert services == "首页 / 运行中心 / 项目共享服务  ›"
     assert focused
+
+
+def test_operations_center_instance_uses_shared_instance_detail() -> None:
+    async def run() -> tuple[tuple[str, ...], str, int, tuple[str, ...]]:
+        state = _state()
+        assert state.snapshot is not None
+        state.snapshot = ObserveSnapshot(
+            workspace_id="trader",
+            shared_services=state.snapshot.shared_services,
+            active_instances=(
+                {
+                    "launch_id": "btc-paper",
+                    "instance_id": "run-003",
+                    "mode": "paper",
+                    "state": "running",
+                },
+            ),
+            support_processes=state.snapshot.support_processes,
+        )
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("6")
+            await pilot.pause(0.1)
+            screen.submit("2")
+            await pilot.pause()
+            assert screen.session.context == ("operations", "instances")
+            screen.submit("1")
+            await pilot.pause()
+            detail_context = screen.session.context
+            copy = interaction_copy_text(screen.session.interaction)
+            activity_count = len(screen._output().activities)
+            screen.submit("/back")
+            await pilot.pause()
+            return (
+                detail_context,
+                copy,
+                activity_count,
+                screen.session.context,
+            )
+
+    context, copy, activity_count, after_back = asyncio.run(run())
+    assert context == ("strategy", "instance")
+    assert "btc-paper" in copy
+    assert "实例概览" in copy
+    assert activity_count == 0
+    assert after_back == ("operations", "instances")
+
+
+def test_support_process_detail_is_observable_but_not_lifecycle_control() -> None:
+    async def run() -> tuple[str, str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("6")
+            await pilot.pause(0.1)
+            screen.submit("3")
+            await pilot.pause()
+            assert screen.session.context == ("operations", "supports")
+            group_status = str(
+                screen.query_one("#command-status", Static).render()
+            )
+            screen.submit("1")
+            await pilot.pause()
+            detail = interaction_copy_text(screen.session.interaction)
+            context = str(screen.query_one("#command-context", Static).render())
+            screen.submit("/back")
+            await pilot.pause()
+            return (
+                group_status,
+                context,
+                detail,
+                str(screen.query_one("#command-context", Static).render()),
+            )
+
+    group_status, context, detail, after_back = asyncio.run(run())
+    assert group_status == "就绪"
+    assert context == "首页 / 运行中心 / System Supervisor  ›"
+    assert "System Supervisor" in detail
+    assert "不提供普通服务启停" in detail
+    assert "停止" not in detail
+    assert "重启" not in detail
+    assert after_back == "首页 / 运行中心 / 支撑进程  ›"
 
 
 def test_service_status_copy_and_actions_follow_lifecycle_state() -> None:
@@ -287,21 +328,13 @@ def test_service_status_copy_and_actions_follow_lifecycle_state() -> None:
     assert {item.id for item in service_actions(running)} >= {"stop", "restart"}
 
 
-def test_stopped_service_detail_keeps_one_action_list_at_60x20(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        operations,
-        "list_services",
-        lambda state: ({"component": "market", "status": "not_running"},),
-    )
-
+def test_stopped_service_detail_keeps_one_action_list_at_60x20() -> None:
     async def run() -> tuple[type[object], int, int, int, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(60, 20)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("6", "3", "1"):
+            for value in ("6", "1", "2"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             return (
@@ -377,7 +410,21 @@ def test_operations_service_logs_flow_in_content_without_activity_pollution(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("6", "3", "1", "5"):
+            for value in ("6", "1", "2"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            # The fixture marks Market stopped, so inject a running detail to
+            # exercise the finite log-follow controls without a real process.
+            screen.session.operations.selected_service_status = service_status_view(
+                {
+                    "component": "market",
+                    "status": "ready",
+                    "pid": 42,
+                    "logs_available": True,
+                }
+            )
+            screen._show_context()
+            for value in ("5",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             await pilot.pause(1.1)
@@ -406,12 +453,12 @@ def test_operations_service_logs_flow_in_content_without_activity_pollution(
     )
     assert "market-log" in live
     assert "market-log" not in exported
-    assert activity_count == 1
+    assert activity_count == 0
     assert unseen > 0
     assert refresh_count >= 2
     assert worker_closed
-    assert "已结束 market 日志跟随" in exported
-    assert context == "首页 / 系统维护 / market  ›"
+    assert "已结束行情服务日志跟随" in exported
+    assert context == "首页 / 运行中心 / 行情服务  ›"
 
 
 def test_operations_log_rotation_does_not_hide_repeated_first_line() -> None:

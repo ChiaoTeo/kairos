@@ -8,12 +8,13 @@ from ..widgets import ActionItem
 HOME_ACTIONS = (
     ActionItem("market", "查看市场行情", "查看实时报价、历史行情和行情回放", "1"),
     ActionItem("reference", "搜索交易标的", "查找股票、期货、期权和交易所", "2"),
-    ActionItem("strategy", "创建并运行策略", "选择策略、设置参数并启动运行", "3"),
+    ActionItem("strategy", "策略管理", "管理运行方案、启动实例并查看运行历史", "3"),
     ActionItem(
         "resources", "运行前检查", "检查账户、行情、模型连接和通知是否就绪", "4"
     ),
     ActionItem("research", "数据与回测", "准备研究数据并运行策略回测", "5"),
-    ActionItem("operations", "系统维护", "管理工作区和后台服务，诊断运行问题", "6"),
+    ActionItem("operations", "运行中心", "查看当前运行拓扑、依赖和异常", "6"),
+    ActionItem("project", "项目管理", "查看、检查、创建、打开或切换项目", "7"),
 )
 
 MARKET_ACTIONS = (
@@ -40,10 +41,7 @@ REFERENCE_ACTIONS = (
 )
 
 STRATEGY_ACTIONS = (
-    ActionItem("launch", "运行列表与控制", "配置、启动、停止和诊断 Launch", "1"),
-    ActionItem("observe", "打开运行观测", "查看组件、Launch 与行情状态", "2"),
-    ActionItem("once", "刷新一次运行快照", "读取当前 Workspace 状态", "3"),
-    ActionItem("doctor", "推荐诊断动作", "根据当前状态给出下一步", "4"),
+    ActionItem("launch", "运行方案", "配置、校验、启动并查看运行实例", "1"),
 )
 
 RESOURCE_ACTIONS = (
@@ -60,12 +58,7 @@ RESEARCH_ACTIONS = (
 )
 
 OPERATIONS_ACTIONS = (
-    ActionItem("project", "工作区管理", "创建、检查或安装工作区模板", "1"),
-    ActionItem("observe", "运行状态", "查看后台服务、启动任务和行情状态", "2"),
-    ActionItem("services", "后台服务", "启动、停止或重启基础数据与行情服务", "3"),
-    ActionItem("doctor", "问题诊断", "检查服务连接、健康状态和进程占用", "4"),
-    ActionItem("config", "高级设置", "配置路径、运行方案和模型连接", "5"),
-    ActionItem("business", "风控与集成工具", "查看风控、资金与外部服务集成", "6"),
+    ActionItem("refresh", "刷新运行结构", "重新读取活动实例、共享服务和支撑进程", "r"),
 )
 
 SECTION_ACTIONS: dict[str, tuple[ActionItem, ...]] = {
@@ -80,10 +73,10 @@ SECTION_ACTIONS: dict[str, tuple[ActionItem, ...]] = {
 SECTION_LABELS: dict[str, str] = {
     "market": "市场行情",
     "reference": "市场标的",
-    "strategy": "策略运行",
+    "strategy": "策略管理",
     "resources": "运行准备",
     "research": "数据研究",
-    "operations": "系统维护",
+    "operations": "运行中心",
 }
 
 

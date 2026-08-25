@@ -18,6 +18,7 @@ class ResultKind(StrEnum):
     REFERENCE_RELATED = "reference-related"
     KAIROS_COMMAND = "kairos-command"
     OPERATIONS_SERVICES = "operations-services"
+    OPERATIONS_OVERVIEW = "operations-overview"
     OPERATIONS = "operations-result"
     OPERATIONS_PROJECT = "operations-project-result"
     OPERATIONS_PROFILE = "operations-profile-result"

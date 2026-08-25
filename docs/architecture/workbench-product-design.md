@@ -8,7 +8,7 @@ Application/Contract 边界和显式 CLI 约束仍以项目架构规则及
 ## 1. 产品定位
 
 Kairos Workbench 是面向人工操作的统一终端工作台。它帮助用户在不知道完整 CLI 命令和内部模块
-结构的前提下，完成行情、标的、Launch、运行准备、数据研究以及服务与进程操作。
+结构的前提下，完成行情、标的、运行方案、运行准备、数据研究以及运行中心操作。
 
 Workbench 是现有业务 Application 与 Contract 的输入适配和结果展示层，不是新的业务 API、业务
 状态所有者或命令执行器。它只有一个 `KairosWorkbenchApp`、一个主工作屏和一个持续可见的输入框。
@@ -38,27 +38,32 @@ Workbench 同时服务三类使用者：
 - 日常操作者：需要快速查看行情、控制 Launch、管理账户和诊断服务。
 - 研究与开发人员：需要准备数据、运行研究流程、检查系统状态并把证据交给 Agent。
 
-首页固定为六个稳定任务入口，不随内部命令或模块数量增长：
+打开项目后的首页固定为七个稳定入口，不随内部命令或模块数量增长：
 
 | 编号 | 产品入口 | 用户要完成的工作 | 主要业务所有者 |
 | --- | --- | --- | --- |
 | 1 | 查看市场行情 | 搜索报价、下载历史行情、浏览数据集、回放与连接运行服务 | Market、Reference、Integration |
 | 2 | 查找市场标的 | 查找资产、交易所、合约、Market 与期权链 | Reference |
-| 3 | Launch | 创建和配置 Launch、启动 Instance、查看组件、跟随输出和控制执行 | Workspace/System、Execution、Market |
+| 3 | 策略管理 | 创建和配置运行方案、启动运行实例、查看组件、跟随输出和控制执行 | Workspace/System、Execution、Market |
 | 4 | 运行前检查 | 配置账户、市场数据、模型、通知并检查连接 | Account、Integration、Workspace/System |
 | 5 | 数据与回测 | 管理 Dataset、Research Plan 和 Gate | Data/Research 所属 Application |
-| 6 | 服务与进程 | 查看项目共享服务、运行中的 Launch、支撑进程和日志 | Workspace/System |
+| 6 | 运行中心 | 查看活动运行实例、项目共享服务、支撑进程、依赖和日志 | Workspace/System |
+| 7 | 项目管理 | 查看、检查、创建、打开或切换项目，安装项目模板 | Workspace/System |
 
 首页只负责分组和导航，不拥有这些业务行为。
 
+项目管理不隶属于“运行中心”。当前项目是整个 Workbench 的全局上下文，必须在正常首页持续可见；
+首页第 7 项提供可发现的项目管理入口，`p` / `/project` 提供同一入口的快捷访问。项目管理虽然出现在
+首页，但不拥有行情、Launch 或服务状态，只负责项目生命周期和项目文件检查。
+
 ### 2.1 产品对象与术语
 
-Workbench 使用项目、Launch、Instance、项目共享服务和支撑进程表达运行结构：
+Workbench 使用项目、运行方案、运行实例、项目共享服务和支撑进程表达运行结构：
 
 ```text
 项目
-  -> Launch
-       -> Instance
+  -> 运行方案（底层兼容名 Launch）
+       -> 运行实例（Launch Instance）
             -> Strategy
             -> Account × N
             -> Risk
@@ -73,15 +78,35 @@ Workbench 使用项目、Launch、Instance、项目共享服务和支撑进程�
        -> Aeron
 ```
 
-- `Launch` 是可重复启动的规范化运行配置，也是产品中的策略运行对象；界面不得再把“策略运行”和
-  `Launch` 表达为两个层级。
-- `Instance` 是某个 Launch 的一次实际运行。
-- `Strategy` 是 Instance 内的进程和业务组件，不等于 Launch。
+- `运行方案` 是可重复启动的规范化运行配置，底层继续兼容 `Launch` 命令和存储名称。
+- `运行实例` 是某个运行方案的一次实际执行；启动和重启都会创建新的实例身份。
+- `Strategy` 是运行实例内的进程和业务组件，不等于运行方案。
 - “项目”是面向用户的顶层上下文；`Workspace` 只在技术证据或需要精确说明资源作用域时出现。
 - “项目共享服务”只指具有 Workspace identity 的 Reference 和共享 Market。
 - System Supervisor 和 Aeron 是支撑进程，可观察但不是普通业务服务。
 - `Profile` 不是统一产品对象。Market runtime profile、Agent Profile 和通用 Config Profile 必须分别
   由自己的业务场景解释，不能合并为一个“管理 Profiles”入口。
+
+### 2.2 全局项目上下文
+
+项目决定业务数据、Launch 配置、运行资源和 transcript 的作用域，因此它不是某个业务任务下面的普通
+子菜单。全局顶栏只持续展示产品身份与当前项目，例如 `KAIROS / trader`；不将 `p 项目管理`
+这类导航动作拼接到项目身份上，也不在顶栏复制页面位置。当前页面由面包屑唯一表达，瞬时
+任务状态由右侧状态区表达。
+
+正常首页必须在固定项目摘要中展示：
+
+- 面向用户的项目名称；
+- 项目根路径或可消歧的缩略路径；
+- 项目配置是否可用；
+- 进入“项目管理”的 `p` / `/project` 提示；该提示仅属于首页摘要、项目管理入口和帮助，
+  不得常驻在全局顶栏。
+
+首页第 7 项“项目管理”和 `p` / `/project` 必须进入完全相同的上下文，不得维护两套项目流程。
+
+项目摘要只保存已解析的 Workspace identity 和展示事实，不复制项目配置或业务状态。用户切换项目后，
+Workbench 必须重新解析 Workspace，清理旧项目的临时选择、持续刷新和未完成向导，再以新项目进入正常
+首页；不得让旧项目的 Launch、服务或资源选择泄漏到新项目上下文。
 
 ## 3. 信息架构
 
@@ -111,6 +136,10 @@ Application、Actor 或 Contract 拥有；界面不得成为第二个可变业�
       -> 已选对象
         -> 叶子操作
           -> 参数 / 确认 / 执行 / 结果
+
+全局项目上下文
+  -> 项目管理
+    -> 项目概览 / 检查 / 创建 / 打开或切换 / 安装模板
 ```
 
 并非每个流程都需要所有层级。对象唯一且业务规则允许时可以直接进入详情；存在多个候选或选择会改变
@@ -130,17 +159,41 @@ Backtest 和 Paper 的 Market 默认属于 Instance，Live 的 Market 默认项�
 socket 或文件而被解释为项目共享组件。
 
 不同作用域不得因文件存在、服务失败或 Provider 不可用而自动互相回退。当前作用域必须通过面包屑、
-对象摘要或确认信息对用户可见。从“服务与进程”选择一个 Launch 时，必须进入与 Launch 产品入口共用的
-Launch/Instance 页面，不得建立第二套运行详情或组件控制模型。
+对象摘要或确认信息对用户可见。从“运行中心”选择一个活动运行实例时，必须进入与“策略管理”共用的
+实例详情，不得建立第二套运行详情或组件控制模型。
 
 ### 3.4 无项目状态
 
 `kairos interactive` 无法解析项目时仍然进入同一个 Workbench App，但不得展示依赖 Workspace 的正常
-首页。Interaction Region 只提供创建回测示例项目、创建空项目、打开指定项目和退出。创建或打开成功后
-刷新项目摘要并进入正常首页。
+首页。Interaction Region 直接进入项目启动状态，只提供创建回测示例项目、创建空项目、打开指定项目
+和退出。创建或打开成功后刷新项目摘要并进入正常首页；项目存在之前不得展示或进入其余六个项目内
+任务。
 
-项目创建、模板安装和项目选择属于 Workbench 启动状态，不属于“服务与进程”。需要 Workspace 的
-`kairos observe`、Launch attach 等深链接继续失败关闭并返回明确的项目解析错误。
+项目创建、模板安装和项目选择属于全局项目管理；无项目时由启动状态承载，已有项目时由 `p` /
+`/project` 进入。它们不属于“运行中心”。需要 Workspace 的 `kairos observe`、Launch attach 等
+深链接继续失败关闭并返回明确的项目解析错误。
+
+### 3.5 项目管理
+
+已有项目时，用户可以从固定项目摘要、`p` 或 `/project` 进入同一套项目管理上下文：
+
+```text
+项目管理
+
+当前项目  trader-demo
+路径      …/trader-demo/.kairos
+状态      配置正常
+
+[1] 项目概览  · 查看身份、路径、版本和关键配置
+[2] 检查项目  · 检查目录结构、配置和必要资源
+[3] 切换项目  · 打开另一个已有项目
+[4] 创建项目  · 创建空项目或从模板创建
+[5] 安装模板  · 安装可复用的项目模板
+```
+
+“检查项目”只诊断项目文件、目录和配置，不承担 Workspace 服务或 Launch 的运行诊断。项目管理不得
+暴露通用配置清单、内部 Application 操作目录或未解释的 Profile 管理。成功创建或打开项目后必须明确
+展示新项目身份，并返回该项目的正常首页；取消时保留原项目上下文。
 
 ## 4. 主界面结构
 
@@ -148,7 +201,7 @@ Workbench 使用一个垂直布局，从上到下包含：
 
 | 区域 | 职责 | 内容生命周期 |
 | --- | --- | --- |
-| Workspace 摘要 | 展示当前 Workspace 身份和必要的全局状态 | 会话持续可见 |
+| 项目摘要 | 展示当前项目身份、配置结论和项目管理入口 | 会话持续可见 |
 | Activity Stream | 保留当前会话已经到达终态的操作、结果和证据 | 追加式，可清屏和复制 |
 | Interaction Region | 展示当前选择、参数、确认、运行态或持续控制 | 随交互状态原地替换 |
 | 状态栏 | 展示等待、执行中、成功、失败或暂停等瞬时状态 | 单行覆盖更新 |
@@ -295,6 +348,7 @@ dispatch、成功、错误和取消四处重复登记。
 | `/copy-history` | 只复制 Activity Stream |
 | `/bottom` | 跳到最新 Activity 并恢复自动跟随 |
 | `/transcript` | 展示当前脱敏 transcript 路径 |
+| `/project` | 进入全局项目管理；不向 Activity Stream 追加导航记录 |
 | `/exit` | 无任务时退出；有任务时进入明确的取消或退出确认 |
 
 ## 7. 参数、验证与向导
@@ -406,7 +460,7 @@ Secret 输入必须满足：
 `AppendActivity`、`SetInteraction`、`RunOperation`、`SetStatus`，以及两个仅用于启动 Market/Launch 刷新的
 Control adapter effect。Screen 负责应用 effect 和管理 Textual Worker，不推断产品结果含义。
 
-## 10. 六大产品入口
+## 10. 七个首页入口
 
 ### 10.1 市场行情
 
@@ -430,11 +484,11 @@ Reference 入口提供资产、交易所、合约、Market 和期权链。资产
 Reference generation、publication 和 Provider 同步状态属于项目共享服务的运行信息，不应混入普通
 标的详情。
 
-### 10.3 Launch
+### 10.3 策略管理
 
-Launch 入口围绕 Launch 和运行 Instance 组织：
+策略管理围绕运行方案和运行实例组织：
 
-- 列出、创建和编辑 Launch；
+- 列出、创建和编辑运行方案；
 - 选择 backtest、paper 或 live 模式；
 - 启动、停止、等待和诊断实例；
 - 查看组件与时间线；
@@ -444,14 +498,14 @@ Launch 入口围绕 Launch 和运行 Instance 组织：
 运行态 Execution 必须绑定具体 Launch Instance。Standalone 订单操作属于明确的账户或 Execution
 作用域，不得因找不到实例而自动切换。
 
-Launch 列表同时合并已发布配置、草稿和运行注册记录。选择 Launch 后先进入唯一的 Launch 详情；
-当前 Instance 和历史 Instance 是这个详情的下一级对象。界面可以用“策略运行”解释 Launch，但不得再
-创建一个位于 Launch 之上或之下的“策略运行”对象。
+运行方案列表同时合并已发布配置和草稿；运行注册记录作为该方案的活动或历史实例展示。选择运行方案
+后进入唯一的方案详情，活动实例和历史实例是下一级对象。界面不得把带 `instance_id` 的记录称为
+“正在运行的 Launch”。
 
 Instance 组件默认只提供状态、日志、current view 和所属业务 Contract 允许的动作。Account、Risk、
 Execution、Capital 和实例级 Market 的生命周期由 Launch 统一管理，不提供局部启动、停止或重启入口。
 项目共享 Market 可以从 Instance 详情进入其 connected 业务视图，但其 Workspace 生命周期仍由
-“服务与进程”负责。
+“运行中心”负责。
 
 ### 10.4 运行准备
 
@@ -470,20 +524,19 @@ Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不�
 
 会改变数据或发布状态的步骤必须显示目标、计划 hash 或证据文件，并根据风险进入确认。
 
-### 10.6 服务与进程
+### 10.6 运行中心
 
-“服务与进程”是当前项目运行结构的观察与 Workspace 服务控制入口，不是项目设置、CLI 命令目录或
-剩余能力集合。进入后直接显示按作用域分组的运行清单，不再先展示“运行状态、后台服务、问题诊断、
-高级设置”等功能菜单：
+“运行中心”是当前项目实际运行拓扑的观察与 Workspace 服务控制入口，不是项目设置、运行方案配置、
+CLI 命令目录或剩余能力集合。进入后直接显示按作用域分组的当前运行清单：
 
 ```text
-服务与进程
+运行中心
 
 项目共享服务
   Reference    运行中 · 持续运行
-  Market       运行中 · 按需启动 · 被 2 个 Launch 使用
+  Market       运行中 · 按需启动 · 被 2 个实例使用
 
-正在运行的 Launch
+活动运行实例
   btc-paper / run-003      Paper · 正常
   options-live / run-007   Live · Execution 异常
 
@@ -492,7 +545,7 @@ Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不�
   Aeron                     运行中
 ```
 
-选择正在运行的 Launch 后进入 10.3 定义的同一个 Launch/Instance 页面。支撑进程只提供状态、日志和
+选择活动运行实例后进入 10.3 定义的同一个实例详情。支撑进程只提供状态、日志和
 技术证据，不作为普通业务服务提供任意启停。`kairos observe` 直接进入这个页面并持续刷新；Workbench
 中的 `/observe` 使用同一个分层结果模型；`observe --once` 继续保留机器可读输出。
 
@@ -519,15 +572,15 @@ Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不�
 System Application 用例完成启动、等待就绪、登记 desired state 和启动或复用 Supervisor。Workbench
 不得只调用 `ensure_running()`，否则它与 `kairos system up` 具有不同生命周期语义。
 
-“停止服务”必须先检查活动 Launch 依赖；存在依赖时拒绝并列出 Launch。允许停止时先取消 desired
+“停止服务”必须先检查活动运行实例依赖；存在依赖时拒绝并列出实例。允许停止时先取消 desired
 state，再请求服务安全停止。“重启服务”同样先通过依赖安全检查，成功后保持重启前的 desired 语义。
 Workbench 与显式 `system up/down/restart` 必须调用同一个 Application 用例，不得各自复制部分流程，
 也不得通过 Typer executor 互相调用。
 
-#### 10.6.2 Launch 与支撑进程
+#### 10.6.2 运行实例与支撑进程
 
-正在运行的 Launch 用 `launch_id / instance_id` 标识，摘要展示 mode、整体状态和异常组件。选择后进入
-Launch 页面，由 Launch 统一停止和重启整个 Instance。服务与进程页面不得给 Instance-owned Account、
+活动运行实例用 `launch_id / instance_id` 标识，摘要展示 mode、整体状态和异常组件。选择后进入实例
+详情，由 Launch Application 统一停止或恢复整个 Instance。运行中心不得给 Instance-owned Account、
 Risk、Execution、Capital 或 Market 提供通用局部生命周期操作。
 
 System Supervisor 展示当前 desired 服务、恢复状态和最近错误；Aeron 展示进程状态和日志。它们是
@@ -547,7 +600,7 @@ Workbench 不提供脱离对象的全局“问题诊断”入口。只有 Applic
 
 #### 10.6.4 不属于本入口的能力
 
-- 项目创建、打开和模板安装属于无项目启动状态；
+- 项目创建、打开、切换和模板安装属于全局项目管理；无项目时直接显示为启动状态；
 - 账户、市场数据连接、模型连接和通知属于运行前检查；
 - Market runtime profile 属于市场连接或 Launch，Agent Profile 属于 Agent 资源；
 - Risk、Capital 和 Integration 的业务动作属于具体 Launch Instance、资源配置或显式 standalone CLI；
@@ -559,6 +612,11 @@ Capital 等业务语义，也不得绕过业务 Contract 调用其他业务主�
 
 Workbench 不把 Workspace runtime 伪装成保留 ID `kairos-system` 的隐藏 Launch。Workspace 服务、
 Supervisor 和普通 Launch 使用各自真实的 identity 与生命周期呈现。
+
+### 10.7 项目管理
+
+项目管理复用 3.4 和 3.5 定义的启动与全局项目上下文。首页第 7 项、项目摘要中的快捷提示以及
+`p` / `/project` 进入同一流程。项目管理不复制“运行中心”的运行状态、服务诊断或恢复动作。
 
 ## 11. Transcript 与 Agent 协作
 
@@ -610,7 +668,10 @@ port。只有用户任务确实无法归入现有产品入口时，才讨论增�
 ### 14.1 通用交互
 
 - 首页输入编号只更新动作列表和面包屑，内容区不新增菜单或原始输入。
-- 无法解析项目时不展示正常首页，只提供创建、打开项目和退出。
+- 正常首页持续展示当前项目，并可通过 `p` / `/project` 进入项目管理。
+- 正常首页第 7 项进入与 `p` / `/project` 相同的项目管理上下文。
+- 无法解析项目时不展示正常首页，只提供创建、打开和退出，其余六个项目内入口不可见且不可达。
+- 切换项目会停止旧项目的持续刷新、清理临时选择和向导，并以新项目身份返回首页。
 - 子菜单导航、`/back` 和 `/home` 不污染内容区。
 - 叶子操作参数未齐全时，内容区不逐项回显输入。
 - 参数齐全后只写入一次完整、稳定、脱敏的操作记录。
@@ -636,7 +697,7 @@ port。只有用户任务确实无法归入现有产品入口时，才讨论增�
 - 有限操作最多形成一个终态 Activity，自动刷新不追加 Activity。
 - Observe 结果分别表达项目共享服务、Launch Instance 和支撑进程，不在 Workspace scope 虚构
   Account、Risk、Execution 或 Capital 状态。
-- “服务与进程”和 Launch 入口选择同一个 Launch 时进入同一套 Launch/Instance Session 与页面。
+- “运行中心”和“策略管理”选择同一个实例时进入同一套 Instance Session 与页面。
 - Workspace 服务启动登记 Supervisor desired state；停止先取消 desired state；停止和重启都执行活动
   Launch 依赖检查。
 - Instance-owned 组件只通过所属 Launch Instance 定位，Workbench 不提供局部生命周期捷径。

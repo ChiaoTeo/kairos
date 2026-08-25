@@ -106,7 +106,7 @@ def load_launches(state: Any) -> tuple[dict[str, Any], ...]:
     return tuple(by_id[key] for key in sorted(by_id))
 
 
-def execute(state: Any, record: dict[str, Any], action: str) -> Any:
+def execute(state: Any, record: Mapping[str, Any], action: str) -> Any:
     owner = _owner(state)
     launch_id = str(record["launch_id"])
     runtime = LaunchRuntimeApplication(owner)
@@ -245,7 +245,7 @@ def send_python(state: Any, launch_id: str, source: str) -> dict[str, Any]:
     )
 
 
-def preview(record: dict[str, Any], action: str) -> dict[str, Any]:
+def preview(record: Mapping[str, Any], action: str) -> dict[str, Any]:
     return {
         "status": "preview",
         "action": action,

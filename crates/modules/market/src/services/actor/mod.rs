@@ -5,4 +5,4 @@ mod state;
 
 pub(crate) use checkpoint::ReplayCheckpoint;
 pub use state::MarketActor;
-pub(crate) use state::sources::{AttachedSource, BusinessSubscriptionKey, PendingSourceRequest};
+pub(crate) use state::sources::{AttachedSource, PendingSourceRequest, PhysicalSubscriptionKey};

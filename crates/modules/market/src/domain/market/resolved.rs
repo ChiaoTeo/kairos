@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::{AttachedMarketDataRoute, ProviderRouteBinding, ResolvedMarketDataRoute};
 use crate::domain::observation::ObservationScope;
 use crate::domain::source::MarketFeedId;
+use crate::domain::subscription::ObservationSelector;
 
 /// Canonical Market facts and the providers able to satisfy Market observations.
 /// Provider-native product, symbol and runtime feed identity remain private.
@@ -37,6 +38,8 @@ pub struct ResolvedMarket {
     pub(crate) runtime_routes: BTreeMap<Provider, ProviderRouteBinding>,
     #[serde(skip)]
     pub(crate) selected_provider: Option<Provider>,
+    #[serde(skip)]
+    pub(crate) selected_observations: BTreeSet<ObservationSelector>,
     pub status: ReferenceStatus,
 }
 
@@ -70,6 +73,7 @@ impl ResolvedMarket {
             data_routes: BTreeSet::from([data_route]),
             runtime_routes,
             selected_provider: None,
+            selected_observations: BTreeSet::new(),
             status: ReferenceStatus::Active,
         };
         value.validate()?;
@@ -151,6 +155,7 @@ impl ResolvedMarket {
             data_routes,
             runtime_routes,
             selected_provider: None,
+            selected_observations: BTreeSet::new(),
             status: ReferenceStatus::Active,
         };
         value.validate()?;
@@ -185,6 +190,7 @@ impl ResolvedMarket {
             data_routes: BTreeSet::new(),
             runtime_routes,
             selected_provider: None,
+            selected_observations: BTreeSet::new(),
             status: ReferenceStatus::Active,
         };
         value.validate()?;
@@ -223,6 +229,7 @@ impl ResolvedMarket {
             data_routes: BTreeSet::new(),
             runtime_routes,
             selected_provider: None,
+            selected_observations: BTreeSet::new(),
             status: ReferenceStatus::Active,
         };
         value.validate()?;
@@ -274,6 +281,75 @@ impl ResolvedMarket {
                     .then(|| self.runtime_routes.values().next())
                     .flatten()
             })
+    }
+
+    pub(crate) fn select_observations(
+        &mut self,
+        selectors: &[ObservationSelector],
+    ) -> Result<(), String> {
+        let route = self
+            .runtime_route()
+            .ok_or_else(|| "resolved Market has no runtime provider binding".to_string())?;
+        let requested: BTreeSet<ObservationSelector> =
+            if selectors.is_empty() || selectors.iter().any(|value| value.kind.is_none()) {
+                let capabilities = if route.observation_capabilities.is_empty() {
+                    BTreeSet::from([crate::ObservationKind::Quote])
+                } else {
+                    route.observation_capabilities.clone()
+                };
+                capabilities
+                    .into_iter()
+                    .map(|kind| ObservationSelector {
+                        kind: Some(kind),
+                        qualifier: None,
+                    })
+                    .collect()
+            } else {
+                selectors
+                    .iter()
+                    .map(|selector| {
+                        let kind = selector.kind.expect("wildcards were expanded above");
+                        let supported = route.observation_capabilities.is_empty()
+                            || route.observation_capabilities.contains(&kind)
+                            || matches!(
+                                kind,
+                                crate::ObservationKind::Rate
+                                    if route
+                                        .observation_capabilities
+                                        .contains(&crate::ObservationKind::FundingRate)
+                            )
+                            || matches!(
+                                kind,
+                                crate::ObservationKind::FundingRate
+                                    if route
+                                        .observation_capabilities
+                                        .contains(&crate::ObservationKind::Rate)
+                            );
+                        supported
+                            .then(|| selector.clone())
+                            .ok_or_else(|| format!("provider route does not support {kind:?}"))
+                    })
+                    .collect::<Result<_, _>>()?
+            };
+        if requested.is_empty() {
+            return Err("provider route exposes no subscribable observations".into());
+        }
+        self.selected_observations = requested;
+        Ok(())
+    }
+
+    pub(crate) fn observation_requirements(&self) -> BTreeSet<ObservationSelector> {
+        if !self.selected_observations.is_empty() {
+            return self.selected_observations.clone();
+        }
+        self.runtime_route()
+            .into_iter()
+            .flat_map(|route| route.observation_capabilities.iter().copied())
+            .map(|kind| ObservationSelector {
+                kind: Some(kind),
+                qualifier: None,
+            })
+            .collect()
     }
 
     pub(crate) fn retain_provider(&mut self, provider: &Provider) -> bool {

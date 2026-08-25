@@ -8,20 +8,31 @@ from typing import Any
 
 from kairospy.system.apps.components.application import ComponentProcessApplication
 from kairospy.system.apps.configuration.application import ConfigApplication
-from kairospy.system.apps.launch.application import (
-    WorkspaceComponentDependencyApplication,
-)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.system.apps.workspace_services import WorkspaceServiceApplication
 
 from ....widgets import ActionItem
 
 
 PROJECT_ACTIONS = (
-    ActionItem("status", "查看项目状态", "Workspace 身份与路径", "1"),
-    ActionItem("init", "创建项目", "逐步输入目录、Workspace ID 与模板", "2"),
-    ActionItem("scaffold", "安装示例模板", "安装可运行的 backtest 示例", "3"),
-    ActionItem("doctor", "运行项目诊断", "检查 Launch 配置与运行准备", "4"),
+    ActionItem("status", "项目概览", "查看项目身份、路径和 Workspace 位置", "1"),
+    ActionItem("doctor", "检查项目", "检查目录、配置和必要资源", "2"),
+    ActionItem("open", "切换项目", "打开另一个已有项目", "3"),
+    ActionItem("init", "创建项目", "创建空项目或从模板创建", "4"),
+    ActionItem("scaffold", "安装模板", "为当前项目安装 backtest 示例", "5"),
 )
+
+PROJECT_START_ACTIONS = (
+    ActionItem("open", "打开项目", "选择一个已有项目", "1"),
+    ActionItem("init", "创建项目", "创建空项目或从模板创建", "2"),
+)
+
+
+def project_actions(*, has_project: bool) -> tuple[ActionItem, ...]:
+    """Expose only project actions valid for the current shell state."""
+
+    return PROJECT_ACTIONS if has_project else PROJECT_START_ACTIONS
+
 
 CONFIG_ACTIONS = (
     ActionItem("paths", "查看路径", "配置、状态、运行和日志目录", "1"),
@@ -60,6 +71,14 @@ class ProjectPromptState:
 
     def next_prompt(self) -> tuple[str, str, str] | None:
         if self.action == "scaffold":
+            return None
+        if self.action == "open" and "root" not in self.values:
+            return (
+                "root",
+                "项目目录",
+                "请输入已有项目目录；输入 /back 取消。",
+            )
+        if self.action == "open":
             return None
         for name, label, detail in (
             ("root", "项目目录", "例如 my-project；输入 /back 取消。"),
@@ -118,6 +137,17 @@ def execute_project(state: Any, action: str) -> Any:
 
 
 def execute_project_write(state: Any, prompt: ProjectPromptState) -> Any:
+    if prompt.action == "open":
+        owner = WorkspaceApplication().open(prompt.values["root"])
+        state.owner = owner
+        state.workspace_arg = Path(owner.paths.root)
+        state.refresh_snapshot()
+        return {
+            "status": "opened",
+            "workspace_id": owner.workspace_id,
+            "project_root": str(owner.paths.project_root),
+            "workspace_root": str(owner.paths.root),
+        }
     if prompt.action == "scaffold":
         owner = _owner(state)
         created = WorkspaceApplication().install_template(owner, template="backtest")
@@ -186,15 +216,16 @@ def execute_service(state: Any, component: str, action: str) -> Any:
     if action == "status":
         return application.list_status()[component]
     if action == "start":
-        application.ensure_running(component)
-        return application.list_status()[component]
+        return {
+            "component": component,
+            **WorkspaceServiceApplication(owner).start_and_keep_running(component),
+        }
     if action in {"stop", "restart"}:
-        WorkspaceComponentDependencyApplication(owner).require_clear(component, action)
         if action == "stop":
-            application.stop(component)
+            result = WorkspaceServiceApplication(owner).stop(component)
         else:
-            application.restart(component)
-        return application.list_status()[component]
+            result = WorkspaceServiceApplication(owner).restart(component)
+        return {"component": component, **result}
     if action in {"logs", "log-tail"}:
         return application.log_snapshot(
             component, limit=500 if action == "log-tail" else 200
@@ -202,16 +233,11 @@ def execute_service(state: Any, component: str, action: str) -> Any:
     if action == "diagnostics":
         return application.doctor()["components"][component]
     if action == "repair":
-        repaired = application.repair_component(component)
-        if repaired.get("status") != "repaired":
-            raise RuntimeError(str(repaired.get("reason") or "运行资源不可安全清理"))
-        return application.list_status()[component]
+        result = WorkspaceServiceApplication(owner).repair(component, start=False)
+        return {"component": component, **result}
     if action == "repair-start":
-        repaired = application.repair_component(component)
-        if repaired.get("status") != "repaired":
-            raise RuntimeError(str(repaired.get("reason") or "运行资源不可安全清理"))
-        application.ensure_running(component)
-        return application.list_status()[component]
+        result = WorkspaceServiceApplication(owner).repair(component, start=True)
+        return {"component": component, **result}
     raise ValueError(f"unknown service action: {action}")
 
 
@@ -225,8 +251,10 @@ __all__ = [
     "BUSINESS_ACTIONS",
     "CONFIG_ACTIONS",
     "PROJECT_ACTIONS",
+    "PROJECT_START_ACTIONS",
     "PROFILE_ACTIONS",
     "ProjectPromptState",
+    "project_actions",
     "execute_config",
     "execute_operation",
     "execute_project",

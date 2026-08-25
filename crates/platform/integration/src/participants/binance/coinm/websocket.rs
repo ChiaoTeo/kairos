@@ -1,4 +1,4 @@
-websocket_connection!(BinanceCoinMWebSocketConnection, "coinm.websocket");
+websocket_connection!(BinanceCoinMWebSocketConnection, "coinm.websocket", "coinm");
 market_websocket_capabilities!(BinanceCoinMWebSocketConnection, "coinm");
 
 user_websocket_connection!(

@@ -42,12 +42,34 @@ macro_rules! rest_connection {
 }
 
 macro_rules! websocket_connection {
-    ($name:ident, $domain:literal) => {
+    ($name:ident, $domain:literal, $family:literal) => {
         pub struct $name {
-            service: crate::services::participants::binance::socket::SocketService,
+            descriptor: crate::ConnectionDescriptor,
+            services: std::collections::BTreeMap<
+                crate::services::participants::binance::market_stream::StreamShard,
+                crate::services::participants::binance::socket::SocketService,
+            >,
+            policy: crate::services::participants::binance::market_stream::MarketStreamPolicy,
+            event_capacity: usize,
+            connected: bool,
             subscriptions: std::collections::BTreeMap<
                 crate::MarketSubscriptionId,
-                (Vec<crate::MarketFeed>, Vec<String>),
+                (
+                    Vec<crate::MarketFeed>,
+                    Vec<crate::services::participants::binance::market_stream::AssignedStream>,
+                ),
+            >,
+            stream_assignments: std::collections::BTreeMap<
+                crate::services::participants::binance::market_stream::PlannedStream,
+                crate::services::participants::binance::market_stream::StreamShard,
+            >,
+            stream_references: std::collections::BTreeMap<
+                crate::services::participants::binance::market_stream::PlannedStream,
+                u32,
+            >,
+            confirmed_streams: std::collections::BTreeMap<
+                crate::services::participants::binance::market_stream::StreamShard,
+                std::collections::BTreeSet<String>,
             >,
             pending_market_events:
                 crate::transport::websocket::InboundDispatcher<crate::MarketEvent>,
@@ -62,13 +84,38 @@ macro_rules! websocket_connection {
                 config: crate::participants::binance::BinanceWebSocketConfig,
             ) -> Result<Self, crate::IntegrationError> {
                 let descriptor = config.descriptor(connection_key, $domain)?;
+                let policy =
+                    crate::services::participants::binance::market_stream::MarketStreamPolicy::new(
+                        $family,
+                        &config.endpoint,
+                    )?;
+                let services = policy
+                    .initial_shards()
+                    .map(|(shard, endpoint)| {
+                        Ok((
+                            shard,
+                            crate::services::participants::binance::socket::SocketService::new(
+                                descriptor.clone(),
+                                endpoint,
+                                config.event_capacity,
+                            )?
+                            .with_market_policy(
+                                policy.max_incoming_messages_per_second(),
+                                policy.session_lifetime(),
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<_, crate::IntegrationError>>()?;
                 Ok(Self {
-                    service: crate::services::participants::binance::socket::SocketService::new(
-                        descriptor,
-                        config.endpoint,
-                        config.event_capacity,
-                    )?,
+                    descriptor,
+                    services,
+                    policy,
+                    event_capacity: config.event_capacity,
+                    connected: false,
                     subscriptions: std::collections::BTreeMap::new(),
+                    stream_assignments: std::collections::BTreeMap::new(),
+                    stream_references: std::collections::BTreeMap::new(),
+                    confirmed_streams: std::collections::BTreeMap::new(),
                     pending_market_events:
                         crate::transport::websocket::InboundDispatcher::new(
                             config.event_capacity,
@@ -80,7 +127,25 @@ macro_rules! websocket_connection {
             }
 
             pub fn descriptor(&self) -> &crate::ConnectionDescriptor {
-                self.service.descriptor()
+                &self.descriptor
+            }
+
+            fn socket_for_shard(
+                &self,
+                shard: crate::services::participants::binance::market_stream::StreamShard,
+            ) -> Result<
+                crate::services::participants::binance::socket::SocketService,
+                crate::IntegrationError,
+            > {
+                crate::services::participants::binance::socket::SocketService::new(
+                    self.descriptor.clone(),
+                    self.policy.endpoint(shard.route)?,
+                    self.event_capacity,
+                )?
+                .with_market_policy(
+                    self.policy.max_incoming_messages_per_second(),
+                    self.policy.session_lifetime(),
+                )
             }
 
             /// Seed the last update id from a REST depth snapshot before
@@ -99,6 +164,21 @@ macro_rules! websocket_connection {
                 events: impl IntoIterator<Item = crate::MarketEvent>,
             ) -> Result<(), crate::IntegrationError> {
                 for event in events {
+                    // Options underlying-level streams fan out every contract;
+                    // retain only the contract/kind demanded by Market. Other
+                    // Binance products expose symbol-scoped streams and keep
+                    // their existing direct event behavior.
+                    let demanded = self.policy.family() != "options"
+                        || self.subscriptions.values().any(|(feeds, _)| {
+                            feeds.iter().any(|feed| {
+                                crate::services::participants::binance::market_stream::feed_accepts_event(
+                                    feed, &event,
+                                )
+                            })
+                        });
+                    if !demanded {
+                        continue;
+                    }
                     match self.order_book_sequences.validate_binance(&event)? {
                         crate::services::sequence::SequenceDisposition::Accept => {
                             self.pending_market_events.buffer(event)?;
@@ -109,9 +189,140 @@ macro_rules! websocket_connection {
                 Ok(())
             }
 
-            async fn next_value(&mut self) -> Result<serde_json::Value, crate::IntegrationError> {
+            fn assign_streams(
+                &mut self,
+                streams: impl IntoIterator<
+                    Item = crate::services::participants::binance::market_stream::PlannedStream,
+                >,
+            ) -> Result<
+                Vec<crate::services::participants::binance::market_stream::AssignedStream>,
+                crate::IntegrationError,
+            > {
+                use crate::services::participants::binance::market_stream::{
+                    AssignedStream, StreamShard,
+                };
+                let mut assigned = Vec::new();
+                for stream in streams {
+                    let shard = if let Some(shard) = self.stream_assignments.get(&stream) {
+                        *shard
+                    } else {
+                        let mut counts = std::collections::BTreeMap::<StreamShard, usize>::new();
+                        for shard in self.stream_assignments.values() {
+                            *counts.entry(*shard).or_default() += 1;
+                        }
+                        let existing = self
+                            .services
+                            .keys()
+                            .filter(|shard| shard.route == stream.route)
+                            .copied()
+                            .find(|shard| {
+                                counts.get(shard).copied().unwrap_or_default()
+                                    < self.policy.max_streams_per_socket()
+                            });
+                        let shard = existing.unwrap_or_else(|| StreamShard {
+                            route: stream.route,
+                            index: self
+                                .services
+                                .keys()
+                                .filter(|shard| shard.route == stream.route)
+                                .map(|shard| shard.index)
+                                .max()
+                                .unwrap_or_default()
+                                .saturating_add(1),
+                        });
+                        if !self.services.contains_key(&shard) {
+                            let service = self.socket_for_shard(shard)?;
+                            self.services.insert(shard, service);
+                        }
+                        self.stream_assignments.insert(stream.clone(), shard);
+                        shard
+                    };
+                    assigned.push(AssignedStream { stream, shard });
+                }
+                Ok(assigned)
+            }
+
+            async fn connect_assigned_shards(
+                &mut self,
+                streams: &[crate::services::participants::binance::market_stream::AssignedStream],
+            ) -> Result<(), crate::IntegrationError> {
+                if !self.connected {
+                    return Ok(());
+                }
+                let shards = streams
+                    .iter()
+                    .map(|stream| stream.shard)
+                    .collect::<std::collections::BTreeSet<_>>();
+                for shard in shards {
+                    let service = self.services.get_mut(&shard).ok_or_else(|| {
+                        crate::IntegrationError::Unavailable(format!(
+                            "Binance {} stream shard {shard:?} is unavailable",
+                            self.policy.family(),
+                        ))
+                    })?;
+                    if !service.health().healthy {
+                        service.connect().await?;
+                    }
+                }
+                Ok(())
+            }
+
+            fn commit_subscription(
+                &mut self,
+                id: crate::MarketSubscriptionId,
+                feeds: Vec<crate::MarketFeed>,
+                streams: Vec<crate::services::participants::binance::market_stream::AssignedStream>,
+            ) {
+                for stream in &streams {
+                    *self
+                        .stream_references
+                        .entry(stream.stream.clone())
+                        .or_default() += 1;
+                }
+                self.subscriptions.insert(id, (feeds, streams));
+            }
+
+            fn commit_unsubscription(&mut self, id: crate::MarketSubscriptionId) {
+                let Some((_, streams)) = self.subscriptions.remove(&id) else {
+                    return;
+                };
+                for stream in streams {
+                    let remove = self
+                        .stream_references
+                        .get_mut(&stream.stream)
+                        .is_some_and(|references| {
+                            *references = references.saturating_sub(1);
+                            *references == 0
+                        });
+                    if remove {
+                        self.stream_references.remove(&stream.stream);
+                        self.stream_assignments.remove(&stream.stream);
+                    }
+                }
+            }
+
+            fn discard_unreferenced_assignments(&mut self) {
+                self.stream_assignments
+                    .retain(|stream, _| self.stream_references.contains_key(stream));
+            }
+
+            async fn next_value(
+                &mut self,
+                shard: crate::services::participants::binance::market_stream::StreamShard,
+            ) -> Result<serde_json::Value, crate::IntegrationError> {
                 loop {
-                    match self.service.next().await? {
+                    match self
+                        .services
+                        .get_mut(&shard)
+                        .ok_or_else(|| {
+                            crate::IntegrationError::Unavailable(format!(
+                                "Binance {} stream shard {shard:?} is unavailable",
+                                self.policy.family(),
+                            ))
+                        })?
+                        .next()
+                        .await?
+                    {
                         tokio_tungstenite::tungstenite::Message::Text(text) => {
                             return serde_json::from_str(&text).map_err(|error| {
                                 crate::IntegrationError::InvalidPayload(error.to_string())
@@ -132,12 +343,21 @@ macro_rules! websocket_connection {
                 cx: &mut std::task::Context<'_>,
             ) -> std::task::Poll<Result<serde_json::Value, crate::IntegrationError>> {
                 loop {
-                    let message = match self.service.poll_next(cx) {
-                        std::task::Poll::Ready(Ok(message)) => message,
-                        std::task::Poll::Ready(Err(error)) => {
-                            return std::task::Poll::Ready(Err(error))
+                    let mut message = None;
+                    for service in self.services.values_mut() {
+                        match service.poll_next(cx) {
+                            std::task::Poll::Ready(Ok(value)) => {
+                                message = Some(value);
+                                break;
+                            },
+                            std::task::Poll::Ready(Err(error)) => {
+                                return std::task::Poll::Ready(Err(error))
+                            },
+                            std::task::Poll::Pending => {},
                         }
-                        std::task::Poll::Pending => return std::task::Poll::Pending,
+                    }
+                    let Some(message) = message else {
+                        return std::task::Poll::Pending;
                     };
                     match message {
                         tokio_tungstenite::tungstenite::Message::Text(text) => {
@@ -159,14 +379,22 @@ macro_rules! websocket_connection {
                 }
             }
 
-            async fn send_and_confirm(
+            async fn send_request(
                 &mut self,
+                shard: crate::services::participants::binance::market_stream::StreamShard,
                 method: &str,
                 streams: &[String],
-            ) -> Result<(), crate::IntegrationError> {
+            ) -> Result<serde_json::Value, crate::IntegrationError> {
                 let request_id = self.next_request_id;
                 self.next_request_id = self.next_request_id.saturating_add(1);
-                self.service
+                self.services
+                    .get_mut(&shard)
+                    .ok_or_else(|| {
+                        crate::IntegrationError::Unavailable(format!(
+                            "Binance {} stream shard {shard:?} is unavailable",
+                            self.policy.family(),
+                        ))
+                    })?
                     .send(serde_json::json!({
                         "method": method,
                         "params": streams,
@@ -174,14 +402,17 @@ macro_rules! websocket_connection {
                     }).to_string())
                     .await?;
                 loop {
-                    let value = self.next_value().await?;
+                    let value = self.next_value(shard).await?;
                     if value.get("id").and_then(serde_json::Value::as_u64) == Some(request_id) {
-                        if let Some(error) = value.get("error") {
+                        if let Some(error) = value
+                            .get("error")
+                            .or_else(|| value.get("code").map(|_| &value))
+                        {
                             return Err(crate::IntegrationError::InvalidRequest(format!(
                                 "Binance subscription rejected: {error}"
                             )));
                         }
-                        return Ok(());
+                        return Ok(value);
                     }
                     self.queue_market_events(
                         crate::services::participants::binance::stream::normalize(&value)?,
@@ -189,40 +420,183 @@ macro_rules! websocket_connection {
                 }
             }
 
-            async fn restore_subscriptions(&mut self) -> Result<(), crate::IntegrationError> {
-                let streams = self
-                    .subscriptions
-                    .values()
-                    .flat_map(|(_, streams)| streams.clone())
-                    .collect::<Vec<_>>();
-                if !streams.is_empty() {
-                    self.send_and_confirm("SUBSCRIBE", &streams).await?;
+            async fn send_and_confirm(
+                &mut self,
+                shard: crate::services::participants::binance::market_stream::StreamShard,
+                method: &str,
+                streams: &[String],
+            ) -> Result<(), crate::IntegrationError> {
+                self.send_request(shard, method, streams).await?;
+                let confirmed = self.confirmed_streams.entry(shard).or_default();
+                match method {
+                    "SUBSCRIBE" => confirmed.extend(streams.iter().cloned()),
+                    "UNSUBSCRIBE" => {
+                        for stream in streams {
+                            confirmed.remove(stream);
+                        }
+                    },
+                    _ => {},
                 }
                 Ok(())
+            }
+
+            fn desired_streams(
+                &self,
+                shard: crate::services::participants::binance::market_stream::StreamShard,
+            ) -> std::collections::BTreeSet<String> {
+                self.stream_assignments
+                    .iter()
+                    .filter(|(stream, assigned)| {
+                        **assigned == shard && self.stream_references.contains_key(*stream)
+                    })
+                    .map(|(stream, _)| stream.name.clone())
+                    .collect()
+            }
+
+            async fn reconcile_subscriptions(&mut self) -> Result<(), crate::IntegrationError> {
+                let shards = self
+                    .services
+                    .keys()
+                    .copied()
+                    .filter(|shard| !self.desired_streams(*shard).is_empty())
+                    .collect::<Vec<_>>();
+                for shard in shards {
+                    let reply = self.send_request(shard, "LIST_SUBSCRIPTIONS", &[]).await?;
+                    let actual = reply
+                        .get("result")
+                        .and_then(serde_json::Value::as_array)
+                        .ok_or_else(|| {
+                            crate::IntegrationError::InvalidPayload(format!(
+                                "Binance {} LIST_SUBSCRIPTIONS result must be an array",
+                                self.policy.family(),
+                            ))
+                        })?
+                        .iter()
+                        .map(|value| {
+                            value.as_str().map(str::to_owned).ok_or_else(|| {
+                                crate::IntegrationError::InvalidPayload(
+                                    "Binance LIST_SUBSCRIPTIONS stream must be text".into(),
+                                )
+                            })
+                        })
+                        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+                    let desired = self.desired_streams(shard);
+                    let delta =
+                        crate::services::participants::binance::market_stream::reconciliation_delta(
+                            &desired, &actual,
+                        );
+                    self.confirmed_streams.insert(shard, actual);
+                    if !delta.missing.is_empty() {
+                        self.send_and_confirm(shard, "SUBSCRIBE", &delta.missing)
+                            .await?;
+                    }
+                    if !delta.stale.is_empty() {
+                        self.send_and_confirm(shard, "UNSUBSCRIBE", &delta.stale)
+                            .await?;
+                    }
+                }
+                Ok(())
+            }
+
+            async fn restore_subscriptions(&mut self) -> Result<(), crate::IntegrationError> {
+                let mut by_shard = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+                for stream in self
+                    .subscriptions
+                    .values()
+                    .flat_map(|(_, streams)| streams)
+                {
+                    by_shard
+                        .entry(stream.shard)
+                        .or_default()
+                        .insert(stream.stream.name.clone());
+                }
+                for (shard, streams) in by_shard {
+                    self.send_and_confirm(shard, "SUBSCRIBE", &streams.into_iter().collect::<Vec<_>>())
+                        .await?;
+                }
+                if self.subscriptions.is_empty() {
+                    return Ok(());
+                }
+                self.reconcile_subscriptions().await
             }
         }
 
         impl crate::ConnectionHealthQuery for $name {
             fn connection_health(&mut self) -> crate::ConnectionHealth {
-                self.service.health()
+                let health = self
+                    .services
+                    .values_mut()
+                    .map(|service| service.health())
+                    .collect::<Vec<_>>();
+                let healthy = health.iter().all(|value| value.healthy);
+                let lifecycle = if healthy {
+                    crate::ConnectionLifecycle::Ready
+                } else {
+                    health
+                        .iter()
+                        .find(|value| !value.healthy)
+                        .map_or(crate::ConnectionLifecycle::Created, |value| value.lifecycle)
+                };
+                crate::ConnectionHealth {
+                    lifecycle,
+                    healthy,
+                    authenticated: health.iter().all(|value| value.authenticated),
+                    last_error: health.into_iter().find_map(|value| value.last_error),
+                }
             }
         }
 
         impl crate::ConnectionLifecycleCommand for $name {
             async fn connect(&mut self) -> Result<(), crate::IntegrationError> {
-                self.service.connect().await?;
+                for service in self.services.values_mut() {
+                    service.connect().await?;
+                }
+                self.connected = true;
                 self.restore_subscriptions().await
             }
 
             async fn disconnect(&mut self) -> Result<(), crate::IntegrationError> {
                 self.pending_market_events.clear();
                 self.order_book_sequences.clear();
-                self.service.disconnect().await
+                self.confirmed_streams.clear();
+                for service in self.services.values_mut() {
+                    service.disconnect().await?;
+                }
+                self.connected = false;
+                Ok(())
             }
 
             async fn reconnect(&mut self) -> Result<(), crate::IntegrationError> {
-                self.service.reconnect().await?;
-                self.restore_subscriptions().await
+                let shards = self.services.keys().copied().collect::<Vec<_>>();
+                let mut replacements = std::collections::BTreeMap::<
+                    crate::services::participants::binance::market_stream::StreamShard,
+                    crate::services::participants::binance::socket::SocketService,
+                >::new();
+                for shard in shards {
+                    let mut replacement = self.socket_for_shard(shard)?;
+                    if let Err(error) = replacement.connect().await {
+                        for service in replacements.values_mut() {
+                            let _ = service.disconnect().await;
+                        }
+                        return Err(error);
+                    }
+                    replacements.insert(shard, replacement);
+                }
+                let mut previous = std::mem::replace(&mut self.services, replacements);
+                self.confirmed_streams.clear();
+                self.connected = true;
+                if let Err(error) = self.restore_subscriptions().await {
+                    for service in self.services.values_mut() {
+                        let _ = service.disconnect().await;
+                    }
+                    self.services = previous;
+                    self.connected = true;
+                    return Err(error);
+                }
+                for service in previous.values_mut() {
+                    service.disconnect().await?;
+                }
+                Ok(())
             }
         }
     };
@@ -241,10 +615,19 @@ macro_rules! market_websocket_capabilities {
                 let streams = request
                     .feeds
                     .iter()
-                    .map(|feed| {
-                        crate::services::participants::binance::stream::stream_name(feed, $family)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .map(|feed| self.policy.plan(feed))
+                    .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+                let streams = self.assign_streams(streams)?;
+                self.connect_assigned_shards(&streams).await?;
+                let mut by_shard = std::collections::BTreeMap::<_, Vec<_>>::new();
+                for stream in &streams {
+                    if !self.stream_references.contains_key(&stream.stream) {
+                        by_shard
+                            .entry(stream.shard)
+                            .or_default()
+                            .push(stream.stream.name.clone());
+                    }
+                }
                 let id = crate::MarketSubscriptionId(self.next_subscription_id);
                 self.next_subscription_id = self.next_subscription_id.saturating_add(1);
                 let subscription = crate::MarketSubscription {
@@ -252,23 +635,41 @@ macro_rules! market_websocket_capabilities {
                     feeds: request.feeds.clone(),
                     delivery: crate::MarketDelivery::Push,
                 };
-                match self.send_and_confirm("SUBSCRIBE", &streams).await {
+                let mut result = Ok(());
+                let mut confirmed_shards = 0_usize;
+                for (shard, shard_streams) in by_shard {
+                    if let Err(error) = self
+                        .send_and_confirm(shard, "SUBSCRIBE", &shard_streams)
+                        .await
+                    {
+                        result = Err(error);
+                        break;
+                    }
+                    confirmed_shards += 1;
+                }
+                match result {
                     Ok(()) => {
-                        self.subscriptions.insert(id, (request.feeds, streams));
+                        self.commit_subscription(id, request.feeds, streams);
                         Ok(crate::MarketSubscriptionOutcome::Confirmed(subscription))
                     },
-                    Err(crate::IntegrationError::InvalidRequest(message)) => Ok(
-                        crate::MarketSubscriptionOutcome::Rejected(crate::ParticipantRejection {
-                            code: None,
-                            message,
-                            participant_request_id: Some(id.0.to_string()),
-                        }),
-                    ),
-                    Err(crate::IntegrationError::NotReady) => {
+                    Err(crate::IntegrationError::InvalidRequest(message))
+                        if confirmed_shards == 0 =>
+                    {
+                        self.discard_unreferenced_assignments();
+                        Ok(crate::MarketSubscriptionOutcome::Rejected(
+                            crate::ParticipantRejection {
+                                code: None,
+                                message,
+                                participant_request_id: Some(id.0.to_string()),
+                            },
+                        ))
+                    },
+                    Err(crate::IntegrationError::NotReady) if confirmed_shards == 0 => {
+                        self.discard_unreferenced_assignments();
                         Err(crate::IntegrationError::NotReady)
                     },
                     Err(error) => {
-                        self.subscriptions.insert(id, (request.feeds, streams));
+                        self.commit_subscription(id, request.feeds, streams);
                         Ok(crate::MarketSubscriptionOutcome::Indeterminate {
                             provisional: Some(subscription),
                             reason: error.to_string(),
@@ -290,19 +691,44 @@ macro_rules! market_websocket_capabilities {
                                 "unknown Binance market subscription".into(),
                             )
                         })?;
-                match self.send_and_confirm("UNSUBSCRIBE", &streams).await {
+                let mut by_shard = std::collections::BTreeMap::<_, Vec<_>>::new();
+                for stream in &streams {
+                    if self.stream_references.get(&stream.stream).copied() == Some(1) {
+                        by_shard
+                            .entry(stream.shard)
+                            .or_default()
+                            .push(stream.stream.name.clone());
+                    }
+                }
+                let mut result = Ok(());
+                let mut confirmed_shards = 0_usize;
+                for (shard, shard_streams) in by_shard {
+                    if let Err(error) = self
+                        .send_and_confirm(shard, "UNSUBSCRIBE", &shard_streams)
+                        .await
+                    {
+                        result = Err(error);
+                        break;
+                    }
+                    confirmed_shards += 1;
+                }
+                match result {
                     Ok(()) => {
-                        self.subscriptions.remove(&subscription);
+                        self.commit_unsubscription(subscription);
                         Ok(crate::MarketSubscriptionOutcome::Confirmed(()))
                     },
-                    Err(crate::IntegrationError::InvalidRequest(message)) => Ok(
-                        crate::MarketSubscriptionOutcome::Rejected(crate::ParticipantRejection {
-                            code: None,
-                            message,
-                            participant_request_id: Some(subscription.0.to_string()),
-                        }),
-                    ),
-                    Err(crate::IntegrationError::NotReady) => {
+                    Err(crate::IntegrationError::InvalidRequest(message))
+                        if confirmed_shards == 0 =>
+                    {
+                        Ok(crate::MarketSubscriptionOutcome::Rejected(
+                            crate::ParticipantRejection {
+                                code: None,
+                                message,
+                                participant_request_id: Some(subscription.0.to_string()),
+                            },
+                        ))
+                    },
+                    Err(crate::IntegrationError::NotReady) if confirmed_shards == 0 => {
                         Err(crate::IntegrationError::NotReady)
                     },
                     Err(error) => Ok(crate::MarketSubscriptionOutcome::Indeterminate {
@@ -346,7 +772,10 @@ macro_rules! market_websocket_capabilities {
 
         impl crate::ConnectionMaintenance for $name {
             fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
-                self.service.next_maintenance_at()
+                self.services
+                    .values()
+                    .filter_map(|service| service.next_maintenance_at())
+                    .min()
             }
 
             fn poll_maintenance(
@@ -354,7 +783,15 @@ macro_rules! market_websocket_capabilities {
                 _cx: &mut std::task::Context<'_>,
                 now: tokio::time::Instant,
             ) -> std::task::Poll<Result<crate::MaintenanceOutcome, crate::IntegrationError>> {
-                self.service.poll_maintenance(now)
+                for service in self.services.values() {
+                    if let std::task::Poll::Ready(outcome) = service.poll_maintenance(now) {
+                        match outcome {
+                            Ok(crate::MaintenanceOutcome::Healthy) => {},
+                            other => return std::task::Poll::Ready(other),
+                        }
+                    }
+                }
+                std::task::Poll::Ready(Ok(crate::MaintenanceOutcome::Healthy))
             }
         }
     };

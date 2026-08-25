@@ -14,6 +14,7 @@ from kairospy.investment.apps.reference.application.models import (
 )
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import WorkbenchState
+from kairospy.system.apps.observe.application import ObserveSnapshot
 
 
 def workbench_state() -> WorkbenchState:
@@ -24,7 +25,21 @@ def workbench_state() -> WorkbenchState:
             project_root=Path("/workspace/trader"),
         ),
     )
-    return WorkbenchState(owner=owner, workspace_arg=owner.paths.root)
+    return WorkbenchState(
+        owner=owner,
+        workspace_arg=owner.paths.root,
+        snapshot=ObserveSnapshot(
+            workspace_id="trader",
+            shared_services={
+                "reference": {"status": "running", "operating_mode": "continuous"},
+                "market": {"status": "not_running", "operating_mode": "stopped"},
+            },
+            support_processes={
+                "system-supervisor": {"status": "running"},
+                "aeron": {"status": "running"},
+            },
+        ),
+    )
 
 
 def market() -> Market:

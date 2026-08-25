@@ -21,6 +21,8 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0014 | [统一 Textual 工作台](0014-unified-textual-workbench.md) | Accepted |
 | 0015 | [Provider 连接、凭据与账户访问](0015-provider-connections-and-account-access.md) | Accepted |
 | 0016 | [模型连接与模型引用](0016-model-connections-and-model-references.md) | Accepted |
+| 0017 | [运行方案、运行实例与运行中心](0017-run-plans-instances-and-operations-center.md) | Accepted |
+| 0018 | [Provider-owned Market subscription planning](0018-provider-owned-market-subscription-planning.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

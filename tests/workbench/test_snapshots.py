@@ -133,19 +133,17 @@ def test_command_confirmation_uses_interaction_region(snap_compare: Any) -> None
 def test_command_observe_degraded_state(snap_compare: Any) -> None:
     snapshot = ObserveSnapshot(
         workspace_id="visual-fixture",
-        components={
+        shared_services={
             "market": {"status": "degraded", "freshness": "stale"},
-            "execution": {"status": "ready", "freshness": "current"},
         },
-        launches=(
+        active_instances=(
             {
                 "launch_id": "paper-demo",
                 "mode": "paper",
-                "status": "degraded",
+                "state": "degraded",
                 "instance_id": "instance-1",
             },
         ),
-        market_snapshot={"status": "stale", "generation": 7},
         observed_at=datetime(2026, 8, 24, 10, 0, tzinfo=timezone.utc),
     )
 

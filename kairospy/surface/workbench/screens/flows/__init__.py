@@ -87,6 +87,8 @@ def handle_context(
     """Route a context-relative selection to the current product owner."""
 
     section = session.context[:1]
+    if section == ("project",):
+        return operations.handle_context(state, session, command)
     if section == ("market",):
         return market.handle_context(state, session, command)
     if section == ("reference",):

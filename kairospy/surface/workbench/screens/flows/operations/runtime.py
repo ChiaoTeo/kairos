@@ -10,6 +10,7 @@ from uuid import uuid4
 from rich.panel import Panel
 from rich.pretty import Pretty
 from rich.text import Text
+from kairospy.system.apps.components.application import ComponentProcessApplication
 
 from ....widgets import (
     ActionToken,
@@ -41,6 +42,7 @@ from .actions import (
     PROFILE_ACTIONS,
     PROJECT_ACTIONS,
     ProjectPromptState,
+    project_actions,
     execute_config,
     execute_operation,
     execute_project,
@@ -51,11 +53,20 @@ from .actions import (
 )
 from .views import (
     LOG_FOLLOW_ACTIONS,
+    SUPPORT_ACTIONS,
+    SupportStatusView,
+    ServiceStatusView,
     diagnostics_renderable,
     service_actions,
+    service_display_name,
+    service_status_line,
     service_status_view,
     service_summary,
-    services_overview,
+    operations_overview,
+    operations_group_records,
+    operations_records,
+    support_summary,
+    support_diagnostics,
 )
 from ..resources.actions import list_records as list_resource_records
 from ...navigation import (
@@ -80,15 +91,18 @@ def handle_input(
     return handle_command(state, session, token.action, (value,))
 
 
-def cancel_input(session: GuidedSession, token: ActionToken) -> None:
+def cancel_input(session: GuidedSession, token: ActionToken) -> bool:
     """Clear only the Operations prompt owned by the token."""
 
+    if token.feature is not Feature.OPERATIONS:
+        return False
     if token.action.startswith("business:field:"):
         session.operations.business_prompt = None
     elif token.action.startswith("operations-project:field:"):
         session.operations.project_prompt = None
     elif token.action == "operations-profile:name":
         session.operations.profile_action = None
+    return True
 
 
 def handle_command(
@@ -107,7 +121,7 @@ def handle_command(
     if command.startswith("operations-project:field:"):
         prompt = session.operations.project_prompt
         if not isinstance(prompt, ProjectPromptState):
-            session.enter("operations", "project")
+            session.enter("project")
             return _choice(
                 state,
                 session,
@@ -171,21 +185,66 @@ def handle_command(
 def handle_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context[:1] == ("operations",):
+    if session.context == ("project",) or session.context[:1] == ("operations",):
         return _operations_context(state, session, command)
     return None
+
+
+def enter_overview(state: Any, session: GuidedSession) -> tuple[ScreenEffect, ...]:
+    """Open the Operations Center by reading its current runtime inventory."""
+
+    session.enter("operations", "overview")
+    return (
+        _run(
+            "operations.overview",
+            "查看运行中心",
+            ResultKind.OPERATIONS_OVERVIEW,
+            state.refresh_snapshot,
+        ),
+    )
 
 
 def handle_success(
     state: Any, session: GuidedSession, spec: OperationSpec, result: Any
 ) -> tuple[ScreenEffect, ...] | None:
     kind = spec.route.kind
+    if kind is ResultKind.OPERATIONS_OVERVIEW:
+        if result is None:
+            session.context = ("operations", "overview")
+            session.visible_records = ()
+            return _choice(
+                state,
+                session,
+                Text(
+                    state.load_error or "当前项目的运行状态不可用",
+                    style="yellow",
+                ),
+                "运行结构读取失败 · 可刷新或返回",
+            )
+        inventory = operations_records(result)
+        records = operations_group_records(inventory)
+        session.context = ("operations", "overview")
+        session.visible_records = records
+        session.operations.inventory_records = inventory
+        session.operations.group_records = records
+        interaction = ChoiceInteraction(
+            title=context_label(session.context),
+            summary=operations_overview(result),
+            actions=tuple(
+                ActionItem(str(index), record.label, record.description, str(index))
+                for index, record in enumerate(records, 1)
+            ),
+        )
+        session.interaction = interaction
+        return SetInteraction(interaction), SetStatus(
+            f"已读取 {len(records)} 个运行对象 · 请选择"
+        )
     if kind is ResultKind.OPERATIONS_SERVICES:
         records = tuple(service_status_view(record) for record in (result or ()))
         session.context = ("operations", "services")
         visible = selection_records(
             records,
-            label=lambda record: record.component,
+            label=lambda record: record.display_name,
             description=lambda record: f"{record.state_label} · {record.summary}",
         )
         session.visible_records = visible
@@ -196,7 +255,6 @@ def handle_success(
         )
         interaction = ChoiceInteraction(
             title=context_label(session.context),
-            summary=services_overview(records),
             actions=actions,
         )
         session.interaction = interaction
@@ -204,7 +262,7 @@ def handle_success(
             f"找到 {len(records)} 个结果 · 请选择"
         )
     titles = {
-        ResultKind.OPERATIONS: "系统维护结果",
+        ResultKind.OPERATIONS: "服务操作结果",
         ResultKind.OPERATIONS_PROJECT: "项目操作结果",
         ResultKind.OPERATIONS_PROFILE: "Profile 操作结果",
         ResultKind.BUSINESS: "业务工具结果",
@@ -213,8 +271,9 @@ def handle_success(
     if title is None:
         return None
     if kind is ResultKind.OPERATIONS_PROJECT:
-        session.operations.project_prompt = None
-        session.context = ("operations", "project")
+        session.home()
+        if spec.action_name.endswith(".scaffold") or state.owner is None:
+            session.enter("project")
     elif kind is ResultKind.OPERATIONS_PROFILE:
         session.operations.profile_action = None
         session.context = ("operations", "profiles")
@@ -236,6 +295,18 @@ def handle_success(
     elif kind is ResultKind.OPERATIONS and spec.route.qualifier == "service-logs":
         lines = result.get("lines", ()) if isinstance(result, Mapping) else ()
         body = Text("\n".join(str(line) for line in lines) or "当前没有日志。")
+    elif kind is ResultKind.OPERATIONS and spec.route.qualifier == "support-logs":
+        lines = result.get("lines", ()) if isinstance(result, Mapping) else ()
+        body = Text("\n".join(str(line) for line in lines) or "当前没有日志。")
+    elif (
+        kind is ResultKind.OPERATIONS and spec.route.qualifier == "support-diagnostics"
+    ):
+        view = session.operations.selected_support_status
+        body = (
+            support_diagnostics(view)
+            if view is not None
+            else Text("支撑进程上下文已经失效。", style="yellow")
+        )
     else:
         body = Panel(Pretty(result, expand_all=True), title=title)
     return _activity(spec, body), *_choice(state, session, status="操作已完成")
@@ -251,6 +322,8 @@ def handle_failure(
         "service-status",
         "service-diagnostics",
         "service-logs",
+        "support-logs",
+        "support-diagnostics",
     }:
         current = session.operations.selected_service_status
         suggestion = (
@@ -298,6 +371,108 @@ def _operations_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
     context = session.context
+    if context[:2] == ("operations", "support"):
+        action = action_id(SUPPORT_ACTIONS, command)
+        if action == "refresh":
+            return enter_overview(state, session)
+        if action is None:
+            return None
+        name = session.operations.selected_support
+        if name is None:
+            return enter_overview(state, session)
+        if action == "logs":
+            return (
+                _run(
+                    "operations.support.logs",
+                    f"查看 {name} 日志",
+                    ResultKind.OPERATIONS,
+                    lambda: ComponentProcessApplication(state.owner).log_snapshot(name),
+                    qualifier="support-logs",
+                ),
+            )
+        return (
+            _run(
+                "operations.support.diagnostics",
+                f"查看 {name} 技术证据",
+                ResultKind.OPERATIONS,
+                lambda: session.operations.selected_support_status,
+                qualifier="support-diagnostics",
+            ),
+        )
+    if context == ("operations", "overview") and session.visible_records:
+        target = _record_choice(session.visible_records, command)
+        if target is None:
+            if command in {"refresh", "r"}:
+                return enter_overview(state, session)
+            return None
+        if not isinstance(target, Mapping):
+            return None
+        kind = target.get("kind")
+        if kind == "group":
+            name = str(target.get("name") or "")
+            records = target.get("records")
+            if name not in {"services", "instances", "supports"} or not isinstance(
+                records, tuple
+            ):
+                return None
+            session.context = ("operations", name)
+            session.visible_records = records
+            interaction = ChoiceInteraction(
+                title=context_label(session.context),
+                summary=(
+                    Text("当前没有运行对象", style="dim") if not records else None
+                ),
+                actions=tuple(
+                    ActionItem(str(i), record.label, record.description, str(i))
+                    for i, record in enumerate(records, 1)
+                ),
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus("就绪")
+        return None
+    if (
+        context
+        in {
+            ("operations", "services"),
+            ("operations", "instances"),
+            ("operations", "supports"),
+        }
+        and session.visible_records
+    ):
+        target = _record_choice(session.visible_records, command)
+        if target is None:
+            return None
+        if not isinstance(target, Mapping):
+            return None
+        kind = target.get("kind")
+        if kind == "service":
+            view = target.get("value")
+            if not isinstance(view, ServiceStatusView):
+                return None
+            session.operations.selected_service = view.component
+            session.operations.selected_service_status = view
+            session.visible_records = ()
+            session.context = ("operations", "service", view.component)
+            return _choice(state, session, status=service_status_line(view))
+        if kind == "run-instance" and isinstance(target.get("value"), Mapping):
+            from ..launch.runtime import enter_selected_instance
+
+            return enter_selected_instance(state, session, target["value"])
+        if kind == "support":
+            name = str(target.get("name") or "support")
+            value = target.get("value")
+            if not isinstance(value, SupportStatusView):
+                return None
+            session.visible_records = ()
+            session.operations.selected_support = name
+            session.operations.selected_support_status = value
+            session.context = ("operations", "support", name)
+            return _choice(
+                state,
+                session,
+                support_summary(value),
+            )
+        return None
     if context[:2] == ("operations", "service-logs"):
         component = session.operations.selected_service
         buffer = session.operations.live_buffer
@@ -333,6 +508,7 @@ def _operations_context(
         )
         if action is None:
             return None
+        display_name = service_display_name(component)
 
         if action == "follow":
             session.operations.start_logs(component, started_at=time.monotonic())
@@ -361,11 +537,11 @@ def _operations_context(
                 else "service-status"
             ),
             running_status={
-                "start": f"正在启动 {component} · 创建进程并等待控制端点就绪…",
-                "stop": f"正在停止 {component} · 请求安全停止并释放运行资源…",
-                "restart": f"正在重启 {component} · 停止旧进程后等待新进程就绪…",
-                "repair": f"正在清理 {component} 的失效运行资源…",
-                "repair-start": f"正在清理并启动 {component}…",
+                "start": f"正在启动{display_name} · 创建进程并等待控制端点就绪…",
+                "stop": f"正在停止{display_name} · 请求安全停止并释放运行资源…",
+                "restart": f"正在重启{display_name} · 停止旧进程后等待新进程就绪…",
+                "repair": f"正在清理{display_name}的失效运行资源…",
+                "repair-start": f"正在清理并启动{display_name}…",
             }.get(action, "正在读取服务信息…"),
         )
         return _confirm_or_run(
@@ -374,8 +550,10 @@ def _operations_context(
             spec,
             dangerous=action in {"start", "stop", "restart", "repair", "repair-start"},
         )
-    if context == ("operations", "project"):
-        action = action_id(PROJECT_ACTIONS, command)
+    if context in {("project",), ("operations", "project")}:
+        action = action_id(
+            project_actions(has_project=state.owner is not None), command
+        )
         if action is None:
             return None
         if action in {"status", "doctor"}:
@@ -473,9 +651,7 @@ def _operations_context(
         session.operations.selected_service_status = view
         session.visible_records = ()
         session.context = ("operations", "service", component)
-        return _standalone_activity(
-            f"{component} 状态", service_summary(view)
-        ), *_choice(state, session)
+        return _choice(state, session, status=service_status_line(view))
     action = action_id(SECTION_ACTIONS["operations"], command)
     if action is None:
         return None
@@ -492,7 +668,7 @@ def _operations_context(
         return (
             _run(
                 f"operations.{action}",
-                f"系统维护 · {action}",
+                f"运行中心 · {action}",
                 ResultKind.OPERATIONS,
                 lambda: execute_operation(state, action),
             ),
@@ -633,9 +809,14 @@ def _confirm_or_run(
 
 
 def _run(
-    action: str, summary: str, kind: ResultKind, operation: Callable[[], Any]
+    action: str,
+    summary: str,
+    kind: ResultKind,
+    operation: Callable[[], Any],
+    *,
+    qualifier: str | None = None,
 ) -> RunOperation:
-    return RunOperation(_spec(action, summary, kind, operation))
+    return RunOperation(_spec(action, summary, kind, operation, qualifier=qualifier))
 
 
 def _spec(
@@ -696,7 +877,7 @@ def log_control_effects(
         )
         refreshing = buffer.following
     session.control(
-        f"{component} 实时日志",
+        f"{service_display_name(component)}实时日志",
         detail,
         LOG_FOLLOW_ACTIONS,
         refreshing=refreshing,
@@ -721,7 +902,9 @@ def finish_log_follow(session: GuidedSession) -> AppendActivity | None:
         style="dim",
     )
     session.operations.reset_logs()
-    return _standalone_activity(f"已结束 {component} 日志跟随", body)
+    return _standalone_activity(
+        f"已结束{service_display_name(component)}日志跟随", body
+    )
 
 
 def _record_choice(records: tuple[SelectionRecord, ...], value: str) -> object | None:

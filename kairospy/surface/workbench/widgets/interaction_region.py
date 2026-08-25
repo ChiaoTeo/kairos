@@ -212,9 +212,9 @@ def _interaction_renderable(interaction: InteractionState) -> RenderableType | N
         return Panel(Group(*body), title=interaction.title, border_style="cyan")
     if isinstance(interaction, ConfirmInteraction):
         commands = Text()
-        commands.append(f"[/confirm] {interaction.confirm_label}", style="bold yellow")
+        commands.append(f"[/y] {interaction.confirm_label}", style="bold yellow")
         commands.append("    ")
-        commands.append(f"[/cancel] {interaction.cancel_label}", style="bold")
+        commands.append(f"[/n] {interaction.cancel_label}", style="bold")
         parts: list[RenderableType] = [interaction.summary, Text(), commands]
         if interaction.force_hint:
             parts.append(Text(interaction.force_hint, style="dim"))

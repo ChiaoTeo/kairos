@@ -22,7 +22,7 @@ use super::{MarketApplication, MarketError, MarketRpcActor};
 use crate::domain::source::{
     FeedDescriptor, MarketFeedId, SourceEpoch, SourceFailureKind, SourceStatus,
 };
-use crate::services::actor::BusinessSubscriptionKey;
+use crate::services::actor::PhysicalSubscriptionKey;
 use crate::services::publication::HistoryQueue;
 use crate::services::publication::contract::{encode_change_view, encode_event};
 use crate::services::source::messages::{ProviderSubscriptionId, SourceInput};
@@ -1213,25 +1213,12 @@ impl MarketApplication {
     fn desired_managed_markets(
         &self,
         source_id: &MarketFeedId,
-    ) -> BTreeMap<BusinessSubscriptionKey, crate::ResolvedMarket> {
-        let Some(source) = self.actor.attached_sources.get(source_id) else {
-            return BTreeMap::new();
-        };
-        let mut desired = BTreeMap::new();
-        for subscription in self.current_view().subscriptions {
-            if !super::sources::source_supports_selectors(
-                &source.descriptor,
-                &subscription.selectors,
-            ) {
-                continue;
-            }
-            for (market_key, market) in subscription.members {
-                if super::source_accepts(&source.descriptor, &market) {
-                    desired.insert((subscription.id.clone(), market_key), market);
-                }
-            }
-        }
-        desired
+    ) -> Result<BTreeMap<PhysicalSubscriptionKey, crate::ResolvedMarket>, MarketError> {
+        Ok(self
+            .desired_source_subscriptions()
+            .map_err(MarketError::Invalid)?
+            .remove(source_id)
+            .unwrap_or_default())
     }
 
     async fn sync_managed_source_subscriptions(
@@ -1246,7 +1233,7 @@ impl MarketApplication {
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         for source_id in source_ids {
-            let wanted = self.desired_managed_markets(&source_id);
+            let wanted = self.desired_managed_markets(&source_id)?;
             let confirmed = self.actor.attached_sources[&source_id].confirmed.clone();
             let plan = self
                 .conflux
@@ -1343,7 +1330,7 @@ impl MarketApplication {
             return Ok(());
         }
         let mut markets = self
-            .desired_managed_markets(&source_id)
+            .desired_managed_markets(&source_id)?
             .into_values()
             .filter(|market| {
                 market.runtime_route().is_some_and(|binding| {
@@ -1375,7 +1362,7 @@ impl MarketApplication {
         let source_id =
             MarketFeedId::new(value).map_err(|error| MarketError::Invalid(error.to_string()))?;
         let markets = self
-            .desired_managed_markets(&source_id)
+            .desired_managed_markets(&source_id)?
             .into_values()
             .filter_map(|market| market.data_route().map(|route| (route, market)))
             .collect::<BTreeMap<_, _>>();

@@ -10,7 +10,7 @@ This matrix is the maintained source for implementation and certification
 status. Future work belongs in tasks or issues rather than in this document;
 status changes require the evidence defined below.
 
-Last audited: 2026-08-18.
+Last audited: 2026-08-25.
 
 ## 2. Status vocabulary
 
@@ -33,11 +33,11 @@ constructor, SDK dependency, or endpoint wrapper alone is not `I`.
 
 | Product | Reference | Market query | Market stream | Account query/stream | Order command/query/stream | Certification | Notes |
 |---|---|---|---|---|---|---|---|
-| Spot | I/C | I/C | I/C/R | I/C/R | I/C/R | | Shared command is submit/cancel; concrete REST also has keep-priority quantity reduction and symbol-scoped cancel-all. |
+| Spot | I/C | I/C | I/C/R | I/C/R | I/C/R | L-ro | Public market subscribe, receive, reconnect/restore and unsubscribe certified 2026-08-25. Shared command is submit/cancel; concrete REST also has keep-priority quantity reduction and symbol-scoped cancel-all. |
 | Cross/isolated margin | | I | I | I/C/R | I/C/R | | Concrete cross-margin trade history and symbol-scoped cancel-all exist; isolated parameters and account controls remain explicit gaps. |
-| USD-M Futures | I/C | I/C | I/C/R | I/C/R | I/C/R | | Concrete modify, bounded batch submit/cancel, and symbol-scoped cancel-all exist; shared capability is intentionally unchanged. |
-| COIN-M Futures | I/C | I/C | I/C/R | I/C/R | I/C/R | | Separate endpoint/fault domain with concrete modify, bounded batch submit/cancel, and scoped cancel-all. |
-| Options | I/C | I/C | I/C/R | I/C/R | I/C/R | | Greeks, typed trade/fee history, bounded batch submit/cancel and scoped cancel-all exist; stop/stop-limit remain deliberately unsupported. |
+| USD-M Futures | I/C | I/C | I/C/R | I/C/R | I/C/R | L-ro | Current market-route mark-price subscribe, receive, reconnect/restore and unsubscribe certified 2026-08-25. Concrete modify, bounded batch submit/cancel, and symbol-scoped cancel-all exist. |
+| COIN-M Futures | I/C | I/C | I/C/R | I/C/R | I/C/R | L-ro | Public quote subscribe, receive, reconnect/restore and unsubscribe certified 2026-08-25. Separate endpoint/fault domain with concrete modify, bounded batch submit/cancel, and scoped cancel-all. |
+| Options | I/C | I/C | I/C/R | I/C/R | I/C/R | L-ro | Current public/market route quote and mark-price subscribe, receive, reconnect/restore and unsubscribe certified 2026-08-25. Greeks, typed trade/fee history, bounded batch submit/cancel and scoped cancel-all exist. |
 | Equity/Stocks Trading | I/C | I/C | I/C/R | | I/C/R | | API-key-gated product; not a canonical exchange identity source. |
 | Alpha Trading | I | I | I | | | | No business composition route proven. |
 | Portfolio Margin | | | | I | I | | Concrete methods/resources exist without a complete business route. |
@@ -144,8 +144,25 @@ provider-native inherent method.
 | `HistoricalTradeQuery` | Spot | | Equity/Options/Futures/Crypto | |
 | `MarketSubscriptionCommand` / stream | Spot, Margin, USD-M, COIN-M, Options, Equity, Alpha | unified public/user socket | Equity/Options/Futures/Indices/Forex/Crypto sockets | public socket |
 
-An empty cell means no implementation was proven in the 2026-08-18 audit. A
+An empty cell means no implementation was proven in the 2026-08-25 audit. A
 stream normalizer is not counted as the corresponding bounded query.
+
+### 4.1 Provider subscription-planning audit
+
+The 2026-08-25 audit applies Decision 0018 without claiming uniform production readiness:
+
+| Provider | Dedicated component | Current planning/recovery evidence | Availability conclusion |
+|---|---|---|---|
+| Binance | Product-specific connections with a shared private Binance policy | endpoint-class routing, stream deduplication, capacity shards, pacing, server inventory reconciliation, replacement-first reconnect and public live certification | Spot, USD-M, COIN-M and Options public streams are `L-ro`; authenticated and depth-continuity gates remain. |
+| OKX | Dedicated public WebSocket connection | typed channel arguments, per-argument acknowledgements, restore, bounded buffering and order-book sequence recovery | Implemented/composed/recovery-tested, but not live-certified in this audit. |
+| Hyperliquid | Dedicated unified WebSocket connection | typed native subscriptions, acknowledgement handling, restore and bounded public/private event buffering | Implemented/composed/recovery-tested, but not live-certified in this audit. |
+| Massive | Dedicated product WebSocket connections | product-specific feed parameters, acknowledgement handling, restore and bounded buffering | Equities/Options retain existing `L-ro`; other entitled products are not live-certified. |
+| IBKR | Dedicated market-data session, query delivery only | bounded quote query over the IBKR session; no `MarketSubscriptionCommand` implementation | Usable only as a polling/query source; push subscription planning is not implemented. |
+
+The concrete OKX, Hyperliquid and Massive connections already satisfy the provider-specific ownership
+boundary, so no empty cross-provider planner or wrapper was added. Capacity, traffic-class or
+reconciliation policy should be added inside the owning provider connection only when its current
+protocol and production evidence require it.
 
 ### 4.2 Account and execution
 

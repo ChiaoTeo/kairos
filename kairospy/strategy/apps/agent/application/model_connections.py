@@ -77,6 +77,7 @@ _PROVIDERS: Mapping[str, Mapping[str, object]] = {
 
 
 ModelProbe = Callable[[Mapping[str, object], str | None, str], object]
+ConversationProbe = Callable[[Mapping[str, object], str | None, str, str], object]
 CatalogProbe = Callable[
     [Mapping[str, object], str | None], Sequence[Mapping[str, object]]
 ]
@@ -338,6 +339,48 @@ class ModelProviderConnectionApplication:
         result = self.probe(connection, model, secret=secret, probe=probe)
         return self.record_probe(connection_id, model, result)
 
+    def converse(
+        self,
+        connection_id: str,
+        model: str,
+        message: str,
+        *,
+        probe: ConversationProbe | None = None,
+    ) -> dict[str, object]:
+        """Send one user message, return the reply, and update verification."""
+
+        connection = self.show(connection_id)
+        if connection.get("configured") is not True:
+            raise ValueError(f"model connection is not ready: {connection_id}")
+        model = _model_id(model)
+        message = _conversation_message(message)
+        secret = self._secret(connection)
+        try:
+            payload = (probe or _converse_with_model)(
+                connection, secret, model, message
+            )
+            response = _response_text(str(connection["api_mode"]), payload)
+        except Exception as error:
+            result: dict[str, object] = {
+                "succeeded": False,
+                "detail": "对话测试失败",
+                "error_category": _probe_error_category(error),
+                "model": model,
+                "message": message,
+                "response": None,
+            }
+        else:
+            result = {
+                "succeeded": True,
+                "detail": "对话测试成功",
+                "error_category": None,
+                "model": model,
+                "message": message,
+                "response": response,
+            }
+        verification = self.record_probe(connection_id, model, result)
+        return {**result, **verification}
+
     def probe(
         self,
         connection: Mapping[str, object],
@@ -511,9 +554,9 @@ class ModelProviderConnectionApplication:
             "error_category": selected.get("error_category"),
             "tested_configuration_hash": selected.get("configuration_hash"),
             "current_configuration_hash": current_hash,
-            "tested": list(selected.get("tested") or ()),
-            "not_tested": list(selected.get("not_tested") or ()),
-            "capabilities": list(selected.get("capabilities") or ()),
+            "tested": list(_sequence(selected.get("tested"))),
+            "not_tested": list(_sequence(selected.get("not_tested"))),
+            "capabilities": list(_sequence(selected.get("capabilities"))),
             "verified_models": verified_models,
             "failed_models": failed_models,
             "stale_models": stale_models,
@@ -690,6 +733,14 @@ def _latest_verification(
     )
 
 
+def _sequence(value: object) -> Sequence[object]:
+    """Validate a sequence read from persisted dynamic configuration."""
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return value
+    return ()
+
+
 def _discover_models(
     connection: Mapping[str, object], secret: str | None
 ) -> Sequence[Mapping[str, object]]:
@@ -731,6 +782,23 @@ def _detect_local_models(
 def _probe_model(
     connection: Mapping[str, object], secret: str | None, model: str
 ) -> object:
+    return _converse_with_model(
+        connection,
+        secret,
+        model,
+        "Reply with OK to verify this Kairos model connection.",
+        max_output_tokens=8,
+    )
+
+
+def _converse_with_model(
+    connection: Mapping[str, object],
+    secret: str | None,
+    model: str,
+    message: str,
+    *,
+    max_output_tokens: int = 256,
+) -> object:
     mode = str(connection["api_mode"])
     base_url = str(connection["base_url"])
     timeout = float(cast(Any, connection.get("timeout_seconds") or 60.0))
@@ -740,8 +808,8 @@ def _probe_model(
             headers=_auth_headers(mode, secret),
             payload={
                 "model": model,
-                "input": "Reply with OK to verify this Kairos model connection.",
-                "max_output_tokens": 8,
+                "input": message,
+                "max_output_tokens": max_output_tokens,
                 "store": False,
             },
             timeout=timeout,
@@ -752,8 +820,8 @@ def _probe_model(
             headers=_auth_headers(mode, secret),
             payload={
                 "model": model,
-                "messages": [{"role": "user", "content": "Reply with OK."}],
-                "max_tokens": 8,
+                "messages": [{"role": "user", "content": message}],
+                "max_tokens": max_output_tokens,
                 "stream": False,
             },
             timeout=timeout,
@@ -764,8 +832,8 @@ def _probe_model(
             headers=_auth_headers(mode, secret),
             payload={
                 "model": model,
-                "messages": [{"role": "user", "content": "Reply with OK."}],
-                "max_tokens": 8,
+                "messages": [{"role": "user", "content": message}],
+                "max_tokens": max_output_tokens,
             },
             timeout=timeout,
         )
@@ -773,11 +841,51 @@ def _probe_model(
         f"{base_url}/api/chat",
         payload={
             "model": model,
-            "messages": [{"role": "user", "content": "Reply with OK."}],
+            "messages": [{"role": "user", "content": message}],
             "stream": False,
         },
         timeout=timeout,
     )
+
+
+def _response_text(mode: str, payload: object) -> str:
+    if not isinstance(payload, Mapping):
+        raise ValueError("model response must be a JSON object")
+    if mode == "openai-responses":
+        direct = payload.get("output_text")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        output = _sequence(payload.get("output"))
+        for item in output:
+            if not isinstance(item, Mapping):
+                continue
+            for content in _sequence(item.get("content")):
+                if not isinstance(content, Mapping):
+                    continue
+                text = content.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+    elif mode == "anthropic-messages":
+        for content in _sequence(payload.get("content")):
+            if isinstance(content, Mapping):
+                text = content.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+    elif mode == "ollama-native":
+        message = payload.get("message")
+        if isinstance(message, Mapping):
+            text = message.get("content")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    else:
+        choices = _sequence(payload.get("choices"))
+        if choices and isinstance(choices[0], Mapping):
+            message = choices[0].get("message")
+            if isinstance(message, Mapping):
+                text = message.get("content")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+    raise ValueError("model response did not contain text")
 
 
 def _auth_headers(mode: str, secret: str | None) -> dict[str, str]:
@@ -834,6 +942,15 @@ def _model_id(value: str) -> str:
     value = value.strip()
     if not value or len(value) > 256 or any(character.isspace() for character in value):
         raise ValueError("model id must be a non-empty value without whitespace")
+    return value
+
+
+def _conversation_message(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("conversation message must not be empty")
+    if len(value) > 4000:
+        raise ValueError("conversation message must not exceed 4000 characters")
     return value
 
 

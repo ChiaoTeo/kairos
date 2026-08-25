@@ -11,7 +11,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Mapping, cast
 
 from kairospy.system.apps.credentials.application import (
@@ -87,7 +87,7 @@ class AgentResourceApplication:
             if connection.get("configured") is not True:
                 continue
             connection_id = str(connection["connection_id"])
-            for model in connection.get("verified_models") or ():
+            for model in _sequence(connection.get("verified_models")):
                 model_id = str(model)
                 verification = connections.verification(connection_id, model=model_id)
                 if verification.get("verification_status") != "verified":
@@ -194,7 +194,7 @@ class AgentResourceApplication:
                 else None
             ),
             models=tuple(str(value["id"]) for value in discovered),
-            timeout_seconds=float(current.get("timeout_seconds") or 60.0),
+            timeout_seconds=float(str(current.get("timeout_seconds") or 60.0)),
             enabled=bool(current.get("enabled", True)),
             overwrite=True,
         )
@@ -208,6 +208,19 @@ class AgentResourceApplication:
     ) -> dict[str, object]:
         return ModelProviderConnectionApplication(self.workspace).test(
             connection_id, model, probe=probe
+        )
+
+    def converse_with_model(
+        self,
+        connection_id: str,
+        model: str,
+        message: str,
+        *,
+        probe: Callable[[Mapping[str, object], str | None, str, str], object]
+        | None = None,
+    ) -> dict[str, object]:
+        return ModelProviderConnectionApplication(self.workspace).converse(
+            connection_id, model, message, probe=probe
         )
 
     def probe_model_connection(
@@ -545,6 +558,14 @@ def _credential_hash(value: Mapping[str, object]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _sequence(value: object) -> Sequence[object]:
+    """Validate a sequence read from a workspace resource record."""
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return value
+    return ()
 
 
 def _model_configuration_hash(

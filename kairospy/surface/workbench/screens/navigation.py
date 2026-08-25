@@ -11,7 +11,6 @@ from rich.table import Table
 
 from ..widgets import ActionItem
 from .flows.resources.account_actions import ACCOUNT_ACTIONS as RESOURCE_ACCOUNT_ACTIONS
-from .flows.operations.business import actions as business_actions
 from .catalog import HOME_ACTIONS, SECTION_ACTIONS, SECTION_LABELS
 from .flows.launch.execution_actions import (
     EXECUTION_ACTIONS as STRATEGY_EXECUTION_ACTIONS,
@@ -21,12 +20,14 @@ from .flows.launch.market_actions import (
 )
 from .session import GuidedSession
 from .flows.operations.actions import (
-    BUSINESS_ACTIONS as OPERATIONS_BUSINESS_ACTIONS,
-    CONFIG_ACTIONS as OPERATIONS_CONFIG_ACTIONS,
-    PROFILE_ACTIONS as OPERATIONS_PROFILE_ACTIONS,
-    PROJECT_ACTIONS as OPERATIONS_PROJECT_ACTIONS,
+    project_actions,
 )
-from .flows.operations.views import LOG_FOLLOW_ACTIONS, service_actions
+from .flows.operations.views import (
+    LOG_FOLLOW_ACTIONS,
+    SUPPORT_ACTIONS,
+    service_actions,
+    service_display_name,
+)
 from .flows.launch.orders import ORDER_ACTIONS as ACCOUNT_ORDER_ACTIONS
 from .flows.research.actions import (
     DATA_ACTIONS as RESEARCH_DATA_ACTIONS,
@@ -62,7 +63,18 @@ def go_back(session: GuidedSession) -> bool:
 
     if not session.context:
         return False
-    if session.context == ("market", "providers"):
+    if session.context == ("project",):
+        session.home()
+    elif session.context == ("operations", "overview"):
+        session.home()
+    elif session.context in {
+        ("operations", "services"),
+        ("operations", "instances"),
+        ("operations", "supports"),
+    }:
+        session.context = ("operations", "overview")
+        session.visible_records = session.operations.group_records
+    elif session.context == ("market", "providers"):
         session.context = ("market", "selected")
         session.visible_records = _visible(session.market.records)
     elif session.context == ("market", "connected"):
@@ -88,14 +100,20 @@ def go_back(session: GuidedSession) -> bool:
         )
     elif session.context[:2] == ("operations", "service"):
         session.context = ("operations", "services")
-        session.visible_records = session.operations.service_records
-    elif session.context == ("operations", "profiles"):
-        session.context = ("operations", "config")
-    elif len(session.context) == 3 and session.context[:2] == (
-        "operations",
-        "business",
-    ):
-        session.context = ("operations", "business")
+        session.visible_records = tuple(
+            record
+            for record in session.operations.inventory_records
+            if isinstance(record.value, Mapping)
+            and record.value.get("kind") == "service"
+        )
+    elif session.context[:2] == ("operations", "support"):
+        session.context = ("operations", "supports")
+        session.visible_records = tuple(
+            record
+            for record in session.operations.inventory_records
+            if isinstance(record.value, Mapping)
+            and record.value.get("kind") == "support"
+        )
     elif len(session.context) > 1 and session.context[0] == "operations":
         session.enter("operations")
     elif session.context == ("resources", "selected"):
@@ -145,8 +163,18 @@ def go_back(session: GuidedSession) -> bool:
             session.context = ("strategy", "components")
             session.visible_records = _visible(session.strategy.component_records)
         else:
-            session.context = ("strategy", "instances")
-            session.visible_records = _visible(session.strategy.instance_records)
+            if session.strategy.instance_entered_from_operations:
+                session.context = ("operations", "instances")
+                session.visible_records = tuple(
+                    record
+                    for record in session.operations.inventory_records
+                    if isinstance(record.value, Mapping)
+                    and record.value.get("kind") == "run-instance"
+                )
+                session.strategy.instance_entered_from_operations = False
+            else:
+                session.context = ("strategy", "instances")
+                session.visible_records = _visible(session.strategy.instance_records)
     elif len(session.context) > 1 and session.context[0] == "strategy":
         session.enter("strategy")
     elif len(session.context) > 1 and session.context[0] == "reference":
@@ -176,6 +204,8 @@ def action_id(items: tuple[ActionItem, ...], value: str) -> str | None:
 def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
     if not session.context:
         return HOME_ACTIONS
+    if session.context == ("project",):
+        return project_actions(has_project=state.owner is not None)
     if session.context == ("market", "selected"):
         market = session.market.selected
         if market is None:
@@ -188,20 +218,12 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
         return market_provider_actions(session.market.routes)
     if session.context == ("market", "connected"):
         return WORKSPACE_MARKET_ACTIONS
-    if session.context == ("operations", "project"):
-        return OPERATIONS_PROJECT_ACTIONS
-    if session.context == ("operations", "config"):
-        return OPERATIONS_CONFIG_ACTIONS
-    if session.context == ("operations", "business"):
-        return OPERATIONS_BUSINESS_ACTIONS
-    if session.context == ("operations", "profiles"):
-        return OPERATIONS_PROFILE_ACTIONS
-    if len(session.context) == 3 and session.context[:2] == ("operations", "business"):
-        return business_actions(session.context[2])
     if session.context[:2] == ("operations", "service"):
         return service_actions(session.operations.selected_service_status)
     if session.context[:2] == ("operations", "service-logs"):
         return LOG_FOLLOW_ACTIONS
+    if session.context[:2] == ("operations", "support"):
+        return SUPPORT_ACTIONS
     if session.context == ("resources", "selected"):
         return resource_detail_actions(session.resources.kind)
     if session.context == ("resources", "account-operations"):
@@ -263,6 +285,8 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
 def context_label(context: tuple[str, ...]) -> str:
     if not context:
         return "首页"
+    if context == ("project",):
+        return "项目管理"
     parts = ["首页", SECTION_LABELS.get(context[0], context[0])]
     if len(context) > 1:
         labels: Mapping[tuple[str, ...], str] = {
@@ -271,20 +295,19 @@ def context_label(context: tuple[str, ...]) -> str:
             ("market", "connected"): "运行中 Market",
             ("reference", "selected"): "已选目录记录",
             ("reference", "instrument-types"): "选择合约类型",
-            ("operations", "project"): "工作区管理",
-            ("operations", "services"): "后台服务",
+            ("operations", "services"): "项目共享服务",
+            ("operations", "instances"): "活动运行实例",
+            ("operations", "supports"): "支撑进程",
             ("operations", "service"): "服务操作",
-            ("operations", "config"): "高级设置",
-            ("operations", "business"): "风控与集成工具",
-            ("operations", "profiles"): "配置 Profiles",
+            ("operations", "overview"): "运行概览",
             ("resources", "selected"): "已选运行资源",
             ("resources", "account-operations"): "账户运行查询",
             ("resources", "account-orders"): "订单管理",
             ("resources", "setup"): "配置向导",
             ("research", "data"): "数据准备",
             ("research", "research"): "研究流程",
-            ("strategy", "launches"): "Launch 列表",
-            ("strategy", "selected"): "已选 Launch",
+            ("strategy", "launches"): "运行方案",
+            ("strategy", "selected"): "已选运行方案",
             ("strategy", "instances"): "运行实例",
             ("strategy", "instance"): "已选实例",
             ("strategy", "components"): "实例组件",
@@ -296,17 +319,16 @@ def context_label(context: tuple[str, ...]) -> str:
         }
         parts.append(labels.get(context, "查询结果"))
         if len(context) == 3 and context[:2] == ("operations", "service"):
-            parts[-1] = context[2]
+            parts[-1] = service_display_name(context[2])
         elif len(context) == 3 and context[:2] == (
             "operations",
             "service-logs",
         ):
-            parts[-1] = f"{context[2]} / 实时日志"
-        if len(context) == 3 and context[:2] == ("operations", "business"):
+            parts[-1] = f"{service_display_name(context[2])} / 实时日志"
+        elif len(context) == 3 and context[:2] == ("operations", "support"):
             parts[-1] = {
-                "risk": "Risk",
-                "capital": "Capital",
-                "integration": "Provider 集成",
+                "system-supervisor": "System Supervisor",
+                "aeron": "Aeron",
             }.get(context[2], context[2])
     return " / ".join(parts)
 
@@ -356,6 +378,22 @@ def menu_renderable(context: str, items: tuple[ActionItem, ...]) -> RenderableTy
     return Panel(table, title=context, border_style="cyan")
 
 
+def project_summary(state: Any) -> RenderableType:
+    """Describe the global project gate without exposing raw configuration."""
+
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style="dim", no_wrap=True)
+    table.add_column()
+    if state.owner is None:
+        table.add_row("当前项目", "尚未打开")
+        table.add_row("下一步", "打开已有项目或创建新项目")
+        return table
+    table.add_row("当前项目", state.workspace_id)
+    table.add_row("项目路径", str(state.project_root or state.workspace_arg or "—"))
+    table.add_row("状态", "项目已打开")
+    return table
+
+
 def display_shortcut(value: str | None) -> str:
     if value is None or value.isdecimal():
         return value or ""
@@ -369,6 +407,7 @@ __all__ = [
     "display_shortcut",
     "go_back",
     "menu_renderable",
+    "project_summary",
     "record_description",
     "record_label",
 ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Callable
 
 from rich.panel import Panel
@@ -314,7 +315,7 @@ def _activity(
     )
 
 
-def _account_id(record: dict[str, Any] | None) -> str:
+def _account_id(record: Mapping[str, Any] | None) -> str:
     return str(record.get("account_id") or "").strip() if record else ""
 
 

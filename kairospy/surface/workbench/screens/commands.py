@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from kairospy.investment.apps.account.application.cli import AccountCliApplication
-from kairospy.investment.apps.market.application.cli import MarketCliApplication
+from kairospy.investment.apps.market.application.cli import (
+    MarketCliApplication,
+    parse_market_command_line,
+)
 from kairospy.investment.apps.reference.application.cli import ReferenceCliApplication
 from kairospy.system.apps.components.application import NativeCliApplication
 from kairospy.system.apps.integration.application import IntegrationCliApplication
@@ -35,6 +38,28 @@ DANGEROUS_ACTIONS = {
     "transfer",
     "up",
 }
+
+
+def normalize(state: Any, argv: tuple[str, ...]) -> tuple[str, ...]:
+    """Normalize a pasted shell equivalent into Workbench component input."""
+
+    if not argv:
+        return argv
+    if argv[0] == "kairos":
+        argv = argv[1:]
+    if not argv or argv[0] != "market":
+        return argv
+    command = parse_market_command_line(argv[1:])
+    if command.workspace is not None:
+        if state.owner is None:
+            raise RuntimeError(state.load_error or "当前没有可用的 workspace")
+        expected = state.owner.paths.root.expanduser().resolve()
+        supplied = command.workspace.expanduser().resolve()
+        if supplied != expected:
+            raise ValueError(
+                f"命令 workspace 为 {supplied}，当前 Workbench workspace 为 {expected}。"
+            )
+    return ("market", *command.arguments)
 
 
 def run(state: Any, argv: tuple[str, ...]) -> Any:
@@ -98,4 +123,4 @@ def _reference_arguments(arguments: list[str]) -> list[str]:
     return ["standalone", *arguments]
 
 
-__all__ = ["is_dangerous", "preview", "run"]
+__all__ = ["is_dangerous", "normalize", "preview", "run"]

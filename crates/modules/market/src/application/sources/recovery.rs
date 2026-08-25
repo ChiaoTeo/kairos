@@ -829,4 +829,115 @@ mod tests {
         assert_eq!(confirmed.len(), 1);
         assert_eq!(confirmed.values().next().unwrap().as_str(), "current");
     }
+
+    #[tokio::test]
+    async fn strategies_share_one_physical_subscription_until_the_last_owner_releases_it() {
+        let mut application = MarketApplication::new_with_source_capacity("market", 10, 4).unwrap();
+        let source_id = MarketFeedId::new("binance-spot").unwrap();
+        let descriptor = FeedDescriptor::for_provider(
+            source_id.clone(),
+            "binance",
+            ExchangeId::new("binance").unwrap(),
+            "spot",
+            Some("crypto".into()),
+        )
+        .unwrap();
+        let (commands, mut command_receiver) = mpsc::channel(4);
+        let (_input_sender, inputs) = mpsc::channel(4);
+        application
+            .attach_source(SourceHandle {
+                descriptor,
+                commands,
+                inputs,
+                task: tokio::spawn(std::future::pending::<()>()),
+            })
+            .unwrap();
+        application
+            .apply_source_input(SourceInput::StatusChanged {
+                source_id: source_id.clone(),
+                epoch: SourceEpoch::new(1),
+                status: SourceStatus::Ready,
+                error: None,
+            })
+            .await
+            .unwrap();
+        let market = resolved_market_with_asset_type(
+            "market:binance:spot:BTCUSDT",
+            "instrument:spot:BTC-USDT",
+            "binance",
+            "spot",
+            "crypto",
+            "BTCUSDT",
+        )
+        .unwrap();
+        let first_id = SubscriptionId::new("strategy-a-btc").unwrap();
+        let second_id = SubscriptionId::new("strategy-b-btc").unwrap();
+        application
+            .subscribe_static(first_id.clone(), "strategy-a", market.clone())
+            .unwrap();
+        application
+            .subscribe_static(second_id.clone(), "strategy-b", market)
+            .unwrap();
+
+        application.sync_source_subscriptions().await.unwrap();
+        let SourceCommand::Subscribe { request_id, .. } = command_receiver.recv().await.unwrap()
+        else {
+            panic!("expected shared physical subscribe")
+        };
+        assert!(
+            matches!(
+                command_receiver.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ),
+            "the second logical consumer must not create another provider subscription"
+        );
+        application
+            .apply_source_input(SourceInput::SubscriptionConfirmed {
+                source_id: source_id.clone(),
+                epoch: SourceEpoch::new(1),
+                request_id,
+                handle: ProviderSubscriptionId::new("shared-btc").unwrap(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            application
+                .current_view()
+                .subscriptions
+                .iter()
+                .all(|subscription| subscription.status == SubscriptionStatus::Ready)
+        );
+
+        assert!(
+            application
+                .unsubscribe_owned(&first_id, "strategy-a")
+                .unwrap()
+        );
+        application.sync_source_subscriptions().await.unwrap();
+        assert!(matches!(
+            command_receiver.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert_eq!(
+            application.actor.attached_sources[&source_id]
+                .confirmed
+                .len(),
+            1
+        );
+
+        assert!(
+            application
+                .unsubscribe_owned(&second_id, "strategy-b")
+                .unwrap()
+        );
+        application.sync_source_subscriptions().await.unwrap();
+        assert!(matches!(
+            command_receiver.recv().await.unwrap(),
+            SourceCommand::Unsubscribe { .. }
+        ));
+        assert!(matches!(
+            command_receiver.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
 }

@@ -44,10 +44,11 @@ class WorkbenchState:
             self.snapshot = None
             return None
         try:
+            previous = self.snapshot
             self.snapshot = SystemObserveApplication(self.owner).read()
             self.load_error = None
         except Exception as error:
-            self.snapshot = None
+            self.snapshot = previous
             self.load_error = str(error)
         return self.snapshot
 

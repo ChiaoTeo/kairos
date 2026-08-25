@@ -86,3 +86,5 @@ ignore = ["kairospy/infrastructure/protocol/generated"]
 typeCheckingMode = "basic"
 reportMissingImports = "error"
 reportMissingTypeStubs = "none"
+# Public facades intentionally use module-level __getattr__ for lazy imports.
+reportUnsupportedDunderAll = "none"

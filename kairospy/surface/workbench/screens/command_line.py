@@ -61,6 +61,7 @@ from .navigation import (
     context_items,
     context_label,
     go_back,
+    project_summary,
     record_label,
 )
 from .operation import OperationSpec, RunningTask
@@ -72,6 +73,7 @@ from .catalog import HOME_ACTIONS, SECTION_ACTIONS
 from .session import GuidedSession
 from .commands import (
     is_dangerous as is_dangerous_kairos_command,
+    normalize as normalize_kairos_command,
     preview as preview_kairos_command,
     run as run_kairos_command,
 )
@@ -101,7 +103,6 @@ class CommandLineScreen(Screen[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        self._interrupt_exit_pending = False
         self._running_task: RunningTask | None = None
         self._attach_refresh_worker: Worker[Any] | None = None
         self._market_refresh_worker: Worker[Any] | None = None
@@ -122,10 +123,7 @@ class CommandLineScreen(Screen[None]):
             highlight=False,
             markup=False,
         )
-        yield Static(
-            "本会话完成的操作和结果会保留在这里",
-            id="activity-empty",
-        )
+        yield Static("", id="activity-empty")
         yield InteractionRegion(
             ChoiceInteraction(actions=HOME_ACTIONS),
             id="interaction-region",
@@ -140,6 +138,8 @@ class CommandLineScreen(Screen[None]):
         )
 
     def on_mount(self) -> None:
+        if self.workbench_app.state.owner is None:
+            self.session.enter("project")
         self._show_context()
         self.app.set_focus(self._input())
         self.set_interval(1.0, self._refresh_launch_attach)
@@ -181,7 +181,11 @@ class CommandLineScreen(Screen[None]):
             command, arguments = _parse_command(value)
             is_allowed = value.startswith("/") and command in {
                 "confirm",
+                "yes",
+                "y",
                 "cancel",
+                "no",
+                "n",
                 "exit",
                 "quit",
                 "q",
@@ -189,11 +193,9 @@ class CommandLineScreen(Screen[None]):
                 "?",
             }
             if not is_allowed or arguments:
-                self._interrupt_exit_pending = False
-                self._set_status("等待确认 · 请输入 /confirm 或 /cancel")
+                self._set_status("等待确认 · 请输入 /y 或 /n")
                 self.app.set_focus(self._input())
                 return
-            self._interrupt_exit_pending = False
             self._dispatch(command, arguments)
             self.app.set_focus(self._input())
             return
@@ -259,6 +261,10 @@ class CommandLineScreen(Screen[None]):
             self._dispatch(value.lower(), ())
             self.app.set_focus(self._input())
             return
+        if value.lower() == "p":
+            self.enter_project_management()
+            self.app.set_focus(self._input())
+            return
         if not value.startswith("/") and not value.isdecimal():
             self._dispatch_kairos(value)
             return
@@ -285,6 +291,12 @@ class CommandLineScreen(Screen[None]):
             argv = tuple(shlex.split(value))
         except ValueError as error:
             self._write_error(f"无法解析 kairos 命令：{error}")
+            self._show_context()
+            return
+        try:
+            argv = normalize_kairos_command(self.workbench_app.state, argv)
+        except (RuntimeError, ValueError) as error:
+            self._write_error(str(error))
             self._show_context()
             return
         if not argv:
@@ -371,6 +383,9 @@ class CommandLineScreen(Screen[None]):
     def _dispatch_context(self, command: str, arguments: tuple[str, ...]) -> bool:
         if arguments:
             return False
+        if command == "project" or (command == "p" and not self.session.context):
+            self.enter_project_management()
+            return True
         if not self.session.context:
             section = action_id(HOME_ACTIONS, command)
             if section is None:
@@ -391,6 +406,24 @@ class CommandLineScreen(Screen[None]):
     def enter_section(self, section: str) -> None:
         """Enter one product context without replacing the command screen."""
 
+        if self.workbench_app.state.owner is None and section != "project":
+            self.session.enter("project")
+            self._show_context()
+            self._set_status("请先打开或创建项目")
+            return
+        if section == "project":
+            self.enter_project_management()
+            return
+        if section == "operations":
+            self.workbench_app.transcript.record(
+                "navigation", section=section, mode="guided"
+            )
+            self._apply_effects(
+                product_flows.operations.enter_overview(
+                    self.workbench_app.state, self.session
+                )
+            )
+            return
         if section == "observe":
             self._start_operation(self._observe_spec())
             return
@@ -400,6 +433,16 @@ class CommandLineScreen(Screen[None]):
         self.session.enter(section)
         self.workbench_app.transcript.record(
             "navigation", section=section, mode="guided"
+        )
+        self._show_context()
+
+    def enter_project_management(self) -> None:
+        """Enter the global project context without creating another screen."""
+
+        self._finish_operations_logs()
+        self.session.enter("project")
+        self.workbench_app.transcript.record(
+            "navigation", section="project", mode="global"
         )
         self._show_context()
 
@@ -464,7 +507,7 @@ class CommandLineScreen(Screen[None]):
 
     def action_clear(self) -> None:
         self._output().clear_visible_history()
-        self.query_one("#activity-empty", Static).display = True
+        self.query_one("#activity-empty", Static).display = False
         self._show_context()
         self._set_status("活动记录已清空 · Transcript 和业务状态未改变")
 
@@ -562,7 +605,6 @@ class CommandLineScreen(Screen[None]):
             self._show_context()
             return
         if isinstance(interaction, ConfirmInteraction):
-            self._interrupt_exit_pending = False
             product_flows.cancel_confirmation(self.session, interaction.operation)
             self.session.reset_prompt()
             self._set_status("就绪")
@@ -594,12 +636,6 @@ class CommandLineScreen(Screen[None]):
     def action_interrupt(self) -> None:
         """Cancel active work, or ask before exiting when completely idle."""
 
-        if self._interrupt_exit_pending:
-            self.workbench_app.transcript.record(
-                "session_finished", status="forced_interrupt"
-            )
-            self.app.exit(130)
-            return
         if (
             isinstance(self.session.interaction, (InputInteraction, ConfirmInteraction))
             or self._running_task is not None
@@ -611,9 +647,7 @@ class CommandLineScreen(Screen[None]):
             self.workbench_app.action_quit,
             route=ResultRoute(ResultKind.CONFIRMED, "exit"),
             title="退出 Workbench",
-            force_hint="再次按 Ctrl+C 强制退出，返回码 130。",
         )
-        self._interrupt_exit_pending = True
 
     def request_confirmation(
         self,
@@ -627,7 +661,6 @@ class CommandLineScreen(Screen[None]):
     ) -> None:
         """Stage a dangerous action in the interaction region, without a modal."""
 
-        self._interrupt_exit_pending = False
         operation = OperationSpec.create(
             action_name=("workbench.exit" if route.qualifier == "exit" else summary),
             audit_summary=redact_text(summary),
@@ -665,8 +698,8 @@ class CommandLineScreen(Screen[None]):
             summary=operation.audit_summary,
         )
         self._interaction().present(self.session.interaction)
-        self._input().placeholder = "输入 /confirm 或 /cancel"
-        self._set_hints("/confirm 继续  ·  /cancel 或 Esc 取消")
+        self._input().placeholder = "输入 /y 或 /n"
+        self._set_hints("/y 继续  ·  /n 或 Esc 取消")
         self._set_status("等待确认")
 
     def _confirm_pending(self) -> None:
@@ -676,7 +709,6 @@ class CommandLineScreen(Screen[None]):
             return
         operation = interaction.operation
         summary = operation.audit_summary
-        self._interrupt_exit_pending = False
         self.session.finish_prompt()
         self.workbench_app.transcript.record(
             "confirmation_accepted",
@@ -804,7 +836,7 @@ class CommandLineScreen(Screen[None]):
         if isinstance(interaction, InputInteraction):
             command_input.placeholder = interaction.prompt
         elif isinstance(interaction, ConfirmInteraction):
-            command_input.placeholder = "输入 /confirm 或 /cancel"
+            command_input.placeholder = "输入 /y 或 /n"
         else:
             command_input.placeholder = "输入编号或命令；Enter 提交"
         if not command_input.disabled:
@@ -812,12 +844,9 @@ class CommandLineScreen(Screen[None]):
 
     def _sync_context_chrome(self) -> None:
         interaction = self.session.interaction
-        context = (
-            interaction.title
-            if isinstance(interaction, InputInteraction) and interaction.title
-            else self._context_label()
+        self.query_one("#command-context", Static).update(
+            f"{self._context_label()}  ›"
         )
-        self.query_one("#command-context", Static).update(f"{context}  ›")
         if isinstance(interaction, InputInteraction):
             verb = (
                 "搜索"
@@ -1149,6 +1178,7 @@ class CommandLineScreen(Screen[None]):
                 running_task.spec,
                 event.worker.result,
             )
+            self.query_one(WorkspaceHeader).refresh_project()
             if effects is not None:
                 self._apply_effects(effects, running_task.spec)
                 return
@@ -1211,6 +1241,10 @@ class CommandLineScreen(Screen[None]):
         self.call_after_refresh(self.app.set_focus, self._input())
 
     def _show_context(self) -> None:
+        if self.workbench_app.state.owner is None and self.session.context != (
+            "project",
+        ):
+            self.session.enter("project")
         if isinstance(
             self.session.interaction, (ChoiceInteraction, ControlInteraction)
         ):
@@ -1226,7 +1260,15 @@ class CommandLineScreen(Screen[None]):
         elif self.session.context == ("strategy", "attach"):
             self._present_launch_control()
         else:
-            self.session.choose(items, title=context)
+            self.session.choose(
+                items,
+                title=context,
+                summary=(
+                    project_summary(self.workbench_app.state)
+                    if self.session.context == ("project",)
+                    else None
+                ),
+            )
             self._interaction().present(self.session.interaction)
         self.query_one("#command-context", Static).update(f"{context}  ›")
         self._input().placeholder = "输入编号或命令；Enter 提交"
@@ -1350,6 +1392,7 @@ def _activity_kind(kind: ResultKind) -> ActivityKind:
         ResultKind.RESOURCES_SUMMARY,
         ResultKind.RESOURCE_LIST,
         ResultKind.OPERATIONS_SERVICES,
+        ResultKind.OPERATIONS_OVERVIEW,
         ResultKind.STRATEGY_LAUNCHES,
         ResultKind.STRATEGY_INSTANCES,
         ResultKind.STRATEGY_COMPONENTS,
@@ -1400,8 +1443,9 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_row("其他文本", "作为 kairos <输入> 交给所属 Application 执行")
     table.add_row("/back", "返回上一级；等待参数时取消当前步骤")
     table.add_row("/home", "返回首页")
+    table.add_row("p /project", "进入全局项目管理")
     table.add_row("/exit", "退出 Kairos Workbench")
-    table.add_row("/observe", "查看 Workspace 组件和 Launch 状态")
+    table.add_row("/observe", "打开当前项目的运行中心")
     table.add_row("/market [代码]", "搜索有效市场标的；省略代码时进入引导")
     if context[:1] == ("market",):
         table.add_row("/r", "回放本地 JSONL 行情")
@@ -1413,7 +1457,7 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_row("/copy", "复制当前页完整输出，可直接粘贴给 Agent")
     table.add_row("/copy-history", "只复制当前会话的活动记录")
     table.add_row("/bottom", "回到最新活动并恢复自动跟随")
-    table.add_row("/confirm /cancel", "继续或取消等待中的步骤")
+    table.add_row("/y /n", "继续或取消等待中的步骤")
     table.add_row("PgUp / PgDn", "翻阅内容区；输入焦点保持在命令框")
     table.add_row("Ctrl+End", "回到内容区底部并继续跟随新输出")
     table.add_row("Alt+PgUp / PgDn", "滚动内容超出高度上限的交互区")

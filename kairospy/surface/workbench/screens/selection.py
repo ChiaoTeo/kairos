@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from typing import TypeVar
+
+
+_RecordT = TypeVar("_RecordT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,11 +64,11 @@ class LaunchRecordView(Mapping[str, object]):
 
 
 def selection_records(
-    records: Iterable[object],
+    records: Iterable[_RecordT],
     *,
-    label: Callable[[object], str],
-    description: Callable[[object], str],
-    key: Callable[[object], str] | None = None,
+    label: Callable[[_RecordT], str],
+    description: Callable[[_RecordT], str],
+    key: Callable[[_RecordT], str] | None = None,
 ) -> tuple[SelectionRecord, ...]:
     """Adapt owner results once when they cross into numbered UI state."""
 

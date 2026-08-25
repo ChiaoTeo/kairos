@@ -2,6 +2,7 @@
 
 websocket_connection!(
     BinanceAlphaTradingWebSocketConnection,
-    "advanced.alpha.websocket"
+    "advanced.alpha.websocket",
+    "alpha"
 );
 market_websocket_capabilities!(BinanceAlphaTradingWebSocketConnection, "alpha");

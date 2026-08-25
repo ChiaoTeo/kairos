@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Sequence
-
 import typer
 
-from kairospy.investment.apps.market.application.cli import MarketCliApplication
+from kairospy.investment.apps.market.application.cli import (
+    MarketCliApplication,
+    parse_market_command_line,
+)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
@@ -41,36 +41,12 @@ CONNECTED_COMMANDS = {
 }
 
 
-def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str]]:
-    values: list[str] = []
-    result: list[str] = []
-    index = 0
-    while index < len(argv):
-        item = argv[index]
-        if item == "--workspace":
-            if index + 1 >= len(argv):
-                raise typer.BadParameter("--workspace requires a value")
-            values.append(argv[index + 1])
-            index += 2
-            continue
-        if item.startswith("--workspace="):
-            values.append(item.split("=", 1)[1])
-            index += 1
-            continue
-        if item == "--format":
-            result.append("--output")
-        elif item.startswith("--format="):
-            result.append("--output=" + item.split("=", 1)[1])
-        else:
-            result.append(item)
-        index += 1
-    if len(set(values)) > 1:
-        raise typer.BadParameter("--workspace may be specified only once")
-    return (Path(values[0]) if values else None), result
-
-
 def market_passthrough(ctx: typer.Context) -> None:
-    workspace, arguments = _workspace_and_arguments(ctx.args)
+    try:
+        command = parse_market_command_line(ctx.args)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    workspace, arguments = command.workspace, list(command.arguments)
     if not arguments or arguments == ["--help"] or arguments == ["-h"]:
         typer.echo(HELP.rstrip(), nl=False)
         return
@@ -94,9 +70,10 @@ def market_passthrough(ctx: typer.Context) -> None:
             "for a launch-scoped Market server."
         )
     owner = WorkspaceApplication().resolve(workspace) if workspace is not None else None
-    result = MarketCliApplication(owner).invoke(
-        [explicit_mode, *(arguments or ["--help"])]
-    )
+    native_arguments = [explicit_mode, *(arguments or ["--help"])]
+    if command.output is not None:
+        native_arguments[:0] = ["--output", command.output]
+    result = MarketCliApplication(owner).invoke(native_arguments)
     output = result.stdout if result.returncode == 0 else result.stderr or result.stdout
     if output:
         typer.echo(output.rstrip(), nl=False)

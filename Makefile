@@ -1,6 +1,9 @@
 RUSTFMT_TOOLCHAIN ?= nightly-2025-08-26
 
-.PHONY: docs docs-check rust-fmt rust-fmt-check
+.PHONY: docs docs-check python-type-check rust-fmt rust-fmt-check
+
+python-type-check:
+	uv run pyright --warnings
 
 rust-fmt:
 	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all

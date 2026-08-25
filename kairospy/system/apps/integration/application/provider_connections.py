@@ -74,9 +74,9 @@ class ProviderConnectionConfigurationApplication:
             {
                 "provider": provider,
                 "default_endpoint": value["default_endpoint"],
-                "products": list(value["products"]),
-                "purposes": list(value["purposes"]),
-                "credential_fields": list(value["credential_fields"]),
+                "products": list(_sequence(value["products"])),
+                "purposes": list(_sequence(value["purposes"])),
+                "credential_fields": list(_sequence(value["credential_fields"])),
             }
             for provider, value in _PROVIDERS.items()
         )
@@ -155,7 +155,9 @@ class ProviderConnectionConfigurationApplication:
                 self.workspace
             ).resource_snapshot(credential_id)
             credential_provider = str(credential.get("provider") or "")
-            credential_fields = [str(value) for value in credential.get("fields") or ()]
+            credential_fields = [
+                str(value) for value in _sequence(credential.get("fields"))
+            ]
         else:
             credential = {
                 "provider": credential_provider,
@@ -164,7 +166,10 @@ class ProviderConnectionConfigurationApplication:
         if credential_provider != provider:
             raise ValueError(f"{provider} connection requires a {provider} credential")
         fields = set(str(value) for value in credential_fields or ())
-        missing = sorted(set(definition["credential_fields"]) - fields)
+        required_fields = {
+            str(value) for value in _sequence(definition["credential_fields"])
+        }
+        missing = sorted(required_fields - fields)
         if missing:
             raise ValueError(
                 f"{provider} credential is missing required values: {', '.join(missing)}"
@@ -226,8 +231,8 @@ class ProviderConnectionConfigurationApplication:
             connection_id,
             provider=str(current["provider"]),
             credential_id=str(current["credential_id"]),
-            products=list(current["products"]),
-            purposes=list(current["purposes"]),
+            products=[str(value) for value in _sequence(current["products"])],
+            purposes=[str(value) for value in _sequence(current["purposes"])],
             endpoint=str(current["endpoint"]),
             environment=str(current["environment"]),
             enabled=enabled,
@@ -275,8 +280,8 @@ class ProviderConnectionConfigurationApplication:
         definition = _PROVIDERS[str(connection["provider"])]
         credentials = CredentialConfigurationApplication(self.workspace)
         secrets = {
-            field: value
-            for field in definition["credential_fields"]
+            str(field): value
+            for field in _sequence(definition["credential_fields"])
             if (value := credentials.resolve_field(credential_id, str(field)))
             is not None
         }
@@ -284,7 +289,7 @@ class ProviderConnectionConfigurationApplication:
         try:
             observed = dict((probe or _probe_market_connection)(connection, secrets))
             capabilities = sorted(
-                set(str(value) for value in observed.get("capabilities") or ())
+                set(str(value) for value in _sequence(observed.get("capabilities")))
             )
             evidence = {
                 "schema_version": 1,
@@ -296,10 +301,10 @@ class ProviderConnectionConfigurationApplication:
                 "observed_permissions": sorted(
                     set(
                         str(value)
-                        for value in observed.get("observed_permissions") or ()
+                        for value in _sequence(observed.get("observed_permissions"))
                     )
                 ),
-                "warnings": list(observed.get("warnings") or ()),
+                "warnings": list(_sequence(observed.get("warnings"))),
             }
         except Exception as error:
             evidence = {
@@ -425,10 +430,14 @@ class ProviderConnectionConfigurationApplication:
             issues.append(f"credential does not exist: {credential_id or 'missing'}")
         if credential and credential.get("provider") != provider:
             issues.append("credential provider does not match connection provider")
-        products = [str(item) for item in value.get("products") or ()]
-        purposes = [str(item) for item in value.get("purposes") or ()]
-        unsupported_products = sorted(set(products) - set(definition["products"]))
-        unsupported_purposes = sorted(set(purposes) - set(definition["purposes"]))
+        products = [str(item) for item in _sequence(value.get("products"))]
+        purposes = [str(item) for item in _sequence(value.get("purposes"))]
+        unsupported_products = sorted(
+            set(products) - set(_sequence(definition["products"]))
+        )
+        unsupported_purposes = sorted(
+            set(purposes) - set(_sequence(definition["purposes"]))
+        )
         if unsupported_products:
             issues.append(f"unsupported products: {', '.join(unsupported_products)}")
         if unsupported_purposes:
@@ -467,7 +476,7 @@ class ProviderConnectionConfigurationApplication:
         except (KeyError, OSError, ValueError):
             credential_hash = None
         payload = {
-            key: sorted(str(item) for item in value.get(key) or ())
+            key: sorted(str(item) for item in _sequence(value.get(key)))
             if key in {"products", "purposes"}
             else value.get(key)
             for key in _FINGERPRINT_FIELDS
@@ -574,6 +583,14 @@ def _error_category(error: Exception) -> str:
     return "provider_response"
 
 
+def _sequence(value: object) -> Sequence[object]:
+    """Validate a sequence read from TOML, JSON, or provider metadata."""
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return value
+    return ()
+
+
 def _probe_market_connection(
     connection: Mapping[str, object], secrets: Mapping[str, str]
 ) -> Mapping[str, object]:
@@ -581,7 +598,7 @@ def _probe_market_connection(
 
     provider = str(connection["provider"])
     endpoint = str(connection["endpoint"])
-    product = next(iter(connection.get("products") or ()), "spot")
+    product = next(iter(_sequence(connection.get("products"))), "spot")
     if provider == "binance":
         url = f"{endpoint}/api/v3/exchangeInfo?symbol=BTCUSDT"
         headers = {"X-MBX-APIKEY": secrets.get("api_key", "")}

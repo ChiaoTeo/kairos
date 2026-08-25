@@ -6,6 +6,7 @@
 ## Coverage
 
 - [Capability matrix](capability-matrix.md)
+- [Binance public market-stream certification](binance-market-stream-certification.md)
 - [Provider-native account and audit history](provider-native-account-history.md)
 - [Provider-native ordinary-order extensions](provider-native-order-extensions.md)
 
@@ -22,4 +23,3 @@
 [Adapter provenance](adapter-provenance/README.md) records official provider
 sources, inspected upstream implementations, reused logic, deliberately
 uncopied areas, tests and license obligations.
-

@@ -44,6 +44,7 @@ from .views import (
     mapping_renderable,
     model_catalog_renderable,
     record_summary,
+    records_renderable,
 )
 from .wizard import ResourceWizardState, prepare_model_draft, save_resource_wizard
 from .actions import (
@@ -185,7 +186,31 @@ def handle_command(
         )
         return (_start_model_test(state, wizard, model),)
     if command == "resource:model-test":
-        return _resource_confirmation(state, session, "test", value=value)
+        model = value.strip()
+        if (
+            not model
+            or len(model) > 256
+            or any(character.isspace() for character in model)
+        ):
+            return _input_error(session, "模型 ID 不能为空或包含空白字符")
+        return _ask_model_message(session, model)
+    if command == "resource:model-chat":
+        prefix = "test-model-message:"
+        action = str(session.resources.action or "")
+        if not action.startswith(prefix):
+            return None
+        if not value:
+            return _input_error(session, "测试消息不能为空")
+        model = action.removeprefix(prefix)
+        session.resources.action = None
+        run = _model_conversation_run(state, session, model, value)
+        return _confirm_or_run(
+            state,
+            session,
+            run.operation,
+            details=Text(f"模型：{model}\n消息：{value}"),
+            title="确认发送模型测试消息",
+        )
     return None
 
 
@@ -319,7 +344,7 @@ def handle_context(
             model = _selected_saved_model(record, selected_model)
             if model is None:
                 return None
-            return _resource_confirmation(state, session, "test", value=model)
+            return _ask_model_message(session, model)
         action = action_id(detail_actions(kind), command)
         if action is None:
             return None
@@ -358,7 +383,7 @@ def handle_context(
             session.resources.action = "test-model-choice"
             interaction = ChoiceInteraction(
                 title=f"{_title(session)} · 选择测试模型",
-                summary=Text("选择一个模型执行最小文本调用。", style="dim"),
+                summary=Text("选择一个模型并发送一条测试消息。", style="dim"),
                 actions=_saved_model_actions(record),
             )
             session.interaction = interaction
@@ -372,7 +397,7 @@ def handle_context(
         )
     if len(session.context) > 1 and session.visible_records:
         record = _record_choice(session.visible_records, command)
-        if record is None or session.resources.kind is None:
+        if not isinstance(record, Mapping) or session.resources.kind is None:
             return None
         selected = ResourceRecordView.from_mapping(record)
         session.resources.selected = selected
@@ -419,47 +444,7 @@ def handle_success(
         records = tuple(
             ResourceRecordView.from_mapping(record) for record in (result or ())
         )
-        session.resources.kind = resource_kind
-        session.context = ("resources", resource_kind)
-        visible = selection_records(
-            records,
-            key=lambda record: identity(resource_kind, record),
-            label=lambda record: identity(resource_kind, record),
-            description=lambda record: record_summary(resource_kind, record),
-        )
-        session.visible_records = visible
-        if records:
-            actions = (
-                *tuple(
-                    ActionItem(
-                        str(i),
-                        record.label,
-                        record.description,
-                        str(i),
-                    )
-                    for i, record in enumerate(visible, 1)
-                ),
-                ActionItem(
-                    "new",
-                    f"添加{RESOURCE_LABELS[resource_kind]}",
-                    "启动安全的单输入配置向导",
-                    "n",
-                ),
-            )
-            status = f"找到 {len(records)} 个结果 · 请选择"
-        else:
-            actions = (
-                ActionItem(
-                    "new",
-                    f"添加{RESOURCE_LABELS[resource_kind]}",
-                    "启动安全的单输入配置向导",
-                    "new",
-                ),
-            )
-            status = f"尚未配置 {RESOURCE_LABELS[resource_kind]}"
-        interaction = ChoiceInteraction(title=_title(session), actions=actions)
-        session.interaction = interaction
-        return SetInteraction(interaction), SetStatus(status)
+        return _enter_resource_list(session, resource_kind, records)
     if kind is ResultKind.RESOURCES_SUMMARY:
         body = summary_renderable(result)
         return _activity(spec, body), *_choice(state, session, status="检查已完成")
@@ -478,14 +463,21 @@ def handle_success(
         )
         outcome = _resource_action_outcome(action, result)
         if action == "delete":
-            if selected is not None and resource_kind is not None:
-                selected_id = identity(resource_kind, selected)
-                session.visible_records = tuple(
-                    record
-                    for record in session.visible_records
-                    if record.key != selected_id
-                )
             session.resources.selected = None
+            if resource_kind is not None:
+                records = tuple(
+                    ResourceRecordView.from_mapping(record)
+                    for record in list_records(state, resource_kind)
+                )
+                return (
+                    _activity(spec, body, outcome),
+                    *_enter_resource_list(
+                        session,
+                        resource_kind,
+                        records,
+                        status="连接已删除 · 请选择其他连接",
+                    ),
+                )
             session.context = ("resources",)
         elif isinstance(result, Mapping) and any(
             key in result for key in ("account_id", "connection_id", "destination_id")
@@ -515,21 +507,87 @@ def handle_success(
             else Panel(str(result), title=title)
         )
         if isinstance(wizard, ResourceWizardState):
-            if isinstance(result, Mapping) and result.get("status") == "preview":
-                session.resources.selected = None
-                session.context = ("resources", wizard.kind)
-            else:
-                selected = (
-                    ResourceRecordView.from_mapping(result)
-                    if isinstance(result, Mapping)
-                    else ResourceRecordView({})
-                )
-                session.resources.selected = selected
-                session.context = ("resources", "selected")
+            resource_kind = wizard.kind
             wizard.clear_secrets()
+        else:
+            resource_kind = None
         session.resources.wizard = None
+        if resource_kind is not None:
+            records = tuple(
+                ResourceRecordView.from_mapping(record)
+                for record in list_records(state, resource_kind)
+            )
+            return (
+                _activity(spec, body),
+                *_enter_resource_list(
+                    session,
+                    resource_kind,
+                    records,
+                    status="资源配置已完成 · 请选择连接",
+                ),
+            )
         return _activity(spec, body), *_choice(state, session, status="资源配置已完成")
     return None
+
+
+def _enter_resource_list(
+    session: GuidedSession,
+    resource_kind: str,
+    records: tuple[ResourceRecordView, ...],
+    *,
+    status: str | None = None,
+) -> tuple[ScreenEffect, ...]:
+    """Enter one resource list and expose selection before management actions."""
+
+    session.resources.kind = resource_kind
+    session.resources.selected = None
+    session.resources.action = None
+    session.context = ("resources", resource_kind)
+    visible = selection_records(
+        records,
+        key=lambda record: identity(resource_kind, record),
+        label=lambda record: identity(resource_kind, record),
+        description=lambda record: record_summary(resource_kind, record),
+    )
+    session.visible_records = visible
+    if records:
+        actions = (
+            *tuple(
+                ActionItem(
+                    str(index),
+                    record.label,
+                    record.description,
+                    str(index),
+                )
+                for index, record in enumerate(visible, 1)
+            ),
+            ActionItem(
+                "new",
+                f"添加{RESOURCE_LABELS[resource_kind]}",
+                "启动安全的单输入配置向导",
+                "n",
+            ),
+        )
+        resolved_status = status or f"找到 {len(records)} 个结果 · 请选择"
+    else:
+        actions = (
+            ActionItem(
+                "new",
+                f"添加{RESOURCE_LABELS[resource_kind]}",
+                "启动安全的单输入配置向导",
+                "new",
+            ),
+        )
+        resolved_status = status or f"尚未配置 {RESOURCE_LABELS[resource_kind]}"
+    interaction = ChoiceInteraction(
+        title=_title(session),
+        summary=records_renderable(
+            resource_kind, tuple(dict(record) for record in records)
+        ),
+        actions=actions,
+    )
+    session.interaction = interaction
+    return SetInteraction(interaction), SetStatus(resolved_status)
 
 
 def handle_failure(
@@ -715,10 +773,19 @@ def _advance_wizard(
                 models = ModelConnectionDraftApplication(
                     _workspace_owner(state)
                 ).discover_models(draft)
-            except BaseException:
-                draft.discard()
-                raise
-            return {"draft": draft, "models": models, "preview": False}
+            except Exception as error:
+                return {
+                    "draft": draft,
+                    "models": (),
+                    "discovery_error": str(error),
+                    "preview": False,
+                }
+            return {
+                "draft": draft,
+                "models": models,
+                "discovery_error": None,
+                "preview": False,
+            }
 
         return (
             _run(
@@ -1006,7 +1073,7 @@ def _selected_discovered_model(wizard: ResourceWizardState, action: str) -> str 
 def _saved_model_actions(record: Mapping[str, Any]) -> tuple[ActionItem, ...]:
     models = tuple(dict.fromkeys(map(str, record.get("models") or ())))
     actions = tuple(
-        ActionItem(f"saved-model-{index}", model, "执行最小文本调用", str(index))
+        ActionItem(f"saved-model-{index}", model, "发送一条测试消息", str(index))
         for index, model in enumerate(models, 1)
     )
     return (
@@ -1028,6 +1095,45 @@ def _selected_saved_model(record: Mapping[str, Any], action: str) -> str | None:
         return tuple(dict.fromkeys(map(str, record.get("models") or ())))[index]
     except (ValueError, IndexError):
         return None
+
+
+def _ask_model_message(session: GuidedSession, model: str) -> tuple[ScreenEffect, ...]:
+    session.resources.action = f"test-model-message:{model}"
+    return _ask(
+        session,
+        "resource:model-chat",
+        "请输入一条测试消息",
+        "消息会真实发送给所选模型；输入 /back 取消。",
+        Text(f"模型：{model}"),
+    )
+
+
+def _model_conversation_run(
+    state: Any, session: GuidedSession, model: str, message: str
+) -> RunOperation:
+    record = session.resources.selected
+    assert record is not None
+    connection_id = identity("models", record)
+
+    def converse() -> Any:
+        if state.dry_run or state.no_exec:
+            return {
+                "status": "preview",
+                "succeeded": True,
+                "model": model,
+                "message": message,
+                "response": "预览模式未执行真实模型调用",
+            }
+        return AgentResourceApplication(_workspace_owner(state)).converse_with_model(
+            connection_id, model, message
+        )
+
+    return _run(
+        "resources.models.converse",
+        f"测试模型对话 {connection_id}/{model}",
+        ResultRoute(ResultKind.RESOURCE_ACTION, "test"),
+        converse,
+    )
 
 
 def _model_choice_interaction(
@@ -1107,13 +1213,23 @@ def _handle_model_discovery_success(
     interaction = _model_choice_interaction(session, wizard)
     session.interaction = interaction
     count = len(wizard.discovered_models)
-    body = Text(
-        f"发现 {count} 个模型。" if count else "未发现模型，可手动输入模型 ID。"
-    )
+    discovery_error = str(result.get("discovery_error") or "")
+    if discovery_error:
+        body = Text(
+            f"模型目录不可用（{discovery_error}）。这不代表推理接口不可用，"
+            "请手动输入模型 ID 继续测试。",
+            style="yellow",
+        )
+        status = "模型目录不可用 · 请选择手动输入模型 ID"
+    else:
+        body = Text(
+            f"发现 {count} 个模型。" if count else "未发现模型，可手动输入模型 ID。"
+        )
+        status = "请选择用于验证的模型"
     return (
         _activity(spec, body),
         SetInteraction(interaction),
-        SetStatus("请选择用于验证的模型"),
+        SetStatus(status),
     )
 
 
@@ -1352,7 +1468,11 @@ def _account_access_summary(
         str(record.get("integration_provider") or record.get("broker") or "—"),
     )
     table.add_row("环境", str(record.get("environment") or "—"))
-    table.add_row("产品", "/".join(map(str, record.get("segments") or ())) or "—")
+    segments = record.get("segments")
+    table.add_row(
+        "产品",
+        "/".join(map(str, segments)) if isinstance(segments, list) else "—",
+    )
     if purpose:
         table.add_row("Kairos 用途", purpose)
     if credential_id:

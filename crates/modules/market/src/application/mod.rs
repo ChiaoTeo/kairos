@@ -26,7 +26,7 @@ pub use model::{
     MarketError, MarketObservationResult, MarketQueryResult, OrderBookSide,
 };
 pub use replay::{load_replay_events, load_replay_events_many};
-pub(crate) use sources::source_accepts;
+pub(crate) use sources::{source_accepts, source_supports_selectors};
 pub use universe::ReconcileMarketUniverse;
 pub(crate) use universe::{MarketProviderCapability, MarketUniverseResolver};
 

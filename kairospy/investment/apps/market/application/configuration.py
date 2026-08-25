@@ -34,7 +34,8 @@ class MarketProviderBindingApplication:
         )
         provider = str(connection["provider"])
         product = product.strip().lower()
-        if product not in connection.get("products", []):
+        products = connection.get("products")
+        if not isinstance(products, list) or product not in products:
             raise ValueError(
                 f"provider connection {connection_id} does not enable product {product}"
             )

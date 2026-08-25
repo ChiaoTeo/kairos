@@ -88,9 +88,7 @@ def handle_context(
     if action is None:
         return None
     selected = session.market.selected
-    default = (
-        str(selected.id) if selected is not None and hasattr(selected, "id") else ""
-    )
+    default = str(getattr(selected, "id", "")) if selected is not None else ""
     prompt = LaunchMarketPromptState(action, record, default)
     session.launch_market.prompt = prompt
     return _advance(state, session, prompt)

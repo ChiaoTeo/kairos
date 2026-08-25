@@ -51,10 +51,11 @@ from app_support import (
     (
         ("1", "首页 / 市场行情  ›"),
         ("2", "首页 / 市场标的  ›"),
-        ("3", "首页 / 策略运行  ›"),
+        ("3", "首页 / 策略管理  ›"),
         ("4", "首页 / 运行准备  ›"),
         ("5", "首页 / 数据研究  ›"),
-        ("6", "首页 / 系统维护  ›"),
+        ("6", "首页 / 运行中心 / 运行概览  ›"),
+        ("7", "项目管理  ›"),
     ),
 )
 def test_home_number_enters_product_context_without_replacing_input(
@@ -75,6 +76,152 @@ def test_home_number_enters_product_context_without_replacing_input(
     assert screen_type is CommandLineScreen
     assert actual_context == context
     assert input_focused
+
+
+def test_missing_project_enters_project_start_before_business_home() -> None:
+    async def run() -> tuple[str, str, int, tuple[str, ...], str]:
+        state = WorkbenchState(
+            owner=None,
+            workspace_arg=None,
+            load_error="尚未打开项目",
+        )
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            initial_context = str(screen.query_one("#command-context", Static).render())
+            initial_actions = interaction_copy_text(screen.session.interaction)
+            initial_count = screen.query_one("#guided-actions", ActionList).option_count
+            screen.submit("/home")
+            screen.enter_section("market")
+            await pilot.pause()
+            return (
+                initial_context,
+                initial_actions,
+                initial_count,
+                screen.session.context,
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    context, actions, count, guarded_context, status = asyncio.run(run())
+    assert context == "项目管理  ›"
+    assert count == 2
+    assert "打开项目" in actions
+    assert "创建项目" in actions
+    assert "查看市场行情" not in actions
+    assert guarded_context == ("project",)
+    assert status == "请先打开或创建项目"
+
+
+def test_project_home_entry_and_global_shortcut_share_one_context() -> None:
+    async def run(command: str) -> tuple[tuple[str, ...], str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit(command)
+            await pilot.pause()
+            return screen.session.context, interaction_copy_text(
+                screen.session.interaction
+            )
+
+    numbered = asyncio.run(run("7"))
+    shortcut = asyncio.run(run("p"))
+    assert numbered[0] == shortcut[0] == ("project",)
+    assert numbered[1] == shortcut[1]
+    assert "项目概览" in numbered[1]
+    assert "切换项目" in numbered[1]
+
+
+def test_workspace_header_remains_project_identity_during_navigation() -> None:
+    async def run(command: str) -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit(command)
+            await pilot.pause()
+            return (
+                str(screen.query_one("#workspace-title", Static).render()),
+                str(screen.query_one("#command-context", Static).render()),
+            )
+
+    operations_header, operations_context = asyncio.run(run("6"))
+    project_header, project_context = asyncio.run(run("p"))
+
+    assert operations_header == project_header == "KAIROS  /  trader"
+    assert operations_context == "首页 / 运行中心 / 运行概览  ›"
+    assert project_context == "项目管理  ›"
+
+
+def test_switch_project_reloads_global_context_and_clears_old_selections(
+    tmp_path: Path,
+) -> None:
+    first = WorkspaceApplication().init_project(
+        tmp_path / "first", workspace_id="first"
+    )
+    second = WorkspaceApplication().init_project(
+        tmp_path / "second", workspace_id="second"
+    )
+
+    async def run() -> tuple[str, tuple[str, ...], object, str]:
+        state = WorkbenchState(
+            owner=first,
+            workspace_arg=first.paths.root,
+            yes=True,
+        )
+        state.refresh_snapshot()
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.session.market.selected = _market()
+            for value in ("7", "3", str(second.paths.project_root)):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            await pilot.pause(0.2)
+            return (
+                state.workspace_id,
+                screen.session.context,
+                screen.session.market.selected,
+                str(screen.query_one("#workspace-title", Static).render()),
+            )
+
+    workspace_id, context, selected_market, header = asyncio.run(run())
+    assert workspace_id == "second"
+    assert context == ()
+    assert selected_market is None
+    assert "second" in header
+    assert "first" not in header
+
+
+def test_create_project_unlocks_the_project_home(
+    tmp_path: Path,
+) -> None:
+    async def run() -> tuple[str, tuple[str, ...], int, str]:
+        state = WorkbenchState(owner=None, workspace_arg=None, yes=True)
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("2", str(tmp_path / "created"), "demo", "none"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            await pilot.pause(0.2)
+            return (
+                state.workspace_id,
+                screen.session.context,
+                screen.query_one("#guided-actions", ActionList).option_count,
+                interaction_copy_text(screen.session.interaction),
+            )
+
+    workspace_id, context, count, actions = asyncio.run(run())
+    assert workspace_id == "demo"
+    assert context == ()
+    assert count == 7
+    assert "查看市场行情" in actions
+    assert "运行中心" in actions
+    assert "项目管理" in actions
 
 
 def test_home_navigation_does_not_append_to_content_stream() -> None:
@@ -242,6 +389,25 @@ def test_ctrl_c_rejects_pending_confirmation_without_running_action() -> None:
     assert focused
 
 
+def test_short_n_command_rejects_pending_confirmation() -> None:
+    called: list[bool] = []
+
+    async def run() -> tuple[int | None, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.request_confirmation("危险操作", lambda: called.append(True))
+            screen.submit("/n")
+            await pilot.pause()
+            return app.return_value, screen.session.interaction.mode.value
+
+    return_value, mode = asyncio.run(run())
+    assert return_value is None
+    assert called == []
+    assert mode == "choice"
+
+
 def test_all_home_products_enter_the_shared_command_screen() -> None:
     async def run(section: str) -> tuple[type[object], tuple[str, ...]]:
         app = KairosWorkbenchApp(_state())
@@ -262,7 +428,9 @@ def test_all_home_products_enter_the_shared_command_screen() -> None:
     ):
         screen_type, context = asyncio.run(run(section))
         assert screen_type is CommandLineScreen
-        assert context == (section,)
+        assert context == (
+            ("operations", "overview") if section == "operations" else (section,)
+        )
 
 
 @pytest.mark.parametrize("size", ((60, 20), (80, 24), (120, 30), (160, 40)))
@@ -284,4 +452,6 @@ def test_primary_contexts_mount_at_supported_terminal_sizes(
 
     screen_type, context = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == (section,)
+    assert context == (
+        ("operations", "overview") if section == "operations" else (section,)
+    )

@@ -1438,7 +1438,7 @@ owner contract 或 owner application 产生，并由对应 current view / event 
 聚合命令应该按用户工作流命名，而不是按底层模块命名。优先入口包括：
 
 - `kairos interactive`（短别名 `kairos i`）
-- `kairos observe`（交互模式复用 Workbench，`--once` 为机器输出）
+- `kairos observe`（交互模式复用运行中心，`--once` 只输出当前活动实例、项目共享服务和支撑进程）
 - `kairos launch attach`（复用 Workbench screen stack）
 - 未来可加入 `kairos trade`、`kairos transfer`、`kairos workflow` 等产品入口
 

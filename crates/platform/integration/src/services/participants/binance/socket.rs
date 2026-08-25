@@ -6,6 +6,7 @@ use crate::{
 };
 
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+const SESSION_ROTATION_MARGIN: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// Reusable raw WebSocket mechanism owned by one concrete Binance connection.
 pub(crate) struct SocketService {
@@ -13,6 +14,10 @@ pub(crate) struct SocketService {
     endpoint: String,
     event_capacity: usize,
     socket: Option<TokioSocket>,
+    established_at: Option<tokio::time::Instant>,
+    session_lifetime: Option<std::time::Duration>,
+    control_interval: Option<std::time::Duration>,
+    next_control_at: Option<tokio::time::Instant>,
 }
 
 impl SocketService {
@@ -40,7 +45,36 @@ impl SocketService {
             endpoint,
             event_capacity,
             socket: None,
+            established_at: None,
+            session_lifetime: None,
+            control_interval: None,
+            next_control_at: None,
         })
+    }
+
+    pub(crate) fn with_market_policy(
+        mut self,
+        max_incoming_messages_per_second: u32,
+        session_lifetime: std::time::Duration,
+    ) -> Result<Self, IntegrationError> {
+        // Reserve one message/second for ping/pong traffic instead of allowing
+        // application control messages to consume the provider's full quota.
+        let application_rate = max_incoming_messages_per_second.saturating_sub(1);
+        if application_rate == 0 {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance WebSocket message policy must leave control headroom".into(),
+            ));
+        }
+        if session_lifetime <= SESSION_ROTATION_MARGIN {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance WebSocket session lifetime must exceed the rotation margin".into(),
+            ));
+        }
+        self.control_interval = Some(std::time::Duration::from_secs_f64(
+            1.0 / f64::from(application_rate),
+        ));
+        self.session_lifetime = Some(session_lifetime);
+        Ok(self)
     }
 
     pub(crate) async fn connect(&mut self) -> Result<(), IntegrationError> {
@@ -48,6 +82,8 @@ impl SocketService {
         match TokioSocket::connect(&self.endpoint, self.event_capacity).await {
             Ok(socket) => {
                 self.socket = Some(socket);
+                self.established_at = Some(tokio::time::Instant::now());
+                self.next_control_at = None;
                 self.state.mark_ready(false);
                 Ok(())
             },
@@ -64,13 +100,8 @@ impl SocketService {
             socket.close().await;
         }
         self.state.mark_stopped();
-        Ok(())
-    }
-
-    pub(crate) async fn reconnect(&mut self) -> Result<(), IntegrationError> {
-        self.disconnect().await?;
-        self.connect().await?;
-        self.state.reconnect_count = self.state.reconnect_count.saturating_add(1);
+        self.established_at = None;
+        self.next_control_at = None;
         Ok(())
     }
 
@@ -82,17 +113,43 @@ impl SocketService {
         &self.state.identity
     }
 
+    #[cfg(test)]
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
     pub(crate) fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
-        self.socket
+        let idle = self
+            .socket
             .as_ref()
-            .map(|socket| socket.last_activity() + IDLE_TIMEOUT)
+            .map(|socket| socket.last_activity() + IDLE_TIMEOUT);
+        let rotation = self.established_at.zip(self.session_lifetime).map(
+            |(established_at, session_lifetime)| {
+                established_at + session_lifetime - SESSION_ROTATION_MARGIN
+            },
+        );
+        idle.into_iter().chain(rotation).min()
     }
 
     pub(crate) fn poll_maintenance(
         &self,
         now: tokio::time::Instant,
     ) -> Poll<Result<crate::MaintenanceOutcome, IntegrationError>> {
-        match self.next_maintenance_at() {
+        let rotation = self.established_at.zip(self.session_lifetime).map(
+            |(established_at, session_lifetime)| {
+                established_at + session_lifetime - SESSION_ROTATION_MARGIN
+            },
+        );
+        if rotation.is_some_and(|deadline| deadline <= now) {
+            return Poll::Ready(Ok(crate::MaintenanceOutcome::ReconnectRequired {
+                reason: "Binance WebSocket session rotation deadline reached".into(),
+            }));
+        }
+        match self
+            .socket
+            .as_ref()
+            .map(|socket| socket.last_activity() + IDLE_TIMEOUT)
+        {
             Some(deadline) if deadline <= now => {
                 Poll::Ready(Ok(crate::MaintenanceOutcome::ReconnectRequired {
                     reason: "Binance WebSocket idle deadline elapsed".into(),
@@ -103,12 +160,19 @@ impl SocketService {
     }
 
     pub(crate) async fn send(&mut self, payload: String) -> Result<(), IntegrationError> {
+        if let Some(deadline) = self.next_control_at {
+            tokio::time::sleep_until(deadline).await;
+        }
         self.socket
             .as_mut()
             .ok_or(IntegrationError::NotReady)?
             .send_text(payload)
             .await
-            .map_err(IntegrationError::Transport)
+            .map_err(IntegrationError::Transport)?;
+        self.next_control_at = self
+            .control_interval
+            .map(|interval| tokio::time::Instant::now() + interval);
+        Ok(())
     }
 
     pub(crate) async fn next(
@@ -156,5 +220,56 @@ impl SocketService {
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::{ConnectionDescriptor, ParticipantKind, ParticipantRef};
+
+    use super::*;
+
+    fn descriptor() -> ConnectionDescriptor {
+        ConnectionDescriptor::new(
+            "binance-market-test",
+            ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
+            "market.websocket",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn market_policy_reserves_message_headroom() {
+        let spot = SocketService::new(descriptor(), "wss://example.test/ws", 1)
+            .unwrap()
+            .with_market_policy(5, std::time::Duration::from_secs(86_400))
+            .unwrap();
+        let futures = SocketService::new(descriptor(), "wss://example.test/ws", 1)
+            .unwrap()
+            .with_market_policy(10, std::time::Duration::from_secs(86_400))
+            .unwrap();
+
+        assert_eq!(
+            spot.control_interval,
+            Some(std::time::Duration::from_millis(250))
+        );
+        assert!(futures.control_interval.unwrap() > std::time::Duration::from_millis(111));
+        assert!(futures.control_interval.unwrap() < std::time::Duration::from_millis(112));
+    }
+
+    #[tokio::test]
+    async fn session_rotation_is_requested_before_provider_disconnect() {
+        let mut service = SocketService::new(descriptor(), "wss://example.test/ws", 1)
+            .unwrap()
+            .with_market_policy(10, std::time::Duration::from_secs(86_400))
+            .unwrap();
+        let now = tokio::time::Instant::now();
+        service.established_at = Some(now - std::time::Duration::from_secs(86_400));
+
+        assert!(matches!(
+            service.poll_maintenance(now),
+            Poll::Ready(Ok(crate::MaintenanceOutcome::ReconnectRequired { reason }))
+                if reason == "Binance WebSocket session rotation deadline reached"
+        ));
     }
 }

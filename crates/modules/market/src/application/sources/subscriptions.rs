@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::super::{MarketApplication, MarketError};
 use crate::domain::market::ResolvedMarket;
 use crate::domain::source::{FeedDescriptor, MarketFeedId};
-use crate::services::actor::{BusinessSubscriptionKey, PendingSourceRequest};
+use crate::services::actor::{PendingSourceRequest, PhysicalSubscriptionKey};
 use crate::services::source::messages::SourceCommand;
 
 impl MarketApplication {
@@ -14,50 +14,7 @@ impl MarketApplication {
     }
 
     async fn reconcile_source_commands(&mut self) -> Result<(), String> {
-        let subscriptions = self.current_view().subscriptions;
-        let mut desired =
-            BTreeMap::<MarketFeedId, BTreeMap<BusinessSubscriptionKey, ResolvedMarket>>::new();
-        for subscription in subscriptions {
-            let selectors = subscription.selectors.clone();
-            for (market_id, market) in subscription.members {
-                let route_matches = self
-                    .actor
-                    .attached_sources
-                    .values()
-                    .filter(|source| source_accepts(&source.descriptor, &market))
-                    .collect::<Vec<_>>();
-                let has_route_match = !route_matches.is_empty();
-                let mut matches = route_matches
-                    .into_iter()
-                    .filter(|source| source_supports_selectors(&source.descriptor, &selectors))
-                    .collect::<Vec<_>>();
-                if matches.is_empty() && has_route_match {
-                    return Err(format!(
-                        "configured source for market {} does not support the requested observation",
-                        market.scope.key()
-                    ));
-                }
-                matches.sort_by_key(|source| {
-                    (
-                        self.actor
-                            .source_state(&source.descriptor.id)
-                            .is_none_or(|state| {
-                                state.status != crate::domain::source::SourceStatus::Ready
-                            }),
-                        source.descriptor.id.clone(),
-                    )
-                });
-                let Some(source_id) = matches.first().map(|source| source.descriptor.id.clone())
-                else {
-                    continue;
-                };
-                desired
-                    .entry(source_id)
-                    .or_default()
-                    .insert((subscription.id.clone(), market_id), market);
-            }
-        }
-
+        let mut desired = self.desired_source_subscriptions()?;
         let pending_keys = self
             .actor
             .pending_source_requests
@@ -141,6 +98,68 @@ impl MarketApplication {
         }
         Ok(())
     }
+
+    pub(crate) fn desired_source_subscriptions(
+        &self,
+    ) -> Result<BTreeMap<MarketFeedId, BTreeMap<PhysicalSubscriptionKey, ResolvedMarket>>, String>
+    {
+        let subscriptions = self.current_view().subscriptions;
+        let mut desired =
+            BTreeMap::<MarketFeedId, BTreeMap<PhysicalSubscriptionKey, ResolvedMarket>>::new();
+        for subscription in subscriptions {
+            let selectors = subscription.selectors.clone();
+            for (_market_id, mut market) in subscription.members {
+                let route_matches = self
+                    .actor
+                    .attached_sources
+                    .values()
+                    .filter(|source| source_accepts(&source.descriptor, &market))
+                    .collect::<Vec<_>>();
+                let has_route_match = !route_matches.is_empty();
+                let mut matches = route_matches
+                    .into_iter()
+                    .filter(|source| source_supports_selectors(&source.descriptor, &selectors))
+                    .collect::<Vec<_>>();
+                if matches.is_empty() && has_route_match {
+                    return Err(format!(
+                        "configured source for market {} does not support the requested observation",
+                        market.scope.key()
+                    ));
+                }
+                matches.sort_by_key(|source| {
+                    (
+                        self.actor
+                            .source_state(&source.descriptor.id)
+                            .is_none_or(|state| {
+                                state.status != crate::domain::source::SourceStatus::Ready
+                            }),
+                        source.descriptor.id.clone(),
+                    )
+                });
+                let Some(source_id) = matches.first().map(|source| source.descriptor.id.clone())
+                else {
+                    continue;
+                };
+                let descriptor = &self.actor.attached_sources[&source_id].descriptor;
+                if descriptor.provider.is_some() {
+                    market.select_observations(&selectors)?;
+                }
+                let key =
+                    PhysicalSubscriptionKey::for_source(descriptor, &market).ok_or_else(|| {
+                        format!(
+                            "market {} cannot resolve physical route for source {source_id}",
+                            market.scope.key()
+                        )
+                    })?;
+                desired
+                    .entry(source_id)
+                    .or_default()
+                    .entry(key)
+                    .or_insert(market);
+            }
+        }
+        Ok(desired)
+    }
 }
 
 pub(crate) fn source_accepts(source: &FeedDescriptor, market: &ResolvedMarket) -> bool {
@@ -169,9 +188,23 @@ pub(crate) fn source_supports_selectors(
 ) -> bool {
     source.observation_capabilities.is_empty()
         || selectors.iter().all(|selector| {
-            selector
-                .kind
-                .is_none_or(|kind| source.observation_capabilities.contains(&kind))
+            selector.kind.is_none_or(|kind| {
+                source.observation_capabilities.contains(&kind)
+                    || matches!(
+                        kind,
+                        crate::ObservationKind::Rate
+                            if source
+                                .observation_capabilities
+                                .contains(&crate::ObservationKind::FundingRate)
+                    )
+                    || matches!(
+                        kind,
+                        crate::ObservationKind::FundingRate
+                            if source
+                                .observation_capabilities
+                                .contains(&crate::ObservationKind::Rate)
+                    )
+            })
         })
 }
 
@@ -221,5 +254,100 @@ mod tests {
         .unwrap();
 
         assert!(!source_accepts(&source, &equity_market()));
+    }
+
+    #[test]
+    fn managed_source_plan_aggregates_logical_consumers_by_physical_route() {
+        let mut application = MarketApplication::new("market", 10).unwrap();
+        let source_id = MarketFeedId::new("massive-equity").unwrap();
+        application
+            .attach_managed_source(
+                FeedDescriptor::for_provider(
+                    source_id.clone(),
+                    "massive",
+                    kairos_primitives::reference::ExchangeId::new("data_provider:massive").unwrap(),
+                    "equity",
+                    Some("equity".into()),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let market = equity_market();
+        application
+            .subscribe_static(
+                crate::SubscriptionId::new("strategy-a-aapl").unwrap(),
+                "strategy-a",
+                market.clone(),
+            )
+            .unwrap();
+        application
+            .subscribe_static(
+                crate::SubscriptionId::new("strategy-b-aapl").unwrap(),
+                "strategy-b",
+                market,
+            )
+            .unwrap();
+
+        let desired = application.desired_source_subscriptions().unwrap();
+        assert_eq!(desired.len(), 1);
+        assert_eq!(desired[&source_id].len(), 1);
+    }
+
+    #[test]
+    fn managed_source_plan_compiles_strategy_observations_into_physical_identity() {
+        let mut application = MarketApplication::new("market", 10).unwrap();
+        let source_id = MarketFeedId::new("massive-equity").unwrap();
+        let source = FeedDescriptor::for_provider(
+            source_id.clone(),
+            "massive",
+            kairos_primitives::reference::ExchangeId::new("data_provider:massive").unwrap(),
+            "equity",
+            Some("equity".into()),
+        )
+        .unwrap()
+        .with_observation_capabilities([
+            crate::ObservationKind::Quote,
+            crate::ObservationKind::Trade,
+        ]);
+        application.attach_managed_source(source).unwrap();
+        let mut market = equity_market();
+        let provider = kairos_primitives::market::Provider::new("massive").unwrap();
+        market
+            .runtime_routes
+            .get_mut(&provider)
+            .unwrap()
+            .observation_capabilities =
+            [crate::ObservationKind::Quote, crate::ObservationKind::Trade]
+                .into_iter()
+                .collect();
+        application
+            .subscribe_static_with_selectors(
+                crate::SubscriptionId::new("strategy-a-aapl").unwrap(),
+                "strategy-a",
+                market.clone(),
+                vec![crate::ObservationSelector::parse("quote").unwrap()],
+            )
+            .unwrap();
+        application
+            .subscribe_static_with_selectors(
+                crate::SubscriptionId::new("strategy-b-aapl").unwrap(),
+                "strategy-b",
+                market,
+                vec![crate::ObservationSelector::parse("trade").unwrap()],
+            )
+            .unwrap();
+
+        let desired = application.desired_source_subscriptions().unwrap();
+        assert_eq!(desired[&source_id].len(), 2);
+        let requirements = desired[&source_id]
+            .values()
+            .map(ResolvedMarket::observation_requirements)
+            .collect::<BTreeSet<_>>();
+        assert!(requirements.contains(&BTreeSet::from([
+            crate::ObservationSelector::parse("quote").unwrap()
+        ])));
+        assert!(requirements.contains(&BTreeSet::from([
+            crate::ObservationSelector::parse("trade").unwrap()
+        ])));
     }
 }

@@ -41,9 +41,7 @@ Screen {
 }
 
 #activity-empty {
-    height: 1;
-    margin: 0 3;
-    color: $text-muted;
+    display: none;
 }
 
 #interaction-region {

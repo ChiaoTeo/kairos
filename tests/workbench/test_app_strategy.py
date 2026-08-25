@@ -99,8 +99,8 @@ def test_strategy_launch_list_detail_and_back_stay_in_command_screen(
 
     screen_type, selected, launches, launch_id, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert selected == "首页 / 策略运行 / 已选 Launch  ›"
-    assert launches == "首页 / 策略运行 / Launch 列表  ›"
+    assert selected == "首页 / 策略管理 / 已选运行方案  ›"
+    assert launches == "首页 / 策略管理 / 运行方案  ›"
     assert launch_id == "paper-demo"
     assert focused
 
@@ -161,10 +161,10 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
 
     screen_type, instances, selected, components, after_back = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert instances == "首页 / 策略运行 / 运行实例  ›"
-    assert selected == "首页 / 策略运行 / 已选实例  ›"
-    assert components == "首页 / 策略运行 / 实例组件  ›"
-    assert after_back == "首页 / 策略运行 / 已选实例  ›"
+    assert instances == "首页 / 策略管理 / 运行实例  ›"
+    assert selected == "首页 / 策略管理 / 已选实例  ›"
+    assert components == "首页 / 策略管理 / 实例组件  ›"
+    assert after_back == "首页 / 策略管理 / 已选实例  ›"
 
 
 def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
@@ -235,7 +235,7 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
     assert screen_type is CommandLineScreen
     assert [action for action, _ in calls] == ["status", "cancel"]
     assert calls[-1][1] == {"order-id": "order-1", "reason": "manual cancel"}
-    assert context == "首页 / 策略运行 / Execution Server  ›"
+    assert context == "首页 / 策略管理 / Execution Server  ›"
     assert "Execution 作用域确认" not in output
     assert focused
 
@@ -305,7 +305,7 @@ def test_launch_market_snapshot_and_replay_pause_use_one_input(
     context, output = asyncio.run(run())
     assert [action for action, _ in calls] == ["quote", "pause-replay"]
     assert calls[0][1]["market-id"] == "market:btc-usdt"
-    assert context == "首页 / 策略运行 / Market 组件  ›"
+    assert context == "首页 / 策略管理 / Market 组件  ›"
     assert "Market 组件结果" in output
 
 
@@ -364,7 +364,7 @@ def test_launch_timeline_export_uses_argument_and_inline_confirmation(
 
     context, output = asyncio.run(run())
     assert exports == ["timeline.jsonl"]
-    assert context == "首页 / 策略运行 / 实例时间线  ›"
+    assert context == "首页 / 策略管理 / 实例时间线  ›"
     assert "时间线导出结果" in output
 
 
@@ -414,7 +414,7 @@ def test_launch_attach_python_uses_same_input_and_inline_confirmation(
 
     context, output, focused = asyncio.run(run())
     assert calls == [("paper-demo", "print('ready')")]
-    assert context == "首页 / 策略运行 / 跟随输出  ›"
+    assert context == "首页 / 策略管理 / 跟随输出  ›"
     assert "accepted" in output
     assert focused
 
@@ -598,7 +598,7 @@ def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert saved == [("backtest-demo", False)]
-    assert context == "首页 / 策略运行 / 已选 Launch  ›"
+    assert context == "首页 / 策略管理 / 已选运行方案  ›"
     assert "Launch 脱敏摘要" not in output
     assert "Launch 配置结果" in output
     assert focused
@@ -765,12 +765,12 @@ def test_live_launch_wizard_selects_business_resources_and_access_mode(
         (
             {"initial_launch_attach": "paper-demo"},
             "paper-demo",
-            "首页 / 策略运行 / 跟随输出  ›",
+            "首页 / 策略管理 / 跟随输出  ›",
         ),
         (
             {"initial_launch_setup": ("new-demo", None)},
             "new-demo",
-            "首页 / 策略运行 / 配置向导  ›",
+            "首页 / 策略管理 / 配置向导  ›",
         ),
     ),
 )

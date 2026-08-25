@@ -13,6 +13,8 @@ from rich.table import Table
 from rich.text import Text
 
 from ....widgets import ActionItem
+from kairospy.system.apps.observe.application import ObserveSnapshot
+from ...selection import SelectionRecord
 
 
 class ServiceDisplayState(StrEnum):
@@ -49,6 +51,189 @@ _STATE_COPY: dict[ServiceDisplayState, tuple[str, str, str]] = {
     ServiceDisplayState.UNKNOWN: ("未知", "grey62", "无法可靠判断服务状态"),
 }
 
+_SERVICE_NAMES = {
+    "market": "行情服务",
+    "reference": "标的服务",
+}
+
+_MODE_NAMES = {
+    "continuous": "持续运行",
+    "on_demand": "按需启动",
+    "recovering": "正在恢复",
+    "recovery_paused": "恢复已暂停",
+    "stopped": "已停止",
+}
+
+_SUPPORT_NAMES = {
+    "system-supervisor": "System Supervisor",
+    "aeron": "Aeron",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class SupportStatusView:
+    """Typed presentation facts for one System support process."""
+
+    name: str
+    status: str
+    pid: int | str | None
+    pid_alive: bool
+    health_file: str | None
+    logs_available: bool
+
+    @classmethod
+    def from_mapping(cls, name: str, value: Mapping[str, Any]) -> "SupportStatusView":
+        return cls(
+            name=name,
+            status=str(value.get("status") or "unknown"),
+            pid=value.get("pid"),
+            pid_alive=bool(value.get("pid_alive")),
+            health_file=(
+                str(value["health_file"]) if value.get("health_file") else None
+            ),
+            logs_available=bool(value.get("logs_available")),
+        )
+
+
+def operations_records(snapshot: ObserveSnapshot) -> tuple[SelectionRecord, ...]:
+    """Map one System snapshot into the selectable product hierarchy."""
+
+    records: list[SelectionRecord] = []
+    for component in ("reference", "market"):
+        raw = {
+            "component": component,
+            **snapshot.shared_services.get(component, {}),
+        }
+        view = service_status_view(raw)
+        mode = _MODE_NAMES.get(str(raw.get("operating_mode")), "运行方式未知")
+        records.append(
+            SelectionRecord(
+                f"service:{component}",
+                view.display_name,
+                f"{view.state_label} · {mode}",
+                {"kind": "service", "value": view},
+            )
+        )
+    for instance in snapshot.active_instances:
+        state = str(instance.get("state") or "unknown")
+        launch_id = str(instance.get("launch_id") or "未命名运行方案")
+        instance_id = str(instance.get("instance_id") or "—")
+        mode = str(instance.get("mode") or "—")
+        records.append(
+            SelectionRecord(
+                f"run-instance:{launch_id}:{instance_id}",
+                f"{launch_id} / {instance_id}",
+                f"{mode} · {state}",
+                {"kind": "run-instance", "value": dict(instance)},
+            )
+        )
+    for name in ("system-supervisor", "aeron"):
+        raw = dict(snapshot.support_processes.get(name, {}))
+        view = SupportStatusView.from_mapping(name, raw)
+        status = str(raw.get("status") or "unknown")
+        label = "运行中" if status == "running" else "已停止"
+        records.append(
+            SelectionRecord(
+                f"support:{name}",
+                _SUPPORT_NAMES[name],
+                label,
+                {"kind": "support", "name": name, "value": view},
+            )
+        )
+    return tuple(records)
+
+
+def operations_group_records(
+    records: tuple[SelectionRecord, ...],
+) -> tuple[SelectionRecord, ...]:
+    """Group the runtime inventory by product scope before object selection."""
+
+    groups = (
+        ("services", "项目共享服务", "service", "个服务"),
+        ("instances", "活动运行实例", "run-instance", "个实例"),
+        ("supports", "支撑进程", "support", "个进程"),
+    )
+    grouped: list[SelectionRecord] = []
+    for key, label, kind, unit in groups:
+        children = tuple(
+            record
+            for record in records
+            if isinstance(record.value, Mapping) and record.value.get("kind") == kind
+        )
+        description = f"{len(children)} {unit}" if children else "当前没有运行对象"
+        grouped.append(
+            SelectionRecord(
+                f"operations-group:{key}",
+                label,
+                description,
+                {"kind": "group", "name": key, "records": children},
+            )
+        )
+    return tuple(grouped)
+
+
+def operations_overview(snapshot: ObserveSnapshot) -> RenderableType:
+    state = {
+        "healthy": ("正常", "green"),
+        "partial": ("部分就绪", "yellow"),
+        "degraded": ("存在异常", "red"),
+    }.get(snapshot.overall_status, (snapshot.overall_status, "yellow"))
+    body = Text()
+    body.append(f"当前项目：{snapshot.workspace_id}\n", style="bold")
+    body.append("整体状态：")
+    body.append(state[0], style=f"bold {state[1]}")
+    return body
+
+
+def support_summary(view: SupportStatusView) -> RenderableType:
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style="dim")
+    table.add_column()
+    table.add_row("状态", "运行中" if view.status == "running" else "已停止")
+    table.add_row("进程", str(view.pid or "无"))
+    table.add_row("日志", "可用" if view.logs_available else "尚未生成")
+    table.add_row("说明", "支撑进程只提供状态和技术证据，不提供普通服务启停。")
+    return Group(
+        Text(_SUPPORT_NAMES.get(view.name, view.name), style="bold cyan"),
+        Text(),
+        table,
+    )
+
+
+def support_diagnostics(view: SupportStatusView) -> RenderableType:
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style="dim")
+    table.add_column()
+    table.add_row("PID", str(view.pid or "—"))
+    table.add_row("进程存活", "是" if view.pid_alive else "否")
+    table.add_row("Health file", view.health_file or "—")
+    table.add_row("日志可用", "是" if view.logs_available else "否")
+    return Group(
+        Text(f"{_SUPPORT_NAMES.get(view.name, view.name)}技术证据", style="bold cyan"),
+        Text(),
+        table,
+    )
+
+
+def service_display_name(component: str) -> str:
+    """Return the operator-facing name while preserving the runtime identifier."""
+
+    return _SERVICE_NAMES.get(component, component)
+
+
+def service_status_line(view: ServiceStatusView) -> str:
+    """Return the compact lifecycle context shown above the command input."""
+
+    parts = [view.display_name, view.state_label]
+    dependents = view.raw.get("dependents")
+    if isinstance(dependents, (list, tuple)):
+        parts.append(
+            f"{len(dependents)} 个活动实例正在使用"
+            if dependents
+            else "无活动运行实例"
+        )
+    return " · ".join(parts)
+
 
 @dataclass(frozen=True, slots=True)
 class ServiceStatusView:
@@ -73,6 +258,10 @@ class ServiceStatusView:
     def summary(self) -> str:
         return _STATE_COPY[self.state][2]
 
+    @property
+    def display_name(self) -> str:
+        return service_display_name(self.component)
+
 
 def service_status_view(value: object) -> ServiceStatusView:
     """Convert raw application output once at the Workbench boundary."""
@@ -92,7 +281,7 @@ def service_status_view(value: object) -> ServiceStatusView:
         ServiceDisplayState.RUNNING: "服务运行正常；可跟随日志或刷新状态。",
         ServiceDisplayState.STARTING: "等待服务就绪；必要时查看启动日志。",
         ServiceDisplayState.DEGRADED: "查看技术诊断和日志，确认受影响能力。",
-        ServiceDisplayState.STOPPED: f"启动 {component}。",
+        ServiceDisplayState.STOPPED: f"启动 {service_display_name(component)}。",
         ServiceDisplayState.UNRESPONSIVE: "先查看日志；确认后可安全停止服务。",
         ServiceDisplayState.STALE: "清理失效资源后重新启动服务。",
         ServiceDisplayState.START_FAILED: "查看启动日志后重新启动服务。",
@@ -161,7 +350,7 @@ def service_actions(view: ServiceStatusView | None) -> tuple[ActionItem, ...]:
 
     if view.state is ServiceDisplayState.STOPPED:
         return (
-            action("start", "启动", "启动组件并等待就绪", 1),
+            action("start", "启动并保持运行", "启动服务并登记自动恢复", 1),
             recent(2),
             follow(3),
             diagnostics(4),
@@ -208,6 +397,12 @@ LOG_FOLLOW_ACTIONS = (
     ActionItem("clear", "清空当前窗口", "不删除完整日志文件", "c"),
 )
 
+SUPPORT_ACTIONS = (
+    ActionItem("refresh", "刷新运行结构", "重新读取支撑进程状态", "1"),
+    ActionItem("logs", "查看最近日志", "读取最近 200 行进程日志", "2"),
+    ActionItem("diagnostics", "查看技术证据", "查看 PID、Health file 和日志位置", "3"),
+)
+
 
 def service_summary(view: ServiceStatusView) -> RenderableType:
     table = Table.grid(padding=(0, 3))
@@ -216,10 +411,23 @@ def service_summary(view: ServiceStatusView) -> RenderableType:
     state = Text(view.state_label, style=f"bold {view.state_style}")
     table.add_row("状态", state)
     table.add_row("说明", view.summary)
+    mode = _MODE_NAMES.get(str(view.raw.get("operating_mode")))
+    if mode is not None:
+        table.add_row("运行方式", mode)
+    dependents = view.raw.get("dependents")
+    if isinstance(dependents, (list, tuple)):
+        labels = [
+            f"{item.get('launch_id')} / {item.get('instance_id')}"
+            for item in dependents
+            if isinstance(item, Mapping)
+        ]
+        table.add_row(
+            "正在使用", "、".join(labels) if labels else "无活动运行实例"
+        )
     table.add_row("进程", str(view.pid) if view.pid is not None else "无")
     table.add_row("日志", "可用" if view.logs_available else "尚未生成")
     table.add_row("建议", Text(view.recommendation, style="bold"))
-    return Group(Text(view.component, style="bold cyan"), Text(), table)
+    return Group(Text(view.display_name, style="bold cyan"), Text(), table)
 
 
 def services_overview(views: tuple[ServiceStatusView, ...]) -> RenderableType:
@@ -229,7 +437,7 @@ def services_overview(views: tuple[ServiceStatusView, ...]) -> RenderableType:
     table.add_column()
     for view in views:
         table.add_row(
-            view.component,
+            view.display_name,
             Text(view.state_label, style=f"bold {view.state_style}"),
             view.summary,
         )
@@ -267,7 +475,7 @@ def diagnostics_renderable(view: ServiceStatusView) -> RenderableType:
     for label, value in fields:
         table.add_row(label, str(value))
     return Group(
-        Text(f"{view.component} 技术诊断", style="bold cyan"),
+        Text(f"{view.display_name}技术诊断", style="bold cyan"),
         Text(),
         table,
         Text(),
@@ -277,11 +485,20 @@ def diagnostics_renderable(view: ServiceStatusView) -> RenderableType:
 
 __all__ = [
     "LOG_FOLLOW_ACTIONS",
+    "SUPPORT_ACTIONS",
     "ServiceDisplayState",
     "ServiceStatusView",
+    "SupportStatusView",
     "diagnostics_renderable",
     "service_actions",
+    "service_display_name",
     "service_status_view",
+    "service_status_line",
     "service_summary",
     "services_overview",
+    "operations_overview",
+    "operations_group_records",
+    "operations_records",
+    "support_summary",
+    "support_diagnostics",
 ]

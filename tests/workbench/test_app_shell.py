@@ -100,7 +100,7 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
     assert output == ""
     assert workspace_title == "KAIROS  /  trader"
     assert context == "首页  ›"
-    assert option_count == 6
+    assert option_count == 7
     assert not actions_can_focus
     assert input_focused
 
@@ -187,7 +187,7 @@ def test_idle_ctrl_c_requests_exit_confirmation_in_interaction_region() -> None:
             focused = screen.query_one(
                 "#command-input", WorkbenchCommandInput
             ).has_focus
-            screen.submit("/confirm")
+            screen.submit("/y")
             await pilot.pause()
             return app.return_value, status, output, interaction, focused
 
@@ -196,8 +196,7 @@ def test_idle_ctrl_c_requests_exit_confirmation_in_interaction_region() -> None:
     assert status == "等待确认"
     assert output == ""
     assert interaction.summary == "当前没有运行中的任务，是否退出？"
-    assert interaction.force_hint is not None
-    assert "再次按 Ctrl+C 强制退出" in interaction.force_hint
+    assert interaction.force_hint is None
     assert focused
 
 
@@ -309,20 +308,29 @@ def test_output_paging_keeps_input_focus_and_ctrl_end_resumes_follow() -> None:
     assert "Ctrl+End 最新" in hints
 
 
-def test_second_idle_ctrl_c_forces_exit() -> None:
-    async def run() -> int | None:
+def test_ctrl_c_cancels_idle_exit_confirmation() -> None:
+    async def run() -> tuple[int | None, str, bool]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
             await pilot.press("ctrl+c")
             await pilot.pause()
             await pilot.press("ctrl+c")
             await pilot.pause()
-        return app.return_value
+            return (
+                app.return_value,
+                screen.session.interaction.mode.value,
+                screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
+            )
 
-    assert asyncio.run(run()) == 130
+    return_value, mode, focused = asyncio.run(run())
+    assert return_value is None
+    assert mode == "choice"
+    assert focused
 
 
-def test_input_between_ctrl_c_presses_breaks_force_exit_sequence() -> None:
+def test_invalid_input_keeps_idle_exit_confirmation_cancellable() -> None:
     async def run() -> tuple[int | None, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
@@ -412,6 +420,44 @@ def test_bare_native_command_uses_owner_cli_application(
     assert seen == {"component": "risk", "arguments": ["standalone", "schema"]}
     assert "risk-v1" in output
     assert focused
+
+
+def test_pasted_public_market_command_runs_in_workbench(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def run_market(application: object, arguments: list[str]) -> dict[str, object]:
+        seen["arguments"] = arguments
+        return {"schema": "market-v1"}
+
+    monkeypatch.setattr(
+        "kairospy.surface.workbench.screens.commands.MarketCliApplication.run",
+        run_market,
+    )
+
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            workspace = app.state.owner.paths.root
+            screen.submit(
+                "kairos market "
+                f"--workspace {workspace} --format json "
+                "standalone once --symbol AAPL"
+            )
+            await pilot.pause(0.1)
+            return (
+                _log_text(screen.query_one("#command-output", RichLog)),
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    output, status = asyncio.run(run())
+
+    assert seen == {"arguments": ["standalone", "once", "--symbol", "AAPL"]}
+    assert "market-v1" in output
+    assert status == "就绪"
 
 
 def test_external_workbench_stylesheet_is_loaded_and_watchable() -> None:

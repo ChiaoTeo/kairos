@@ -401,6 +401,23 @@ description or design note:
 
 ## Verification before handoff
 
+### Python changes
+
+After changing Python code, always run the full-project type check:
+
+```text
+make python-type-check
+```
+
+Before handing off a Python-affecting task, run that command again in addition
+to focused tests for the changed behavior. A Python-affecting task is not
+complete while Pyright reports an error or warning. Fix dynamic JSON, TOML,
+provider, and persistence values by validating and converting them once at
+their owning boundary. Do not introduce `Any`, an unchecked `cast(...)`, or
+`# type: ignore` solely to silence the type checker. If an unrelated
+pre-existing failure blocks the gate, report the exact failure and still run
+Pyright on the affected package; do not claim the gate passed.
+
 ### Workbench TUI development
 
 The Workbench is a keyboard-first Textual command line. Its normal layout is a

@@ -64,7 +64,7 @@ def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
         )
     if kind == "models":
         return (
-            ActionItem("test", "测试模型", "执行最小文本调用", "1"),
+            ActionItem("test", "对话测试", "发送一条消息并查看模型回复", "1"),
             ActionItem("discover", "重新发现模型", "刷新服务当前提供的模型目录", "2"),
             ActionItem("models", "查看模型状态", "查看模型 ID 和各自验证状态", "3"),
             ActionItem("advanced", "安全与高级信息", "查看版本、状态和引用", "4"),
@@ -114,7 +114,7 @@ def list_records(state: Any, kind: str) -> tuple[dict[str, Any], ...]:
 def execute_action(
     state: Any,
     kind: str,
-    record: dict[str, Any],
+    record: Mapping[str, Any],
     action: str,
     *,
     value: str | None = None,
@@ -174,7 +174,8 @@ def execute_action(
         if action == "toggle":
             enabled = not bool(record.get("enabled", True))
             result = application.set_enabled(resource_id, enabled=enabled)
-            for product in result.get("products") or ():
+            products = result.get("products")
+            for product in products if isinstance(products, list) else ():
                 if product != "reference":
                     MarketProviderBindingApplication(owner).bind_connection(
                         resource_id, product=str(product), enabled=enabled

@@ -12,7 +12,7 @@ from rich.text import Text
 from kairospy.system.apps.observe.application import ObserveSnapshot
 
 
-_COMPONENTS = ("reference", "market", "account", "risk", "execution")
+_SHARED_SERVICES = ("reference", "market")
 
 
 def observe_renderable(snapshot: ObserveSnapshot) -> RenderableType:
@@ -21,8 +21,8 @@ def observe_renderable(snapshot: ObserveSnapshot) -> RenderableType:
     table.add_column("状态")
     table.add_column("新鲜度")
     table.add_column("详情")
-    for name in _COMPONENTS:
-        value = snapshot.components.get(name, {})
+    for name in _SHARED_SERVICES:
+        value = snapshot.shared_services.get(name, {})
         table.add_row(
             name,
             str(value.get("status", "unknown")),
@@ -31,7 +31,7 @@ def observe_renderable(snapshot: ObserveSnapshot) -> RenderableType:
         )
     summary = Text(
         f"{snapshot.workspace_id} · {snapshot.overall_status} · "
-        f"{len(snapshot.launches)} 个 Launch\n",
+        f"{len(snapshot.active_instances)} 个活动实例\n",
         style="bold",
     )
     summary.append(f"建议：{_next_step(snapshot)}", style="dim")
@@ -41,15 +41,13 @@ def observe_renderable(snapshot: ObserveSnapshot) -> RenderableType:
 def _next_step(snapshot: ObserveSnapshot) -> str:
     if snapshot.error:
         return "检查工作区诊断信息"
-    if not snapshot.launches:
-        return "完成工作区检查并配置第一个 Launch"
-    latest = snapshot.launches[-1]
+    if not snapshot.active_instances:
+        return "当前没有活动运行实例"
+    latest = snapshot.active_instances[-1]
     state = str(latest.get("state") or "unknown")
     if state in {"failed", "unresponsive", "degraded"}:
-        return "查看最近 Launch 的日志和组件状态"
-    if state == "completed":
-        return "查看最近 Launch 的运行结果"
-    return "继续查看最近 Launch 的运行状态"
+        return "查看异常运行实例的日志和组件状态"
+    return "继续查看活动运行实例的状态"
 
 
 def _freshness(value: Mapping[str, Any]) -> str:

@@ -610,6 +610,58 @@ def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
     assert "资源操作结果" in output
 
 
+def test_deleting_model_connection_returns_to_model_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = [
+        {
+            "connection_id": "primary-model",
+            "provider": "openai",
+            "enabled": True,
+            "models": ["gpt-test"],
+            "verification_status": "verified",
+        }
+    ]
+    monkeypatch.setattr(
+        resources,
+        "list_records",
+        lambda state, kind: tuple(records),
+    )
+
+    def execute(
+        state: object,
+        kind: str,
+        selected: object,
+        action: str,
+        **kwargs: object,
+    ) -> dict[str, str]:
+        assert kind == "models"
+        assert action == "delete"
+        records.clear()
+        return {"connection_id": "primary-model", "status": "deleted"}
+
+    monkeypatch.setattr(resources, "execute_action", execute)
+
+    async def run() -> tuple[tuple[str, ...], tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "1", "7", "/confirm"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            return (
+                screen.session.context,
+                tuple(action.label for action in interaction.actions),
+            )
+
+    context, actions = asyncio.run(run())
+    assert context == ("resources", "models")
+    assert actions == ("添加模型连接",)
+
+
 def test_notification_detail_only_offers_destination_owned_actions() -> None:
     actions = detail_actions("notifications")
 
@@ -1028,7 +1080,7 @@ def test_model_connection_wizard_discovers_tests_and_atomically_commits(
         },
     )
 
-    async def run() -> tuple[str, str, object]:
+    async def run() -> tuple[str, str, object, tuple[str, ...]]:
         app = KairosWorkbenchApp(state)
         async with app.run_test(size=(120, 36)) as pilot:
             screen = app.screen
@@ -1047,13 +1099,25 @@ def test_model_connection_wizard_discovers_tests_and_atomically_commits(
             await pilot.pause(0.1)
             screen.submit("/confirm")
             await pilot.pause(0.1)
+            list_interaction = screen.session.interaction
+            assert isinstance(list_interaction, ChoiceInteraction)
+            assert screen.session.context == ("resources", "models")
+            assert [action.label for action in list_interaction.actions] == [
+                "ollama-local",
+                "添加模型连接",
+            ]
+            screen.submit("1")
+            await pilot.pause(0.1)
+            detail_interaction = screen.session.interaction
+            assert isinstance(detail_interaction, ChoiceInteraction)
             return (
                 str(screen.query_one("#command-context", Static).render()),
                 _log_text(screen.query_one("#command-output", RichLog)),
                 screen.session.resources.wizard,
+                tuple(action.label for action in detail_interaction.actions),
             )
 
-    context, output, wizard = asyncio.run(run())
+    context, output, wizard, actions = asyncio.run(run())
     connection = ModelProviderConnectionApplication(workspace).show("ollama-local")
     assert "模型连接" in context
     assert "ollama-local" in context
@@ -1063,6 +1127,103 @@ def test_model_connection_wizard_discovers_tests_and_atomically_commits(
     assert connection["verified_models"] == ["qwen3:8b"]
     assert "发现 2 个模型" in output
     assert "最小文本响应成功" in output
+    assert "修改配置" in actions
+    assert "删除连接" in actions
+
+
+def test_model_catalog_failure_allows_manual_model_and_saves_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="model-manual"
+    )
+    state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
+
+    def forbidden(*args: object, **kwargs: object) -> object:
+        raise PermissionError("HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(ModelProviderConnectionApplication, "discover", forbidden)
+    monkeypatch.setattr(
+        ModelProviderConnectionApplication,
+        "probe",
+        lambda self, connection, model, *, secret, probe=None: {
+            "succeeded": True,
+            "detail": "最小文本响应成功",
+            "error_category": None,
+        },
+    )
+
+    async def run() -> tuple[str, tuple[str, ...]]:
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "/new", "4", "ikun", ""):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            labels = tuple(action.label for action in interaction.actions)
+            screen.submit("1")
+            await pilot.pause()
+            screen.submit("gpt-5.6-sol")
+            await pilot.pause(0.1)
+            screen.submit("/confirm")
+            await pilot.pause(0.1)
+            return _log_text(screen.query_one("#command-output", RichLog)), labels
+
+    output, labels = asyncio.run(run())
+    saved = ModelProviderConnectionApplication(workspace).show("ikun")
+    assert labels == ("手动输入模型 ID",)
+    assert "模型目录不可用" in output
+    assert saved["models"] == ["gpt-5.6-sol"]
+    assert saved["verification_status"] == "verified"
+
+
+def test_saved_model_can_send_message_and_show_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="model-conversation"
+    )
+    ModelProviderConnectionApplication(workspace).configure(
+        "ollama-local", provider="ollama", models=("qwen3:8b",)
+    )
+    state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
+    monkeypatch.setattr(
+        "kairospy.strategy.apps.agent.application.AgentResourceApplication.converse_with_model",
+        lambda self, connection_id, model, message: {
+            "succeeded": True,
+            "verification_status": "verified",
+            "model": model,
+            "message": message,
+            "response": "你好，我是 Qwen。",
+        },
+    )
+
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "1", "1", "1"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, InputInteraction)
+            screen.submit("你好，请介绍自己")
+            await pilot.pause()
+            screen.submit("/confirm")
+            await pilot.pause(0.1)
+            return (
+                _log_text(screen.query_one("#command-output", RichLog)),
+                screen.query_one("#command-input", WorkbenchCommandInput).placeholder,
+            )
+
+    output, placeholder = asyncio.run(run())
+    assert "你好，请介绍自己" in output
+    assert "你好，我是 Qwen。" in output
+    assert placeholder == "输入编号或命令；Enter 提交"
 
 
 def test_model_connection_home_discards_staged_hosted_credential(
@@ -1221,7 +1382,7 @@ def test_resource_delete_dry_run_previews_without_executing(
 
     output, records = asyncio.run(run())
     assert "预览" in output
-    assert records == ()
+    assert tuple(record.key for record in records) == ("paper-main",)
 
 
 def test_resource_setup_uses_masked_single_input_and_never_records_secret(

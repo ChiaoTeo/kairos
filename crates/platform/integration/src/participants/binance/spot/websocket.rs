@@ -1,4 +1,4 @@
-websocket_connection!(BinanceSpotWebSocketConnection, "spot.websocket");
+websocket_connection!(BinanceSpotWebSocketConnection, "spot.websocket", "spot");
 market_websocket_capabilities!(BinanceSpotWebSocketConnection, "spot");
 
 user_websocket_connection!(

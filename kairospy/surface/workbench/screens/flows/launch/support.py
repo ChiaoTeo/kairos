@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 
-def config_path(owner: Any, record: dict[str, Any]) -> Path:
+def config_path(owner: Any, record: Mapping[str, Any]) -> Path:
     configured = record.get("config")
     return (
         Path(str(configured))
