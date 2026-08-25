@@ -126,6 +126,7 @@ mod tests {
             "binance-spot-rest".into(),
             MarketProviderBinding::BinanceSpot {
                 enabled: true,
+                connection_id: None,
                 transport: crate::composition::config::BinanceSpotTransport::Rest,
                 endpoint: None,
                 snapshot_interval_ms: 1_000,
@@ -201,8 +202,9 @@ mod tests {
                 "massive-equity".into(),
                 MarketProviderBinding::Massive {
                     enabled: true,
+                    connection_id: None,
                     product: MassiveMarketProduct::Equity,
-                    credential_id: "massive".into(),
+                    credential_id: Some("massive".into()),
                     endpoint: None,
                 },
             ),
@@ -210,7 +212,8 @@ mod tests {
                 "binance-equity".into(),
                 MarketProviderBinding::BinanceEquity {
                     enabled: true,
-                    credential_id: "binance".into(),
+                    connection_id: None,
+                    credential_id: Some("binance".into()),
                     endpoint: None,
                     snapshot_interval_ms: 1_000,
                 },
@@ -295,8 +298,9 @@ mod tests {
             "massive-options".into(),
             MarketProviderBinding::Massive {
                 enabled: true,
+                connection_id: None,
                 product: MassiveMarketProduct::Options,
-                credential_id: "massive".into(),
+                credential_id: Some("massive".into()),
                 endpoint: None,
             },
         )]);

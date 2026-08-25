@@ -39,6 +39,7 @@ class ActivityRecord:
     copy_text: str | None = None
     audit_summary: str | None = None
     artifact_path: Path | None = None
+    equivalent_command: tuple[str, ...] | None = None
 
 
 __all__ = ["ActivityKind", "ActivityOutcome", "ActivityRecord"]

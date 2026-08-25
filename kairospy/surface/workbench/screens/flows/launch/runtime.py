@@ -11,6 +11,12 @@ from rich.panel import Panel
 from rich.pretty import Pretty
 from rich.text import Text
 
+from kairospy.investment.apps.account.application import AccountConfigurationApplication
+from kairospy.strategy.apps.agent.application import AgentResourceApplication
+from kairospy.system.apps.integration.application import (
+    ProviderConnectionConfigurationApplication,
+)
+
 from ....widgets import (
     ActionToken,
     ActionItem,
@@ -108,7 +114,7 @@ def handle_command(
                 "例如 paper-demo；输入 /back 取消。",
             )
             return _with_input_error(session, effects, str(error))
-        return _start_wizard(session, wizard)
+        return _start_wizard(state, session, wizard)
     if command.startswith("strategy:launch-field:"):
         wizard = session.strategy.wizard
         if not isinstance(wizard, LaunchWizardState):
@@ -123,7 +129,7 @@ def handle_command(
             wizard.accept(command.removeprefix("strategy:launch-field:"), value)
         except ValueError as error:
             return _input_error(session, str(error))
-        return _advance_wizard(session, wizard)
+        return _advance_wizard(state, session, wizard)
     if command == "strategy:launch-save-mode":
         mode = value.strip().lower() or "draft"
         if mode not in {"draft", "publish"}:
@@ -207,6 +213,63 @@ def handle_context(
         return None
     context = session.context
     record = session.strategy.selected_record
+    if context == ("strategy", "setup"):
+        wizard = session.strategy.wizard
+        if not isinstance(wizard, LaunchWizardState):
+            return None
+        prompt = wizard.next_prompt()
+        if prompt is None:
+            return None
+        if prompt[0] == "mode":
+            selected = action_id(_mode_actions(), command)
+            if selected is None:
+                return None
+            wizard.accept("mode", selected.removeprefix("mode-"))
+            return _advance_wizard(state, session, wizard)
+        if prompt[0] == "accounts":
+            selected = action_id(_account_actions(wizard), command)
+            if selected is None:
+                return None
+            if selected == "accounts-none":
+                wizard.selected_accounts.clear()
+                wizard.accept("accounts", "")
+                return _advance_wizard(state, session, wizard)
+            if selected == "accounts-done":
+                wizard.accept("accounts", ",".join(sorted(wizard.selected_accounts)))
+                return _advance_wizard(state, session, wizard)
+            account_id = _selected_account_id(wizard, selected)
+            if account_id is None:
+                return None
+            if account_id in wizard.selected_accounts:
+                wizard.selected_accounts.remove(account_id)
+            else:
+                wizard.selected_accounts.add(account_id)
+            return _advance_wizard(state, session, wizard)
+        if prompt[0] == "market-profile":
+            selected = action_id(_market_connection_actions(wizard), command)
+            connection_id = _selected_connection_id(wizard, selected or "")
+            if connection_id is None:
+                return None
+            wizard.accept("market-profile", connection_id)
+            return _advance_wizard(state, session, wizard)
+        if prompt[0] == "live-trading":
+            selected = action_id(_live_access_actions(), command)
+            if selected is None:
+                return None
+            wizard.accept("live-trading", "yes" if selected == "allow-trade" else "no")
+            return _advance_wizard(state, session, wizard)
+        if prompt[0] != "agent-model-ref":
+            return None
+        selected = action_id(_model_ref_actions(wizard), command)
+        if selected is None:
+            return None
+        value = ""
+        if selected != "unavailable":
+            value = _selected_model_ref(wizard, selected) or ""
+            if not value:
+                return None
+        wizard.accept("agent-model-ref", value)
+        return _advance_wizard(state, session, wizard)
     if context == ("strategy", "attach"):
         if record is None:
             session.enter("strategy")
@@ -334,7 +397,7 @@ def handle_context(
                 return _choice(
                     state, session, Text(str(error), style="red"), "无法打开配置"
                 )
-            return _start_wizard(session, wizard)
+            return _start_wizard(state, session, wizard)
         if action == "attach":
             session.context = ("strategy", "attach")
             session.strategy.reset_live_buffer(
@@ -574,24 +637,113 @@ def enter_deep_link(
             return activity, *_choice(
                 state, session, Text(str(error), style="red"), "无法打开配置"
             )
-        return activity, *_start_wizard(session, wizard)
+        return activity, *_start_wizard(state, session, wizard)
     return activity, *_choice(state, session)
 
 
 def _start_wizard(
-    session: GuidedSession, wizard: LaunchWizardState
+    state: Any, session: GuidedSession, wizard: LaunchWizardState
 ) -> tuple[ScreenEffect, ...]:
     session.strategy.wizard = wizard
     session.context = ("strategy", "setup")
-    return _advance_wizard(session, wizard)
+    return _advance_wizard(state, session, wizard)
 
 
 def _advance_wizard(
-    session: GuidedSession, wizard: LaunchWizardState
+    state: Any, session: GuidedSession, wizard: LaunchWizardState
 ) -> tuple[ScreenEffect, ...]:
     prompt = wizard.next_prompt()
     if prompt:
         name, label, detail = prompt
+        if name == "agent-model-ref":
+            wizard.model_refs = (
+                AgentResourceApplication(state.owner).verified_model_refs()
+                if state.owner is not None
+                else ()
+            )
+            interaction = ChoiceInteraction(
+                title=f"{context_label(session.context)} · 选择 Agent 模型",
+                summary=Text(
+                    "仅显示当前配置下已完成最小文本调用验证的模型。"
+                    if wizard.model_refs
+                    else "当前没有已验证模型；可以继续保存未完成草稿，但不能发布 Launch。",
+                    style="dim" if wizard.model_refs else "yellow",
+                ),
+                actions=_model_ref_actions(wizard),
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus(
+                "请选择 Agent 模型"
+                if wizard.model_refs
+                else "没有可用模型 · 可保存未完成草稿"
+            )
+        if name == "mode":
+            interaction = ChoiceInteraction(
+                title=f"{context_label(session.context)} · 运行模式",
+                summary=Text("选择 Launch 的运行边界。", style="dim"),
+                actions=_mode_actions(),
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus("请选择运行模式")
+        if name == "accounts":
+            if not wizard.account_records and state.owner is not None:
+                try:
+                    wizard.account_records = tuple(
+                        AccountConfigurationApplication(state.owner).list()
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    wizard.account_records = ()
+                wizard.selected_accounts.update(
+                    item.strip()
+                    for item in wizard._default("accounts").split(",")
+                    if item.strip()
+                )
+            interaction = ChoiceInteraction(
+                title=f"{context_label(session.context)} · 选择账户",
+                summary=Text(
+                    "选择一个或多个 Account；这里不会选择或显示 API Key。"
+                    "完成后再决定只读观察或允许交易。",
+                    style="dim",
+                ),
+                actions=_account_actions(wizard),
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus("请选择账户后完成")
+        if name == "market-profile":
+            if not wizard.provider_connections and state.owner is not None:
+                try:
+                    wizard.provider_connections = tuple(
+                        item
+                        for item in ProviderConnectionConfigurationApplication(
+                            state.owner
+                        ).list()
+                        if item.get("enabled")
+                        and "market-query" in item.get("purposes", [])
+                    )
+                except (OSError, ValueError):
+                    wizard.provider_connections = ()
+            interaction = ChoiceInteraction(
+                title=f"{context_label(session.context)} · 选择行情连接",
+                summary=Text(
+                    "仅显示启用且声明 market-query 的 Provider Connection。",
+                    style="dim",
+                ),
+                actions=_market_connection_actions(wizard),
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus("请选择行情连接")
+        if name == "live-trading":
+            interaction = ChoiceInteraction(
+                title=f"{context_label(session.context)} · 账户使用方式",
+                summary=Text(
+                    "只读观察只要求 account-read；允许交易还会要求 order-trade binding、"
+                    "Provider 实测交易权限和后续安全约束。",
+                    style="yellow",
+                ),
+                actions=_live_access_actions(),
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus("请选择账户使用方式")
         return _ask(session, f"strategy:launch-field:{name}", label, detail)
     return _ask(
         session,
@@ -600,6 +752,126 @@ def _advance_wizard(
         "draft 仅保存草稿；publish 校验并发布。",
         Pretty(wizard.preview(), expand_all=True),
     )
+
+
+def _model_ref_actions(wizard: LaunchWizardState) -> tuple[ActionItem, ...]:
+    if not wizard.model_refs:
+        return (
+            ActionItem(
+                "unavailable",
+                "暂不选择模型",
+                "继续完成向导并保存为未完成草稿",
+                "1",
+            ),
+        )
+    return tuple(
+        ActionItem(
+            f"model-ref-{index}",
+            str(value["model_ref"]),
+            f"{value.get('provider_label') or value.get('provider') or '模型服务'} · 已验证",
+            str(index),
+        )
+        for index, value in enumerate(wizard.model_refs, 1)
+    )
+
+
+def _mode_actions() -> tuple[ActionItem, ...]:
+    return (
+        ActionItem("mode-backtest", "回测", "历史事件回放，不连接真实账户", "1"),
+        ActionItem("mode-paper", "模拟运行", "实时行情 + 模拟账户", "2"),
+        ActionItem("mode-live", "实时运行", "真实账户；交易能力需要额外授权", "3"),
+    )
+
+
+def _account_actions(wizard: LaunchWizardState) -> tuple[ActionItem, ...]:
+    actions = [
+        ActionItem("accounts-done", "完成选择", "使用当前勾选的 Account", "1"),
+        ActionItem("accounts-none", "不使用账户", "仅运行不依赖账户的策略", "2"),
+    ]
+    actions.extend(
+        ActionItem(
+            f"account-{index}",
+            f"{'✓ ' if str(record.get('account_id')) in wizard.selected_accounts else ''}"
+            f"{record.get('account_id')}",
+            f"{record.get('integration_provider') or record.get('broker') or 'unknown'} · "
+            f"{record.get('environment') or record.get('mode') or 'unknown'}",
+            str(index + 2),
+        )
+        for index, record in enumerate(wizard.account_records, 1)
+    )
+    return tuple(actions)
+
+
+def _selected_account_id(wizard: LaunchWizardState, action: str) -> str | None:
+    if not action.startswith("account-"):
+        return None
+    try:
+        record = wizard.account_records[int(action.removeprefix("account-")) - 1]
+    except (ValueError, IndexError):
+        return None
+    return str(record.get("account_id") or "") or None
+
+
+def _market_connection_actions(wizard: LaunchWizardState) -> tuple[ActionItem, ...]:
+    if not wizard.provider_connections:
+        return (
+            ActionItem(
+                "connection-unavailable",
+                "没有可用行情连接",
+                "请先在资源配置中添加并测试 Provider Connection",
+                "1",
+            ),
+        )
+    return tuple(
+        ActionItem(
+            f"connection-{index}",
+            str(record.get("connection_id")),
+            f"{record.get('provider')} · {', '.join(record.get('products', []))} · "
+            f"{record.get('verification_status') or 'pending'}",
+            str(index),
+        )
+        for index, record in enumerate(wizard.provider_connections, 1)
+    )
+
+
+def _selected_connection_id(wizard: LaunchWizardState, action: str) -> str | None:
+    if not action.startswith("connection-") or action == "connection-unavailable":
+        return None
+    try:
+        record = wizard.provider_connections[
+            int(action.removeprefix("connection-")) - 1
+        ]
+    except (ValueError, IndexError):
+        return None
+    return str(record.get("connection_id") or "") or None
+
+
+def _live_access_actions() -> tuple[ActionItem, ...]:
+    return (
+        ActionItem(
+            "observe-only",
+            "只读观察",
+            "读取余额、持仓和订单状态，不允许创建真实订单",
+            "1",
+        ),
+        ActionItem(
+            "allow-trade",
+            "允许交易",
+            "要求同一 Account 显式配置 order-trade 并通过权限验证",
+            "2",
+        ),
+    )
+
+
+def _selected_model_ref(wizard: LaunchWizardState, action: str) -> str | None:
+    if not action.startswith("model-ref-"):
+        return None
+    try:
+        index = int(action.removeprefix("model-ref-")) - 1
+        value = wizard.model_refs[index]
+    except (ValueError, IndexError):
+        return None
+    return str(value.get("model_ref") or "") or None
 
 
 def _wizard_confirmation(

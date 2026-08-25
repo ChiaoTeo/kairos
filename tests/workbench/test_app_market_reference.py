@@ -27,6 +27,8 @@ from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
 from kairospy.surface.workbench.screens.flows import market, reference
 from kairospy.surface.workbench.screens.flows.market.actions import (
+    MarketFilePromptState,
+    file_result_renderable,
     observation_renderable,
 )
 from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
@@ -334,10 +336,14 @@ def test_single_market_route_appends_quote_to_activity_stream(
             "provider": "massive",
             "bid_price": "226.50",
             "ask_price": "226.75",
+            "observed_at_unix_nanos": 1_777_777_777_000_000_000,
+            "_fetched_at_unix_nanos": 1_777_777_778_000_000_000,
+            "_source_mode": "provider-direct",
+            "_transport": "REST",
         },
     )
 
-    async def run() -> tuple[str, str, int]:
+    async def run() -> tuple[str, str, tuple[Any, ...]]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -349,15 +355,28 @@ def test_single_market_route_appends_quote_to_activity_stream(
             return (
                 _log_text(output),
                 str(screen.query_one("#command-status", Static).render()),
-                len(output.activities),
+                output.activities,
             )
 
-    output, status, activity_count = asyncio.run(run())
+    output, status, activities = asyncio.run(run())
 
-    assert activity_count == 1
+    assert len(activities) == 1
     assert "AAPL   QUOTE" in output
     assert "226.50" in output
     assert "226.75" in output
+    assert "massive · REST · Provider 直连" in output
+    assert "市场时间" in output
+    assert "获取时间" in output
+    assert "数据年龄  1.0 秒" in output
+    assert "重新执行" in output
+    command = activities[0].equivalent_command
+    assert command is not None
+    assert command[-4:] == (
+        "--provider",
+        "massive",
+        "--observation-kind",
+        "quote",
+    )
     assert status == "行情已就绪"
 
 
@@ -449,6 +468,41 @@ def test_order_book_observation_has_a_readable_two_sided_table() -> None:
     assert "买价" in output
     assert "100" in output
     assert "101" in output
+
+
+def test_workspace_snapshot_identifies_current_view_provenance() -> None:
+    rendered = observation_renderable(
+        {
+            "symbol": "AAPL",
+            "data_type": "quote",
+            "provider": "massive",
+            "bid_price": "309.18",
+            "ask_price": "309.45",
+            "source_observed_at_unix_nanos": 1_777_777_777_000_000_000,
+            "_fetched_at_unix_nanos": 1_777_777_778_000_000_000,
+            "_source_mode": "workspace-view",
+        }
+    )
+    with Console(width=80, record=True) as console:
+        console.print(rendered)
+    output = console.export_text()
+
+    assert "massive · Workspace 当前视图" in output
+    assert "市场时间" in output
+    assert "获取时间" in output
+
+
+def test_market_replay_result_identifies_local_files_as_source() -> None:
+    prompt = MarketFilePromptState("replay", _market())
+    prompt.accept("files", "one.jsonl, two.jsonl")
+    rendered = file_result_renderable({"status": "completed"}, prompt)
+    with Console(width=80, record=True) as console:
+        console.print(rendered)
+    output = console.export_text()
+
+    assert "来源" in output
+    assert "本地回放" in output
+    assert "2 个 JSONL 文件" in output
 
 
 def test_market_history_download_is_a_single_input_redacted_scope_preview(

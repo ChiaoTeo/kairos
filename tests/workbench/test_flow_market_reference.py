@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from kairospy.surface.workbench.screens.effects import (
     AppendActivity,
+    RunOperation,
     SetInteraction,
     SetStatus,
 )
@@ -73,3 +74,45 @@ def test_explicit_market_observation_returns_one_terminal_activity() -> None:
     assert "226.50" in (activities[0].copy_text or "")
     assert any(isinstance(effect, SetStatus) for effect in effects)
     assert "226.50" in renderable_plain_text(session.market.snapshot)
+
+
+def test_selected_market_exposes_one_truthful_diagnostic_action() -> None:
+    selected = _market()
+    actions = market.selected_market_actions(selected)
+
+    diagnostic = tuple(action for action in actions if action.id == "diagnose")
+
+    assert len(diagnostic) == 1
+    assert diagnostic[0].label == "诊断当前市场"
+    assert diagnostic[0].shortcut == "d"
+    assert not {"validate", "universe"}.intersection(action.id for action in actions)
+
+
+def test_selected_market_diagnostic_runs_validation_directly() -> None:
+    session = GuidedSession(context=("market", "selected"))
+    session.market.selected = _market()
+
+    effects = market.handle_context(_state(), session, "d")
+
+    assert effects is not None
+    operation = next(effect for effect in effects if isinstance(effect, RunOperation))
+    assert operation.operation.action_name == "market.diagnose"
+    assert operation.operation.route.kind is ResultKind.MARKET_DIAGNOSTIC
+
+
+def test_diagnostics_search_runs_diagnostic_after_market_selection() -> None:
+    state = _state()
+    session = GuidedSession(context=("market",))
+    session.market.purpose = "diagnostics"
+    market.handle_success(
+        state,
+        session,
+        _spec(ResultKind.MARKET),
+        (_market(),),
+    )
+
+    effects = market.handle_context(state, session, "1")
+
+    assert effects is not None
+    operation = next(effect for effect in effects if isinstance(effect, RunOperation))
+    assert operation.operation.action_name == "market.diagnose"

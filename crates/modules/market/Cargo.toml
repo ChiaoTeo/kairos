@@ -17,6 +17,7 @@ flatbuffers.workspace = true
 futures-util.workspace = true
 kairos-conflux.workspace = true
 kairos-credentials.workspace = true
+kairos-integration.workspace = true
 kairos-market-contract.workspace = true
 kairos-primitives.workspace = true
 kairos-protocol.workspace = true

@@ -22,7 +22,7 @@ def _workspace(tmp_path, monkeypatch):
     return workspace
 
 
-def test_massive_configuration_owns_reference_and_market_sections(
+def test_massive_configuration_writes_connection_and_reference_binding_only(
     tmp_path, monkeypatch
 ) -> None:
     workspace = _workspace(tmp_path, monkeypatch)
@@ -35,21 +35,18 @@ def test_massive_configuration_owns_reference_and_market_sections(
     )
 
     assert configured["verification_status"] == "pending"
-    assert configured["shared_by"] == ["Reference", "Market"]
+    assert configured["shared_by"] == ["Reference"]
     manifest = tomllib.loads(workspace.paths.manifest.read_text())
-    assert (
-        manifest["reference"]["providers"]["massive"]["credential_id"]
-        == "massive-readonly"
-    )
-    assert manifest["market"]["providers"] == [
-        {
-            "type": "massive",
-            "product": "equity",
-            "enabled": True,
-            "credential_id": "massive-readonly",
-            "endpoint": "https://massive.example",
-        }
-    ]
+    assert manifest["reference"]["providers"]["massive"] == {
+        "enabled": True,
+        "connection_id": "massive",
+    }
+    assert "market" not in manifest or "providers" not in manifest["market"]
+    connection = tomllib.loads(
+        (workspace.paths.market_connections_root() / "massive.toml").read_text()
+    )["connection"]
+    assert connection["credential_id"] == "massive-readonly"
+    assert connection["endpoint"] == "https://massive.example"
     assert "do-not-persist" not in workspace.paths.manifest.read_text()
 
 

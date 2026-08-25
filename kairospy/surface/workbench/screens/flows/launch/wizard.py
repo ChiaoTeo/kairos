@@ -28,6 +28,10 @@ class LaunchWizardState:
     source: Path | None = None
     values: dict[str, Any] = field(default_factory=dict)
     answers: dict[str, Any] = field(default_factory=dict)
+    model_refs: tuple[dict[str, object], ...] = ()
+    account_records: tuple[dict[str, object], ...] = ()
+    selected_accounts: set[str] = field(default_factory=set)
+    provider_connections: tuple[dict[str, object], ...] = ()
 
     @classmethod
     def open(cls, launch_id: str, source: Path | None = None) -> LaunchWizardState:
@@ -124,6 +128,13 @@ class LaunchWizardState:
                 raise ValueError("Intent review 初始模式必须是 shadow、gate 或 revise")
             self.answers[name] = value
             return
+        if name == "agent-model-ref":
+            if value:
+                connection, separator, model = value.partition("/")
+                if not separator or not connection or not model:
+                    raise ValueError("请选择一条已验证的模型连接和模型")
+            self.answers[name] = value
+            return
         if name in {"strategy", "backtest-start", "backtest-end"} and not value:
             raise ValueError(f"{_LAUNCH_PROMPTS[name]}不能为空")
         self.answers[name] = value
@@ -131,12 +142,17 @@ class LaunchWizardState:
     def build_values(self) -> dict[str, Any]:
         mode = str(self.answers["mode"])
         execution_enabled = bool(self.answers["execution-enabled"])
+        selected_accounts = tuple(self.answers["accounts"])
+        existing_scopes = _account_scopes(self.values)
         draft = LaunchDraft(
             launch_id=self.launch_id,
             mode=mode,
             strategy=str(self.answers["strategy"]),
-            accounts=tuple(self.answers["accounts"]),
-            account_scopes=dict(self.answers["account-scopes"]),
+            accounts=selected_accounts,
+            account_scopes={
+                account_id: dict(existing_scopes.get(account_id, {}))
+                for account_id in selected_accounts
+            },
             execution_enabled=execution_enabled,
             market_profile=(
                 str(self.answers["market-profile"]) if mode != "backtest" else None
@@ -190,7 +206,7 @@ class LaunchWizardState:
         execution = bool(self.answers.get("execution-enabled", True))
         agent = bool(self.answers.get("agent-enabled", False))
         notifications = bool(self.answers.get("notifications-enabled", False))
-        steps = ["mode", "strategy", "accounts", "account-scopes"]
+        steps = ["mode", "strategy", "accounts"]
         if mode == "backtest":
             steps.extend(("backtest-start", "backtest-end", "backtest-events"))
         else:
@@ -225,9 +241,7 @@ class LaunchWizardState:
                 )
             )
             steps.extend(
-                ("agent-fixture",)
-                if mode == "backtest"
-                else ("agent-model-connection", "agent-model")
+                ("agent-fixture",) if mode == "backtest" else ("agent-model-ref",)
             )
             steps.append("agent-mcp")
         if mode != "backtest":
@@ -318,8 +332,11 @@ class LaunchWizardState:
             "agent-required-contexts": ",".join(
                 _strings(review.get("required_contexts"))
             ),
-            "agent-model-connection": model.get("connection") or "",
-            "agent-model": model.get("model") or "",
+            "agent-model-ref": (
+                f"{model.get('connection')}/{model.get('model')}"
+                if model.get("connection") and model.get("model")
+                else ""
+            ),
             "agent-fixture": agent.get("fixture_path") or "fixtures/agent.jsonl",
             "agent-mcp": json.dumps(agent.get("mcp") or [], ensure_ascii=False),
             "notifications-enabled": _bool_text(notifications.get("enabled", False)),
@@ -380,10 +397,12 @@ class LaunchWizardState:
             current["fixture_path"] = str(self.answers["agent-fixture"])
         else:
             current.pop("fixture_path", None)
+            model_ref = str(self.answers["agent-model-ref"])
+            connection, _, model = model_ref.partition("/")
             current["model"] = {
                 **dict(_mapping(current.get("model"))),
-                "connection": str(self.answers["agent-model-connection"]),
-                "model": str(self.answers["agent-model"]),
+                "connection": connection,
+                "model": model,
             }
         return current
 
@@ -503,9 +522,9 @@ def _bool_text(value: object) -> str:
 _LAUNCH_PROMPTS = {
     "mode": "运行模式（backtest / paper / live）",
     "strategy": "Strategy 引用",
-    "accounts": "交易账户 ID（逗号分隔，可留空）",
+    "accounts": "选择账户（可留空）",
     "account-scopes": "账户范围 JSON object",
-    "market-profile": "Market 连接 Profile",
+    "market-profile": "选择行情 Provider Connection",
     "market-scope": "Market 范围（shared / instance）",
     "backtest-start": "回测开始时间",
     "backtest-end": "回测结束时间",
@@ -515,7 +534,7 @@ _LAUNCH_PROMPTS = {
     "execution-channel": "Execution channel",
     "execution-segment": "Account segment key",
     "risk-profile": "Risk Profile",
-    "live-trading": "是否允许真实订单副作用（yes / no）",
+    "live-trading": "账户使用方式（只读观察 / 允许交易）",
     "live-limit-only": "是否强制仅允许限价单（yes / no）",
     "live-max-notional": "单笔最大名义金额",
     "agent-enabled": "是否启用 Agent（yes / no）",
@@ -530,8 +549,7 @@ _LAUNCH_PROMPTS = {
     "agent-selectable-modes": "Strategy 可切换模式（逗号分隔）",
     "agent-operations": "Agent 审核操作（逗号分隔）",
     "agent-required-contexts": "必需 context keys（逗号分隔，可留空）",
-    "agent-model-connection": "模型连接",
-    "agent-model": "固定模型 snapshot",
+    "agent-model-ref": "Agent 模型",
     "agent-fixture": "Agent Fixture 文件",
     "agent-mcp": "MCP servers JSON 数组",
     "notifications-enabled": "是否启用通知（yes / no）",

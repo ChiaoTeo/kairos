@@ -436,25 +436,37 @@ class ComponentProcessApplication:
                 "component": component,
                 "status": "not_running",
                 "control_socket": str(socket),
+                "control_reachable": False,
+                "probe_error": None,
             }
         try:
-            return self.client(
+            value = self.client(
                 "account" if component == "account" else component,
                 socket,
                 timeout=self.control_timeout,
             ).status()
+            value.setdefault("component", component)
+            value.setdefault("control_socket", str(socket))
+            value["control_reachable"] = True
+            value["probe_error"] = None
+            return value
         except TimeoutError:
+            detail = f"health check timed out after {self.control_timeout:g}s"
             return {
                 "component": component,
                 "status": "unresponsive",
                 "control_socket": str(socket),
-                "error": f"health check timed out after {self.control_timeout:g}s",
+                "control_reachable": False,
+                "probe_error": detail,
+                "error": detail,
             }
         except Exception as error:
             return {
                 "component": component,
                 "status": "not_running",
                 "control_socket": str(socket),
+                "control_reachable": False,
+                "probe_error": str(error),
                 "error": str(error),
             }
 
@@ -471,14 +483,22 @@ class ComponentProcessApplication:
                 pass
         pid = value.get("pid")
         process = _process_details(pid)
+        log_file = self.workspace.paths.logs / component / "process.log"
+        process_lock = self.workspace.paths.process_lock(component)
+        control_socket = self.workspace.paths.process_socket(component)
         return {
             "pid": pid,
             "pid_alive": process["alive"],
             "process_state": process["state"],
             "process_command": process["command"],
             "health_file": str(health_file),
-            "log_file": str(self.workspace.paths.logs / component / "process.log"),
-            "process_lock": str(self.workspace.paths.process_lock(component)),
+            "health_file_exists": health_file.is_file(),
+            "log_file": str(log_file),
+            "logs_available": log_file.is_file(),
+            "process_lock": str(process_lock),
+            "process_lock_exists": process_lock.exists(),
+            "process_lock_held": _lock_is_held(process_lock),
+            "control_socket_exists": control_socket.exists(),
         }
 
     def list_status(self) -> dict[str, dict[str, Any]]:
@@ -524,6 +544,26 @@ class ComponentProcessApplication:
             return ()
         return tuple(lines[-limit:])
 
+    def log_snapshot(self, component: str, *, limit: int = 200) -> dict[str, Any]:
+        """Read a bounded tail with enough file identity to detect rotation."""
+
+        lines = self.logs(component, limit=limit)
+        path = self.workspace.paths.logs / component / "process.log"
+        try:
+            value = path.stat()
+            generation = f"{value.st_dev}:{value.st_ino}"
+            size = value.st_size
+        except FileNotFoundError:
+            generation = None
+            size = 0
+        return {
+            "component": component,
+            "path": str(path),
+            "generation": generation,
+            "size": size,
+            "lines": list(lines),
+        }
+
     def doctor(self) -> dict[str, Any]:
         """Inspect runtime resources without mutating the workspace."""
         report: dict[str, Any] = {
@@ -560,10 +600,13 @@ class ComponentProcessApplication:
                 "lock": str(lock),
                 "lock_held": _lock_is_held(lock),
                 "repairable": (
-                    socket_kind == "socket"
-                    and statuses[component].get("status")
+                    statuses[component].get("status")
                     in {"stale", "not_running", "unresponsive"}
                     and not _lock_is_held(lock)
+                    and (
+                        socket_kind == "socket"
+                        or (socket_kind == "missing" and health.is_file())
+                    )
                 ),
             }
         return report
@@ -584,6 +627,25 @@ class ComponentProcessApplication:
             elif value["socket_kind"] != "missing":
                 skipped[component] = "active, healthy, or lock-owned"
         return {"repaired": repaired, "skipped": skipped}
+
+    def repair_component(self, component: str) -> dict[str, Any]:
+        """Remove stale runtime resources for exactly one workspace component."""
+
+        if component not in SYSTEM_COMPONENTS:
+            raise ValueError(f"unsupported workspace component: {component}")
+        report = self.doctor()["components"][component]
+        if not report["repairable"]:
+            return {
+                "component": component,
+                "status": "skipped",
+                "reason": "active, healthy, or lock-owned",
+            }
+        socket = self.workspace.paths.process_socket(component)
+        health = self.workspace.paths.health_file(component)
+        socket.unlink(missing_ok=True)
+        if health.exists() and not report["lock_held"]:
+            health.unlink(missing_ok=True)
+        return {"component": component, "status": "repaired"}
 
     def _command(
         self,

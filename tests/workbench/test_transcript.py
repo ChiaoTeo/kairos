@@ -107,7 +107,7 @@ def test_guided_arguments_produce_one_semantic_action(
 
 
 def test_complete_operation_redacts_paired_secret_arguments(tmp_path: Path) -> None:
-    async def run() -> tuple[str, dict[str, object]]:
+    async def run() -> tuple[str, dict[str, object], dict[str, object]]:
         app = KairosWorkbenchApp(
             _state(tmp_path), transcript_path=tmp_path / "secret-action.jsonl"
         )
@@ -120,9 +120,14 @@ def test_complete_operation_redacts_paired_secret_arguments(tmp_path: Path) -> N
             action = next(
                 event for event in app.transcript.events if event["event"] == "action"
             )
-            return screen._output().plain_text, action
+            activity = next(
+                event
+                for event in app.transcript.events
+                if event["event"] == "activity"
+            )
+            return screen._output().plain_text, action, activity
 
-    output, action = asyncio.run(run())
+    output, action, activity = asyncio.run(run())
     encoded = json.dumps(action, ensure_ascii=False)
     assert "top-secret-value" not in output
     assert "top-secret-value" not in encoded
@@ -134,6 +139,13 @@ def test_complete_operation_redacts_paired_secret_arguments(tmp_path: Path) -> N
     ]
     assert "kairos 命令结果" in output
     assert "<redacted>" in output
+    assert activity["equivalent_command"] == [
+        "kairos",
+        "integration",
+        "connect",
+        "--token",
+        "<redacted>",
+    ]
 
 
 def test_scope_and_confirmation_do_not_commit_operation_before_acceptance(

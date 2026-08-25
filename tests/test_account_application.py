@@ -178,3 +178,114 @@ def test_account_credential_identity_invalidates_verification_without_leaking_se
         "state", "configuration", "accounts", "main.json"
     ).read_text()
     assert "never-print-this" not in evidence
+
+
+def test_account_access_projects_readonly_and_trade_on_one_account(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="account-access"
+    )
+    CredentialConfigurationApplication(workspace).configure(
+        "binance-read",
+        provider="binance",
+        values={"api_key": "read-key", "api_secret": "read-secret"},
+    )
+    CredentialConfigurationApplication(workspace).configure(
+        "binance-trade",
+        provider="binance",
+        values={"api_key": "trade-key", "api_secret": "trade-secret"},
+        role="trade",
+    )
+    account = {
+        "account_id": "binance-main",
+        "broker": "binance",
+        "integration_provider": "binance",
+        "environment": "live",
+        "segments": ["spot"],
+        "permissions": {"read": "granted"},
+        "credentials": [
+            {
+                "name": "account-read",
+                "credential_id": "binance-read",
+                "role": "readonly",
+            }
+        ],
+        "status": "connected",
+    }
+
+    class FakeCli:
+        def run(self, arguments):
+            if arguments[0] == "show":
+                return {"account": dict(account)}
+            if arguments[:2] == ["credential", "add"]:
+                name = arguments[arguments.index("--name") + 1]
+                credential_id = arguments[arguments.index("--credential-id") + 1]
+                role = arguments[arguments.index("--role") + 1]
+                account["credentials"] = [
+                    value for value in account["credentials"] if value["name"] != name
+                ] + [
+                    {
+                        "name": name,
+                        "credential_id": credential_id,
+                        "role": role,
+                    }
+                ]
+                account["permissions"] = {"read": "granted", "trade": "granted"}
+                return {"account": dict(account)}
+            raise AssertionError(arguments)
+
+    monkeypatch.setattr(
+        "kairospy.investment.apps.account.application._cli", lambda _workspace: FakeCli()
+    )
+    app = AccountConfigurationApplication(workspace)
+
+    upgraded = app.configure_access(
+        "binance-main",
+        purpose="order-trade",
+        credential_id="binance-trade",
+    )
+
+    assert upgraded["account_id"] == "binance-main"
+    assert [value["purpose"] for value in upgraded["access_bindings"]] == [
+        "account-read",
+        "order-trade",
+    ]
+    assert account["account_id"] == "binance-main"
+
+
+def test_account_access_rejects_cross_provider_credential(tmp_path, monkeypatch) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="account-access"
+    )
+    CredentialConfigurationApplication(workspace).configure(
+        "okx-read",
+        provider="okx",
+        values={
+            "api_key": "key",
+            "api_secret": "secret",
+            "passphrase": "passphrase",
+        },
+    )
+
+    class FakeCli:
+        def run(self, arguments):
+            assert arguments[0] == "show"
+            return {
+                "account": {
+                    "account_id": "binance-main",
+                    "broker": "binance",
+                    "integration_provider": "binance",
+                    "permissions": {"read": "granted"},
+                    "credentials": [],
+                }
+            }
+
+    monkeypatch.setattr(
+        "kairospy.investment.apps.account.application._cli", lambda _workspace: FakeCli()
+    )
+
+    with pytest.raises(ValueError, match="binance credential"):
+        AccountConfigurationApplication(workspace).configure_access(
+            "binance-main", purpose="account-read", credential_id="okx-read"
+        )

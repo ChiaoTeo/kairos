@@ -16,6 +16,7 @@ from .application import (
     SubscriptionReleaseResult,
     SubscriptionStatus,
 )
+from .configuration import MarketProviderBindingApplication
 from .events import (
     BarEvent,
     EventStreamGap,

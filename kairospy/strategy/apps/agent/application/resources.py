@@ -78,6 +78,40 @@ class AgentResourceApplication:
                     return value
             raise
 
+    def verified_model_refs(self) -> tuple[dict[str, object], ...]:
+        """Return concrete models currently safe for Launch selection."""
+
+        result: list[dict[str, object]] = []
+        connections = ModelProviderConnectionApplication(self.workspace)
+        for connection in self.model_connections():
+            if connection.get("configured") is not True:
+                continue
+            connection_id = str(connection["connection_id"])
+            for model in connection.get("verified_models") or ():
+                model_id = str(model)
+                verification = connections.verification(connection_id, model=model_id)
+                if verification.get("verification_status") != "verified":
+                    continue
+                result.append(
+                    {
+                        "connection_id": connection_id,
+                        "model": model_id,
+                        "model_ref": f"{connection_id}/{model_id}",
+                        "provider": connection.get("provider"),
+                        "provider_label": connection.get("provider_label"),
+                        "last_tested_at": verification.get("last_tested_at"),
+                    }
+                )
+        return tuple(
+            sorted(
+                result,
+                key=lambda value: (
+                    str(value["connection_id"]),
+                    str(value["model"]),
+                ),
+            )
+        )
+
     def detect_local_model_providers(
         self,
         *,
@@ -133,6 +167,36 @@ class AgentResourceApplication:
     ) -> tuple[dict[str, object], ...]:
         return ModelProviderConnectionApplication(self.workspace).discover_models(
             connection_id, probe=probe
+        )
+
+    def refresh_model_catalog(
+        self,
+        connection_id: str,
+        *,
+        probe: Callable[
+            [Mapping[str, object], str | None], tuple[Mapping[str, object], ...]
+        ]
+        | None = None,
+    ) -> dict[str, object]:
+        """Discover and persist the current model IDs for one saved connection."""
+
+        connections = ModelProviderConnectionApplication(self.workspace)
+        current = connections.show(connection_id)
+        discovered = connections.discover_models(connection_id, probe=probe)
+        return connections.configure(
+            connection_id,
+            provider=str(current["provider"]),
+            api_mode=str(current["api_mode"]),
+            base_url=str(current["base_url"]),
+            credential_id=(
+                str(current["credential_id"])
+                if current.get("credential_id") is not None
+                else None
+            ),
+            models=tuple(str(value["id"]) for value in discovered),
+            timeout_seconds=float(current.get("timeout_seconds") or 60.0),
+            enabled=bool(current.get("enabled", True)),
+            overwrite=True,
         )
 
     def test_model_connection(

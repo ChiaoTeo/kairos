@@ -8,6 +8,15 @@ from pathlib import Path
 from typing import Sequence
 
 
+def _environment_names(name: str) -> tuple[str, str]:
+    """Return the canonical and legacy environment overrides for a binary."""
+
+    component_name = name.removeprefix("kairos-")
+    canonical = "KAIROS_" + component_name.upper().replace("-", "_")
+    legacy = "KAIROS_" + name.upper().replace("-", "_")
+    return canonical, legacy
+
+
 def reject_owned_options(arguments: Sequence[str], owned: set[str]) -> None:
     """Reject options owned by a native CLI adapter before spawning it.
 
@@ -31,9 +40,10 @@ def resolve_binary(name: str, *, override: str | None = None) -> str:
     """
     if override:
         return override
-    env_name = "KAIROS_" + name.upper().replace("-", "_")
-    if value := os.environ.get(env_name):
-        return value
+    env_name, legacy_env_name = _environment_names(name)
+    for candidate_env_name in (env_name, legacy_env_name):
+        if value := os.environ.get(candidate_env_name):
+            return value
     package_root = Path(__file__).resolve().parents[4]
     packaged_candidates = [package_root / "_bin" / name]
     if os.name == "nt":

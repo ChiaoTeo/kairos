@@ -63,6 +63,57 @@ def test_workspace_owns_private_credential_model_connection(
     assert not workspace.paths.agent_mcp_config().exists()
 
 
+def test_verified_model_refs_are_concrete_launch_choices(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    resources = AgentResourceApplication(workspace)
+    resources.configure_model_connection(
+        "ollama-local",
+        provider="ollama",
+        models=("qwen3:8b", "unverified:latest"),
+    )
+    resources.test_model_connection(
+        "ollama-local", "qwen3:8b", probe=lambda *_args: {"ok": True}
+    )
+
+    assert resources.verified_model_refs() == (
+        {
+            "connection_id": "ollama-local",
+            "model": "qwen3:8b",
+            "model_ref": "ollama-local/qwen3:8b",
+            "provider": "ollama",
+            "provider_label": "Ollama",
+            "last_tested_at": resources.model_verification(
+                "ollama-local", model="qwen3:8b"
+            )["last_tested_at"],
+        },
+    )
+
+
+def test_refresh_model_catalog_preserves_existing_model_verification(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    resources = AgentResourceApplication(workspace)
+    resources.configure_model_connection(
+        "ollama-local", provider="ollama", models=("qwen3:8b",)
+    )
+    resources.test_model_connection(
+        "ollama-local", "qwen3:8b", probe=lambda *_args: {"ok": True}
+    )
+
+    refreshed = resources.refresh_model_catalog(
+        "ollama-local",
+        probe=lambda _connection, _secret: (
+            {"id": "qwen3:8b"},
+            {"id": "deepseek-r1:8b"},
+        ),
+    )
+
+    assert refreshed["models"] == ["qwen3:8b", "deepseek-r1:8b"]
+    assert refreshed["verified_models"] == ["qwen3:8b"]
+    assert refreshed["verification_status"] == "verified"
+
+
 def test_agent_credential_write_uses_private_file(tmp_path: Path) -> None:
     resources = AgentResourceApplication(_workspace(tmp_path))
 

@@ -14,6 +14,13 @@ from kairospy.strategy.apps.agent.application.model_connections import (
     ModelProviderConnectionApplication,
 )
 from kairospy.system.apps.workspace.application import WorkspaceApplication
+from kairospy.investment.apps.account.application import AccountConfigurationApplication
+from kairospy.system.apps.credentials.application import (
+    CredentialConfigurationApplication,
+)
+from kairospy.system.apps.integration.application import (
+    ProviderConnectionConfigurationApplication,
+)
 from kairospy.investment.apps.reference.application.models import (
     Asset,
     InstrumentRef,
@@ -24,6 +31,7 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.session import GuidedSession
 from kairospy.surface.workbench.screens.flows.launch import (
     execution,
     market as launch_market,
@@ -33,6 +41,7 @@ from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardS
 from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
+    ChoiceInteraction,
     ControlInteraction,
     WorkbenchCommandInput,
     interaction_copy_text,
@@ -565,10 +574,9 @@ def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
             screen.submit("/new")
             screen.submit("backtest-demo")
             for value in (
-                "backtest",
+                "1",
                 "",
-                "",
-                "",
+                "2",
                 "",
                 "",
                 "",
@@ -658,6 +666,97 @@ def test_launch_wizard_preserves_agent_review_profile_and_capability_fields() ->
         "gate",
     ]
     assert agent["capabilities"]["intent_review"]["required_contexts"] == ["account"]
+
+
+def test_launch_wizard_selects_one_verified_model_ref(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-model"
+    )
+    connections = ModelProviderConnectionApplication(workspace)
+    connections.configure(
+        "ollama-local", provider="ollama", models=("qwen3:8b", "untested:latest")
+    )
+    connections.test("ollama-local", "qwen3:8b", probe=lambda *_args: {"ok": True})
+    state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
+    wizard = LaunchWizardState("paper-model")
+    while (prompt := wizard.next_prompt()) is not None:
+        if prompt[0] == "agent-enabled":
+            wizard.accept(prompt[0], "yes")
+        elif prompt[0] == "agent-model-ref":
+            break
+        else:
+            wizard.accept(prompt[0], "")
+    session = GuidedSession(context=("strategy", "setup"))
+    session.strategy.wizard = wizard
+
+    effects = strategy._advance_wizard(state, session, wizard)
+
+    assert effects
+    interaction = session.interaction
+    assert isinstance(interaction, ChoiceInteraction)
+    assert [action.label for action in interaction.actions] == ["ollama-local/qwen3:8b"]
+    strategy.handle_context(state, session, "1")
+    assert wizard.answers["agent-model-ref"] == "ollama-local/qwen3:8b"
+    while (prompt := wizard.next_prompt()) is not None:
+        wizard.accept(prompt[0], "")
+    values = wizard.build_values()
+    assert values["agent"]["model"] == {
+        "connection": "ollama-local",
+        "model": "qwen3:8b",
+    }
+
+
+def test_live_launch_wizard_selects_business_resources_and_access_mode(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch-resources"
+    )
+    AccountConfigurationApplication(workspace).simulate("paper-main")
+    CredentialConfigurationApplication(workspace).configure(
+        "massive-read", provider="massive", values={"api_key": "secret"}
+    )
+    ProviderConnectionConfigurationApplication(workspace).configure(
+        "massive-equity",
+        provider="massive",
+        credential_id="massive-read",
+        products=("equity",),
+        purposes=("market-query",),
+    )
+    state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
+    wizard = LaunchWizardState("live-resources")
+    session = GuidedSession(context=("strategy", "setup"))
+    session.strategy.wizard = wizard
+
+    strategy._advance_wizard(state, session, wizard)
+    strategy.handle_context(state, session, "3")
+    wizard.accept("strategy", "builtin:interactive")
+    strategy._advance_wizard(state, session, wizard)
+    assert isinstance(session.interaction, ChoiceInteraction)
+    assert "paper-main" in [action.label for action in session.interaction.actions]
+
+    strategy.handle_context(state, session, "3")
+    strategy.handle_context(state, session, "1")
+    assert wizard.answers["accounts"] == ("paper-main",)
+    assert wizard.next_prompt()[0] == "market-profile"
+    assert isinstance(session.interaction, ChoiceInteraction)
+    assert [action.label for action in session.interaction.actions] == [
+        "massive-equity"
+    ]
+
+    strategy.handle_context(state, session, "1")
+    while (prompt := wizard.next_prompt()) is not None:
+        if prompt[0] == "live-trading":
+            break
+        wizard.accept(prompt[0], "")
+    strategy._advance_wizard(state, session, wizard)
+    assert [action.label for action in session.interaction.actions] == [
+        "只读观察",
+        "允许交易",
+    ]
+    strategy.handle_context(state, session, "1")
+    assert wizard.answers["live-trading"] is False
+    assert "account-scopes" not in wizard._step_names()
 
 
 @pytest.mark.parametrize(

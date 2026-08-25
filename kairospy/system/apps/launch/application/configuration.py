@@ -1889,10 +1889,22 @@ def _workspace_account_issues(
         if config.mode == "paper" and environment == "live":
             issues.append(f"Paper Launch cannot select a live Account: {account_id}")
         capabilities = {str(value) for value in account.get("capabilities") or ()}
-        if account_id in trade_accounts and "trade" not in capabilities:
-            issues.append(
-                f"Account manual test did not verify trade permission: {account_id}"
-            )
+        purposes = {
+            str(value.get("purpose"))
+            for value in account.get("access_bindings") or ()
+            if isinstance(value, Mapping) and value.get("enabled", True)
+        }
+        if environment not in {"paper", "simulated"}:
+            if "account-read" not in purposes or "read" not in capabilities:
+                issues.append(
+                    f"Account does not have verified account-read access: {account_id}"
+                )
+            if account_id in trade_accounts and (
+                "order-trade" not in purposes or "trade" not in capabilities
+            ):
+                issues.append(
+                    f"Account does not have verified order-trade access: {account_id}"
+                )
     return tuple(issues)
 
 
@@ -1906,20 +1918,25 @@ def _workspace_data_provider_issues(
     profile = market.get("profile") if isinstance(market, Mapping) else None
     if profile is None:
         return ()
-    if profile != "massive":
-        return (f"Workspace data connection is not supported or verified: {profile}",)
-    from kairospy.investment.apps.reference.application import ReferenceProviderConfigurationApplication
+    from kairospy.system.apps.integration.application import ProviderConnectionConfigurationApplication
     from kairospy.system.apps.workspace.application import WorkspaceApplication
 
     try:
         workspace = WorkspaceApplication().open(workspace_root)
-        connection = ReferenceProviderConfigurationApplication(workspace).show(
-            "massive"
+        connection = ProviderConnectionConfigurationApplication(workspace).show(
+            str(profile)
         )
     except (KeyError, FileNotFoundError, OSError, ValueError) as error:
-        return (f"Massive data connection is unavailable: {error}",)
+        return (f"Workspace data connection is unavailable: {profile}: {error}",)
     if connection.get("verification_status") != "verified":
-        return ("Massive data connection requires a successful manual read test",)
+        return (
+            f"Data connection requires a successful manual read test: {profile}",
+        )
+    verified = {
+        str(value) for value in connection.get("capabilities_verified") or ()
+    }
+    if "market-query" not in verified:
+        return (f"Data connection has not verified market-query: {profile}",)
     return ()
 
 
@@ -1939,7 +1956,7 @@ def _workspace_resource_snapshots(
     from kairospy.investment.apps.account.application import AccountConfigurationApplication
     from kairospy.strategy.apps.agent.application import AgentResourceApplication
     from kairospy.strategy.apps.notification.application import NotificationAdminApplication
-    from kairospy.investment.apps.reference.application import ReferenceProviderConfigurationApplication
+    from kairospy.system.apps.integration.application import ProviderConnectionConfigurationApplication
     from kairospy.system.apps.workspace.application import WorkspaceApplication
 
     workspace = WorkspaceApplication().open(workspace_root)
@@ -1952,10 +1969,11 @@ def _workspace_resource_snapshots(
     data_snapshots: dict[str, Any] = {}
     mode_value = config.values.get(config.mode)
     market = mode_value.get("market") if isinstance(mode_value, Mapping) else None
-    if isinstance(market, Mapping) and market.get("profile") == "massive":
-        data_snapshots["massive"] = ReferenceProviderConfigurationApplication(
+    if isinstance(market, Mapping) and market.get("profile"):
+        connection_id = str(market["profile"])
+        data_snapshots[connection_id] = ProviderConnectionConfigurationApplication(
             workspace
-        ).resource_snapshot("massive")
+        ).resource_snapshot(connection_id)
 
     model_snapshots: dict[str, Any] = {}
     agent = AgentLaunchConfig.from_mapping(config.agent, launch_mode=config.mode)
@@ -2022,7 +2040,7 @@ def _current_resource_hashes(
     from kairospy.investment.apps.account.application import AccountConfigurationApplication
     from kairospy.strategy.apps.agent.application import AgentResourceApplication
     from kairospy.strategy.apps.notification.application import NotificationAdminApplication
-    from kairospy.investment.apps.reference.application import ReferenceProviderConfigurationApplication
+    from kairospy.system.apps.integration.application import ProviderConnectionConfigurationApplication
     from kairospy.system.apps.credentials.application import (
         CredentialConfigurationApplication,
     )
@@ -2031,7 +2049,7 @@ def _current_resource_hashes(
     workspace = WorkspaceApplication().open(workspace_root)
     owners = {
         "accounts": AccountConfigurationApplication(workspace),
-        "data_providers": ReferenceProviderConfigurationApplication(workspace),
+        "data_providers": ProviderConnectionConfigurationApplication(workspace),
         "models": AgentResourceApplication(workspace),
         "notifications": NotificationAdminApplication(workspace),
         "mcp_credentials": CredentialConfigurationApplication(workspace),

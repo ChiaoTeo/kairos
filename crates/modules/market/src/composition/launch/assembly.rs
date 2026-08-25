@@ -381,6 +381,9 @@ pub async fn build_market_host(
         super::super::sources::install_connections(
             &mut system,
             &credentials_root,
+            &kairos_integration::composition::ProviderConnectionProfile::canonical_root(
+                workspace.root(),
+            ),
             &market_config.providers,
         )
         .map_err(MarketStartupError::new)?

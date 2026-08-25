@@ -203,8 +203,28 @@ async fn build_source_plan(
         }
     }
     if configured.massive.enabled {
-        let credential_id = configured.massive.credential_id;
-        let endpoint = configured.massive.endpoint;
+        let mut credential_id = configured.massive.credential_id;
+        let mut endpoint = configured.massive.endpoint;
+        if let Some(connection_id) = configured.massive.connection_id.as_deref() {
+            let workspace = workspace.as_ref().ok_or_else(|| {
+                crate::domain::ReferenceError::Provider(
+                    "Reference connection binding requires a Workspace".into(),
+                )
+            })?;
+            let root = kairos_integration::composition::ProviderConnectionProfile::canonical_root(
+                workspace.root(),
+            );
+            let connection = kairos_integration::composition::ProviderConnectionProfile::load(
+                &root,
+                connection_id,
+            )
+            .map_err(crate::domain::ReferenceError::Provider)?;
+            connection
+                .require("massive", Some("reference"), "reference-catalog")
+                .map_err(crate::domain::ReferenceError::Provider)?;
+            credential_id = Some(connection.credential_id);
+            endpoint = Some(connection.endpoint);
+        }
         let credential = load_required_credential(
             credentials_root.as_deref(),
             "massive",

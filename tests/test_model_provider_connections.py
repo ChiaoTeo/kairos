@@ -6,7 +6,9 @@ from pathlib import Path
 from kairospy.strategy.apps.agent.application.model_connections import (
     ModelProviderConnectionApplication,
 )
-from kairospy.system.apps.credentials.application import CredentialConfigurationApplication
+from kairospy.system.apps.credentials.application import (
+    CredentialConfigurationApplication,
+)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
@@ -117,6 +119,102 @@ def test_connection_change_invalidates_model_verification(tmp_path: Path) -> Non
     assert application.verification("local")["verification_status"] == (
         "retest_required"
     )
+
+
+def test_each_model_keeps_independent_verification_evidence(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ai")
+    application = ModelProviderConnectionApplication(workspace)
+    application.configure(
+        "local",
+        provider="ollama",
+        models=("qwen3:8b", "deepseek-r1:8b"),
+    )
+
+    application.test("local", "qwen3:8b", probe=lambda *_args: {"ok": True})
+    application.test("local", "deepseek-r1:8b", probe=lambda *_args: {"ok": True})
+
+    assert (
+        application.verification("local", model="qwen3:8b")["verification_status"]
+        == "verified"
+    )
+    assert (
+        application.verification("local", model="deepseek-r1:8b")["verification_status"]
+        == "verified"
+    )
+    summary = application.show("local")
+    assert summary["verified_models"] == ["deepseek-r1:8b", "qwen3:8b"]
+    evidence = json.loads(
+        workspace.paths.child(
+            "state", "configuration", "models", "local.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert evidence["version"] == 3
+    assert set(evidence["verifications"]) == {"qwen3:8b", "deepseek-r1:8b"}
+
+
+def test_catalog_refresh_does_not_invalidate_models_but_endpoint_change_does(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ai")
+    application = ModelProviderConnectionApplication(workspace)
+    application.configure("local", provider="ollama", models=("qwen3:8b",))
+    application.test("local", "qwen3:8b", probe=lambda *_args: {"ok": True})
+
+    application.configure(
+        "local",
+        provider="ollama",
+        models=("qwen3:8b", "new-model:latest"),
+        overwrite=True,
+    )
+    assert (
+        application.verification("local", model="qwen3:8b")["verification_status"]
+        == "verified"
+    )
+
+    application.configure(
+        "local",
+        provider="ollama",
+        base_url="http://127.0.0.1:22434/v1",
+        models=("qwen3:8b", "new-model:latest"),
+        overwrite=True,
+    )
+    assert (
+        application.verification("local", model="qwen3:8b")["verification_status"]
+        == "retest_required"
+    )
+
+
+def test_version_two_single_model_evidence_remains_readable(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ai")
+    application = ModelProviderConnectionApplication(workspace)
+    application.configure("local", provider="ollama", models=("qwen3:8b",))
+    connection = application._base_summary(application._path("local"))
+    legacy = {
+        "version": 2,
+        "connection_id": "local",
+        "provider": "ollama",
+        "api_mode": "openai-chat-completions",
+        "model": "qwen3:8b",
+        "model_ref": "local/qwen3:8b",
+        "configuration_hash": application._legacy_configuration_hash(connection),
+        "tested_at": "2026-01-01T00:00:00+00:00",
+        "succeeded": True,
+        "detail": "最小文本响应成功",
+        "error_category": None,
+        "tested": ["endpoint", "authentication", "minimum text response"],
+        "not_tested": [],
+        "capabilities": ["text_inference"],
+    }
+    evidence_path = workspace.paths.child(
+        "state", "configuration", "models", "local.json"
+    )
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    verification = application.verification("local", model="qwen3:8b")
+
+    assert verification["verification_status"] == "verified"
+    assert verification["model_ref"] == "local/qwen3:8b"
 
 
 def test_custom_openai_compatible_provider_requires_explicit_mode_and_endpoint(

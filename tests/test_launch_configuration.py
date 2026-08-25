@@ -13,6 +13,7 @@ from kairospy.system.apps.launch.application import (
     LaunchRuntimeApplication,
     OptionBacktestConstraints,
 )
+from kairospy.system.apps.launch.application import configuration as launch_configuration
 from kairospy import Kairos
 from kairospy.research.apps.data.application import DatasetRef, DatasetSetRef
 from kairospy.system.apps.launch.application.wizard import (
@@ -144,6 +145,83 @@ def test_live_execution_requires_explicit_side_effect_and_notional_bound(
     assert LaunchConfigurationApplication().validate(path)["valid"] is True
 
 
+def test_live_readonly_launch_only_requires_account_read_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="readonly-live"
+    )
+    path = workspace.paths.launch_config("observe")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '[launch]\nid = "observe"\nmode = "live"\nstrategy = "builtin:interactive"\n\n'
+        '[accounts.main]\nref = "main"\n\n'
+        '[execution]\nenabled = false\n\n'
+        '[risk]\nprofile = "production-default"\n\n'
+        '[live.safety]\ntrading_enabled = false\nrequire_limit_orders = true\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        AccountConfigurationApplication,
+        "show",
+        lambda _self, _account_id: {
+            "verification_status": "verified",
+            "environment": "live",
+            "capabilities": ["read", "trade"],
+            "access_bindings": [{"purpose": "account-read", "enabled": True}],
+        },
+    )
+    config = LaunchConfigurationApplication().load(path)
+
+    assert launch_configuration._workspace_account_issues(
+        config, workspace.paths.root
+    ) == ()
+
+
+def test_live_trade_route_requires_explicit_order_trade_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="trade-live"
+    )
+    path = workspace.paths.launch_config("trade")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '[launch]\nid = "trade"\nmode = "live"\nstrategy = "builtin:interactive"\n\n'
+        '[accounts.main]\nref = "main"\ntrade = true\n\n'
+        '[execution]\nenabled = true\n'
+        'routes = [{ route_id = "main-spot", account_id = "main", '
+        'segment_key = "spot", broker_id = "binance", execution_channel = "spot" }]\n\n'
+        '[risk]\nprofile = "production-default"\n\n'
+        '[live.safety]\ntrading_enabled = true\nrequire_limit_orders = true\n'
+        'max_order_notional = "100"\n',
+        encoding="utf-8",
+    )
+    account = {
+        "verification_status": "verified",
+        "environment": "live",
+        "capabilities": ["read", "trade"],
+        "access_bindings": [{"purpose": "account-read", "enabled": True}],
+    }
+    monkeypatch.setattr(
+        AccountConfigurationApplication,
+        "show",
+        lambda _self, _account_id: account,
+    )
+    config = LaunchConfigurationApplication().load(path)
+
+    assert launch_configuration._workspace_account_issues(
+        config, workspace.paths.root
+    ) == ("Account does not have verified order-trade access: main",)
+
+    account["access_bindings"].append(
+        {"purpose": "order-trade", "enabled": True}
+    )
+    assert launch_configuration._workspace_account_issues(
+        config, workspace.paths.root
+    ) == ()
+
+
 def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
     tmp_path: Path,
 ) -> None:
@@ -170,10 +248,11 @@ def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
             "owner": "Reference/Market",
             "resource": "data_provider",
             "severity": "blocker",
-            "reason": (
-                "Workspace data connection is not supported or verified: "
-                "some-unverified-profile"
-            ),
+                "reason": (
+                    "Workspace data connection is unavailable: "
+                    "some-unverified-profile: 'provider connection does not exist: "
+                    "some-unverified-profile'"
+                ),
             "action": "configure and manually test the selected data connection",
         }
     ]

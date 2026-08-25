@@ -52,6 +52,9 @@ pub struct PublicReferenceProvider {
 pub struct CredentialedReferenceProvider {
     #[serde(default)]
     pub enabled: bool,
+    /// Integration-owned connection profile. Legacy credential/endpoint fields
+    /// remain readable during the workspace migration.
+    pub connection_id: Option<String>,
     pub credential_id: Option<String>,
     pub endpoint: Option<String>,
 }

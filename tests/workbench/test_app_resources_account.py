@@ -24,6 +24,7 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.activity import ActivityOutcome
 from kairospy.surface.workbench.screens.flows.resources import (
     account,
     configuration as resources,
@@ -36,6 +37,11 @@ import kairospy.surface.workbench.screens.flows.resources.wizard as resource_wiz
 from kairospy.surface.workbench.screens.flows.resources.wizard import (
     ResourceWizardState,
     save_resource_wizard,
+)
+from kairospy.surface.workbench.screens.flows.resources.actions import detail_actions
+from kairospy.surface.workbench.screens.flows.resources.views import (
+    action_result_renderable,
+    detail_renderable,
 )
 from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
 from kairospy.system.apps.observe.application import ObserveSnapshot
@@ -143,6 +149,150 @@ def test_account_resource_list_uses_a_human_summary_instead_of_raw_json(
     assert "{" not in prompt
 
 
+def test_notification_detail_prioritizes_user_facing_fields() -> None:
+    content = renderable_plain_text(
+        detail_renderable(
+            "notifications",
+            {
+                "destination_id": "telegram-alerts",
+                "provider": "telegram",
+                "enabled": True,
+                "credential_id": "telegram-alerts",
+                "secret_available": True,
+                "chat_id": "5705864725",
+                "configured": True,
+                "verification_status": "pending",
+                "last_tested_at": None,
+                "tested_configuration_hash": None,
+            },
+        )
+    )
+
+    assert "提醒" in content
+    assert "telegram-alerts" in content
+    assert "凭据状态" in content
+    assert "可用" in content
+    assert "待验证" in content
+    assert "5705864725" not in content
+    assert "****4725" in content
+    assert "tested_configuration_hash" not in content
+    assert "{" not in content
+
+
+def test_notification_test_result_highlights_delivery_instead_of_health_json() -> None:
+    content = renderable_plain_text(
+        action_result_renderable(
+            "notifications",
+            "test",
+            {
+                "notification_id": "3177290b54c84912aea7b10b9dfabce",
+                "publish_status": "accepted",
+                "destination_id": "telegram-alerts",
+                "health": {
+                    "state": "healthy",
+                    "queue_depth": 0,
+                    "delivered_total": 1,
+                    "destinations": {
+                        "telegram-alerts": {
+                            "sender": "telegram",
+                            "delivered_total": 1,
+                            "failed_total": 0,
+                            "last_success_at": "2026-08-25T08:24:48+00:00",
+                        }
+                    },
+                },
+            },
+            title="通知提醒 · telegram-alerts · 资源操作结果",
+        )
+    )
+
+    assert "测试消息已送达" in content
+    assert "telegram" in content
+    assert "2026-08-25T08:24:48+00:00" in content
+    assert "queue_depth" not in content
+    assert "delivered_total" not in content
+    assert "{" not in content
+
+
+def test_market_data_failure_explains_result_and_next_action() -> None:
+    content = renderable_plain_text(
+        action_result_renderable(
+            "data",
+            "test",
+            {
+                "verification_status": "failed",
+                "last_tested_at": "2026-08-25T08:42:16+00:00",
+                "tested": [
+                    "API authentication",
+                    "AAPL Reference lookup",
+                    "SPY hourly bar read",
+                ],
+                "not_tested": ["Options catalog and market data"],
+                "capabilities_verified": [],
+                "error_category": "invalid_response",
+                "current_configuration_hash": "secret-noise",
+            },
+            title="市场数据 · massive · 资源操作结果",
+        )
+    )
+
+    assert "连接验证失败" in content
+    assert "Provider 返回了无法识别的响应" in content
+    assert "已尝试检查" in content
+    assert "未执行检查" in content
+    assert "Massive API 兼容地址" in content
+    assert "已验证能力" not in content
+    assert "invalid_response" not in content
+    assert "secret-noise" not in content
+    assert "{" not in content
+
+
+def test_market_data_failed_test_uses_failure_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = {
+        "connection_id": "massive",
+        "provider": "massive",
+        "enabled": True,
+        "verification_status": "pending",
+    }
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: (record,))
+    monkeypatch.setattr(
+        resources,
+        "execute_action",
+        lambda state, kind, selected, action, **kwargs: {
+            "verification_status": "failed",
+            "tested": ["API authentication"],
+            "not_tested": ["Options catalog and market data"],
+            "capabilities_verified": [],
+            "error_category": "invalid_response",
+        },
+    )
+
+    async def run() -> tuple[ActivityOutcome, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(120, 32)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "2"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            screen.submit("1")
+            screen.submit("1")
+            screen.submit("/confirm")
+            await pilot.pause(0.1)
+            output = screen.query_one("#command-output", RichLog)
+            activity = output.activities[-1]
+            status = str(screen.query_one("#command-status", Static).render())
+            return activity.outcome, _log_text(output), status
+
+    outcome, output, status = asyncio.run(run())
+    assert outcome is ActivityOutcome.FAILURE
+    assert "✗" in output
+    assert "连接验证失败" in output
+    assert status == "连接验证失败 · 请检查结果"
+
+
 def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,7 +308,7 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
     labels = {
         "accounts": "交易账户",
         "data": "市场数据",
-        "models": "AI 模型",
+        "models": "模型连接",
         "notifications": "通知提醒",
     }
     monkeypatch.setattr(
@@ -227,7 +377,7 @@ def test_check_all_connections_renders_all_resource_groups(
     context, output = asyncio.run(run())
     assert context == "首页 / 运行准备  ›"
     assert "运行资源检查" in output
-    for label in ("交易账户", "市场数据", "AI 模型", "通知提醒"):
+    for label in ("交易账户", "市场数据", "模型连接", "通知提醒"):
         assert label in output
 
 
@@ -239,7 +389,7 @@ def test_empty_resource_groups_offer_new_configuration_action(
         "list_records",
         lambda state, kind: (),
     )
-    labels = ("交易账户", "市场数据", "AI 模型", "通知提醒")
+    labels = ("交易账户", "市场数据", "模型连接", "通知提醒")
 
     async def run() -> list[tuple[str, str, str, int]]:
         states: list[tuple[str, str, str, int]] = []
@@ -441,7 +591,7 @@ def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("5")
+            screen.submit("6")
             assert calls == []
             screen.submit("/confirm")
             await pilot.pause(0.1)
@@ -460,64 +610,17 @@ def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
     assert "资源操作结果" in output
 
 
-def test_notification_attach_collects_launch_and_route_before_confirmation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, str | None, str | None]] = []
-    record = {
-        "destination_id": "ops-alerts",
-        "sender": "feishu",
-        "enabled": True,
-        "verification_status": "verified",
-    }
-    monkeypatch.setattr(
-        resources,
-        "list_records",
-        lambda state, kind: (record,),
-    )
+def test_notification_detail_only_offers_destination_owned_actions() -> None:
+    actions = detail_actions("notifications")
 
-    def execute(
-        state: object,
-        kind: str,
-        selected: dict[str, object],
-        action: str,
-        *,
-        value: str | None = None,
-        launch_id: str | None = None,
-    ) -> dict[str, str]:
-        calls.append((action, value, launch_id))
-        return {"status": "attached"}
-
-    monkeypatch.setattr(
-        resources,
-        "execute_action",
-        execute,
-    )
-
-    async def run() -> tuple[str | None, str | None, str]:
-        app = KairosWorkbenchApp(_state())
-        async with app.run_test(size=(100, 30)) as pilot:
-            screen = app.screen
-            assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "4"):
-                screen.submit(value)
-                await pilot.pause(0.1)
-            for value in ("1", "2", "launch-alpha", "alerts"):
-                screen.submit(value)
-            assert calls == []
-            screen.submit("/confirm")
-            await pilot.pause(0.1)
-            return (
-                screen.session.resources.action,
-                screen.session.resources.launch_id,
-                screen.session.interaction.mode.value,
-            )
-
-    action, launch_id, mode = asyncio.run(run())
-    assert calls == [("attach", "alerts", "launch-alpha")]
-    assert action is None
-    assert launch_id is None
-    assert mode == "choice"
+    assert [action.id for action in actions] == [
+        "test",
+        "edit",
+        "toggle",
+        "advanced",
+        "delete",
+    ]
+    assert "Launch 引用" in actions[3].description
 
 
 def test_existing_notification_can_enter_identity_preserving_edit_wizard(
@@ -544,7 +647,7 @@ def test_existing_notification_can_enter_identity_preserving_edit_wizard(
             screen.submit("4")
             await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("5")
+            screen.submit("2")
             await pilot.pause()
             return (
                 str(screen.query_one("#command-context", Static).render()),
@@ -579,6 +682,77 @@ def test_notification_wizard_uses_numbered_choices_and_automatic_identity() -> N
         True,
     )
     assert "resource-id" not in wizard._steps()
+
+
+def test_live_account_wizard_defaults_to_named_readonly_exchange_account() -> None:
+    wizard = ResourceWizardState("accounts")
+
+    wizard.accept("account-mode", "2")
+    wizard.accept("account-provider", "okex")
+
+    assert wizard.answers == {
+        "account-mode": "live",
+        "account-provider": "okx",
+    }
+    assert wizard._steps() == (
+        "account-mode",
+        "account-provider",
+        "resource-id",
+        "account-segment",
+        "secret-primary",
+        "secret-secondary",
+        "secret-tertiary",
+    )
+    assert wizard._default("resource-id") == "okx-readonly"
+
+
+def test_account_wizard_exposes_binance_and_okx_readonly_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: ())
+
+    async def run() -> tuple[list[str], list[str], str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(120, 34)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "1", "/new"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            mode_prompts = [
+                str(option.prompt)
+                for option in screen.query_one("#guided-actions", ActionList)._options
+            ]
+            screen.submit("2")
+            await pilot.pause()
+            provider_prompts = [
+                str(option.prompt)
+                for option in screen.query_one("#guided-actions", ActionList)._options
+            ]
+            screen.submit("1")
+            await pilot.pause()
+            interaction = screen.session.interaction
+            assert isinstance(interaction, InputInteraction)
+            return (
+                mode_prompts,
+                provider_prompts,
+                renderable_plain_text(interaction.value_summary),
+                interaction.prompt,
+            )
+
+    modes, providers, summary, prompt = asyncio.run(run())
+    assert modes == [
+        "[1]  模拟账户  ·  使用本地余额，不连接交易所",
+        "[2]  交易所账户  ·  连接 Binance 或 OKX 的真实账户",
+    ]
+    assert providers == [
+        "[1]  Binance  ·  连接 Binance API",
+        "[2]  OKX（原 OKEx）  ·  连接 OKX API",
+    ]
+    assert "Binance" in summary
+    assert "只读（不下单、不转账）" in summary
+    assert "binance-readonly" in summary
+    assert prompt == "资源名称"
 
 
 def test_notification_provider_uses_standard_action_cards(
@@ -731,11 +905,222 @@ def test_model_wizard_changes_provider_specific_defaults() -> None:
     assert wizard._default("endpoint") == "https://api.anthropic.com/v1"
 
 
+def test_model_wizard_uses_provider_specific_product_paths() -> None:
+    hosted = ResourceWizardState("models")
+    hosted.accept("model-provider", "openai")
+    assert hosted._steps() == (
+        "model-provider",
+        "resource-id",
+        "endpoint",
+        "secret-primary",
+    )
+    assert hosted._default("endpoint") == "https://api.openai.com/v1"
+
+    local = ResourceWizardState("models")
+    local.accept("model-provider", "ollama")
+    assert local._steps() == ("model-provider", "resource-id", "endpoint")
+    assert local._default("endpoint") == "http://127.0.0.1:11434/v1"
+
+    custom = ResourceWizardState("models")
+    custom.accept("model-provider", "custom")
+    assert custom._steps() == (
+        "model-provider",
+        "resource-id",
+        "model-mode",
+        "endpoint",
+        "secret-primary",
+    )
+
+
+def test_model_wizard_requires_new_hosted_credential_but_reuses_existing() -> None:
+    created = ResourceWizardState(
+        "models",
+        answers={
+            "model-provider": "openai",
+            "resource-id": "openai-main",
+        },
+    )
+    with pytest.raises(ValueError, match="OpenAI 需要 API Key"):
+        created.accept("secret-primary", "")
+
+    edited = ResourceWizardState(
+        "models",
+        {
+            "connection_id": "openai-main",
+            "provider": "openai",
+            "credential_id": "openai-main-auth",
+        },
+        answers={"model-provider": "openai"},
+    )
+    edited.accept("secret-primary", "")
+    assert edited.answers["secret-primary"] == ""
+
+    edited.answers["model-provider"] = "anthropic"
+    with pytest.raises(ValueError, match="Anthropic 需要 API Key"):
+        edited.accept("secret-primary", "")
+
+
+def test_model_provider_is_a_numbered_choice_with_product_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: ())
+
+    async def run() -> tuple[list[str], str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "/new"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            prompts = [
+                str(option.prompt)
+                for option in screen.query_one("#guided-actions", ActionList)._options
+            ]
+            summary = renderable_plain_text(interaction.summary)
+            screen.submit("4")
+            await pilot.pause()
+            next_interaction = screen.session.interaction
+            assert isinstance(next_interaction, InputInteraction)
+            return (
+                prompts,
+                summary,
+                renderable_plain_text(next_interaction.value_summary),
+                screen.query_one("#command-input", WorkbenchCommandInput).placeholder,
+            )
+
+    prompts, summary, next_summary, placeholder = asyncio.run(run())
+    assert len(prompts) == 6
+    assert prompts[0] == "[1]  OpenAI（推荐）  ·  使用 Responses API"
+    assert prompts[3] == "[4]  Ollama（本地）  ·  连接 Ollama，默认无需 API Key"
+    assert "创建模型连接" in summary
+    assert "'kind'" not in summary
+    assert "Ollama" in next_summary
+    assert "http://127.0.0.1:11434/v1" in next_summary
+    assert "无需 API Key" in next_summary
+    assert placeholder == "资源名称"
+
+
+def test_model_connection_wizard_discovers_tests_and_atomically_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="model-workbench"
+    )
+    state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
+    monkeypatch.setattr(
+        ModelProviderConnectionApplication,
+        "discover",
+        lambda self, connection, *, secret, probe=None: (
+            {"id": "qwen3:8b", "name": "Qwen 3 8B", "source": "test"},
+            {"id": "deepseek-r1:8b", "name": "DeepSeek R1 8B", "source": "test"},
+        ),
+    )
+    monkeypatch.setattr(
+        ModelProviderConnectionApplication,
+        "probe",
+        lambda self, connection, model, *, secret, probe=None: {
+            "succeeded": True,
+            "detail": "最小文本响应成功",
+            "error_category": None,
+        },
+    )
+
+    async def run() -> tuple[str, str, object]:
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            for value in ("/new", "4", "ollama-local", ""):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            assert "选择验证模型" in interaction.title
+            assert len(interaction.actions) == 3
+            screen.submit("1")
+            await pilot.pause(0.1)
+            screen.submit("/confirm")
+            await pilot.pause(0.1)
+            return (
+                str(screen.query_one("#command-context", Static).render()),
+                _log_text(screen.query_one("#command-output", RichLog)),
+                screen.session.resources.wizard,
+            )
+
+    context, output, wizard = asyncio.run(run())
+    connection = ModelProviderConnectionApplication(workspace).show("ollama-local")
+    assert "模型连接" in context
+    assert "ollama-local" in context
+    assert wizard is None
+    assert connection["models"] == ["qwen3:8b", "deepseek-r1:8b"]
+    assert connection["verification_status"] == "verified"
+    assert connection["verified_models"] == ["qwen3:8b"]
+    assert "发现 2 个模型" in output
+    assert "最小文本响应成功" in output
+
+
+def test_model_connection_home_discards_staged_hosted_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="model-cancel"
+    )
+    state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
+    monkeypatch.setattr(
+        ModelProviderConnectionApplication,
+        "discover",
+        lambda self, connection, *, secret, probe=None: ({"id": "gpt-test"},),
+    )
+
+    async def run() -> tuple[ResourceWizardState, tuple[str, ...]]:
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            for value in (
+                "/new",
+                "1",
+                "openai-main",
+                "",
+                "secret-never-persist",
+            ):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            wizard = screen.session.resources.wizard
+            assert isinstance(wizard, ResourceWizardState)
+            assert wizard.model_draft is not None
+            assert not (
+                workspace.paths.credentials_root() / "openai-main-openai-auth.toml"
+            ).exists()
+            screen.submit("/home")
+            await pilot.pause()
+            return wizard, screen.session.context
+
+    wizard, context = asyncio.run(run())
+    assert context == ()
+    assert wizard.model_draft is None
+    assert wizard.answers["secret-primary"] == ""
+    assert not (
+        workspace.paths.credentials_root() / "openai-main-openai-auth.toml"
+    ).exists()
+    assert not (workspace.paths.model_connections_root() / "openai-main.toml").exists()
+
+
 def test_editing_market_data_preserves_its_credential_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configured_credentials: list[str] = []
     configured_connections: list[str] = []
+    market_bindings: list[tuple[str, str]] = []
 
     class Credentials:
         def __init__(self, owner: object) -> None:
@@ -754,11 +1139,21 @@ def test_editing_market_data_preserves_its_credential_identity(
             configured_connections.append(credential_id)
             return {"connection_id": "massive", "credential_id": credential_id}
 
+    class MarketBindings:
+        def __init__(self, owner: object) -> None:
+            pass
+
+        def bind_connection(self, connection_id: str, *, product: str) -> None:
+            market_bindings.append((connection_id, product))
+
     monkeypatch.setattr(
         resource_wizard, "CredentialConfigurationApplication", Credentials
     )
     monkeypatch.setattr(
         resource_wizard, "ReferenceProviderConfigurationApplication", Reference
+    )
+    monkeypatch.setattr(
+        resource_wizard, "MarketProviderBindingApplication", MarketBindings
     )
     wizard = ResourceWizardState(
         "data",
@@ -779,6 +1174,7 @@ def test_editing_market_data_preserves_its_credential_identity(
 
     assert configured_credentials == ["massive-readonly"]
     assert configured_connections == ["massive-readonly"]
+    assert market_bindings == [("massive", "equity")]
 
 
 def test_resource_delete_dry_run_previews_without_executing(
@@ -816,7 +1212,7 @@ def test_resource_delete_dry_run_previews_without_executing(
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("6")
+            screen.submit("7")
             await pilot.pause(0.1)
             return (
                 _log_text(screen.query_one("#command-output", RichLog)),
@@ -824,7 +1220,7 @@ def test_resource_delete_dry_run_previews_without_executing(
             )
 
     output, records = asyncio.run(run())
-    assert "preview" in output
+    assert "预览" in output
     assert records == ()
 
 
@@ -861,10 +1257,8 @@ def test_resource_setup_uses_masked_single_input_and_never_records_secret(
             screen.submit("4")
             screen.submit("2")
             await pilot.pause(0.1)
-            screen.submit("/new")
-            screen.submit("massive-main")
-            screen.submit("")
-            screen.submit("")
+            for value in ("/new", "1", "massive-main", "1", "", "2"):
+                screen.submit(value)
             command_input = screen.query_one("#command-input", WorkbenchCommandInput)
             masked = command_input.password
             command_input.value = "top-secret-value"
@@ -909,7 +1303,7 @@ def test_ctrl_c_during_resource_secret_prompt_clears_staged_credentials(
             screen.submit("4")
             screen.submit("2")
             await pilot.pause(0.1)
-            for value in ("/new", "massive-main", "", ""):
+            for value in ("/new", "1", "massive-main", "1", "", "2"):
                 screen.submit(value)
             assert screen.query_one("#command-input", WorkbenchCommandInput).password
             await pilot.press("ctrl+c")

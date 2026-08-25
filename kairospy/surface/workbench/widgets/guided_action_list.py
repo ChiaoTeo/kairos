@@ -27,15 +27,18 @@ class GuidedActionList(ActionList):
 
     def _replace_options(self) -> None:
         compact = getattr(self, "_compact", self.size.width < 68)
-        self.set_options(
-            [
-                Option(
-                    _compact_prompt(item) if compact else _guided_action_prompt(item),
-                    id=item.id,
-                )
-                for item in self.items
-            ]
+        # Explicitly clear the OptionList before adding the next context.  This
+        # also resets its virtual height, preventing shorter prior menus from
+        # remaining painted below the current service actions.
+        self.clear_options()
+        self.add_options(
+            Option(
+                _compact_prompt(item) if compact else _guided_action_prompt(item),
+                id=item.id,
+            )
+            for item in self.items
         )
+        self.refresh(layout=True)
 
 
 def _compact_prompt(item: ActionItem) -> Text:

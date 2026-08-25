@@ -25,7 +25,7 @@ _SENSITIVE_KEYS = frozenset(
 _SENSITIVE_LINE = re.compile(
     r"(?i)(?:--)?"
     r"(api[_ -]?key|authorization|bearer|credential|password|secret|token)"
-    r"(?:\s*[:=]\s*|\s+)([^\s,;]+)"
+    r"(?:[ \t]*[:=][ \t]*|[ \t]+)([^\s,;]+)"
 )
 _AUTHORIZATION_LINE = re.compile(r"(?im)(authorization\s*[:=]\s*)[^\r\n]+")
 _FEISHU_WEBHOOK = re.compile(
@@ -66,9 +66,42 @@ def redact_value(value: Any, *, placeholder: str = "<redacted>") -> Any:
     return value
 
 
+def redact_cli_arguments(arguments: tuple[str, ...]) -> tuple[str, ...]:
+    """Redact values paired with credential-shaped CLI flags."""
+
+    sensitive_names = {
+        "api-key",
+        "apikey",
+        "authorization",
+        "bearer",
+        "credential",
+        "password",
+        "secret",
+        "token",
+    }
+    redacted: list[str] = []
+    hide_next = False
+    for argument in arguments:
+        if hide_next:
+            redacted.append("<redacted>")
+            hide_next = False
+            continue
+        normalized = argument.lstrip("-").lower().replace("_", "-")
+        name = normalized.partition("=")[0]
+        if name in sensitive_names:
+            if "=" in argument:
+                redacted.append(f"{argument.partition('=')[0]}=<redacted>")
+            else:
+                redacted.append(argument)
+                hide_next = True
+            continue
+        redacted.append(redact_text(argument))
+    return tuple(redacted)
+
+
 def _is_sensitive_key(key: str) -> bool:
     normalized = key.strip().lower().replace("-", "_").replace(" ", "_")
     return normalized in _SENSITIVE_KEYS or normalized.startswith("secret_")
 
 
-__all__ = ["redact_text", "redact_value"]
+__all__ = ["redact_cli_arguments", "redact_text", "redact_value"]

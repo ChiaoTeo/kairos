@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -374,9 +374,7 @@ class ModelProviderConnectionApplication:
         connection = self.show(connection_id)
         model = _model_id(model)
         succeeded = result.get("succeeded") is True
-        evidence = {
-            "version": 2,
-            "connection_id": connection_id,
+        verification = {
             "provider": connection.get("provider"),
             "api_mode": connection.get("api_mode"),
             "model": model,
@@ -396,8 +394,25 @@ class ModelProviderConnectionApplication:
             ],
             "capabilities": ["text_inference"] if succeeded else [],
         }
+        path = self._evidence_path(connection_id)
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            existing = {}
+        verifications = _model_verifications(existing, connection_id)
+        legacy_hash = self._legacy_configuration_hash(connection)
+        current_hash = self._configuration_hash(connection)
+        for value in verifications.values():
+            if value.get("configuration_hash") == legacy_hash:
+                value["configuration_hash"] = current_hash
+        verifications[model] = verification
+        evidence = {
+            "version": 3,
+            "connection_id": connection_id,
+            "verifications": verifications,
+        }
         _write_private_atomic(
-            self._evidence_path(connection_id),
+            path,
             json.dumps(evidence, indent=2, sort_keys=True) + "\n",
             overwrite=True,
         )
@@ -424,30 +439,84 @@ class ModelProviderConnectionApplication:
             return _pending_verification(self._configuration_hash(connection))
         if not isinstance(evidence, Mapping):
             return _pending_verification(self._configuration_hash(connection))
-        changed = evidence.get("configuration_hash") != self._configuration_hash(
-            connection
+        verifications = _model_verifications(evidence, connection_id)
+        current_hash = self._configuration_hash(connection)
+        valid_hashes = {current_hash}
+        if evidence.get("version") != 3:
+            valid_hashes.add(self._legacy_configuration_hash(connection))
+        verified_models = sorted(
+            key
+            for key, value in verifications.items()
+            if value.get("configuration_hash") in valid_hashes
+            and value.get("succeeded") is True
         )
-        if model is not None and evidence.get("model") != model:
-            changed = True
-        status = (
-            "retest_required"
-            if changed
-            else "verified"
-            if evidence.get("succeeded") is True
-            else "failed"
+        failed_models = sorted(
+            key
+            for key, value in verifications.items()
+            if value.get("configuration_hash") in valid_hashes
+            and value.get("succeeded") is not True
         )
+        stale_models = sorted(
+            key
+            for key, value in verifications.items()
+            if value.get("configuration_hash") not in valid_hashes
+        )
+        if model is not None:
+            model = _model_id(model)
+            selected = verifications.get(model)
+            if selected is None:
+                return {
+                    **_pending_verification(current_hash),
+                    "model": model,
+                    "model_ref": f"{connection_id}/{model}",
+                    "verified_models": verified_models,
+                    "failed_models": failed_models,
+                    "stale_models": stale_models,
+                }
+            status = (
+                "retest_required"
+                if selected.get("configuration_hash") not in valid_hashes
+                else "verified"
+                if selected.get("succeeded") is True
+                else "failed"
+            )
+        elif verified_models:
+            status = "verified"
+            selected = _latest_verification(
+                verifications[value] for value in verified_models
+            )
+        elif failed_models:
+            status = "failed"
+            selected = _latest_verification(
+                verifications[value] for value in failed_models
+            )
+        elif stale_models:
+            status = "retest_required"
+            selected = _latest_verification(
+                verifications[value] for value in stale_models
+            )
+        else:
+            return {
+                **_pending_verification(current_hash),
+                "verified_models": [],
+                "failed_models": [],
+                "stale_models": [],
+            }
         return {
             "verification_status": status,
-            "model": evidence.get("model"),
-            "model_ref": evidence.get("model_ref"),
-            "last_tested_at": evidence.get("tested_at"),
-            "last_test_detail": evidence.get("detail"),
-            "error_category": evidence.get("error_category"),
-            "tested_configuration_hash": evidence.get("configuration_hash"),
-            "current_configuration_hash": self._configuration_hash(connection),
-            "tested": list(evidence.get("tested") or ()),
-            "not_tested": list(evidence.get("not_tested") or ()),
-            "capabilities": list(evidence.get("capabilities") or ()),
+            "model": selected.get("model"),
+            "model_ref": selected.get("model_ref"),
+            "last_tested_at": selected.get("tested_at"),
+            "last_test_detail": selected.get("detail"),
+            "error_category": selected.get("error_category"),
+            "tested_configuration_hash": selected.get("configuration_hash"),
+            "current_configuration_hash": current_hash,
+            "tested": list(selected.get("tested") or ()),
+            "not_tested": list(selected.get("not_tested") or ()),
+            "capabilities": list(selected.get("capabilities") or ()),
+            "verified_models": verified_models,
+            "failed_models": failed_models,
+            "stale_models": stale_models,
         }
 
     def resource_snapshot(self, connection_id: str, *, model: str) -> dict[str, object]:
@@ -497,8 +566,7 @@ class ModelProviderConnectionApplication:
                 issues.append("安全凭据不存在")
             if credential is not None and credential.get("configured") is not True:
                 issues.extend(
-                    str(item)
-                    for item in cast(Any, credential.get("issues") or ())
+                    str(item) for item in cast(Any, credential.get("issues") or ())
                 )
         elif _PROVIDERS.get(provider, {}).get("auth_required", True) is True:
             issues.append("缺少安全凭据")
@@ -525,6 +593,14 @@ class ModelProviderConnectionApplication:
         )
 
     def _configuration_hash(self, connection: Mapping[str, object]) -> str:
+        return self._configuration_hash_value(connection, include_models=False)
+
+    def _legacy_configuration_hash(self, connection: Mapping[str, object]) -> str:
+        return self._configuration_hash_value(connection, include_models=True)
+
+    def _configuration_hash_value(
+        self, connection: Mapping[str, object], *, include_models: bool
+    ) -> str:
         credential_id = connection.get("credential_id")
         credential_hash: str | None = None
         if isinstance(credential_id, str) and credential_id:
@@ -543,9 +619,10 @@ class ModelProviderConnectionApplication:
             "base_url": connection.get("base_url"),
             "credential_id": credential_id,
             "credential_hash": credential_hash,
-            "models": list(cast(Any, connection.get("models") or ())),
             "timeout_seconds": connection.get("timeout_seconds"),
         }
+        if include_models:
+            payload["models"] = list(cast(Any, connection.get("models") or ()))
         if connection.get("enabled", True) is False:
             payload["enabled"] = False
         return hashlib.sha256(
@@ -571,6 +648,46 @@ def _pending_verification(configuration_hash: str | None) -> dict[str, object]:
         "not_tested": [],
         "capabilities": [],
     }
+
+
+def _model_verifications(
+    evidence: object, connection_id: str
+) -> dict[str, dict[str, object]]:
+    if not isinstance(evidence, Mapping):
+        return {}
+    if evidence.get("connection_id") not in {None, connection_id}:
+        return {}
+    if evidence.get("version") == 3:
+        values = evidence.get("verifications")
+        if not isinstance(values, Mapping):
+            return {}
+        result: dict[str, dict[str, object]] = {}
+        for key, value in values.items():
+            if not isinstance(key, str) or not isinstance(value, Mapping):
+                continue
+            try:
+                model = _model_id(str(value.get("model") or key))
+            except ValueError:
+                continue
+            result[model] = dict(value)
+        return result
+    model_value = evidence.get("model")
+    if not isinstance(model_value, str):
+        return {}
+    try:
+        model = _model_id(model_value)
+    except ValueError:
+        return {}
+    return {model: dict(evidence)}
+
+
+def _latest_verification(
+    values: Iterable[Mapping[str, object]],
+) -> Mapping[str, object]:
+    return max(
+        values,
+        key=lambda value: str(value.get("tested_at") or ""),
+    )
 
 
 def _discover_models(
@@ -725,9 +842,7 @@ def _toml_string(value: str) -> str:
 
 
 def _model_connection_document(connection: Mapping[str, object]) -> str:
-    models = tuple(
-        str(value) for value in cast(Any, connection.get("models") or ())
-    )
+    models = tuple(str(value) for value in cast(Any, connection.get("models") or ()))
     lines = [
         "[connection]",
         "version = 1",

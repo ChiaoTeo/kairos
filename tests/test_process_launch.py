@@ -246,6 +246,8 @@ def test_component_status_does_not_start_a_missing_process(tmp_path: Path) -> No
     )
     value = ComponentProcessApplication(workspace).status("market")
     assert value["status"] == "not_running"
+    assert value["control_reachable"] is False
+    assert value["probe_error"] is None
     assert not workspace.paths.process_socket("market").exists()
 
 
@@ -272,6 +274,9 @@ def test_component_list_treats_a_stale_socket_as_not_running(tmp_path: Path) -> 
     value = ComponentProcessApplication(workspace).list_status()
 
     assert value["reference"]["status"] == "not_running"
+    assert value["reference"]["control_reachable"] is False
+    assert value["reference"]["control_socket_exists"] is True
+    assert value["reference"]["probe_error"]
 
 
 def test_component_list_includes_process_metadata_from_health_file(
@@ -324,6 +329,45 @@ def test_system_repair_removes_unlocked_stale_socket(tmp_path: Path) -> None:
 
     assert "market" in result["repaired"]
     assert not socket.exists()
+
+
+def test_component_repair_only_removes_selected_stale_resources(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="component-repair"
+    )
+    sockets = {
+        component: workspace.paths.process_socket(component)
+        for component in ("market", "reference")
+    }
+    import socket as socket_module
+
+    for socket in sockets.values():
+        socket.parent.mkdir(parents=True, exist_ok=True)
+        listener = socket_module.socket(socket_module.AF_UNIX)
+        listener.bind(str(socket))
+        listener.close()
+
+    result = ComponentProcessApplication(workspace).repair_component("market")
+
+    assert result == {"component": "market", "status": "repaired"}
+    assert not sockets["market"].exists()
+    assert sockets["reference"].exists()
+
+
+def test_component_repair_removes_dead_health_metadata_without_socket(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="health-repair"
+    )
+    health = workspace.paths.health_file("market")
+    health.parent.mkdir(parents=True, exist_ok=True)
+    health.write_text('{"pid": 999999, "status": "ready"}', encoding="utf-8")
+
+    result = ComponentProcessApplication(workspace).repair_component("market")
+
+    assert result == {"component": "market", "status": "repaired"}
+    assert not health.exists()
 
 
 def test_system_repair_does_not_remove_lock_owned_socket(tmp_path: Path) -> None:

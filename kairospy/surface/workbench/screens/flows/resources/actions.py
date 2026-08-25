@@ -10,6 +10,7 @@ from typing import Any
 from kairospy.investment.apps.account.application import (
     AccountConfigurationApplication,
 )
+from kairospy.investment.apps.market.application import MarketProviderBindingApplication
 from kairospy.investment.apps.reference.application import (
     ReferenceProviderConfigurationApplication,
 )
@@ -21,11 +22,11 @@ from kairospy.system.apps.configuration.application import (
     ConfigurationReferenceApplication,
     WorkspaceResourceLifecycleApplication,
 )
-from kairospy.system.apps.launch.application import (
-    LaunchNotificationConfigurationApplication,
-)
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
+)
+from kairospy.system.apps.integration.application import (
+    ProviderConnectionConfigurationApplication,
 )
 
 from ....widgets import ActionItem
@@ -50,30 +51,36 @@ def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
     if kind == "accounts":
         return (
             ActionItem("operations", "账户运行查询", "余额、持仓、费率与订单", "1"),
+            ActionItem(
+                "access",
+                "管理账户访问",
+                "增加或替换 account-read / order-trade binding",
+                "2",
+            ),
             *tuple(
                 ActionItem(item.id, item.label, item.description, str(index))
-                for index, item in enumerate(common, 2)
+                for index, item in enumerate(common, 3)
             ),
         )
     if kind == "models":
         return (
             ActionItem("test", "测试模型", "执行最小文本调用", "1"),
-            ActionItem("models", "查看已保存模型", "显示当前连接的模型 ID", "2"),
-            ActionItem("advanced", "安全与高级信息", "查看版本、状态和引用", "3"),
-            ActionItem("edit", "修改配置", "逐字段更新安全配置", "4"),
-            ActionItem("toggle", "启用或停用", "切换连接可用状态", "5"),
-            ActionItem("delete", "删除连接", "移除配置和验证记录", "6"),
+            ActionItem("discover", "重新发现模型", "刷新服务当前提供的模型目录", "2"),
+            ActionItem("models", "查看模型状态", "查看模型 ID 和各自验证状态", "3"),
+            ActionItem("advanced", "安全与高级信息", "查看版本、状态和引用", "4"),
+            ActionItem("edit", "修改配置", "逐字段更新安全配置", "5"),
+            ActionItem("toggle", "启用或停用", "切换连接可用状态", "6"),
+            ActionItem("delete", "删除连接", "移除配置和验证记录", "7"),
         )
     if kind == "notifications":
         return (
             ActionItem("test", "发送真实测试消息", "验证真实 provider delivery", "1"),
-            ActionItem("attach", "绑定到 Launch", "添加通知 route", "2"),
-            ActionItem("detach", "从 Launch 解绑", "移除相关 route", "3"),
-            ActionItem("validate", "校验通知配置", "检查指定运行模式", "4"),
-            ActionItem("edit", "修改配置", "更新渠道、安全凭据和目标", "5"),
-            ActionItem("advanced", "安全与高级信息", "查看版本、状态和引用", "6"),
-            ActionItem("toggle", "启用或停用", "切换通知提醒状态", "7"),
-            ActionItem("delete", "删除提醒", "移除配置和验证记录", "8"),
+            ActionItem("edit", "修改配置", "更新渠道、安全凭据和目标", "2"),
+            ActionItem("toggle", "启用或停用", "切换通知提醒状态", "3"),
+            ActionItem(
+                "advanced", "使用情况与高级信息", "查看 Launch 引用、版本和状态", "4"
+            ),
+            ActionItem("delete", "删除提醒", "移除配置和验证记录", "5"),
         )
     return common
 
@@ -94,7 +101,7 @@ def list_records(state: Any, kind: str) -> tuple[dict[str, Any], ...]:
     if kind == "accounts":
         records = AccountConfigurationApplication(owner).list()
     elif kind == "data":
-        records = ReferenceProviderConfigurationApplication(owner).list()
+        records = ProviderConnectionConfigurationApplication(owner).list()
     elif kind == "models":
         records = AgentResourceApplication(owner).model_connections()
     elif kind == "notifications":
@@ -111,16 +118,42 @@ def execute_action(
     action: str,
     *,
     value: str | None = None,
-    launch_id: str | None = None,
 ) -> Any:
     owner = _owner(state)
     resource_id = identity(kind, record)
     if action == "delete":
+        if kind == "data":
+            connections = ProviderConnectionConfigurationApplication(owner)
+            external_references = [
+                reference
+                for reference in ConfigurationReferenceApplication(
+                    owner
+                ).data_provider_references(resource_id)
+                if reference.get("source") != owner.paths.manifest.name
+            ]
+            if external_references:
+                raise ValueError("Provider Connection 仍被 Launch 引用，不能删除")
+            MarketProviderBindingApplication(owner).unbind_connection(resource_id)
+            if resource_id == "massive":
+                return ReferenceProviderConfigurationApplication(owner).delete(
+                    resource_id
+                )
+            return connections.delete(resource_id)
         return WorkspaceResourceLifecycleApplication(owner).delete(
             _reference_kind(kind), resource_id
         )
     if kind == "accounts":
         application = AccountConfigurationApplication(owner)
+        if action == "access":
+            purpose, separator, credential_id = (value or "").partition("|")
+            if not separator:
+                raise ValueError("账户访问配置缺少 purpose 或 credential")
+            return application.configure_access(
+                resource_id,
+                purpose=purpose,
+                credential_id=credential_id,
+                force=True,
+            )
         if action == "test":
             return application.test_connection(resource_id)
         if action == "toggle":
@@ -131,19 +164,30 @@ def execute_action(
         if action == "advanced":
             return _advanced(owner, kind, resource_id, record)
     elif kind == "data":
-        application = ReferenceProviderConfigurationApplication(owner)
+        application = ProviderConnectionConfigurationApplication(owner)
         if action == "test":
+            if resource_id == "massive":
+                return ReferenceProviderConfigurationApplication(owner).test_connection(
+                    resource_id
+                )
             return application.test_connection(resource_id)
         if action == "toggle":
-            return application.set_enabled(
-                resource_id, enabled=not bool(record.get("enabled", True))
-            )
+            enabled = not bool(record.get("enabled", True))
+            result = application.set_enabled(resource_id, enabled=enabled)
+            for product in result.get("products") or ():
+                if product != "reference":
+                    MarketProviderBindingApplication(owner).bind_connection(
+                        resource_id, product=str(product), enabled=enabled
+                    )
+            return result
         if action == "advanced":
             return _advanced(owner, kind, resource_id, record)
     elif kind == "models":
         application = AgentResourceApplication(owner)
         if action == "test":
             return application.test_model_connection(resource_id, value or "")
+        if action == "discover":
+            return application.refresh_model_catalog(resource_id)
         if action == "toggle":
             return application.set_model_connection_enabled(
                 resource_id, enabled=not bool(record.get("enabled", True))
@@ -160,21 +204,6 @@ def execute_action(
             )
         if action == "advanced":
             return _advanced(owner, kind, resource_id, record)
-        if action == "validate":
-            return application.validate_workspace(mode=value or "paper")
-        if action == "attach":
-            if not launch_id:
-                raise ValueError("通知绑定需要 Launch ID")
-            application.show(resource_id)
-            return LaunchNotificationConfigurationApplication(owner).attach(
-                launch_id, resource_id, route=value or "signals", default=True
-            )
-        if action == "detach":
-            if not launch_id:
-                raise ValueError("通知解绑需要 Launch ID")
-            return LaunchNotificationConfigurationApplication(owner).detach(
-                launch_id, resource_id
-            )
     raise ValueError(f"unsupported {kind} resource action: {action}")
 
 
@@ -184,7 +213,6 @@ def preview_action(
     action: str,
     *,
     value: str | None = None,
-    launch_id: str | None = None,
 ) -> dict[str, Any]:
     return {
         "status": "preview",
@@ -192,7 +220,6 @@ def preview_action(
         "resource": identity(kind, record),
         "action": action,
         "value": value,
-        "launch_id": launch_id,
     }
 
 
@@ -209,7 +236,7 @@ def _advanced(
     if kind == "accounts":
         uses = references.account_references(resource_id)
     elif kind == "data":
-        uses = references.data_provider_references(resource_id)
+        uses = MarketProviderBindingApplication(owner).references(resource_id)
     elif kind == "notifications":
         uses = references.destination_references(resource_id)
     else:

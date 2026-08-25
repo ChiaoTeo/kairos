@@ -17,6 +17,7 @@ clap.workspace = true
 futures-util.workspace = true
 kairos-conflux.workspace = true
 kairos-credentials.workspace = true
+kairos-integration.workspace = true
 kairos-primitives.workspace = true
 kairos-protocol.workspace = true
 kairos-reference-contract.workspace = true

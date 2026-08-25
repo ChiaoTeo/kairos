@@ -20,11 +20,19 @@ use crate::domain::source::{FeedDescriptor, MarketFeedId};
 pub(crate) fn install(
     system: &mut ConfluxSystem,
     credentials_root: &Path,
+    connections_root: &Path,
     sources: &std::collections::BTreeMap<String, MarketProviderBinding>,
 ) -> Result<Vec<MarketSourcePlan>, String> {
     let mut plans = Vec::new();
     for (source_id, binding) in sources.iter().filter(|(_, binding)| binding.enabled()) {
-        install_one(system, credentials_root, source_id, binding, &mut plans)?;
+        install_one(
+            system,
+            credentials_root,
+            connections_root,
+            source_id,
+            binding,
+            &mut plans,
+        )?;
     }
     Ok(plans)
 }
@@ -32,12 +40,25 @@ pub(crate) fn install(
 fn install_one(
     system: &mut ConfluxSystem,
     credentials_root: &Path,
+    connections_root: &Path,
     source_id: &str,
     binding: &MarketProviderBinding,
     plans: &mut Vec<MarketSourcePlan>,
 ) -> Result<(), String> {
     let key = source_id.to_owned();
     let capabilities = binding_observation_capabilities(binding);
+    let connection = binding
+        .connection_id()
+        .map(|connection_id| {
+            let profile = kairos_integration::composition::ProviderConnectionProfile::load(
+                connections_root,
+                connection_id,
+            )?;
+            let (provider, product, purpose) = connection_requirement(binding);
+            profile.require(provider, product, purpose)?;
+            Ok::<_, String>(profile)
+        })
+        .transpose()?;
     match binding {
         MarketProviderBinding::BinanceSpot {
             transport,
@@ -56,9 +77,11 @@ fn install_one(
                             ConnectionKey::new(key.clone())?,
                             BinanceRestConfig {
                                 environment: "public".into(),
-                                endpoint: endpoint.clone().unwrap_or_else(|| {
-                                    default_endpoint("binance-spot-rest").into()
-                                }),
+                                endpoint: resolved_endpoint(
+                                    connection.as_ref(),
+                                    endpoint,
+                                    default_endpoint("binance-spot-rest"),
+                                ),
                                 credential: None,
                             },
                         )
@@ -79,9 +102,11 @@ fn install_one(
                             ConnectionKey::new(key.clone())?,
                             BinanceWebSocketConfig {
                                 environment: "public".into(),
-                                endpoint: endpoint.clone().unwrap_or_else(|| {
-                                    default_endpoint("binance-spot-websocket").into()
-                                }),
+                                endpoint: resolved_endpoint(
+                                    connection.as_ref(),
+                                    endpoint,
+                                    default_endpoint("binance-spot-websocket"),
+                                ),
                                 credential: None,
                                 event_capacity: 4_096,
                             },
@@ -100,6 +125,13 @@ fn install_one(
             snapshot_interval_ms,
             ..
         } => {
+            let credential_id = connection
+                .as_ref()
+                .map(|value| value.credential_id.as_str())
+                .or(credential_id.as_deref())
+                .ok_or_else(|| {
+                    format!("Market source {source_id} requires a Binance connection or credential")
+                })?;
             let credentials =
                 CredentialStore::load(credentials_root).map_err(|error| error.to_string())?;
             let credential = credentials
@@ -119,11 +151,13 @@ fn install_one(
                     ConnectionKey::new(key.clone())?,
                     BinanceRestConfig {
                         environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint("binance-equity").into()),
+                        endpoint: resolved_endpoint(
+                            connection.as_ref(),
+                            endpoint,
+                            default_endpoint("binance-equity"),
+                        ),
                         credential: Some(BinanceCredential {
-                            principal_id: credential_id.clone(),
+                            principal_id: credential_id.to_owned(),
                             api_key,
                             secret,
                         }),
@@ -179,9 +213,11 @@ fn install_one(
                 BinanceDerivativeTransport::Rest => {
                     let config = BinanceRestConfig {
                         environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint(rest_key).into()),
+                        endpoint: resolved_endpoint(
+                            connection.as_ref(),
+                            endpoint,
+                            default_endpoint(rest_key),
+                        ),
                         credential: None,
                     };
                     match product {
@@ -210,9 +246,11 @@ fn install_one(
                 BinanceDerivativeTransport::Websocket => {
                     let config = BinanceWebSocketConfig {
                         environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint(ws_key).into()),
+                        endpoint: resolved_endpoint(
+                            connection.as_ref(),
+                            endpoint,
+                            default_endpoint(ws_key),
+                        ),
                         credential: None,
                         event_capacity: 4_096,
                     };
@@ -260,9 +298,11 @@ fn install_one(
                             ConnectionKey::new(key.clone())?,
                             OkxRestConfig {
                                 environment: "public".into(),
-                                endpoint: endpoint
-                                    .clone()
-                                    .unwrap_or_else(|| default_endpoint("okx-spot-rest").into()),
+                                endpoint: resolved_endpoint(
+                                    connection.as_ref(),
+                                    endpoint,
+                                    default_endpoint("okx-spot-rest"),
+                                ),
                             },
                         )
                         .map_err(|e| e.to_string())?;
@@ -288,9 +328,11 @@ fn install_one(
                             ConnectionKey::new(key.clone())?,
                             OkxWebSocketConfig {
                                 environment: "public".into(),
-                                endpoint: endpoint.clone().unwrap_or_else(|| {
-                                    default_endpoint("okx-public-websocket").into()
-                                }),
+                                endpoint: resolved_endpoint(
+                                    connection.as_ref(),
+                                    endpoint,
+                                    default_endpoint("okx-public-websocket"),
+                                ),
                                 event_capacity: 4_096,
                             },
                         )
@@ -383,6 +425,13 @@ fn install_one(
             endpoint,
             ..
         } => {
+            let credential_id = connection
+                .as_ref()
+                .map(|value| value.credential_id.as_str())
+                .or(credential_id.as_deref())
+                .ok_or_else(|| {
+                    format!("Market source {source_id} requires a Massive connection or credential")
+                })?;
             let credentials =
                 CredentialStore::load(credentials_root).map_err(|error| error.to_string())?;
             let api_key = credentials
@@ -397,9 +446,11 @@ fn install_one(
             };
             let config = MassiveWebSocketConfig {
                 environment: "public".into(),
-                endpoint: endpoint
-                    .clone()
-                    .unwrap_or_else(|| default_endpoint(endpoint_key).into()),
+                endpoint: resolved_endpoint(
+                    connection.as_ref(),
+                    endpoint,
+                    default_endpoint(endpoint_key),
+                ),
                 api_key,
                 event_capacity: 4_096,
             };
@@ -496,4 +547,72 @@ fn descriptor(
         Some(asset.into()),
     )?
     .with_observation_capabilities(capabilities))
+}
+
+fn resolved_endpoint(
+    connection: Option<&kairos_integration::composition::ProviderConnectionProfile>,
+    legacy: &Option<String>,
+    default: &str,
+) -> String {
+    connection
+        .map(|value| value.endpoint.clone())
+        .or_else(|| legacy.clone())
+        .unwrap_or_else(|| default.to_owned())
+}
+
+fn connection_requirement(
+    binding: &MarketProviderBinding,
+) -> (&'static str, Option<&'static str>, &'static str) {
+    match binding {
+        MarketProviderBinding::BinanceSpot { transport, .. } => (
+            "binance",
+            Some("spot"),
+            match transport {
+                BinanceSpotTransport::Rest => "market-query",
+                BinanceSpotTransport::Websocket => "market-stream",
+            },
+        ),
+        MarketProviderBinding::BinanceEquity { .. } => ("binance", Some("equity"), "market-query"),
+        MarketProviderBinding::BinanceDerivatives {
+            product, transport, ..
+        } => (
+            "binance",
+            Some(match product {
+                BinanceDerivativeProduct::UsdMFutures => "usd-m-futures",
+                BinanceDerivativeProduct::CoinMFutures => "coin-m-futures",
+                BinanceDerivativeProduct::Options => "options",
+            }),
+            match transport {
+                BinanceDerivativeTransport::Rest => "market-query",
+                BinanceDerivativeTransport::Websocket => "market-stream",
+            },
+        ),
+        MarketProviderBinding::Massive { product, .. } => (
+            "massive",
+            Some(match product {
+                MassiveMarketProduct::Equity => "equity",
+                MassiveMarketProduct::Options => "options",
+            }),
+            "market-stream",
+        ),
+        MarketProviderBinding::Okx {
+            instrument_type,
+            transport,
+            ..
+        } => (
+            "okx",
+            Some(match instrument_type {
+                OkxInstrumentType::Spot => "spot",
+                OkxInstrumentType::Swap => "swap",
+                OkxInstrumentType::Futures => "futures",
+                OkxInstrumentType::Options => "options",
+            }),
+            match transport {
+                PublicMarketTransport::Rest => "market-query",
+                PublicMarketTransport::Websocket => "market-stream",
+            },
+        ),
+        MarketProviderBinding::Hyperliquid { .. } => ("hyperliquid", None, "market-query"),
+        MarketProviderBinding::Ibkr { .. } => ("ibkr", None, "market-query"),
+    }
 }

@@ -12,8 +12,12 @@ Kairos Strategy 可以通过 `ctx.notifications` 发布逻辑通知。策略只�
 1. 显示现有 Destination 和 Credential 可用状态；
 2. 分渠道引导配置飞书自定义机器人或 Telegram Bot；
 3. 使用 Telegram `getMe` 验证 Bot，并通过 `getUpdates` 发现可选 chat；
-4. 把 Destination 绑定到 Launch-owned route；
+4. 显示 Destination 被哪些 Launch 引用；
 5. 在显式确认后发送真实测试消息。
+
+Destination 与 Launch route 的关联在创建或编辑 Launch 时配置。进入“运行列表与控制”，
+新建或编辑 Launch，并在通知步骤中选择 Destination。通知目标页面不直接修改
+Launch-owned route。
 
 也可以直接运行：
 

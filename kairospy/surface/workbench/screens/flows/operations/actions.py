@@ -31,15 +31,7 @@ CONFIG_ACTIONS = (
     ActionItem("explain", "解释指定配置", "按名称查看配置路径和值", "5"),
     ActionItem("operations", "查看可用操作", "列出配置 Application 支持的操作", "6"),
     ActionItem("profiles", "管理 Profiles", "列出、创建并切换 Profile", "7"),
-    ActionItem("models", "管理 AI 模型连接", "进入模型资源上下文", "8"),
-)
-
-SERVICE_ACTIONS = (
-    ActionItem("status", "查看状态", "读取组件健康与运行资源", "1"),
-    ActionItem("start", "启动", "启动组件并等待就绪", "2"),
-    ActionItem("stop", "停止", "请求组件安全停止", "3"),
-    ActionItem("restart", "重启", "停止后启动新的组件进程", "4"),
-    ActionItem("logs", "查看日志", "读取最近 200 行进程日志", "5"),
+    ActionItem("models", "管理模型连接", "进入模型连接资源上下文", "8"),
 )
 
 BUSINESS_ACTIONS = (
@@ -109,15 +101,6 @@ def execute_operation(state: Any, action: str) -> Any:
     owner = _owner(state)
     if action == "doctor":
         return ComponentProcessApplication(owner).doctor()
-    if action == "repair":
-        return ComponentProcessApplication(owner).repair()
-    if action == "workspace":
-        return {
-            "workspace_id": owner.workspace_id,
-            "project_root": str(owner.paths.project_root),
-            "workspace_root": str(owner.paths.root),
-            "manifest": str(owner.paths.manifest),
-        }
     raise ValueError(f"unknown operation: {action}")
 
 
@@ -201,18 +184,34 @@ def execute_service(state: Any, component: str, action: str) -> Any:
     owner = _owner(state)
     application = ComponentProcessApplication(owner)
     if action == "status":
-        return application.status(component)
+        return application.list_status()[component]
     if action == "start":
-        return application.ensure_running(component).status()
+        application.ensure_running(component)
+        return application.list_status()[component]
     if action in {"stop", "restart"}:
         WorkspaceComponentDependencyApplication(owner).require_clear(component, action)
-        return (
+        if action == "stop":
             application.stop(component)
-            if action == "stop"
-            else application.restart(component).status()
+        else:
+            application.restart(component)
+        return application.list_status()[component]
+    if action in {"logs", "log-tail"}:
+        return application.log_snapshot(
+            component, limit=500 if action == "log-tail" else 200
         )
-    if action == "logs":
-        return {"component": component, "lines": list(application.logs(component))}
+    if action == "diagnostics":
+        return application.doctor()["components"][component]
+    if action == "repair":
+        repaired = application.repair_component(component)
+        if repaired.get("status") != "repaired":
+            raise RuntimeError(str(repaired.get("reason") or "运行资源不可安全清理"))
+        return application.list_status()[component]
+    if action == "repair-start":
+        repaired = application.repair_component(component)
+        if repaired.get("status") != "repaired":
+            raise RuntimeError(str(repaired.get("reason") or "运行资源不可安全清理"))
+        application.ensure_running(component)
+        return application.list_status()[component]
     raise ValueError(f"unknown service action: {action}")
 
 
@@ -228,7 +227,6 @@ __all__ = [
     "PROJECT_ACTIONS",
     "PROFILE_ACTIONS",
     "ProjectPromptState",
-    "SERVICE_ACTIONS",
     "execute_config",
     "execute_operation",
     "execute_project",

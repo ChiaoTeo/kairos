@@ -131,6 +131,17 @@ class ConfigurationReferenceApplication:
     def data_provider_references(self, connection_id: str) -> list[dict[str, str]]:
         connection_id = _required_id(connection_id)
         result: list[dict[str, str]] = []
+        if self.workspace.paths.manifest.is_file():
+            value = _read(self.workspace.paths.manifest)
+            for location, item in _walk(value):
+                if location[-1:] == ("connection_id",) and item == connection_id:
+                    result.append(
+                        _reference(
+                            self.workspace.paths.manifest,
+                            location,
+                            self.workspace.paths.root,
+                        )
+                    )
         for path in self._launch_documents():
             value = _read(path)
             for mode in ("paper", "live"):
@@ -158,6 +169,9 @@ class ConfigurationReferenceApplication:
     ) -> tuple[Path, ...]:
         paths = list(self._launch_documents())
         paths.extend(sorted((self.workspace.paths.config / "accounts").glob("*.toml")))
+        paths.extend(
+            sorted(self.workspace.paths.market_connections_root().glob("*.toml"))
+        )
         notification = self.workspace.paths.notification_config()
         if notification.is_file():
             paths.append(notification)

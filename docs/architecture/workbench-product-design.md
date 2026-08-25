@@ -8,7 +8,7 @@ Application/Contract 边界和显式 CLI 约束仍以项目架构规则及
 ## 1. 产品定位
 
 Kairos Workbench 是面向人工操作的统一终端工作台。它帮助用户在不知道完整 CLI 命令和内部模块
-结构的前提下，完成行情、标的、策略、运行资源、研究数据和系统维护任务。
+结构的前提下，完成行情、标的、Launch、运行准备、数据研究以及服务与进程操作。
 
 Workbench 是现有业务 Application 与 Contract 的输入适配和结果展示层，不是新的业务 API、业务
 状态所有者或命令执行器。它只有一个 `KairosWorkbenchApp`、一个主工作屏和一个持续可见的输入框。
@@ -34,7 +34,7 @@ Workbench 是现有业务 Application 与 Contract 的输入适配和结果展�
 
 Workbench 同时服务三类使用者：
 
-- 新用户：需要发现能力、完成运行准备并获得下一步引导。
+- 新用户：需要发现能力、通过运行前检查并获得下一步引导。
 - 日常操作者：需要快速查看行情、控制 Launch、管理账户和诊断服务。
 - 研究与开发人员：需要准备数据、运行研究流程、检查系统状态并把证据交给 Agent。
 
@@ -44,12 +44,44 @@ Workbench 同时服务三类使用者：
 | --- | --- | --- | --- |
 | 1 | 查看市场行情 | 搜索报价、下载历史行情、浏览数据集、回放与连接运行服务 | Market、Reference、Integration |
 | 2 | 查找市场标的 | 查找资产、交易所、合约、Market 与期权链 | Reference |
-| 3 | 配置并运行策略 | 配置 Launch、启动实例、查看组件、跟随输出和控制执行 | Workspace/System、Execution、Market |
-| 4 | 完成运行准备 | 配置账户、市场数据、模型、通知并检查连接 | Account、Integration、Workspace/System |
-| 5 | 准备数据研究 | 管理 Dataset、Research Plan 和 Gate | Data/Research 所属 Application |
-| 6 | 维护系统 | 管理项目、服务、配置、Profile、迁移和业务诊断工具 | Workspace/System 及对应业务所有者 |
+| 3 | Launch | 创建和配置 Launch、启动 Instance、查看组件、跟随输出和控制执行 | Workspace/System、Execution、Market |
+| 4 | 运行前检查 | 配置账户、市场数据、模型、通知并检查连接 | Account、Integration、Workspace/System |
+| 5 | 数据与回测 | 管理 Dataset、Research Plan 和 Gate | Data/Research 所属 Application |
+| 6 | 服务与进程 | 查看项目共享服务、运行中的 Launch、支撑进程和日志 | Workspace/System |
 
 首页只负责分组和导航，不拥有这些业务行为。
+
+### 2.1 产品对象与术语
+
+Workbench 使用项目、Launch、Instance、项目共享服务和支撑进程表达运行结构：
+
+```text
+项目
+  -> Launch
+       -> Instance
+            -> Strategy
+            -> Account × N
+            -> Risk
+            -> Execution（可选）
+            -> Capital（可选）
+            -> Market（实例级或项目共享）
+  -> 项目共享服务
+       -> Reference
+       -> Market
+  -> 支撑进程
+       -> System Supervisor
+       -> Aeron
+```
+
+- `Launch` 是可重复启动的规范化运行配置，也是产品中的策略运行对象；界面不得再把“策略运行”和
+  `Launch` 表达为两个层级。
+- `Instance` 是某个 Launch 的一次实际运行。
+- `Strategy` 是 Instance 内的进程和业务组件，不等于 Launch。
+- “项目”是面向用户的顶层上下文；`Workspace` 只在技术证据或需要精确说明资源作用域时出现。
+- “项目共享服务”只指具有 Workspace identity 的 Reference 和共享 Market。
+- System Supervisor 和 Aeron 是支撑进程，可观察但不是普通业务服务。
+- `Profile` 不是统一产品对象。Market runtime profile、Agent Profile 和通用 Config Profile 必须分别
+  由自己的业务场景解释，不能合并为一个“管理 Profiles”入口。
 
 ## 3. 信息架构
 
@@ -57,7 +89,7 @@ Workbench 同时服务三类使用者：
 
 用户上下文由面包屑和显式选择表达，不使用 shell path。上下文可包含：
 
-- 当前 Workspace；
+- 当前项目及其 Workspace identity；
 - 当前产品入口；
 - 当前 Launch 与 Instance；
 - 当前账户；
@@ -84,16 +116,31 @@ Application、Actor 或 Contract 拥有；界面不得成为第二个可变业�
 并非每个流程都需要所有层级。对象唯一且业务规则允许时可以直接进入详情；存在多个候选或选择会改变
 业务含义时，必须先让用户明确选择。
 
-### 3.3 Standalone 与 connected 作用域
+### 3.3 运行作用域
 
-产品必须显式区分直接访问 Provider 的 standalone 操作和连接运行组件的 connected 操作。例如行情：
+产品必须显式区分 standalone、项目共享服务和 Launch Instance 三种作用域：
 
-- standalone：报价、历史下载、本地数据集和独立回放；
-- Workspace connected：连接 Workspace Market 服务；
-- Launch connected：连接具体 Launch Instance 的 Market 组件。
+- standalone：直接访问 Provider、本地数据、目录或配置，不依赖正在运行的组件；
+- 项目共享服务：连接具有 Workspace identity 的 Reference 或共享 Market；
+- Launch Instance：连接具体 Instance 拥有或绑定的 Strategy、Account、Risk、Execution、Capital
+  和 Market。
+
+Backtest 和 Paper 的 Market 默认属于 Instance，Live 的 Market 默认项目共享，显式 Launch 配置可以在
+业务规则允许时改变 Market scope。Account、Risk、Execution 和 Capital 不得因为 Workspace 下存在同名
+socket 或文件而被解释为项目共享组件。
 
 不同作用域不得因文件存在、服务失败或 Provider 不可用而自动互相回退。当前作用域必须通过面包屑、
-对象摘要或确认信息对用户可见。
+对象摘要或确认信息对用户可见。从“服务与进程”选择一个 Launch 时，必须进入与 Launch 产品入口共用的
+Launch/Instance 页面，不得建立第二套运行详情或组件控制模型。
+
+### 3.4 无项目状态
+
+`kairos interactive` 无法解析项目时仍然进入同一个 Workbench App，但不得展示依赖 Workspace 的正常
+首页。Interaction Region 只提供创建回测示例项目、创建空项目、打开指定项目和退出。创建或打开成功后
+刷新项目摘要并进入正常首页。
+
+项目创建、模板安装和项目选择属于 Workbench 启动状态，不属于“服务与进程”。需要 Workspace 的
+`kairos observe`、Launch attach 等深链接继续失败关闭并返回明确的项目解析错误。
 
 ## 4. 主界面结构
 
@@ -147,6 +194,15 @@ Market 自动刷新不产生 Activity；用户明确选择“保存当前快照�
 
 命令栏始终包含当前上下文和一个输入框。placeholder 只说明此刻需要输入什么，不承载长篇帮助。
 普通导航状态接受编号、动作名和 `/` 命令；参数状态只接受当前参数及允许的取消、帮助和退出命令。
+
+### 4.5 结果表达
+
+Workbench 结果默认按“对象、结论、关键事实、影响、下一步动作”组织，不直接把 Application 返回的
+mapping、内部字段名或 Python `repr` 作为产品页面。PID、socket、health file、process lock、Manifest
+路径和规范化配置等证据只在明确的“查看进程信息”“查看技术证据”或复制给 Agent 的脱敏上下文中出现。
+
+一个结果页不得只证明操作已经执行；它必须说明目标对象的最终状态。失败结果应在所属作用域内提供
+重试、查看日志、修复配置或返回上一级等恢复动作，不把用户送到一个脱离当前对象的通用诊断菜单。
 
 ## 5. 单输入交互模型
 
@@ -371,11 +427,12 @@ Control adapter effect。Screen 负责应用 effect 和管理 Textual Worker，�
 Reference 入口提供资产、交易所、合约、Market 和期权链。资产和合约按代码或名称搜索；数量较少的
 交易所和 Provider 可以直接列出。详情页可以继续查看关联 listing、Market 和技术标识。
 
-Reference generation、publication 和 Provider 同步状态属于系统诊断信息，不应混入普通标的详情。
+Reference generation、publication 和 Provider 同步状态属于项目共享服务的运行信息，不应混入普通
+标的详情。
 
-### 10.3 策略运行
+### 10.3 Launch
 
-策略入口围绕 Launch 和运行 Instance 组织：
+Launch 入口围绕 Launch 和运行 Instance 组织：
 
 - 列出、创建和编辑 Launch；
 - 选择 backtest、paper 或 live 模式；
@@ -387,9 +444,18 @@ Reference generation、publication 和 Provider 同步状态属于系统诊断�
 运行态 Execution 必须绑定具体 Launch Instance。Standalone 订单操作属于明确的账户或 Execution
 作用域，不得因找不到实例而自动切换。
 
+Launch 列表同时合并已发布配置、草稿和运行注册记录。选择 Launch 后先进入唯一的 Launch 详情；
+当前 Instance 和历史 Instance 是这个详情的下一级对象。界面可以用“策略运行”解释 Launch，但不得再
+创建一个位于 Launch 之上或之下的“策略运行”对象。
+
+Instance 组件默认只提供状态、日志、current view 和所属业务 Contract 允许的动作。Account、Risk、
+Execution、Capital 和实例级 Market 的生命周期由 Launch 统一管理，不提供局部启动、停止或重启入口。
+项目共享 Market 可以从 Instance 详情进入其 connected 业务视图，但其 Workspace 生命周期仍由
+“服务与进程”负责。
+
 ### 10.4 运行准备
 
-运行准备按资源类型组织账户、市场数据、AI 模型和通知目标。配置向导必须区分普通字段与 Secret，
+运行准备按资源类型组织账户、市场数据、模型连接和通知目标。配置向导必须区分普通字段与 Secret，
 支持预览、验证、编辑和删除，并在结束时给出资源是否可用于 paper/live 的明确结论。
 
 Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不允许 Execution 或其他模块向 Account
@@ -404,11 +470,95 @@ Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不�
 
 会改变数据或发布状态的步骤必须显示目标、计划 hash 或证据文件，并根据风险进入确认。
 
-### 10.6 系统维护
+### 10.6 服务与进程
 
-系统维护提供项目工作区、实时观测、服务管理、诊断、stale 资源修复、配置、Profile、迁移和受控的
-业务工具入口。系统组合可以连接业务 Contract 与进程资源，但不得绕过业务 Contract 调用其他业务
-主包 Application。
+“服务与进程”是当前项目运行结构的观察与 Workspace 服务控制入口，不是项目设置、CLI 命令目录或
+剩余能力集合。进入后直接显示按作用域分组的运行清单，不再先展示“运行状态、后台服务、问题诊断、
+高级设置”等功能菜单：
+
+```text
+服务与进程
+
+项目共享服务
+  Reference    运行中 · 持续运行
+  Market       运行中 · 按需启动 · 被 2 个 Launch 使用
+
+正在运行的 Launch
+  btc-paper / run-003      Paper · 正常
+  options-live / run-007   Live · Execution 异常
+
+支撑进程
+  System Supervisor        运行中
+  Aeron                     运行中
+```
+
+选择正在运行的 Launch 后进入 10.3 定义的同一个 Launch/Instance 页面。支撑进程只提供状态、日志和
+技术证据，不作为普通业务服务提供任意启停。`kairos observe` 直接进入这个页面并持续刷新；Workbench
+中的 `/observe` 使用同一个分层结果模型；`observe --once` 继续保留机器可读输出。
+
+#### 10.6.1 项目共享服务
+
+当前只有 Reference 和共享 Market 具有 Workspace-scoped identity。服务详情必须同时展示：
+
+- 运行状态；
+- 运行方式；
+- 是否由 System Supervisor 自动恢复；
+- 当前依赖它的 Launch；
+- 日志是否可用；
+- 与状态匹配的可执行动作。
+
+运行方式使用以下关闭词汇：
+
+- `按需启动`：服务进程正在运行，但不在 Supervisor desired state 中；
+- `持续运行`：服务已登记为 desired，Supervisor 会在异常退出后尝试恢复；
+- `正在恢复`：Supervisor 正在按策略重新启动服务；
+- `恢复已暂停`：自动重试达到上限，需要人工检查；
+- `已停止`：进程未运行，也未登记为 desired。
+
+用户主动启动已停止的 Workspace 服务时，产品动作命名为“启动并保持运行”。这个动作必须通过同一个
+System Application 用例完成启动、等待就绪、登记 desired state 和启动或复用 Supervisor。Workbench
+不得只调用 `ensure_running()`，否则它与 `kairos system up` 具有不同生命周期语义。
+
+“停止服务”必须先检查活动 Launch 依赖；存在依赖时拒绝并列出 Launch。允许停止时先取消 desired
+state，再请求服务安全停止。“重启服务”同样先通过依赖安全检查，成功后保持重启前的 desired 语义。
+Workbench 与显式 `system up/down/restart` 必须调用同一个 Application 用例，不得各自复制部分流程，
+也不得通过 Typer executor 互相调用。
+
+#### 10.6.2 Launch 与支撑进程
+
+正在运行的 Launch 用 `launch_id / instance_id` 标识，摘要展示 mode、整体状态和异常组件。选择后进入
+Launch 页面，由 Launch 统一停止和重启整个 Instance。服务与进程页面不得给 Instance-owned Account、
+Risk、Execution、Capital 或 Market 提供通用局部生命周期操作。
+
+System Supervisor 展示当前 desired 服务、恢复状态和最近错误；Aeron 展示进程状态和日志。它们是
+Reference、Market 或 Launch 故障的技术证据，不成为首页能力，也不提供普通的独立启停流程。
+
+#### 10.6.3 诊断与恢复
+
+项目文件检查、Workspace 服务诊断和 Launch 诊断是三个不同用例：
+
+- 项目文件和 Launch 配置问题在打开项目、运行前检查或 Launch 校验中呈现；
+- socket、health file、process lock 和 Supervisor 状态在具体 Workspace 服务详情中呈现；
+- Strategy 与 Instance 组件问题在具体 Launch/Instance 中呈现。
+
+Workbench 不提供脱离对象的全局“问题诊断”入口。只有 Application 已证明 socket、health file 或其他
+资源失效且没有活进程或锁所有者时，具体服务页面才显示“清理并重新启动”或“仅清理”。无法证明安全时
+必须失败关闭并展示占用证据。
+
+#### 10.6.4 不属于本入口的能力
+
+- 项目创建、打开和模板安装属于无项目启动状态；
+- 账户、市场数据连接、模型连接和通知属于运行前检查；
+- Market runtime profile 属于市场连接或 Launch，Agent Profile 属于 Agent 资源；
+- Risk、Capital 和 Integration 的业务动作属于具体 Launch Instance、资源配置或显式 standalone CLI；
+- Manifest、全部 TOML、配置路径、Application 操作清单和通用 Config Profile 不作为 Workbench 菜单。
+
+System 组合可以定位 Workspace 组件、执行依赖安全检查并连接 owner Contract，但不拥有 Market、Risk、
+Capital 等业务语义，也不得绕过业务 Contract 调用其他业务主包 Application。不存在 Workspace target
+时，System 入口必须说明该 scope 不存在，不得自动寻找任意 Launch Instance 代替。
+
+Workbench 不把 Workspace runtime 伪装成保留 ID `kairos-system` 的隐藏 Launch。Workspace 服务、
+Supervisor 和普通 Launch 使用各自真实的 identity 与生命周期呈现。
 
 ## 11. Transcript 与 Agent 协作
 
@@ -460,10 +610,12 @@ port。只有用户任务确实无法归入现有产品入口时，才讨论增�
 ### 14.1 通用交互
 
 - 首页输入编号只更新动作列表和面包屑，内容区不新增菜单或原始输入。
+- 无法解析项目时不展示正常首页，只提供创建、打开项目和退出。
 - 子菜单导航、`/back` 和 `/home` 不污染内容区。
 - 叶子操作参数未齐全时，内容区不逐项回显输入。
 - 参数齐全后只写入一次完整、稳定、脱敏的操作记录。
 - 每个结果、错误和确认都能识别 Workspace、作用域与目标对象。
+- 产品结果按对象、结论、关键事实、影响和下一步动作呈现，不直接展示 Python mapping repr。
 - 输入焦点在导航、参数、确认、失败和取消后都返回唯一输入框。
 
 ### 14.2 安全
@@ -482,6 +634,13 @@ port。只有用户任务确实无法归入现有产品入口时，才讨论增�
 - 自动刷新、回放和跟随输出不创建第二套交互运行时。
 - 产品 flow 不依赖 Textual Screen/App/Widget API；Screen 不保存产品状态转换表。
 - 有限操作最多形成一个终态 Activity，自动刷新不追加 Activity。
+- Observe 结果分别表达项目共享服务、Launch Instance 和支撑进程，不在 Workspace scope 虚构
+  Account、Risk、Execution 或 Capital 状态。
+- “服务与进程”和 Launch 入口选择同一个 Launch 时进入同一套 Launch/Instance Session 与页面。
+- Workspace 服务启动登记 Supervisor desired state；停止先取消 desired state；停止和重启都执行活动
+  Launch 依赖检查。
+- Instance-owned 组件只通过所属 Launch Instance 定位，Workbench 不提供局部生命周期捷径。
+- Workbench 不暴露通用“高级设置”“管理 Profiles”“查看可用 Application 操作”或全局 repair 菜单。
 
 ### 14.4 验证证据
 
@@ -492,6 +651,8 @@ port。只有用户任务确实无法归入现有产品入口时，才讨论增�
 - `tests/workbench/test_binary.py` 的真实入口测试；
 - `tests/workbench/test_transcript.py` 的脱敏与审计测试；
 - 使用 credential-free fixture 的真实 PTY 导航、参数、结果和取消检查。
+- Workspace 服务按需运行、持续运行、依赖阻止停止、Supervisor 恢复和安全清理的状态测试。
+- Backtest/Paper Instance Market、Live shared Market 以及显式 Market scope 的边界测试。
 
 文档描述的是统一产品合同。具体动作目录、Application 请求类型和结果字段仍以代码为准，不在本文复制
 生成式清单。

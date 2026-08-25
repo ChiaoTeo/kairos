@@ -44,7 +44,7 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
             await terminal.type("/back")
             await terminal.press("Enter")
             await asyncio.sleep(0.2)
-            assert "完成运行准备" in await terminal.text()
+            assert "运行前检查" in await terminal.text()
 
             await terminal.type("/help")
             await terminal.press("Enter")
@@ -58,7 +58,7 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
 
             await terminal.press("Escape")
             await asyncio.sleep(0.2)
-            assert "完成运行准备" in await terminal.text()
+            assert "运行前检查" in await terminal.text()
 
             await terminal.resize(60, 20)
             await terminal.wait_idle(timeout=10_000)

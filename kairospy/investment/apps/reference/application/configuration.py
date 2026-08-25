@@ -20,6 +20,10 @@ from urllib.request import Request, urlopen
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
 )
+from kairospy.system.apps.integration.application import (
+    PreparedProviderConnection,
+    ProviderConnectionConfigurationApplication,
+)
 from kairospy.system.apps.workspace.application import Workspace
 from kairospy.system.apps.workspace.application import WorkspaceConfigurationTransaction
 
@@ -33,26 +37,33 @@ class PreparedReferenceProvider:
     workspace: Workspace
     connection: Mapping[str, object]
     document: str
+    provider_connection: PreparedProviderConnection
 
     def stage(self, transaction: WorkspaceConfigurationTransaction) -> None:
+        self.provider_connection.stage(transaction)
         transaction.stage_text(self.workspace.paths.manifest, self.document)
 
 
 @dataclass(frozen=True, slots=True)
 class ReferenceProviderConfigurationApplication:
-    """Own the shared Reference/Market Massive connection lifecycle."""
+    """Own the Reference binding to the Massive provider connection."""
 
     workspace: Workspace
 
     def list(self) -> list[dict[str, Any]]:
-        value = self._massive_config()
+        try:
+            self._provider_connections().show("massive")
+        except KeyError:
+            value = self._massive_config()
+        else:
+            value = {"connection_id": "massive"}
         if not value:
             return []
         return [self.show("massive")]
 
     def show(self, connection_id: str = "massive") -> dict[str, Any]:
         _require_massive_id(connection_id)
-        value = self._massive_config()
+        value = self._connection_config()
         if not value:
             raise KeyError("Massive data connection is not configured")
         credential_id = str(value.get("credential_id") or "")
@@ -76,10 +87,10 @@ class ReferenceProviderConfigurationApplication:
             "enabled": bool(value.get("enabled", False)),
             "credential_id": credential_id,
             "endpoint": str(value.get("endpoint") or _MASSIVE_DEFAULT_ENDPOINT),
-            "capabilities": list(self._configured_capabilities()),
+            "capabilities": list(self._configured_capabilities(value)),
             "configured": bool(value.get("enabled", False)) and not issues,
             "issues": issues,
-            "shared_by": ["Reference", "Market"],
+            "shared_by": ["Reference"],
         }
         return {**result, **self.verification("massive", configuration=result)}
 
@@ -95,7 +106,11 @@ class ReferenceProviderConfigurationApplication:
             endpoint=endpoint,
             capabilities=capabilities,
         )
-        _write_atomic(self.workspace.paths.manifest, prepared.document)
+        transaction = WorkspaceConfigurationTransaction(
+            self.workspace, "provider-connection:massive"
+        )
+        prepared.stage(transaction)
+        transaction.commit()
         return self.show("massive")
 
     def prepare_massive(
@@ -132,41 +147,33 @@ class ReferenceProviderConfigurationApplication:
                 raise ValueError("Massive credential requires an api_key value")
 
         document = self.workspace.paths.manifest.read_text(encoding="utf-8")
-        common = {
-            "enabled": True,
-            "credential_id": credential_id,
-            "endpoint": endpoint,
-        }
-        document = _set_section(document, "reference.providers.massive", common)
-        document = _set_section(
-            document, "market.profiles.massive", {"scope": "shared"}
-        )
-        # Remove the superseded named-source form when this owner rewrites the
-        # connection; Market now consumes the typed [[market.providers]] list.
-        document = _set_section(document, "market.sources.massive-equity", None)
-        document = _set_section(document, "market.sources.massive-options", None)
-        market_providers: list[Mapping[str, object]] = []
+        products = ["reference"]
+        purposes = ["reference-catalog"]
         if "equity_market" in selected:
-            market_providers.append(
-                {
-                    "type": "massive",
-                    "product": "equity",
-                    "enabled": True,
-                    "credential_id": credential_id,
-                    "endpoint": endpoint,
-                }
-            )
+            products.append("equity")
+            purposes.append("market-query")
+            purposes.append("market-stream")
         if "options" in selected:
-            market_providers.append(
-                {
-                    "type": "massive",
-                    "product": "options",
-                    "enabled": True,
-                    "credential_id": credential_id,
-                    "endpoint": endpoint,
-                }
-            )
-        document = _replace_massive_market_providers(document, market_providers)
+            products.append("options")
+            if "market-query" not in purposes:
+                purposes.append("market-query")
+            if "market-stream" not in purposes:
+                purposes.append("market-stream")
+        provider_connection = self._provider_connections().prepare(
+            "massive",
+            provider="massive",
+            credential_id=credential_id,
+            products=products,
+            purposes=purposes,
+            endpoint=endpoint,
+            credential_provider=credential_provider,
+            credential_fields=("api_key",),
+        )
+        document = _set_section(
+            document,
+            "reference.providers.massive",
+            {"enabled": True, "connection_id": "massive"},
+        )
         return PreparedReferenceProvider(
             self.workspace,
             {
@@ -180,6 +187,7 @@ class ReferenceProviderConfigurationApplication:
                 "issues": [],
             },
             document,
+            provider_connection,
         )
 
     def test_connection(
@@ -276,6 +284,19 @@ class ReferenceProviderConfigurationApplication:
                 "error_category": result.get("error_category") or "provider_response",
             }
         _write_json_atomic(self._evidence_path(connection_id), evidence)
+        try:
+            self._provider_connections().record_probe_result(
+                connection_id,
+                succeeded=result.get("succeeded") is True,
+                capabilities=("reference-catalog", "market-query"),
+                error_category=str(
+                    result.get("error_category") or "provider_response"
+                ),
+            )
+        except KeyError:
+            # Legacy manifest-only configurations keep their bounded read path
+            # until the deterministic migration creates a connection profile.
+            pass
         return self.verification(connection_id)
 
     def set_enabled(
@@ -284,21 +305,17 @@ class ReferenceProviderConfigurationApplication:
         """Enable or disable the shared connection without changing its credential."""
 
         _require_massive_id(connection_id)
-        current = dict(self._massive_config())
-        if not current:
-            raise KeyError("Massive data connection is not configured")
-        current["enabled"] = enabled
+        try:
+            self._provider_connections().set_enabled(connection_id, enabled=enabled)
+        except KeyError:
+            current = dict(self._massive_config())
+            if not current:
+                raise KeyError("Massive data connection is not configured")
+            current["enabled"] = enabled
+        else:
+            current = {"enabled": enabled, "connection_id": connection_id}
         document = self.workspace.paths.manifest.read_text(encoding="utf-8")
         document = _set_section(document, "reference.providers.massive", current)
-        value = tomllib.loads(document)
-        market = value.get("market")
-        providers = market.get("providers") if isinstance(market, Mapping) else None
-        massive_providers = [
-            {**dict(item), "enabled": enabled}
-            for item in (providers if isinstance(providers, list) else ())
-            if isinstance(item, Mapping) and item.get("type") == "massive"
-        ]
-        document = _replace_massive_market_providers(document, massive_providers)
         _write_atomic(self.workspace.paths.manifest, document)
         return self.show(connection_id)
 
@@ -306,15 +323,19 @@ class ReferenceProviderConfigurationApplication:
         """Remove owner configuration and evidence, retaining the credential."""
 
         _require_massive_id(connection_id)
-        if not self._massive_config():
+        try:
+            self._provider_connections().show(connection_id)
+        except KeyError:
+            has_connection = False
+        else:
+            has_connection = True
+        if not has_connection and not self._massive_config():
             raise KeyError("Massive data connection is not configured")
         document = self.workspace.paths.manifest.read_text(encoding="utf-8")
         document = _set_section(document, "reference.providers.massive", None)
-        document = _set_section(document, "market.profiles.massive", None)
-        document = _set_section(document, "market.sources.massive-equity", None)
-        document = _set_section(document, "market.sources.massive-options", None)
-        document = _replace_massive_market_providers(document, [])
         _write_atomic(self.workspace.paths.manifest, document)
+        if has_connection:
+            self._provider_connections().delete(connection_id)
         self._evidence_path(connection_id).unlink(missing_ok=True)
         return {"connection_id": connection_id, "status": "deleted"}
 
@@ -396,14 +417,14 @@ class ReferenceProviderConfigurationApplication:
         return safe
 
     def _base_configuration(self) -> dict[str, Any]:
-        value = self._massive_config()
+        value = self._connection_config()
         return {
             "connection_id": "massive",
             "provider": "massive",
             "enabled": bool(value.get("enabled", False)),
             "credential_id": str(value.get("credential_id") or ""),
             "endpoint": str(value.get("endpoint") or _MASSIVE_DEFAULT_ENDPOINT),
-            "capabilities": list(self._configured_capabilities()),
+            "capabilities": list(self._configured_capabilities(value)),
         }
 
     def _configuration_fingerprint(self, value: Mapping[str, Any]) -> str:
@@ -428,7 +449,6 @@ class ReferenceProviderConfigurationApplication:
                 "role": credential.get("role"),
                 "fields": credential.get("fields", []),
                 "resource_hash": credential.get("resource_hash"),
-                "resource_hash": credential.get("resource_hash"),
             },
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -443,7 +463,23 @@ class ReferenceProviderConfigurationApplication:
         massive = providers.get("massive") if isinstance(providers, Mapping) else None
         return massive if isinstance(massive, Mapping) else {}
 
-    def _configured_capabilities(self) -> tuple[str, ...]:
+    def _connection_config(self) -> Mapping[str, Any]:
+        try:
+            return self._provider_connections().show("massive")
+        except KeyError:
+            return self._massive_config()
+
+    def _configured_capabilities(
+        self, connection: Mapping[str, Any] | None = None
+    ) -> tuple[str, ...]:
+        if connection is not None and connection.get("products"):
+            products = {str(item) for item in connection.get("products") or ()}
+            result = ["reference"] if "reference" in products else []
+            if "equity" in products:
+                result.append("equity_market")
+            if "options" in products:
+                result.append("options")
+            return tuple(result)
         value = tomllib.loads(self.workspace.paths.manifest.read_text(encoding="utf-8"))
         result = ["reference"]
         market = value.get("market")
@@ -461,6 +497,9 @@ class ReferenceProviderConfigurationApplication:
             if "options" in products:
                 result.append("options")
         return tuple(result)
+
+    def _provider_connections(self) -> ProviderConnectionConfigurationApplication:
+        return ProviderConnectionConfigurationApplication(self.workspace)
 
     def _evidence_path(self, connection_id: str) -> Path:
         return self.workspace.paths.child(
@@ -522,27 +561,6 @@ def _set_section(
     if not replacement:
         return document
     return document.rstrip() + "\n\n" + replacement
-
-
-def _replace_massive_market_providers(
-    document: str, providers: Sequence[Mapping[str, object]]
-) -> str:
-    block_pattern = re.compile(r"(?ms)^\[\[market\.providers\]\]\s*\n.*?(?=^\[|\Z)")
-    retained: list[str] = []
-    position = 0
-    for match in block_pattern.finditer(document):
-        retained.append(document[position : match.start()])
-        block = match.group(0)
-        if not re.search(r'(?m)^type\s*=\s*["\']massive["\']\s*$', block):
-            retained.append(block)
-        position = match.end()
-    retained.append(document[position:])
-    result = "".join(retained).rstrip()
-    for provider in providers:
-        result += "\n\n[[market.providers]]\n"
-        for key, value in provider.items():
-            result += f"{key} = {_toml_value(value)}\n"
-    return result + "\n"
 
 
 def _toml_value(value: object) -> str:

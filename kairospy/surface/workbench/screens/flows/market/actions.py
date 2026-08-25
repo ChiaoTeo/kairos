@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
+from time import time_ns
 from typing import Any
 
 from rich.console import Group, RenderableType
@@ -174,8 +175,82 @@ def execute_file_action(state: Any, prompt: MarketFilePromptState) -> dict[str, 
     )
 
 
+def file_command(state: Any, prompt: MarketFilePromptState) -> tuple[str, ...]:
+    """Return the canonical CLI command for a download or replay operation."""
+
+    market = prompt.market
+    symbol = market.venue_symbol or market.instrument.display_symbol
+    if prompt.action == "replay":
+        arguments: list[str] = [
+            "standalone",
+            "replay",
+            "--market-id",
+            str(market.id),
+            "--instrument-id",
+            str(market.instrument.id),
+            "--exchange-id",
+            str(market.exchange_id).rsplit(":", 1)[-1],
+            "--market-type",
+            str(market.instrument_kind),
+            "--symbol",
+            str(symbol),
+        ]
+        for path in prompt.values["files"]:
+            arguments.extend(("--file", str(path)))
+    else:
+        provider = str(prompt.values["provider"])
+        data_kind = str(prompt.values["data_kind"])
+        arguments = [
+            "standalone",
+            "download",
+            "--provider",
+            provider,
+            "--symbol",
+            str(symbol),
+            "--market-type",
+            str(market.instrument_kind),
+            "--data-kind",
+            data_kind,
+            "--instrument-id",
+            str(market.instrument.id),
+            "--start",
+            str(_history_time_millis(str(prompt.values["start"]), end_of_day=False)),
+            "--end",
+            str(_history_time_millis(str(prompt.values["end"]), end_of_day=True)),
+            "--file",
+            str(prompt.values["destination"]),
+        ]
+        if provider == "binance":
+            arguments.extend(("--market-id", str(market.id)))
+        if data_kind == "bar":
+            arguments.extend(("--interval", "1d"))
+    return tuple(
+        MarketCliApplication(state.owner, binary="kairos-market-cli").command(arguments)
+    )
+
+
 def preview_file_action(prompt: MarketFilePromptState) -> dict[str, Any]:
     return {"status": "preview", **prompt.summary()}
+
+
+def file_result_renderable(
+    result: Any, prompt: MarketFilePromptState
+) -> RenderableType:
+    details = Table.grid(padding=(0, 2))
+    details.add_column(style="dim", no_wrap=True)
+    details.add_column(style="dim")
+    if prompt.action == "replay":
+        files = tuple(prompt.values.get("files") or ())
+        details.add_row("来源", "本地回放")
+        details.add_row("输入", f"{len(files)} 个 JSONL 文件")
+    else:
+        provider = str(prompt.values.get("provider") or "—")
+        details.add_row("来源", f"{provider} · Provider 直连")
+        details.add_row("产物", str(prompt.values.get("destination") or "—"))
+    return Panel(
+        Group(Pretty(result, expand_all=True), Text(""), details),
+        title="Market 文件操作结果",
+    )
 
 
 def selected_market_actions(market: Any) -> tuple[ActionItem, ...]:
@@ -220,12 +295,11 @@ def selected_market_actions(market: Any) -> tuple[ActionItem, ...]:
     ]
     actions.extend(
         (
-            ActionItem("validate", "验证市场定义", "检查标识、类型与交易规则", "v"),
             ActionItem(
-                "universe",
-                "检查 Reference 映射",
-                "查看同类型可映射市场",
-                "u",
+                "diagnose",
+                "诊断当前市场",
+                "检查标识、类型与交易规则",
+                "d",
             ),
         )
     )
@@ -266,6 +340,23 @@ def load_routes(
     )
 
 
+def route_command(state: Any, market: Any, observation_kind: str) -> tuple[str, ...]:
+    """Return the canonical CLI command for standalone route discovery."""
+
+    return tuple(
+        MarketCliApplication(state.owner, binary="kairos-market-cli").command(
+            (
+                "standalone",
+                "routes",
+                "--market-type",
+                str(market.instrument_kind),
+                "--observation-kind",
+                observation_kind,
+            )
+        )
+    )
+
+
 def load_observation(
     state: Any,
     market: Any,
@@ -273,7 +364,7 @@ def load_observation(
     provider: str,
 ) -> dict[str, Any]:
     symbol = market.venue_symbol or market.instrument.display_symbol
-    return MarketCliApplication(state.owner).once(
+    result = MarketCliApplication(state.owner).once(
         market_id=str(market.id),
         instrument_id=str(market.instrument.id),
         exchange_id=str(market.exchange_id).rsplit(":", 1)[-1],
@@ -282,24 +373,77 @@ def load_observation(
         provider=provider,
         observation_kind=observation_kind,
     )
+    return {
+        **result,
+        "_source_mode": "provider-direct",
+        "_transport": "REST",
+        "_fetched_at_unix_nanos": time_ns(),
+    }
 
 
-def run_diagnostic(state: Any, market: Any, action: str) -> dict[str, Any]:
+def observation_command(
+    state: Any,
+    market: Any,
+    observation_kind: str,
+    provider: str,
+) -> tuple[str, ...]:
+    """Return the canonical CLI command for one direct observation."""
+
+    symbol = market.venue_symbol or market.instrument.display_symbol
+    arguments = (
+        "standalone",
+        "once",
+        "--market-id",
+        str(market.id),
+        "--instrument-id",
+        str(market.instrument.id),
+        "--exchange-id",
+        str(market.exchange_id).rsplit(":", 1)[-1],
+        "--market-type",
+        str(market.instrument_kind),
+        "--symbol",
+        str(symbol),
+        "--provider",
+        provider,
+        "--observation-kind",
+        observation_kind,
+    )
+    return tuple(
+        MarketCliApplication(state.owner, binary="kairos-market-cli").command(arguments)
+    )
+
+
+def run_diagnostic(state: Any, market: Any) -> dict[str, Any]:
     application = MarketCliApplication(state.owner)
     symbol = market.venue_symbol or market.instrument.display_symbol
-    if action == "validate":
-        return application.validate(
-            market_id=str(market.id),
-            instrument_id=str(market.instrument.id),
-            exchange_id=str(market.exchange_id).rsplit(":", 1)[-1],
-            market_type=str(market.instrument_kind),
-            symbol=str(symbol),
-        )
-    if action == "universe":
-        return application.reference_universe(
-            instrument_kind=str(market.instrument_kind), limit=10_000
-        )
-    raise ValueError(f"unknown Market diagnostic: {action}")
+    return application.validate(
+        market_id=str(market.id),
+        instrument_id=str(market.instrument.id),
+        exchange_id=str(market.exchange_id).rsplit(":", 1)[-1],
+        market_type=str(market.instrument_kind),
+        symbol=str(symbol),
+    )
+
+
+def diagnostic_command(state: Any, market: Any) -> tuple[str, ...]:
+    symbol = market.venue_symbol or market.instrument.display_symbol
+    arguments = (
+        "standalone",
+        "validate",
+        "--market-id",
+        str(market.id),
+        "--instrument-id",
+        str(market.instrument.id),
+        "--exchange-id",
+        str(market.exchange_id).rsplit(":", 1)[-1],
+        "--market-type",
+        str(market.instrument_kind),
+        "--symbol",
+        str(symbol),
+    )
+    return tuple(
+        MarketCliApplication(state.owner, binary="kairos-market-cli").command(arguments)
+    )
 
 
 def load_datasets(state: Any) -> dict[str, Any]:
@@ -315,8 +459,6 @@ def observation_renderable(value: Any) -> RenderableType:
     if data_type in {"order-book", "order_book"}:
         return _order_book_renderable(value, symbol=symbol, provider=provider)
     rows = Table.grid(padding=(0, 2))
-    rows.add_column(style="dim", no_wrap=True)
-    rows.add_column(style="bold")
     fields = {
         "quote": (
             ("买价", "bid_price"),
@@ -336,14 +478,36 @@ def observation_renderable(value: Any) -> RenderableType:
     }.get(data_type)
     if fields is None:
         return Pretty(dict(value), expand_all=True)
-    for label, key in fields:
-        field = value.get(key)
-        if field is not None:
-            rows.add_row(label, str(field))
+    if data_type == "quote":
+        rows.add_column(style="dim", no_wrap=True)
+        rows.add_column(style="bold green", justify="right")
+        rows.add_column(style="dim", no_wrap=True)
+        rows.add_column(style="bold red", justify="right")
+        rows.add_row(
+            "买价",
+            str(value.get("bid_price") or "—"),
+            "卖价",
+            str(value.get("ask_price") or "—"),
+        )
+        rows.add_row(
+            "买量",
+            str(value.get("bid_quantity") or "—"),
+            "卖量",
+            str(value.get("ask_quantity") or "—"),
+        )
+        if value.get("last_price") is not None:
+            rows.add_row("最新", str(value["last_price"]), "", "")
+    else:
+        rows.add_column(style="dim", no_wrap=True)
+        rows.add_column(style="bold")
+        for label, key in fields:
+            field = value.get(key)
+            if field is not None:
+                rows.add_row(label, str(field))
     heading = Text()
     heading.append(symbol, style="bold cyan")
     heading.append(f"   {data_type.upper()}", style="dim")
-    metadata = Text(f"{provider}  ·  {_observation_time(value)}", style="dim")
+    metadata = _observation_metadata(value, provider)
     return Panel(
         Group(heading, Text(""), rows, Text(""), metadata),
         border_style="cyan",
@@ -373,7 +537,7 @@ def _order_book_renderable(
     heading = Text()
     heading.append(symbol, style="bold cyan")
     heading.append("   ORDER BOOK", style="dim")
-    metadata = Text(f"{provider}  ·  {_observation_time(value)}", style="dim")
+    metadata = _observation_metadata(value, provider)
     return Panel(
         Group(heading, Text(""), book, Text(""), metadata),
         border_style="cyan",
@@ -399,7 +563,7 @@ def route_diagnostic_renderable(
 
 
 def _observation_time(value: Mapping[str, Any]) -> str:
-    raw = value.get("observed_at_unix_nanos") or value.get("event_at_unix_nanos")
+    raw = _observation_nanos(value)
     if raw is None:
         return "时间未知"
     try:
@@ -407,6 +571,61 @@ def _observation_time(value: Mapping[str, Any]) -> str:
     except (TypeError, ValueError, OSError):
         return str(raw)
     return instant.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _observation_metadata(value: Mapping[str, Any], provider: str) -> RenderableType:
+    details = Table.grid(padding=(0, 2))
+    details.add_column(style="dim", no_wrap=True)
+    details.add_column(style="dim")
+    source_mode = {
+        "provider-direct": "Provider 直连",
+        "workspace-view": "Workspace 当前视图",
+        "local-replay": "本地回放",
+        "local-file": "本地文件",
+        "derived": "派生结果",
+    }.get(str(value.get("_source_mode") or ""), "来源模式未知")
+    transport = str(value.get("_transport") or "").strip()
+    source = " · ".join(part for part in (provider, transport, source_mode) if part)
+    details.add_row("来源", source)
+    observed = _observation_nanos(value)
+    if observed is not None:
+        details.add_row("市场时间", _format_unix_nanos(observed))
+    fetched = value.get("_fetched_at_unix_nanos")
+    if fetched is not None:
+        details.add_row("获取时间", _format_unix_nanos(fetched))
+    if observed is not None and fetched is not None:
+        try:
+            age_seconds = max(0.0, (int(fetched) - int(observed)) / 1_000_000_000)
+        except (TypeError, ValueError):
+            pass
+        else:
+            details.add_row("数据年龄", _format_age(age_seconds))
+    return details
+
+
+def _observation_nanos(value: Mapping[str, Any]) -> Any:
+    return (
+        value.get("observed_at_unix_nanos")
+        or value.get("event_at_unix_nanos")
+        or value.get("opened_at_unix_nanos")
+        or value.get("source_observed_at_unix_nanos")
+    )
+
+
+def _format_unix_nanos(raw: Any) -> str:
+    try:
+        instant = datetime.fromtimestamp(int(raw) / 1_000_000_000, tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return str(raw)
+    return instant.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _format_age(seconds: float) -> str:
+    if seconds < 1:
+        return f"{seconds * 1_000:.0f} 毫秒"
+    if seconds < 60:
+        return f"{seconds:.1f} 秒"
+    return f"{seconds / 60:.1f} 分钟"
 
 
 def _history_time_millis(value: str, *, end_of_day: bool) -> int:
@@ -425,13 +644,18 @@ __all__ = [
     "MarketFilePromptState",
     "MarketRouteView",
     "execute_file_action",
+    "diagnostic_command",
+    "file_command",
+    "file_result_renderable",
     "load_observation",
     "load_datasets",
     "load_routes",
+    "observation_command",
     "observation_renderable",
     "provider_actions",
     "preview_file_action",
     "route_diagnostic_renderable",
+    "route_command",
     "run_diagnostic",
     "selected_market_actions",
 ]

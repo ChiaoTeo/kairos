@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
@@ -19,7 +20,11 @@ from textual.screen import Screen
 from textual.widgets import Input, Static
 from textual.worker import Worker
 
-from kairospy.surface.presentation import redact_text, redact_value
+from kairospy.surface.presentation import (
+    redact_cli_arguments,
+    redact_text,
+    redact_value,
+)
 from ..widgets import (
     ActionToken,
     ActivityStream,
@@ -41,6 +46,7 @@ from .effects import (
     AppendActivity,
     RefreshLaunchControl,
     RefreshMarketControl,
+    RefreshOperationsLogs,
     RunOperation,
     ScreenEffect,
     SetInteraction,
@@ -99,6 +105,7 @@ class CommandLineScreen(Screen[None]):
         self._running_task: RunningTask | None = None
         self._attach_refresh_worker: Worker[Any] | None = None
         self._market_refresh_worker: Worker[Any] | None = None
+        self._operations_log_worker: Worker[Any] | None = None
         self.session = GuidedSession()
 
     @property
@@ -136,6 +143,7 @@ class CommandLineScreen(Screen[None]):
         self._show_context()
         self.app.set_focus(self._input())
         self.set_interval(1.0, self._refresh_launch_attach)
+        self.set_interval(1.0, self._refresh_operations_logs)
         self.set_interval(2.0, self._refresh_market_control)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -306,9 +314,11 @@ class CommandLineScreen(Screen[None]):
 
     def _dispatch(self, command: str, arguments: tuple[str, ...]) -> None:
         if command in {"home", "/"}:
+            self._finish_operations_logs()
             self.session.home()
             self._show_context()
         elif command in {"exit", "quit", "q"}:
+            self._finish_operations_logs()
             self.workbench_app.action_quit()
         elif command in {"back", "b"}:
             self.action_back()
@@ -444,6 +454,8 @@ class CommandLineScreen(Screen[None]):
             self.session.reset_prompt()
             self._show_context()
             return
+        if self.session.context[:2] == ("operations", "service-logs"):
+            self._finish_operations_logs()
         if not go_back(self.session):
             self._show_context()
             self._set_status("当前已经在首页")
@@ -498,6 +510,10 @@ class CommandLineScreen(Screen[None]):
 
         output = self._output()
         output.pause_follow()
+        if self.session.context[:2] == ("operations", "service-logs"):
+            buffer = self.session.operations.live_buffer
+            if buffer is not None:
+                buffer.pause()
         output.scroll_page_up(animate=False)
 
     def action_scroll_output_down(self) -> None:
@@ -510,6 +526,10 @@ class CommandLineScreen(Screen[None]):
 
         output = self._output()
         output.pause_follow()
+        if self.session.context[:2] == ("operations", "service-logs"):
+            buffer = self.session.operations.live_buffer
+            if buffer is not None:
+                buffer.pause()
         output.scroll_up(animate=False)
 
     def action_scroll_output_line_down(self) -> None:
@@ -521,6 +541,15 @@ class CommandLineScreen(Screen[None]):
         """Return to the newest output and resume automatic following."""
 
         self._output().resume_follow()
+        if self.session.context[:2] == ("operations", "service-logs"):
+            buffer = self.session.operations.live_buffer
+            if buffer is not None:
+                buffer.resume()
+                self._apply_effects(
+                    product_flows.operations.log_control_effects(
+                        self.session, "实时日志继续跟随"
+                    )
+                )
 
     def action_cancel_pending(self) -> None:
         interaction = self.session.interaction
@@ -662,8 +691,11 @@ class CommandLineScreen(Screen[None]):
 
     def _start_operation(self, spec: OperationSpec) -> None:
         equivalent = spec.equivalent_command
+        safe_equivalent = redact_cli_arguments(equivalent) if equivalent else None
         arguments = (
-            equivalent[1:] if equivalent and equivalent[:1] == ("kairos",) else ()
+            safe_equivalent[1:]
+            if safe_equivalent and safe_equivalent[:1] == ("kairos",)
+            else ()
         )
         if self.workbench_app.transcript.claim_operation(spec.operation_id):
             self.workbench_app.transcript.record(
@@ -672,8 +704,10 @@ class CommandLineScreen(Screen[None]):
                 operation_id=spec.operation_id,
                 action=spec.action_name,
                 display=spec.audit_summary,
-                arguments=list(_redact_arguments(arguments)),
-                equivalent_command=shlex.join(equivalent) if equivalent else None,
+                arguments=list(arguments),
+                equivalent_command=(
+                    shlex.join(safe_equivalent) if safe_equivalent else None
+                ),
             )
             self.workbench_app.transcript.record(
                 "operation_started",
@@ -697,10 +731,24 @@ class CommandLineScreen(Screen[None]):
         )
         self._running_task = RunningTask(spec, worker)
 
-    def _apply_effects(self, effects: tuple[ScreenEffect, ...]) -> None:
+    def _apply_effects(
+        self,
+        effects: tuple[ScreenEffect, ...],
+        operation: OperationSpec | None = None,
+    ) -> None:
         for effect in effects:
             if isinstance(effect, AppendActivity):
-                self._output().append_activity(effect.activity)
+                activity = effect.activity
+                if (
+                    operation is not None
+                    and activity.activity_id == operation.operation_id
+                    and activity.equivalent_command is None
+                ):
+                    activity = replace(
+                        activity,
+                        equivalent_command=operation.equivalent_command,
+                    )
+                self._output().append_activity(activity)
                 self.query_one("#activity-empty", Static).display = False
             elif isinstance(effect, SetInteraction):
                 self.session.interaction = effect.interaction
@@ -724,6 +772,22 @@ class CommandLineScreen(Screen[None]):
                 self._sync_input_to_interaction(self.session.interaction)
                 self._sync_context_chrome()
                 self._refresh_launch_attach(force=effect.force)
+            elif isinstance(effect, RefreshOperationsLogs):
+                component = self.session.operations.selected_service or "服务"
+                output = self._output()
+                if effect.reset_view:
+                    if output.live_title is None:
+                        output.begin_live_stream(f"{component} 日志 · 跟随中")
+                    else:
+                        output.clear_live_stream()
+                    self.query_one("#activity-empty", Static).display = False
+                buffer = self.session.operations.live_buffer
+                if buffer is not None and buffer.following:
+                    output.resume_follow()
+                else:
+                    output.pause_follow()
+                if effect.force:
+                    self._refresh_operations_logs(force=True)
         self._report_unseen_activity()
 
     def _report_unseen_activity(self) -> None:
@@ -845,6 +909,88 @@ class CommandLineScreen(Screen[None]):
             exclusive=True,
             exit_on_error=False,
         )
+
+    def _refresh_operations_logs(self, *, force: bool = False) -> None:
+        if self.session.context[:2] != ("operations", "service-logs"):
+            return
+        if self._operations_log_worker is not None:
+            return
+        operation = product_flows.operations.service_log_operation(
+            self.workbench_app.state, self.session
+        )
+        if operation is None:
+            return
+        self._operations_log_worker = self.run_worker(
+            operation,
+            name="operations-service-logs",
+            group="operations-service-logs",
+            thread=True,
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    def _render_operations_logs(self, result: Any) -> None:
+        if self.session.context[:2] != ("operations", "service-logs"):
+            return
+        buffer = self.session.operations.live_buffer
+        if buffer is None:
+            return
+        raw_lines = result.get("lines", ()) if isinstance(result, Mapping) else ()
+        lines = tuple(str(line) for line in raw_lines)
+        generation = (
+            str(result["generation"])
+            if isinstance(result, Mapping) and result.get("generation") is not None
+            else None
+        )
+        byte_size = int(result.get("size") or 0) if isinstance(result, Mapping) else 0
+        rotated = (
+            self.session.operations.log_generation is not None
+            and generation is not None
+            and generation != self.session.operations.log_generation
+        )
+        truncated = byte_size < self.session.operations.log_size
+        seen = () if rotated or truncated else self.session.operations.source_tail
+        overlap = 0
+        for size in range(min(len(seen), len(lines)), 0, -1):
+            if seen[-size:] == lines[:size]:
+                overlap = size
+                break
+        new_lines = lines[overlap:]
+        status = self.session.operations.selected_service_status
+        if isinstance(result, Mapping) and result.get("path"):
+            buffer.full_log_path = Path(str(result["path"]))
+        elif status is not None and status.raw.get("log_file"):
+            buffer.full_log_path = Path(str(status.raw["log_file"]))
+        buffer.extend(new_lines)
+        self.session.operations.source_tail = lines[-buffer.capacity :]
+        self.session.operations.log_generation = generation
+        self.session.operations.log_size = byte_size
+        self.session.operations.received_lines += len(new_lines)
+        self.session.operations.warning_lines += sum(
+            1 for line in new_lines if "warn" in line.lower() or "error" in line.lower()
+        )
+        output = self._output()
+        if output.live_title is None:
+            component = self.session.operations.selected_service or "服务"
+            output.begin_live_stream(f"{component} 日志 · 跟随中")
+        output.append_live_lines(new_lines, retained_lines=tuple(buffer.lines))
+        self._apply_effects(
+            product_flows.operations.log_control_effects(
+                self.session,
+                "实时日志 · 后台刷新中"
+                if buffer.following
+                else f"实时日志已暂停 · {buffer.unseen_lines} 行未读",
+            )
+        )
+
+    def _finish_operations_logs(self) -> None:
+        if self._operations_log_worker is not None:
+            self._operations_log_worker.cancel()
+            self._operations_log_worker = None
+        activity = product_flows.operations.finish_log_follow(self.session)
+        self._output().end_live_stream()
+        if activity is not None:
+            self._apply_effects((activity,))
 
     def _render_launch_attach_snapshot(self, result: Any) -> None:
         if not isinstance(result, Mapping):
@@ -973,6 +1119,20 @@ class CommandLineScreen(Screen[None]):
             elif event.state.name == "CANCELLED":
                 self._attach_refresh_worker = None
             return
+        if event.worker.group == "operations-service-logs":
+            if event.worker is not self._operations_log_worker:
+                return
+            if event.state.name == "SUCCESS":
+                self._operations_log_worker = None
+                self._render_operations_logs(event.worker.result)
+            elif event.state.name == "ERROR":
+                self._operations_log_worker = None
+                if self.session.context[:2] == ("operations", "service-logs"):
+                    self._write_error(str(event.worker.error))
+                    self._set_status("实时日志刷新失败 · 可重试或返回")
+            elif event.state.name == "CANCELLED":
+                self._operations_log_worker = None
+            return
         if event.worker.group != "guided-command":
             return
         running_task = self._running_task
@@ -990,7 +1150,7 @@ class CommandLineScreen(Screen[None]):
                 event.worker.result,
             )
             if effects is not None:
-                self._apply_effects(effects)
+                self._apply_effects(effects, running_task.spec)
                 return
             self._append_terminal_activity(
                 running_task.spec,
@@ -1010,7 +1170,7 @@ class CommandLineScreen(Screen[None]):
                 error,
             )
             if effects is not None:
-                self._apply_effects(effects)
+                self._apply_effects(effects, running_task.spec)
             else:
                 self._append_terminal_activity(
                     running_task.spec,
@@ -1031,7 +1191,7 @@ class CommandLineScreen(Screen[None]):
                 running_task.spec,
             )
             if effects is not None:
-                self._apply_effects(effects)
+                self._apply_effects(effects, running_task.spec)
             else:
                 self._append_terminal_activity(
                     running_task.spec,
@@ -1141,6 +1301,7 @@ class CommandLineScreen(Screen[None]):
                 body=body,
                 copy_text=redact_text(rendered_text),
                 audit_summary=spec.audit_summary,
+                equivalent_command=spec.equivalent_command,
             )
         )
 
@@ -1225,7 +1386,7 @@ def _redact_result(value: Any) -> Any:
         command = value.get("command")
         if isinstance(command, (list, tuple)):
             redacted["command"] = list(
-                _redact_arguments(tuple(str(part) for part in command))
+                redact_cli_arguments(tuple(str(part) for part in command))
             )
         return redacted
     return redact_value(value)
@@ -1265,36 +1426,3 @@ def _running_status(kind: ResultKind) -> str:
         ResultKind.OBSERVE: "正在读取系统状态…",
         ResultKind.MARKET: "正在搜索市场标的…",
     }.get(kind, "正在执行…")
-
-
-def _redact_arguments(arguments: tuple[str, ...]) -> tuple[str, ...]:
-    """Redact values paired with credential-shaped CLI flags."""
-
-    sensitive_names = {
-        "api-key",
-        "apikey",
-        "authorization",
-        "bearer",
-        "credential",
-        "password",
-        "secret",
-        "token",
-    }
-    redacted: list[str] = []
-    hide_next = False
-    for argument in arguments:
-        if hide_next:
-            redacted.append("<redacted>")
-            hide_next = False
-            continue
-        normalized = argument.lstrip("-").lower().replace("_", "-")
-        name = normalized.partition("=")[0]
-        if name in sensitive_names:
-            if "=" in argument:
-                redacted.append(f"{argument.partition('=')[0]}=<redacted>")
-            else:
-                redacted.append(argument)
-                hide_next = True
-            continue
-        redacted.append(redact_text(argument))
-    return tuple(redacted)

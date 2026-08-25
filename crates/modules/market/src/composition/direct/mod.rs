@@ -78,7 +78,13 @@ pub fn compose_standalone_market(
         CliMarketOnceProvider::BinanceSpotRest => {
             let configured = configured_binding(workspace_root, request.connection)?;
             let configured_endpoint = match configured {
-                Some(MarketProviderBinding::BinanceSpot { endpoint, .. }) => endpoint,
+                Some(MarketProviderBinding::BinanceSpot {
+                    connection_id,
+                    endpoint,
+                    ..
+                }) => provider_profile(workspace_root, connection_id.as_deref())?
+                    .map(|value| value.endpoint)
+                    .or(endpoint),
                 _ => None,
             };
             DirectMarketConnection::BinanceSpot(BinanceSpotRestConnection::new(
@@ -106,6 +112,7 @@ pub fn compose_standalone_market(
                 })
                 .ok_or("Binance equity Market source does not exist")?;
             let MarketProviderBinding::BinanceEquity {
+                connection_id,
                 credential_id,
                 endpoint,
                 ..
@@ -113,7 +120,13 @@ pub fn compose_standalone_market(
             else {
                 return Err("selected Market source is not Binance equity".into());
             };
-            let requested_credential = request.credential_id.as_deref().unwrap_or(&credential_id);
+            let profile = provider_profile(Some(workspace.root()), connection_id.as_deref())?;
+            let requested_credential = request
+                .credential_id
+                .as_deref()
+                .or_else(|| profile.as_ref().map(|value| value.credential_id.as_str()))
+                .or(credential_id.as_deref())
+                .ok_or("Binance equity source requires a connection or credential")?;
             let credentials = CredentialStore::for_workspace(&workspace)?;
             let credential = credentials
                 .find_provider("binance", Some(requested_credential))
@@ -130,6 +143,7 @@ pub fn compose_standalone_market(
                     endpoint: request
                         .endpoint
                         .clone()
+                        .or_else(|| profile.as_ref().map(|value| value.endpoint.clone()))
                         .or(endpoint)
                         .unwrap_or_else(|| "https://api.binance.com".into()),
                     credential: Some(BinanceCredential {
@@ -172,6 +186,7 @@ pub fn compose_standalone_market(
                 .ok_or("Massive equity Market source does not exist")?;
             let MarketProviderBinding::Massive {
                 product: MassiveMarketProduct::Equity,
+                connection_id,
                 credential_id,
                 endpoint,
                 ..
@@ -179,12 +194,15 @@ pub fn compose_standalone_market(
             else {
                 return Err("selected Market source is not Massive equity".into());
             };
+            let profile = provider_profile(Some(workspace.root()), connection_id.as_deref())?;
+            let selected_credential = request
+                .credential_id
+                .as_deref()
+                .or_else(|| profile.as_ref().map(|value| value.credential_id.as_str()))
+                .or(credential_id.as_deref());
             let credentials = CredentialStore::for_workspace(&workspace)?;
             let api_key = credentials
-                .find_provider(
-                    "massive",
-                    request.credential_id.as_deref().or(Some(&credential_id)),
-                )
+                .find_provider("massive", selected_credential)
                 .and_then(|credential| credential.value("api_key").cloned())
                 .ok_or("Massive workspace credential does not exist")?;
             DirectMarketConnection::MassiveEquity(MassiveRestConnection::new(
@@ -194,6 +212,7 @@ pub fn compose_standalone_market(
                     endpoint: request
                         .endpoint
                         .clone()
+                        .or_else(|| profile.as_ref().map(|value| value.endpoint.clone()))
                         .or(endpoint)
                         .unwrap_or_else(|| "https://api.massive.com".into()),
                     api_key,
@@ -222,6 +241,24 @@ fn configured_binding(
         .find(|binding| {
             binding.enabled() && direct_source(binding).is_some_and(|value| value.0 == connection)
         }))
+}
+
+fn provider_profile(
+    workspace_root: Option<&Path>,
+    connection_id: Option<&str>,
+) -> Result<
+    Option<kairos_integration::composition::ProviderConnectionProfile>,
+    Box<dyn std::error::Error>,
+> {
+    let Some(connection_id) = connection_id else {
+        return Ok(None);
+    };
+    let workspace_root = workspace_root.ok_or("provider connection requires a Workspace")?;
+    let root =
+        kairos_integration::composition::ProviderConnectionProfile::canonical_root(workspace_root);
+    Ok(Some(
+        kairos_integration::composition::ProviderConnectionProfile::load(&root, connection_id)?,
+    ))
 }
 
 fn provider_name(binding: &MarketProviderBinding) -> Option<&'static str> {

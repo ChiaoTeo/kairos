@@ -8,6 +8,7 @@ from kairospy.system.apps.launch.application.readiness import (
     ResourceKind,
     ResourceState,
     RunReadinessApplication,
+    RuntimeCapability,
     normalize_error_category,
     project_resource_readiness,
 )
@@ -114,6 +115,50 @@ def test_overview_treats_missing_notification_as_optional_and_required_kinds_as_
     assert default["needs_action"] == 0
     assert required["ready"] is False
     assert required["missing_required_kinds"] == ["account", "market_data"]
+
+
+def test_capability_readiness_does_not_require_trade_for_readonly_run() -> None:
+    readonly = project_resource_readiness(
+        ResourceKind.ACCOUNT,
+        {
+            "account_id": "binance-main",
+            "broker": "binance",
+            "environment": "live",
+            "segments": ["spot"],
+            "configured": True,
+            "verification_status": "verified",
+            "capabilities": ["read", "trade"],
+            "access_bindings": [
+                {
+                    "purpose": "account-read",
+                    "credential_id": "binance-read",
+                    "enabled": True,
+                }
+            ],
+        },
+    )
+
+    assert readonly.capabilities == (
+        RuntimeCapability.ACCOUNT_READ,
+        RuntimeCapability.ORDER_QUERY,
+    )
+    assert RuntimeCapability.ORDER_TRADE not in readonly.capabilities
+
+
+def test_market_capabilities_are_reported_independently() -> None:
+    connection = project_resource_readiness(
+        ResourceKind.MARKET_DATA,
+        {
+            "connection_id": "okx-swap",
+            "configured": True,
+            "enabled": True,
+            "verification_status": "verified",
+            "purposes": ["market-query", "market-stream"],
+            "capabilities_verified": ["market-query"],
+        },
+    )
+
+    assert connection.capabilities == (RuntimeCapability.MARKET_QUERY,)
 
 
 def test_readiness_includes_published_and_draft_launch_references(

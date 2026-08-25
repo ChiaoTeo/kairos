@@ -6,14 +6,14 @@ from ..widgets import ActionItem
 
 
 HOME_ACTIONS = (
-    ActionItem("market", "查看市场行情", "报价 · 历史行情 · 行情回放", "1"),
-    ActionItem("reference", "查找市场标的", "股票 · 期货 · 期权 · 交易市场", "2"),
-    ActionItem("strategy", "配置并运行策略", "选择策略 · 配置参数 · 启动", "3"),
+    ActionItem("market", "查看市场行情", "查看实时报价、历史行情和行情回放", "1"),
+    ActionItem("reference", "搜索交易标的", "查找股票、期货、期权和交易所", "2"),
+    ActionItem("strategy", "创建并运行策略", "选择策略、设置参数并启动运行", "3"),
     ActionItem(
-        "resources", "完成运行准备", "账户 · 市场数据 · AI 模型 · 通知提醒", "4"
+        "resources", "运行前检查", "检查账户、行情、模型连接和通知是否就绪", "4"
     ),
-    ActionItem("research", "准备数据研究", "研究数据 · 回测数据", "5"),
-    ActionItem("operations", "维护系统", "工作区 · 后台进程 · 问题排查", "6"),
+    ActionItem("research", "数据与回测", "准备研究数据并运行策略回测", "5"),
+    ActionItem("operations", "系统维护", "管理工作区和后台服务，诊断运行问题", "6"),
 )
 
 MARKET_ACTIONS = (
@@ -49,7 +49,7 @@ STRATEGY_ACTIONS = (
 RESOURCE_ACTIONS = (
     ActionItem("accounts", "交易账户", "账户身份、权限与连接验证", "1"),
     ActionItem("data", "市场数据", "Reference 与行情数据连接", "2"),
-    ActionItem("models", "AI 模型", "模型服务、凭据与可用模型", "3"),
+    ActionItem("models", "模型连接", "模型服务、Endpoint、凭据与可用模型", "3"),
     ActionItem("notifications", "通知提醒", "飞书、Telegram 等通知目标", "4"),
     ActionItem("check", "检查所有连接", "汇总未配置、待验证与失败原因", "5"),
 )
@@ -60,14 +60,12 @@ RESEARCH_ACTIONS = (
 )
 
 OPERATIONS_ACTIONS = (
-    ActionItem("project", "项目工作区", "创建、检查并安装项目模板", "1"),
-    ActionItem("observe", "实时观测", "组件、Launch 与市场状态总览", "2"),
-    ActionItem("services", "系统服务", "管理 Reference 与 Market 进程", "3"),
-    ActionItem("doctor", "诊断系统", "检查 socket、健康文件与进程锁", "4"),
-    ActionItem("repair", "修复 stale 资源", "仅清理可证明已失效的运行资源", "5"),
-    ActionItem("config", "高级配置", "路径、配置、Profile 与模型连接", "6"),
-    ActionItem("workspace", "Workspace 信息", "查看当前工作区路径和身份", "8"),
-    ActionItem("business", "业务工具", "Risk、Capital 与 Provider 集成", "9"),
+    ActionItem("project", "工作区管理", "创建、检查或安装工作区模板", "1"),
+    ActionItem("observe", "运行状态", "查看后台服务、启动任务和行情状态", "2"),
+    ActionItem("services", "后台服务", "启动、停止或重启基础数据与行情服务", "3"),
+    ActionItem("doctor", "问题诊断", "检查服务连接、健康状态和进程占用", "4"),
+    ActionItem("config", "高级设置", "配置路径、运行方案和模型连接", "5"),
+    ActionItem("business", "风控与集成工具", "查看风控、资金与外部服务集成", "6"),
 )
 
 SECTION_ACTIONS: dict[str, tuple[ActionItem, ...]] = {

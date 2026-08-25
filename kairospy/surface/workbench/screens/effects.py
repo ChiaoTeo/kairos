@@ -43,6 +43,14 @@ class RefreshLaunchControl:
     force: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class RefreshOperationsLogs:
+    """Ask the Textual adapter to refresh a service's transient log stream."""
+
+    force: bool = True
+    reset_view: bool = False
+
+
 ScreenEffect = (
     AppendActivity
     | SetInteraction
@@ -50,6 +58,7 @@ ScreenEffect = (
     | SetStatus
     | RefreshMarketControl
     | RefreshLaunchControl
+    | RefreshOperationsLogs
 )
 
 
@@ -57,6 +66,7 @@ __all__ = [
     "AppendActivity",
     "RefreshMarketControl",
     "RefreshLaunchControl",
+    "RefreshOperationsLogs",
     "RunOperation",
     "ScreenEffect",
     "SetInteraction",

@@ -11,6 +11,7 @@ pub enum MarketProviderBinding {
     BinanceSpot {
         #[serde(default = "enabled_by_default")]
         enabled: bool,
+        connection_id: Option<String>,
         #[serde(default)]
         transport: BinanceSpotTransport,
         endpoint: Option<String>,
@@ -20,7 +21,8 @@ pub enum MarketProviderBinding {
     BinanceEquity {
         #[serde(default = "enabled_by_default")]
         enabled: bool,
-        credential_id: String,
+        connection_id: Option<String>,
+        credential_id: Option<String>,
         endpoint: Option<String>,
         #[serde(default = "default_source_snapshot_interval_ms")]
         snapshot_interval_ms: u64,
@@ -28,6 +30,7 @@ pub enum MarketProviderBinding {
     BinanceDerivatives {
         #[serde(default = "enabled_by_default")]
         enabled: bool,
+        connection_id: Option<String>,
         product: BinanceDerivativeProduct,
         #[serde(default)]
         transport: BinanceDerivativeTransport,
@@ -38,13 +41,15 @@ pub enum MarketProviderBinding {
     Massive {
         #[serde(default = "enabled_by_default")]
         enabled: bool,
+        connection_id: Option<String>,
         product: MassiveMarketProduct,
-        credential_id: String,
+        credential_id: Option<String>,
         endpoint: Option<String>,
     },
     Okx {
         #[serde(default = "enabled_by_default")]
         enabled: bool,
+        connection_id: Option<String>,
         instrument_type: OkxInstrumentType,
         #[serde(default)]
         transport: PublicMarketTransport,
@@ -142,6 +147,17 @@ impl MarketProviderBinding {
             | Self::Okx { enabled, .. }
             | Self::Hyperliquid { enabled, .. }
             | Self::Ibkr { enabled, .. } => *enabled,
+        }
+    }
+
+    pub fn connection_id(&self) -> Option<&str> {
+        match self {
+            Self::BinanceSpot { connection_id, .. }
+            | Self::BinanceEquity { connection_id, .. }
+            | Self::BinanceDerivatives { connection_id, .. }
+            | Self::Massive { connection_id, .. }
+            | Self::Okx { connection_id, .. } => connection_id.as_deref(),
+            Self::Hyperliquid { .. } | Self::Ibkr { .. } => None,
         }
     }
 

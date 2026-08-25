@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from time import time_ns
 from typing import Any
 from uuid import uuid4
 
@@ -34,13 +35,18 @@ from .actions import (
     MARKET_CONTROL_ACTIONS,
     MarketFilePromptState,
     MarketRouteView,
+    diagnostic_command,
     execute_file_action,
+    file_command,
+    file_result_renderable,
     load_datasets,
     load_observation,
     load_routes,
+    observation_command,
     observation_renderable,
     preview_file_action,
     route_diagnostic_renderable,
+    route_command,
     run_diagnostic,
     selected_market_actions,
 )
@@ -49,6 +55,7 @@ from ..reference.actions import load_records
 from .workspace import (
     WORKSPACE_MARKET_ACTIONS,
     WorkspaceMarketPromptState,
+    equivalent_command as workspace_market_command,
     execute as execute_workspace_market,
     preview as preview_workspace_market,
 )
@@ -301,19 +308,38 @@ def handle_success(
         return (_activity(spec, body), *_choice(state, session, status="诊断已完成"))
 
     if kind is ResultKind.MARKET_FILE:
+        prompt = session.market.file_prompt
         session.market.file_prompt = None
         session.context = ("market", "selected")
         session.visible_records = session.market.records
-        body = Panel(Pretty(result, expand_all=True), title="Market 文件操作结果")
+        body = (
+            file_result_renderable(result, prompt)
+            if isinstance(prompt, MarketFilePromptState)
+            else Panel(Pretty(result, expand_all=True), title="Market 文件操作结果")
+        )
         return (
             _activity(spec, body),
             *_choice(state, session, status="文件操作已完成"),
         )
 
     if kind is ResultKind.WORKSPACE_MARKET:
+        prompt = session.market.workspace_prompt
         session.market.workspace_prompt = None
         session.context = ("market", "connected")
-        body = Panel(Pretty(result, expand_all=True), title="Workspace Market 结果")
+        if (
+            isinstance(prompt, WorkspaceMarketPromptState)
+            and prompt.action == "snapshot"
+            and isinstance(result, Mapping)
+        ):
+            snapshot = dict(result)
+            snapshot.setdefault("data_type", prompt.values["kind"])
+            snapshot.setdefault("symbol", prompt.values["market-id"])
+            snapshot.setdefault("provider", prompt.values["provider"] or "—")
+            snapshot["_source_mode"] = "workspace-view"
+            snapshot["_fetched_at_unix_nanos"] = time_ns()
+            body = observation_renderable(snapshot)
+        else:
+            body = Panel(Pretty(result, expand_all=True), title="Workspace Market 结果")
         return (_activity(spec, body), *_choice(state, session, status="操作已完成"))
 
     return None
@@ -456,18 +482,8 @@ def _handle_market_context(
                 SetInteraction(_market_interaction(state, session)),
                 SetStatus("当前行情快照已保存到活动历史"),
             )
-        if action in {"validate", "universe"}:
-            return (
-                RunOperation(
-                    _spec(
-                        action_name=f"market.{action}",
-                        summary=f"{record_label(market)} · 诊断 {action}",
-                        route=ResultRoute(ResultKind.MARKET_DIAGNOSTIC, action),
-                        operation=lambda: run_diagnostic(state, market, action),
-                        status="正在诊断市场定义…",
-                    )
-                ),
-            )
+        if action == "diagnose":
+            return (_run_market_diagnostic(state, session),)
         session.market.observation = action
         session.market.snapshot = None
         session.market.refresh_enabled = False
@@ -479,6 +495,7 @@ def _handle_market_context(
                     route=ResultRoute(ResultKind.MARKET_ROUTES),
                     operation=lambda: load_routes(state, market, action),
                     status="正在查找行情数据源…",
+                    equivalent_command=route_command(state, market, action),
                 )
             ),
         )
@@ -518,6 +535,8 @@ def _handle_market_context(
             prompt = MarketFilePromptState(session.market.purpose, record)
             session.market.file_prompt = prompt
             return _advance_file_prompt(state, session, prompt)
+        if session.market.purpose == "diagnostics":
+            return (_run_market_diagnostic(state, session),)
         return _choice(
             state,
             session,
@@ -600,6 +619,24 @@ def _run_observation(state: Any, session: GuidedSession, provider: str) -> RunOp
             route=ResultRoute(ResultKind.MARKET_OBSERVATION),
             operation=lambda: load_observation(state, market, observation, provider),
             status=f"正在通过 {provider} 读取行情…",
+            equivalent_command=observation_command(
+                state, market, observation, provider
+            ),
+        )
+    )
+
+
+def _run_market_diagnostic(state: Any, session: GuidedSession) -> RunOperation:
+    market = session.market.selected
+    assert market is not None
+    return RunOperation(
+        _spec(
+            action_name="market.diagnose",
+            summary=f"{record_label(market)} · 市场诊断",
+            route=ResultRoute(ResultKind.MARKET_DIAGNOSTIC),
+            operation=lambda: run_diagnostic(state, market),
+            status="正在诊断当前市场…",
+            equivalent_command=diagnostic_command(state, market),
         )
     )
 
@@ -665,6 +702,7 @@ def _advance_file_prompt(
         route=ResultRoute(ResultKind.MARKET_FILE),
         operation=operation,
         status=f"正在执行 Market {prompt.action}…",
+        equivalent_command=file_command(state, prompt),
     )
     return _confirm_or_run(
         state,
@@ -704,6 +742,7 @@ def _advance_workspace_prompt(
         route=ResultRoute(ResultKind.WORKSPACE_MARKET),
         operation=operation,
         status=f"正在执行 Workspace Market {prompt.action}…",
+        equivalent_command=workspace_market_command(state, prompt),
     )
     return _confirm_or_run(
         state,
@@ -775,6 +814,7 @@ def _spec(
     route: ResultRoute,
     operation: Any,
     status: str,
+    equivalent_command: tuple[str, ...] | None = None,
 ) -> OperationSpec:
     return OperationSpec.create(
         action_name=action_name,
@@ -782,6 +822,7 @@ def _spec(
         route=route,
         operation=operation,
         running_status=status,
+        equivalent_command=equivalent_command,
     )
 
 

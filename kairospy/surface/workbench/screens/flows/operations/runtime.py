@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Mapping
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -20,6 +22,7 @@ from ....widgets import (
 from ...activity import ActivityKind, ActivityOutcome, ActivityRecord
 from ...effects import (
     AppendActivity,
+    RefreshOperationsLogs,
     RunOperation,
     ScreenEffect,
     SetInteraction,
@@ -37,7 +40,6 @@ from .actions import (
     CONFIG_ACTIONS,
     PROFILE_ACTIONS,
     PROJECT_ACTIONS,
-    SERVICE_ACTIONS,
     ProjectPromptState,
     execute_config,
     execute_operation,
@@ -46,6 +48,14 @@ from .actions import (
     execute_service,
     list_services,
     mutate_profile,
+)
+from .views import (
+    LOG_FOLLOW_ACTIONS,
+    diagnostics_renderable,
+    service_actions,
+    service_status_view,
+    service_summary,
+    services_overview,
 )
 from ..resources.actions import list_records as list_resource_records
 from ...navigation import (
@@ -171,20 +181,23 @@ def handle_success(
 ) -> tuple[ScreenEffect, ...] | None:
     kind = spec.route.kind
     if kind is ResultKind.OPERATIONS_SERVICES:
-        records = tuple(result or ())
+        records = tuple(service_status_view(record) for record in (result or ()))
         session.context = ("operations", "services")
         visible = selection_records(
             records,
-            label=record_label,
-            description=record_description,
+            label=lambda record: record.component,
+            description=lambda record: f"{record.state_label} · {record.summary}",
         )
         session.visible_records = visible
+        session.operations.service_records = visible
         actions = tuple(
             ActionItem(str(i), record.label, record.description, str(i))
             for i, record in enumerate(visible, 1)
         )
         interaction = ChoiceInteraction(
-            title=context_label(session.context), actions=actions
+            title=context_label(session.context),
+            summary=services_overview(records),
+            actions=actions,
         )
         session.interaction = interaction
         return SetInteraction(interaction), SetStatus(
@@ -207,7 +220,24 @@ def handle_success(
         session.context = ("operations", "profiles")
     elif kind is ResultKind.BUSINESS:
         session.operations.business_prompt = None
-    body = Panel(Pretty(result, expand_all=True), title=title)
+    if kind is ResultKind.OPERATIONS and spec.route.qualifier == "service-status":
+        view = service_status_view(result)
+        session.operations.selected_service_status = view
+        body = service_summary(view)
+    elif (
+        kind is ResultKind.OPERATIONS and spec.route.qualifier == "service-diagnostics"
+    ):
+        current = session.operations.selected_service_status
+        raw = dict(current.raw) if current is not None else {}
+        if isinstance(result, Mapping):
+            raw.update(result)
+        raw.setdefault("component", session.operations.selected_service or "unknown")
+        body = diagnostics_renderable(service_status_view(raw))
+    elif kind is ResultKind.OPERATIONS and spec.route.qualifier == "service-logs":
+        lines = result.get("lines", ()) if isinstance(result, Mapping) else ()
+        body = Text("\n".join(str(line) for line in lines) or "当前没有日志。")
+    else:
+        body = Panel(Pretty(result, expand_all=True), title=title)
     return _activity(spec, body), *_choice(state, session, status="操作已完成")
 
 
@@ -217,6 +247,29 @@ def handle_failure(
     if spec.route.kind not in _KINDS:
         return None
     session.clear_result_flow(spec.route.kind)
+    if spec.route.qualifier in {
+        "service-status",
+        "service-diagnostics",
+        "service-logs",
+    }:
+        current = session.operations.selected_service_status
+        suggestion = (
+            current.recommendation
+            if current is not None
+            else "查看最近日志或技术诊断后重试。"
+        )
+        body = Text()
+        body.append(f"原因：{error}", style="red")
+        body.append(f"\n\n建议：{suggestion}", style="yellow")
+        return (
+            _activity(spec, body, ActivityOutcome.FAILURE),
+            *_choice(
+                state,
+                session,
+                body,
+                "操作失败 · 请选择恢复动作",
+            ),
+        )
     return (
         _activity(spec, Text(error, style="red"), ActivityOutcome.FAILURE),
         *_choice(
@@ -245,17 +298,51 @@ def _operations_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
     context = session.context
-    if context == ("operations", "service"):
+    if context[:2] == ("operations", "service-logs"):
+        component = session.operations.selected_service
+        buffer = session.operations.live_buffer
+        if component is None or buffer is None:
+            session.context = ("operations", "services")
+            return _choice(state, session, status="日志上下文已经失效")
+        action = action_id(LOG_FOLLOW_ACTIONS, command)
+        if action is None:
+            return None
+        if action == "pause":
+            if buffer.following:
+                buffer.pause()
+                status = "实时日志已暂停"
+            else:
+                buffer.resume()
+                status = "实时日志继续跟随"
+            return RefreshOperationsLogs(False), *log_control_effects(session, status)
+        if action == "clear":
+            buffer.clear_visible()
+            return RefreshOperationsLogs(False, True), *log_control_effects(
+                session, "当前日志窗口已清空"
+            )
+        return RefreshOperationsLogs(True), *log_control_effects(
+            session, "正在刷新实时日志"
+        )
+    if context[:2] == ("operations", "service"):
         component = session.operations.selected_service
         if component is None:
             session.enter("operations")
             return _choice(state, session)
-        action = action_id(SERVICE_ACTIONS, command)
+        action = action_id(
+            service_actions(session.operations.selected_service_status), command
+        )
         if action is None:
             return None
 
+        if action == "follow":
+            session.operations.start_logs(component, started_at=time.monotonic())
+            session.context = ("operations", "service-logs", component)
+            return RefreshOperationsLogs(True, True), *log_control_effects(
+                session, "实时日志 · 后台刷新中"
+            )
+
         def operation() -> Any:
-            if action in {"start", "stop", "restart"} and (
+            if action in {"start", "stop", "restart", "repair", "repair-start"} and (
                 state.dry_run or state.no_exec
             ):
                 return {"status": "preview", "component": component, "action": action}
@@ -266,9 +353,26 @@ def _operations_context(
             f"kairos system {action} --component {component}",
             ResultKind.OPERATIONS,
             operation,
+            qualifier=(
+                "service-diagnostics"
+                if action == "diagnostics"
+                else "service-logs"
+                if action == "logs"
+                else "service-status"
+            ),
+            running_status={
+                "start": f"正在启动 {component} · 创建进程并等待控制端点就绪…",
+                "stop": f"正在停止 {component} · 请求安全停止并释放运行资源…",
+                "restart": f"正在重启 {component} · 停止旧进程后等待新进程就绪…",
+                "repair": f"正在清理 {component} 的失效运行资源…",
+                "repair-start": f"正在清理并启动 {component}…",
+            }.get(action, "正在读取服务信息…"),
         )
         return _confirm_or_run(
-            state, session, spec, dangerous=action in {"start", "stop", "restart"}
+            state,
+            session,
+            spec,
+            dangerous=action in {"start", "stop", "restart", "repair", "repair-start"},
         )
     if context == ("operations", "project"):
         action = action_id(PROJECT_ACTIONS, command)
@@ -302,7 +406,7 @@ def _operations_context(
             return (
                 _run(
                     "resources.models.list",
-                    "查看 AI 模型连接",
+                    "查看模型连接",
                     ResultKind.RESOURCE_LIST,
                     lambda: list_resource_records(state, "models"),
                 ),
@@ -356,7 +460,8 @@ def _operations_context(
         record = _record_choice(session.visible_records, command)
         if record is None:
             return None
-        component = str(record.get("component") or "")
+        view = service_status_view(record)
+        component = view.component
         if not component:
             return _choice(
                 state,
@@ -365,9 +470,11 @@ def _operations_context(
                 "服务记录无效",
             )
         session.operations.selected_service = component
-        session.context = ("operations", "service")
+        session.operations.selected_service_status = view
+        session.visible_records = ()
+        session.context = ("operations", "service", component)
         return _standalone_activity(
-            component, Panel(Pretty(record, expand_all=True), title=component)
+            f"{component} 状态", service_summary(view)
         ), *_choice(state, session)
     action = action_id(SECTION_ACTIONS["operations"], command)
     if action is None:
@@ -381,7 +488,7 @@ def _operations_context(
                 state.refresh_snapshot,
             ),
         )
-    if action in {"doctor", "workspace"}:
+    if action == "doctor":
         return (
             _run(
                 f"operations.{action}",
@@ -390,29 +497,11 @@ def _operations_context(
                 lambda: execute_operation(state, action),
             ),
         )
-    if action == "repair":
-
-        def repair() -> Any:
-            if state.dry_run or state.no_exec:
-                return {"status": "preview", "action": "repair"}
-            return execute_operation(state, action)
-
-        return _confirm_or_run(
-            state,
-            session,
-            _spec(
-                "operations.repair",
-                "修复 stale 运行资源",
-                ResultKind.OPERATIONS,
-                repair,
-            ),
-            dangerous=True,
-        )
     if action == "services":
         return (
             _run(
                 "operations.services",
-                "查看系统服务",
+                "查看后台服务",
                 ResultKind.OPERATIONS_SERVICES,
                 lambda: list_services(state),
             ),
@@ -550,14 +639,20 @@ def _run(
 
 
 def _spec(
-    action: str, summary: str, kind: ResultKind, operation: Callable[[], Any]
+    action: str,
+    summary: str,
+    kind: ResultKind,
+    operation: Callable[[], Any],
+    *,
+    qualifier: str | None = None,
+    running_status: str = "正在执行…",
 ) -> OperationSpec:
     return OperationSpec.create(
         action_name=action,
         audit_summary=summary,
-        route=ResultRoute(kind),
+        route=ResultRoute(kind, qualifier),
         operation=operation,
-        running_status="正在执行…",
+        running_status=running_status,
     )
 
 
@@ -571,6 +666,62 @@ def _choice(
     )
     session.interaction = interaction
     return SetInteraction(interaction), SetStatus(status)
+
+
+def service_log_operation(
+    state: Any, session: GuidedSession
+) -> Callable[[], Any] | None:
+    """Return a finite tail read for the selected service log stream."""
+
+    component = session.operations.selected_service
+    if component is None or session.context[:2] != ("operations", "service-logs"):
+        return None
+    return lambda: execute_service(state, component, "log-tail")
+
+
+def log_control_effects(
+    session: GuidedSession, status: str
+) -> tuple[ScreenEffect, ...]:
+    component = session.operations.selected_service or "服务"
+    buffer = session.operations.live_buffer
+    if buffer is None:
+        detail = Text("等待首次日志刷新…", style="dim")
+        refreshing = False
+    else:
+        detail = Text(
+            f"可见 {len(buffer.lines)} 行 · 未读 {buffer.unseen_lines}"
+            f" · 已丢弃 {buffer.dropped_lines}\n"
+            f"完整日志 {buffer.full_log_path or '尚未生成'}",
+            style="dim",
+        )
+        refreshing = buffer.following
+    session.control(
+        f"{component} 实时日志",
+        detail,
+        LOG_FOLLOW_ACTIONS,
+        refreshing=refreshing,
+    )
+    return SetInteraction(session.interaction), SetStatus(status)
+
+
+def finish_log_follow(session: GuidedSession) -> AppendActivity | None:
+    """Close transient log state and retain one compact terminal summary."""
+
+    component = session.operations.selected_service
+    buffer = session.operations.live_buffer
+    started_at = session.operations.log_started_at
+    if component is None or buffer is None:
+        session.operations.reset_logs()
+        return None
+    duration = max(0.0, time.monotonic() - started_at) if started_at else 0.0
+    path = str(buffer.full_log_path) if buffer.full_log_path is not None else "尚未生成"
+    body = Text(
+        f"持续 {duration:.1f} 秒 · 接收 {session.operations.received_lines} 行"
+        f" · 警告 {session.operations.warning_lines} 行\n完整日志 {path}",
+        style="dim",
+    )
+    session.operations.reset_logs()
+    return _standalone_activity(f"已结束 {component} 日志跟随", body)
 
 
 def _record_choice(records: tuple[SelectionRecord, ...], value: str) -> object | None:

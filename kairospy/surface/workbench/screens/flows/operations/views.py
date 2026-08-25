@@ -1,0 +1,287 @@
+"""Operator-facing service state and renderables for System Maintenance."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+from rich.console import Group, RenderableType
+from rich.table import Table
+from rich.text import Text
+
+from ....widgets import ActionItem
+
+
+class ServiceDisplayState(StrEnum):
+    RUNNING = "running"
+    STARTING = "starting"
+    DEGRADED = "degraded"
+    STOPPED = "stopped"
+    UNRESPONSIVE = "unresponsive"
+    STALE = "stale"
+    START_FAILED = "start_failed"
+    UNKNOWN = "unknown"
+
+
+_STATE_COPY: dict[ServiceDisplayState, tuple[str, str, str]] = {
+    ServiceDisplayState.RUNNING: ("运行中", "green", "服务运行正常"),
+    ServiceDisplayState.STARTING: ("启动中", "cyan", "等待服务完成启动"),
+    ServiceDisplayState.DEGRADED: ("降级", "yellow", "服务可用，但部分能力异常"),
+    ServiceDisplayState.STOPPED: ("已停止", "cyan", "可以启动服务"),
+    ServiceDisplayState.UNRESPONSIVE: (
+        "无响应",
+        "red",
+        "进程仍在运行，但控制端点没有响应",
+    ),
+    ServiceDisplayState.STALE: (
+        "资源残留",
+        "yellow",
+        "进程已经退出，但运行资源尚未清理",
+    ),
+    ServiceDisplayState.START_FAILED: (
+        "启动失败",
+        "red",
+        "最近一次启动没有成功",
+    ),
+    ServiceDisplayState.UNKNOWN: ("未知", "grey62", "无法可靠判断服务状态"),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceStatusView:
+    """Presentation-only interpretation of one component status response."""
+
+    component: str
+    state: ServiceDisplayState
+    raw: Mapping[str, Any]
+    pid: int | str | None
+    logs_available: bool
+    recommendation: str
+
+    @property
+    def state_label(self) -> str:
+        return _STATE_COPY[self.state][0]
+
+    @property
+    def state_style(self) -> str:
+        return _STATE_COPY[self.state][1]
+
+    @property
+    def summary(self) -> str:
+        return _STATE_COPY[self.state][2]
+
+
+def service_status_view(value: object) -> ServiceStatusView:
+    """Convert raw application output once at the Workbench boundary."""
+
+    if isinstance(value, ServiceStatusView):
+        return value
+    if not isinstance(value, Mapping):
+        value = {"component": str(value), "status": "unknown"}
+    raw = dict(value)
+    component = str(raw.get("component") or "unknown")
+    state = _display_state(raw)
+    log_path = raw.get("log_file")
+    logs_available = bool(raw.get("logs_available")) or bool(
+        log_path and Path(str(log_path)).is_file()
+    )
+    recommendation = {
+        ServiceDisplayState.RUNNING: "服务运行正常；可跟随日志或刷新状态。",
+        ServiceDisplayState.STARTING: "等待服务就绪；必要时查看启动日志。",
+        ServiceDisplayState.DEGRADED: "查看技术诊断和日志，确认受影响能力。",
+        ServiceDisplayState.STOPPED: f"启动 {component}。",
+        ServiceDisplayState.UNRESPONSIVE: "先查看日志；确认后可安全停止服务。",
+        ServiceDisplayState.STALE: "清理失效资源后重新启动服务。",
+        ServiceDisplayState.START_FAILED: "查看启动日志后重新启动服务。",
+        ServiceDisplayState.UNKNOWN: "重新检查状态并查看技术诊断。",
+    }[state]
+    return ServiceStatusView(
+        component=component,
+        state=state,
+        raw=raw,
+        pid=raw.get("pid"),
+        logs_available=logs_available,
+        recommendation=recommendation,
+    )
+
+
+def _display_state(value: Mapping[str, Any]) -> ServiceDisplayState:
+    status = str(value.get("status") or "unknown").lower()
+    if status in {"ok", "ready", "running", "healthy"}:
+        return ServiceDisplayState.RUNNING
+    if status in {"starting", "initializing"}:
+        return ServiceDisplayState.STARTING
+    if status in {"degraded", "unhealthy"}:
+        return ServiceDisplayState.DEGRADED
+    if status in {"unresponsive", "timeout"} or (
+        bool(value.get("pid_alive")) and value.get("control_reachable") is False
+    ):
+        return ServiceDisplayState.UNRESPONSIVE
+    if status in {"failed", "start_failed", "error"}:
+        return ServiceDisplayState.START_FAILED
+    if status == "stale" or (
+        not bool(value.get("pid_alive"))
+        and bool(value.get("control_socket_exists"))
+        and value.get("control_reachable") is False
+    ):
+        return ServiceDisplayState.STALE
+    if status in {"not_running", "stopped"}:
+        return ServiceDisplayState.STOPPED
+    return ServiceDisplayState.UNKNOWN
+
+
+def service_actions(view: ServiceStatusView | None) -> tuple[ActionItem, ...]:
+    """Return only actions that make sense for the current lifecycle state."""
+
+    if view is None:
+        return ()
+
+    def action(action_id: str, label: str, detail: str, shortcut: int) -> ActionItem:
+        return ActionItem(action_id, label, detail, str(shortcut))
+
+    def refresh(shortcut: int) -> ActionItem:
+        return action("status", "刷新状态", "重新检查进程与健康状态", shortcut)
+
+    def recent(shortcut: int) -> ActionItem:
+        return action("logs", "查看最近日志", "读取最近 200 行进程日志", shortcut)
+
+    def follow(shortcut: int) -> ActionItem:
+        return action("follow", "跟随实时日志", "在内容区持续显示新增日志", shortcut)
+
+    def diagnostics(shortcut: int) -> ActionItem:
+        return action(
+            "diagnostics",
+            "查看技术诊断",
+            "检查进程、控制端点和运行资源",
+            shortcut,
+        )
+
+    if view.state is ServiceDisplayState.STOPPED:
+        return (
+            action("start", "启动", "启动组件并等待就绪", 1),
+            recent(2),
+            follow(3),
+            diagnostics(4),
+        )
+    if view.state is ServiceDisplayState.STALE:
+        return (
+            ActionItem("repair-start", "清理并启动", "清理确认失效的资源后启动", "1"),
+            ActionItem("repair", "仅清理失效资源", "保留服务停止状态", "2"),
+            recent(3),
+            diagnostics(4),
+        )
+    if view.state in {ServiceDisplayState.RUNNING, ServiceDisplayState.DEGRADED}:
+        return (
+            refresh(1),
+            action("stop", "停止", "请求组件安全停止", 2),
+            action("restart", "重启", "停止后启动新的组件进程", 3),
+            recent(4),
+            follow(5),
+            diagnostics(6),
+        )
+    if view.state is ServiceDisplayState.UNRESPONSIVE:
+        return (
+            refresh(1),
+            action("stop", "停止", "请求组件安全停止", 2),
+            recent(3),
+            follow(4),
+            diagnostics(5),
+        )
+    if view.state is ServiceDisplayState.STARTING:
+        return refresh(1), recent(2), follow(3), diagnostics(4)
+    if view.state is ServiceDisplayState.START_FAILED:
+        return (
+            action("start", "重新启动", "重新启动组件并等待就绪", 1),
+            recent(2),
+            follow(3),
+            diagnostics(4),
+        )
+    return refresh(1), recent(2), diagnostics(3)
+
+
+LOG_FOLLOW_ACTIONS = (
+    ActionItem("refresh", "立即刷新", "读取当前新增日志", "1"),
+    ActionItem("pause", "暂停或继续", "控制后台日志刷新", "p"),
+    ActionItem("clear", "清空当前窗口", "不删除完整日志文件", "c"),
+)
+
+
+def service_summary(view: ServiceStatusView) -> RenderableType:
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style="dim", no_wrap=True)
+    table.add_column()
+    state = Text(view.state_label, style=f"bold {view.state_style}")
+    table.add_row("状态", state)
+    table.add_row("说明", view.summary)
+    table.add_row("进程", str(view.pid) if view.pid is not None else "无")
+    table.add_row("日志", "可用" if view.logs_available else "尚未生成")
+    table.add_row("建议", Text(view.recommendation, style="bold"))
+    return Group(Text(view.component, style="bold cyan"), Text(), table)
+
+
+def services_overview(views: tuple[ServiceStatusView, ...]) -> RenderableType:
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style="bold", no_wrap=True)
+    table.add_column(no_wrap=True)
+    table.add_column()
+    for view in views:
+        table.add_row(
+            view.component,
+            Text(view.state_label, style=f"bold {view.state_style}"),
+            view.summary,
+        )
+    needs_action = tuple(
+        view
+        for view in views
+        if view.state not in {ServiceDisplayState.RUNNING, ServiceDisplayState.STOPPED}
+    )
+    if not needs_action:
+        advice = Text("所有后台服务状态明确；可选择组件进行控制。", style="dim")
+    else:
+        advice = Text(
+            "建议：" + "；".join(view.recommendation for view in needs_action),
+            style="yellow",
+        )
+    return Group(table, Text(), advice)
+
+
+def diagnostics_renderable(view: ServiceStatusView) -> RenderableType:
+    raw = view.raw
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style="dim", no_wrap=True)
+    table.add_column()
+    fields = (
+        ("PID", raw.get("pid") or "—"),
+        ("进程存活", "是" if raw.get("pid_alive") else "否"),
+        ("进程命令", raw.get("process_command") or "—"),
+        ("控制端点", raw.get("control_socket") or "—"),
+        ("控制可达", "是" if raw.get("control_reachable") else "否"),
+        ("探测错误", raw.get("probe_error") or raw.get("error") or "—"),
+        ("Health file", raw.get("health_file") or "—"),
+        ("Process lock", raw.get("process_lock") or "—"),
+        ("Lock held", "是" if raw.get("process_lock_held") else "否"),
+    )
+    for label, value in fields:
+        table.add_row(label, str(value))
+    return Group(
+        Text(f"{view.component} 技术诊断", style="bold cyan"),
+        Text(),
+        table,
+        Text(),
+        Text(f"结论：{view.summary}。{view.recommendation}", style=view.state_style),
+    )
+
+
+__all__ = [
+    "LOG_FOLLOW_ACTIONS",
+    "ServiceDisplayState",
+    "ServiceStatusView",
+    "diagnostics_renderable",
+    "service_actions",
+    "service_status_view",
+    "service_summary",
+    "services_overview",
+]

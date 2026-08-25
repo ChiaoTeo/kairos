@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from .flows.market.workspace import WorkspaceMarketPromptState
     from .flows.operations.actions import ProjectPromptState
     from .flows.operations.business import BusinessPromptState
+    from .flows.operations.views import ServiceStatusView
     from .flows.resources.wizard import ResourceWizardState
 
 
@@ -84,15 +85,45 @@ class OperationsSession:
     """Operations-owned selections and multi-step prompts."""
 
     selected_service: str | None = None
+    selected_service_status: ServiceStatusView | None = None
+    service_records: tuple[SelectionRecord, ...] = ()
+    live_buffer: LiveBuffer | None = None
+    source_tail: tuple[str, ...] = ()
+    log_generation: str | None = None
+    log_size: int = 0
+    log_started_at: float | None = None
+    received_lines: int = 0
+    warning_lines: int = 0
     project_prompt: ProjectPromptState | None = None
     profile_action: str | None = None
     business_prompt: BusinessPromptState | None = None
 
     def reset(self) -> None:
         self.selected_service = None
+        self.selected_service_status = None
+        self.service_records = ()
+        self.reset_logs()
         self.project_prompt = None
         self.profile_action = None
         self.business_prompt = None
+
+    def start_logs(self, component: str, *, started_at: float) -> None:
+        self.live_buffer = LiveBuffer(f"service/{component}")
+        self.source_tail = ()
+        self.log_generation = None
+        self.log_size = 0
+        self.log_started_at = started_at
+        self.received_lines = 0
+        self.warning_lines = 0
+
+    def reset_logs(self) -> None:
+        self.live_buffer = None
+        self.source_tail = ()
+        self.log_generation = None
+        self.log_size = 0
+        self.log_started_at = None
+        self.received_lines = 0
+        self.warning_lines = 0
 
     def finish_result(self, kind: ResultKind) -> None:
         if kind is ResultKind.BUSINESS:
@@ -122,14 +153,14 @@ class ResourcesSession:
     kind: str | None = None
     selected: ResourceRecordView | None = None
     action: str | None = None
-    launch_id: str | None = None
     wizard: ResourceWizardState | None = None
 
     def reset(self) -> None:
+        if self.wizard is not None:
+            self.wizard.clear_secrets()
         self.kind = None
         self.selected = None
         self.action = None
-        self.launch_id = None
         self.wizard = None
 
 

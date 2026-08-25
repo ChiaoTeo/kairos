@@ -11,7 +11,9 @@ from kairospy.investment.apps.account.application import AccountConfigurationApp
 from kairospy.strategy.apps.agent.application import AgentResourceApplication
 from kairospy.system.apps.configuration.application.references import ConfigurationReferenceApplication
 from kairospy.strategy.apps.notification.application import NotificationAdminApplication
-from kairospy.investment.apps.reference.application import ReferenceProviderConfigurationApplication
+from kairospy.system.apps.integration.application import (
+    ProviderConnectionConfigurationApplication,
+)
 from kairospy.system.apps.workspace.application import Workspace
 
 
@@ -20,6 +22,15 @@ class ResourceKind(StrEnum):
     MARKET_DATA = "market_data"
     AI_MODEL = "ai_model"
     NOTIFICATION = "notification"
+
+
+class RuntimeCapability(StrEnum):
+    REFERENCE_CATALOG = "reference-catalog"
+    MARKET_QUERY = "market-query"
+    MARKET_STREAM = "market-stream"
+    ACCOUNT_READ = "account-read"
+    ORDER_QUERY = "order-query"
+    ORDER_TRADE = "order-trade"
 
 
 class ResourceState(StrEnum):
@@ -98,6 +109,7 @@ class ResourceReadiness:
     not_tested: tuple[str, ...]
     current_configuration_hash: str | None
     tested_configuration_hash: str | None
+    capabilities: tuple[RuntimeCapability, ...] = ()
     references: tuple[Mapping[str, str], ...] = ()
 
     @property
@@ -129,6 +141,7 @@ class ResourceReadiness:
             "not_tested": list(self.not_tested),
             "current_configuration_hash": self.current_configuration_hash,
             "tested_configuration_hash": self.tested_configuration_hash,
+            "capabilities": [value.value for value in self.capabilities],
             "next_action": self.next_action,
             "actions": [action.as_dict() for action in self.actions],
             "references": [dict(reference) for reference in self.references],
@@ -225,6 +238,7 @@ def project_resource_readiness(
         tested_configuration_hash=_optional_text(
             value.get("tested_configuration_hash")
         ),
+        capabilities=_resource_capabilities(kind, value, state),
         references=tuple(dict(reference) for reference in references),
     )
 
@@ -252,9 +266,7 @@ class RunReadinessApplication:
                     str(value["connection_id"])
                 ),
             )
-            for value in ReferenceProviderConfigurationApplication(
-                self.workspace
-            ).list()
+            for value in ProviderConnectionConfigurationApplication(self.workspace).list()
         )
         result.extend(
             project_resource_readiness(
@@ -283,10 +295,13 @@ class RunReadinessApplication:
         self,
         *,
         required_kinds: Sequence[ResourceKind] = (),
+        required_capabilities: Sequence[RuntimeCapability] = (),
     ) -> dict[str, object]:
         resources = self.resources()
         required_sequence = tuple(dict.fromkeys(required_kinds))
         required = frozenset(required_sequence)
+        capability_sequence = tuple(dict.fromkeys(required_capabilities))
+        required_capability_set = frozenset(capability_sequence)
         groups: dict[str, dict[str, object]] = {}
         for kind in ResourceKind:
             values = tuple(value for value in resources if value.kind is kind)
@@ -302,6 +317,12 @@ class RunReadinessApplication:
                 "referenced": sum(bool(value.references) for value in values),
             }
         available_kinds = {value.kind for value in resources if value.selectable}
+        available_capabilities = {
+            capability
+            for value in resources
+            if value.selectable
+            for capability in value.capabilities
+        }
         blockers = [
             value.as_dict()
             for value in resources
@@ -312,6 +333,16 @@ class RunReadinessApplication:
         missing_required = [
             kind.value for kind in required_sequence if kind not in available_kinds
         ]
+        missing_capabilities = [
+            capability.value
+            for capability in capability_sequence
+            if capability not in available_capabilities
+        ]
+        capability_blockers = [
+            value.as_dict()
+            for value in resources
+            if set(value.capabilities) & required_capability_set and not value.selectable
+        ]
         return {
             "groups": groups,
             "resources": [value.as_dict() for value in resources],
@@ -319,9 +350,16 @@ class RunReadinessApplication:
                 value.state is not ResourceState.AVAILABLE and not value.optional
                 for value in resources
             ),
-            "blocking_resources": blockers,
+            "blocking_resources": [*blockers, *capability_blockers],
             "missing_required_kinds": missing_required,
-            "ready": not blockers and not missing_required,
+            "missing_required_capabilities": missing_capabilities,
+            "available_capabilities": sorted(
+                capability.value for capability in available_capabilities
+            ),
+            "ready": not blockers
+            and not capability_blockers
+            and not missing_required
+            and not missing_capabilities,
         }
 
 
@@ -365,6 +403,72 @@ def _credential_issue(issues: Sequence[str]) -> bool:
         for issue in issues
         for marker in ("secretref", "credential", "凭据", "认证资料")
     )
+
+
+def _resource_capabilities(
+    kind: ResourceKind,
+    value: Mapping[str, object],
+    state: ResourceState,
+) -> tuple[RuntimeCapability, ...]:
+    if kind is ResourceKind.MARKET_DATA:
+        declared = {
+            str(item) for item in cast(Any, value.get("purposes") or ())
+        }
+        verified = {
+            str(item)
+            for item in cast(Any, value.get("capabilities_verified") or ())
+        }
+        aliases = {
+            "reference": RuntimeCapability.REFERENCE_CATALOG,
+            "equity_market": RuntimeCapability.MARKET_QUERY,
+            "options": RuntimeCapability.MARKET_QUERY,
+        }
+        effective = verified if state is ResourceState.AVAILABLE else declared
+        capabilities = {
+            capability
+            for item in effective
+            if (capability := _runtime_capability(item, aliases)) is not None
+        }
+        return tuple(sorted(capabilities, key=str))
+    if kind is ResourceKind.ACCOUNT:
+        environment = str(value.get("environment") or "").lower()
+        if environment in {"paper", "simulated"}:
+            return (
+                RuntimeCapability.ACCOUNT_READ,
+                RuntimeCapability.ORDER_QUERY,
+                RuntimeCapability.ORDER_TRADE,
+            )
+        purposes = {
+            str(item.get("purpose"))
+            for item in cast(Any, value.get("access_bindings") or ())
+            if isinstance(item, Mapping) and item.get("enabled", True)
+        }
+        observed = {
+            str(item).lower()
+            for item in cast(Any, value.get("capabilities") or ())
+        }
+        result: set[RuntimeCapability] = set()
+        if "account-read" in purposes and (not observed or "read" in observed):
+            result.update(
+                {RuntimeCapability.ACCOUNT_READ, RuntimeCapability.ORDER_QUERY}
+            )
+        if "order-trade" in purposes and "trade" in observed:
+            result.update(
+                {RuntimeCapability.ORDER_QUERY, RuntimeCapability.ORDER_TRADE}
+            )
+        return tuple(sorted(result, key=str))
+    return ()
+
+
+def _runtime_capability(
+    value: str, aliases: Mapping[str, RuntimeCapability]
+) -> RuntimeCapability | None:
+    if value in aliases:
+        return aliases[value]
+    try:
+        return RuntimeCapability(value)
+    except ValueError:
+        return None
 
 
 def _configured(
@@ -420,6 +524,7 @@ __all__ = [
     "ResourceReadiness",
     "ResourceState",
     "RunReadinessApplication",
+    "RuntimeCapability",
     "normalize_error_category",
     "project_resource_readiness",
 ]

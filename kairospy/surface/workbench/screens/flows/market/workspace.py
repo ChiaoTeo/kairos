@@ -130,9 +130,53 @@ def preview(prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
     return {"status": "preview", **prompt.summary()}
 
 
+def equivalent_command(
+    state: Any, prompt: WorkspaceMarketPromptState
+) -> tuple[str, ...] | None:
+    """Return a stable CLI equivalent for connected read operations."""
+
+    if state.owner is None or prompt.action not in {"snapshot", "freshness"}:
+        return None
+    owner = state.owner
+    arguments = [
+        "connected",
+        prompt.action,
+        "--socket",
+        str(owner.paths.process_socket("market")),
+        "--view-root",
+        str(owner.paths.child("snapshots", "market", "market-shared")),
+    ]
+    if prompt.action == "snapshot":
+        arguments.extend(
+            (
+                prompt.values["kind"],
+                "--market-id",
+                prompt.values["market-id"],
+                "--provider",
+                prompt.values["provider"],
+            )
+        )
+        timeframe = prompt.values.get("timeframe")
+        if timeframe:
+            arguments.extend(("--timeframe", timeframe))
+    else:
+        arguments.extend(
+            (
+                "--market-id",
+                prompt.values["market-id"],
+                "--provider",
+                prompt.values["provider"],
+            )
+        )
+    return tuple(
+        MarketCliApplication(owner, binary="kairos-market-cli").command(arguments)
+    )
+
+
 __all__ = [
     "WORKSPACE_MARKET_ACTIONS",
     "WorkspaceMarketPromptState",
     "execute",
+    "equivalent_command",
     "preview",
 ]

@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from rich.text import Text
+
 from kairospy.investment.apps.reference.application.models import (
     InstrumentRef,
     Market,
@@ -14,6 +16,11 @@ from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.activity import (
+    ActivityKind,
+    ActivityOutcome,
+    ActivityRecord,
+)
 from kairospy.surface.workbench.screens.flows import market
 from kairospy.surface.workbench.screens.operation import OperationSpec
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
@@ -153,4 +160,52 @@ def test_command_observe_degraded_state(snap_compare: Any) -> None:
         KairosWorkbenchApp(_state()),
         terminal_size=(120, 36),
         run_before=show_snapshot,
+    )
+
+
+def test_reproducible_activity_stream_60x20(snap_compare: Any) -> None:
+    async def show_activities(pilot: Any) -> None:
+        screen = pilot.app.screen
+        assert isinstance(screen, CommandLineScreen)
+        output = screen._output()
+        output.append_activity(
+            ActivityRecord(
+                activity_id="quote-1",
+                kind=ActivityKind.QUERY,
+                outcome=ActivityOutcome.SUCCESS,
+                title="AAPL · 最新报价 · massive",
+                body=Text(
+                    "买价  309.18    卖价  309.45\n来源  massive · REST · Provider 直连"
+                ),
+                equivalent_command=(
+                    "kairos-market-cli",
+                    "--workspace",
+                    "/workspace/visual-fixture/.kairos",
+                    "standalone",
+                    "once",
+                    "--symbol",
+                    "AAPL",
+                    "--provider",
+                    "massive",
+                    "--observation-kind",
+                    "quote",
+                ),
+            )
+        )
+        output.append_activity(
+            ActivityRecord(
+                activity_id="book-1",
+                kind=ActivityKind.QUERY,
+                outcome=ActivityOutcome.FAILURE,
+                title="AAPL · 订单簿 · 路由不可用",
+                body=Text("请求  equity / order-book\n建议  检查 Market 数据连接"),
+            )
+        )
+        screen.query_one("#activity-empty").display = False
+        await pilot.pause()
+
+    assert snap_compare(
+        KairosWorkbenchApp(_state()),
+        terminal_size=(60, 20),
+        run_before=show_activities,
     )

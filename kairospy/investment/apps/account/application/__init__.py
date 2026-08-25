@@ -167,6 +167,114 @@ class AccountConfigurationApplication:
             "resource_hash": self._configuration_fingerprint(account),
         }
 
+    def access_bindings(self, account_id: str) -> list[dict[str, Any]]:
+        """Project legacy credential roles as closed Kairos access purposes."""
+
+        return self._access_bindings(self._show_raw(account_id))
+
+    def _access_bindings(
+        self, account: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        raw_bindings = account.get("credentials")
+        bindings = raw_bindings if isinstance(raw_bindings, list) else []
+        if not bindings and account.get("credential_id"):
+            bindings = [
+                {
+                    "name": "default",
+                    "credential_id": account["credential_id"],
+                    "role": account.get("credential_role") or "readonly",
+                }
+            ]
+        result: list[dict[str, Any]] = []
+        for binding in bindings:
+            if not isinstance(binding, Mapping):
+                continue
+            role = str(binding.get("role") or "readonly").strip().lower()
+            name = str(binding.get("name") or "default").strip().lower()
+            purpose = (
+                "order-trade"
+                if name == "order-trade"
+                or role in {"trade", "trading", "transfer", "admin"}
+                else "account-read"
+            )
+            result.append(
+                {
+                    "purpose": purpose,
+                    "credential_id": str(binding.get("credential_id") or ""),
+                    "enabled": True,
+                    "observed_permissions": sorted(
+                        str(permission)
+                        for permission, state in (
+                            account.get("permissions", {}).items()
+                            if isinstance(account.get("permissions"), Mapping)
+                            else ()
+                        )
+                        if str(state).lower() in {"granted", "true", "enabled"}
+                    ),
+                }
+            )
+        return sorted(result, key=lambda value: str(value["purpose"]))
+
+    def configure_access(
+        self,
+        account_id: str,
+        *,
+        purpose: str,
+        credential_id: str,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Add or replace one checked access purpose on the same Account."""
+
+        purpose = purpose.strip().lower()
+        roles = {"account-read": "readonly", "order-trade": "trade"}
+        if purpose not in roles:
+            raise ValueError("account access purpose must be account-read or order-trade")
+        account = self._show_raw(account_id)
+        credential = CredentialConfigurationApplication(self.workspace).show(
+            credential_id
+        )
+        expected_provider = str(
+            account.get("integration_provider") or account.get("broker") or ""
+        ).lower()
+        if credential.get("provider") != expected_provider:
+            raise ValueError(
+                f"{expected_provider} account requires a {expected_provider} credential"
+            )
+        value = _cli(self.workspace).run(
+            [
+                "credential",
+                "add",
+                "--account-id",
+                _text(account_id, "account_id"),
+                "--name",
+                purpose,
+                "--credential-id",
+                _text(credential_id, "credential_id"),
+                "--role",
+                roles[purpose],
+                *( ["--force"] if force else [] ),
+            ]
+        )
+        updated = _account(value)
+        observed = {
+            str(permission).lower()
+            for permission, state in (
+                updated.get("permissions", {}).items()
+                if isinstance(updated.get("permissions"), Mapping)
+                else ()
+            )
+            if str(state).lower() in {"granted", "true", "enabled"}
+        }
+        required = "trade" if purpose == "order-trade" else "read"
+        if required not in observed:
+            raise ValueError(
+                f"credential does not provide required {required} permission"
+            )
+        return {
+            **self.show(account_id),
+            "access_bindings": self.access_bindings(account_id),
+        }
+
     def test_connection(
         self,
         account_id: str,
@@ -259,7 +367,15 @@ class AccountConfigurationApplication:
             ]
         if not bindings or not isinstance(bindings[0], Mapping):
             raise ValueError("account has no credential binding")
-        binding = bindings[0]
+        binding = next(
+            (
+                value
+                for value in bindings
+                if isinstance(value, Mapping)
+                and str(value.get("name") or "").lower() == "account-read"
+            ),
+            bindings[0],
+        )
         result = _cli(self.workspace).run(
             [
                 "credential",
@@ -291,7 +407,11 @@ class AccountConfigurationApplication:
         }
 
     def _with_verification(self, account: dict[str, Any]) -> dict[str, Any]:
-        return {**account, **self.verification(str(account["account_id"]))}
+        return {
+            **account,
+            "access_bindings": self._access_bindings(account),
+            **self.verification(str(account["account_id"])),
+        }
 
     def _configuration_fingerprint(self, account: Mapping[str, Any]) -> str:
         credential_ids = {

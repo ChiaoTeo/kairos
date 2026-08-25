@@ -25,8 +25,8 @@ from .flows.operations.actions import (
     CONFIG_ACTIONS as OPERATIONS_CONFIG_ACTIONS,
     PROFILE_ACTIONS as OPERATIONS_PROFILE_ACTIONS,
     PROJECT_ACTIONS as OPERATIONS_PROJECT_ACTIONS,
-    SERVICE_ACTIONS as OPERATIONS_SERVICE_ACTIONS,
 )
+from .flows.operations.views import LOG_FOLLOW_ACTIONS, service_actions
 from .flows.launch.orders import ORDER_ACTIONS as ACCOUNT_ORDER_ACTIONS
 from .flows.research.actions import (
     DATA_ACTIONS as RESEARCH_DATA_ACTIONS,
@@ -79,8 +79,16 @@ def go_back(session: GuidedSession) -> bool:
             if kind is not None and session.visible_records
             else ("reference",)
         )
-    elif session.context == ("operations", "service"):
+    elif session.context[:2] == ("operations", "service-logs"):
+        component = session.operations.selected_service
+        session.context = (
+            ("operations", "service", component)
+            if component is not None
+            else ("operations", "services")
+        )
+    elif session.context[:2] == ("operations", "service"):
         session.context = ("operations", "services")
+        session.visible_records = session.operations.service_records
     elif session.context == ("operations", "profiles"):
         session.context = ("operations", "config")
     elif len(session.context) == 3 and session.context[:2] == (
@@ -190,8 +198,10 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
         return OPERATIONS_PROFILE_ACTIONS
     if len(session.context) == 3 and session.context[:2] == ("operations", "business"):
         return business_actions(session.context[2])
-    if session.context == ("operations", "service"):
-        return OPERATIONS_SERVICE_ACTIONS
+    if session.context[:2] == ("operations", "service"):
+        return service_actions(session.operations.selected_service_status)
+    if session.context[:2] == ("operations", "service-logs"):
+        return LOG_FOLLOW_ACTIONS
     if session.context == ("resources", "selected"):
         return resource_detail_actions(session.resources.kind)
     if session.context == ("resources", "account-operations"):
@@ -261,11 +271,11 @@ def context_label(context: tuple[str, ...]) -> str:
             ("market", "connected"): "运行中 Market",
             ("reference", "selected"): "已选目录记录",
             ("reference", "instrument-types"): "选择合约类型",
-            ("operations", "project"): "项目工作区",
-            ("operations", "services"): "系统服务",
+            ("operations", "project"): "工作区管理",
+            ("operations", "services"): "后台服务",
             ("operations", "service"): "服务操作",
-            ("operations", "config"): "高级配置",
-            ("operations", "business"): "业务工具",
+            ("operations", "config"): "高级设置",
+            ("operations", "business"): "风控与集成工具",
             ("operations", "profiles"): "配置 Profiles",
             ("resources", "selected"): "已选运行资源",
             ("resources", "account-operations"): "账户运行查询",
@@ -285,6 +295,13 @@ def context_label(context: tuple[str, ...]) -> str:
             ("strategy", "setup"): "配置向导",
         }
         parts.append(labels.get(context, "查询结果"))
+        if len(context) == 3 and context[:2] == ("operations", "service"):
+            parts[-1] = context[2]
+        elif len(context) == 3 and context[:2] == (
+            "operations",
+            "service-logs",
+        ):
+            parts[-1] = f"{context[2]} / 实时日志"
         if len(context) == 3 and context[:2] == ("operations", "business"):
             parts[-1] = {
                 "risk": "Risk",
