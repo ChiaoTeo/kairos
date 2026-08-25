@@ -34,6 +34,14 @@ action-first dispatch path from Decision 0020.
 This is a breaking migration. Current callers must send the new tagged algorithm; Execution does not
 translate or accept the removed shapes.
 
+Kairospy exposes the same breaking boundary through explicit algorithm value objects. Its control
+encoder emits a complete `ExecutionIntentRequest` with the tagged algorithm and rejects unknown Intent
+fields; it does not retain a client-side split interval or standalone pair hedge field.
+
+Idempotent replay compares the complete decoded Intent, not only command or Strategy decision identity.
+The same idempotency key with any changed payload is invalid; this prevents a changed algorithm or route
+from being hidden behind a duplicate response.
+
 ## Consequences
 
 - A command has one inspectable source of truth for its algorithm and timing semantics.

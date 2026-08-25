@@ -233,10 +233,13 @@ def test_interactive_strategy_composes_without_execution_or_accounts(
     assert result.status == "completed"
     assert result.result["value"] == 2
     from decimal import Decimal
-    from kairospy.strategy import InstrumentId
+    from kairospy.strategy import ImmediateAlgorithm, InstrumentId
 
     disabled = composition.application.context.execution.target_position(
-        InstrumentId("instrument:test:BTCUSDT"), Decimal("1"), account="main"
+        InstrumentId("instrument:test:BTCUSDT"),
+        Decimal("1"),
+        account="main",
+        algorithm=ImmediateAlgorithm(),
     )
     assert disabled.status == "rejected"
     assert disabled.error == "execution is disabled for this launch"

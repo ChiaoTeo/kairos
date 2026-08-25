@@ -155,7 +155,6 @@ def _revision(value: object):
         return TightenSplitPolicy(
             max_child_quantity=_optional_text(value.get("max_child_quantity")),
             child_count=_optional_integer(value.get("child_count"), str(kind)),
-            interval_millis=_optional_integer(value.get("interval_millis"), str(kind)),
         )
     if kind == "require_maker_execution":
         required = value.get("required", True)

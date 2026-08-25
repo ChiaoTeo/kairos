@@ -17,6 +17,7 @@ from .errors import (
 )
 from .events import ExecutionEvent
 from .intents import (
+    ExecutionAlgorithmPolicy,
     MakerExecutionPolicy,
     OptionSpreadRequest,
     PairArbitrageRequest,
@@ -336,6 +337,7 @@ class ExecutionApplication:
         quantity: Decimal,
         *,
         account: AccountId | str,
+        algorithm: ExecutionAlgorithmPolicy,
         segment: SegmentKey | str = "spot",
         limit_price: Decimal | None = None,
         reason: str = "",
@@ -356,6 +358,7 @@ class ExecutionApplication:
         request = TargetPositionRequest(
             instrument_id=str(_instrument_id(instrument)),
             quantity=quantity,
+            algorithm=algorithm,
             account_id=str(account),
             segment_key=str(segment),
             limit_price=limit_price,
@@ -378,6 +381,7 @@ class ExecutionApplication:
         instrument: InstrumentRef | InstrumentId,
         *,
         account: AccountId | str,
+        algorithm: ExecutionAlgorithmPolicy,
         segment: SegmentKey | str = "spot",
         reason: str = "",
         intent_id: IntentId | None = None,
@@ -389,6 +393,7 @@ class ExecutionApplication:
             instrument,
             Decimal("0"),
             account=account,
+            algorithm=algorithm,
             segment=segment,
             reason=reason,
             intent_id=intent_id,
@@ -859,6 +864,7 @@ class AccountExecution:
         instrument: InstrumentRef | InstrumentId,
         quantity: Decimal,
         *,
+        algorithm: ExecutionAlgorithmPolicy,
         limit_price: Decimal | None = None,
         reason: str = "",
         intent_id: IntentId | None = None,
@@ -870,6 +876,7 @@ class AccountExecution:
             instrument,
             quantity,
             account=self.account_id,
+            algorithm=algorithm,
             segment=self.segment_key,
             limit_price=limit_price,
             reason=reason,
@@ -883,6 +890,7 @@ class AccountExecution:
         self,
         instrument: InstrumentRef | InstrumentId,
         *,
+        algorithm: ExecutionAlgorithmPolicy,
         reason: str = "",
         intent_id: IntentId | None = None,
         strategy_decision_id: str | None = None,
@@ -892,6 +900,7 @@ class AccountExecution:
         return self._application.close_position(
             instrument,
             account=self.account_id,
+            algorithm=algorithm,
             segment=self.segment_key,
             reason=reason,
             intent_id=intent_id,

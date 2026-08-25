@@ -308,9 +308,7 @@ class MakerTakerHedgeAlgorithm:
     hedge: HedgePolicy
 
 
-ExecutionAlgorithmPolicy = (
-    ImmediateAlgorithm | TwapAlgorithm | MakerTakerHedgeAlgorithm
-)
+ExecutionAlgorithmPolicy = ImmediateAlgorithm | TwapAlgorithm | MakerTakerHedgeAlgorithm
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,7 +332,9 @@ class QuoteProvisioningRequest:
 
     def __post_init__(self) -> None:
         if not isinstance(self.algorithm, ImmediateAlgorithm):
-            raise ValueError("quote provisioning currently requires Immediate algorithm")
+            raise ValueError(
+                "quote provisioning currently requires Immediate algorithm"
+            )
         if (
             not self.instrument_id.strip()
             or not self.segment_key.strip()
@@ -414,7 +414,9 @@ class PortfolioRebalanceRequest:
 
     def __post_init__(self) -> None:
         if not isinstance(self.algorithm, ImmediateAlgorithm):
-            raise ValueError("portfolio rebalance currently requires Immediate algorithm")
+            raise ValueError(
+                "portfolio rebalance currently requires Immediate algorithm"
+            )
         if not self.targets:
             raise ValueError("portfolio rebalance requires at least one target")
         object.__setattr__(self, "targets", tuple(self.targets))

@@ -21,7 +21,7 @@ from kairospy.strategy.apps.notification.application import NotificationAdminApp
 from kairospy.system.apps.launch.composition import compose_strategy_process
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.strategy import StrategyIdentity, StrategyLogger
-from kairospy.strategy import InstrumentId
+from kairospy.strategy import ImmediateAlgorithm, InstrumentId
 
 
 def _workspace(tmp_path: Path):
@@ -497,7 +497,10 @@ signals = ["feishu-options", "telegram-personal"]
         "2026-08-18T00:00:00+00:00"
     }
     rejected = execution.target_position(
-        InstrumentId("instrument:test:SPY"), Decimal("1"), account="main"
+        InstrumentId("instrument:test:SPY"),
+        Decimal("1"),
+        account="main",
+        algorithm=ImmediateAlgorithm(),
     )
     assert rejected.status == "rejected"
     assert rejected.error == "execution is disabled for this launch"

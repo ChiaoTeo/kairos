@@ -65,6 +65,15 @@ algorithm decisions.
 `SplitOrderPolicy` controls quantity subdivision only; it has no interval or algorithm-selection
 semantics.
 
+The kairospy strategy/control surface uses the same boundary. Its request models require one explicit
+`ImmediateAlgorithm`, `TwapAlgorithm`, or `MakerTakerHedgeAlgorithm` and serialize that choice into the
+required tagged contract field. The removed split interval and standalone pair `hedge_policy` are not
+accepted by the Python API either, so Python and Rust callers do not enter different execution paths.
+The cross-language certification test starts the Rust Conflux JSON-RPC runtime, submits the request with
+the public Kairospy client, and verifies both exact idempotent replay and process-boundary rejection of a
+removed field. An idempotency key may replay only an identical complete Intent payload; changing its
+quantity, algorithm, route, or another field is rejected instead of being mislabeled as a duplicate.
+
 `Twap` is an explicit single-leg algorithm with `slice_count` and `slice_interval`. Admission rejects a
 TWAP Intent that also supplies split options, because TWAP alone owns slice quantity and cadence. The
 planner preserves the exact requested total across deterministic slice identities. `TwapSpec` persists
@@ -136,3 +145,12 @@ invariants, lifecycle, persistence, crash recovery, and reconciliation. Venue Ex
 the Integration provider boundary and must separately certify acknowledgement identity, protocol
 mapping, private-stream convergence, disconnect recovery, and query reconciliation. A deterministic
 provider fixture is not evidence that a live venue has been certified.
+
+The ignored `kairospy_explicit_algorithm_round_trips_through_execution_json_rpc` library test is the
+explicit Python/Rust process-contract gate. Run it with:
+
+```text
+cargo test -p kairos-execution --lib \
+  integration_tests::kairospy_explicit_algorithm_round_trips_through_execution_json_rpc \
+  -- --exact --ignored
+```

@@ -18,6 +18,7 @@ from kairospy.strategy.apps.agent.application import (
 from kairospy.strategy.apps.agent.application.policy import DecisionPolicy
 from kairospy.investment.apps.execution.application import (
     ArbitrageLegRequest,
+    ImmediateAlgorithm,
     OptionSpreadLegRequest,
     OptionSpreadRequest,
     PairArbitrageRequest,
@@ -49,7 +50,9 @@ def _candidate(request: object) -> IntentCandidate:
 
 
 def test_policy_approves_original_and_rejects_without_effective_request() -> None:
-    request = TargetPositionRequest("BTCUSDT", Decimal("2"), account_id="main")
+    request = TargetPositionRequest(
+        "BTCUSDT", Decimal("2"), algorithm=ImmediateAlgorithm(), account_id="main"
+    )
     policy = DecisionPolicy({})
 
     approved = policy.apply(
@@ -70,6 +73,7 @@ def test_policy_applies_atomic_risk_monotonic_target_revisions() -> None:
     request = TargetPositionRequest(
         "BTCUSDT",
         Decimal("2"),
+        algorithm=ImmediateAlgorithm(),
         account_id="main",
         limit_price=Decimal("100"),
     )
@@ -99,6 +103,7 @@ def test_policy_rejects_direction_or_risk_expansion_atomically() -> None:
     request = TargetPositionRequest(
         "BTCUSDT",
         Decimal("2"),
+        algorithm=ImmediateAlgorithm(),
         account_id="main",
         limit_price=Decimal("100"),
     )
@@ -145,7 +150,9 @@ def test_policy_rejects_direction_or_risk_expansion_atomically() -> None:
 
 
 def test_policy_enforces_profile_code_allowlists() -> None:
-    request = TargetPositionRequest("BTCUSDT", Decimal("2"), account_id="main")
+    request = TargetPositionRequest(
+        "BTCUSDT", Decimal("2"), algorithm=ImmediateAlgorithm(), account_id="main"
+    )
     policy = DecisionPolicy({}, reason_codes=("liquidity",), risk_flags=("stale",))
 
     outcome = policy.apply(
@@ -182,11 +189,13 @@ def test_policy_tightens_deadline_and_slippage_without_changing_identity() -> No
         OptionSpreadLegRequest("long", "BTC-110-C", "Buy", Decimal("1")),
         Decimal("1"),
         Decimal("9"),
+        algorithm=ImmediateAlgorithm(),
         deadline_unix_nanos=200,
     )
     arbitrage = PairArbitrageRequest(
         ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), "main"),
         ArbitrageLegRequest("BTCUSD", "Sell", Decimal("1"), "main"),
+        algorithm=ImmediateAlgorithm(),
         max_slippage_bps=20,
     )
     policy = DecisionPolicy(
@@ -228,14 +237,16 @@ def test_policy_tightens_split_and_requires_maker_execution() -> None:
     split_request = TargetPositionRequest(
         "BTCUSDT",
         Decimal("10"),
+        algorithm=ImmediateAlgorithm(),
         account_id="main",
         split=SplitOrderPolicy(
             max_child_quantity=Decimal("5"),
             child_count=2,
-            interval_millis=100,
         ),
     )
-    maker_request = TargetPositionRequest("BTCUSDT", Decimal("1"), account_id="main")
+    maker_request = TargetPositionRequest(
+        "BTCUSDT", Decimal("1"), algorithm=ImmediateAlgorithm(), account_id="main"
+    )
     policy = DecisionPolicy(
         {"allow_split_tightening": True, "allow_require_maker": True}
     )
@@ -248,7 +259,7 @@ def test_policy_tightens_split_and_requires_maker_execution() -> None:
             (),
             (),
             "smaller children",
-            (TightenSplitPolicy("2", 3, 200),),
+            (TightenSplitPolicy("2", 3),),
         ),
     )
     maker = policy.apply(
@@ -267,6 +278,5 @@ def test_policy_tightens_split_and_requires_maker_execution() -> None:
     assert split.effective_request.split is not None
     assert split.effective_request.split.max_child_quantity == Decimal("2")
     assert split.effective_request.split.child_count == 3
-    assert split.effective_request.split.interval_millis == 200
     assert isinstance(maker.effective_request, TargetPositionRequest)
     assert maker.effective_request.maker is not None

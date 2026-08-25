@@ -11,6 +11,7 @@ from kairospy.strategy import (
     Balance,
     Bar,
     BarEvent,
+    ImmediateAlgorithm,
     MarketEvent,
     Quote,
     QuoteEvent,
@@ -42,6 +43,7 @@ class TypeContractStrategy(Strategy):
                 event.data.instrument,
                 Decimal("1"),
                 account="paper-account",
+                algorithm=ImmediateAlgorithm(),
             )
         elif isinstance(event, QuoteEvent):
             assert_type(event.data, Quote)

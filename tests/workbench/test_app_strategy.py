@@ -86,6 +86,10 @@ def test_strategy_launch_list_detail_and_back_stay_in_command_screen(
             screen.submit("1")
             await pilot.pause()
             selected = str(screen.query_one("#command-context", Static).render())
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            assert interaction.summary is None
+            assert not screen.query_one("#interaction-content", Static).display
             screen.submit("/back")
             screen.submit("1")
             await pilot.pause()

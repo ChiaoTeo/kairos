@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.strategy import BarEvent, Strategy, StrategyContext
+from kairospy.strategy import BarEvent, ImmediateAlgorithm, Strategy, StrategyContext
 
 
 class SpyHourlyBarStrategy(Strategy):
@@ -26,11 +26,13 @@ class SpyHourlyBarStrategy(Strategy):
                 event.data.instrument,
                 Decimal("1"),
                 account="paper-account",
+                algorithm=ImmediateAlgorithm(),
                 reason="enter after the first completed hourly bar",
             )
         elif count == 3:
             ctx.execution.close_position(
                 event.data.instrument,
                 account="paper-account",
+                algorithm=ImmediateAlgorithm(),
                 reason="close after the third completed hourly bar",
             )

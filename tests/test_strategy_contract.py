@@ -26,6 +26,7 @@ from kairospy.strategy import (
     GreeksEvent,
     InstrumentId,
     InstrumentRef,
+    ImmediateAlgorithm,
     MarketId,
     ObservationScope,
     OptionGreeks,
@@ -74,6 +75,7 @@ def test_disabled_execution_returns_a_typed_rejected_receipt() -> None:
         InstrumentId("instrument:test:SPY"),
         Decimal("1"),
         account="main",
+        algorithm=ImmediateAlgorithm(),
     )
 
     assert receipt.status.value == "rejected"

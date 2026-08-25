@@ -383,7 +383,7 @@ impl ExecutionApplication {
         self.complete_cancellation(prepared, outcome)
     }
 
-    async fn reconcile_managed_orders(
+    pub(crate) async fn reconcile_managed_orders(
         &mut self,
         query: RemoteOrderQuery,
         context: &mut Context<'_, Self>,

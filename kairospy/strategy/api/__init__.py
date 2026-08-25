@@ -60,6 +60,7 @@ from kairospy.investment.apps.execution.application import (
     DeliveryCertainty,
     ExecutionApplication,
     ExecutionAccountNotEnabledError,
+    ExecutionAlgorithmPolicy,
     ExecutionEvent,
     ExecutionIntent,
     ExecutionLookupError,
@@ -71,9 +72,11 @@ from kairospy.investment.apps.execution.application import (
     IntentStatus,
     IntentUpdateEvent,
     HedgePolicy,
+    ImmediateAlgorithm,
     LimitOrderRequest,
     MarketOrderRequest,
     MakerExecutionPolicy,
+    MakerTakerHedgeAlgorithm,
     OptionSpreadLegRequest,
     OptionSpreadRequest,
     Order,
@@ -94,6 +97,7 @@ from kairospy.investment.apps.execution.application import (
     SplitOrderPolicy,
     TargetPositionRequest,
     TimeInForce,
+    TwapAlgorithm,
 )
 from kairospy.investment.apps.market.application import (
     AggressorSide,

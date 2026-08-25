@@ -16,7 +16,7 @@ from textual.widgets import RichLog
 
 from ..safety import redact_renderable, renderable_plain_text
 from ..screens.activity import ActivityOutcome, ActivityRecord
-from ..theme import ERROR, PRIMARY, SUCCESS, WARNING
+from ..theme import NORD_COLORS, RichThemeColors, rich_theme_colors
 from kairospy.surface.presentation import redact_cli_arguments, redact_text
 
 
@@ -55,6 +55,15 @@ class ActivityStream(RichLog):
         self._rendered_ranges: list[_RenderedRange] = []
         self._rendered_width: int | None = None
         self._reflow_timer: Timer | None = None
+
+    def on_mount(self) -> None:
+        self.app.theme_changed_signal.subscribe(self, self._theme_changed)
+
+    def _theme_changed(self, _theme: object) -> None:
+        self._rebuild_visible()
+
+    def _theme_colors(self) -> RichThemeColors:
+        return rich_theme_colors(self.app.current_theme)
 
     @property
     def activities(self) -> tuple[ActivityRecord, ...]:
@@ -208,7 +217,11 @@ class ActivityStream(RichLog):
     ) -> None:
         start = len(self.lines)
         super().write(
-            _activity_renderable(activity, separated=separated),
+            _activity_renderable(
+                activity,
+                separated=separated,
+                colors=self._theme_colors(),
+            ),
             scroll_end=scroll_end,
         )
         self._rendered_ranges.append(
@@ -227,7 +240,11 @@ class ActivityStream(RichLog):
             return
         start = len(self.lines)
         super().write(
-            _live_header(title, separated=separated),
+            _live_header(
+                title,
+                separated=separated,
+                colors=self._theme_colors(),
+            ),
             scroll_end=False,
         )
         for line in lines:
@@ -351,13 +368,16 @@ class ActivityStream(RichLog):
 
 
 def _activity_renderable(
-    activity: ActivityRecord, *, separated: bool
+    activity: ActivityRecord,
+    *,
+    separated: bool,
+    colors: RichThemeColors = NORD_COLORS,
 ) -> RenderableType:
     marker, border = {
-        ActivityOutcome.SUCCESS: ("✓", SUCCESS),
-        ActivityOutcome.FAILURE: ("×", ERROR),
-        ActivityOutcome.CANCELLED: ("■", WARNING),
-        ActivityOutcome.NOTICE: ("•", PRIMARY),
+        ActivityOutcome.SUCCESS: ("✓", colors.success),
+        ActivityOutcome.FAILURE: ("×", colors.error),
+        ActivityOutcome.CANCELLED: ("■", colors.warning),
+        ActivityOutcome.NOTICE: ("•", colors.primary),
     }[activity.outcome]
     header = Text()
     header.append(marker, style=f"bold {border}")
@@ -373,17 +393,24 @@ def _activity_renderable(
         command = Text()
         command.append("重新执行\n", style="dim")
         command.append("$ ", style="dim")
-        command.append(shlex.join(activity.equivalent_command), style=PRIMARY)
+        command.append(
+            shlex.join(activity.equivalent_command), style=colors.primary
+        )
         values.extend((Text(""), command))
     return Group(*values)
 
 
-def _live_header(title: str, *, separated: bool = True) -> RenderableType:
+def _live_header(
+    title: str,
+    *,
+    separated: bool = True,
+    colors: RichThemeColors = NORD_COLORS,
+) -> RenderableType:
     values: list[RenderableType] = []
     if separated:
         values.append(Rule(style="grey37"))
     header = Text()
-    header.append("●", style=f"bold {PRIMARY}")
+    header.append("●", style=f"bold {colors.primary}")
     header.append(f" {title}", style="bold")
     values.append(header)
     return Group(*values)

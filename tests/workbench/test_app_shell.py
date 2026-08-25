@@ -12,6 +12,7 @@ import pytest
 from rich.text import Text
 from textual.app import App
 from textual.containers import Horizontal, Vertical
+from textual.content import Content
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Select, Static
 
 from kairospy.strategy.apps.agent.application.model_connections import (
@@ -494,6 +495,94 @@ def test_external_workbench_stylesheet_is_loaded_and_watchable() -> None:
     assert normal_app.theme == "kairos-nord"
     assert normal_app.css_monitor is None
     assert app.css_monitor is not None
+
+
+def test_workbench_registers_and_selects_six_curated_themes() -> None:
+    app = KairosWorkbenchApp(_state())
+
+    expected = {
+        "kairos-tokyo-night",
+        "kairos-catppuccin",
+        "kairos-nord",
+        "kairos-gruvbox",
+        "kairos-everforest",
+        "kairos-dracula",
+    }
+
+    assert expected <= app.available_themes.keys()
+    for alias, registered_name in (
+        ("tokyo-night", "kairos-tokyo-night"),
+        ("catppuccin", "kairos-catppuccin"),
+        ("nord", "kairos-nord"),
+        ("gruvbox", "kairos-gruvbox"),
+        ("everforest", "kairos-everforest"),
+        ("dracula", "kairos-dracula"),
+    ):
+        assert app.select_theme(alias)
+        assert app.theme == registered_name
+
+    assert not app.select_theme("unknown")
+
+
+def test_theme_command_updates_css_and_rich_semantic_colors() -> None:
+    async def run() -> tuple[str, str, str, str, str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("/theme dracula")
+            await pilot.pause()
+            title = screen.query_one("#workspace-title", Static).render()
+            assert isinstance(title, Content)
+            styles = {str(span.style) for span in title.spans}
+            theme = app.current_theme
+            return (
+                app.theme,
+                theme.background,
+                theme.panel,
+                theme.primary,
+                theme.foreground or "",
+                "bold #bd93f9" in styles,
+            )
+
+    assert asyncio.run(run()) == (
+        "kairos-dracula",
+        "#282a36",
+        "#343746",
+        "#bd93f9",
+        "#f8f8f2",
+        True,
+    )
+
+
+def test_theme_picker_uses_interaction_region_and_preserves_content() -> None:
+    async def run() -> tuple[str, tuple[str, ...], str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = _log_text(screen.query_one("#command-output", RichLog))
+            screen.submit("/theme")
+            await pilot.pause()
+            actions = screen.query_one("#guided-actions", ActionList)
+            labels = tuple(item.label for item in actions.items)
+            assert _log_text(screen.query_one("#command-output", RichLog)) == output
+            screen.submit("1")
+            await pilot.pause()
+            return app.theme, labels, type(screen.session.interaction).__name__
+
+    theme, labels, interaction = asyncio.run(run())
+
+    assert theme == "kairos-tokyo-night"
+    assert labels == (
+        "Tokyo Night",
+        "Catppuccin Mocha",
+        "Nord  ✓",
+        "Gruvbox Dark",
+        "Everforest Dark",
+        "Dracula",
+    )
+    assert interaction == "ChoiceInteraction"
 
 
 @pytest.mark.parametrize("theme", ("textual-dark", "textual-light"))

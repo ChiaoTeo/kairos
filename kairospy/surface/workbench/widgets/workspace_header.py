@@ -9,7 +9,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Static
 
-from ..theme import ERROR, PRIMARY, SUCCESS, WARNING
+from ..theme import RichThemeColors, rich_theme_colors
 
 if TYPE_CHECKING:
     from ..app import KairosWorkbenchApp
@@ -20,6 +20,7 @@ class WorkspaceHeader(Horizontal):
 
     def __init__(self) -> None:
         super().__init__(id="workspace-header")
+        self._status_value = "就绪"
 
     def compose(self) -> ComposeResult:
         yield Static(id="workspace-title")
@@ -28,18 +29,24 @@ class WorkspaceHeader(Horizontal):
             yield Static(id="command-status")
 
     def on_mount(self) -> None:
+        self.app.theme_changed_signal.subscribe(self, self._theme_changed)
         self.refresh_project()
         self.set_status("就绪")
+
+    def _theme_changed(self, _theme: object) -> None:
+        self.refresh_project()
+        self.set_status(self._status_value)
 
     def refresh_project(self) -> None:
         """Refresh the global project identity after opening or creating a project."""
 
         app = cast("KairosWorkbenchApp", self.app)
         state = app.state
-        title = Text("◆ KAIROS", style=f"bold {PRIMARY}")
+        colors = rich_theme_colors(self.app.current_theme)
+        title = Text("◆ KAIROS", style=f"bold {colors.primary}")
         title.append("  /  ", style="dim")
         if state.owner is None:
-            title.append("未打开项目", style=f"bold {WARNING}")
+            title.append("未打开项目", style=f"bold {colors.warning}")
         else:
             title.append(state.workspace_id, style="bold")
         self.query_one("#workspace-title", Static).update(title)
@@ -48,18 +55,21 @@ class WorkspaceHeader(Horizontal):
     def set_status(self, value: str) -> None:
         """Render an activity value with a small semantic status marker."""
 
-        marker, style = _status_presentation(value)
+        self._status_value = value
+        marker, style = _status_presentation(
+            value, rich_theme_colors(self.app.current_theme)
+        )
         self.query_one("#status-indicator", Static).update(Text(marker, style=style))
         self.query_one("#command-status", Static).update(Text(value, style=style))
 
 
-def _status_presentation(value: str) -> tuple[str, str]:
+def _status_presentation(value: str, colors: RichThemeColors) -> tuple[str, str]:
     if "失败" in value or "错误" in value:
-        return "×", ERROR
+        return "×", colors.error
     if "正在" in value or "刷新中" in value:
-        return "●", PRIMARY
+        return "●", colors.primary
     if "完成" in value or "成功" in value:
-        return "✓", SUCCESS
+        return "✓", colors.success
     if "取消" in value:
-        return "■", WARNING
+        return "■", colors.warning
     return "●", "dim"

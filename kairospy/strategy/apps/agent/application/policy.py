@@ -178,17 +178,10 @@ def _tightened_split(
     if original is not None and original.child_count is not None:
         if revision.child_count is None or revision.child_count < original.child_count:
             raise ValueError("Split revision cannot reduce child count")
-    if original is not None and original.interval_millis is not None:
-        if (
-            revision.interval_millis is None
-            or revision.interval_millis < original.interval_millis
-        ):
-            raise ValueError("Split revision cannot shorten child interval")
     return SplitOrderPolicy(
         max_child_quantity=max_child,
         child_count=revision.child_count,
         min_child_quantity=(None if original is None else original.min_child_quantity),
-        interval_millis=revision.interval_millis,
     )
 
 

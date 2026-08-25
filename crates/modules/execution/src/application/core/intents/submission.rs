@@ -442,9 +442,9 @@ impl ExecutionApplication {
             .intent_for_idempotency_key(&idempotency_key)
             .map_err(ExecutionError::Persistence)?
         {
-            if state.intent.strategy_decision_id != intent.strategy_decision_id {
+            if state.intent != intent {
                 return Err(ExecutionError::Invalid(
-                    "idempotency key replay changed strategy_decision_id".into(),
+                    "idempotency key replay changed intent payload".into(),
                 ));
             }
             if state.status == IntentStatus::Rejected {

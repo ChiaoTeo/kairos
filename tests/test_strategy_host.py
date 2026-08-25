@@ -35,6 +35,7 @@ from kairospy.strategy import (
     ExchangeId,
     InstrumentId,
     InstrumentRef,
+    ImmediateAlgorithm,
     ListingId,
     Market,
     MarketData,
@@ -168,6 +169,7 @@ class UserStrategy(Strategy):
             event.data.instrument,
             Decimal("1"),
             account="main",
+            algorithm=ImmediateAlgorithm(),
             strategy_decision_id=decision.strategy_decision_id,
         )
 
@@ -1063,6 +1065,7 @@ def test_execution_application_uses_strategy_scoped_command_surface(
         _MARKET.instrument,
         Decimal("2"),
         account="main",
+        algorithm=ImmediateAlgorithm(),
         strategy_decision_id=decision.strategy_decision_id,
     )
 

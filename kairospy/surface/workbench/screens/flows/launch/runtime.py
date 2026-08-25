@@ -470,7 +470,11 @@ def enter_selected_record(
     session.strategy.selected_record = selected
     session.context = ("strategy", "selected")
     session.visible_records = ()
-    return _choice(state, session, Pretty(selected, expand_all=True))
+    return _choice(
+        state,
+        session,
+        status=f"已选择运行方案 · {record_label(selected)}",
+    )
 
 
 def enter_selected_instance(

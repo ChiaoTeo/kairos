@@ -28,6 +28,7 @@ from kairospy.surface.presentation import (
     redact_value,
 )
 from ..widgets import (
+    ActionItem,
     ActionToken,
     ActivityStream,
     ChoiceInteraction,
@@ -81,6 +82,7 @@ from .commands import (
     preview as preview_kairos_command,
     run as run_kairos_command,
 )
+from ..theme import THEME_CHOICES, theme_alias
 
 
 _COMMAND_ALIASES = {
@@ -132,6 +134,8 @@ class CommandLineScreen(Screen[None]):
         self._primary_hint = "数字选择  ·  /b 或 /back 返回  ·  /help 帮助"
         self._back_preview_interaction: InteractionState | None = None
         self._back_preview_hint: str | None = None
+        self._theme_preview_interaction: InteractionState | None = None
+        self._theme_preview_hint: str | None = None
 
     @property
     def workbench_app(self) -> KairosWorkbenchApp:
@@ -255,6 +259,9 @@ class CommandLineScreen(Screen[None]):
         selected = next((item for item in actions.items if item.id == option_id), None)
         if selected is None or selected.disabled:
             return
+        if self._is_back_target_picker():
+            self._discard_back_preview()
+        self._input().value = ""
         self.submit(selected.shortcut or selected.id)
         self.call_after_refresh(self._focus_actions_if_available)
 
@@ -307,6 +314,7 @@ class CommandLineScreen(Screen[None]):
                 "back",
                 "help",
                 "?",
+                "theme",
             }
             if not is_allowed or arguments:
                 self._set_status("等待确认 · 请输入 /y 或 /n")
@@ -360,6 +368,10 @@ class CommandLineScreen(Screen[None]):
             ):
                 self._interaction().present(self.session.interaction)
                 self._set_status("仍在等待参数 · /back 取消")
+                return
+            if is_workbench_command and pending_command == "theme":
+                self._dispatch(pending_command, pending_arguments)
+                self.app.set_focus(self._input())
                 return
             pending = interaction.action
             self.session.finish_prompt()
@@ -455,6 +467,13 @@ class CommandLineScreen(Screen[None]):
         self._start_operation(spec)
 
     def _dispatch(self, command: str, arguments: tuple[str, ...]) -> None:
+        if not arguments and self._theme_picker_active():
+            interaction = self.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            selected = action_id(interaction.actions, command)
+            if selected is not None and selected.startswith("theme:"):
+                self._select_theme(selected.removeprefix("theme:"))
+                return
         if not arguments and self._is_back_target_picker():
             interaction = self.session.interaction
             assert isinstance(interaction, ChoiceInteraction)
@@ -475,6 +494,18 @@ class CommandLineScreen(Screen[None]):
             self._present_help()
         elif command == "clear":
             self.action_clear()
+        elif command == "theme":
+            if not arguments:
+                self.present_theme_picker()
+            elif len(arguments) == 1 and self.workbench_app.select_theme(arguments[0]):
+                if self._theme_picker_active():
+                    self._restore_theme_picker()
+                self._set_status(f"主题已切换 · {self.workbench_app.theme}")
+            else:
+                self._set_status(
+                    "可用主题 · tokyo-night / catppuccin / nord / gruvbox / "
+                    "everforest / dracula"
+                )
         elif command == "copy":
             self.workbench_app.action_copy_page()
         elif command == "copy-history":
@@ -605,6 +636,10 @@ class CommandLineScreen(Screen[None]):
         self._apply_effects(effects)
 
     def action_back(self) -> None:
+        if self._theme_picker_active():
+            self._restore_theme_picker()
+            self._set_status("已取消主题选择")
+            return
         if isinstance(self.session.interaction, (InputInteraction, ConfirmInteraction)):
             interaction = self.session.interaction
             token = (
@@ -677,6 +712,70 @@ class CommandLineScreen(Screen[None]):
         self._interaction().present(self.session.interaction)
         self._set_hints("输入编号并按 Enter 跳转  ·  Esc 取消")
         self._set_status("请选择要返回的层级")
+
+    def present_theme_picker(self) -> None:
+        """Present curated themes without covering or mutating the content area."""
+
+        if not self._theme_picker_active():
+            self._theme_preview_interaction = self.session.interaction
+            self._theme_preview_hint = self._primary_hint
+        current = self.workbench_app.theme
+        descriptions = {
+            "Tokyo Night": "深蓝冷调，清晰利落",
+            "Catppuccin Mocha": "柔和粉彩，低刺激",
+            "Nord": "克制冰川色，层级稳定",
+            "Gruvbox Dark": "复古暖色，对比鲜明",
+            "Everforest Dark": "自然绿调，长时间舒适",
+            "Dracula": "高辨识紫色，状态醒目",
+        }
+        actions = tuple(
+            ActionItem(
+                f"theme:{theme_alias(theme.name)}",
+                f"{label}{'  ✓' if theme.name == current else ''}",
+                descriptions[label],
+                str(index),
+            )
+            for index, (label, theme) in enumerate(THEME_CHOICES, start=1)
+        )
+        self.session.interaction = ChoiceInteraction(
+            title="选择主题",
+            actions=actions,
+        )
+        self._interaction().present(self.session.interaction)
+        self._set_hints(
+            "输入编号选择  ·  ↑↓ 选择  ·  Enter 应用并保存到项目  ·  Esc 取消"
+        )
+        self._set_status("请选择 Workbench 主题")
+        self.call_after_refresh(self._focus_actions_if_available)
+
+    def _theme_picker_active(self) -> bool:
+        interaction = self.session.interaction
+        return (
+            self._theme_preview_interaction is not None
+            and isinstance(interaction, ChoiceInteraction)
+            and bool(interaction.actions)
+            and all(item.id.startswith("theme:") for item in interaction.actions)
+        )
+
+    def _select_theme(self, alias: str) -> None:
+        if not self.workbench_app.select_theme(alias):
+            self._set_status(f"未知主题 · {alias}")
+            return
+        selected = self.workbench_app.theme
+        self._restore_theme_picker()
+        self._set_status(f"主题已切换 · {selected}")
+
+    def _restore_theme_picker(self) -> None:
+        interaction = self._theme_preview_interaction
+        hint = self._theme_preview_hint
+        self._theme_preview_interaction = None
+        self._theme_preview_hint = None
+        if interaction is not None:
+            self.session.interaction = interaction
+            self._interaction().present(interaction)
+        if hint is not None:
+            self._set_hints(hint)
+        self.app.set_focus(self._input())
 
     def _dispatch_back(self, arguments: tuple[str, ...]) -> None:
         """Return directly when unambiguous or present semantic destinations."""
@@ -1729,6 +1828,10 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
         table.add_row("/d", "诊断市场定义和 Reference 映射")
         table.add_row("/a", "输入完整 Market ID")
     table.add_row("/clear", "清空当前输出显示")
+    table.add_row(
+        "/theme [名称]",
+        "选择或切换 Tokyo Night、Catppuccin、Nord、Gruvbox、Everforest、Dracula",
+    )
     table.add_row("/transcript", "显示当前 Agent 可读会话记录的路径")
     table.add_row("/copy", "复制当前页完整输出，可直接粘贴给 Agent")
     table.add_row("/copy-history", "只复制当前会话的活动记录")

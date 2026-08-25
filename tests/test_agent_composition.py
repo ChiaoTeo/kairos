@@ -25,7 +25,10 @@ from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.reference import InstrumentId
 from kairospy.investment.apps.reference.application import InstrumentRef
-from kairospy.investment.apps.execution.application import TargetPositionRequest
+from kairospy.investment.apps.execution.application import (
+    ImmediateAlgorithm,
+    TargetPositionRequest,
+)
 
 
 PROFILE = {
@@ -121,7 +124,9 @@ def test_optional_agent_resource_failure_is_degraded_and_cannot_enter_gate(
     )
     assert isinstance(decorated, UnavailableAgentExecutionCommands)
     rejected = decorated.target_position(
-        TargetPositionRequest("BTCUSDT", Decimal("1"), account_id="main"),
+        TargetPositionRequest(
+            "BTCUSDT", Decimal("1"), algorithm=ImmediateAlgorithm(), account_id="main"
+        ),
         request_id="request-1",
         strategy_id="strategy",
         instance_id="instance",
@@ -240,18 +245,46 @@ def test_exposure_reduction_requires_fresh_complete_account_evidence() -> None:
     )
 
     assert (
-        complete(TargetPositionRequest("BTCUSDT", Decimal("1"), account_id="main"))
+        complete(
+            TargetPositionRequest(
+                "BTCUSDT",
+                Decimal("1"),
+                algorithm=ImmediateAlgorithm(),
+                account_id="main",
+            )
+        )
         == "reduce"
     )
     assert (
-        complete(TargetPositionRequest("BTCUSDT", Decimal("0"), account_id="main"))
+        complete(
+            TargetPositionRequest(
+                "BTCUSDT",
+                Decimal("0"),
+                algorithm=ImmediateAlgorithm(),
+                account_id="main",
+            )
+        )
         == "reduce"
     )
     assert (
-        complete(TargetPositionRequest("BTCUSDT", Decimal("3"), account_id="main"))
+        complete(
+            TargetPositionRequest(
+                "BTCUSDT",
+                Decimal("3"),
+                algorithm=ImmediateAlgorithm(),
+                account_id="main",
+            )
+        )
         == "increase"
     )
     assert (
-        partial(TargetPositionRequest("BTCUSDT", Decimal("0"), account_id="main"))
+        partial(
+            TargetPositionRequest(
+                "BTCUSDT",
+                Decimal("0"),
+                algorithm=ImmediateAlgorithm(),
+                account_id="main",
+            )
+        )
         == "unknown"
     )

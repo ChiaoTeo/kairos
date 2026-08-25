@@ -60,7 +60,9 @@ pub(crate) struct ExecutionActor {
 impl ExecutionActor {
     pub(crate) fn new() -> Self {
         Self {
-            generation: 0,
+            // Generation zero is reserved for the absence of a published state.
+            // A newly constructed actor already owns a valid, publishable state.
+            generation: 1,
             event_sequence: 0,
             orders: BTreeMap::new(),
             commitments: BTreeMap::new(),

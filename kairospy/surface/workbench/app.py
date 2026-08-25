@@ -16,7 +16,12 @@ from .state import WorkbenchState
 from kairospy.surface.presentation import redact_text
 
 from .transcript import WorkbenchTranscript
-from .theme import KAIROS_THEME
+from .preferences import load_project_theme, save_project_theme
+from .theme import (
+    KAIROS_THEME,
+    KAIROS_THEMES,
+    resolve_theme_name,
+)
 from .widgets import ActivityStream
 
 
@@ -30,6 +35,7 @@ class KairosWorkbenchApp(App[int]):
         Binding("ctrl+q", "quit", "退出", show=False),
         Binding("question_mark", "help", "帮助"),
         Binding("ctrl+p", "command_palette", "命令", show=False),
+        Binding("ctrl+t", "change_theme", "主题", show=False),
         Binding("ctrl+c", "cancel_operation", "取消操作", show=False),
         Binding("ctrl+shift+c", "copy_page", "复制当前页", show=False),
     ]
@@ -46,8 +52,9 @@ class KairosWorkbenchApp(App[int]):
         transcript_path: Path | None = None,
     ) -> None:
         super().__init__(watch_css=watch_css)
-        self.register_theme(KAIROS_THEME)
-        self.theme = KAIROS_THEME.name
+        for theme in KAIROS_THEMES:
+            self.register_theme(theme)
+        self.theme = load_project_theme(state.owner) or KAIROS_THEME.name
         self.state = state
         self.transcript = WorkbenchTranscript.create(state, transcript_path)
         self.initial_section = initial_section
@@ -118,6 +125,13 @@ class KairosWorkbenchApp(App[int]):
         if isinstance(screen, CommandLineScreen):
             screen.submit("/help")
 
+    def action_change_theme(self) -> None:
+        """Open the curated theme picker in the shared interaction region."""
+
+        screen = self.screen
+        if isinstance(screen, CommandLineScreen):
+            screen.present_theme_picker()
+
     def action_cancel_operation(self) -> None:
         screen = self.screen
         if isinstance(screen, CommandLineScreen):
@@ -127,6 +141,16 @@ class KairosWorkbenchApp(App[int]):
         """Copy the current interaction and stable activity history for handoff."""
 
         self.copy_current_page()
+
+    def select_theme(self, name: str) -> bool:
+        """Select one curated Kairos theme by its short or registered name."""
+
+        theme_name = resolve_theme_name(name)
+        if theme_name is None:
+            return False
+        self.theme = theme_name
+        save_project_theme(self.state.owner, theme_name)
+        return True
 
     def copy_current_page(self, *, history_only: bool = False) -> None:
         """Copy a redacted page rendering, optionally limiting it to activities."""

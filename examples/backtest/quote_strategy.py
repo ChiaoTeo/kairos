@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.strategy import QuoteEvent, Strategy, StrategyContext
+from kairospy.strategy import ImmediateAlgorithm, QuoteEvent, Strategy, StrategyContext
 
 
 class BtcusdtQuoteStrategy(Strategy):
@@ -27,6 +27,7 @@ class BtcusdtQuoteStrategy(Strategy):
                 quote.instrument,
                 Decimal("0.01"),
                 account="paper-account",
+                algorithm=ImmediateAlgorithm(),
                 limit_price=quote.ask_price,
                 reason="enter on the first executable quote",
             )
@@ -34,5 +35,6 @@ class BtcusdtQuoteStrategy(Strategy):
             ctx.execution.close_position(
                 quote.instrument,
                 account="paper-account",
+                algorithm=ImmediateAlgorithm(),
                 reason="close on the second quote",
             )

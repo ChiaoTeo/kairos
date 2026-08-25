@@ -59,6 +59,10 @@ No default workspace test may place an external order.
 
 - Provider capability and composition inventory: [capability matrix](capability-matrix.md)
 - Outcome rules and application recovery: `crates/modules/execution/src/integration_tests.rs`
+- Kairospy/Rust JSON-RPC contract interoperability and legacy-field rejection:
+  `kairospy_explicit_algorithm_round_trips_through_execution_json_rpc` in the same test module
+- Managed TWAP dispatch through the Binance adapter and HTTP venue boundary:
+  `conflux_managed_runtime_dispatches_due_twap_through_its_venue_connection` in the same test module
 - Binance order mapping and outcome fixtures:
   `crates/platform/integration/src/services/participants/binance/execution.rs`
 - OKX order mapping and outcome fixtures:

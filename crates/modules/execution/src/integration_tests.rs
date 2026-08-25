@@ -11,8 +11,8 @@ use std::time::Duration;
 use kairos_conflux::{
     BlockingOrderCommand as OrderCommand, BlockingOrderQuery as OrderQuery, CommandOutcome,
     Conflux, ConfluxConfig, ConfluxSystem, ConnectionKey, ExternalOrder, ExternalOrderQuery,
-    IndeterminateCommand, IntegrationError, MmapOutputDeclaration, OrderEntryEvent,
-    OrderEntryRequest, OrderEntryStatus, OrderType as ConnectionOrderType,
+    IndeterminateCommand, IntegrationError, JsonRpcRuntimeConfig, MmapOutputDeclaration,
+    OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, OrderType as ConnectionOrderType,
     ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
     ShutdownMode, TimeInForce,
 };
@@ -31,7 +31,9 @@ use kairos_execution::{
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
     MarketObservation, OrderSide, OrderType, Quote, SplitOrderPolicy, UnknownRemoteOrderResolution,
 };
-use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher};
+use kairos_execution_contract::{
+    ExecutionControlRpcServer, ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
+};
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::execution::{
@@ -2675,7 +2677,7 @@ async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connectio
         .expect("test listener accepts blocking connections");
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
-        for expected_path in ["/api/v3/time", "/api/v3/order"] {
+        loop {
             let (mut stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -2685,13 +2687,18 @@ async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connectio
             let request = String::from_utf8_lossy(&buffer[..size]);
             let request_line = request.lines().next().unwrap_or_default();
             assert!(
-                request_line.contains(expected_path),
-                "expected {expected_path}, received {request_line}"
+                request_line.contains("/api/v3/time") || request_line.contains("/api/v3/order"),
+                "unexpected Binance request: {request_line}"
             );
-            let body = if expected_path.ends_with("/time") {
-                r#"{"serverTime":1700000000000}"#
+            let submitted = request_line.contains("/api/v3/order");
+            let body = if submitted {
+                r#"{"orderId":42}"#.to_owned()
             } else {
-                r#"{"orderId":42}"#
+                let now_millis = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis();
+                format!(r#"{{"serverTime":{now_millis}}}"#)
             };
             write!(
                 stream,
@@ -2699,18 +2706,30 @@ async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connectio
                 body.len()
             )
             .unwrap();
+            if submitted {
+                break;
+            }
         }
     });
 
     let directory = tempfile::tempdir().unwrap();
     let state_path = directory.path().join("execution.json");
-    let application = application(&state_path);
+    let mut application = application(&state_path);
     let identity = kairos_primitives::runtime::InstanceIdentity::new(
         "workspace:test",
         "launch:test",
         "instance:test",
     )
     .unwrap();
+    application
+        .configure_conflux(
+            Vec::new(),
+            Vec::new(),
+            identity.clone(),
+            ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+            None,
+        )
+        .unwrap();
     let entry_key = ConnectionKey::new("execution.test.spot.command").unwrap();
     let mut system = ConfluxSystem::new();
     system
@@ -2753,7 +2772,7 @@ async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connectio
     tokio::task::LocalSet::new()
         .run_until(async move {
             let process = tokio::task::spawn_local(conflux.run());
-            handle
+            let invocation = handle
                 .rpc_actor_invocation(Duration::from_secs(5))
                 .call(move |application, context| {
                     Box::pin(async move {
@@ -2817,13 +2836,552 @@ async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connectio
                         Ok(())
                     })
                 })
-                .await
-                .unwrap();
+                .await;
+            if let Err(error) = invocation {
+                match process.await.unwrap() {
+                    Ok(_) => panic!("managed invocation failed: {error}; actor exited cleanly"),
+                    Err(actor_error) => {
+                        panic!("managed invocation failed: {error}; actor failed: {actor_error}")
+                    },
+                }
+            }
             handle.shutdown(ShutdownMode::Drain);
             process.await.unwrap().unwrap();
         })
         .await;
     server.join().unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
+    let submit_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let submit_endpoint = format!("http://{}", submit_listener.local_addr().unwrap());
+    let submit_server = std::thread::spawn(move || loop {
+        let (mut stream, _) = submit_listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut buffer = [0_u8; 16 * 1024];
+        let size = stream.read(&mut buffer).unwrap();
+        let request = String::from_utf8_lossy(&buffer[..size]);
+        let request_line = request.lines().next().unwrap_or_default();
+        let submitted = request_line.contains("/api/v3/order");
+        assert!(
+            submitted || request_line.contains("/api/v3/time"),
+            "unexpected Binance submit request: {request_line}"
+        );
+        let body = if submitted {
+            // The venue accepted the order but its acknowledgement lost the
+            // required identity. Execution must reconcile instead of retrying.
+            "{}".to_owned()
+        } else {
+            let now_millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            format!(r#"{{"serverTime":{now_millis}}}"#)
+        };
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        if submitted {
+            break;
+        }
+    });
+
+    let directory = tempfile::tempdir().unwrap();
+    let state_path = directory.path().join("execution.json");
+    let identity = kairos_primitives::runtime::InstanceIdentity::new(
+        "workspace:test",
+        "launch:test",
+        "instance:restart",
+    )
+    .unwrap();
+    let entry_key = ConnectionKey::new("execution.test.spot.command").unwrap();
+    let plan = ExecutionConnectionPlan {
+        route_id: "test".into(),
+        required: true,
+        account_id: AccountId::new("main").unwrap(),
+        segment_key: SegmentKey::new("spot").unwrap(),
+        instrument_type: ParticipantInstrumentTypeRef::new("spot").unwrap(),
+        entry_key: entry_key.to_string(),
+        query_key: entry_key.to_string(),
+        stream_key: "execution.test.spot.stream".into(),
+    };
+    let mut first = application(&state_path);
+    first
+        .configure_conflux(
+            Vec::new(),
+            Vec::new(),
+            identity.clone(),
+            ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+            None,
+        )
+        .unwrap();
+    let mut first_system = ConfluxSystem::new();
+    first_system
+        .connections()
+        .binance_spot_rest
+        .create(
+            entry_key.clone(),
+            kairos_conflux::BinanceRestConfig {
+                environment: "test".into(),
+                endpoint: submit_endpoint,
+                credential: Some(kairos_conflux::BinanceCredential {
+                    principal_id: "test".into(),
+                    api_key: SecretString::from("test-api-key".to_owned()),
+                    secret: SecretString::from("test-secret".to_owned()),
+                }),
+            },
+        )
+        .unwrap();
+    for kind in [
+        ExecutionViewKind::ActiveOrders,
+        ExecutionViewKind::CurrentExecution,
+        ExecutionViewKind::ActiveIntents,
+    ] {
+        let key = ExecutionViewKey::from_identity(&identity, kind);
+        first_system
+            .outputs()
+            .mmap
+            .declare(
+                key.canonical_key(),
+                MmapOutputDeclaration {
+                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
+                    slot_capacity: 1024 * 1024,
+                    revision: 1,
+                },
+            )
+            .unwrap();
+    }
+    let (first_conflux, first_handle) =
+        Conflux::new(first, first_system, ConfluxConfig::default()).unwrap();
+    let first_actor = tokio::task::LocalSet::new()
+        .run_until(async move {
+            let process = tokio::task::spawn_local(first_conflux.run());
+            first_handle
+                .rpc_actor_invocation(Duration::from_secs(5))
+                .call(move |application, context| {
+                    Box::pin(async move {
+                        application
+                            .configure_conflux(
+                                vec![plan],
+                                Vec::new(),
+                                identity,
+                                ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+                                None,
+                            )
+                            .unwrap();
+                        let mut intent =
+                            strategy_intent("intent:twap-managed-restart", 4, Some(100));
+                        intent.source_event_time_unix_nanos = Some(UnixNanos::new(100));
+                        intent.algorithm = kairos_execution::ExecutionAlgorithmPolicy::Twap(
+                            kairos_execution::TwapPolicy {
+                                slice_count: 2,
+                                slice_interval: DurationNanos::new(10),
+                            },
+                        );
+                        application.submit_intent(intent).unwrap();
+                        let error = application
+                            .advance_due_algorithm_runs_managed(110, 8, context)
+                            .await
+                            .unwrap_err();
+                        assert!(matches!(error, ExecutionError::Indeterminate(_)));
+                        assert_eq!(application.orders(None).len(), 2);
+                        assert_eq!(
+                            application.algorithm_runs()[0].actions[1].status,
+                            AlgorithmActionStatus::Indeterminate
+                        );
+                        while application.pending_business_event().is_some() {
+                            application.acknowledge_business_event();
+                        }
+                        Ok(())
+                    })
+                })
+                .await
+                .unwrap();
+            first_handle.shutdown(ShutdownMode::Drain);
+            process.await.unwrap().unwrap().actor
+        })
+        .await;
+    submit_server.join().unwrap();
+    let uncertain_order_id = first_actor
+        .orders(None)
+        .into_iter()
+        .find(|order| order.status == ExecutionOrderStatus::Unknown)
+        .expect("response loss leaves one uncertain order")
+        .order_id
+        .to_string();
+
+    let query_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let query_endpoint = format!("http://{}", query_listener.local_addr().unwrap());
+    let queried_order_id = uncertain_order_id.clone();
+    let query_server = std::thread::spawn(move || {
+        let mut observed_open = false;
+        let mut observed_history = false;
+        while !observed_open || !observed_history {
+            let (mut stream, _) = query_listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = [0_u8; 16 * 1024];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_line = request.lines().next().unwrap_or_default();
+            let body = if request_line.contains("/api/v3/time") {
+                let now_millis = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis();
+                format!(r#"{{"serverTime":{now_millis}}}"#)
+            } else if request_line.contains("/api/v3/openOrders") {
+                observed_open = true;
+                serde_json::json!([{
+                    "orderId": 99,
+                    "clientOrderId": queried_order_id,
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "LIMIT",
+                    "status": "NEW",
+                    "origQty": "2",
+                    "executedQty": "0",
+                    "price": "100",
+                    "updateTime": 1_700_000_000_000_u64
+                }])
+                .to_string()
+            } else if request_line.contains("/api/v3/allOrders") {
+                observed_history = true;
+                serde_json::json!([{
+                    "orderId": 99,
+                    "clientOrderId": queried_order_id,
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "LIMIT",
+                    "status": "NEW",
+                    "origQty": "2",
+                    "executedQty": "0",
+                    "price": "100",
+                    "updateTime": 1_700_000_000_000_u64
+                }])
+                .to_string()
+            } else {
+                panic!("unexpected Binance query request: {request_line}");
+            };
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+
+    let mut restored = application(&state_path);
+    assert_eq!(restored.orders(None).len(), 2);
+    assert_eq!(
+        restored.algorithm_runs()[0].actions[1].status,
+        AlgorithmActionStatus::Indeterminate
+    );
+    restored
+        .configure_conflux(
+            Vec::new(),
+            Vec::new(),
+            identity.clone(),
+            ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+            None,
+        )
+        .unwrap();
+    let mut restored_system = ConfluxSystem::new();
+    restored_system
+        .connections()
+        .binance_spot_rest
+        .create(
+            entry_key.clone(),
+            kairos_conflux::BinanceRestConfig {
+                environment: "test".into(),
+                endpoint: query_endpoint,
+                credential: Some(kairos_conflux::BinanceCredential {
+                    principal_id: "test".into(),
+                    api_key: SecretString::from("test-api-key".to_owned()),
+                    secret: SecretString::from("test-secret".to_owned()),
+                }),
+            },
+        )
+        .unwrap();
+    for kind in [
+        ExecutionViewKind::ActiveOrders,
+        ExecutionViewKind::CurrentExecution,
+        ExecutionViewKind::ActiveIntents,
+    ] {
+        let key = ExecutionViewKey::from_identity(&identity, kind);
+        restored_system
+            .outputs()
+            .mmap
+            .declare(
+                key.canonical_key(),
+                MmapOutputDeclaration {
+                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
+                    slot_capacity: 1024 * 1024,
+                    revision: 1,
+                },
+            )
+            .unwrap();
+    }
+    let (restored_conflux, restored_handle) =
+        Conflux::new(restored, restored_system, ConfluxConfig::default()).unwrap();
+    let restored_plan = ExecutionConnectionPlan {
+        route_id: "test".into(),
+        required: true,
+        account_id: AccountId::new("main").unwrap(),
+        segment_key: SegmentKey::new("spot").unwrap(),
+        instrument_type: ParticipantInstrumentTypeRef::new("spot").unwrap(),
+        entry_key: entry_key.to_string(),
+        query_key: entry_key.to_string(),
+        stream_key: "execution.test.spot.stream".into(),
+    };
+    let final_actor = tokio::task::LocalSet::new()
+        .run_until(async move {
+            let process = tokio::task::spawn_local(restored_conflux.run());
+            restored_handle
+                .rpc_actor_invocation(Duration::from_secs(5))
+                .call(move |application, context| {
+                    Box::pin(async move {
+                        application
+                            .configure_conflux(
+                                vec![restored_plan],
+                                Vec::new(),
+                                identity,
+                                ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+                                None,
+                            )
+                            .unwrap();
+                        let changed = application
+                            .reconcile_managed_orders(Default::default(), context)
+                            .await
+                            .unwrap();
+                        assert_eq!(changed, 1);
+                        assert_eq!(application.orders(None).len(), 2);
+                        let reconciled = application
+                            .orders(None)
+                            .into_iter()
+                            .find(|order| order.order_id.as_str() == uncertain_order_id)
+                            .unwrap();
+                        assert_eq!(reconciled.status, ExecutionOrderStatus::Accepted);
+                        assert_eq!(reconciled.remote_order_id.as_deref(), Some("99"));
+                        assert_ne!(
+                            application.algorithm_runs()[0].actions[1].status,
+                            AlgorithmActionStatus::Indeterminate
+                        );
+                        while application.pending_business_event().is_some() {
+                            application.acknowledge_business_event();
+                        }
+                        Ok(())
+                    })
+                })
+                .await
+                .unwrap();
+            restored_handle.shutdown(ShutdownMode::Drain);
+            process.await.unwrap().unwrap().actor
+        })
+        .await;
+    query_server.join().unwrap();
+    assert_eq!(final_actor.orders(None).len(), 2);
+    let persisted = application(&state_path);
+    assert_eq!(persisted.orders(None).len(), 2);
+    assert_eq!(
+        persisted
+            .orders(None)
+            .into_iter()
+            .find(|order| order.order_id.as_str() == uncertain_order_id)
+            .unwrap()
+            .remote_order_id
+            .as_deref(),
+        Some("99")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "cross-language certification: requires uv and the Kairospy workspace"]
+async fn kairospy_explicit_algorithm_round_trips_through_execution_json_rpc() {
+    let directory = tempfile::tempdir().unwrap();
+    let state_path = directory.path().join("execution.json");
+    let socket_path = directory.path().join("execution.sock");
+    let mut application = application(&state_path);
+    let mut intent = strategy_intent("intent:kairospy-rpc-immediate", 2, None);
+    intent.strategy_decision_id = Some("decision:kairospy-rpc-immediate".into());
+    intent.strategy_id = "python-strategy".into();
+    intent.reason = "cross-language contract certification".into();
+    application
+        .submit_intent_with_idempotency(intent, "request:kairospy-rpc-immediate".into())
+        .unwrap();
+    while application.pending_business_event().is_some() {
+        application.acknowledge_business_event();
+    }
+    let durable = application.pending_outbox(1_024).unwrap();
+    application
+        .acknowledge_outbox(&durable.iter().map(|entry| entry.id).collect::<Vec<_>>())
+        .unwrap();
+
+    let identity =
+        kairos_primitives::runtime::InstanceIdentity::new("workspace:test", "launch", "instance")
+            .unwrap();
+    application
+        .configure_conflux(
+            Vec::new(),
+            Vec::new(),
+            identity.clone(),
+            ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+            None,
+        )
+        .unwrap();
+    let mut system = ConfluxSystem::new();
+    for kind in [
+        ExecutionViewKind::ActiveOrders,
+        ExecutionViewKind::CurrentExecution,
+        ExecutionViewKind::ActiveIntents,
+    ] {
+        let key = ExecutionViewKey::from_identity(&identity, kind);
+        system
+            .outputs()
+            .mmap
+            .declare(
+                key.canonical_key(),
+                MmapOutputDeclaration {
+                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
+                    slot_capacity: 1024 * 1024,
+                    revision: 1,
+                },
+            )
+            .unwrap();
+    }
+    let (conflux, handle) = Conflux::new(application, system, ConfluxConfig::default()).unwrap();
+    let methods = crate::application::ExecutionRpcService::<ExecutionApplication>::new(
+        handle.rpc_actor_invocation(Duration::from_secs(5)),
+    )
+    .into_rpc();
+    let runtime = conflux.with_json_rpc(
+        handle.clone(),
+        methods,
+        JsonRpcRuntimeConfig::uds(socket_path.clone()),
+    );
+
+    tokio::task::LocalSet::new()
+        .run_until(async move {
+            let process = tokio::task::spawn_local(runtime.run());
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while (!socket_path.exists()
+                || !matches!(handle.phase(), kairos_conflux::ProcessPhase::Running))
+                && tokio::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(
+                socket_path.exists(),
+                "Execution JSON-RPC socket did not start"
+            );
+
+            let script = r#"
+import copy
+from decimal import Decimal
+import json
+import sys
+
+from kairospy.infrastructure.contracts.execution import ExecutionControlClient
+from kairospy.infrastructure.transport.json_rpc import UnixJsonRpcClient
+from kairospy.investment.apps.execution.application.commands import ExecutionCommandClient
+from kairospy.strategy import ImmediateAlgorithm, TargetPositionRequest
+
+class Capture:
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.params = None
+
+    def call(self, method, params=None):
+        self.params = copy.deepcopy(params)
+        return self.delegate.call(method, params)
+
+socket_path = sys.argv[1]
+control = ExecutionControlClient(socket_path, timeout=5)
+capture = Capture(control)
+execution = ExecutionCommandClient(capture, launch_id="launch")
+result = execution.target_position(
+    TargetPositionRequest(
+        "BTCUSDT",
+        Decimal("2"),
+        algorithm=ImmediateAlgorithm(),
+        account_id="main",
+        execution_route_id="execution-route:test",
+        intent_id="intent:kairospy-rpc-immediate",
+        strategy_decision_id="decision:kairospy-rpc-immediate",
+        reason="cross-language contract certification",
+    ),
+    strategy_id="python-strategy",
+    instance_id="instance",
+    request_id="request:kairospy-rpc-immediate",
+)
+assert result.status == "accepted", result
+assert result.result["status"] == "duplicate", result
+assert capture.params is not None
+legacy = copy.deepcopy(capture.params[0])
+legacy["command_id"] = "request:kairospy-rpc-legacy"
+legacy["idempotency_key"] = "request:kairospy-rpc-legacy"
+legacy["intent"]["hedge_policy"] = {}
+legacy_rejected = False
+legacy_error = ""
+try:
+    control.call("execution_submit_intent", [legacy])
+except RuntimeError as error:
+    legacy_error = str(error)
+    legacy_rejected = "hedge_policy" in legacy_error or "Invalid params" in legacy_error
+assert legacy_rejected, legacy_error
+health = dict(control.health())
+UnixJsonRpcClient(socket_path, timeout=5).call(
+    "system_stop",
+    [{"immediate": False, "reason": "cross-language certification complete"}],
+)
+print(json.dumps({
+    "status": result.result["status"],
+    "intent_id": result.result["intent_id"],
+    "legacy_rejected": legacy_rejected,
+    "health": health["status"],
+}))
+"#;
+            let python_socket = socket_path.clone();
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new("uv")
+                    .args(["run", "python", "-c", script])
+                    .arg(python_socket)
+                    .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
+                    .output()
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "Kairospy client failed:\nstdout={}\nstderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let evidence: serde_json::Value =
+                serde_json::from_slice(&output.stdout).expect("Kairospy emits JSON evidence");
+            assert_eq!(evidence["status"], "duplicate");
+            assert_eq!(evidence["intent_id"], "intent:kairospy-rpc-immediate");
+            assert_eq!(evidence["legacy_rejected"], true);
+            assert_eq!(evidence["health"], "ready");
+
+            let outcome = process.await.unwrap().unwrap();
+            assert_eq!(outcome.actor.intents().len(), 1);
+            assert_eq!(outcome.actor.orders(None).len(), 1);
+            assert!(matches!(
+                outcome.actor.algorithm_runs()[0].spec,
+                kairos_execution::ExecutionAlgorithmSpec::Immediate
+            ));
+        })
+        .await;
 }
 
 #[test]
@@ -4193,6 +4751,34 @@ fn intent_idempotency_survives_restart_without_creating_a_second_intent() {
         .submit_intent_with_idempotency(intent, "command-1".into())
         .unwrap();
     assert!(duplicate);
+}
+
+#[test]
+fn intent_idempotency_rejects_any_changed_payload() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let intent = strategy_intent("intent:idempotent-payload", 1, None);
+    let mut app = application(&path);
+    app.submit_intent_with_idempotency(intent.clone(), "command-payload".into())
+        .unwrap();
+
+    let mut changed_quantity = intent.clone();
+    changed_quantity.target_quantity = Quantity::new(2, 0).unwrap();
+    let error = app
+        .submit_intent_with_idempotency(changed_quantity, "command-payload".into())
+        .unwrap_err();
+    assert!(error.to_string().contains("changed intent payload"));
+
+    let mut changed_algorithm = intent;
+    changed_algorithm.algorithm =
+        kairos_execution::ExecutionAlgorithmPolicy::Twap(kairos_execution::TwapPolicy {
+            slice_count: 2,
+            slice_interval: DurationNanos::new(10),
+        });
+    let error = app
+        .submit_intent_with_idempotency(changed_algorithm, "command-payload".into())
+        .unwrap_err();
+    assert!(error.to_string().contains("changed intent payload"));
 }
 
 #[test]

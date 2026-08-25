@@ -1061,11 +1061,11 @@ def test_account_wizard_exposes_binance_and_okx_readonly_paths(
 
     modes, providers, summary, prompt = asyncio.run(run())
     assert modes == [
-        "[1]  模拟账户  ·  使用本地余额，不连接交易所",
+        "[1]  模拟账户    ·  使用本地余额，不连接交易所",
         "[2]  交易所账户  ·  连接 Binance 或 OKX 的真实账户",
     ]
     assert providers == [
-        "[1]  Binance  ·  连接 Binance API",
+        "[1]  Binance         ·  连接 Binance API",
         "[2]  OKX（原 OKEx）  ·  连接 OKX API",
     ]
     assert "Binance" in summary
@@ -1105,7 +1105,7 @@ def test_notification_provider_uses_standard_action_cards(
     prompts, summary, placeholder = asyncio.run(run())
     assert prompts == [
         "[1]  飞书（推荐）  ·  使用群机器人 Webhook",
-        "[2]  Telegram  ·  使用机器人令牌和 Chat ID",
+        "[2]  Telegram      ·  使用机器人令牌和 Chat ID",
     ]
     assert "创建通知提醒" in summary
     assert "<redacted>" not in "".join(prompts)
@@ -1312,8 +1312,8 @@ def test_model_provider_is_a_numbered_choice_with_product_summary(
 
     prompts, summary, next_summary, placeholder = asyncio.run(run())
     assert len(prompts) == 6
-    assert prompts[0] == "[1]  OpenAI（推荐）  ·  使用 Responses API"
-    assert prompts[3] == "[4]  Ollama（本地）  ·  连接 Ollama，默认无需 API Key"
+    assert prompts[0] == "[1]  OpenAI（推荐）     ·  使用 Responses API"
+    assert prompts[3] == "[4]  Ollama（本地）     ·  连接 Ollama，默认无需 API Key"
     assert "配置模型服务" in summary
     assert "'kind'" not in summary
     assert "Ollama" in next_summary

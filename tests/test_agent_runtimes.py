@@ -32,7 +32,10 @@ from kairospy.strategy.apps.agent.services.tools import (
     MCPServerBinding,
     MCPToolPolicy,
 )
-from kairospy.investment.apps.execution.application import TargetPositionRequest
+from kairospy.investment.apps.execution.application import (
+    ImmediateAlgorithm,
+    TargetPositionRequest,
+)
 
 
 def _candidate() -> IntentCandidate:
@@ -47,7 +50,11 @@ def _candidate() -> IntentCandidate:
         instance_id="instance",
         operation="target_position",
         request=TargetPositionRequest(
-            "BTCUSDT", Decimal("1"), account_id="main", intent_id="intent"
+            "BTCUSDT",
+            Decimal("1"),
+            algorithm=ImmediateAlgorithm(),
+            account_id="main",
+            intent_id="intent",
         ),
         exposure_effect="unknown",
         profile_hash="profile-hash",

@@ -25,7 +25,10 @@ from kairospy.strategy.apps.agent.services import (
     DecisionTask,
 )
 from kairospy.strategy.apps.agent.services.events import AgentEventStream
-from kairospy.investment.apps.execution.application import TargetPositionRequest
+from kairospy.investment.apps.execution.application import (
+    ImmediateAlgorithm,
+    TargetPositionRequest,
+)
 from kairospy.strategy import CommandResult
 
 
@@ -79,7 +82,11 @@ def _candidate(
         instance_id="instance",
         operation="target_position",
         request=TargetPositionRequest(
-            "BTCUSDT", Decimal("2"), account_id="main", intent_id=f"intent-{index}"
+            "BTCUSDT",
+            Decimal("2"),
+            algorithm=ImmediateAlgorithm(),
+            account_id="main",
+            intent_id=f"intent-{index}",
         ),
         exposure_effect="unknown",
         profile_hash="profile-hash",

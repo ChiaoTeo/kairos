@@ -10,6 +10,7 @@ from kairospy.investment.apps.execution.application import (
     ExecutionAccountNotEnabledError,
     ExecutionApplication,
     ExecutionIntent,
+    ImmediateAlgorithm,
     IntentNotFoundError,
     IntentStatus,
     OrderSide,
@@ -87,7 +88,9 @@ def test_for_account_is_only_single_account_sugar_over_canonical_requests() -> N
     main = execution.for_account("main", segment="usd_m_futures")
 
     target = main.target_position(
-        InstrumentId("instrument:test:BTC-PERP"), Decimal("2")
+        InstrumentId("instrument:test:BTC-PERP"),
+        Decimal("2"),
+        algorithm=ImmediateAlgorithm(),
     )
     order = main.limit_order(
         InstrumentId("instrument:test:BTC-PERP"),
@@ -113,6 +116,7 @@ def test_root_execute_submits_one_cross_account_intent() -> None:
     request = PairArbitrageRequest(
         ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), "main"),
         ArbitrageLegRequest("BTC-PERP", "Sell", Decimal("1"), "hedge"),
+        algorithm=ImmediateAlgorithm(),
     )
 
     receipt = execution.execute(request)
@@ -129,6 +133,7 @@ def test_cross_account_intent_rejects_entire_request_before_transport() -> None:
     request = PairArbitrageRequest(
         ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), "main"),
         ArbitrageLegRequest("BTC-PERP", "Sell", Decimal("1"), "outside"),
+        algorithm=ImmediateAlgorithm(),
     )
 
     receipt = execution.execute(request)
@@ -202,7 +207,10 @@ def test_refresh_quote_requires_an_owned_intent() -> None:
 
 def test_rejected_receipt_require_accepted_preserves_delivery_semantics() -> None:
     receipt = application(None, None).target_position(
-        InstrumentId("instrument:test:BTCUSDT"), Decimal("1"), account="main"
+        InstrumentId("instrument:test:BTCUSDT"),
+        Decimal("1"),
+        account="main",
+        algorithm=ImmediateAlgorithm(),
     )
 
     assert not receipt.accepted

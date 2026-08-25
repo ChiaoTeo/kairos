@@ -3,12 +3,15 @@ from __future__ import annotations
 from decimal import Decimal
 import hashlib
 import json
+import pytest
 
 from kairospy.investment.apps.execution.application import IntentAdmissionEvidence
 
 from kairospy.strategy import (
     ArbitrageLegRequest,
     HedgePolicy,
+    ImmediateAlgorithm,
+    MakerTakerHedgeAlgorithm,
     MakerExecutionPolicy,
     PairArbitrageRequest,
     PortfolioRebalanceRequest,
@@ -17,6 +20,7 @@ from kairospy.strategy import (
     QuoteRefreshRequest,
     SplitOrderPolicy,
     TargetPositionRequest,
+    TwapAlgorithm,
     InstrumentId,
     LimitOrderRequest,
     MarketOrderRequest,
@@ -184,6 +188,7 @@ def test_execution_client_encodes_decimal_intent_without_vendor_payloads() -> No
         TargetPositionRequest(
             "BTCUSDT",
             Decimal("1.250"),
+            algorithm=ImmediateAlgorithm(),
             account_id="main",
             segment_key="usd_m_futures",
         ),
@@ -199,16 +204,56 @@ def test_execution_client_encodes_decimal_intent_without_vendor_payloads() -> No
     assert body["intent"]["target_quantity"] == "1.250"
     assert body["intent"]["strategy_id"] == "sma"
     assert body["intent"]["segment_key"] == "usd_m_futures"
+    assert body["intent"]["algorithm"] == {"type": "immediate"}
+
+
+def test_kairospy_encodes_twap_and_rejects_removed_algorithm_aliases() -> None:
+    client = RecordingClient()
+    port = ExecutionCommandClient(client)
+    port.target_position(
+        TargetPositionRequest(
+            "BTCUSDT",
+            Decimal("4"),
+            algorithm=TwapAlgorithm(slice_count=2, slice_interval_nanos=10),
+            account_id="main",
+            source_event_time_unix_nanos=100,
+        ),
+        strategy_id="twap",
+        instance_id="instance-1",
+        request_id="request-twap",
+    )
+    intent = client.calls[0][1][0]["intent"]
+    assert intent["algorithm"] == {
+        "type": "twap",
+        "policy": {"slice_count": 2, "slice_interval": 10},
+    }
+
+    with pytest.raises(TypeError):
+        SplitOrderPolicy(child_count=2, **{"interval_millis": 10})
+    with pytest.raises(TypeError):
+        PairArbitrageRequest(
+            ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), "main"),
+            ArbitrageLegRequest("BTC-PERP", "Sell", Decimal("1"), "hedge"),
+            **{"hedge_policy": HedgePolicy("leg-0", "leg-1")},
+        )
 
 
 def test_execution_client_forwards_canonical_agent_admission_evidence() -> None:
     client = RecordingClient()
     port = ExecutionCommandClient(client)
     original = TargetPositionRequest(
-        "BTCUSDT", Decimal("2"), account_id="main", intent_id="intent-1"
+        "BTCUSDT",
+        Decimal("2"),
+        algorithm=ImmediateAlgorithm(),
+        account_id="main",
+        intent_id="intent-1",
     )
     effective = TargetPositionRequest(
-        "BTCUSDT", Decimal("1"), account_id="main", intent_id="intent-1"
+        "BTCUSDT",
+        Decimal("1"),
+        algorithm=ImmediateAlgorithm(),
+        account_id="main",
+        intent_id="intent-1",
     )
     admission = IntentAdmissionEvidence(
         decision_id="decision-1",
@@ -249,7 +294,12 @@ def test_execution_client_applies_launch_live_safety_before_owner_command() -> N
     )
 
     handle = port.target_position(
-        TargetPositionRequest("BTCUSDT", Decimal("1"), account_id="main"),
+        TargetPositionRequest(
+            "BTCUSDT",
+            Decimal("1"),
+            algorithm=ImmediateAlgorithm(),
+            account_id="main",
+        ),
         strategy_id="sma",
         instance_id="instance-1",
         request_id="request-3",
@@ -334,6 +384,7 @@ def test_execution_client_encodes_pair_arbitrage_as_two_execution_legs() -> None
             ArbitrageLegRequest(
                 "BTC-PERP", "Sell", Decimal("1"), "okx-hedge", segment_key="perp"
             ),
+            algorithm=ImmediateAlgorithm(),
         ),
         strategy_id="arb",
         instance_id="instance-1",
@@ -355,14 +406,14 @@ def test_pair_request_exposes_split_maker_and_hedge_controls() -> None:
                 "Buy",
                 Decimal("100"),
                 "maker-main",
-                split=SplitOrderPolicy(child_count=4, interval_millis=50),
+                split=SplitOrderPolicy(child_count=4),
                 maker=MakerExecutionPolicy(
                     min_interval_millis=25, max_inventory_abs=Decimal("200")
                 ),
             ),
             ArbitrageLegRequest("USDCUSDT-PERP", "Sell", Decimal("100"), "maker-hedge"),
-            hedge_policy=HedgePolicy(
-                "leg-0", "leg-1", max_unhedged_quantity=Decimal("1")
+            algorithm=MakerTakerHedgeAlgorithm(
+                HedgePolicy("leg-0", "leg-1", max_unhedged_quantity=Decimal("1"))
             ),
         ),
         strategy_id="maker",
@@ -372,7 +423,8 @@ def test_pair_request_exposes_split_maker_and_hedge_controls() -> None:
     intent = client.calls[0][1][0]["intent"]
     assert intent["legs"][0]["options"]["split"]["child_count"] == 4
     assert intent["legs"][0]["options"]["maker"]["max_inventory_abs"] == "200"
-    assert intent["hedge_policy"]["leader_leg_id"] == "leg-0"
+    assert intent["algorithm"]["type"] == "maker_taker_hedge"
+    assert intent["algorithm"]["policy"]["leader_leg_id"] == "leg-0"
 
 
 def test_quote_provisioning_is_a_two_sided_execution_intent() -> None:
@@ -385,6 +437,7 @@ def test_quote_provisioning_is_a_two_sided_execution_intent() -> None:
             Decimal("100"),
             Decimal("1.0002"),
             Decimal("100"),
+            algorithm=ImmediateAlgorithm(),
             account_id="main",
             maker=MakerExecutionPolicy(min_interval_millis=100),
         ),
@@ -425,6 +478,7 @@ def test_execution_client_encodes_portfolio_targets_as_target_position_legs() ->
                 PortfolioRebalanceTarget("BTCUSDT", Decimal("2"), "main"),
                 PortfolioRebalanceTarget("ETHUSDT", Decimal("5"), "secondary"),
             ),
+            algorithm=ImmediateAlgorithm(),
         ),
         strategy_id="portfolio",
         instance_id="instance-1",

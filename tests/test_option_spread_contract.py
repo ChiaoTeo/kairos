@@ -2,7 +2,12 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.strategy import CommandHandle, OptionSpreadLegRequest, OptionSpreadRequest
+from kairospy.strategy import (
+    CommandHandle,
+    ImmediateAlgorithm,
+    OptionSpreadLegRequest,
+    OptionSpreadRequest,
+)
 from kairospy.investment.apps.execution.application.application import ExecutionApplication
 
 
@@ -21,6 +26,7 @@ def test_option_spread_is_one_fixed_risk_package_contract() -> None:
         long_leg=_leg("long", "SPY-P-490", "buy"),
         minimum_net_credit=Decimal("1.20"),
         maximum_loss=Decimal("880"),
+        algorithm=ImmediateAlgorithm(),
         source_snapshot_id="dataset-set:hash",
         source_event_sequence=42,
         source_event_time_unix_nanos=1_700_000_000_000_000_000,
@@ -47,6 +53,7 @@ def test_option_spread_enters_execution_application_as_one_intent() -> None:
         long_leg=_leg("long", "SPY-P-490", "buy"),
         minimum_net_credit=Decimal("1.20"),
         maximum_loss=Decimal("880"),
+        algorithm=ImmediateAlgorithm(),
     )
     app = ExecutionApplication(
         _Commands(), None, strategy_id="strategy", instance_id="instance"
@@ -74,4 +81,5 @@ def test_option_spread_rejects_nonn_package_or_unprotected_shapes(
             long_leg=long,
             minimum_net_credit=Decimal("1"),
             maximum_loss=Decimal("900"),
+            algorithm=ImmediateAlgorithm(),
         )

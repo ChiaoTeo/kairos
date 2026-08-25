@@ -369,7 +369,6 @@ class ExecutionCommandClient:
             "failure_policy": request.failure_policy,
             "minimum_net_credit": _decimal(request.minimum_net_credit),
             "maximum_loss": _decimal(request.maximum_loss),
-            "maximum_quote_age_nanos": request.maximum_quote_age_nanos,
             "deadline_unix_nanos": request.deadline_unix_nanos,
             "legs": [
                 _option_spread_leg(request.short_leg),
@@ -626,9 +625,17 @@ def _single_order_intent(
 ) -> dict[str, object]:
     return {
         "intent_id": f"{strategy_id}:intent:{request_id}",
+        "strategy_decision_id": None,
         "strategy_id": strategy_id,
         "launch_id": launch_id or "",
         "instance_id": instance_id,
+        "instrument_id": order["instrument_id"],
+        "market_id": order.get("market_id"),
+        "execution_route_id": order.get("execution_route_id"),
+        "account_ids": [order["account_id"]],
+        "segment_key": order["segment_key"],
+        "target_quantity": "0",
+        "limit_price": None,
         "intent_type": "SingleOrder",
         "algorithm": _execution_algorithm(ImmediateAlgorithm()),
         "completion_policy": "AllLegsSatisfied",
@@ -641,11 +648,12 @@ def _single_order_intent(
                 "segment_key": order["segment_key"],
                 "instrument_id": order["instrument_id"],
                 "market_id": order.get("market_id") or order["instrument_id"],
-                "side": str(order["side"]).lower(),
+                "execution_route_id": order.get("execution_route_id"),
+                "side": str(order["side"]).capitalize(),
                 "quantity": order["quantity"],
-                "quantity_semantics": "order_quantity",
                 "limit_price": order.get("limit_price"),
-                "options": order.get("options") or {},
+                "target_position": False,
+                "options": _contract_order_options(order.get("options")),
             }
         ],
     }
@@ -705,7 +713,18 @@ def _execution_options(
     split: SplitOrderPolicy | None,
     maker: MakerExecutionPolicy | None,
 ) -> dict[str, object]:
-    options: dict[str, object] = {}
+    options: dict[str, object] = {
+        "time_in_force": None,
+        "reduce_only": None,
+        "post_only": None,
+        "position_side": None,
+        "quote_asset": None,
+        "wallet_type": None,
+        "trading_session": None,
+        "tokenize": None,
+        "split": None,
+        "maker": None,
+    }
     if split is not None:
         options["split"] = {
             "max_child_quantity": None
@@ -738,15 +757,31 @@ def _execution_options(
     return options
 
 
+def _contract_order_options(value: object) -> dict[str, object]:
+    options = _execution_options(None, None)
+    if value is None:
+        return options
+    if not isinstance(value, Mapping):
+        raise TypeError("Execution order options must be a mapping")
+    unknown = set(value) - set(options)
+    if unknown:
+        raise ValueError(
+            "Execution order options contain unsupported fields: "
+            + ", ".join(sorted(unknown))
+        )
+    options.update(value)
+    return options
+
+
 def _intent_submission_payload(
     effective: Mapping[str, object],
     evidence: IntentAdmissionEvidence | None,
 ) -> dict[str, object]:
-    payload: dict[str, object] = {"intent": dict(effective)}
+    effective_body = _contract_intent_body(effective)
+    payload: dict[str, object] = {"intent": effective_body}
     if evidence is None:
         return payload
-    original = _original_intent_body(effective, evidence)
-    effective_body = dict(effective)
+    original = _contract_intent_body(_original_intent_body(effective_body, evidence))
     original_json = _canonical_control_json(original)
     effective_json = _canonical_control_json(effective_body)
     payload["admission_evidence"] = {
@@ -759,6 +794,87 @@ def _intent_submission_payload(
         "effective_hash": hashlib.sha256(effective_json).hexdigest(),
     }
     return payload
+
+
+_INTENT_FIELDS = frozenset(
+    {
+        "intent_id",
+        "strategy_decision_id",
+        "strategy_id",
+        "launch_id",
+        "instance_id",
+        "instrument_id",
+        "market_id",
+        "execution_route_id",
+        "account_ids",
+        "segment_key",
+        "target_quantity",
+        "limit_price",
+        "source_snapshot_id",
+        "source_event_sequence",
+        "source_event_time_unix_nanos",
+        "reason",
+        "intent_type",
+        "algorithm",
+        "completion_policy",
+        "failure_policy",
+        "legs",
+        "deadline_unix_nanos",
+        "min_edge_bps",
+        "max_slippage_bps",
+        "estimated_fee_bps",
+        "minimum_net_credit",
+        "maximum_loss",
+        "order_options",
+    }
+)
+
+
+def _contract_intent_body(value: Mapping[str, object]) -> dict[str, object]:
+    unknown = set(value) - _INTENT_FIELDS
+    if unknown:
+        raise ValueError(
+            "Execution Intent contains unsupported fields: "
+            + ", ".join(sorted(unknown))
+        )
+    body = dict(value)
+    for required in (
+        "intent_id",
+        "strategy_id",
+        "launch_id",
+        "instance_id",
+        "instrument_id",
+        "account_ids",
+        "segment_key",
+        "reason",
+        "intent_type",
+        "algorithm",
+    ):
+        if required not in body:
+            raise ValueError(f"Execution Intent {required} is required")
+    defaults: dict[str, object] = {
+        "strategy_decision_id": None,
+        "market_id": None,
+        "execution_route_id": None,
+        "target_quantity": "0",
+        "limit_price": None,
+        "source_snapshot_id": None,
+        "source_event_sequence": None,
+        "source_event_time_unix_nanos": None,
+        "completion_policy": "AllLegsSatisfied",
+        "failure_policy": "CancelRemaining",
+        "legs": [],
+        "deadline_unix_nanos": None,
+        "min_edge_bps": None,
+        "max_slippage_bps": None,
+        "estimated_fee_bps": None,
+        "minimum_net_credit": None,
+        "maximum_loss": None,
+        "order_options": {},
+    }
+    for field, default in defaults.items():
+        body.setdefault(field, default)
+    return body
 
 
 def _original_intent_body(

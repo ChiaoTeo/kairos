@@ -15,7 +15,7 @@ from textual.containers import Vertical
 from textual.widgets import Static
 
 from ..safety import redact_renderable
-from ..theme import PRIMARY, WARNING
+from ..theme import NORD_COLORS, RichThemeColors, rich_theme_colors
 from kairospy.surface.presentation import redact_text
 from .action_list import ActionItem
 from .guided_action_list import GuidedActionList
@@ -158,6 +158,7 @@ class InteractionRegion(Vertical):
         # This mount-time value is discarded immediately; the Session remains
         # the sole owner of the current interaction.
         self._initial_interaction = initial_interaction
+        self._current_interaction: InteractionState | None = initial_interaction
 
     def compose(self) -> ComposeResult:
         yield Static(id="interaction-content")
@@ -168,21 +169,30 @@ class InteractionRegion(Vertical):
         )
 
     def on_mount(self) -> None:
+        self.app.theme_changed_signal.subscribe(self, self._theme_changed)
         if self._initial_interaction is not None:
             self.present(self._initial_interaction)
             self._initial_interaction = None
+
+    def _theme_changed(self, _theme: object) -> None:
+        if self._current_interaction is not None:
+            self.present(self._current_interaction)
 
     def present(self, interaction: InteractionState) -> None:
         """Replace the region atomically with one current interaction."""
 
         if not self.is_mounted:
+            self._current_interaction = interaction
             return
+        self._current_interaction = interaction
         content = self.query_one("#interaction-content", Static)
         actions = self.query_one("#guided-actions", GuidedActionList)
         items = _interaction_actions(interaction)
         actions.replace_items(items)
         actions.display = bool(items)
-        renderable = _interaction_renderable(interaction)
+        renderable = _interaction_renderable(
+            interaction, colors=rich_theme_colors(self.app.current_theme)
+        )
         content.update(redact_renderable(renderable) if renderable is not None else "")
         content.display = renderable is not None
 
@@ -193,7 +203,9 @@ def _interaction_actions(interaction: InteractionState) -> tuple[ActionItem, ...
     return ()
 
 
-def _interaction_renderable(interaction: InteractionState) -> RenderableType | None:
+def _interaction_renderable(
+    interaction: InteractionState, *, colors: RichThemeColors = NORD_COLORS
+) -> RenderableType | None:
     if isinstance(interaction, ChoiceInteraction):
         if interaction.summary is None:
             return None
@@ -205,35 +217,41 @@ def _interaction_renderable(interaction: InteractionState) -> RenderableType | N
         body.extend(
             (
                 Text(interaction.prompt, style="bold"),
-                Text(interaction.detail, style="dim"),
+                Text(interaction.detail, style=colors.muted),
             )
         )
         if interaction.error:
             body.extend((Text(), Text(interaction.error, style="bold red")))
-        return Panel(Group(*body), title=interaction.title, border_style=PRIMARY)
+        return Panel(
+            Group(*body), title=interaction.title, border_style=colors.primary
+        )
     if isinstance(interaction, ConfirmInteraction):
         commands = Text()
         commands.append(
-            f"[/y] {interaction.confirm_label}", style=f"bold {WARNING}"
+            f"[/y] {interaction.confirm_label}", style=f"bold {colors.warning}"
         )
         commands.append("    ")
         commands.append(f"[/n] {interaction.cancel_label}", style="bold")
         parts: list[RenderableType] = [interaction.summary, Text(), commands]
         if interaction.force_hint:
-            parts.append(Text(interaction.force_hint, style="dim"))
-        return Panel(Group(*parts), title=interaction.title, border_style=WARNING)
+            parts.append(Text(interaction.force_hint, style=colors.muted))
+        return Panel(
+            Group(*parts), title=interaction.title, border_style=colors.warning
+        )
     if isinstance(interaction, RunningInteraction):
         detail = Text(interaction.message)
         if interaction.progress is not None:
-            detail.append(f"\n进度 {interaction.progress:.0%}", style=PRIMARY)
+            detail.append(
+                f"\n进度 {interaction.progress:.0%}", style=colors.primary
+            )
         if interaction.cancellable:
-            detail.append("\nCtrl+C 取消当前任务", style="dim")
-        return Panel(detail, title=interaction.title, border_style=PRIMARY)
+            detail.append("\nCtrl+C 取消当前任务", style=colors.muted)
+        return Panel(detail, title=interaction.title, border_style=colors.primary)
     state = "自动刷新中" if interaction.refreshing else "自动刷新已关闭"
     return Group(
-        Text(interaction.title, style=f"bold {PRIMARY}"),
+        Text(interaction.title, style=f"bold {colors.primary}"),
         interaction.snapshot,
-        Text(state, style="dim"),
+        Text(state, style=colors.muted),
     )
 
 

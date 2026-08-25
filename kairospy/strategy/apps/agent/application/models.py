@@ -196,7 +196,6 @@ class TightenMaxSlippage:
 class TightenSplitPolicy:
     max_child_quantity: str | None = None
     child_count: int | None = None
-    interval_millis: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

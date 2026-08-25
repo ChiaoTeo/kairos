@@ -435,6 +435,35 @@ def test_back_preview_is_reverted_when_input_no_longer_matches() -> None:
     assert context == ("market",)
 
 
+def test_focused_back_picker_consumes_alias_and_keeps_input_visible() -> None:
+    async def run() -> tuple[tuple[str, ...], str, bool, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.session.context = ("strategy", "execution")
+            screen._show_context()
+
+            await pilot.press("slash", "b", "tab", "down", "enter")
+            await pilot.pause()
+            command_input = screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            )
+            return (
+                screen.session.context,
+                command_input.value,
+                command_input.display,
+                screen.query_one("#guided-actions", ActionList).has_focus,
+            )
+
+    context, value, input_visible, actions_focused = asyncio.run(run())
+
+    assert context == ("strategy", "instance")
+    assert value == ""
+    assert input_visible
+    assert actions_focused
+
+
 def test_slash_b_from_market_menu_offers_home_before_navigating() -> None:
     async def run() -> tuple[tuple[str, ...], str, tuple[str, ...]]:
         app = KairosWorkbenchApp(_state())
