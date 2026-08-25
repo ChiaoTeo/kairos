@@ -232,7 +232,10 @@ pub(crate) fn remote_status(value: &str) -> ExecutionOrderStatus {
         ExecutionOrderStatus::Rejected
     } else if normalized.contains("expire") {
         ExecutionOrderStatus::Expired
-    } else if normalized.contains("submit") || normalized.contains("accept") {
+    } else if normalized.contains("submit")
+        || normalized.contains("accept")
+        || normalized.contains("acknowledge")
+    {
         ExecutionOrderStatus::Accepted
     } else {
         ExecutionOrderStatus::Unknown

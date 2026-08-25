@@ -348,7 +348,7 @@ fn direct_source(
         } => Some((
             CliMarketOnceProvider::BinanceUsdMRest,
             "perpetual",
-            vec![ObservationKind::Quote],
+            vec![ObservationKind::Quote, ObservationKind::OrderBook],
         )),
         MarketProviderBinding::BinanceDerivatives {
             product: BinanceDerivativeProduct::Options,
@@ -455,6 +455,12 @@ transport = "rest"
         let quotes =
             standalone_market_routes(Some(directory.path()), "perpetual", ObservationKind::Quote)
                 .unwrap();
+        let order_books = standalone_market_routes(
+            Some(directory.path()),
+            "perpetual",
+            ObservationKind::OrderBook,
+        )
+        .unwrap();
         let trades =
             standalone_market_routes(Some(directory.path()), "perpetual", ObservationKind::Trade)
                 .unwrap();
@@ -462,6 +468,8 @@ transport = "rest"
         assert_eq!(quotes.len(), 1);
         assert_eq!(quotes[0].provider.as_str(), "binance");
         assert_eq!(quotes[0].connection, CliMarketOnceProvider::BinanceUsdMRest);
+        assert_eq!(order_books.len(), 1);
+        assert_eq!(order_books[0].provider.as_str(), "binance");
         assert!(trades.is_empty());
     }
 

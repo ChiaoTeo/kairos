@@ -269,6 +269,9 @@ impl ExecutionApplication {
                     },
                     _ => {},
                 }
+                if let Some(intent_id) = reconciled.intent_id.as_deref() {
+                    self.refresh_intent(intent_id)?;
+                }
                 changed += 1;
             }
         }

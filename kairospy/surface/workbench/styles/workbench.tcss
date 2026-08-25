@@ -55,14 +55,13 @@ Screen {
 
 #operation-dock {
     height: auto;
-    margin: 0 2;
+    margin: 0;
     border: none;
-    border-top: solid $boost;
     background: $surface;
 }
 
 #operation-dock:focus-within {
-    border-top: solid $boost;
+    border: none;
 }
 
 #interaction-region {
@@ -91,13 +90,14 @@ Screen {
     height: auto;
     max-height: 9;
     margin: 0;
-    padding: 0 1;
+    padding: 1 2 0 2;
     border: none;
     background: $surface;
 }
 
 #guided-actions:focus {
-    background: $panel;
+    background: $surface;
+    background-tint: transparent;
 }
 
 #guided-actions > .option-list--option {
@@ -120,7 +120,7 @@ Screen {
 #command-context {
     width: auto;
     height: 1fr;
-    padding: 0 1;
+    padding: 0 3;
     content-align: center middle;
     color: $primary;
     text-style: bold;
@@ -129,9 +129,9 @@ Screen {
 
 #command-input {
     width: 1fr;
-    height: 1fr;
-    margin: 0;
-    padding: 1 1;
+    height: 1;
+    margin: 1 2 1 0;
+    padding: 0 1;
     border: none;
     color: $text;
     background: $surface;
@@ -139,21 +139,16 @@ Screen {
 
 #command-input:focus {
     color: $text;
-    background: $panel;
+    background: $primary 22%;
+    background-tint: transparent;
 }
 
 #command-hints {
     height: 1;
-    margin: 0 2;
-    padding: 0 1;
+    margin: 0;
+    padding: 0 3;
     color: $secondary;
     background: $surface;
-}
-
-.-theme-kairos-dracula #command-bar,
-.-theme-kairos-dracula #command-context,
-.-theme-kairos-dracula #command-input {
-    background: $panel;
 }
 
 Screen.viewport-narrow #workspace-header {
@@ -171,14 +166,25 @@ Screen.viewport-narrow #command-output {
 }
 
 Screen.viewport-narrow #operation-dock {
-    margin-left: 1;
-    margin-right: 1;
+    margin: 0;
+}
+
+Screen.viewport-narrow #guided-actions {
+    padding: 1 0 0 0;
+}
+
+Screen.viewport-narrow #command-context {
+    padding-left: 1;
+    padding-right: 1;
+}
+
+Screen.viewport-narrow #command-input {
+    margin-right: 0;
 }
 
 Screen.viewport-narrow #command-hints {
     height: 1;
-    margin-left: 1;
-    margin-right: 1;
+    margin: 0;
     padding: 0 1;
 }
 

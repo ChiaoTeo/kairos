@@ -19,7 +19,7 @@ use kairos_conflux::{
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
     ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionFillReport, RefreshQuoteIntent,
-    RemoteOrderUpdate, RiskCommandFailure, SubmitOrder,
+    RemoteOrderQuery, RemoteOrderUpdate, RiskCommandFailure, SubmitOrder,
 };
 use kairos_execution::composition::{
     ExecutionConnectionOptions, FileExecutionStore, SimulatedRiskBehavior,
@@ -2959,6 +2959,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
     }
     let (first_conflux, first_handle) =
         Conflux::new(first, first_system, ConfluxConfig::default()).unwrap();
+    let first_identity = identity.clone();
     let first_actor = tokio::task::LocalSet::new()
         .run_until(async move {
             let process = tokio::task::spawn_local(first_conflux.run());
@@ -2970,7 +2971,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
                             .configure_conflux(
                                 vec![plan],
                                 Vec::new(),
-                                identity,
+                                first_identity,
                                 ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
                                 None,
                             )
@@ -3031,11 +3032,11 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
             let size = stream.read(&mut buffer).unwrap();
             let request = String::from_utf8_lossy(&buffer[..size]);
             let request_line = request.lines().next().unwrap_or_default();
+            let now_millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
             let body = if request_line.contains("/api/v3/time") {
-                let now_millis = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis();
                 format!(r#"{{"serverTime":{now_millis}}}"#)
             } else if request_line.contains("/api/v3/openOrders") {
                 observed_open = true;
@@ -3049,7 +3050,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
                     "origQty": "2",
                     "executedQty": "0",
                     "price": "100",
-                    "updateTime": 1_700_000_000_000_u64
+                    "updateTime": now_millis
                 }])
                 .to_string()
             } else if request_line.contains("/api/v3/allOrders") {
@@ -3064,7 +3065,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
                     "origQty": "2",
                     "executedQty": "0",
                     "price": "100",
-                    "updateTime": 1_700_000_000_000_u64
+                    "updateTime": now_millis
                 }])
                 .to_string()
             } else {
@@ -3142,6 +3143,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
         query_key: entry_key.to_string(),
         stream_key: "execution.test.spot.stream".into(),
     };
+    let reconciled_order_id = uncertain_order_id.clone();
     let final_actor = tokio::task::LocalSet::new()
         .run_until(async move {
             let process = tokio::task::spawn_local(restored_conflux.run());
@@ -3159,7 +3161,13 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
                             )
                             .unwrap();
                         let changed = application
-                            .reconcile_managed_orders(Default::default(), context)
+                            .reconcile_managed_orders(
+                                RemoteOrderQuery {
+                                    symbol: Some(Symbol::new("BTCUSDT").unwrap()),
+                                    ..Default::default()
+                                },
+                                context,
+                            )
                             .await
                             .unwrap();
                         assert_eq!(changed, 1);
@@ -3167,7 +3175,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
                         let reconciled = application
                             .orders(None)
                             .into_iter()
-                            .find(|order| order.order_id.as_str() == uncertain_order_id)
+                            .find(|order| order.order_id.as_str() == reconciled_order_id)
                             .unwrap();
                         assert_eq!(reconciled.status, ExecutionOrderStatus::Accepted);
                         assert_eq!(reconciled.remote_order_id.as_deref(), Some("99"));

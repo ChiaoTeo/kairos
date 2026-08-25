@@ -106,6 +106,40 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
     assert input_focused
 
 
+def test_focusing_interaction_controls_does_not_tint_the_whole_region() -> None:
+    async def run() -> tuple[int, float, int, bool, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            command_input = app.screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            )
+            input_tint_alpha = command_input.styles.background_tint.a
+            input_highlight_alpha = command_input.styles.background.a
+            await pilot.press("tab")
+            actions = app.screen.query_one("#guided-actions", ActionList)
+            return (
+                input_tint_alpha,
+                input_highlight_alpha,
+                actions.styles.background_tint.a,
+                actions.has_focus,
+                command_input.region.right == actions.content_region.right,
+            )
+
+    (
+        input_tint_alpha,
+        input_highlight_alpha,
+        actions_tint_alpha,
+        actions_focused,
+        right_edges_aligned,
+    ) = asyncio.run(run())
+
+    assert input_tint_alpha == 0
+    assert input_highlight_alpha == pytest.approx(0.22)
+    assert actions_tint_alpha == 0
+    assert actions_focused
+    assert right_edges_aligned
+
+
 def test_copy_page_copies_complete_redacted_output_for_agent() -> None:
     async def run() -> tuple[str, tuple[dict[str, object], ...]]:
         app = KairosWorkbenchApp(_state())
@@ -548,7 +582,7 @@ def test_theme_command_updates_css_and_rich_semantic_colors() -> None:
     assert asyncio.run(run()) == (
         "kairos-dracula",
         "#282a36",
-        "#343746",
+        "#44475a",
         "#bd93f9",
         "#f8f8f2",
         True,

@@ -88,7 +88,7 @@ def _action_prompt(
     spacious: bool = False,
     primary: str = PRIMARY,
     foreground: str = "#eceff4",
-    muted: str = "#9aa3b2",
+    muted: str = "#d8dee9",
 ) -> Text:
     prompt = Text()
     if item.shortcut:

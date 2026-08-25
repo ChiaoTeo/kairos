@@ -95,7 +95,7 @@ def _guided_action_prompt(
     heading_width: int,
     primary: str = PRIMARY,
     foreground: str = "#eceff4",
-    muted: str = "#9aa3b2",
+    muted: str = "#d8dee9",
 ) -> Text:
     prompt = Text()
     if item.shortcut:

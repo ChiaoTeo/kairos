@@ -178,7 +178,10 @@ impl ExecutionActor {
             })
             .collect::<BTreeSet<_>>();
         for action in &mut run.actions {
-            if action.status != AlgorithmActionStatus::Pending {
+            if !matches!(
+                action.status,
+                AlgorithmActionStatus::Pending | AlgorithmActionStatus::Indeterminate
+            ) {
                 continue;
             }
             let AlgorithmActionKind::SubmitChild { order_id, .. } = &action.kind else {
@@ -187,11 +190,22 @@ impl ExecutionActor {
             let Some(order) = orders.iter().find(|order| &order.order_id == order_id) else {
                 continue;
             };
-            action.status = match order
-                .attempts
-                .last()
-                .map(|attempt| attempt.delivery_certainty)
+            action.status = if order.remote_order_id.is_some()
+                && !matches!(
+                    order.status,
+                    ExecutionOrderStatus::Submitting | ExecutionOrderStatus::Unknown
+                )
             {
+                // An authoritative venue event/query resolves the historical
+                // uncertainty of the submit acknowledgement without rewriting
+                // that attempt's original delivery evidence.
+                AlgorithmActionStatus::Completed
+            } else {
+                match order
+                    .attempts
+                    .last()
+                    .map(|attempt| attempt.delivery_certainty)
+                {
                 Some(DeliveryCertainty::Confirmed | DeliveryCertainty::Rejected) => {
                     AlgorithmActionStatus::Completed
                 },
@@ -205,6 +219,7 @@ impl ExecutionActor {
                     AlgorithmActionStatus::Failed
                 },
                 _ => AlgorithmActionStatus::Pending,
+                }
             };
         }
         for leg in &mut run.legs {
@@ -234,12 +249,10 @@ impl ExecutionActor {
                     let leaves = order.quantity.checked_sub(order.filled_quantity)?;
                     total.checked_add(leaves)
                 })?;
-            leg.lifecycle = if leg_orders.iter().any(|order| {
-                order.status == ExecutionOrderStatus::Unknown
-                    || order.attempts.last().is_some_and(|attempt| {
-                        attempt.delivery_certainty == DeliveryCertainty::Indeterminate
-                    })
-            }) {
+            leg.lifecycle = if leg_orders
+                .iter()
+                .any(|order| order.status == ExecutionOrderStatus::Unknown)
+            {
                 AlgorithmLegLifecycle::ReconciliationRequired
             } else if leg.filled_quantity >= leg.target_quantity {
                 AlgorithmLegLifecycle::Completed
@@ -287,12 +300,9 @@ impl ExecutionActor {
                 let leaves = order.quantity.checked_sub(order.filled_quantity)?;
                 total.checked_add(leaves)
             })?;
-        let unwind_requires_reconciliation = unwind_orders.iter().any(|order| {
-            order.status == ExecutionOrderStatus::Unknown
-                || order.attempts.last().is_some_and(|attempt| {
-                    attempt.delivery_certainty == DeliveryCertainty::Indeterminate
-                })
-        });
+        let unwind_requires_reconciliation = unwind_orders
+            .iter()
+            .any(|order| order.status == ExecutionOrderStatus::Unknown);
         if matches!(run.spec, ExecutionAlgorithmSpec::MakerTakerHedge(_)) {
             run.synchronize_maker_taker_exposure(
                 unwind_filled,
