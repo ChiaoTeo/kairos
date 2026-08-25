@@ -192,7 +192,7 @@ def _ask(
 ) -> tuple[ScreenEffect, ...]:
     session.ask(
         ActionToken(Feature.RESEARCH, action),
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         prompt=prompt,
         detail=detail,
     )
@@ -225,7 +225,7 @@ def _choice(
     status: str = "就绪",
 ) -> tuple[ScreenEffect, ...]:
     interaction = ChoiceInteraction(
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         summary=summary,
         actions=context_items(session, state),
     )

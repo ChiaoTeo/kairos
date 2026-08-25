@@ -73,9 +73,10 @@
   authenticates once and accepts multiple channel/symbol subscriptions. Massive documents a
   default limit of one concurrent connection per asset class. Source:
   <https://massive.com/docs/websocket/quickstart>.
-- The current `MassiveConnection` is a REST/capability factory and
-  `MassiveAsyncMarketStream` is the real socket owner. The target types are one
-  `MassiveRestConnection` plus concrete asset-class WebSocket connections, initially Stocks and
-  Options. They directly implement the redesigned Integration traits; no pass-through
-  Massive-specific mirror trait is added. Equity/Option query filters do not require duplicate
-  REST connections.
+- The current types are one `MassiveRestConnection` plus concrete Stocks, Options, Futures,
+  Indices, Forex, and Crypto WebSocket connections. They directly implement the Integration
+  capabilities; no pass-through Massive-specific mirror trait is added. Product-native channel
+  planning, physical subscription reference counts, acknowledgement/error handling, and socket
+  replacement remain private to Integration. All six stream products are composed into Market;
+  live entitlement reruns use the explicit gate recorded in
+  [Massive market-stream certification](../massive-market-stream-certification.md).

@@ -187,6 +187,11 @@ pub struct IntentState {
     pub dependency_watermarks: DependencyWatermarks,
     #[serde(default)]
     pub pending_orders: Vec<SubmitOrder>,
+    /// Provider-ready templates retained by an algorithm but not yet eligible
+    /// for dispatch. Maker-first pair hedges live here until leader fills
+    /// create normalized exposure.
+    #[serde(default)]
+    pub dormant_orders: Vec<SubmitOrder>,
     #[serde(default)]
     pub pending_order_due_unix_nanos: BTreeMap<OrderId, UnixNanos>,
     #[serde(default)]
@@ -207,6 +212,9 @@ pub struct HedgeRequirement {
     pub required_hedge_quantity: Quantity,
     pub unhedged_quantity: Quantity,
     pub max_unhedged_quantity: Quantity,
+    pub unhedged_since: Option<UnixNanos>,
+    pub max_unhedged_duration: Option<DurationNanos>,
+    pub exposure_deadline: Option<UnixNanos>,
     pub within_tolerance: bool,
     pub compensation_attempts: u32,
     pub max_compensation_attempts: u32,

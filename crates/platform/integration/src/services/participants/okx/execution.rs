@@ -144,13 +144,21 @@ pub(crate) fn normalize_order_submission(
             participant_request_id: None,
         }));
     }
+    let Some(remote_order_id) = row
+        .get("ordId")
+        .and_then(Value::as_str)
+        .and_then(|value| kairos_primitives::integration::RemoteOrderId::new(value).ok())
+    else {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent(
+                "OKX accepted-order response is missing a valid ordId",
+            ),
+        ));
+    };
     Ok(CommandOutcome::Confirmed(OrderEntryEvent {
         order_id: request.order_id.clone(),
         status: OrderEntryStatus::Accepted,
-        remote_order_id: row
-            .get("ordId")
-            .and_then(Value::as_str)
-            .and_then(|value| kairos_primitives::integration::RemoteOrderId::new(value).ok()),
+        remote_order_id: Some(remote_order_id),
         filled_quantity: None,
         occurred_at_unix_nanos: now_nanos().into(),
         reason: row
@@ -177,33 +185,58 @@ pub(crate) fn normalize_order_cancellation(
     at_unix_nanos: u64,
     payload: &Value,
 ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
-    let row = payload
+    let Some(row) = payload
         .get("data")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first());
-    let code = row
-        .and_then(|value| value.get("sCode"))
-        .and_then(Value::as_str)
-        .unwrap_or("0");
+        .and_then(|rows| rows.first())
+    else {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent("OKX cancel response data is missing"),
+        ));
+    };
+    let Some(code) = row.get("sCode").and_then(Value::as_str) else {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent("OKX cancel response sCode is missing"),
+        ));
+    };
     if code != "0" {
         return Ok(CommandOutcome::Rejected(ParticipantRejection {
             code: Some(code.into()),
             message: row
-                .and_then(|value| value.get("sMsg"))
+                .get("sMsg")
                 .and_then(Value::as_str)
                 .unwrap_or("OKX rejected the cancellation")
                 .into(),
             participant_request_id: None,
         }));
     }
+    let Some(response_remote_order_id) = row
+        .get("ordId")
+        .and_then(Value::as_str)
+        .and_then(|value| kairos_primitives::integration::RemoteOrderId::new(value).ok())
+    else {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent(
+                "OKX cancel response is missing a valid ordId",
+            ),
+        ));
+    };
+    if response_remote_order_id.as_str() != remote_order_id {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent(format!(
+                "OKX cancel response ordId {} does not match requested {remote_order_id}",
+                response_remote_order_id.as_str()
+            )),
+        ));
+    }
     Ok(CommandOutcome::Confirmed(OrderEntryEvent {
         order_id: request.order_id.clone(),
         status: OrderEntryStatus::Canceled,
-        remote_order_id: kairos_primitives::integration::RemoteOrderId::new(remote_order_id).ok(),
+        remote_order_id: Some(response_remote_order_id),
         filled_quantity: None,
         occurred_at_unix_nanos: at_unix_nanos.into(),
         reason: row
-            .and_then(|value| value.get("sMsg"))
+            .get("sMsg")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .into(),
@@ -276,10 +309,10 @@ fn now_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::order_request_body;
-    #[test]
-    fn order_uses_participant_instrument_instead_of_parsing_market_id() {
-        let request = crate::OrderEntryRequest {
+    use super::{normalize_order_cancellation, normalize_order_submission, order_request_body};
+
+    fn order() -> crate::OrderEntryRequest {
+        crate::OrderEntryRequest {
             order_id: kairos_primitives::execution::OrderId::new("order-1").unwrap(),
             intent_id: None,
             account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
@@ -302,8 +335,72 @@ mod tests {
             order_type: crate::OrderType::Market,
             limit_price: None,
             options: Default::default(),
-        };
+        }
+    }
+
+    #[test]
+    fn order_uses_participant_instrument_instead_of_parsing_market_id() {
+        let request = order();
         let body = order_request_body(&request, "cross").unwrap();
         assert_eq!(body["instId"], "BTC-USDT-SWAP");
+    }
+
+    #[test]
+    fn submit_requires_a_valid_remote_order_identity() {
+        assert!(matches!(
+            normalize_order_submission(&order(), &serde_json::json!({"data": [{"sCode": "0"}]}))
+                .unwrap(),
+            crate::CommandOutcome::Indeterminate(_)
+        ));
+        assert!(matches!(
+            normalize_order_submission(
+                &order(),
+                &serde_json::json!({"data": [{"sCode": "0", "ordId": "42"}]})
+            )
+            .unwrap(),
+            crate::CommandOutcome::Confirmed(_)
+        ));
+    }
+
+    #[test]
+    fn cancel_requires_an_explicit_matching_acknowledgement() {
+        let request = order();
+        for payload in [
+            serde_json::json!({}),
+            serde_json::json!({"data": [{}]}),
+            serde_json::json!({"data": [{"sCode": "0"}]}),
+            serde_json::json!({"data": [{"sCode": "0", "ordId": "43"}]}),
+        ] {
+            assert!(matches!(
+                normalize_order_cancellation(&request, "42", 1, &payload).unwrap(),
+                crate::CommandOutcome::Indeterminate(_)
+            ));
+        }
+        assert!(matches!(
+            normalize_order_cancellation(
+                &request,
+                "42",
+                1,
+                &serde_json::json!({"data": [{"sCode": "0", "ordId": "42"}]})
+            )
+            .unwrap(),
+            crate::CommandOutcome::Confirmed(_)
+        ));
+    }
+
+    #[test]
+    fn submit_and_cancel_preserve_explicit_rejection() {
+        let request = order();
+        let payload = serde_json::json!({
+            "data": [{"sCode": "51000", "sMsg": "rejected", "ordId": "42"}]
+        });
+        assert!(matches!(
+            normalize_order_submission(&request, &payload).unwrap(),
+            crate::CommandOutcome::Rejected(_)
+        ));
+        assert!(matches!(
+            normalize_order_cancellation(&request, "42", 1, &payload).unwrap(),
+            crate::CommandOutcome::Rejected(_)
+        ));
     }
 }

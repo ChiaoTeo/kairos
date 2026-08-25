@@ -95,7 +95,7 @@ def handle_context(
         session.reference.instrument_type = instrument_type
         session.ask(
             ActionToken(Feature.REFERENCE, "search", "instruments"),
-            title=context_label(session.context),
+            title=context_label(session.context, session.root_label),
             prompt="输入代码或名称；直接回车浏览",
             detail="输入 /back 或按 Esc 取消并返回合约类型菜单。",
         )
@@ -163,7 +163,7 @@ def handle_context(
     )
     session.ask(
         ActionToken(Feature.REFERENCE, "search", action),
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         prompt=prompt,
         detail="输入 /back 或按 Esc 取消并返回当前菜单。",
     )
@@ -182,7 +182,7 @@ def handle_success(
             return _show_record_choices(session, records, reference_kind)
         session.enter("reference")
         interaction = ChoiceInteraction(
-            title="首页 / 市场标的",
+            title=f"{session.root_label} / 市场标的",
             summary=Text("没有找到匹配的 Reference 记录。", style="dim"),
             actions=SECTION_ACTIONS["reference"],
         )
@@ -253,7 +253,7 @@ def _choice(
     status: str = "就绪",
 ) -> tuple[ScreenEffect, ...]:
     interaction = ChoiceInteraction(
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         summary=summary,
         actions=context_items(session, state),
     )
@@ -333,7 +333,9 @@ def _show_record_choices(
         )
         for index, record in enumerate(visible, 1)
     )
-    interaction = ChoiceInteraction(title="首页 / 市场标的", actions=actions)
+    interaction = ChoiceInteraction(
+        title=f"{session.root_label} / 市场标的", actions=actions
+    )
     return (
         SetInteraction(interaction),
         SetStatus(f"找到 {len(records)} 个结果 · 请选择"),

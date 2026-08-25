@@ -43,6 +43,11 @@ def test_market_command_line_separates_surface_options() -> None:
     assert command.arguments == ("standalone", "once", "--symbol", "AAPL")
 
 
+def test_market_command_line_rejects_unknown_output_format() -> None:
+    with pytest.raises(ValueError, match="must be text, json, or table"):
+        parse_market_command_line(("--format", "yaml", "standalone", "once"))
+
+
 def test_pasted_public_market_command_is_normalized(tmp_path: Path) -> None:
     workspace = tmp_path / ".kairos"
 

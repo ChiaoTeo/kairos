@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::task::{Context, Poll};
 
 use kairos_primitives::account::SegmentKey;
@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::participants::hyperliquid::{HyperliquidUserStreamConfig, HyperliquidWebSocketConfig};
+use crate::services::participants::hyperliquid::market_stream::{
+    ControlBudget, MarketStreamPolicy, PlannedStream,
+};
 use crate::services::participants::hyperliquid::socket::SocketService;
 use crate::services::participants::hyperliquid::stream;
 use crate::{
@@ -24,13 +27,23 @@ use crate::{
 pub struct HyperliquidWebSocketConnection {
     service: SocketService,
     user: Option<HyperliquidUserStreamConfig>,
-    subscriptions: BTreeMap<MarketSubscriptionId, (Vec<MarketFeed>, Vec<Value>)>,
+    subscriptions: BTreeMap<MarketSubscriptionId, LogicalSubscription>,
+    physical_streams: BTreeMap<PlannedStream, usize>,
+    policy: MarketStreamPolicy,
+    control_budget: ControlBudget,
     pending_market: VecDeque<MarketEvent>,
     pending_account: VecDeque<ExternalAccountEventEnvelope>,
     pending_execution: VecDeque<ExternalEventEnvelope<ExternalExecutionEvent>>,
     next_subscription_id: u64,
     channel_epoch: u64,
     event_capacity: usize,
+    reserved_streams: usize,
+}
+
+#[derive(Clone, Debug)]
+struct LogicalSubscription {
+    feeds: Vec<MarketFeed>,
+    streams: Vec<PlannedStream>,
 }
 
 impl HyperliquidWebSocketConnection {
@@ -47,16 +60,28 @@ impl HyperliquidWebSocketConnection {
         }
         let user = config.user.clone();
         let event_capacity = config.event_capacity;
+        let service = SocketService::new(connection_key, config)?;
+        let policy = MarketStreamPolicy::default();
+        let reserved_streams = if user.is_some() {
+            policy.reserve_process_subscriptions(3, false)?;
+            3
+        } else {
+            0
+        };
         Ok(Self {
-            service: SocketService::new(connection_key, config)?,
+            service,
             user,
             subscriptions: BTreeMap::new(),
+            physical_streams: BTreeMap::new(),
+            policy,
+            control_budget: ControlBudget::default(),
             pending_market: VecDeque::new(),
             pending_account: VecDeque::new(),
             pending_execution: VecDeque::new(),
             next_subscription_id: 1,
             channel_epoch: 0,
             event_capacity,
+            reserved_streams,
         })
     }
 
@@ -64,48 +89,97 @@ impl HyperliquidWebSocketConnection {
         self.service.descriptor()
     }
 
-    async fn command(&mut self, method: &str, subscription: Value) -> Result<(), IntegrationError> {
+    async fn command(
+        &mut self,
+        method: &str,
+        subscription: Value,
+        recovery: bool,
+    ) -> Result<(), IntegrationError> {
+        self.control_budget
+            .admit(&self.policy, tokio::time::Instant::now(), recovery)?;
         self.service
             .send(json!({"method": method, "subscription": subscription.clone()}).to_string())
             .await?;
-        loop {
-            let value = self.next_value().await?;
-            match value.get("channel").and_then(Value::as_str) {
-                Some("subscriptionResponse")
-                    if value.pointer("/data/method").and_then(Value::as_str) == Some(method)
-                        && value.pointer("/data/subscription") == Some(&subscription) =>
-                {
-                    return Ok(());
-                },
-                Some("error") => {
-                    return Err(IntegrationError::InvalidRequest(
-                        value
-                            .pointer("/data/error")
-                            .or_else(|| value.get("data"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("Hyperliquid subscription rejected")
-                            .into(),
-                    ));
-                },
-                _ => {},
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let value = self.next_value().await?;
+                match value.get("channel").and_then(Value::as_str) {
+                    Some("subscriptionResponse")
+                        if value.pointer("/data/method").and_then(Value::as_str)
+                            == Some(method)
+                            && value.pointer("/data/subscription").is_some_and(|actual| {
+                                subscription_ack_matches(&subscription, actual)
+                            }) =>
+                    {
+                        return Ok(());
+                    },
+                    Some("error") => {
+                        return Err(IntegrationError::InvalidRequest(
+                            value
+                                .pointer("/data/error")
+                                .or_else(|| value.get("data"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("Hyperliquid subscription rejected")
+                                .into(),
+                        ));
+                    },
+                    _ => {},
+                }
+                self.demultiplex(&value)?;
             }
-            self.demultiplex(&value)?;
-        }
+        })
+        .await
+        .map_err(|_| {
+            IntegrationError::Transport(format!("Hyperliquid {method} acknowledgement timed out"))
+        })?
     }
 
     async fn apply_market_commands(
         &mut self,
         method: &str,
-        subscriptions: &[Value],
+        subscriptions: &[PlannedStream],
+        recovery: bool,
     ) -> Result<usize, (usize, IntegrationError)> {
         let mut confirmed = 0;
         for subscription in subscriptions {
-            if let Err(error) = self.command(method, subscription.clone()).await {
+            if let Err(error) = self
+                .command(method, subscription.subscription(), recovery)
+                .await
+            {
                 return Err((confirmed, error));
             }
             confirmed += 1;
         }
         Ok(confirmed)
+    }
+
+    fn rebuild_physical_streams(&mut self) {
+        self.physical_streams =
+            crate::services::participants::hyperliquid::market_stream::reference_counts(
+                self.subscriptions
+                    .values()
+                    .map(|subscription| subscription.streams.clone()),
+            );
+    }
+
+    fn queue_market_events(
+        &mut self,
+        events: impl IntoIterator<Item = MarketEvent>,
+    ) -> Result<(), IntegrationError> {
+        let demanded = events
+            .into_iter()
+            .filter(|event| {
+                crate::services::participants::hyperliquid::market_stream::event_is_demanded(
+                    self.subscriptions
+                        .values()
+                        .flat_map(|subscription| subscription.feeds.iter()),
+                    event,
+                )
+            })
+            .collect::<Vec<_>>();
+        self.ensure_capacity(demanded.len())?;
+        self.pending_market.extend(demanded);
+        Ok(())
     }
 
     async fn next_value(&mut self) -> Result<Value, IntegrationError> {
@@ -150,34 +224,37 @@ impl HyperliquidWebSocketConnection {
             .unwrap_or_default()
         {
             "l2Book" => {
-                self.ensure_capacity(1)?;
-                self.pending_market
-                    .push_back(stream::book(value.get("data").ok_or_else(|| {
-                        IntegrationError::InvalidPayload(
-                            "Hyperliquid l2Book data is missing".into(),
-                        )
-                    })?)?)
+                self.queue_market_events([stream::book(value.get("data").ok_or_else(|| {
+                    IntegrationError::InvalidPayload("Hyperliquid l2Book data is missing".into())
+                })?)?])?
             },
             "trades" => {
                 let rows = value.get("data").and_then(Value::as_array).ok_or_else(|| {
                     IntegrationError::InvalidPayload("Hyperliquid trades data is missing".into())
                 })?;
-                self.ensure_capacity(rows.len())?;
-                self.pending_market.extend(
+                self.queue_market_events(
                     rows.iter()
                         .map(stream::trade)
                         .collect::<Result<Vec<_>, _>>()?,
-                );
+                )?;
             },
-            "candle" => {
-                self.ensure_capacity(1)?;
-                self.pending_market
-                    .push_back(stream::candle(value.get("data").ok_or_else(|| {
-                        IntegrationError::InvalidPayload(
-                            "Hyperliquid candle data is missing".into(),
-                        )
-                    })?)?)
+            "candle" => self.queue_market_events([stream::candle(
+                value.get("data").ok_or_else(|| {
+                    IntegrationError::InvalidPayload("Hyperliquid candle data is missing".into())
+                })?,
+            )?])?,
+            "bbo" => {
+                self.queue_market_events([stream::best_bid_offer(value.get("data").ok_or_else(
+                    || IntegrationError::InvalidPayload("Hyperliquid bbo data is missing".into()),
+                )?)?])?
             },
+            "activeAssetCtx" => self.queue_market_events(stream::active_asset_context(
+                value.get("data").ok_or_else(|| {
+                    IntegrationError::InvalidPayload(
+                        "Hyperliquid active asset context data is missing".into(),
+                    )
+                })?,
+            )?)?,
             "allMids" => {
                 let mids = value
                     .pointer("/data/mids")
@@ -188,13 +265,14 @@ impl HyperliquidWebSocketConnection {
                             "Hyperliquid allMids data is missing".into(),
                         )
                     })?;
-                self.ensure_capacity(mids.len())?;
+                let mut events = Vec::new();
                 for (coin, price) in mids {
                     let mut event =
                         stream::empty(coin, crate::MarketEventKind::Quote, stream::now())?;
                     event.price = stream::optional(Some(price))?;
-                    self.pending_market.push_back(event);
+                    events.push(event);
                 }
+                self.queue_market_events(events)?;
             },
             "orderUpdates" => self.normalize_orders(value.get("data").unwrap_or(&Value::Null))?,
             "userEvents" | "userFills" => {
@@ -405,18 +483,20 @@ impl HyperliquidWebSocketConnection {
     }
 
     async fn restore(&mut self) -> Result<(), IntegrationError> {
-        let market = self
-            .subscriptions
-            .values()
-            .flat_map(|(_, values)| values.clone())
-            .collect::<Vec<_>>();
+        let market = self.physical_streams.keys().cloned().collect::<Vec<_>>();
+        self.policy.admit_subscription_count(market.len(), true)?;
         for subscription in market {
-            self.command("subscribe", subscription).await?;
+            self.command("subscribe", subscription.subscription(), true)
+                .await?;
         }
         if let Some(user) = self.user.clone() {
             for kind in ["orderUpdates", "userEvents", "userFills"] {
-                self.command("subscribe", json!({"type": kind, "user": user.address}))
-                    .await?;
+                self.command(
+                    "subscribe",
+                    json!({"type": kind, "user": user.address}),
+                    true,
+                )
+                .await?;
             }
         }
         Ok(())
@@ -440,7 +520,12 @@ impl ConnectionLifecycleCommand for HyperliquidWebSocketConnection {
     async fn connect(&mut self) -> Result<(), IntegrationError> {
         self.service.connect().await?;
         self.channel_epoch = self.channel_epoch.saturating_add(1);
-        self.restore().await
+        self.control_budget = ControlBudget::default();
+        if let Err(error) = self.restore().await {
+            self.service.disconnect().await?;
+            return Err(error);
+        }
+        Ok(())
     }
     async fn disconnect(&mut self) -> Result<(), IntegrationError> {
         self.pending_market.clear();
@@ -449,8 +534,52 @@ impl ConnectionLifecycleCommand for HyperliquidWebSocketConnection {
         self.service.disconnect().await
     }
     async fn reconnect(&mut self) -> Result<(), IntegrationError> {
-        self.disconnect().await?;
-        self.connect().await
+        let overlap = self.physical_streams.len() + usize::from(self.user.is_some()) * 3;
+        if self
+            .policy
+            .reserve_process_subscriptions(overlap, true)
+            .is_err()
+        {
+            self.service.disconnect().await?;
+            self.control_budget = ControlBudget::default();
+            self.service.connect().await?;
+            let next_epoch = self.channel_epoch.saturating_add(1);
+            if let Err(error) = self.restore().await {
+                self.service.disconnect().await?;
+                return Err(error);
+            }
+            self.channel_epoch = next_epoch;
+            self.pending_market.clear();
+            self.pending_account.clear();
+            self.pending_execution.clear();
+            return Ok(());
+        }
+        let retired = match self.service.begin_replacement().await {
+            Ok(retired) => retired,
+            Err(error) => {
+                self.policy.release_process_subscriptions(overlap);
+                return Err(error);
+            },
+        };
+        let previous_budget = std::mem::take(&mut self.control_budget);
+        let next_epoch = self.channel_epoch.saturating_add(1);
+        match self.restore().await {
+            Ok(()) => {
+                self.service.commit_replacement(retired).await;
+                self.policy.release_process_subscriptions(overlap);
+                self.channel_epoch = next_epoch;
+                self.pending_market.clear();
+                self.pending_account.clear();
+                self.pending_execution.clear();
+                Ok(())
+            },
+            Err(error) => {
+                self.service.rollback_replacement(retired).await;
+                self.policy.release_process_subscriptions(overlap);
+                self.control_budget = previous_budget;
+                Err(error)
+            },
+        }
     }
 }
 impl crate::ConnectionMaintenance for HyperliquidWebSocketConnection {
@@ -471,13 +600,27 @@ impl MarketSubscriptionCommand for HyperliquidWebSocketConnection {
         &mut self,
         request: MarketSubscriptionRequest,
     ) -> Result<MarketSubscriptionOutcome<MarketSubscription>, IntegrationError> {
-        let mut values = Vec::new();
-        for feed in &request.feeds {
-            let value = stream::subscription(feed)?;
-            if !values.contains(&value) {
-                values.push(value);
-            }
-        }
+        let streams = request
+            .feeds
+            .iter()
+            .map(|feed| self.policy.plan(feed))
+            .collect::<Result<BTreeSet<_>, _>>()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        let new_streams = streams
+            .iter()
+            .filter(|stream| !self.physical_streams.contains_key(*stream))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.policy.admit_subscription_count(
+            self.physical_streams
+                .len()
+                .saturating_add(new_streams.len()),
+            false,
+        )?;
+        self.policy
+            .reserve_process_subscriptions(new_streams.len(), false)?;
+        self.reserved_streams = self.reserved_streams.saturating_add(new_streams.len());
         let id = MarketSubscriptionId(self.next_subscription_id);
         self.next_subscription_id = self.next_subscription_id.saturating_add(1);
         let subscription = MarketSubscription {
@@ -485,21 +628,38 @@ impl MarketSubscriptionCommand for HyperliquidWebSocketConnection {
             feeds: request.feeds.clone(),
             delivery: MarketDelivery::Push,
         };
-        match self.apply_market_commands("subscribe", &values).await {
+        let logical = LogicalSubscription {
+            feeds: request.feeds,
+            streams,
+        };
+        match self
+            .apply_market_commands("subscribe", &new_streams, false)
+            .await
+        {
             Ok(_) => {
-                self.subscriptions.insert(id, (request.feeds, values));
+                self.subscriptions.insert(id, logical);
+                self.rebuild_physical_streams();
                 Ok(MarketSubscriptionOutcome::Confirmed(subscription))
             },
-            Err((0, IntegrationError::InvalidRequest(message))) => Ok(
-                MarketSubscriptionOutcome::Rejected(crate::ParticipantRejection {
-                    code: None,
-                    message,
-                    participant_request_id: Some(id.0.to_string()),
-                }),
-            ),
-            Err((0, IntegrationError::NotReady)) => Err(IntegrationError::NotReady),
+            Err((0, IntegrationError::InvalidRequest(message))) => {
+                self.policy.release_process_subscriptions(new_streams.len());
+                self.reserved_streams = self.reserved_streams.saturating_sub(new_streams.len());
+                Ok(MarketSubscriptionOutcome::Rejected(
+                    crate::ParticipantRejection {
+                        code: None,
+                        message,
+                        participant_request_id: Some(id.0.to_string()),
+                    },
+                ))
+            },
+            Err((0, error @ (IntegrationError::NotReady | IntegrationError::RateLimited(_)))) => {
+                self.policy.release_process_subscriptions(new_streams.len());
+                self.reserved_streams = self.reserved_streams.saturating_sub(new_streams.len());
+                Err(error)
+            },
             Err((confirmed, error)) => {
-                self.subscriptions.insert(id, (request.feeds, values));
+                self.subscriptions.insert(id, logical);
+                self.rebuild_physical_streams();
                 Ok(MarketSubscriptionOutcome::Indeterminate {
                     provisional: Some(subscription),
                     reason: format!(
@@ -513,16 +673,29 @@ impl MarketSubscriptionCommand for HyperliquidWebSocketConnection {
         &mut self,
         subscription: MarketSubscriptionId,
     ) -> Result<MarketSubscriptionOutcome<()>, IntegrationError> {
-        let (_, values) = self
+        let logical = self
             .subscriptions
             .get(&subscription)
             .cloned()
             .ok_or_else(|| {
                 IntegrationError::InvalidRequest("unknown Hyperliquid subscription".into())
             })?;
-        match self.apply_market_commands("unsubscribe", &values).await {
+        let removed_streams = logical
+            .streams
+            .iter()
+            .filter(|stream| self.physical_streams.get(*stream) == Some(&1))
+            .cloned()
+            .collect::<Vec<_>>();
+        match self
+            .apply_market_commands("unsubscribe", &removed_streams, false)
+            .await
+        {
             Ok(_) => {
                 self.subscriptions.remove(&subscription);
+                self.rebuild_physical_streams();
+                self.policy
+                    .release_process_subscriptions(removed_streams.len());
+                self.reserved_streams = self.reserved_streams.saturating_sub(removed_streams.len());
                 Ok(MarketSubscriptionOutcome::Confirmed(()))
             },
             Err((0, IntegrationError::InvalidRequest(message))) => Ok(
@@ -533,13 +706,28 @@ impl MarketSubscriptionCommand for HyperliquidWebSocketConnection {
                 }),
             ),
             Err((0, IntegrationError::NotReady)) => Err(IntegrationError::NotReady),
-            Err((confirmed, error)) => Ok(MarketSubscriptionOutcome::Indeterminate {
-                provisional: Some(()),
-                reason: format!(
-                    "Hyperliquid confirmed removal of {confirmed} feeds before unsubscription became uncertain: {error}"
-                ),
-            }),
+            Err((confirmed, error)) => {
+                self.subscriptions.remove(&subscription);
+                self.rebuild_physical_streams();
+                self.policy
+                    .release_process_subscriptions(removed_streams.len());
+                self.reserved_streams = self.reserved_streams.saturating_sub(removed_streams.len());
+                Ok(MarketSubscriptionOutcome::Indeterminate {
+                    provisional: Some(()),
+                    reason: format!(
+                        "Hyperliquid confirmed removal of {confirmed} feeds before unsubscription became uncertain: {error}; desired state will be restored on reconnect"
+                    ),
+                })
+            },
         }
+    }
+}
+
+impl Drop for HyperliquidWebSocketConnection {
+    fn drop(&mut self) {
+        self.policy
+            .release_process_subscriptions(self.reserved_streams);
+        self.reserved_streams = 0;
     }
 }
 impl MarketDataStream for HyperliquidWebSocketConnection {
@@ -631,6 +819,15 @@ fn decimal(value: Option<&Value>) -> Result<Option<DecimalValue>, IntegrationErr
         .map(|v| parse_decimal(v))
         .transpose()
 }
+
+fn subscription_ack_matches(requested: &Value, actual: &Value) -> bool {
+    match (requested.as_object(), actual.as_object()) {
+        (Some(requested), Some(actual)) => requested
+            .iter()
+            .all(|(key, value)| actual.get(key) == Some(value)),
+        _ => requested == actual,
+    }
+}
 fn account_order_status(value: &str) -> ExternalOrderStatus {
     match value.to_ascii_lowercase().as_str() {
         "open" | "triggered" => ExternalOrderStatus::Acknowledged,
@@ -656,6 +853,11 @@ fn payload(error: impl std::fmt::Display) -> IntegrationError {
 
 #[cfg(test)]
 mod tests {
+    use futures_util::{SinkExt, StreamExt};
+    use kairos_primitives::integration::ParticipantSymbol;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
     use super::*;
 
     fn connection() -> HyperliquidWebSocketConnection {
@@ -730,5 +932,116 @@ mod tests {
             account.participant_event_id.as_deref(),
             Some("hyperliquid:84")
         );
+    }
+
+    #[test]
+    fn subscription_ack_accepts_provider_supplied_default_fields() {
+        assert!(subscription_ack_matches(
+            &json!({"type":"l2Book","coin":"@109"}),
+            &json!({
+                "type":"l2Book","coin":"@109",
+                "nSigFigs":null,"mantissa":null,"fast":false
+            })
+        ));
+    }
+
+    fn quote_feed() -> MarketFeed {
+        MarketFeed {
+            kind: crate::MarketDataKind::Quote,
+            symbol: Some(ParticipantSymbol::new("BTC").unwrap()),
+            interval: None,
+            depth: None,
+            update_speed_millis: None,
+        }
+    }
+
+    async fn acknowledge(
+        socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        expected_method: &str,
+    ) {
+        let message = socket.next().await.unwrap().unwrap();
+        let Message::Text(text) = message else {
+            panic!("expected Hyperliquid text control message")
+        };
+        let request: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            request.get("method").and_then(Value::as_str),
+            Some(expected_method)
+        );
+        let subscription = request.get("subscription").unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "channel":"subscriptionResponse",
+                    "data":{"method":expected_method,"subscription":subscription}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn duplicate_logical_demand_uses_one_physical_stream_across_reconnect() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (first_transport, _) = listener.accept().await.unwrap();
+            let mut first = accept_async(first_transport).await.unwrap();
+            acknowledge(&mut first, "subscribe").await;
+
+            let (second_transport, _) = listener.accept().await.unwrap();
+            let mut second = accept_async(second_transport).await.unwrap();
+            acknowledge(&mut second, "subscribe").await;
+            assert!(matches!(
+                first.next().await,
+                Some(Ok(Message::Close(_))) | None
+            ));
+            acknowledge(&mut second, "unsubscribe").await;
+        });
+
+        let mut connection = HyperliquidWebSocketConnection::new(
+            crate::ConnectionKey::new("hyperliquid-market-test").unwrap(),
+            HyperliquidWebSocketConfig {
+                environment: "test".into(),
+                endpoint: format!("ws://{address}"),
+                event_capacity: 16,
+                user: None,
+            },
+        )
+        .unwrap();
+        connection.connect().await.unwrap();
+        let first = match connection
+            .subscribe(MarketSubscriptionRequest::new(vec![quote_feed()]).unwrap())
+            .await
+            .unwrap()
+        {
+            MarketSubscriptionOutcome::Confirmed(subscription) => subscription,
+            other => panic!("unexpected first subscription outcome: {other:?}"),
+        };
+        let second = match connection
+            .subscribe(MarketSubscriptionRequest::new(vec![quote_feed()]).unwrap())
+            .await
+            .unwrap()
+        {
+            MarketSubscriptionOutcome::Confirmed(subscription) => subscription,
+            other => panic!("unexpected second subscription outcome: {other:?}"),
+        };
+        assert_eq!(
+            connection.physical_streams.values().copied().sum::<usize>(),
+            2
+        );
+        assert!(matches!(
+            connection.unsubscribe(first.id).await.unwrap(),
+            MarketSubscriptionOutcome::Confirmed(())
+        ));
+        connection.reconnect().await.unwrap();
+        assert!(matches!(
+            connection.unsubscribe(second.id).await.unwrap(),
+            MarketSubscriptionOutcome::Confirmed(())
+        ));
+        connection.disconnect().await.unwrap();
+        server.await.unwrap();
     }
 }

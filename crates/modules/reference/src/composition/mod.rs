@@ -220,10 +220,15 @@ async fn build_source_plan(
             )
             .map_err(crate::domain::ReferenceError::Provider)?;
             connection
-                .require("massive", Some("reference"), "reference-catalog")
+                .require("massive", None, "reference-catalog")
                 .map_err(crate::domain::ReferenceError::Provider)?;
+            endpoint = Some(
+                connection
+                    .endpoint_for("reference-catalog", None)
+                    .expect("validated provider connection has a REST endpoint")
+                    .to_owned(),
+            );
             credential_id = Some(connection.credential_id);
-            endpoint = Some(connection.endpoint);
         }
         let credential = load_required_credential(
             credentials_root.as_deref(),

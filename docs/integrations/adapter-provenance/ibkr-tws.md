@@ -2,11 +2,11 @@
 
 ## Scope
 
-This note covers the in-progress provider-native IBKR execution and Account
-migration. The first vertical slice is US equity order entry, order query,
-private order/execution events, account snapshot and private account updates
-for one explicit TWS or IB Gateway client binding and target account.
-Market-data and Reference identity slices remain separate capabilities.
+This note covers provider-native IBKR execution, Account, and Level-I Market
+connections. The current vertical slices are US equity order entry/query,
+private order/execution events, account snapshot/updates, and shared streaming
+quotes for one explicit TWS or IB Gateway client binding per connection role.
+Reference identity remains a separate capability.
 
 ## Official provider sources
 
@@ -18,6 +18,8 @@ Market-data and Reference identity slices remain separate capabilities.
   <https://interactivebrokers.github.io/tws-api/order_submission.html>
 - IBKR TWS API order modification identity rules:
   <https://interactivebrokers.github.io/tws-api/modifying_orders.html>
+- IBKR TWS API streaming market data and data-line limits:
+  <https://interactivebrokers.github.io/tws-api/market_data.html>
 
 Provider facts that constrain the Kairos connection model:
 
@@ -91,6 +93,12 @@ query and stream facts use the canonical `ibkr:<order-id>` remote identity and
 carry the Integration binding ID. The old blocking order and execution-stream adapters have been
 deleted. Query and stream consumers use separate client IDs so each long-running subscription has
 one mutable owner.
+
+Market composition uses the market-data connection as a push source. Integration merges duplicate
+strategy demand by provider symbol, retains logical demand across reconnect, restores `reqMktData`
+subscriptions, reserves line and 50-message/second headroom, and maps TWS entitlement and pacing
+errors without flattening them into transport timeouts. The reproducible external-session gate is
+recorded in [IBKR market-stream certification](../ibkr-market-stream-certification.md).
 
 Before composition, Execution acquires a workspace-owned `ExclusiveProcess`
 lease keyed by normalized TWS/Gateway host, port and client ID. The OS advisory

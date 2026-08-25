@@ -154,7 +154,7 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream(
         run()
     )
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 市场标的 / 查询结果  ›"
+    assert context == "trader / 市场标的 / 查询结果  ›"
     assert option_count == 1
     assert input_focused
     assert "找到 1 条交易标的记录" not in output
@@ -204,13 +204,13 @@ def test_market_search_owns_action_area_until_results_are_ready(
         input_focused,
         output,
     ) = asyncio.run(run())
-    assert prompt_context == "首页 / 市场行情  ›"
+    assert prompt_context == "trader / 市场行情  ›"
     assert not prompt_actions_visible
     assert prompt_hints.splitlines() == [
         "Enter 搜索  ·  Esc 返回",
         "Alt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新",
     ]
-    assert context == "首页 / 市场行情 / 查询结果  ›"
+    assert context == "trader / 市场行情 / 查询结果  ›"
     assert option_count == 1
     assert input_focused
     assert "找到 1 个标的" not in output
@@ -285,6 +285,7 @@ def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
             interaction = screen.session.interaction
             assert isinstance(interaction, ControlInteraction)
             screen.submit("/back")
+            screen.submit("1")
             await pilot.pause()
             return (
                 type(app.screen),
@@ -303,7 +304,7 @@ def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
     control_text = console.export_text()
 
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 市场行情 / 查询结果  ›"
+    assert context == "trader / 市场行情 / 查询结果  ›"
     assert "226.50" in output
     assert "AAPL   QUOTE" in output
     assert "bar" in next_actions
@@ -447,7 +448,7 @@ def test_selecting_market_enters_named_context_without_printing_raw_record(
             )
 
     context, output, actions = asyncio.run(run())
-    assert context == "首页 / 市场行情 / 已选标的 · AAPL · nasdaq · equity  ›"
+    assert context == "trader / 市场行情 / 已选标的 · AAPL · nasdaq · equity  ›"
     assert "MarketId(" not in output
     assert "最新报价" in actions[0]
     assert "订单簿" in actions[1]
@@ -532,7 +533,7 @@ def test_market_history_download_is_a_single_input_redacted_scope_preview(
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 市场行情 / 已选标的 · AAPL · nasdaq · equity  ›"
+    assert context == "trader / 市场行情 / 已选标的 · AAPL · nasdaq · equity  ›"
     assert "Market 文件操作结果" in output
     assert "history/aapl.jsonl" in output
     assert "preview" in output
@@ -595,6 +596,7 @@ def test_guided_reference_detail_technical_and_back_preserve_results(
                 await pilot.pause(0.05)
             selected = str(screen.query_one("#command-context", Static).render())
             screen.submit("/back")
+            screen.submit("1")
             await pilot.pause()
             results = str(screen.query_one("#command-context", Static).render())
             return (
@@ -605,8 +607,8 @@ def test_guided_reference_detail_technical_and_back_preserve_results(
             )
 
     selected, results, output, focused = asyncio.run(run())
-    assert selected == "首页 / 市场标的 / 已选目录记录  ›"
-    assert results == "首页 / 市场标的 / 查询结果  ›"
+    assert selected == "trader / 市场标的 / 已选目录记录  ›"
+    assert results == "trader / 市场标的 / 查询结果  ›"
     assert "asset:usd" in output
     assert focused
 

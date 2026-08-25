@@ -1,14 +1,59 @@
 //! Scheduled order advancement, cancellation, and expiry.
 
+use std::collections::BTreeSet;
+
 use super::super::*;
+use crate::domain::AlgorithmRunStatus;
 
 pub(crate) struct DueIntentOrder {
     pub(crate) intent_id: IntentId,
     pub(crate) leg_id: String,
+    pub(crate) action_id: String,
+    pub(crate) execution_style: AlgorithmExecutionStyle,
     pub(crate) request: SubmitOrder,
 }
 
 impl ExecutionApplication {
+    pub(in crate::application) fn due_algorithm_intents(
+        &self,
+        now_unix_nanos: u64,
+        limit: usize,
+    ) -> Vec<String> {
+        self.actor
+            .algorithm_runs()
+            .filter(|run| {
+                matches!(run.spec, ExecutionAlgorithmSpec::MakerTakerHedge(_))
+                    && run
+                        .next_wake_at
+                        .is_some_and(|wake| wake.get() <= now_unix_nanos)
+                    && !matches!(
+                        run.status,
+                        AlgorithmRunStatus::Completed
+                            | AlgorithmRunStatus::Unwound
+                            | AlgorithmRunStatus::Failed
+                            | AlgorithmRunStatus::ReconciliationRequired
+                    )
+            })
+            .take(limit)
+            .map(|run| run.intent_id.to_string())
+            .collect()
+    }
+
+    pub fn advance_due_algorithm_runs(
+        &mut self,
+        now_unix_nanos: u64,
+        limit: usize,
+    ) -> Result<usize, ExecutionError> {
+        let due = self.due_algorithm_intents(now_unix_nanos, limit);
+        for intent_id in &due {
+            self.drive_maker_taker_hedge(intent_id, now_unix_nanos)?;
+        }
+        if !due.is_empty() {
+            self.advance_due_intent_orders(now_unix_nanos, usize::MAX)?;
+        }
+        Ok(due.len())
+    }
+
     /// Submit due child orders from durable Intent scheduling state.  The
     /// state loop calls this frequently; command submission therefore never
     /// blocks on a maker cadence or split interval.
@@ -31,6 +76,22 @@ impl ExecutionApplication {
                     let cancellations = self.fail_due_intent_order(&due, &error, now_unix_nanos)?;
                     for cancellation in cancellations {
                         let _ = self.cancel(cancellation);
+                    }
+                    if due.execution_style == AlgorithmExecutionStyle::TakerImmediate
+                        && !matches!(error, ExecutionError::Indeterminate(_))
+                        && self
+                            .actor
+                            .intent(due.intent_id.as_str())
+                            .is_some_and(|state| !state.pending_orders.is_empty())
+                    {
+                        continue;
+                    }
+                    if matches!(
+                        due.execution_style,
+                        AlgorithmExecutionStyle::TakerImmediate
+                            | AlgorithmExecutionStyle::UnwindImmediate
+                    ) {
+                        break;
                     }
                     return Err(error);
                 },
@@ -68,21 +129,109 @@ impl ExecutionApplication {
         let Some((_, intent_id, request)) = next else {
             return Ok(None);
         };
-        let leg_id = intent_leg_id(
-            &self
-                .actor
-                .intent(intent_id.as_str())
-                .ok_or_else(|| ExecutionError::Invalid("scheduled intent disappeared".into()))?
-                .intent,
-            &request,
-        );
+        let leg_id = self
+            .actor
+            .algorithm_run(intent_id.as_str())
+            .and_then(|run| {
+                run.pending_actions().find_map(|action| match &action.kind {
+                    AlgorithmActionKind::SubmitChild {
+                        order_id, leg_id, ..
+                    } if order_id == &request.order_id => Some(leg_id.to_string()),
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(|| {
+                intent_leg_id(
+                    &self
+                        .actor
+                        .intent(intent_id.as_str())
+                        .expect("scheduled intent was selected from actor state")
+                        .intent,
+                    &request,
+                )
+            });
+        let (action_id, execution_style) =
+            self.ensure_due_intent_action(intent_id.as_str(), &leg_id, &request, now_unix_nanos)?;
         self.actor
             .remove_pending_order(intent_id.as_str(), &request.order_id);
         Ok(Some(DueIntentOrder {
             intent_id,
             leg_id,
+            action_id,
+            execution_style,
             request,
         }))
+    }
+
+    fn ensure_due_intent_action(
+        &mut self,
+        intent_id: &str,
+        leg_id: &str,
+        request: &SubmitOrder,
+        business_time_unix_nanos: u64,
+    ) -> Result<(String, AlgorithmExecutionStyle), ExecutionError> {
+        if let Some(action) = self.actor.algorithm_run(intent_id).and_then(|run| {
+            run.pending_actions().find_map(|action| match &action.kind {
+                AlgorithmActionKind::SubmitChild {
+                    order_id,
+                    execution_style,
+                    ..
+                } if order_id == &request.order_id => {
+                    Some((action.action_id.clone(), *execution_style))
+                },
+                _ => None,
+            })
+        }) {
+            return Ok(action);
+        }
+        let run = self
+            .actor
+            .algorithm_run(intent_id)
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("intent has no algorithm run".into()))?;
+        let execution_style = match &run.spec {
+            ExecutionAlgorithmSpec::Immediate => AlgorithmExecutionStyle::Immediate,
+            ExecutionAlgorithmSpec::MakerTakerHedge(_) => AlgorithmExecutionStyle::MakerPostOnly,
+        };
+        let input = AlgorithmInput {
+            business_time: business_time_unix_nanos.into(),
+            ready_children: vec![AlgorithmChildCandidate {
+                order_id: request.order_id.clone(),
+                leg_id: LegId::new(leg_id.to_string())
+                    .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+                quantity: request.quantity,
+                execution_style,
+                execution_route_id: request.execution_route_id.clone(),
+            }],
+        };
+        let decision = match &run.spec {
+            ExecutionAlgorithmSpec::Immediate => decide_immediate(&run, input),
+            ExecutionAlgorithmSpec::MakerTakerHedge(_) => decide_maker_taker_hedge(&run, input),
+        }
+        .map_err(ExecutionError::Invalid)?;
+        let actions = self
+            .actor
+            .apply_algorithm_decision(intent_id, decision)
+            .map_err(ExecutionError::Invalid)?;
+        let action_id = actions
+            .into_iter()
+            .find_map(|action| match action.kind {
+                AlgorithmActionKind::SubmitChild { order_id, .. }
+                    if order_id == request.order_id =>
+                {
+                    Some(action.action_id)
+                },
+                _ => None,
+            })
+            .ok_or_else(|| {
+                ExecutionError::Invalid(
+                    "immediate algorithm did not authorize the due child".into(),
+                )
+            })?;
+        // The decision and stable action identity must be durable before any
+        // order-side work can remove the scheduled request or reach a venue.
+        self.persist_snapshot()?;
+        Ok((action_id, execution_style))
     }
 
     pub(crate) fn complete_due_intent_order(
@@ -91,7 +240,25 @@ impl ExecutionApplication {
         order: &ExecutionOrder,
         now_unix_nanos: u64,
     ) -> Result<(), ExecutionError> {
-        self.attach_plan_order(&due.intent_id, &due.leg_id, &order.order_id)?;
+        self.actor
+            .set_algorithm_action_status(
+                due.intent_id.as_str(),
+                &due.action_id,
+                AlgorithmActionStatus::Completed,
+            )
+            .map_err(ExecutionError::Invalid)?;
+        if due.execution_style == AlgorithmExecutionStyle::UnwindImmediate {
+            self.actor
+                .attach_intent_algorithm_order(
+                    due.intent_id.as_str(),
+                    LegId::new(due.leg_id.clone())
+                        .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+                    order.order_id.as_str(),
+                )
+                .map_err(ExecutionError::Invalid)?;
+        } else {
+            self.attach_plan_order(&due.intent_id, &due.leg_id, &order.order_id)?;
+        }
         let state = self
             .actor
             .intent(due.intent_id.as_str())
@@ -102,13 +269,27 @@ impl ExecutionApplication {
             strategy_decision_id: None,
             event_sequence: 0.into(),
             previous_status: None,
-            status: IntentStatus::Executing,
+            status: if matches!(
+                due.execution_style,
+                AlgorithmExecutionStyle::TakerImmediate | AlgorithmExecutionStyle::UnwindImmediate
+            ) {
+                IntentStatus::Compensating
+            } else {
+                IntentStatus::Executing
+            },
             order_ids: vec![order.order_id.clone()],
             completed_quantity: state.completed_quantity,
             occurred_at_unix_nanos: now_unix_nanos.into(),
-            reason: "child order created".into(),
+            reason: match due.execution_style {
+                AlgorithmExecutionStyle::TakerImmediate => {
+                    "leader fill triggered taker hedge".into()
+                },
+                AlgorithmExecutionStyle::UnwindImmediate => "emergency unwind order created".into(),
+                _ => "child order created".into(),
+            },
             dependency_watermarks: state.dependency_watermarks,
-        })
+        })?;
+        self.refresh_intent(due.intent_id.as_str())
     }
 
     pub(crate) fn fail_due_intent_order(
@@ -118,8 +299,56 @@ impl ExecutionApplication {
         now_unix_nanos: u64,
     ) -> Result<Vec<CancelOrder>, ExecutionError> {
         warn!(event = "scheduled_child_order_failed", component = "execution", intent_id = %due.intent_id, error = %error, "scheduled child order failed");
+        self.actor
+            .set_algorithm_action_status(
+                due.intent_id.as_str(),
+                &due.action_id,
+                if matches!(error, ExecutionError::Indeterminate(_)) {
+                    AlgorithmActionStatus::Indeterminate
+                } else {
+                    AlgorithmActionStatus::Failed
+                },
+            )
+            .map_err(ExecutionError::Invalid)?;
+        if self
+            .actor
+            .order_map()
+            .contains_key(due.request.order_id.as_str())
+        {
+            if due.execution_style == AlgorithmExecutionStyle::UnwindImmediate {
+                self.actor
+                    .attach_intent_algorithm_order(
+                        due.intent_id.as_str(),
+                        LegId::new(due.leg_id.clone())
+                            .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+                        due.request.order_id.as_str(),
+                    )
+                    .map_err(ExecutionError::Invalid)?;
+            } else {
+                self.attach_plan_order(&due.intent_id, &due.leg_id, &due.request.order_id)?;
+            }
+            let orders = self
+                .actor
+                .order_map()
+                .values()
+                .filter(|order| order.intent_id.as_ref() == Some(&due.intent_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            self.actor
+                .synchronize_algorithm_run(due.intent_id.as_str(), &orders, false)
+                .map_err(ExecutionError::Invalid)?;
+        }
+        if due.execution_style == AlgorithmExecutionStyle::TakerImmediate
+            && !matches!(error, ExecutionError::Indeterminate(_))
+        {
+            self.drive_maker_taker_hedge(due.intent_id.as_str(), now_unix_nanos)?;
+            return Ok(Vec::new());
+        }
         let state = self.actor.intent(due.intent_id.as_str());
-        let cancel_siblings = state.is_none_or(|state| {
+        let cancel_siblings = !matches!(
+            due.execution_style,
+            AlgorithmExecutionStyle::TakerImmediate | AlgorithmExecutionStyle::UnwindImmediate
+        ) && state.is_none_or(|state| {
             matches!(state.intent.failure_policy, FailurePolicy::CancelRemaining)
                 || state.intent.intent_type == IntentType::PairArbitrage
         });
@@ -150,7 +379,15 @@ impl ExecutionApplication {
             strategy_decision_id: None,
             event_sequence: 0.into(),
             previous_status: None,
-            status: IntentStatus::Failed,
+            status: if matches!(
+                due.execution_style,
+                AlgorithmExecutionStyle::TakerImmediate | AlgorithmExecutionStyle::UnwindImmediate
+            ) || matches!(error, ExecutionError::Indeterminate(_))
+            {
+                IntentStatus::ReconciliationRequired
+            } else {
+                IntentStatus::Failed
+            },
             order_ids: Vec::new(),
             completed_quantity,
             occurred_at_unix_nanos: now_unix_nanos.into(),
@@ -415,13 +652,32 @@ impl ExecutionApplication {
         if orders.is_empty() {
             return Ok(());
         }
+        let unwind_order_ids = self
+            .actor
+            .algorithm_run(intent_id)
+            .into_iter()
+            .flat_map(|run| &run.actions)
+            .filter_map(|action| match &action.kind {
+                AlgorithmActionKind::SubmitChild {
+                    order_id,
+                    execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+                    ..
+                } => Some(order_id.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         let completed = orders
             .iter()
+            .filter(|order| !unwind_order_ids.contains(&order.order_id))
             .try_fold(Quantity::ZERO, |total, order| {
                 total.checked_add(order.filled_quantity)
             })
             .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
         self.refresh_plan_progress(intent_id, &orders)?;
+        let algorithm_changed = self
+            .actor
+            .synchronize_algorithm_run(intent_id, &orders, !state.pending_orders.is_empty())
+            .map_err(ExecutionError::Invalid)?;
         let has_pending = self
             .actor
             .intent(intent_id)
@@ -460,7 +716,28 @@ impl ExecutionApplication {
             && completed > Quantity::ZERO;
         let policy_satisfied =
             !has_active && (target_reached || hedge_within_tolerance || best_effort_complete);
-        let status = if (all_filled || policy_satisfied) && !has_pending && !has_failed {
+        let algorithm_status = self.actor.algorithm_run(intent_id).map(|run| run.status);
+        let unwind_active = self
+            .actor
+            .algorithm_run(intent_id)
+            .and_then(|run| run.exposure.as_ref())
+            .is_some_and(|exposure| !exposure.unwind_committed_quantity.is_zero());
+        let unwind_recovery_required = self.actor.algorithm_run(intent_id).is_some_and(|run| {
+            let ExecutionAlgorithmSpec::MakerTakerHedge(spec) = &run.spec else {
+                return false;
+            };
+            run.legs.iter().any(|leg| {
+                leg.leg_id == spec.hedge_leg_id
+                    && leg.lifecycle == crate::domain::AlgorithmLegLifecycle::Failed
+            }) && run.exposure.as_ref().is_some_and(|exposure| {
+                exposure.unhedged_after_commitment > spec.max_unhedged_quantity
+            })
+        });
+        let status = if algorithm_status == Some(AlgorithmRunStatus::Unwound) {
+            IntentStatus::Failed
+        } else if unwind_active || unwind_recovery_required {
+            IntentStatus::Compensating
+        } else if (all_filled || policy_satisfied) && !has_pending && !has_failed {
             IntentStatus::Satisfied
         } else if all_canceled && !has_pending {
             IntentStatus::Canceled
@@ -513,6 +790,9 @@ impl ExecutionApplication {
             IntentStatus::Executing
         };
         if state.status == status && state.completed_quantity == completed {
+            if algorithm_changed {
+                self.persist_snapshot()?;
+            }
             return Ok(());
         }
         self.commit_intent(IntentEvent {
@@ -528,10 +808,14 @@ impl ExecutionApplication {
                 IntentStatus::Satisfied => "all child orders filled".into(),
                 IntentStatus::PartiallyFilled => "child orders partially filled".into(),
                 IntentStatus::Canceled => "all child orders canceled".into(),
+                IntentStatus::Failed if algorithm_status == Some(AlgorithmRunStatus::Unwound) => {
+                    "leader exposure was closed by emergency unwind".into()
+                },
                 IntentStatus::Failed => "all child orders failed".into(),
                 IntentStatus::ReconciliationRequired => {
                     "child order reconciliation required".into()
                 },
+                IntentStatus::Compensating => "emergency unwind is active".into(),
                 _ => "child execution progressing".into(),
             },
             dependency_watermarks: state.dependency_watermarks,

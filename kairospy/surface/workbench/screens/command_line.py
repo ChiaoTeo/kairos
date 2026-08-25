@@ -15,7 +15,8 @@ from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
+from textual.events import Resize
 from textual.screen import Screen
 from textual.widgets import Input, Static
 from textual.worker import Worker
@@ -58,6 +59,7 @@ from .flows.resources import configuration as resources_flow
 from .flows.operations.observe_view import observe_renderable
 from .navigation import (
     action_id,
+    back_target_items,
     context_items,
     context_label,
     go_back,
@@ -77,6 +79,11 @@ from .commands import (
     preview as preview_kairos_command,
     run as run_kairos_command,
 )
+
+
+_COMMAND_ALIASES = {
+    "b": "back",
+}
 
 
 class CommandLineScreen(Screen[None]):
@@ -108,6 +115,9 @@ class CommandLineScreen(Screen[None]):
         self._market_refresh_worker: Worker[Any] | None = None
         self._operations_log_worker: Worker[Any] | None = None
         self.session = GuidedSession()
+        self._primary_hint = "数字选择  ·  /b 或 /back 返回  ·  /help 帮助"
+        self._back_preview_interaction: InteractionState | None = None
+        self._back_preview_hint: str | None = None
 
     @property
     def workbench_app(self) -> KairosWorkbenchApp:
@@ -117,6 +127,10 @@ class CommandLineScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield WorkspaceHeader()
+        yield Static(
+            "终端空间不足；建议至少使用 60×20。命令输入仍可用。",
+            id="viewport-warning",
+        )
         yield ActivityStream(
             id="command-output",
             wrap=True,
@@ -124,20 +138,23 @@ class CommandLineScreen(Screen[None]):
             markup=False,
         )
         yield Static("", id="activity-empty")
-        yield InteractionRegion(
-            ChoiceInteraction(actions=HOME_ACTIONS),
-            id="interaction-region",
-        )
-        with Horizontal(id="command-bar"):
-            yield Static("首页  /", id="command-context")
-            yield WorkbenchCommandInput(id="command-input")
+        with Vertical(id="operation-dock"):
+            yield InteractionRegion(
+                ChoiceInteraction(actions=HOME_ACTIONS),
+                id="interaction-region",
+            )
+            with Horizontal(id="command-bar"):
+                yield Static("首页  /", id="command-context")
+                yield WorkbenchCommandInput(id="command-input")
         yield Static(
-            "数字选择  ·  /back 返回  ·  /help 帮助  ·  /exit 退出\n"
+            "数字选择  ·  /b 或 /back 返回  ·  /help 帮助\n"
             "Alt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新",
             id="command-hints",
         )
 
     def on_mount(self) -> None:
+        self._apply_viewport_mode(self.size.width, self.size.height)
+        self._sync_root_label()
         if self.workbench_app.state.owner is None:
             self.session.enter("project")
         self._show_context()
@@ -145,6 +162,19 @@ class CommandLineScreen(Screen[None]):
         self.set_interval(1.0, self._refresh_launch_attach)
         self.set_interval(1.0, self._refresh_operations_logs)
         self.set_interval(2.0, self._refresh_market_control)
+
+    def on_resize(self, event: Resize) -> None:
+        """Apply one shared responsive policy to the complete command screen."""
+
+        self._apply_viewport_mode(event.size.width, event.size.height)
+
+    def _apply_viewport_mode(self, width: int, height: int) -> None:
+        self.set_class(width < 100, "viewport-compact")
+        self.set_class(width < 68, "viewport-narrow")
+        self.set_class(height < 24, "viewport-short")
+        self.set_class(width < 60 or height < 20, "viewport-too-small")
+        if self.is_mounted:
+            self._render_hints()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command-input":
@@ -158,6 +188,30 @@ class CommandLineScreen(Screen[None]):
             command_input.remember(value)
         command_input.value = ""
         self.submit(value)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Preview back destinations while a back alias exactly matches."""
+
+        if event.input.id != "command-input":
+            return
+        matches_back = event.value.strip().lower() in {"/b", "/back"}
+        if matches_back:
+            if self._resource_wizard_active():
+                return
+            if self._back_preview_interaction is not None:
+                return
+            interaction = self.session.interaction
+            if not isinstance(interaction, (ChoiceInteraction, ControlInteraction)):
+                return
+            if self._running_task is not None or self._is_back_target_picker():
+                return
+            if not back_target_items(self.session):
+                return
+            self._back_preview_interaction = interaction
+            self._back_preview_hint = self._primary_hint
+            self._present_back_targets()
+            return
+        self._restore_back_preview()
 
     def submit(self, value: str) -> None:
         """Execute input through the same path used by the visible prompt."""
@@ -189,6 +243,7 @@ class CommandLineScreen(Screen[None]):
                 "exit",
                 "quit",
                 "q",
+                "back",
                 "help",
                 "?",
             }
@@ -211,7 +266,7 @@ class CommandLineScreen(Screen[None]):
                 return
             if (
                 is_workbench_command
-                and pending_command in {"back", "b"}
+                and pending_command == "back"
                 and not pending_arguments
             ):
                 self.action_back()
@@ -263,6 +318,20 @@ class CommandLineScreen(Screen[None]):
             return
         if value.lower() == "p":
             self.enter_project_management()
+            self.app.set_focus(self._input())
+            return
+        if (
+            not value.startswith("/")
+            and self.session.context
+            == (
+                "resources",
+                "model-chat",
+            )
+            and not self._is_back_target_picker()
+        ):
+            self._dispatch_input(
+                ActionToken(Feature.RESOURCES, "resource:model-chat"), value
+            )
             self.app.set_focus(self._input())
             return
         if not value.startswith("/") and not value.isdecimal():
@@ -325,6 +394,13 @@ class CommandLineScreen(Screen[None]):
         self._start_operation(spec)
 
     def _dispatch(self, command: str, arguments: tuple[str, ...]) -> None:
+        if not arguments and self._is_back_target_picker():
+            interaction = self.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            selected = action_id(interaction.actions, command)
+            if selected is not None:
+                self._navigate_back(int(selected.removeprefix("navigate-back:")))
+                return
         if command in {"home", "/"}:
             self._finish_operations_logs()
             self.session.home()
@@ -332,8 +408,8 @@ class CommandLineScreen(Screen[None]):
         elif command in {"exit", "quit", "q"}:
             self._finish_operations_logs()
             self.workbench_app.action_quit()
-        elif command in {"back", "b"}:
-            self.action_back()
+        elif command == "back":
+            self._dispatch_back(arguments)
         elif command in {"help", "?"}:
             self._present_help()
         elif command == "clear":
@@ -383,6 +459,13 @@ class CommandLineScreen(Screen[None]):
     def _dispatch_context(self, command: str, arguments: tuple[str, ...]) -> bool:
         if arguments:
             return False
+        interaction = self.session.interaction
+        if isinstance(interaction, ChoiceInteraction) and self._is_back_target_picker():
+            selected = action_id(interaction.actions, command)
+            if selected is None:
+                return False
+            self._navigate_back(int(selected.removeprefix("navigate-back:")))
+            return True
         if command == "project" or (command == "p" and not self.session.context):
             self.enter_project_management()
             return True
@@ -486,10 +569,24 @@ class CommandLineScreen(Screen[None]):
                 return
             self.action_cancel_pending()
             return
+        if self._is_back_target_picker():
+            self._discard_back_preview()
+            self._show_context()
+            self._set_status("已取消层级选择")
+            return
         if (
             self.session.context == ("resources", "setup")
             and self.session.resources.wizard is not None
         ):
+            effects = resources_flow.back_wizard(
+                self.workbench_app.state,
+                self.session,
+                ActionToken(Feature.RESOURCES, "resource:setup"),
+            )
+            if effects is not None:
+                self._input().password = False
+                self._apply_effects(effects)
+                return
             resources_flow.cancel_input(
                 self.session,
                 ActionToken(Feature.RESOURCES, "resource:setup"),
@@ -503,6 +600,79 @@ class CommandLineScreen(Screen[None]):
             self._show_context()
             self._set_status("当前已经在首页")
             return
+        self._show_context()
+
+    def _present_back_targets(self) -> None:
+        targets = back_target_items(self.session)
+        if not targets:
+            self._show_context()
+            self._set_status("当前已经在首页")
+            return
+        self.session.choose(
+            targets,
+            title="选择返回层级",
+            summary=Text("当前位置：" + self._context_label(), style="dim"),
+        )
+        self._interaction().present(self.session.interaction)
+        self._set_hints("输入编号并按 Enter 跳转  ·  Esc 取消")
+        self._set_status("请选择要返回的层级")
+
+    def _dispatch_back(self, arguments: tuple[str, ...]) -> None:
+        """Return directly when unambiguous or present semantic destinations."""
+
+        if arguments:
+            self._discard_back_preview()
+            self._show_context()
+            self._set_status("/b 不接受参数 · 请先输入 /b，再选择目标层级")
+            return
+        if self._resource_wizard_active():
+            self.action_back()
+            return
+        targets = back_target_items(self.session)
+        if self._is_back_target_picker():
+            if self._back_preview_interaction is not None:
+                self._discard_back_preview()
+                self._set_status("请选择要返回的层级")
+                return
+            self.action_back()
+            return
+        if not targets:
+            self._show_context()
+            self._set_status("当前已经在首页")
+            return
+        self._present_back_targets()
+
+    def _restore_back_preview(self) -> None:
+        interaction = self._back_preview_interaction
+        if interaction is None:
+            return
+        hint = self._back_preview_hint
+        self._discard_back_preview()
+        self.session.interaction = interaction
+        self._interaction().present(interaction)
+        if hint is not None:
+            self._set_hints(hint)
+        self._set_status("就绪")
+
+    def _discard_back_preview(self) -> None:
+        self._back_preview_interaction = None
+        self._back_preview_hint = None
+
+    def _is_back_target_picker(self) -> bool:
+        interaction = self.session.interaction
+        return isinstance(interaction, ChoiceInteraction) and bool(
+            interaction.actions
+            and all(
+                item.id.startswith("navigate-back:") for item in interaction.actions
+            )
+        )
+
+    def _navigate_back(self, steps: int) -> None:
+        if self.session.context[:2] == ("operations", "service-logs"):
+            self._finish_operations_logs()
+        for _ in range(steps):
+            if not go_back(self.session):
+                break
         self._show_context()
 
     def action_clear(self) -> None:
@@ -519,7 +689,7 @@ class CommandLineScreen(Screen[None]):
             return activity_text
         sections = [
             f"Workspace: {self.workbench_app.state.workspace_id}",
-            f"Context: {context_label(self.session.context)}",
+            f"Context: {context_label(self.session.context, self.session.root_label)}",
         ]
         interaction_text = interaction_copy_text(self.session.interaction)
         if interaction_text:
@@ -636,6 +806,12 @@ class CommandLineScreen(Screen[None]):
     def action_interrupt(self) -> None:
         """Cancel active work, or ask before exiting when completely idle."""
 
+        command_input = self._input()
+        if command_input.value:
+            command_input.value = ""
+            self.app.set_focus(command_input)
+            self._set_status("已清空输入")
+            return
         if (
             isinstance(self.session.interaction, (InputInteraction, ConfirmInteraction))
             or self._running_task is not None
@@ -750,6 +926,10 @@ class CommandLineScreen(Screen[None]):
                 qualifier=spec.route.qualifier,
             )
         self.session.busy(spec.route, message=spec.running_status)
+        if spec.route == ResultRoute(ResultKind.RESOURCE_ACTION, "model-chat"):
+            self.session.interaction = ChoiceInteraction(
+                title="", summary=None, actions=()
+            )
         self._interaction().present(self.session.interaction)
         self._input().disabled = True
         self._set_status(spec.running_status)
@@ -844,9 +1024,21 @@ class CommandLineScreen(Screen[None]):
 
     def _sync_context_chrome(self) -> None:
         interaction = self.session.interaction
-        self.query_one("#command-context", Static).update(
-            f"{self._context_label()}  ›"
-        )
+        self.query_one("#command-context", Static).update(f"{self._context_label()}  ›")
+        if self._resource_wizard_active():
+            if isinstance(interaction, ConfirmInteraction):
+                self._set_hints(
+                    "/y 保存  ·  /b 或 /back 上一步  ·  /cancel 退出配置"
+                )
+            elif isinstance(interaction, InputInteraction):
+                self._set_hints(
+                    "Enter 继续  ·  /b 或 /back 上一步  ·  /cancel 退出配置"
+                )
+            else:
+                self._set_hints(
+                    "数字选择  ·  /b 或 /back 上一步  ·  /cancel 退出配置"
+                )
+            return
         if isinstance(interaction, InputInteraction):
             verb = (
                 "搜索"
@@ -857,13 +1049,15 @@ class CommandLineScreen(Screen[None]):
             self._set_hints(f"Enter {verb}  ·  Esc 返回")
             return
         if len(self.session.context) > 1 and self.session.visible_records:
-            self.query_one("#command-hints", Static).update(
-                "输入结果编号查看详情  ·  Esc 返回"
-            )
+            self._set_hints("输入结果编号查看详情  ·  Esc 返回")
         else:
-            self.query_one("#command-hints", Static).update(
-                "数字选择  ·  /back 返回  ·  /help 更多操作  ·  /exit 退出"
-            )
+            self._set_hints("数字选择  ·  /b 或 /back 返回  ·  /help 更多操作")
+
+    def _resource_wizard_active(self) -> bool:
+        return (
+            self.session.context == ("resources", "setup")
+            and self.session.resources.wizard is not None
+        )
 
     def _read_observe(self) -> object | None:
         return self.workbench_app.state.refresh_snapshot()
@@ -1241,6 +1435,7 @@ class CommandLineScreen(Screen[None]):
         self.call_after_refresh(self.app.set_focus, self._input())
 
     def _show_context(self) -> None:
+        self._sync_root_label()
         if self.workbench_app.state.owner is None and self.session.context != (
             "project",
         ):
@@ -1276,7 +1471,7 @@ class CommandLineScreen(Screen[None]):
         if empty_resource_label is not None:
             self._set_hints("输入 /new 开始配置  ·  Esc 返回")
         else:
-            self._set_hints("数字选择  ·  /back 返回  ·  /help 更多操作  ·  /exit 退出")
+            self._set_hints("数字选择  ·  /b 或 /back 返回  ·  /help 更多操作")
         if (
             self.session.context == ("market", "selected")
             and self.session.market.snapshot is not None
@@ -1300,7 +1495,7 @@ class CommandLineScreen(Screen[None]):
         self.call_after_refresh(self.app.set_focus, self._input())
 
     def _context_label(self) -> str:
-        context = context_label(self.session.context)
+        context = context_label(self.session.context, self.session.root_label)
         if self.session.context == ("market", "selected"):
             market = self.session.market.selected
             if market is not None:
@@ -1309,6 +1504,12 @@ class CommandLineScreen(Screen[None]):
         if self.session.context[:1] == ("resources",):
             return resources_flow.context_title(self.session, context)
         return context
+
+    def _sync_root_label(self) -> None:
+        state = self.workbench_app.state
+        self.session.root_label = (
+            state.workspace_id if state.owner is not None else "项目入口"
+        )
 
     def _write_error(self, value: str) -> None:
         if self.session.reject_input(value):
@@ -1360,9 +1561,20 @@ class CommandLineScreen(Screen[None]):
         self.query_one(WorkspaceHeader).set_status(value)
 
     def _set_hints(self, primary: str) -> None:
-        self.query_one("#command-hints", Static).update(
-            f"{primary}\nAlt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新"
-        )
+        self._primary_hint = primary
+        self._render_hints()
+
+    def _render_hints(self) -> None:
+        hints = self.query_one("#command-hints", Static)
+        if self.has_class("viewport-too-small"):
+            hints.update("/help 帮助  ·  /exit 退出")
+        elif self.has_class("viewport-narrow") or self.has_class("viewport-short"):
+            hints.update(self._primary_hint)
+        else:
+            hints.update(
+                f"{self._primary_hint}\n"
+                "Alt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新"
+            )
 
 
 def _parse_command(value: str) -> tuple[str, tuple[str, ...]]:
@@ -1373,7 +1585,8 @@ def _parse_command(value: str) -> tuple[str, tuple[str, ...]]:
         return "", ()
     if not parts:
         return "help", ()
-    return parts[0].lower(), tuple(parts[1:])
+    command = parts[0].lower()
+    return _COMMAND_ALIASES.get(command, command), tuple(parts[1:])
 
 
 def value_or_unknown(arguments: tuple[str, ...]) -> str:
@@ -1441,7 +1654,10 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_column()
     table.add_row("编号 / 动作名", "执行当前上方列出的操作")
     table.add_row("其他文本", "作为 kairos <输入> 交给所属 Application 执行")
-    table.add_row("/back", "返回上一级；等待参数时取消当前步骤")
+    table.add_row(
+        "/b, /back",
+        "单一目标直接返回；多个目标时在交互区选择层级",
+    )
     table.add_row("/home", "返回首页")
     table.add_row("p /project", "进入全局项目管理")
     table.add_row("/exit", "退出 Kairos Workbench")

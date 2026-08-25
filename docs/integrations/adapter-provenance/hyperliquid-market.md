@@ -45,12 +45,15 @@
   ready; the common source driver resubscribes active symbols on reconnect.
 - Market uses the common async snapshot Source Driver, including bounded Actor input delivery and
   explicit source status.
+- The 2026-08-25 production-public certification covers Perpetual symbol-scoped `bbo` and an active
+  Spot L2 book across subscribe, receive, replacement-first reconnect/restore, receive, and
+  unsubscribe. See [Hyperliquid public market-stream certification](../hyperliquid-market-stream-certification.md).
 
 ## Remaining capability slices
 
 - Spot symbol index mapping is supplied by the SDK metadata load for signed exchange operations;
   the public Info normalizer still needs explicit display-symbol coverage.
-- Heartbeat timing policy and live fault-injection against the provider testnet.
+- Private-address recovery and live fault-injection against the provider testnet.
 - Market orders remain unsupported until Kairos owns an explicit slippage policy; limit GTC/Alo/Ioc
   orders and cancel-by-provider-order-id are the first command slice.
 

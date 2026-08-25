@@ -136,7 +136,12 @@ mod asynchronous {
         }
 
         pub(crate) async fn close(&mut self) {
-            let _ = self.stream.close(None).await;
+            // A participant is allowed to disappear without completing the
+            // close handshake. Lifecycle shutdown must remain bounded so a
+            // dead peer cannot stall replacement or process termination.
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(2), self.stream.close(None))
+                    .await;
         }
 
         pub(crate) fn last_activity(&self) -> tokio::time::Instant {

@@ -39,7 +39,7 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
             await terminal.type("2")
             await terminal.press("Enter")
             await asyncio.sleep(0.2)
-            assert "首页 / 市场标的" in await terminal.text()
+            assert "visual-fixture / 市场标的" in await terminal.text()
 
             await terminal.type("/back")
             await terminal.press("Enter")
@@ -63,6 +63,50 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
             await terminal.resize(60, 20)
             await terminal.wait_idle(timeout=10_000)
             assert "输入编号或命令；Enter 提交" in await terminal.text()
+
+            await terminal.press("Ctrl+Q")
+            await terminal.wait_exit(timeout=10_000)
+
+    asyncio.run(run())
+
+
+def test_real_workbench_binary_preserves_input_across_terminal_resize(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "resize-fixture",
+        workspace_id="resize-fixture",
+    )
+
+    async def run() -> None:
+        async with TuiTest(session="kairos-workbench-resize") as terminal:
+            await terminal.run(
+                sys.executable,
+                "-m",
+                "kairospy",
+                "interactive",
+                "--workspace",
+                str(workspace.paths.root),
+                "--dry-run",
+                "--no-exec",
+                cols=100,
+                rows=30,
+                cwd=str(ROOT),
+            )
+            await terminal.wait_text("KAIROS", timeout=30_000)
+            await terminal.type("/market AAPL")
+
+            await terminal.resize(60, 20)
+            await terminal.wait_idle(timeout=10_000)
+            narrow = await terminal.text()
+            assert "KAIROS  /  resize-fixture" in narrow
+            assert "/market AAPL" in narrow
+
+            await terminal.resize(100, 30)
+            await terminal.wait_text("Ctrl+End", timeout=10_000)
+            restored = await terminal.text()
+            assert "● 就绪" in restored
+            assert "/market AAPL" in restored
 
             await terminal.press("Ctrl+Q")
             await terminal.wait_exit(timeout=10_000)

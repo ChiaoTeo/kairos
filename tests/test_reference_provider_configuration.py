@@ -43,7 +43,7 @@ def test_massive_configuration_writes_connection_and_reference_binding_only(
     }
     assert "market" not in manifest or "providers" not in manifest["market"]
     connection = tomllib.loads(
-        (workspace.paths.market_connections_root() / "massive.toml").read_text()
+        (workspace.paths.provider_connections_root() / "massive.toml").read_text()
     )["connection"]
     assert connection["credential_id"] == "massive-readonly"
     assert connection["endpoint"] == "https://massive.example"

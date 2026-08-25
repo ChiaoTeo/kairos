@@ -26,6 +26,8 @@ class ConfigurationReferenceApplication:
             "account": self.account_references,
             "market_data": self.data_provider_references,
             "ai_model": self.model_connection_references,
+            "available_model": self.available_model_references,
+            "model_endpoint": self.model_endpoint_references,
             "notification": self.destination_references,
             "credential": self.credential_references,
         }
@@ -104,6 +106,41 @@ class ConfigurationReferenceApplication:
                 result.append(_reference(path, location, self.workspace.paths.root))
         return _deduplicate(result)
 
+    def available_model_references(self, model_id: str) -> list[dict[str, str]]:
+        model_id = _required_id(model_id)
+        result: list[dict[str, str]] = []
+        for path in self._launch_documents():
+            value = _read(path)
+            agent = value.get("agent")
+            model = agent.get("model") if isinstance(agent, Mapping) else None
+            if isinstance(model, Mapping) and model.get("ref") == model_id:
+                result.append(
+                    _reference(
+                        path, ("agent", "model", "ref"), self.workspace.paths.root
+                    )
+                )
+        return _deduplicate(result)
+
+    def model_endpoint_references(self, endpoint_id: str) -> list[dict[str, str]]:
+        endpoint_id = _required_id(endpoint_id)
+        try:
+            from kairospy.strategy.apps.agent.application import (
+                AvailableModelApplication,
+            )
+
+            models = AvailableModelApplication(self.workspace).for_endpoint(endpoint_id)
+        except (OSError, ValueError):
+            models = ()
+        return [
+            _reference(
+                self.workspace.paths.available_models_root()
+                / f"{model['model_id']}.toml",
+                ("model", "endpoint"),
+                self.workspace.paths.root,
+            )
+            for model in models
+        ]
+
     def destination_references(self, destination_id: str) -> list[dict[str, str]]:
         destination_id = _required_id(destination_id)
         result: list[dict[str, str]] = []
@@ -170,8 +207,9 @@ class ConfigurationReferenceApplication:
         paths = list(self._launch_documents())
         paths.extend(sorted((self.workspace.paths.config / "accounts").glob("*.toml")))
         paths.extend(
-            sorted(self.workspace.paths.market_connections_root().glob("*.toml"))
+            sorted(self.workspace.paths.provider_connections_root().glob("*.toml"))
         )
+        paths.extend(sorted(self.workspace.paths.model_endpoints_root().glob("*.toml")))
         notification = self.workspace.paths.notification_config()
         if notification.is_file():
             paths.append(notification)

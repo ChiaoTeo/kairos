@@ -16,6 +16,8 @@ pub(crate) struct SocketService {
     socket: Option<TokioSocket>,
 }
 
+pub(crate) struct RetiredSocket(Option<TokioSocket>);
+
 impl SocketService {
     pub(crate) fn new(
         connection_key: ConnectionKey,
@@ -76,11 +78,29 @@ impl SocketService {
         Ok(())
     }
 
-    pub(crate) async fn reconnect(&mut self) -> Result<(), IntegrationError> {
-        self.disconnect().await?;
-        self.connect().await?;
+    pub(crate) async fn begin_replacement(&mut self) -> Result<RetiredSocket, IntegrationError> {
+        let replacement = TokioSocket::connect(&self.endpoint, self.event_capacity)
+            .await
+            .map_err(IntegrationError::Transport)?;
+        Ok(RetiredSocket(self.socket.replace(replacement)))
+    }
+
+    pub(crate) async fn commit_replacement(&mut self, mut retired: RetiredSocket) {
+        if let Some(mut socket) = retired.0.take() {
+            socket.close().await;
+        }
+        self.state.mark_ready(self.state.authenticated);
         self.state.reconnect_count = self.state.reconnect_count.saturating_add(1);
-        Ok(())
+    }
+
+    pub(crate) async fn rollback_replacement(&mut self, mut retired: RetiredSocket) {
+        if let Some(mut replacement) = self.socket.take() {
+            replacement.close().await;
+        }
+        self.socket = retired.0.take();
+        if self.socket.is_some() {
+            self.state.mark_ready(self.state.authenticated);
+        }
     }
 
     pub(crate) fn health(&mut self) -> ConnectionHealth {

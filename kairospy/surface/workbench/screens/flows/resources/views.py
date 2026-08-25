@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from rich.console import RenderableType
+from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.pretty import Pretty
 from rich.table import Table
@@ -15,7 +15,8 @@ from rich.text import Text
 RESOURCE_LABELS = {
     "accounts": "交易账户",
     "data": "市场数据",
-    "models": "模型连接",
+    "model_endpoints": "模型服务",
+    "models": "可用模型",
     "notifications": "通知提醒",
 }
 
@@ -23,6 +24,9 @@ RESOURCE_LABELS = {
 _FIELD_LABELS = {
     "account_id": "账户",
     "connection_id": "连接",
+    "endpoint_id": "模型服务",
+    "model_id": "可用模型",
+    "provider_model": "服务商模型 ID",
     "destination_id": "提醒",
     "provider": "Provider",
     "broker": "Broker",
@@ -96,7 +100,8 @@ def identity(kind: str, record: Mapping[str, Any]) -> str:
     keys = {
         "accounts": ("account_id", "id", "name"),
         "data": ("connection_id", "id", "name"),
-        "models": ("connection_id", "id", "name"),
+        "model_endpoints": ("endpoint_id", "id", "name"),
+        "models": ("model_id", "id", "name"),
         "notifications": ("destination_id", "id", "name"),
     }.get(kind, ("id", "name"))
     for key in keys:
@@ -129,12 +134,14 @@ def record_summary(kind: str, record: Mapping[str, Any]) -> str:
         if products:
             facts.append("/".join(map(str, products)))
     elif kind == "models":
-        models = record.get("models") or ()
-        if models:
-            facts.append(f"{len(models)} 个模型")
-        verified_models = record.get("verified_models") or ()
-        if verified_models:
-            facts.append(f"{len(verified_models)} 个已验证")
+        facts.extend(
+            str(value)
+            for value in (record.get("provider_model"), record.get("endpoint_id"))
+            if value
+        )
+    elif kind == "model_endpoints":
+        if record.get("api_mode"):
+            facts.append(str(record["api_mode"]))
     elif kind == "notifications":
         channel = record.get("channel") or record.get("route")
         if channel:
@@ -190,10 +197,7 @@ def records_renderable(
             ),
         ]
         if kind == "models":
-            row.append(
-                f"{len(record.get('models') or ())} 个 / "
-                f"{len(record.get('verified_models') or ())} 个已验证"
-            )
+            row.append(str(record.get("provider_model") or "—"))
         row.extend(
             (
                 "是" if record.get("enabled", True) else "否",
@@ -254,14 +258,11 @@ def detail_renderable(kind: str, record: Mapping[str, Any]) -> RenderableType:
                 "issues",
             ),
             "models": (
-                "connection_id",
-                "provider",
-                "api_mode",
-                "base_url",
-                "models",
-                "credential_id",
-                "secret_available",
+                "model_id",
+                "endpoint_id",
+                "provider_model",
                 "enabled",
+                "configured",
                 "verification_status",
                 "last_tested_at",
                 "issues",
@@ -280,6 +281,49 @@ def detail_renderable(kind: str, record: Mapping[str, Any]) -> RenderableType:
             ),
         }.get(kind),
     )
+
+
+def saved_resource_renderable(
+    kind: str, record: Mapping[str, Any], *, title: str
+) -> RenderableType:
+    """Render a save result as a compact handoff to the next useful action."""
+
+    if kind != "models":
+        return mapping_renderable(record, title=title)
+
+    provider_model = str(record.get("provider_model") or "—")
+    endpoint_id = str(record.get("endpoint_id") or "—")
+    enabled = bool(record.get("enabled", True))
+    verification = str(record.get("verification_status") or "pending").lower()
+    status_label = {
+        "verified": "已验证",
+        "pending": "待验证",
+        "failed": "验证失败",
+        "retest_required": "需要重新验证",
+        "disabled": "已停用",
+    }.get(verification, verification)
+    status_style = {
+        "verified": "bold green",
+        "failed": "bold red",
+        "pending": "bold yellow",
+        "retest_required": "bold yellow",
+        "disabled": "dim",
+    }.get(verification, "")
+
+    facts = Text()
+    facts.append(provider_model)
+    facts.append(f" · 模型服务 {endpoint_id} · ", style="dim")
+    facts.append("已启用" if enabled else "已停用")
+    facts.append(" · ", style="dim")
+    facts.append(status_label, style=status_style)
+
+    if verification == "verified":
+        next_step = Text("该模型已经可以用于 Launch。", style="dim")
+    elif not enabled or verification == "disabled":
+        next_step = Text("下一步：启用该模型后再进行验证。", style="dim")
+    else:
+        next_step = Text("下一步：选择该模型，开始对话验证。", style="yellow")
+    return Group(facts, next_step)
 
 
 def action_result_renderable(
@@ -542,5 +586,6 @@ __all__ = [
     "model_catalog_renderable",
     "record_summary",
     "records_renderable",
+    "saved_resource_renderable",
     "summary_renderable",
 ]

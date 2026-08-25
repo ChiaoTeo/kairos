@@ -49,13 +49,13 @@ from app_support import (
 @pytest.mark.parametrize(
     ("shortcut", "context"),
     (
-        ("1", "首页 / 市场行情  ›"),
-        ("2", "首页 / 市场标的  ›"),
-        ("3", "首页 / 策略管理  ›"),
-        ("4", "首页 / 运行准备  ›"),
-        ("5", "首页 / 数据研究  ›"),
-        ("6", "首页 / 运行中心 / 运行概览  ›"),
-        ("7", "项目管理  ›"),
+        ("1", "trader / 市场行情  ›"),
+        ("2", "trader / 市场标的  ›"),
+        ("3", "trader / 策略管理  ›"),
+        ("4", "trader / 运行准备  ›"),
+        ("5", "trader / 数据研究  ›"),
+        ("6", "trader / 运行中心 / 运行概览  ›"),
+        ("7", "trader / 项目管理  ›"),
     ),
 )
 def test_home_number_enters_product_context_without_replacing_input(
@@ -104,7 +104,7 @@ def test_missing_project_enters_project_start_before_business_home() -> None:
             )
 
     context, actions, count, guarded_context, status = asyncio.run(run())
-    assert context == "项目管理  ›"
+    assert context == "项目入口 / 项目管理  ›"
     assert count == 2
     assert "打开项目" in actions
     assert "创建项目" in actions
@@ -150,8 +150,8 @@ def test_workspace_header_remains_project_identity_during_navigation() -> None:
     project_header, project_context = asyncio.run(run("p"))
 
     assert operations_header == project_header == "KAIROS  /  trader"
-    assert operations_context == "首页 / 运行中心 / 运行概览  ›"
-    assert project_context == "项目管理  ›"
+    assert operations_context == "trader / 运行中心 / 运行概览  ›"
+    assert project_context == "trader / 项目管理  ›"
 
 
 def test_switch_project_reloads_global_context_and_clears_old_selections(
@@ -297,9 +297,13 @@ def test_slash_back_returns_from_result_to_section_then_home() -> None:
 
             await pilot.press("slash", "b", "a", "c", "k", "enter")
             await pilot.pause()
+            await pilot.press("1", "enter")
+            await pilot.pause()
             section_context = str(screen.query_one("#command-context", Static).render())
 
             await pilot.press("slash", "b", "a", "c", "k", "enter")
+            await pilot.pause()
+            await pilot.press("1", "enter")
             await pilot.pause()
             home_context = str(screen.query_one("#command-context", Static).render())
             return (
@@ -310,10 +314,156 @@ def test_slash_back_returns_from_result_to_section_then_home() -> None:
             )
 
     section, home, screen_type, focused = asyncio.run(run())
-    assert section == "首页 / 市场标的  ›"
-    assert home == "首页  ›"
+    assert section == "trader / 市场标的  ›"
+    assert home == "trader  ›"
     assert screen_type is CommandLineScreen
     assert focused
+
+
+@pytest.mark.parametrize("command", ("/b", "/back"))
+def test_back_aliases_offer_the_same_return_level_picker(
+    command: str,
+) -> None:
+    async def run() -> tuple[str, str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.session.context = ("strategy", "execution")
+            screen._show_context()
+
+            screen.submit(command)
+            await pilot.pause()
+            return (
+                interaction_copy_text(screen.session.interaction),
+                _log_text(screen.query_one("#command-output", RichLog)),
+                screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
+            )
+
+    chooser, output, focused = asyncio.run(run())
+    assert "选择返回层级" in chooser
+    assert "trader / 策略管理 / 实例组件" in chooser
+    assert "trader / 策略管理 / 已选实例" in chooser
+    assert "直接返回到此层级" in chooser
+    assert "跨过" not in chooser
+    assert output == ""
+    assert focused
+
+
+@pytest.mark.parametrize(
+    "keys",
+    (("slash", "b"), ("slash", "b", "a", "c", "k")),
+)
+def test_back_aliases_preview_while_typing_and_commit_on_enter(
+    keys: tuple[str, ...],
+) -> None:
+    async def run() -> tuple[str, str, tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.enter_section("market")
+
+            await pilot.press(*keys)
+            await pilot.pause()
+            preview = interaction_copy_text(screen.session.interaction)
+            await pilot.press("enter")
+            await pilot.pause()
+            committed = interaction_copy_text(screen.session.interaction)
+            await pilot.press("1", "enter")
+            await pilot.pause()
+            return preview, committed, screen.session.context
+
+    preview, committed, context = asyncio.run(run())
+    assert "选择返回层级" in preview
+    assert "选择返回层级" in committed
+    assert context == ()
+
+
+def test_back_preview_is_reverted_when_input_no_longer_matches() -> None:
+    async def run() -> tuple[str, str, tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.enter_section("market")
+
+            await pilot.press("slash", "b")
+            await pilot.pause()
+            preview = interaction_copy_text(screen.session.interaction)
+            await pilot.press("x")
+            await pilot.pause()
+            restored = interaction_copy_text(screen.session.interaction)
+            return preview, restored, screen.session.context
+
+    preview, restored, context = asyncio.run(run())
+    assert "选择返回层级" in preview
+    assert "选择返回层级" not in restored
+    assert "搜索标的并查看行情" in restored
+    assert context == ("market",)
+
+
+def test_slash_b_from_market_menu_offers_home_before_navigating() -> None:
+    async def run() -> tuple[tuple[str, ...], str, tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.enter_section("market")
+
+            screen.submit("/b")
+            await pilot.pause()
+            before = screen.session.context
+            interaction = interaction_copy_text(screen.session.interaction)
+            screen.submit("1")
+            await pilot.pause()
+            return before, interaction, screen.session.context
+
+    before, interaction, after = asyncio.run(run())
+    assert before == ("market",)
+    assert "选择返回层级" in interaction
+    assert "[1] trader" in interaction
+    assert after == ()
+
+
+def test_project_back_offers_home_before_navigating() -> None:
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("7")
+            screen.submit("/back")
+            chooser = interaction_copy_text(screen.session.interaction)
+            screen.submit("1")
+            await pilot.pause()
+            return (
+                str(screen.query_one("#command-context", Static).render()),
+                chooser,
+            )
+
+    context, interaction = asyncio.run(run())
+    assert context == "trader  ›"
+    assert "选择返回层级" in interaction
+
+
+def test_back_rejects_arguments_and_keeps_the_current_context() -> None:
+    async def run() -> tuple[tuple[str, ...], str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.enter_section("market")
+
+            screen.submit("/b 2")
+            await pilot.pause()
+            return screen.session.context, str(
+                screen.query_one("#command-status", Static).render()
+            )
+
+    context, status = asyncio.run(run())
+    assert context == ("market",)
+    assert status == "/b 不接受参数 · 请先输入 /b，再选择目标层级"
 
 
 def test_slash_back_cancels_pending_argument_before_leaving_section() -> None:
@@ -336,7 +486,7 @@ def test_slash_back_cancels_pending_argument_before_leaving_section() -> None:
             )
 
     context, pending, focused = asyncio.run(run())
-    assert context == "首页 / 市场行情  ›"
+    assert context == "trader / 市场行情  ›"
     assert not pending
     assert focused
 
@@ -361,7 +511,7 @@ def test_ctrl_c_cancels_pending_argument_without_exiting_workbench() -> None:
     return_value, pending, context, focused = asyncio.run(run())
     assert return_value is None
     assert not pending
-    assert context == "首页 / 市场行情  ›"
+    assert context == "trader / 市场行情  ›"
     assert focused
 
 

@@ -99,7 +99,7 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
     assert subtitle == "命令"
     assert output == ""
     assert workspace_title == "KAIROS  /  trader"
-    assert context == "首页  ›"
+    assert context == "trader  ›"
     assert option_count == 7
     assert not actions_can_focus
     assert input_focused
@@ -197,6 +197,34 @@ def test_idle_ctrl_c_requests_exit_confirmation_in_interaction_region() -> None:
     assert output == ""
     assert interaction.summary == "当前没有运行中的任务，是否退出？"
     assert interaction.force_hint is None
+    assert focused
+
+
+def test_ctrl_c_clears_non_empty_command_input_before_interrupting() -> None:
+    async def run() -> tuple[str, str, str, int | None, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            command_input = screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            )
+            command_input.value = "/help"
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            return (
+                command_input.value,
+                screen.session.interaction.mode.value,
+                str(screen.query_one("#command-status", Static).render()),
+                app.return_value,
+                command_input.has_focus,
+            )
+
+    value, mode, status, return_value, focused = asyncio.run(run())
+    assert value == ""
+    assert mode == "choice"
+    assert status == "已清空输入"
+    assert return_value is None
     assert focused
 
 
@@ -516,7 +544,7 @@ def test_existing_setup_entry_starts_in_guided_product_context() -> None:
 
     screen_type, context = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 运行准备  ›"
+    assert context == "trader / 运行准备  ›"
 
 
 def test_command_input_executes_help_and_keeps_focus() -> None:
@@ -629,6 +657,47 @@ def test_command_layout_runs_at_supported_terminal_sizes() -> None:
 
     for size in ((60, 20), (80, 24), (120, 30), (160, 40)):
         assert asyncio.run(run(size)) == "KAIROS  /  trader"
+
+
+def test_command_screen_applies_responsive_modes_during_terminal_resize() -> None:
+    async def run() -> tuple[bool, bool, bool, bool, str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            command_input = screen.query_one("#command-input", WorkbenchCommandInput)
+            command_input.value = "/market AAPL"
+
+            await pilot.resize_terminal(60, 20)
+            await pilot.pause()
+            supported_narrow = screen.has_class("viewport-narrow")
+            supported_short = screen.has_class("viewport-short")
+
+            await pilot.resize_terminal(55, 16)
+            await pilot.pause()
+            warning = screen.query_one("#viewport-warning", Static)
+            too_small = screen.has_class("viewport-too-small") and warning.display
+
+            await pilot.resize_terminal(100, 30)
+            await pilot.pause()
+            restored = not screen.has_class("viewport-compact") and not warning.display
+            return (
+                supported_narrow,
+                supported_short,
+                too_small,
+                restored,
+                command_input.value,
+                command_input.has_focus,
+            )
+
+    narrow, short, too_small, restored, value, focused = asyncio.run(run())
+
+    assert narrow
+    assert short
+    assert too_small
+    assert restored
+    assert value == "/market AAPL"
+    assert focused
 
 
 def test_text_input_consumes_global_shortcuts_as_text() -> None:

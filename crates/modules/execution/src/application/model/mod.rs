@@ -21,7 +21,7 @@ use kairos_primitives::execution::{
 use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId, Symbol};
 use kairos_primitives::runtime::ActorId;
-use kairos_primitives::time::{Generation, Sequence, UnixNanos};
+use kairos_primitives::time::{DurationNanos, Generation, Sequence, UnixNanos};
 pub use query::*;
 pub(crate) use result::remote_status;
 pub use result::*;
@@ -32,7 +32,8 @@ use serde::{Deserialize, Serialize};
 pub use snapshot::*;
 
 use crate::domain::{
-    CompletionPolicy, ExecutionAttempt, ExecutionFill, ExecutionOrder, ExecutionOrderStatus,
-    ExecutionPlan, FailurePolicy, HedgePolicy, IntentType, MakerExecutionPolicy, OrderCommitment,
-    OrderSide, OrderType, RiskReservationEvidence, SplitOrderPolicy,
+    AlgorithmRun, CompletionPolicy, ExecutionAttempt, ExecutionFill, ExecutionOrder,
+    ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy, IntentType,
+    MakerExecutionPolicy, OrderCommitment, OrderSide, OrderType, RiskReservationEvidence,
+    SplitOrderPolicy,
 };

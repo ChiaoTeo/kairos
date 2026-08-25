@@ -215,7 +215,7 @@ def handle_success(
             return _show_record_choices(session, "market", visible)
         session.enter("market")
         interaction = ChoiceInteraction(
-            title="首页 / 市场行情",
+            title=f"{session.root_label} / 市场行情",
             summary=Text("没有找到匹配的市场标的。", style="dim"),
             actions=SECTION_ACTIONS["market"],
         )
@@ -226,7 +226,7 @@ def handle_success(
         if market is None:
             session.enter("market")
             interaction = ChoiceInteraction(
-                title="首页 / 市场行情",
+                title=f"{session.root_label} / 市场行情",
                 summary=Text("行情上下文已经失效，请重新选择标的。", style="yellow"),
                 actions=SECTION_ACTIONS["market"],
             )
@@ -799,7 +799,7 @@ def _market_interaction(
             refreshing=True,
         )
     return ChoiceInteraction(
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         summary=summary,
         actions=context_items(session, state),
     )
@@ -880,7 +880,11 @@ def _show_record_choices(
         for index, record in enumerate(visible, 1)
     )
     interaction = ChoiceInteraction(
-        title=("首页 / 市场行情" if section == "market" else "首页 / 市场标的"),
+        title=(
+            f"{session.root_label} / 市场行情"
+            if section == "market"
+            else f"{session.root_label} / 市场标的"
+        ),
         actions=actions,
     )
     return (

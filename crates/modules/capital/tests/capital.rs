@@ -11,12 +11,13 @@ use kairos_capital::{
     CapitalOperationStatus, CapitalParticipantOperationState, CapitalPlanId, CapitalPlanStatus,
     CapitalPolicy, CapitalReadiness, CapitalRecoveryAction, CapitalReservationStatus,
     CapitalRouteId, CapitalRouteKind, CapitalSettlementClass, CapitalSubmissionOutcome,
-    CapitalTransferRoute, EvaluateCapitalGroup, ExpireCapitalDemands, ExpireCapitalPlans,
-    FundingLocation, FundingObjective, FundingObjectiveId, FundingObjectiveReceipt,
-    FundingObjectiveStatus, FundingPriority, MarkCapitalDeliveryStarted, ObserveCapitalDemand,
-    ObserveCapitalFacts, ObserveCapitalSettlement, PublishFundingObjective,
-    RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
-    UpdateCapitalPolicy, UpdateCapitalRoute,
+    CapitalTransferRoute, ConfirmManualCapitalTransfer, EvaluateCapitalGroup, ExpireCapitalDemands,
+    ExpireCapitalPlans, FundingLocation, FundingObjective, FundingObjectiveId,
+    FundingObjectiveReceipt, FundingObjectiveStatus, FundingPriority, MarkCapitalDeliveryStarted,
+    ObserveCapitalDemand, ObserveCapitalFacts, ObserveCapitalSettlement,
+    PreviewManualCapitalTransfer, PublishFundingObjective, RecordCapitalParticipantStatus,
+    RecordCapitalRecoveryRequired, RecordCapitalSubmission, UpdateCapitalPolicy,
+    UpdateCapitalRoute,
 };
 use kairos_conflux::{
     AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
@@ -213,6 +214,97 @@ fn configure_ready_planner(application: &mut CapitalApplication, group_id: &Capi
             evaluated_at: UnixNanos::new(120),
         })
         .unwrap();
+}
+
+fn manual_transfer_preview(
+    application: &CapitalApplication,
+    group_id: &CapitalGroupId,
+    suffix: &str,
+) -> kairos_capital::ManualCapitalTransferPreview {
+    application
+        .preview_manual_transfer(PreviewManualCapitalTransfer {
+            capital_group_id: group_id.clone(),
+            preview_id: format!("preview-{suffix}"),
+            plan_id: CapitalPlanId::new(format!("manual-plan-{suffix}")).unwrap(),
+            idempotency_key: IdempotencyKey::new(format!("manual-transfer-{suffix}")).unwrap(),
+            source: route().source,
+            destination: route().destination,
+            amount: Quantity::new(7, 0).unwrap(),
+            source_authority: "lease:account-a:7".into(),
+            created_at: UnixNanos::new(120),
+            expires_at: UnixNanos::new(140),
+        })
+        .unwrap()
+}
+
+#[test]
+fn manual_transfer_preview_is_exact_idempotent_and_rechecks_balance() {
+    let group_id = CapitalGroupId::new("capital-group-manual-transfer").unwrap();
+    let mut application = compose_capital_application(group_config(group_id.as_str()));
+    configure_ready_planner(&mut application, &group_id);
+
+    let preview = manual_transfer_preview(&application, &group_id, "one");
+    assert_eq!(preview.amount, Quantity::new(7, 0).unwrap());
+    assert_eq!(
+        preview.source_observed_available,
+        Quantity::new(35, 0).unwrap()
+    );
+
+    let plan = application
+        .confirm_manual_transfer(ConfirmManualCapitalTransfer {
+            capital_group_id: group_id.clone(),
+            preview: preview.clone(),
+            confirmed_at: UnixNanos::new(125),
+        })
+        .unwrap();
+    assert_eq!(plan.amount, Quantity::new(7, 0).unwrap());
+    assert!(plan.objective_ids.is_empty());
+    assert!(plan.demand_ids.is_empty());
+    assert_eq!(plan.idempotency_key, preview.idempotency_key);
+
+    let repeated = application
+        .confirm_manual_transfer(ConfirmManualCapitalTransfer {
+            capital_group_id: group_id,
+            preview,
+            // A lost response may be retried after the preview TTL. Once the
+            // matching plan exists this is a status/reconciliation path, not
+            // a second authorization.
+            confirmed_at: UnixNanos::new(200),
+        })
+        .unwrap();
+    assert_eq!(repeated.plan_id, plan.plan_id);
+    assert_eq!(application.snapshot().plans.len(), 1);
+}
+
+#[test]
+fn manual_transfer_confirmation_rejects_changed_balance_and_expired_preview() {
+    let group_id = CapitalGroupId::new("capital-group-stale-manual-transfer").unwrap();
+    let mut application = compose_capital_application(group_config(group_id.as_str()));
+    configure_ready_planner(&mut application, &group_id);
+    let stale = manual_transfer_preview(&application, &group_id, "stale");
+    let expired = manual_transfer_preview(&application, &group_id, "expired");
+    application
+        .observe_facts(ObserveCapitalFacts {
+            capital_group_id: group_id.clone(),
+            facts: source_facts(34, 121),
+        })
+        .unwrap();
+    let error = application
+        .confirm_manual_transfer(ConfirmManualCapitalTransfer {
+            capital_group_id: group_id.clone(),
+            preview: stale,
+            confirmed_at: UnixNanos::new(125),
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("preview is stale"), "{error}");
+    let error = application
+        .confirm_manual_transfer(ConfirmManualCapitalTransfer {
+            capital_group_id: group_id,
+            preview: expired,
+            confirmed_at: UnixNanos::new(141),
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("preview has expired"), "{error}");
 }
 
 fn group_with_secondary_member(

@@ -2,32 +2,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use kairos_primitives::integration::ParticipantSymbol;
 use kairos_primitives::time::UnixNanos;
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use crate::{Bar, IntegrationError, MarketDataKind, MarketEvent, MarketEventKind, MarketFeed};
-
-pub(crate) fn subscription(feed: &MarketFeed) -> Result<Value, IntegrationError> {
-    let coin = feed
-        .symbol
-        .as_ref()
-        .ok_or_else(|| {
-            IntegrationError::InvalidRequest("Hyperliquid market feed requires a coin".into())
-        })?
-        .as_str();
-    match feed.kind {
-        MarketDataKind::OrderBook => Ok(json!({"type": "l2Book", "coin": coin})),
-        MarketDataKind::Trade => Ok(json!({"type": "trades", "coin": coin})),
-        MarketDataKind::Quote => Ok(json!({"type": "allMids"})),
-        MarketDataKind::Bar | MarketDataKind::TradeBar => Ok(json!({
-            "type": "candle",
-            "coin": coin,
-            "interval": feed.interval.as_deref().unwrap_or("1m")
-        })),
-        ref kind => Err(IntegrationError::InvalidRequest(format!(
-            "unsupported Hyperliquid feed {kind:?}"
-        ))),
-    }
-}
+use crate::{Bar, IntegrationError, MarketEvent, MarketEventKind};
 
 pub(crate) fn book(data: &Value) -> Result<MarketEvent, IntegrationError> {
     let coin = text(data, "coin")?;
@@ -57,6 +34,59 @@ pub(crate) fn trade(row: &Value) -> Result<MarketEvent, IntegrationError> {
     event.price = optional(row.get("px"))?;
     event.quantity = optional(row.get("sz"))?;
     Ok(event)
+}
+
+pub(crate) fn best_bid_offer(data: &Value) -> Result<MarketEvent, IntegrationError> {
+    let coin = text(data, "coin")?;
+    let sides = data.get("bbo").and_then(Value::as_array).ok_or_else(|| {
+        IntegrationError::InvalidPayload("Hyperliquid bbo data is missing".into())
+    })?;
+    let mut event = empty(
+        coin,
+        MarketEventKind::Quote,
+        millis(data.get("time").and_then(Value::as_u64)),
+    )?;
+    if let Some(bid) = sides.first().and_then(|value| value.as_object()) {
+        event.price = optional(bid.get("px"))?;
+        event.quantity = optional(bid.get("sz"))?;
+    }
+    if let Some(ask) = sides.get(1).and_then(|value| value.as_object()) {
+        event.ask_price = optional(ask.get("px"))?;
+        event.ask_quantity = optional(ask.get("sz"))?;
+    }
+    Ok(event)
+}
+
+pub(crate) fn active_asset_context(data: &Value) -> Result<Vec<MarketEvent>, IntegrationError> {
+    let coin = text(data, "coin")?;
+    let context = data.get("ctx").unwrap_or(data);
+    let observed = millis(
+        data.get("time")
+            .and_then(Value::as_u64)
+            .or_else(|| context.get("time").and_then(Value::as_u64)),
+    );
+    let mut events = Vec::new();
+    for (field, kind) in [
+        ("markPx", MarketEventKind::MarkPrice),
+        ("oraclePx", MarketEventKind::IndexPrice),
+    ] {
+        if let Some(price) = optional(context.get(field))? {
+            let mut event = empty(coin, kind, observed)?;
+            event.price = Some(price);
+            events.push(event);
+        }
+    }
+    if let Some(rate) = optional(context.get("funding"))? {
+        let mut event = empty(coin, MarketEventKind::FundingRate, observed)?;
+        event.rate = Some(rate);
+        events.push(event);
+    }
+    if let Some(quantity) = optional(context.get("openInterest"))? {
+        let mut event = empty(coin, MarketEventKind::OpenInterest, observed)?;
+        event.quantity = Some(quantity);
+        events.push(event);
+    }
+    Ok(events)
 }
 
 pub(crate) fn candle(row: &Value) -> Result<MarketEvent, IntegrationError> {
@@ -179,23 +209,9 @@ fn payload(error: impl std::fmt::Display) -> IntegrationError {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::integration::ParticipantSymbol;
     use serde_json::json;
 
     use super::*;
-    use crate::{MarketDataKind, MarketFeed};
-
-    #[test]
-    fn quote_subscription_uses_the_shared_all_mids_channel() {
-        let feed = MarketFeed {
-            kind: MarketDataKind::Quote,
-            symbol: Some(ParticipantSymbol::new("BTC").unwrap()),
-            interval: None,
-            depth: None,
-            update_speed_millis: None,
-        };
-        assert_eq!(subscription(&feed).unwrap(), json!({"type": "allMids"}));
-    }
 
     #[test]
     fn book_preserves_both_sides_and_provider_time() {
@@ -212,5 +228,49 @@ mod tests {
         assert_eq!(event.bids.len(), 1);
         assert_eq!(event.asks.len(), 1);
         assert_eq!(event.observed_at_unix_nanos.get(), 1_000_000_000);
+    }
+
+    #[test]
+    fn bbo_preserves_both_sides() {
+        let event = best_bid_offer(&json!({
+            "coin":"BTC","time":1000,
+            "bbo":[{"px":"10","sz":"2"},{"px":"11","sz":"3"}]
+        }))
+        .unwrap();
+        assert_eq!(event.kind, MarketEventKind::Quote);
+        assert_eq!(event.observed_at_unix_nanos.get(), 1_000_000_000);
+        assert!(event.price.is_some());
+        assert!(event.ask_price.is_some());
+    }
+
+    #[test]
+    fn active_context_expands_shared_provider_frame_into_typed_observations() {
+        let events = active_asset_context(&json!({
+            "coin":"BTC","ctx":{
+                "markPx":"10","oraclePx":"9","funding":"0.0001","openInterest":"20"
+            }
+        }))
+        .unwrap();
+        assert_eq!(events.len(), 4);
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == MarketEventKind::MarkPrice)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == MarketEventKind::IndexPrice)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == MarketEventKind::FundingRate)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == MarketEventKind::OpenInterest)
+        );
     }
 }

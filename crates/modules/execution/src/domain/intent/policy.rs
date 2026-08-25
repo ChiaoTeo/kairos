@@ -1,6 +1,7 @@
 //! Split, maker, and hedge policy values.
 
 use super::*;
+use kairos_primitives::execution::ExecutionRouteId;
 
 /// Controls how one logical leg is materialized into exchange child orders.
 /// Quantities use the leg's quantity scale; the planner never rounds away
@@ -83,6 +84,14 @@ pub struct HedgePolicy {
     pub contract_multiplier: Ratio,
     #[serde(default)]
     pub max_unhedged_quantity: Quantity,
+    /// Maximum business-time duration for any non-zero filled exposure,
+    /// including a tail that remains inside the quantity tolerance.
+    #[serde(default)]
+    pub max_unhedged_duration: Option<DurationNanos>,
+    /// Ordered alternative routes for a taker hedge proven not sent or
+    /// explicitly rejected. They are never used after an indeterminate send.
+    #[serde(default)]
+    pub fallback_execution_route_ids: Vec<ExecutionRouteId>,
     #[serde(default)]
     pub compensate_on_failure: bool,
     /// Maximum number of compensating submissions before Execution stops
@@ -101,8 +110,21 @@ fn default_compensation_attempts() -> u32 {
 
 impl HedgePolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.leader_leg_id == self.hedge_leg_id || self.max_compensation_attempts == 0 {
+        if self.leader_leg_id == self.hedge_leg_id
+            || self.max_compensation_attempts == 0
+            || self
+                .max_unhedged_duration
+                .is_some_and(|duration| duration.get() == 0)
+        {
             return Err("hedge policy is invalid".into());
+        }
+        let mut routes = std::collections::BTreeSet::new();
+        if self
+            .fallback_execution_route_ids
+            .iter()
+            .any(|route_id| !routes.insert(route_id))
+        {
+            return Err("hedge fallback execution routes must be unique".into());
         }
         Ok(())
     }

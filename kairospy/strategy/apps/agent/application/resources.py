@@ -20,18 +20,71 @@ from kairospy.system.apps.credentials.application import (
 from kairospy.system.apps.workspace.application import Workspace
 
 from .model_connections import ModelProviderConnectionApplication
+from .model_resources import (
+    AvailableModelApplication,
+    ModelEndpointApplication,
+    ModelResourceMigrationApplication,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class AgentResourceApplication:
     workspace: Workspace
 
+    def model_endpoints(self) -> tuple[dict[str, object], ...]:
+        return ModelEndpointApplication(self.workspace).list()
+
+    def available_models(self) -> tuple[dict[str, object], ...]:
+        return AvailableModelApplication(self.workspace).list()
+
+    def model_endpoint(self, endpoint_id: str) -> dict[str, object]:
+        return ModelEndpointApplication(self.workspace).show(endpoint_id)
+
+    def available_model(self, model_id: str) -> dict[str, object]:
+        return AvailableModelApplication(self.workspace).show(model_id)
+
+    def configure_model_endpoint(
+        self, endpoint_id: str, **values: Any
+    ) -> dict[str, object]:
+        return ModelEndpointApplication(self.workspace).configure(endpoint_id, **values)
+
+    def configure_available_model(
+        self, model_id: str, **values: Any
+    ) -> dict[str, object]:
+        return AvailableModelApplication(self.workspace).configure(model_id, **values)
+
+    def test_available_model(
+        self, model_id: str, *, probe: Callable[..., object] | None = None
+    ) -> dict[str, object]:
+        return AvailableModelApplication(self.workspace).test(model_id, probe=probe)
+
+    def converse_with_available_model(
+        self,
+        model_id: str,
+        message: str,
+        *,
+        probe: Callable[..., object] | None = None,
+    ) -> dict[str, object]:
+        return AvailableModelApplication(self.workspace).converse(
+            model_id, message, probe=probe
+        )
+
+    def migrate_legacy_model_resources(self) -> dict[str, object]:
+        return ModelResourceMigrationApplication(self.workspace).migrate_legacy()
+
     def credential_ids(self) -> tuple[str, ...]:
         return tuple(
             dict.fromkeys(
-                str(value["credential_id"])
-                for value in self.model_connections()
-                if value.get("credential_id") and value.get("configured") is True
+                [
+                    str(value["credential_id"])
+                    for value in self.model_endpoints()
+                    if value.get("credential_id") and value.get("configured") is True
+                ]
+                + [
+                    str(value["credential_id"])
+                    for value in self.model_connections()
+                    if value.get("credential_id") and value.get("configured") is True
+                ]
             )
         )
 
@@ -81,7 +134,24 @@ class AgentResourceApplication:
     def verified_model_refs(self) -> tuple[dict[str, object], ...]:
         """Return concrete models currently safe for Launch selection."""
 
-        result: list[dict[str, object]] = []
+        result: list[dict[str, object]] = [
+            {
+                "model_ref": str(value["model_id"]),
+                "model_id": value["model_id"],
+                "endpoint_id": value["endpoint_id"],
+                "provider_model": value["provider_model"],
+                "provider": ModelEndpointApplication(self.workspace)
+                .show(str(value["endpoint_id"]))
+                .get("provider"),
+                "provider_label": ModelEndpointApplication(self.workspace)
+                .show(str(value["endpoint_id"]))
+                .get("provider_label"),
+                "last_tested_at": value.get("last_tested_at"),
+            }
+            for value in self.available_models()
+            if value.get("configured") is True
+            and value.get("verification_status") == "verified"
+        ]
         connections = ModelProviderConnectionApplication(self.workspace)
         for connection in self.model_connections():
             if connection.get("configured") is not True:
@@ -105,12 +175,12 @@ class AgentResourceApplication:
         return tuple(
             sorted(
                 result,
-                key=lambda value: (
-                    str(value["connection_id"]),
-                    str(value["model"]),
-                ),
+                key=lambda value: str(value["model_ref"]),
             )
         )
+
+    def available_model_snapshot(self, model_id: str) -> dict[str, object]:
+        return AvailableModelApplication(self.workspace).resource_snapshot(model_id)
 
     def detect_local_model_providers(
         self,
@@ -295,17 +365,22 @@ class AgentResourceApplication:
         credentials = self.credential_ids()
         profiles = self.profile_ids()
         selections = self.mcp_selections()
+        endpoints = self.model_endpoints()
+        models = self.available_models()
+        verified = self.verified_model_refs()
         return {
-            "ready": bool(credentials),
+            "ready": bool(verified),
             "credentials": list(credentials),
             "model_connections": list(self.model_connections()),
+            "model_endpoints": list(endpoints),
+            "available_models": list(models),
             "profiles": list(profiles),
             "mcp": [
                 {"server": server_id, "profile": profile_id}
                 for server_id, profile_id in selections
             ],
             "legacy_workspace_profiles": bool(profiles or selections),
-            "next_steps": [] if credentials else ["kairos config agent setup"],
+            "next_steps": [] if verified else ["kairos config agent setup"],
         }
 
     def configure_openai_credential(

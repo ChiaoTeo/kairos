@@ -3,11 +3,14 @@
 //! These tests intentionally exercise private application wiring. Keeping them in
 //! the crate avoids turning test doubles into a public Application API.
 
+use std::sync::{Arc, Mutex};
+
 use kairos_conflux::{
     BlockingOrderCommand as OrderCommand, BlockingOrderQuery as OrderQuery, CommandOutcome,
     ExternalOrder, ExternalOrderQuery, IndeterminateCommand, IntegrationError, OrderEntryEvent,
-    OrderEntryRequest, ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind,
-    ParticipantRef,
+    OrderEntryRequest, OrderEntryStatus, OrderType as ConnectionOrderType,
+    ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
+    TimeInForce,
 };
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
@@ -20,6 +23,7 @@ use kairos_execution::composition::{
     SqlxExecutionAudit, SqlxExecutionStore, compose_order_entry, configure_simulated_risk,
 };
 use kairos_execution::{
+    AlgorithmActionKind, AlgorithmActionStatus, AlgorithmExecutionStyle, AlgorithmRunStatus,
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
     MarketObservation, OrderSide, OrderType, Quote, UnknownRemoteOrderResolution,
 };
@@ -29,7 +33,9 @@ use kairos_primitives::execution::{
     ClientOrderId, ExecutionRouteId, FillId, IntentId, LegId, OrderId,
 };
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId, Symbol};
-use kairos_primitives::time::UnixNanos;
+use kairos_primitives::time::{DurationNanos, UnixNanos};
+
+use crate::services::persistence::ExecutionStateStore;
 
 fn fill_report(
     fill_id: impl Into<String>,
@@ -205,6 +211,293 @@ impl OrderCommand for FailingOrderEntry {
     }
 }
 
+struct SecondSubmitIndeterminate {
+    submissions: u32,
+}
+
+impl OrderCommand for SecondSubmitIndeterminate {
+    fn submit_order(
+        &mut self,
+        request: &OrderEntryRequest,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        self.submissions = self.submissions.saturating_add(1);
+        if self.submissions == 2 {
+            return Ok(CommandOutcome::Indeterminate(
+                IndeterminateCommand::may_have_been_sent("hedge response was lost"),
+            ));
+        }
+        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+            order_id: request.order_id.clone(),
+            status: OrderEntryStatus::Accepted,
+            remote_order_id: Some(
+                kairos_primitives::integration::RemoteOrderId::new(format!(
+                    "remote:{}",
+                    request.order_id
+                ))
+                .unwrap(),
+            ),
+            filled_quantity: None,
+            occurred_at_unix_nanos: 1.into(),
+            reason: String::new(),
+        }))
+    }
+
+    fn cancel_order(
+        &mut self,
+        _request: &OrderEntryRequest,
+        _remote_order_id: &str,
+        _at_unix_nanos: u64,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        Err(IntegrationError::Transport(
+            "cancel is not used by this fixture".into(),
+        ))
+    }
+}
+
+struct HedgeFailsThenUnwindConfirms {
+    submissions: u32,
+    unwind_indeterminate: bool,
+}
+
+struct PrimaryHedgeFailsThenFallback {
+    submissions: u32,
+    fallback_outcome: FallbackOutcome,
+}
+
+#[derive(Clone, Copy)]
+enum FallbackOutcome {
+    Confirmed,
+    Failed,
+    Indeterminate,
+}
+
+struct CrashAfterStagingUnwindStore {
+    snapshot: Arc<Mutex<Option<kairos_execution::application::ExecutionSnapshot>>>,
+    fail_once: bool,
+}
+
+struct CrashAfterStagingFallbackStore {
+    snapshot: Arc<Mutex<Option<kairos_execution::application::ExecutionSnapshot>>>,
+    fail_once: bool,
+}
+
+impl ExecutionStateStore for CrashAfterStagingFallbackStore {
+    fn load(&mut self) -> Result<Option<kairos_execution::application::ExecutionSnapshot>, String> {
+        Ok(self.snapshot.lock().unwrap().clone())
+    }
+
+    fn save(
+        &mut self,
+        snapshot: &kairos_execution::application::ExecutionSnapshot,
+    ) -> Result<(), String> {
+        *self.snapshot.lock().unwrap() = Some(snapshot.clone());
+        let staged_fallback = snapshot.intents.iter().any(|state| {
+            state.pending_orders.iter().any(|order| {
+                order
+                    .execution_route_id
+                    .as_ref()
+                    .is_some_and(|route_id| route_id.as_str() == "execution-route:fallback")
+            })
+        });
+        if self.fail_once && staged_fallback {
+            self.fail_once = false;
+            return Err("fixture stops after the fallback action and request are durable".into());
+        }
+        Ok(())
+    }
+}
+
+impl ExecutionStateStore for CrashAfterStagingUnwindStore {
+    fn load(&mut self) -> Result<Option<kairos_execution::application::ExecutionSnapshot>, String> {
+        Ok(self.snapshot.lock().unwrap().clone())
+    }
+
+    fn save(
+        &mut self,
+        snapshot: &kairos_execution::application::ExecutionSnapshot,
+    ) -> Result<(), String> {
+        *self.snapshot.lock().unwrap() = Some(snapshot.clone());
+        let staged_unwind = snapshot.intents.iter().any(|state| {
+            state
+                .pending_orders
+                .iter()
+                .any(|order| order.order_id.as_str().contains(":unwind:decision:"))
+        });
+        if self.fail_once && staged_unwind {
+            self.fail_once = false;
+            return Err("fixture stops after the unwind action and request are durable".into());
+        }
+        Ok(())
+    }
+}
+
+struct SharedSnapshotStore {
+    snapshot: Arc<Mutex<Option<kairos_execution::application::ExecutionSnapshot>>>,
+}
+
+impl ExecutionStateStore for SharedSnapshotStore {
+    fn load(&mut self) -> Result<Option<kairos_execution::application::ExecutionSnapshot>, String> {
+        Ok(self.snapshot.lock().unwrap().clone())
+    }
+
+    fn save(
+        &mut self,
+        snapshot: &kairos_execution::application::ExecutionSnapshot,
+    ) -> Result<(), String> {
+        *self.snapshot.lock().unwrap() = Some(snapshot.clone());
+        Ok(())
+    }
+}
+
+impl OrderCommand for HedgeFailsThenUnwindConfirms {
+    fn submit_order(
+        &mut self,
+        request: &OrderEntryRequest,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        self.submissions = self.submissions.saturating_add(1);
+        if self.submissions == 2 {
+            return Err(IntegrationError::Transport(
+                "fixture proves the taker hedge was not sent".into(),
+            ));
+        }
+        if self.submissions >= 3 {
+            assert!(request.order_id.as_str().contains(":unwind:decision:"));
+            assert_eq!(request.side, kairos_conflux::OrderSide::Sell);
+            assert_eq!(request.order_type, ConnectionOrderType::Limit);
+            assert_eq!(
+                request.quantity.mantissa,
+                if self.submissions == 3 { 2 } else { 1 }
+            );
+            assert_eq!(request.limit_price.unwrap().mantissa, 99);
+            assert_eq!(
+                request.options.time_in_force,
+                Some(TimeInForce::ImmediateOrCancel)
+            );
+            assert_eq!(request.options.post_only, Some(false));
+            if self.unwind_indeterminate {
+                return Ok(CommandOutcome::Indeterminate(
+                    IndeterminateCommand::may_have_been_sent("unwind response was lost"),
+                ));
+            }
+        }
+        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+            order_id: request.order_id.clone(),
+            status: OrderEntryStatus::Accepted,
+            remote_order_id: Some(
+                kairos_primitives::integration::RemoteOrderId::new(format!(
+                    "remote:{}",
+                    request.order_id
+                ))
+                .unwrap(),
+            ),
+            filled_quantity: None,
+            occurred_at_unix_nanos: u64::from(self.submissions).into(),
+            reason: String::new(),
+        }))
+    }
+
+    fn cancel_order(
+        &mut self,
+        _request: &OrderEntryRequest,
+        _remote_order_id: &str,
+        _at_unix_nanos: u64,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        Err(IntegrationError::Transport(
+            "cancel is not used by this fixture".into(),
+        ))
+    }
+}
+
+impl OrderCommand for PrimaryHedgeFailsThenFallback {
+    fn submit_order(
+        &mut self,
+        request: &OrderEntryRequest,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        self.submissions = self.submissions.saturating_add(1);
+        if self.submissions == 2 {
+            return Err(IntegrationError::Transport(
+                "fixture proves the primary hedge was not sent".into(),
+            ));
+        }
+        if self.submissions == 3 {
+            match self.fallback_outcome {
+                FallbackOutcome::Failed => {
+                    return Err(IntegrationError::Transport(
+                        "fixture proves the fallback hedge was not sent".into(),
+                    ));
+                },
+                FallbackOutcome::Indeterminate => {
+                    return Ok(CommandOutcome::Indeterminate(
+                        IndeterminateCommand::may_have_been_sent(
+                            "fallback hedge response was lost",
+                        ),
+                    ));
+                },
+                FallbackOutcome::Confirmed => {},
+            }
+        }
+        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+            order_id: request.order_id.clone(),
+            status: OrderEntryStatus::Accepted,
+            remote_order_id: Some(
+                kairos_primitives::integration::RemoteOrderId::new(format!(
+                    "remote:{}",
+                    request.order_id
+                ))
+                .unwrap(),
+            ),
+            filled_quantity: None,
+            occurred_at_unix_nanos: u64::from(self.submissions).into(),
+            reason: String::new(),
+        }))
+    }
+
+    fn cancel_order(
+        &mut self,
+        _request: &OrderEntryRequest,
+        _remote_order_id: &str,
+        _at_unix_nanos: u64,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        Err(IntegrationError::Transport(
+            "cancel is not used by this fixture".into(),
+        ))
+    }
+}
+
+struct InvalidAcknowledgementOrderEntry;
+
+impl OrderCommand for InvalidAcknowledgementOrderEntry {
+    fn submit_order(
+        &mut self,
+        request: &OrderEntryRequest,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+            order_id: request.order_id.clone(),
+            status: OrderEntryStatus::Accepted,
+            remote_order_id: None,
+            filled_quantity: None,
+            occurred_at_unix_nanos: 1.into(),
+            reason: String::new(),
+        }))
+    }
+
+    fn cancel_order(
+        &mut self,
+        request: &OrderEntryRequest,
+        _remote_order_id: &str,
+        at_unix_nanos: u64,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+            order_id: request.order_id.clone(),
+            status: OrderEntryStatus::Canceled,
+            remote_order_id: None,
+            filled_quantity: None,
+            occurred_at_unix_nanos: at_unix_nanos.into(),
+            reason: String::new(),
+        }))
+    }
+}
+
 fn application(path: &std::path::Path) -> ExecutionApplication {
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
@@ -316,6 +609,34 @@ fn configure_test_access(application: &mut ExecutionApplication) {
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
+            "BTCUSDT",
+        )
+        .unwrap(),
+    );
+}
+
+fn configure_fallback_access(application: &mut ExecutionApplication) {
+    application.configure_execution_route(
+        crate::application::ExecutionRouteCandidate {
+            route_id: ExecutionRouteId::new("execution-route:fallback").unwrap(),
+            account_id: None,
+            segment_key: None,
+            instrument_id: None,
+            market_id: None,
+            broker_id: BrokerId::new("simulated-fallback").unwrap(),
+            execution_channel: kairos_primitives::execution::ExecutionChannelCode::new("spot")
+                .unwrap(),
+            order_entry_symbol: kairos_primitives::execution::OrderEntrySymbol::new("BTCUSDT")
+                .unwrap(),
+            supported_order_types: vec![OrderType::Market],
+            supported_options: vec!["post_only".into()],
+            ready: true,
+            initial_margin_rate_bps: Some(10_000),
+            margin_rule_id: Some("test:fallback-fully-funded".into()),
+        },
+        ParticipantInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Exchange, "simulated-fallback").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
             "BTCUSDT",
         )
@@ -1332,6 +1653,50 @@ fn indeterminate_submission_is_explicit_and_persisted_for_reconciliation() {
 }
 
 #[test]
+fn confirmed_submission_without_remote_identity_is_indeterminate() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(InvalidAcknowledgementOrderEntry)),
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+
+    let result = app.submit(submit_order(
+        "missing-submit-identity",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Market,
+        1,
+        None,
+        None,
+    ));
+
+    assert!(matches!(result, Err(ExecutionError::Indeterminate(_))));
+    assert_eq!(app.orders(None)[0].status, ExecutionOrderStatus::Unknown);
+    assert_eq!(
+        app.commitments()[0].status,
+        kairos_execution::application::CommitmentStatus::Uncertain
+    );
+
+    let cancel = app.cancel(CancelOrder {
+        order_id: OrderId::new("missing-submit-identity").unwrap(),
+        reason: "test".into(),
+    });
+    assert!(matches!(cancel, Err(ExecutionError::Invalid(_))));
+    assert!(
+        cancel
+            .unwrap_err()
+            .to_string()
+            .contains("reconcile it before cancellation")
+    );
+}
+
+#[test]
 fn not_sent_cancel_keeps_the_original_order_state() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
@@ -1408,6 +1773,38 @@ fn indeterminate_cancel_marks_the_order_unknown_for_reconciliation() {
     assert_eq!(
         app.risk_reservations()[0].status,
         kairos_execution::application::RiskReservationSagaStatus::Active
+    );
+}
+
+#[test]
+fn confirmed_cancel_without_remote_identity_is_indeterminate() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    app.submit(submit_order(
+        "missing-cancel-identity",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Market,
+        1,
+        None,
+        None,
+    ))
+    .unwrap();
+    app.install_order_entry(Box::new(InvalidAcknowledgementOrderEntry));
+
+    let result = app.cancel(CancelOrder {
+        order_id: OrderId::new("missing-cancel-identity").unwrap(),
+        reason: "test".into(),
+    });
+
+    assert!(matches!(result, Err(ExecutionError::Indeterminate(_))));
+    assert_eq!(app.orders(None)[0].status, ExecutionOrderStatus::Unknown);
+    assert_eq!(
+        app.commitments()[0].status,
+        kairos_execution::application::CommitmentStatus::Uncertain
     );
 }
 
@@ -1602,6 +1999,179 @@ fn strategy_intent_is_execution_owned_and_restored_with_events() {
     );
     assert_eq!(second.intents()[0].plan.as_ref().unwrap().legs.len(), 2);
     assert_eq!(second.intent_events(Some("strategy:intent:1")).len(), 3);
+}
+
+#[test]
+fn algorithm_run_is_actor_owned_and_restored_with_order_progress() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut first = application(&path);
+    let state = first
+        .submit_intent(strategy_intent("intent:algorithm-run", 3, None))
+        .unwrap();
+    let order_id = state.order_ids[0].clone();
+
+    let run = first.algorithm_runs().pop().unwrap();
+    assert_eq!(run.intent_id.as_str(), "intent:algorithm-run");
+    assert_eq!(run.status, AlgorithmRunStatus::Running);
+    assert_eq!(run.legs[0].committed_quantity, Quantity::new(3, 0).unwrap());
+    assert_eq!(run.legs[0].filled_quantity, Quantity::ZERO);
+    assert_eq!(run.actions.len(), 1);
+    assert_eq!(run.actions[0].status, AlgorithmActionStatus::Completed);
+    assert!(matches!(
+        &run.actions[0].kind,
+        AlgorithmActionKind::SubmitChild {
+            order_id: action_order_id,
+            ..
+        } if action_order_id == &order_id
+    ));
+
+    let restored = application(&path);
+    assert_eq!(restored.algorithm_runs(), vec![run]);
+
+    first
+        .record_fill(fill_report(
+            "fill:algorithm-run",
+            order_id.to_string(),
+            3,
+            100,
+            0,
+            Some(200),
+        ))
+        .unwrap();
+    let completed = first.algorithm_runs().pop().unwrap();
+    assert_eq!(completed.status, AlgorithmRunStatus::Completed);
+    assert_eq!(completed.legs[0].committed_quantity, Quantity::ZERO);
+    assert_eq!(
+        completed.legs[0].filled_quantity,
+        Quantity::new(3, 0).unwrap()
+    );
+
+    let restored = application(&path);
+    assert_eq!(restored.algorithm_runs(), vec![completed]);
+}
+
+#[test]
+fn historical_snapshot_without_algorithm_runs_remains_readable() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let app = application(&path);
+    let mut encoded = serde_json::to_value(app.snapshot()).unwrap();
+    encoded.as_object_mut().unwrap().remove("algorithm_runs");
+
+    let restored: kairos_execution::ExecutionSnapshot = serde_json::from_value(encoded).unwrap();
+    assert!(restored.algorithm_runs.is_empty());
+}
+
+#[test]
+fn restart_reuses_the_durable_immediate_action_before_order_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut first = application(&path);
+    first
+        .accept_intent_with_idempotency_deferred(
+            strategy_intent("intent:durable-action", 2, None),
+            "durable-action-command".into(),
+        )
+        .unwrap();
+
+    let due = first
+        .take_due_intent_order(u64::MAX)
+        .unwrap()
+        .expect("one child is due");
+    let action_id = due.action_id.clone();
+    assert!(first.intents()[0].pending_orders.is_empty());
+    assert_eq!(first.algorithm_runs()[0].actions.len(), 1);
+    assert_eq!(
+        first.algorithm_runs()[0].actions[0].status,
+        AlgorithmActionStatus::Pending
+    );
+    drop(due);
+    drop(first);
+
+    let mut restored = application(&path);
+    assert_eq!(restored.intents()[0].pending_orders.len(), 1);
+    assert_eq!(restored.algorithm_runs()[0].actions[0].action_id, action_id);
+    restored.advance_due_intent_orders(u64::MAX, 1).unwrap();
+
+    let run = restored.algorithm_runs().pop().unwrap();
+    assert_eq!(run.actions.len(), 1);
+    assert_eq!(run.actions[0].action_id, action_id);
+    assert_eq!(run.actions[0].status, AlgorithmActionStatus::Completed);
+}
+
+#[test]
+fn restart_repairs_action_and_plan_identity_after_confirmed_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut first = application(&path);
+    first
+        .accept_intent_with_idempotency_deferred(
+            strategy_intent("intent:dispatch-crash", 2, None),
+            "dispatch-crash-command".into(),
+        )
+        .unwrap();
+    let due = first
+        .take_due_intent_order(u64::MAX)
+        .unwrap()
+        .expect("one child is due");
+    let order_id = due.request.order_id.clone();
+    let action_id = due.action_id.clone();
+    first.submit(due.request).unwrap();
+    assert_eq!(
+        first.algorithm_runs()[0].actions[0].status,
+        AlgorithmActionStatus::Pending
+    );
+    drop(first);
+
+    let restored = application(&path);
+    let run = restored.algorithm_runs().pop().unwrap();
+    assert_eq!(run.actions.len(), 1);
+    assert_eq!(run.actions[0].action_id, action_id);
+    assert_eq!(run.actions[0].status, AlgorithmActionStatus::Completed);
+    assert_eq!(run.status, AlgorithmRunStatus::Running);
+    assert_eq!(restored.intents()[0].order_ids, vec![order_id.clone()]);
+    assert_eq!(
+        restored.orders(None)[0].leg_id,
+        Some(run.legs[0].leg_id.clone())
+    );
+
+    let restored_again = application(&path);
+    assert_eq!(restored_again.algorithm_runs(), vec![run]);
+    assert_eq!(restored_again.intents()[0].order_ids, vec![order_id]);
+}
+
+#[test]
+fn indeterminate_immediate_action_enters_reconciliation_and_restores() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(FailingOrderEntry::indeterminate())),
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+
+    let result = app.submit_intent(strategy_intent("intent:indeterminate-immediate", 1, None));
+    assert!(matches!(result, Err(ExecutionError::Indeterminate(_))));
+    assert_eq!(
+        app.intent("intent:indeterminate-immediate").unwrap().status,
+        kairos_execution::IntentStatus::ReconciliationRequired
+    );
+    let run = app.algorithm_runs().pop().unwrap();
+    assert_eq!(run.status, AlgorithmRunStatus::ReconciliationRequired);
+    assert_eq!(run.actions.len(), 1);
+    assert_eq!(run.actions[0].status, AlgorithmActionStatus::Indeterminate);
+
+    let restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        None,
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    assert_eq!(restored.algorithm_runs(), vec![run]);
 }
 
 #[test]
@@ -1846,6 +2416,61 @@ fn option_spread_intent_rejects_missing_fixed_risk_limits() {
     assert!(error.to_string().contains("maximum loss"));
 }
 
+fn maker_taker_pair_intent(
+    intent_id: &str,
+    leader_quantity: i64,
+    ratio_numerator: u64,
+    max_unhedged_quantity: i64,
+) -> ExecuteStrategyIntent {
+    let mut intent = strategy_intent(intent_id, 0, None);
+    intent.intent_type = kairos_execution::IntentType::PairArbitrage;
+    intent.completion_policy = kairos_execution::CompletionPolicy::HedgeWithinTolerance;
+    intent.failure_policy = kairos_execution::FailurePolicy::Compensate;
+    intent.hedge_policy = Some(HedgePolicy {
+        leader_leg_id: LegId::new("leader").unwrap(),
+        hedge_leg_id: LegId::new("hedge").unwrap(),
+        ratio: kairos_primitives::decimal::Ratio::new(ratio_numerator, 1).unwrap(),
+        contract_multiplier: kairos_primitives::decimal::Ratio::new(1, 1).unwrap(),
+        max_unhedged_quantity: Quantity::new(max_unhedged_quantity, 0).unwrap(),
+        max_unhedged_duration: None,
+        fallback_execution_route_ids: Vec::new(),
+        compensate_on_failure: true,
+        max_compensation_attempts: 3,
+    });
+    intent.legs = vec![
+        intent_leg(
+            "leader",
+            "main",
+            "spot",
+            "BTCUSDT",
+            None,
+            OrderSide::Buy,
+            leader_quantity,
+            Some(100),
+        ),
+        intent_leg(
+            "hedge",
+            "main",
+            "spot",
+            "BTCUSDT",
+            None,
+            OrderSide::Sell,
+            1,
+            Some(100),
+        ),
+    ];
+    intent
+}
+
+fn add_fallback_route(intent: &mut ExecuteStrategyIntent) {
+    intent
+        .hedge_policy
+        .as_mut()
+        .expect("maker-taker fixture has a hedge policy")
+        .fallback_execution_route_ids =
+        vec![ExecutionRouteId::new("execution-route:fallback").unwrap()];
+}
+
 #[test]
 fn pair_fills_create_compensation_from_actual_leader_quantity() {
     let directory = tempfile::tempdir().unwrap();
@@ -1863,6 +2488,8 @@ fn pair_fills_create_compensation_from_actual_leader_quantity() {
                 ratio: kairos_primitives::decimal::Ratio::new(2, 1).unwrap(),
                 contract_multiplier: kairos_primitives::decimal::Ratio::new(1, 1).unwrap(),
                 max_unhedged_quantity: Quantity::new(0, 0).unwrap(),
+                max_unhedged_duration: None,
+                fallback_execution_route_ids: Vec::new(),
                 compensate_on_failure: true,
                 max_compensation_attempts: 3,
             });
@@ -1901,6 +2528,19 @@ fn pair_fills_create_compensation_from_actual_leader_quantity() {
         .unwrap()
         .order_ids[0]
         .clone();
+    let hedge_plan = state
+        .plan
+        .as_ref()
+        .unwrap()
+        .legs
+        .iter()
+        .find(|leg| leg.leg_id == "hedge")
+        .unwrap();
+    assert!(hedge_plan.order_ids.is_empty());
+    assert_eq!(hedge_plan.target_quantity, Quantity::new(8, 0).unwrap());
+    assert_eq!(state.dormant_orders.len(), 1);
+    assert_eq!(app.orders(None).len(), 1);
+    assert!(app.orders(None)[0].selected_route.as_ref().is_some());
     app.record_fill(fill_report(
         "leader-fill",
         leader.to_string(),
@@ -1910,11 +2550,30 @@ fn pair_fills_create_compensation_from_actual_leader_quantity() {
         None,
     ))
     .unwrap();
-    assert!(
-        app.orders(None)
-            .iter()
-            .any(|order| order.order_id.contains(":compensate:8"))
+    let hedge_order = app
+        .orders(None)
+        .into_iter()
+        .find(|order| order.order_id.contains(":hedge:decision:"))
+        .expect("leader fill creates a taker hedge");
+    assert_eq!(hedge_order.quantity, Quantity::new(8, 0).unwrap());
+    assert_eq!(hedge_order.side, OrderSide::Sell);
+    assert_eq!(hedge_order.order_type, OrderType::Market);
+    let run = app.algorithm_runs().pop().unwrap();
+    assert_eq!(
+        run.exposure.as_ref().unwrap().required_hedge_quantity,
+        Quantity::new(8, 0).unwrap()
     );
+    assert_eq!(
+        run.exposure.as_ref().unwrap().hedge_committed_quantity,
+        Quantity::new(8, 0).unwrap()
+    );
+    assert!(run.actions.iter().any(|action| matches!(
+        action.kind,
+        AlgorithmActionKind::SubmitChild {
+            execution_style: AlgorithmExecutionStyle::TakerImmediate,
+            ..
+        }
+    )));
     assert_eq!(
         app.hedge_requirement("intent:hedge-compensation")
             .unwrap()
@@ -1922,6 +2581,1049 @@ fn pair_fills_create_compensation_from_actual_leader_quantity() {
             .unhedged_quantity
             .mantissa(),
         8
+    );
+}
+
+#[test]
+fn maker_taker_threshold_and_restart_preserve_dormant_then_active_hedge() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut first = application(&path);
+    let state = first
+        .submit_intent(maker_taker_pair_intent(
+            "intent:maker-taker-restart",
+            4,
+            1,
+            1,
+        ))
+        .unwrap();
+    let leader_order_id = state
+        .plan
+        .as_ref()
+        .unwrap()
+        .legs
+        .iter()
+        .find(|leg| leg.leg_id == "leader")
+        .unwrap()
+        .order_ids[0]
+        .clone();
+    assert_eq!(first.orders(None).len(), 1);
+    assert_eq!(state.dormant_orders.len(), 1);
+    drop(first);
+
+    let mut restored = application(&path);
+    assert_eq!(restored.orders(None).len(), 1);
+    assert_eq!(restored.intents()[0].dormant_orders.len(), 1);
+    assert_eq!(
+        restored.algorithm_runs()[0].legs[1].lifecycle,
+        kairos_execution::AlgorithmLegLifecycle::Dormant
+    );
+
+    restored
+        .record_fill(fill_report(
+            "maker-fill-below-threshold",
+            leader_order_id.to_string(),
+            1,
+            100,
+            0,
+            Some(200),
+        ))
+        .unwrap();
+    assert_eq!(restored.orders(None).len(), 1);
+    restored
+        .record_fill(fill_report(
+            "maker-fill-above-threshold",
+            leader_order_id.to_string(),
+            1,
+            100,
+            0,
+            Some(201),
+        ))
+        .unwrap();
+    let hedge = restored
+        .orders(None)
+        .into_iter()
+        .find(|order| order.order_id.contains(":hedge:decision:"))
+        .unwrap();
+    assert_eq!(hedge.quantity, Quantity::new(2, 0).unwrap());
+    let run = restored.algorithm_runs().pop().unwrap();
+    assert_eq!(
+        run.exposure.as_ref().unwrap().unhedged_after_commitment,
+        Quantity::ZERO
+    );
+    drop(restored);
+
+    let restored = application(&path);
+    assert_eq!(restored.algorithm_runs(), vec![run]);
+    assert_eq!(restored.orders(None).len(), 2);
+}
+
+#[test]
+fn maker_taker_tail_hedge_is_driven_by_persisted_business_time_deadline() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    app.advance_time(100).unwrap();
+    let mut intent = maker_taker_pair_intent("intent:timed-tail-hedge", 1, 1, 1);
+    intent.source_event_time_unix_nanos = Some(UnixNanos::new(100));
+    intent.hedge_policy.as_mut().unwrap().max_unhedged_duration = Some(DurationNanos::new(10));
+    let state = app.submit_intent(intent).unwrap();
+    app.record_fill(fill_report(
+        "timed-tail-leader-fill",
+        state.order_ids[0].to_string(),
+        1,
+        100,
+        0,
+        Some(100),
+    ))
+    .unwrap();
+
+    assert_eq!(app.orders(None).len(), 1);
+    let waiting = app.algorithm_runs().pop().unwrap();
+    assert_eq!(waiting.status, AlgorithmRunStatus::Waiting);
+    assert_eq!(waiting.next_wake_at, Some(UnixNanos::new(110)));
+    assert_eq!(
+        waiting.exposure.as_ref().unwrap().unhedged_since,
+        Some(UnixNanos::new(100))
+    );
+    drop(app);
+
+    let mut app = application(&path);
+    assert_eq!(app.algorithm_runs()[0], waiting);
+    assert_eq!(app.advance_due_algorithm_runs(109, usize::MAX).unwrap(), 0);
+    assert_eq!(app.orders(None).len(), 1);
+
+    assert_eq!(app.advance_due_algorithm_runs(110, usize::MAX).unwrap(), 1);
+    let hedge = app
+        .orders(None)
+        .into_iter()
+        .find(|order| order.order_id.contains(":hedge:decision:"))
+        .expect("business-time deadline must activate the tail hedge");
+    assert_eq!(hedge.quantity, Quantity::new(1, 0).unwrap());
+    assert_eq!(hedge.order_type, OrderType::Market);
+    assert_eq!(app.algorithm_runs()[0].next_wake_at, None);
+}
+
+#[test]
+fn maker_taker_acceptance_schedules_only_a_post_only_leader() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let (state, replayed) = app
+        .accept_intent_with_idempotency_deferred(
+            maker_taker_pair_intent("intent:maker-first-admission", 3, 1, 0),
+            "maker-first-admission-command".into(),
+        )
+        .unwrap();
+
+    assert!(!replayed);
+    assert_eq!(state.pending_orders.len(), 1);
+    assert_eq!(state.pending_orders[0].options.post_only, Some(true));
+    assert_eq!(state.dormant_orders.len(), 1);
+    assert_eq!(state.dormant_orders[0].side, OrderSide::Sell);
+    assert!(
+        state
+            .plan
+            .as_ref()
+            .unwrap()
+            .legs
+            .iter()
+            .find(|leg| leg.leg_id == "hedge")
+            .unwrap()
+            .order_ids
+            .is_empty()
+    );
+    assert!(matches!(
+        app.algorithm_runs()[0].spec,
+        kairos_execution::ExecutionAlgorithmSpec::MakerTakerHedge(_)
+    ));
+}
+
+#[test]
+fn indeterminate_taker_hedge_blocks_reexecution_and_requires_reconciliation() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(SecondSubmitIndeterminate { submissions: 0 })),
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+    let state = app
+        .submit_intent(maker_taker_pair_intent(
+            "intent:indeterminate-hedge",
+            2,
+            1,
+            0,
+        ))
+        .unwrap();
+    let leader_order_id = state.order_ids[0].clone();
+
+    app.record_fill(fill_report(
+        "leader-fill-indeterminate-hedge",
+        leader_order_id.to_string(),
+        2,
+        100,
+        0,
+        Some(300),
+    ))
+    .unwrap();
+    assert_eq!(
+        app.intent("intent:indeterminate-hedge").unwrap().status,
+        kairos_execution::IntentStatus::ReconciliationRequired
+    );
+    let run = app.algorithm_runs().pop().unwrap();
+    assert_eq!(run.status, AlgorithmRunStatus::ReconciliationRequired);
+    assert_eq!(
+        run.actions.last().unwrap().status,
+        AlgorithmActionStatus::Indeterminate
+    );
+    assert_eq!(
+        app.orders(None)
+            .iter()
+            .filter(|order| order.order_id.contains(":hedge:decision:"))
+            .count(),
+        1
+    );
+
+    let restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        None,
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    assert_eq!(restored.algorithm_runs(), vec![run]);
+    assert_eq!(
+        restored
+            .orders(None)
+            .iter()
+            .filter(|order| order.order_id.contains(":hedge:decision:"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn maker_taker_rejects_an_unconfigured_fallback_route_at_admission() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    let mut intent = maker_taker_pair_intent("intent:unknown-fallback", 2, 1, 0);
+    add_fallback_route(&mut intent);
+
+    let error = app.submit_intent(intent).unwrap_err();
+
+    assert!(error.to_string().contains("is not configured"));
+    assert!(app.intent("intent:unknown-fallback").is_none());
+}
+
+#[test]
+fn proven_primary_hedge_failure_uses_the_configured_fallback_and_restores() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(PrimaryHedgeFailsThenFallback {
+            submissions: 0,
+            fallback_outcome: FallbackOutcome::Confirmed,
+        })),
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    configure_fallback_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+    let mut intent = maker_taker_pair_intent("intent:fallback-hedge", 2, 1, 0);
+    add_fallback_route(&mut intent);
+    let state = app.submit_intent(intent).unwrap();
+
+    app.record_fill(fill_report(
+        "leader-fill-before-fallback",
+        state.order_ids[0].to_string(),
+        2,
+        100,
+        0,
+        Some(480),
+    ))
+    .unwrap();
+
+    let run = app.algorithm_runs().pop().unwrap();
+    let taker_routes = run
+        .actions
+        .iter()
+        .filter_map(|action| match &action.kind {
+            AlgorithmActionKind::SubmitChild {
+                execution_style: AlgorithmExecutionStyle::TakerImmediate,
+                execution_route_id,
+                ..
+            } => execution_route_id.as_ref().map(ToString::to_string),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        taker_routes,
+        vec!["execution-route:test", "execution-route:fallback"]
+    );
+    assert!(!run.actions.iter().any(|action| matches!(
+        action.kind,
+        AlgorithmActionKind::SubmitChild {
+            execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+            ..
+        }
+    )));
+    let fallback_order = app
+        .orders(None)
+        .into_iter()
+        .find(|order| {
+            order
+                .execution_route_id
+                .as_ref()
+                .is_some_and(|route_id| route_id.as_str() == "execution-route:fallback")
+        })
+        .expect("fallback route must own the second hedge submission");
+    assert_eq!(fallback_order.order_type, OrderType::Market);
+    assert_eq!(fallback_order.status, ExecutionOrderStatus::Accepted);
+    drop(app);
+
+    let restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        None,
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    assert_eq!(restored.algorithm_runs(), vec![run]);
+    assert_eq!(
+        restored
+            .orders(None)
+            .iter()
+            .filter(|order| order
+                .execution_route_id
+                .as_ref()
+                .is_some_and(|route_id| { route_id.as_str() == "execution-route:fallback" }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn staged_fallback_is_resumed_after_crash_with_the_same_route_and_action() {
+    let shared = Arc::new(Mutex::new(None));
+    let mut first = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(PrimaryHedgeFailsThenFallback {
+            submissions: 0,
+            fallback_outcome: FallbackOutcome::Confirmed,
+        })),
+        Some(Box::new(CrashAfterStagingFallbackStore {
+            snapshot: Arc::clone(&shared),
+            fail_once: true,
+        })),
+    )
+    .unwrap();
+    configure_test_access(&mut first);
+    configure_fallback_access(&mut first);
+    attach_simulated_risk(&mut first, test_risk());
+    let mut intent = maker_taker_pair_intent("intent:staged-fallback-crash", 2, 1, 0);
+    add_fallback_route(&mut intent);
+    let state = first.submit_intent(intent).unwrap();
+
+    let error = first
+        .record_fill(fill_report(
+            "leader-fill-before-staged-fallback",
+            state.order_ids[0].to_string(),
+            2,
+            100,
+            0,
+            Some(485),
+        ))
+        .unwrap_err();
+    assert!(error.to_string().contains("fallback action and request"));
+    drop(first);
+
+    let mut restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(PrimaryHedgeFailsThenFallback {
+            submissions: 2,
+            fallback_outcome: FallbackOutcome::Confirmed,
+        })),
+        Some(Box::new(SharedSnapshotStore {
+            snapshot: Arc::clone(&shared),
+        })),
+    )
+    .unwrap();
+    configure_test_access(&mut restored);
+    configure_fallback_access(&mut restored);
+    attach_simulated_risk(&mut restored, test_risk());
+    let before = restored.algorithm_runs().pop().unwrap();
+    let pending = before.pending_actions().collect::<Vec<_>>();
+    assert_eq!(pending.len(), 1);
+    assert!(matches!(
+        &pending[0].kind,
+        AlgorithmActionKind::SubmitChild {
+            execution_style: AlgorithmExecutionStyle::TakerImmediate,
+            execution_route_id: Some(route_id),
+            ..
+        } if route_id.as_str() == "execution-route:fallback"
+    ));
+
+    assert_eq!(restored.advance_due_intent_orders(u64::MAX, 1).unwrap(), 1);
+    let after = restored.algorithm_runs().pop().unwrap();
+    assert_eq!(after.pending_actions().count(), 0);
+    assert_eq!(before.actions.len(), after.actions.len());
+    assert_eq!(
+        restored
+            .orders(None)
+            .iter()
+            .filter(|order| order
+                .execution_route_id
+                .as_ref()
+                .is_some_and(|route_id| { route_id.as_str() == "execution-route:fallback" }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn indeterminate_fallback_hedge_stops_without_unwind_or_another_route() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(PrimaryHedgeFailsThenFallback {
+            submissions: 0,
+            fallback_outcome: FallbackOutcome::Indeterminate,
+        })),
+        Some(Box::new(FileExecutionStore::new(
+            directory.path().join("execution.json"),
+        ))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    configure_fallback_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+    let mut intent = maker_taker_pair_intent("intent:indeterminate-fallback", 2, 1, 0);
+    add_fallback_route(&mut intent);
+    let state = app.submit_intent(intent).unwrap();
+
+    app.record_fill(fill_report(
+        "leader-fill-before-indeterminate-fallback",
+        state.order_ids[0].to_string(),
+        2,
+        100,
+        0,
+        Some(490),
+    ))
+    .unwrap();
+
+    let run = app.algorithm_runs().pop().unwrap();
+    assert_eq!(run.status, AlgorithmRunStatus::ReconciliationRequired);
+    assert_eq!(
+        app.intent("intent:indeterminate-fallback").unwrap().status,
+        kairos_execution::IntentStatus::ReconciliationRequired
+    );
+    assert_eq!(
+        run.actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::TakerImmediate,
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+    assert!(!run.actions.iter().any(|action| matches!(
+        action.kind,
+        AlgorithmActionKind::SubmitChild {
+            execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn exhausted_fallback_routes_unwind_only_after_every_known_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(PrimaryHedgeFailsThenFallback {
+            submissions: 0,
+            fallback_outcome: FallbackOutcome::Failed,
+        })),
+        Some(Box::new(FileExecutionStore::new(
+            directory.path().join("execution.json"),
+        ))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    configure_fallback_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+    let mut intent = maker_taker_pair_intent("intent:exhausted-fallback", 2, 1, 0);
+    add_fallback_route(&mut intent);
+    intent.max_slippage_bps = Some(100);
+    let state = app.submit_intent(intent).unwrap();
+
+    app.record_fill(fill_report(
+        "leader-fill-before-exhausted-fallback",
+        state.order_ids[0].to_string(),
+        2,
+        100,
+        0,
+        Some(495),
+    ))
+    .unwrap();
+
+    let run = app.algorithm_runs().pop().unwrap();
+    let styles = run
+        .actions
+        .iter()
+        .filter_map(|action| match action.kind {
+            AlgorithmActionKind::SubmitChild {
+                execution_style, ..
+            } => Some(execution_style),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        styles,
+        vec![
+            AlgorithmExecutionStyle::MakerPostOnly,
+            AlgorithmExecutionStyle::TakerImmediate,
+            AlgorithmExecutionStyle::TakerImmediate,
+            AlgorithmExecutionStyle::UnwindImmediate,
+        ]
+    );
+    assert!(
+        app.orders(None)
+            .iter()
+            .any(|order| order.order_id.contains(":unwind:decision:"))
+    );
+}
+
+#[test]
+fn known_taker_hedge_failure_executes_price_protected_unwind_and_restores_terminal_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(HedgeFailsThenUnwindConfirms {
+            submissions: 0,
+            unwind_indeterminate: false,
+        })),
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+    let mut intent = maker_taker_pair_intent("intent:known-hedge-failure", 2, 1, 0);
+    intent.max_slippage_bps = Some(100);
+    let state = app.submit_intent(intent).unwrap();
+    let leader_order_id = state.order_ids[0].clone();
+
+    app.record_fill(fill_report(
+        "leader-fill-before-unwind",
+        leader_order_id.to_string(),
+        2,
+        100,
+        0,
+        Some(500),
+    ))
+    .unwrap();
+
+    let unwind_order = app
+        .orders(None)
+        .into_iter()
+        .find(|order| order.order_id.contains(":unwind:decision:"))
+        .expect("a proven-not-sent hedge failure must submit the authorized unwind");
+    assert_eq!(unwind_order.side, OrderSide::Sell);
+    assert_eq!(unwind_order.order_type, OrderType::Limit);
+    assert_eq!(unwind_order.quantity, Quantity::new(2, 0).unwrap());
+    assert_eq!(unwind_order.limit_price, Some(Price::new(99, 0).unwrap()));
+    assert_eq!(
+        app.intent("intent:known-hedge-failure").unwrap().status,
+        kairos_execution::IntentStatus::Compensating
+    );
+    let running = app.algorithm_runs().pop().unwrap();
+    assert_eq!(running.status, AlgorithmRunStatus::Running);
+    assert_eq!(
+        running.exposure.as_ref().unwrap().unwind_committed_quantity,
+        Quantity::new(2, 0).unwrap()
+    );
+    assert_eq!(
+        running.exposure.as_ref().unwrap().unhedged_after_commitment,
+        Quantity::ZERO
+    );
+    assert_eq!(
+        running
+            .actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+
+    app.record_fill(fill_report(
+        "emergency-unwind-fill",
+        unwind_order.order_id.to_string(),
+        2,
+        99,
+        0,
+        Some(501),
+    ))
+    .unwrap();
+
+    let terminal = app.algorithm_runs().pop().unwrap();
+    assert_eq!(terminal.status, AlgorithmRunStatus::Unwound);
+    let exposure = terminal.exposure.as_ref().unwrap();
+    assert_eq!(
+        exposure.leader_filled_quantity,
+        Quantity::new(2, 0).unwrap()
+    );
+    assert_eq!(
+        exposure.unwind_filled_quantity,
+        Quantity::new(2, 0).unwrap()
+    );
+    assert_eq!(exposure.net_leader_filled_quantity, Quantity::ZERO);
+    assert_eq!(exposure.required_hedge_quantity, Quantity::ZERO);
+    let terminal_intent = app.intent("intent:known-hedge-failure").unwrap();
+    assert_eq!(
+        terminal_intent.status,
+        kairos_execution::IntentStatus::Failed
+    );
+    assert_eq!(
+        terminal_intent.completed_quantity,
+        Quantity::new(2, 0).unwrap()
+    );
+    assert!(terminal_intent.reason.contains("emergency unwind"));
+    assert_eq!(
+        terminal_intent
+            .plan
+            .as_ref()
+            .unwrap()
+            .legs
+            .iter()
+            .find(|leg| leg.leg_id == "leader")
+            .unwrap()
+            .order_ids,
+        vec![leader_order_id]
+    );
+    drop(app);
+
+    let restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        None,
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    assert_eq!(restored.algorithm_runs(), vec![terminal]);
+    assert_eq!(
+        restored
+            .orders(None)
+            .iter()
+            .filter(|order| order.order_id.contains(":unwind:decision:"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        restored
+            .intent("intent:known-hedge-failure")
+            .unwrap()
+            .status,
+        kairos_execution::IntentStatus::Failed
+    );
+}
+
+#[test]
+fn partial_unwind_terminal_event_submits_only_the_remaining_exposure() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(HedgeFailsThenUnwindConfirms {
+            submissions: 0,
+            unwind_indeterminate: false,
+        })),
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+    let mut intent = maker_taker_pair_intent("intent:partial-unwind", 2, 1, 0);
+    intent.max_slippage_bps = Some(100);
+    let state = app.submit_intent(intent).unwrap();
+    app.record_fill(fill_report(
+        "leader-fill-before-partial-unwind",
+        state.order_ids[0].to_string(),
+        2,
+        100,
+        0,
+        Some(520),
+    ))
+    .unwrap();
+    let first_unwind = app
+        .orders(None)
+        .into_iter()
+        .find(|order| order.order_id.contains(":unwind:decision:"))
+        .unwrap();
+
+    app.record_fill(fill_report(
+        "partial-emergency-unwind-fill",
+        first_unwind.order_id.to_string(),
+        1,
+        99,
+        0,
+        Some(521),
+    ))
+    .unwrap();
+    assert_eq!(
+        app.orders(None)
+            .iter()
+            .filter(|order| order.order_id.contains(":unwind:decision:"))
+            .count(),
+        1
+    );
+    let partial = app.algorithm_runs().pop().unwrap();
+    assert_eq!(
+        partial
+            .exposure
+            .as_ref()
+            .unwrap()
+            .net_leader_filled_quantity,
+        Quantity::new(1, 0).unwrap()
+    );
+    assert_eq!(
+        partial.exposure.as_ref().unwrap().unwind_committed_quantity,
+        Quantity::new(1, 0).unwrap()
+    );
+
+    app.apply_remote_execution_event(RemoteOrderUpdate {
+        order_id: OrderId::new(format!("remote:{}", first_unwind.order_id)).unwrap(),
+        symbol: symbol("BTCUSDT"),
+        status: ExecutionOrderStatus::Canceled,
+        fill_quantity: None,
+        fill_price: None,
+        execution_id: None,
+        fee_currency: None,
+        fee_amount: None,
+        occurred_at_unix_nanos: 522.into(),
+        reason: "IOC remainder canceled".into(),
+    })
+    .unwrap();
+
+    let unwind_orders = app
+        .orders(None)
+        .into_iter()
+        .filter(|order| order.order_id.contains(":unwind:decision:"))
+        .collect::<Vec<_>>();
+    assert_eq!(unwind_orders.len(), 2);
+    let second_unwind = unwind_orders
+        .iter()
+        .find(|order| order.order_id != first_unwind.order_id)
+        .unwrap();
+    assert_eq!(second_unwind.quantity, Quantity::new(1, 0).unwrap());
+    assert_eq!(second_unwind.limit_price, Some(Price::new(99, 0).unwrap()));
+    assert_eq!(
+        app.intent("intent:partial-unwind")
+            .unwrap()
+            .compensation_attempts,
+        2
+    );
+    assert_eq!(
+        app.algorithm_runs()[0]
+            .actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+
+    app.record_fill(fill_report(
+        "remaining-emergency-unwind-fill",
+        second_unwind.order_id.to_string(),
+        1,
+        99,
+        0,
+        Some(523),
+    ))
+    .unwrap();
+    assert_eq!(app.algorithm_runs()[0].status, AlgorithmRunStatus::Unwound);
+    assert_eq!(
+        app.algorithm_runs()[0]
+            .exposure
+            .as_ref()
+            .unwrap()
+            .net_leader_filled_quantity,
+        Quantity::ZERO
+    );
+    assert_eq!(
+        app.intent("intent:partial-unwind").unwrap().status,
+        kairos_execution::IntentStatus::Failed
+    );
+}
+
+#[test]
+fn indeterminate_unwind_requires_reconciliation_and_is_not_reexecuted_after_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(HedgeFailsThenUnwindConfirms {
+            submissions: 0,
+            unwind_indeterminate: true,
+        })),
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+    let mut intent = maker_taker_pair_intent("intent:indeterminate-unwind", 2, 1, 0);
+    intent.max_slippage_bps = Some(100);
+    let state = app.submit_intent(intent).unwrap();
+
+    app.record_fill(fill_report(
+        "leader-fill-before-indeterminate-unwind",
+        state.order_ids[0].to_string(),
+        2,
+        100,
+        0,
+        Some(550),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        app.intent("intent:indeterminate-unwind").unwrap().status,
+        kairos_execution::IntentStatus::ReconciliationRequired
+    );
+    let run = app.algorithm_runs().pop().unwrap();
+    assert_eq!(run.status, AlgorithmRunStatus::ReconciliationRequired);
+    let unwind_action = run
+        .actions
+        .iter()
+        .find(|action| {
+            matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert_eq!(unwind_action.status, AlgorithmActionStatus::Indeterminate);
+    assert_eq!(
+        app.orders(None)
+            .iter()
+            .filter(|order| order.order_id.contains(":unwind:decision:"))
+            .count(),
+        1
+    );
+    drop(app);
+
+    let restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        None,
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    assert_eq!(restored.algorithm_runs(), vec![run]);
+    assert_eq!(
+        restored
+            .orders(None)
+            .iter()
+            .filter(|order| order.order_id.contains(":unwind:decision:"))
+            .count(),
+        1
+    );
+    assert!(
+        restored
+            .intent("intent:indeterminate-unwind")
+            .unwrap()
+            .pending_orders
+            .is_empty()
+    );
+}
+
+#[test]
+fn staged_unwind_is_resumed_after_crash_without_creating_a_second_action() {
+    let shared = Arc::new(Mutex::new(None));
+    let mut first = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(HedgeFailsThenUnwindConfirms {
+            submissions: 0,
+            unwind_indeterminate: false,
+        })),
+        Some(Box::new(CrashAfterStagingUnwindStore {
+            snapshot: Arc::clone(&shared),
+            fail_once: true,
+        })),
+    )
+    .unwrap();
+    configure_test_access(&mut first);
+    attach_simulated_risk(&mut first, test_risk());
+    let mut intent = maker_taker_pair_intent("intent:staged-unwind-crash", 2, 1, 0);
+    intent.max_slippage_bps = Some(100);
+    let state = first.submit_intent(intent).unwrap();
+    let error = first
+        .record_fill(fill_report(
+            "leader-fill-before-staged-unwind",
+            state.order_ids[0].to_string(),
+            2,
+            100,
+            0,
+            Some(600),
+        ))
+        .unwrap_err();
+    assert!(error.to_string().contains("action and request are durable"));
+    drop(first);
+
+    let mut restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(HedgeFailsThenUnwindConfirms {
+            submissions: 2,
+            unwind_indeterminate: false,
+        })),
+        Some(Box::new(SharedSnapshotStore {
+            snapshot: Arc::clone(&shared),
+        })),
+    )
+    .unwrap();
+    configure_test_access(&mut restored);
+    attach_simulated_risk(&mut restored, test_risk());
+    let before = restored.algorithm_runs().pop().unwrap();
+    assert_eq!(before.pending_actions().count(), 1);
+    assert_eq!(
+        before
+            .actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        restored
+            .intent("intent:staged-unwind-crash")
+            .unwrap()
+            .pending_orders
+            .len(),
+        1
+    );
+
+    assert_eq!(restored.advance_due_intent_orders(u64::MAX, 1).unwrap(), 1);
+    let after = restored.algorithm_runs().pop().unwrap();
+    assert_eq!(after.pending_actions().count(), 0);
+    assert_eq!(
+        after
+            .actions
+            .iter()
+            .filter(|action| matches!(
+                action.kind,
+                AlgorithmActionKind::SubmitChild {
+                    execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        restored
+            .orders(None)
+            .iter()
+            .filter(|order| order.order_id.contains(":unwind:decision:"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        restored
+            .intent("intent:staged-unwind-crash")
+            .unwrap()
+            .status,
+        kairos_execution::IntentStatus::Compensating
+    );
+}
+
+#[test]
+fn maker_taker_fill_path_completes_and_restores_with_zero_exposure() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let state = app
+        .submit_intent(maker_taker_pair_intent(
+            "intent:maker-taker-complete",
+            2,
+            1,
+            0,
+        ))
+        .unwrap();
+    let leader_order_id = state.order_ids[0].clone();
+    app.record_fill(fill_report(
+        "maker-taker-leader-complete",
+        leader_order_id.to_string(),
+        2,
+        100,
+        0,
+        Some(400),
+    ))
+    .unwrap();
+    let hedge_order_id = app
+        .orders(None)
+        .into_iter()
+        .find(|order| order.order_id.contains(":hedge:decision:"))
+        .unwrap()
+        .order_id;
+    app.record_fill(fill_report(
+        "maker-taker-hedge-complete",
+        hedge_order_id.to_string(),
+        2,
+        100,
+        0,
+        Some(401),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        app.intent("intent:maker-taker-complete").unwrap().status,
+        kairos_execution::IntentStatus::Satisfied
+    );
+    let run = app.algorithm_runs().pop().unwrap();
+    assert_eq!(run.status, AlgorithmRunStatus::Completed);
+    assert_eq!(
+        run.exposure.as_ref().unwrap().unhedged_filled_quantity,
+        Quantity::ZERO
+    );
+    assert_eq!(
+        run.exposure.as_ref().unwrap().unhedged_after_commitment,
+        Quantity::ZERO
+    );
+
+    let restored = application(&path);
+    assert_eq!(restored.algorithm_runs(), vec![run]);
+    assert_eq!(
+        restored
+            .intent("intent:maker-taker-complete")
+            .unwrap()
+            .status,
+        kairos_execution::IntentStatus::Satisfied
     );
 }
 

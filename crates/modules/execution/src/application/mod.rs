@@ -36,10 +36,15 @@ pub use model::{
 };
 
 pub use crate::domain::{
-    CommitmentBasis, CommitmentResource, CommitmentStatus, CompletionPolicy, ExecutionFill,
-    ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy,
-    IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy, OrderCommitment, OrderSide,
-    OrderType, RiskReservationSagaStatus, SelectedExecutionRoute, SplitOrderPolicy,
+    AlgorithmAction, AlgorithmActionKind, AlgorithmActionStatus, AlgorithmChildCandidate,
+    AlgorithmDecision, AlgorithmExecutionStyle, AlgorithmInput, AlgorithmLegLifecycle,
+    AlgorithmLegRole, AlgorithmLegState, AlgorithmRun, AlgorithmRunId, AlgorithmRunStatus,
+    CommitmentBasis, CommitmentResource, CommitmentStatus, CompletionPolicy,
+    ExecutionAlgorithmSpec, ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus,
+    ExecutionPlan, FailurePolicy, HedgePolicy, IntentLifecycle, IntentType, LegLifecycle,
+    MakerExecutionPolicy, MakerTakerHedgeSpec, NormalizedExposureLedger, OrderCommitment,
+    OrderSide, OrderType, RiskReservationSagaStatus, SelectedExecutionRoute, SplitOrderPolicy,
+    decide_immediate, decide_maker_taker_hedge,
 };
 pub use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

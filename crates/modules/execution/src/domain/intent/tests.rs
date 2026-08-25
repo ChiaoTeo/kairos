@@ -118,6 +118,8 @@ mod tests {
             ratio: Ratio::new(2, 1).unwrap(),
             contract_multiplier: Ratio::new(1, 1).unwrap(),
             max_unhedged_quantity: Quantity::new(1, 0).unwrap(),
+            max_unhedged_duration: None,
+            fallback_execution_route_ids: Vec::new(),
             compensate_on_failure: true,
             max_compensation_attempts: 3,
         };

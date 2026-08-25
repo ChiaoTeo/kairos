@@ -55,6 +55,8 @@ def parse_market_command_line(arguments: Sequence[str]) -> MarketCommandLine:
         else:
             if output is not None:
                 raise ValueError("--format/--output may be specified only once")
+            if value not in {"text", "json", "table"}:
+                raise ValueError("--format/--output must be text, json, or table")
             output = value
     return MarketCommandLine(workspace, output, tuple(result))
 

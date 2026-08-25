@@ -1185,7 +1185,6 @@ fn managed_connection_exists(
                 || contains(connections.binance_stocks_rest.keys())
                 || contains(connections.okx_public_rest.keys())
                 || contains(connections.hyperliquid_info_rest.keys())
-                || contains(connections.ibkr_market_data.keys())
         },
         MarketSourceMode::Stream | MarketSourceMode::MarketScopedStream => {
             contains(connections.binance_spot_websocket.keys())
@@ -1197,6 +1196,11 @@ fn managed_connection_exists(
                 || contains(connections.hyperliquid_websocket.keys())
                 || contains(connections.massive_stocks_websocket.keys())
                 || contains(connections.massive_options_websocket.keys())
+                || contains(connections.massive_futures_websocket.keys())
+                || contains(connections.massive_indices_websocket.keys())
+                || contains(connections.massive_forex_websocket.keys())
+                || contains(connections.massive_crypto_websocket.keys())
+                || contains(connections.ibkr_market_data.keys())
         },
     }
 }
@@ -1436,6 +1440,11 @@ async fn managed_subscribe(
     try_family!(hyperliquid_websocket);
     try_family!(massive_stocks_websocket);
     try_family!(massive_options_websocket);
+    try_family!(massive_futures_websocket);
+    try_family!(massive_indices_websocket);
+    try_family!(massive_forex_websocket);
+    try_family!(massive_crypto_websocket);
+    try_family!(ibkr_market_data);
     Err(IntegrationError::Unavailable(format!(
         "managed Market stream connection is missing: {key}"
     )))
@@ -1472,6 +1481,11 @@ async fn managed_unsubscribe(
     try_family!(hyperliquid_websocket);
     try_family!(massive_stocks_websocket);
     try_family!(massive_options_websocket);
+    try_family!(massive_futures_websocket);
+    try_family!(massive_indices_websocket);
+    try_family!(massive_forex_websocket);
+    try_family!(massive_crypto_websocket);
+    try_family!(ibkr_market_data);
     Err(IntegrationError::Unavailable(format!(
         "managed Market stream connection is missing: {key}"
     )))

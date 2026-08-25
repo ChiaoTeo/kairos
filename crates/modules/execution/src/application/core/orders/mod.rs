@@ -139,7 +139,7 @@ impl ExecutionApplication {
         if let Some(intent_id) = next.intent_id.as_deref() {
             self.refresh_intent(intent_id)?;
             if compensate {
-                self.maybe_submit_compensating_hedge(intent_id)?;
+                self.maybe_submit_compensating_hedge(intent_id, fill.occurred_at_unix_nanos.get())?;
             }
         }
         info!(event = "fill_applied", component = "execution", fill_id = %fill.fill_id, order_id = %next.order_id, status = ?next.status, filled_quantity = next.filled_quantity.mantissa(), "execution fill applied");
@@ -593,7 +593,24 @@ impl ExecutionApplication {
         outcome: Result<CommandOutcome<OrderEntryEvent>, IntegrationError>,
     ) -> Result<ExecutionOrder, ExecutionError> {
         let event = match outcome {
-            Ok(CommandOutcome::Confirmed(event)) => event,
+            Ok(CommandOutcome::Confirmed(event)) => {
+                if event.order_id != order.order_id {
+                    let reason = format!(
+                        "provider submission acknowledgement order {} does not match local order {}",
+                        event.order_id, order.order_id
+                    );
+                    self.mark_unknown_after_gateway_error(&order.order_id, reason.clone())?;
+                    return Err(ExecutionError::Indeterminate(reason));
+                }
+                if event.status != OrderEntryStatus::Rejected && event.remote_order_id.is_none() {
+                    let reason =
+                        "provider submission acknowledgement is missing remote order identity"
+                            .to_string();
+                    self.mark_unknown_after_gateway_error(&order.order_id, reason.clone())?;
+                    return Err(ExecutionError::Indeterminate(reason));
+                }
+                event
+            },
             Ok(CommandOutcome::Rejected(rejection)) => OrderEntryEvent {
                 order_id: order.order_id.clone(),
                 status: OrderEntryStatus::Rejected,
@@ -678,12 +695,17 @@ impl ExecutionApplication {
             &self.execution_routes,
         )
         .map_err(ExecutionError::Invalid)?;
+        let remote_order_id = order
+            .remote_order_id
+            .as_ref()
+            .ok_or_else(|| {
+                ExecutionError::Invalid(
+                    "order has no remote identity; reconcile it before cancellation".into(),
+                )
+            })?
+            .to_string();
         Ok(PreparedCancellation {
-            remote_order_id: order
-                .remote_order_id
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
+            remote_order_id,
             order,
             provider_request: connection_request,
             at_unix_nanos: now_nanos(),
@@ -696,9 +718,28 @@ impl ExecutionApplication {
         prepared: PreparedCancellation,
         outcome: Result<CommandOutcome<OrderEntryEvent>, IntegrationError>,
     ) -> Result<ExecutionOrder, ExecutionError> {
-        let PreparedCancellation { order, reason, .. } = prepared;
+        let PreparedCancellation {
+            order,
+            remote_order_id,
+            reason,
+            ..
+        } = prepared;
         let event = match outcome {
-            Ok(CommandOutcome::Confirmed(event)) => event,
+            Ok(CommandOutcome::Confirmed(event)) => {
+                let identity_matches = event.order_id == order.order_id
+                    && event
+                        .remote_order_id
+                        .as_ref()
+                        .is_some_and(|remote| remote.as_str() == remote_order_id);
+                if !identity_matches {
+                    let reason =
+                        "provider cancellation acknowledgement identity is missing or mismatched"
+                            .to_string();
+                    self.mark_unknown_after_gateway_error(&order.order_id, reason.clone())?;
+                    return Err(ExecutionError::Indeterminate(reason));
+                }
+                event
+            },
             Ok(CommandOutcome::Rejected(rejection)) => {
                 warn!(event = "order_cancel_rejected", component = "execution", order_id = %order.order_id, error = %rejection.message, "provider rejected order cancellation");
                 return Err(ExecutionError::ProviderRejected(rejection.message));
@@ -1387,7 +1428,7 @@ impl ExecutionApplication {
     }
 }
 
-fn validate_execution_route(
+pub(super) fn validate_execution_route(
     request: &SubmitOrder,
     route: &ExecutionRouteCandidate,
 ) -> Result<(), String> {

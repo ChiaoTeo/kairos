@@ -239,19 +239,17 @@ pub(crate) fn submitted(
             participant_request_id: None,
         }));
     }
-    let remote_order_id = value
-        .get("orderId")
-        .and_then(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .or_else(|| value.as_u64().map(|value| value.to_string()))
-        })
-        .and_then(|value| RemoteOrderId::new(value).ok());
+    let Some(remote_order_id) = response_remote_order_id(value) else {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent(
+                "Binance accepted-order response is missing a valid orderId",
+            ),
+        ));
+    };
     Ok(CommandOutcome::Confirmed(OrderEntryEvent {
         order_id: request.order_id.clone(),
         status: OrderEntryStatus::Accepted,
-        remote_order_id,
+        remote_order_id: Some(remote_order_id),
         filled_quantity: None,
         occurred_at_unix_nanos: now(),
         reason: String::new(),
@@ -274,14 +272,41 @@ pub(crate) fn canceled(
             participant_request_id: None,
         }));
     }
+    let Some(response_remote_order_id) = response_remote_order_id(value) else {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent(
+                "Binance cancel response is missing a valid orderId",
+            ),
+        ));
+    };
+    if response_remote_order_id.as_str() != remote {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent(format!(
+                "Binance cancel response orderId {} does not match requested {remote}",
+                response_remote_order_id.as_str()
+            )),
+        ));
+    }
     Ok(CommandOutcome::Confirmed(OrderEntryEvent {
         order_id: request.order_id.clone(),
         status: OrderEntryStatus::Canceled,
-        remote_order_id: RemoteOrderId::new(remote).ok(),
+        remote_order_id: Some(response_remote_order_id),
         filled_quantity: None,
         occurred_at_unix_nanos: at.into(),
         reason: String::new(),
     }))
+}
+
+fn response_remote_order_id(value: &Value) -> Option<RemoteOrderId> {
+    value
+        .get("orderId")
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| value.as_u64().map(|value| value.to_string()))
+        })
+        .and_then(|value| RemoteOrderId::new(value).ok())
 }
 pub(crate) fn orders(
     connection_key: &crate::ConnectionKey,
@@ -367,7 +392,8 @@ pub(crate) fn decimal(v: DecimalValue) -> String {
 
 #[cfg(test)]
 mod native_order_tests {
-    use super::{amend_params, batch_order_parameter, cancel_id_parameter};
+    use super::{amend_params, batch_order_parameter, cancel_id_parameter, canceled, submitted};
+    use super::{canceled_batch_outcome, submitted_batch_outcome};
 
     fn order(id: &str) -> crate::OrderEntryRequest {
         crate::OrderEntryRequest {
@@ -425,6 +451,96 @@ mod native_order_tests {
             .collect::<Vec<_>>();
         assert_eq!(cancel_id_parameter(&cancels).unwrap(), "[1,2]");
         assert!(batch_order_parameter(&[]).is_err());
+    }
+
+    #[test]
+    fn submit_requires_a_valid_remote_order_identity() {
+        let outcome = submitted(&order("order-1"), &serde_json::json!({})).unwrap();
+        assert!(matches!(outcome, crate::CommandOutcome::Indeterminate(_)));
+
+        let outcome = submitted(&order("order-1"), &serde_json::json!({"orderId": 42})).unwrap();
+        let crate::CommandOutcome::Confirmed(event) = outcome else {
+            panic!("valid Binance acknowledgement must be confirmed");
+        };
+        assert_eq!(event.remote_order_id.unwrap().as_str(), "42");
+    }
+
+    #[test]
+    fn cancel_requires_a_matching_remote_order_identity() {
+        let request = order("order-1");
+        assert!(matches!(
+            canceled(&request, "42", 1, &serde_json::json!({})).unwrap(),
+            crate::CommandOutcome::Indeterminate(_)
+        ));
+        assert!(matches!(
+            canceled(&request, "42", 1, &serde_json::json!({"orderId": 43})).unwrap(),
+            crate::CommandOutcome::Indeterminate(_)
+        ));
+        assert!(matches!(
+            canceled(&request, "42", 1, &serde_json::json!({"orderId": 42})).unwrap(),
+            crate::CommandOutcome::Confirmed(_)
+        ));
+    }
+
+    #[test]
+    fn submit_and_cancel_preserve_explicit_rejection() {
+        let request = order("order-1");
+        let rejection = serde_json::json!({"code": -2010, "msg": "rejected"});
+        assert!(matches!(
+            submitted(&request, &rejection).unwrap(),
+            crate::CommandOutcome::Rejected(_)
+        ));
+        assert!(matches!(
+            canceled(&request, "42", 1, &rejection).unwrap(),
+            crate::CommandOutcome::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn batch_outcomes_preserve_each_items_delivery_evidence() {
+        let requests = vec![order("order-1"), order("order-2")];
+        let crate::CommandOutcome::Confirmed(submissions) = submitted_batch_outcome(
+            &requests,
+            crate::CommandOutcome::Confirmed(serde_json::json!([
+                {"orderId": 1},
+                {"code": -2010, "msg": "rejected"}
+            ])),
+        )
+        .unwrap() else {
+            panic!("batch transport acknowledgement must preserve item outcomes");
+        };
+        assert!(matches!(
+            submissions[0],
+            crate::CommandOutcome::Confirmed(_)
+        ));
+        assert!(matches!(submissions[1], crate::CommandOutcome::Rejected(_)));
+
+        let cancels = requests
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, order)| crate::participants::binance::BinanceCancelOrderRequest {
+                    order,
+                    remote_order_id: (index + 1).to_string(),
+                    at_unix_nanos: 1,
+                },
+            )
+            .collect::<Vec<_>>();
+        let crate::CommandOutcome::Confirmed(cancellations) = canceled_batch_outcome(
+            &cancels,
+            crate::CommandOutcome::Confirmed(serde_json::json!([{"orderId": 1}])),
+        )
+        .unwrap() else {
+            panic!("batch transport acknowledgement must preserve item outcomes");
+        };
+        assert!(matches!(
+            cancellations[0],
+            crate::CommandOutcome::Confirmed(_)
+        ));
+        assert!(matches!(
+            cancellations[1],
+            crate::CommandOutcome::Indeterminate(_)
+        ));
     }
 }
 fn parse(value: &str) -> Result<DecimalValue, IntegrationError> {

@@ -64,13 +64,19 @@ def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
         )
     if kind == "models":
         return (
-            ActionItem("test", "对话测试", "发送一条消息并查看模型回复", "1"),
-            ActionItem("discover", "重新发现模型", "刷新服务当前提供的模型目录", "2"),
-            ActionItem("models", "查看模型状态", "查看模型 ID 和各自验证状态", "3"),
-            ActionItem("advanced", "安全与高级信息", "查看版本、状态和引用", "4"),
-            ActionItem("edit", "修改配置", "逐字段更新安全配置", "5"),
-            ActionItem("toggle", "启用或停用", "切换连接可用状态", "6"),
-            ActionItem("delete", "删除连接", "移除配置和验证记录", "7"),
+            ActionItem(
+                "test", "验证并对话", "发送消息；成功回复后标记为已验证", "1"
+            ),
+            ActionItem("delete", "删除", "移除模型配置和验证记录", "2"),
+            ActionItem("edit", "修改", "更新模型服务或服务商模型 ID", "3"),
+        )
+    if kind == "model_endpoints":
+        return (
+            ActionItem("discover", "发现模型", "读取服务提供的模型目录", "1"),
+            ActionItem("advanced", "安全与高级信息", "查看 Endpoint 和引用", "2"),
+            ActionItem("edit", "修改 Endpoint", "更新服务地址、协议和凭据", "3"),
+            ActionItem("toggle", "启用或停用", "切换 Endpoint 可用状态", "4"),
+            ActionItem("delete", "删除 Endpoint", "仅无模型引用时允许", "5"),
         )
     if kind == "notifications":
         return (
@@ -103,7 +109,9 @@ def list_records(state: Any, kind: str) -> tuple[dict[str, Any], ...]:
     elif kind == "data":
         records = ProviderConnectionConfigurationApplication(owner).list()
     elif kind == "models":
-        records = AgentResourceApplication(owner).model_connections()
+        records = AgentResourceApplication(owner).available_models()
+    elif kind == "model_endpoints":
+        records = AgentResourceApplication(owner).model_endpoints()
     elif kind == "notifications":
         records = NotificationAdminApplication(owner).list()
     else:
@@ -186,11 +194,28 @@ def execute_action(
     elif kind == "models":
         application = AgentResourceApplication(owner)
         if action == "test":
-            return application.test_model_connection(resource_id, value or "")
-        if action == "discover":
-            return application.refresh_model_catalog(resource_id)
+            return application.test_available_model(resource_id)
         if action == "toggle":
-            return application.set_model_connection_enabled(
+            from kairospy.strategy.apps.agent.application import (
+                AvailableModelApplication,
+            )
+
+            return AvailableModelApplication(owner).set_enabled(
+                resource_id, enabled=not bool(record.get("enabled", True))
+            )
+        if action == "advanced":
+            return _advanced(owner, kind, resource_id, record)
+    elif kind == "model_endpoints":
+        from kairospy.strategy.apps.agent.application import ModelEndpointApplication
+
+        application = ModelEndpointApplication(owner)
+        if action == "discover":
+            return {
+                "endpoint_id": resource_id,
+                "models": list(application.discover_models(resource_id)),
+            }
+        if action == "toggle":
+            return application.set_enabled(
                 resource_id, enabled=not bool(record.get("enabled", True))
             )
         if action == "advanced":
@@ -240,6 +265,10 @@ def _advanced(
         uses = MarketProviderBindingApplication(owner).references(resource_id)
     elif kind == "notifications":
         uses = references.destination_references(resource_id)
+    elif kind == "models":
+        uses = references.available_model_references(resource_id)
+    elif kind == "model_endpoints":
+        uses = references.model_endpoint_references(resource_id)
     else:
         uses = references.model_connection_references(resource_id)
     return {
@@ -257,7 +286,8 @@ def _reference_kind(kind: str) -> str:
     return {
         "accounts": "account",
         "data": "market_data",
-        "models": "ai_model",
+        "models": "available_model",
+        "model_endpoints": "model_endpoint",
         "notifications": "notification",
     }[kind]
 

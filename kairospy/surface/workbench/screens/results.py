@@ -25,6 +25,7 @@ class ResultKind(StrEnum):
     BUSINESS = "business-result"
     ACCOUNT = "account-result"
     ORDER = "order-result"
+    TRANSFER = "transfer-result"
     EXECUTION = "execution-result"
     LAUNCH_MARKET = "launch-market-result"
     RESOURCES_SUMMARY = "resources-summary"

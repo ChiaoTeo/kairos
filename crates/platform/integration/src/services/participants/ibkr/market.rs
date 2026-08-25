@@ -58,17 +58,59 @@ fn normalize_quote(
         observed_at_unix_nanos: now(),
     };
     for tick in ticks {
-        match tick {
-            TickTypes::Price(value) => set_price(&mut quote, &value.tick_type, value.price)?,
-            TickTypes::Size(value) => set_size(&mut quote, &value.tick_type, value.size)?,
-            TickTypes::PriceSize(value) => {
-                set_price(&mut quote, &value.price_tick_type, value.price)?;
-                set_size(&mut quote, &value.size_tick_type, value.size)?;
-            },
-            _ => {},
-        }
+        apply_tick(&mut quote, tick)?;
     }
     Ok(quote)
+}
+
+pub(crate) fn apply_tick(
+    quote: &mut MarketQuote,
+    tick: &TickTypes,
+) -> Result<bool, IntegrationError> {
+    match tick {
+        TickTypes::Price(value) => {
+            let before = (quote.bid_price, quote.ask_price, quote.last_price);
+            set_price(quote, &value.tick_type, value.price)?;
+            Ok(before != (quote.bid_price, quote.ask_price, quote.last_price))
+        },
+        TickTypes::Size(value) => {
+            let before = (quote.bid_quantity, quote.ask_quantity);
+            set_size(quote, &value.tick_type, value.size)?;
+            Ok(before != (quote.bid_quantity, quote.ask_quantity))
+        },
+        TickTypes::PriceSize(value) => {
+            let before = (
+                quote.bid_price,
+                quote.bid_quantity,
+                quote.ask_price,
+                quote.ask_quantity,
+                quote.last_price,
+            );
+            set_price(quote, &value.price_tick_type, value.price)?;
+            set_size(quote, &value.size_tick_type, value.size)?;
+            Ok(before
+                != (
+                    quote.bid_price,
+                    quote.bid_quantity,
+                    quote.ask_price,
+                    quote.ask_quantity,
+                    quote.last_price,
+                ))
+        },
+        _ => Ok(false),
+    }
+}
+
+pub(crate) fn empty_quote(symbol: ParticipantSymbol) -> MarketQuote {
+    MarketQuote {
+        symbol,
+        bid_price: None,
+        bid_quantity: None,
+        ask_price: None,
+        ask_quantity: None,
+        last_price: None,
+        observed_at_unix_nanos: now(),
+    }
 }
 
 fn set_price(quote: &mut MarketQuote, kind: &TickType, value: f64) -> Result<(), IntegrationError> {

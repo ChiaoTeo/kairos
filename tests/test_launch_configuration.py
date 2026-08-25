@@ -13,7 +13,9 @@ from kairospy.system.apps.launch.application import (
     LaunchRuntimeApplication,
     OptionBacktestConstraints,
 )
-from kairospy.system.apps.launch.application import configuration as launch_configuration
+from kairospy.system.apps.launch.application import (
+    configuration as launch_configuration,
+)
 from kairospy import Kairos
 from kairospy.research.apps.data.application import DatasetRef, DatasetSetRef
 from kairospy.system.apps.launch.application.wizard import (
@@ -26,6 +28,10 @@ from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.investment.apps.account.application import AccountConfigurationApplication
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
+)
+from kairospy.strategy.apps.agent.application import (
+    AvailableModelApplication,
+    ModelEndpointApplication,
 )
 from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch.support import _launch_config_path
@@ -156,9 +162,9 @@ def test_live_readonly_launch_only_requires_account_read_access(
     path.write_text(
         '[launch]\nid = "observe"\nmode = "live"\nstrategy = "builtin:interactive"\n\n'
         '[accounts.main]\nref = "main"\n\n'
-        '[execution]\nenabled = false\n\n'
+        "[execution]\nenabled = false\n\n"
         '[risk]\nprofile = "production-default"\n\n'
-        '[live.safety]\ntrading_enabled = false\nrequire_limit_orders = true\n',
+        "[live.safety]\ntrading_enabled = false\nrequire_limit_orders = true\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -173,9 +179,10 @@ def test_live_readonly_launch_only_requires_account_read_access(
     )
     config = LaunchConfigurationApplication().load(path)
 
-    assert launch_configuration._workspace_account_issues(
-        config, workspace.paths.root
-    ) == ()
+    assert (
+        launch_configuration._workspace_account_issues(config, workspace.paths.root)
+        == ()
+    )
 
 
 def test_live_trade_route_requires_explicit_order_trade_binding(
@@ -189,11 +196,11 @@ def test_live_trade_route_requires_explicit_order_trade_binding(
     path.write_text(
         '[launch]\nid = "trade"\nmode = "live"\nstrategy = "builtin:interactive"\n\n'
         '[accounts.main]\nref = "main"\ntrade = true\n\n'
-        '[execution]\nenabled = true\n'
+        "[execution]\nenabled = true\n"
         'routes = [{ route_id = "main-spot", account_id = "main", '
         'segment_key = "spot", broker_id = "binance", execution_channel = "spot" }]\n\n'
         '[risk]\nprofile = "production-default"\n\n'
-        '[live.safety]\ntrading_enabled = true\nrequire_limit_orders = true\n'
+        "[live.safety]\ntrading_enabled = true\nrequire_limit_orders = true\n"
         'max_order_notional = "100"\n',
         encoding="utf-8",
     )
@@ -214,12 +221,11 @@ def test_live_trade_route_requires_explicit_order_trade_binding(
         config, workspace.paths.root
     ) == ("Account does not have verified order-trade access: main",)
 
-    account["access_bindings"].append(
-        {"purpose": "order-trade", "enabled": True}
+    account["access_bindings"].append({"purpose": "order-trade", "enabled": True})
+    assert (
+        launch_configuration._workspace_account_issues(config, workspace.paths.root)
+        == ()
     )
-    assert launch_configuration._workspace_account_issues(
-        config, workspace.paths.root
-    ) == ()
 
 
 def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
@@ -248,11 +254,11 @@ def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
             "owner": "Reference/Market",
             "resource": "data_provider",
             "severity": "blocker",
-                "reason": (
-                    "Workspace data connection is unavailable: "
-                    "some-unverified-profile: 'provider connection does not exist: "
-                    "some-unverified-profile'"
-                ),
+            "reason": (
+                "Workspace data connection is unavailable: "
+                "some-unverified-profile: 'provider connection does not exist: "
+                "some-unverified-profile'"
+            ),
             "action": "configure and manually test the selected data connection",
         }
     ]
@@ -621,6 +627,89 @@ def test_launch_environment_writes_normalized_config_inside_instance(
         environment.normalized_config_path
     )
     assert environment.process_environment["KAIROS_EXECUTION_DRY_RUN"] == "true"
+
+
+def test_launch_resolves_available_model_ref_and_snapshots_resource(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="model-ref"
+    )
+    ModelEndpointApplication(workspace).configure("local", provider="ollama")
+    models = AvailableModelApplication(workspace)
+    models.configure(
+        "primary-reasoning", endpoint_id="local", provider_model="qwen3:8b"
+    )
+    models.test("primary-reasoning", probe=lambda *_args: {"ok": True})
+    config = workspace.paths.launch_config("agent-paper")
+    config.write_text(
+        '[launch]\nid = "agent-paper"\nmode = "paper"\n'
+        'strategy = "builtin:interactive"\n\n'
+        "[execution]\nenabled = false\n\n"
+        "[agent]\nenabled = true\nrequired = true\n"
+        'runtime = "openai-agents"\n\n'
+        '[agent.model]\nref = "primary-reasoning"\n\n'
+        '[agent.profile]\nversion = "1"\n'
+        'goal = "Review intents"\nrubric = ["bounded"]\n'
+        'invalidation_rules = ["missing context"]\n\n'
+        '[agent.capabilities.intent_review]\ninitial_mode = "shadow"\n'
+        'operations = ["target_position"]\n',
+        encoding="utf-8",
+    )
+
+    application = LaunchConfigurationApplication()
+    assert application.validate(config)["valid"] is True
+    environment = application.environment(
+        config, workspace_root=workspace.paths.root, instance_id="one"
+    )
+    normalized = json.loads(
+        environment.normalized_config_path.read_text(encoding="utf-8")
+    )
+
+    assert normalized["agent"]["model"]["ref"] == "primary-reasoning"
+    snapshot = normalized["resource_snapshots"]["models"]["primary-reasoning"]
+    assert snapshot["model_id"] == "primary-reasoning"
+    assert snapshot["provider_model"] == "qwen3:8b"
+    assert snapshot["verification"]["verification_status"] == "verified"
+
+
+def test_launch_resolves_available_model_ref_with_dot(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="model-ref-dot"
+    )
+    ModelEndpointApplication(workspace).configure("local", provider="ollama")
+    models = AvailableModelApplication(workspace)
+    models.configure("gpt5.5", endpoint_id="local", provider_model="gpt5.5")
+    models.test("gpt5.5", probe=lambda *_args: {"ok": True})
+    config = workspace.paths.launch_config("agent-paper")
+    config.write_text(
+        '[launch]\nid = "agent-paper"\nmode = "paper"\n'
+        'strategy = "builtin:interactive"\n\n'
+        "[execution]\nenabled = false\n\n"
+        "[agent]\nenabled = true\nrequired = true\n"
+        'runtime = "openai-agents"\n\n'
+        '[agent.model]\nref = "gpt5.5"\n\n'
+        '[agent.profile]\nversion = "1"\n'
+        'goal = "Review intents"\nrubric = ["bounded"]\n'
+        'invalidation_rules = ["missing context"]\n\n'
+        '[agent.capabilities.intent_review]\ninitial_mode = "shadow"\n'
+        'operations = ["target_position"]\n',
+        encoding="utf-8",
+    )
+
+    application = LaunchConfigurationApplication()
+    assert application.validate(config)["valid"] is True
+    environment = application.environment(
+        config, workspace_root=workspace.paths.root, instance_id="one"
+    )
+    normalized = json.loads(
+        environment.normalized_config_path.read_text(encoding="utf-8")
+    )
+
+    assert normalized["agent"]["model"]["ref"] == "gpt5.5"
+    assert normalized["resource_snapshots"]["models"]["gpt5.5"]["model_id"] == (
+        "gpt5.5"
+    )
 
 
 def test_instance_resource_drift_uses_secret_ref_identity_not_secret_value(

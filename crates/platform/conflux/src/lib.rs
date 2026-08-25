@@ -68,9 +68,10 @@ pub use kairos_integration::participants::ibkr::{
     IbkrMarketDataConfig, IbkrMarketDataConnection, IbkrOrderConfig, IbkrOrderConnection,
 };
 pub use kairos_integration::participants::massive::{
-    InstrumentQuery as MassiveInstrumentQuery, MassiveOptionsWebSocketConnection,
-    MassiveRestConfig, MassiveRestConnection, MassiveStocksWebSocketConnection,
-    MassiveWebSocketConfig,
+    InstrumentQuery as MassiveInstrumentQuery, MassiveCryptoWebSocketConnection,
+    MassiveForexWebSocketConnection, MassiveFuturesWebSocketConnection,
+    MassiveIndicesWebSocketConnection, MassiveOptionsWebSocketConnection, MassiveRestConfig,
+    MassiveRestConnection, MassiveStocksWebSocketConnection, MassiveWebSocketConfig,
 };
 pub use kairos_integration::participants::okx::private::{
     OkxHistoryQuery, OkxPrivateRestConnection, OkxPrivateWebSocketConnection,

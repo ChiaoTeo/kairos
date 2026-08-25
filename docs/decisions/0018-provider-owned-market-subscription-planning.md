@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-25
-- Scope: Market demand planning, Integration market streams, Binance WebSocket lifecycle
+- Scope: Market demand planning and provider-owned Integration market-stream lifecycles
 
 ## Context
 
@@ -105,6 +105,21 @@ The Binance component derives the required `public` or `market` path. A legacy U
 ending in `/ws` or `/stream` is rejected during configuration instead of starting a partially working
 connection. COIN-M and Spot keep their product-specific path conventions.
 
+### Other current provider policies
+
+The same ownership decision is realized without forcing providers into one algorithm:
+
+| Provider | Native physical identity and capacity policy | Recovery policy |
+| --- | --- | --- |
+| OKX | typed channel arguments; 456 ordinary operations of the published 480/hour; control payloads below 64 KiB | correlate each argument acknowledgement and restore a replacement public socket before retiring the old one |
+| Hyperliquid | symbol-scoped `bbo`, L2/trades/candles, and shared `activeAssetCtx`; process-shared 950 ordinary subscriptions of the per-IP 1,000 and 1,900 ordinary messages/minute of the per-IP 2,000 | accept provider-augmented acknowledgements; replace first when overlap fits, otherwise disconnect and restore within the global limit |
+| Massive | six product-native channel vocabularies; Options enforces the documented 1,000 quote-contract limit | authenticate and restore a replacement product socket first; classify entitlement failures immediately |
+| IBKR | symbol-scoped Level-I lines; configurable allowance defaults to 100 with 10% ordinary reserve; 45 ordinary messages/second of the published 50 | preserve logical demand across a disconnect-first TWS/Gateway client-ID reconnect and pace restoration |
+
+OKX channel arguments, Hyperliquid subscription objects, Massive channel strings, and IBKR TWS
+contracts stay private to their concrete Integration connections. Market continues to express only
+normalized observation requirements.
+
 ### Desired and actual state
 
 An accepted Market subscription handle identifies desired provider demand, not a socket-local request.
@@ -177,6 +192,14 @@ equivalent accelerated rotation test succeed against the applicable Binance envi
   `crates/platform/integration/src/services/participants/binance/stream.rs`
 - Binance socket lifecycle:
   `crates/platform/integration/src/services/participants/binance/socket.rs`
+- OKX planner:
+  `crates/platform/integration/src/services/participants/okx/market_stream.rs`
+- Hyperliquid planner:
+  `crates/platform/integration/src/services/participants/hyperliquid/market_stream.rs`
+- Massive planner:
+  `crates/platform/integration/src/services/participants/massive/market_stream.rs`
+- IBKR planner:
+  `crates/platform/integration/src/services/participants/ibkr/market_stream.rs`
 - Binance Spot WebSocket streams:
   <https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams>
 - Binance USD-M connection and migration:

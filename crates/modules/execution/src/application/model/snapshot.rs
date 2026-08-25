@@ -13,6 +13,8 @@ pub struct ExecutionSnapshot {
     #[serde(default)]
     pub fills: Vec<ExecutionFill>,
     #[serde(default)]
+    pub algorithm_runs: Vec<AlgorithmRun>,
+    #[serde(default)]
     pub commitments: Vec<OrderCommitment>,
     #[serde(default)]
     pub risk_reservations: Vec<RiskReservationEvidence>,
@@ -39,6 +41,7 @@ pub struct ExecutionCurrentView {
     pub events: Vec<ExecutionEvent>,
     pub intent_events: Vec<IntentEvent>,
     pub fills: Vec<ExecutionFill>,
+    pub algorithm_runs: Vec<AlgorithmRun>,
     pub unknown_remote_orders: Vec<UnknownRemoteOrder>,
     pub exchange_event_watermark_unix_nanos: UnixNanos,
 }

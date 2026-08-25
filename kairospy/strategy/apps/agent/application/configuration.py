@@ -39,6 +39,7 @@ _FORBIDDEN_SECRET_KEYS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class AgentModelConfig:
+    ref: str | None
     connection: str
     model: str
     request_timeout_seconds: float
@@ -52,6 +53,7 @@ class AgentModelConfig:
         _reject_unknown(
             value,
             {
+                "ref",
                 "connection",
                 "provider",
                 "model",
@@ -67,12 +69,32 @@ class AgentModelConfig:
         _reject_secrets(value, "agent.model")
         # provider/credential are accepted only as a read-compatible shape for
         # Launch files created before Workspace model connections were explicit.
-        connection_value = value.get("connection", value.get("credential"))
-        connection = _text(connection_value, "agent.model.connection")
-        model = _text(value.get("model"), "agent.model.model")
-        if len(model) > 256 or any(character.isspace() for character in model):
-            raise ValueError("agent.model.model must be a model id without whitespace")
+        ref_value = value.get("ref")
+        ref = None if ref_value is None else _text(ref_value, "agent.model.ref")
+        if ref is not None and not re.fullmatch(
+            r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_-])?", ref
+        ):
+            raise ValueError("agent.model.ref must be a path-safe model id")
+        if ref is None:
+            connection_value = value.get("connection", value.get("credential"))
+            connection = _text(connection_value, "agent.model.connection")
+            model = _text(value.get("model"), "agent.model.model")
+            if len(model) > 256 or any(character.isspace() for character in model):
+                raise ValueError(
+                    "agent.model.model must be a model id without whitespace"
+                )
+        else:
+            if any(
+                value.get(field) is not None
+                for field in ("connection", "credential", "model", "provider")
+            ):
+                raise ValueError(
+                    "agent.model.ref cannot be combined with legacy model fields"
+                )
+            connection = ""
+            model = ""
         return cls(
+            ref=ref,
             connection=connection,
             model=model,
             request_timeout_seconds=_number(
@@ -108,9 +130,13 @@ class AgentModelConfig:
         )
 
     def normalized(self) -> dict[str, object]:
+        identity = (
+            {"ref": self.ref}
+            if self.ref is not None
+            else {"connection": self.connection, "model": self.model}
+        )
         return {
-            "connection": self.connection,
-            "model": self.model,
+            **identity,
             "request_timeout_seconds": self.request_timeout_seconds,
             "max_turns": self.max_turns,
             "max_tool_calls": self.max_tool_calls,

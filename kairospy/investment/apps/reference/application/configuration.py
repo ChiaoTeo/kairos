@@ -147,10 +147,9 @@ class ReferenceProviderConfigurationApplication:
                 raise ValueError("Massive credential requires an api_key value")
 
         document = self.workspace.paths.manifest.read_text(encoding="utf-8")
-        products = ["reference"]
+        products = ["equity"]
         purposes = ["reference-catalog"]
         if "equity_market" in selected:
-            products.append("equity")
             purposes.append("market-query")
             purposes.append("market-stream")
         if "options" in selected:
@@ -166,6 +165,7 @@ class ReferenceProviderConfigurationApplication:
             products=products,
             purposes=purposes,
             endpoint=endpoint,
+            endpoints={"reference-catalog": endpoint, "market-query": endpoint},
             credential_provider=credential_provider,
             credential_fields=("api_key",),
         )
@@ -474,7 +474,8 @@ class ReferenceProviderConfigurationApplication:
     ) -> tuple[str, ...]:
         if connection is not None and connection.get("products"):
             products = {str(item) for item in connection.get("products") or ()}
-            result = ["reference"] if "reference" in products else []
+            purposes = {str(item) for item in connection.get("purposes") or ()}
+            result = ["reference"] if "reference-catalog" in purposes else []
             if "equity" in products:
                 result.append("equity_market")
             if "options" in products:

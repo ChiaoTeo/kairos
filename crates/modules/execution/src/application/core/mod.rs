@@ -11,10 +11,13 @@ use kairos_primitives::time::{DurationNanos, UnixNanos};
 use super::RemoteOrderUpdate;
 use super::model::*;
 use crate::domain::{
-    CommitmentBasis, CommitmentResource, CommitmentStatus, CompletionPolicy, ExecutionFill,
-    ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy,
-    IntentType, MakerExecutionPolicy, OrderCommitment, OrderSide, OrderType,
-    RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy, split_quantity,
+    AlgorithmActionKind, AlgorithmActionStatus, AlgorithmChildCandidate, AlgorithmExecutionStyle,
+    AlgorithmInput, AlgorithmRun, CommitmentBasis, CommitmentResource, CommitmentStatus,
+    CompletionPolicy, ExecutionAlgorithmSpec, ExecutionFill, ExecutionLeg, ExecutionOrder,
+    ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy, IntentType,
+    MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderSide, OrderType,
+    RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy, decide_immediate,
+    decide_maker_taker_hedge, split_quantity,
 };
 use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 use crate::services::dependencies::{ExecutionOrderAdmissionService, QueuedExecutionIntentPlanner};
@@ -223,6 +226,7 @@ impl ExecutionApplication {
             business_time_unix_nanos: None,
             conflux: Default::default(),
         };
+        let mut recovered_algorithm_state = false;
         if let Some(store) = application.store.as_mut() {
             if let Some(snapshot) = store.load().map_err(ExecutionError::Persistence)? {
                 application.actor.restore(
@@ -242,6 +246,14 @@ impl ExecutionApplication {
                 application
                     .actor
                     .restore_intent_events(snapshot.intent_events);
+                application
+                    .actor
+                    .restore_algorithm_runs(snapshot.algorithm_runs)
+                    .map_err(ExecutionError::Persistence)?;
+                recovered_algorithm_state = application
+                    .actor
+                    .synchronize_all_algorithm_runs()
+                    .map_err(ExecutionError::Persistence)?;
                 info!(
                     event = "execution_state_restored",
                     component = "execution",
@@ -253,6 +265,9 @@ impl ExecutionApplication {
                     "execution state restored from persistence"
                 );
             }
+        }
+        if recovered_algorithm_state {
+            application.persist_snapshot()?;
         }
         Ok(application)
     }
@@ -325,6 +340,7 @@ impl ExecutionApplication {
             orders: self.actor.order_map().values().cloned().collect(),
             events: self.actor.events().to_vec(),
             fills: self.actor.fills().to_vec(),
+            algorithm_runs: self.actor.algorithm_runs().cloned().collect(),
             commitments: self.actor.commitments().cloned().collect(),
             risk_reservations: self.actor.risk_reservations().cloned().collect(),
             intents: self.actor.intents().cloned().collect(),
@@ -346,6 +362,7 @@ impl ExecutionApplication {
             events: self.actor.events().to_vec(),
             intent_events: self.actor.intent_events().to_vec(),
             fills: self.actor.fills().to_vec(),
+            algorithm_runs: self.actor.algorithm_runs().cloned().collect(),
             unknown_remote_orders: self.actor.unknown_remote_orders().cloned().collect(),
             exchange_event_watermark_unix_nanos: self.actor.remote_watermark().into(),
         }
@@ -353,6 +370,10 @@ impl ExecutionApplication {
 
     pub fn event_sequence(&self) -> u64 {
         self.actor.event_sequence()
+    }
+
+    pub fn algorithm_runs(&self) -> Vec<AlgorithmRun> {
+        self.actor.algorithm_runs().cloned().collect()
     }
 
     pub fn drain_events(&mut self) -> Vec<ExecutionEvent> {

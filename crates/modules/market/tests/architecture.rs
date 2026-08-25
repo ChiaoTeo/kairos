@@ -596,6 +596,10 @@ fn provider_connections_enter_market_through_named_conflux_collections() {
         ".hyperliquid_websocket",
         ".massive_stocks_websocket",
         ".massive_options_websocket",
+        ".massive_futures_websocket",
+        ".massive_indices_websocket",
+        ".massive_forex_websocket",
+        ".massive_crypto_websocket",
         ".ibkr_market_data",
     ] {
         assert!(

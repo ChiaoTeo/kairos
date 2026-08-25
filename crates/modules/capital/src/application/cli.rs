@@ -110,6 +110,9 @@ pub enum CapitalStandaloneOutput {
     Validation(CapitalValidationResult),
     Preview(CapitalPreviewResult),
     Plan(CapitalPlanResult),
+    TransferPreview(super::StandaloneCapitalTransferPreviewResult),
+    Transfer(super::StandaloneCapitalTransferResult),
+    TransferHistory(super::StandaloneCapitalTransferHistoryResult),
 }
 
 impl CliCapitalApplication {

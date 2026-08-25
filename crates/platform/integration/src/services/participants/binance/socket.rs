@@ -225,9 +225,8 @@ impl SocketService {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::{ConnectionDescriptor, ParticipantKind, ParticipantRef};
-
     use super::*;
+    use crate::domain::{ConnectionDescriptor, ParticipantKind, ParticipantRef};
 
     fn descriptor() -> ConnectionDescriptor {
         ConnectionDescriptor::new(

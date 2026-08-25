@@ -49,6 +49,8 @@ use kairos_integration::participants::ibkr::{
     IbkrMarketDataConfig, IbkrMarketDataConnection, IbkrOrderConfig, IbkrOrderConnection,
 };
 use kairos_integration::participants::massive::{
+    MassiveCryptoWebSocketConnection, MassiveForexWebSocketConnection,
+    MassiveFuturesWebSocketConnection, MassiveIndicesWebSocketConnection,
     MassiveOptionsWebSocketConnection, MassiveRestConfig, MassiveRestConnection,
     MassiveStocksWebSocketConnection, MassiveWebSocketConfig,
 };
@@ -272,6 +274,10 @@ impl ConnectionDriverState {
             "ibkr_market_data_connections" => "ibkr.market",
             "massive_stocks_websocket_connections" => "massive.stocks",
             "massive_options_websocket_connections" => "massive.options",
+            "massive_futures_websocket_connections" => "massive.futures",
+            "massive_indices_websocket_connections" => "massive.indices",
+            "massive_forex_websocket_connections" => "massive.forex",
+            "massive_crypto_websocket_connections" => "massive.crypto",
             _ => return,
         };
         self.maintenance_in_progress
@@ -279,7 +285,7 @@ impl ConnectionDriverState {
     }
 }
 
-const CONNECTION_EVENT_FAMILIES: usize = 19;
+const CONNECTION_EVENT_FAMILIES: usize = 24;
 
 fn is_permanent_connection_error(error: &kairos_integration::IntegrationError) -> bool {
     matches!(
@@ -548,6 +554,14 @@ pub struct ConnectionCollections<'a> {
         TypedConnectionCollection<'a, MassiveStocksWebSocketConnection, MassiveWebSocketConfig>,
     pub massive_options_websocket:
         TypedConnectionCollection<'a, MassiveOptionsWebSocketConnection, MassiveWebSocketConfig>,
+    pub massive_futures_websocket:
+        TypedConnectionCollection<'a, MassiveFuturesWebSocketConnection, MassiveWebSocketConfig>,
+    pub massive_indices_websocket:
+        TypedConnectionCollection<'a, MassiveIndicesWebSocketConnection, MassiveWebSocketConfig>,
+    pub massive_forex_websocket:
+        TypedConnectionCollection<'a, MassiveForexWebSocketConnection, MassiveWebSocketConfig>,
+    pub massive_crypto_websocket:
+        TypedConnectionCollection<'a, MassiveCryptoWebSocketConnection, MassiveWebSocketConfig>,
     pub hyperliquid_websocket:
         TypedConnectionCollection<'a, HyperliquidWebSocketConnection, HyperliquidWebSocketConfig>,
     pub okx_public_rest: TypedConnectionCollection<
@@ -667,6 +681,14 @@ pub struct ConfluxSystem {
         ManagedConnections<String, MassiveStocksWebSocketConnection>,
     pub(crate) massive_options_websocket_connections:
         ManagedConnections<String, MassiveOptionsWebSocketConnection>,
+    pub(crate) massive_futures_websocket_connections:
+        ManagedConnections<String, MassiveFuturesWebSocketConnection>,
+    pub(crate) massive_indices_websocket_connections:
+        ManagedConnections<String, MassiveIndicesWebSocketConnection>,
+    pub(crate) massive_forex_websocket_connections:
+        ManagedConnections<String, MassiveForexWebSocketConnection>,
+    pub(crate) massive_crypto_websocket_connections:
+        ManagedConnections<String, MassiveCryptoWebSocketConnection>,
 }
 
 impl ConfluxSystem {
@@ -726,6 +748,10 @@ impl ConfluxSystem {
             massive_rest_connections: ManagedConnections::new(),
             massive_stocks_websocket_connections: ManagedConnections::new(),
             massive_options_websocket_connections: ManagedConnections::new(),
+            massive_futures_websocket_connections: ManagedConnections::new(),
+            massive_indices_websocket_connections: ManagedConnections::new(),
+            massive_forex_websocket_connections: ManagedConnections::new(),
+            massive_crypto_websocket_connections: ManagedConnections::new(),
         }
     }
 
@@ -879,6 +905,26 @@ impl ConfluxSystem {
             massive_options_websocket: TypedConnectionCollection::new(
                 &mut self.massive_options_websocket_connections,
                 MassiveOptionsWebSocketConnection::new,
+                true,
+            ),
+            massive_futures_websocket: TypedConnectionCollection::new(
+                &mut self.massive_futures_websocket_connections,
+                MassiveFuturesWebSocketConnection::new,
+                true,
+            ),
+            massive_indices_websocket: TypedConnectionCollection::new(
+                &mut self.massive_indices_websocket_connections,
+                MassiveIndicesWebSocketConnection::new,
+                true,
+            ),
+            massive_forex_websocket: TypedConnectionCollection::new(
+                &mut self.massive_forex_websocket_connections,
+                MassiveForexWebSocketConnection::new,
+                true,
+            ),
+            massive_crypto_websocket: TypedConnectionCollection::new(
+                &mut self.massive_crypto_websocket_connections,
+                MassiveCryptoWebSocketConnection::new,
                 true,
             ),
             hyperliquid_websocket: TypedConnectionCollection::new(
@@ -1292,6 +1338,10 @@ impl ConfluxSystem {
         inspect!(ibkr_market_data_connections);
         inspect!(massive_stocks_websocket_connections);
         inspect!(massive_options_websocket_connections);
+        inspect!(massive_futures_websocket_connections);
+        inspect!(massive_indices_websocket_connections);
+        inspect!(massive_forex_websocket_connections);
+        inspect!(massive_crypto_websocket_connections);
         Ok(!pending)
     }
 
@@ -1332,6 +1382,10 @@ impl ConfluxSystem {
         request_stop!(ibkr_market_data_connections);
         request_stop!(massive_stocks_websocket_connections);
         request_stop!(massive_options_websocket_connections);
+        request_stop!(massive_futures_websocket_connections);
+        request_stop!(massive_indices_websocket_connections);
+        request_stop!(massive_forex_websocket_connections);
+        request_stop!(massive_crypto_websocket_connections);
 
         std::future::poll_fn(|cx| {
             self.poll_all_connection_lifecycle(cx, Instant::now(), state);
@@ -1368,6 +1422,10 @@ impl ConfluxSystem {
             check_stopped!(ibkr_market_data_connections);
             check_stopped!(massive_stocks_websocket_connections);
             check_stopped!(massive_options_websocket_connections);
+            check_stopped!(massive_futures_websocket_connections);
+            check_stopped!(massive_indices_websocket_connections);
+            check_stopped!(massive_forex_websocket_connections);
+            check_stopped!(massive_crypto_websocket_connections);
             if complete {
                 Poll::Ready(())
             } else {
@@ -1633,6 +1691,36 @@ impl ConfluxSystem {
                     kairos_integration::ExternalParticipantEvent::Market,
                     "massive.options"
                 ),
+                19 => poll_family!(
+                    massive_futures_websocket_connections,
+                    kairos_integration::MarketDataStream,
+                    kairos_integration::ExternalParticipantEvent::Market,
+                    "massive.futures"
+                ),
+                20 => poll_family!(
+                    massive_indices_websocket_connections,
+                    kairos_integration::MarketDataStream,
+                    kairos_integration::ExternalParticipantEvent::Market,
+                    "massive.indices"
+                ),
+                21 => poll_family!(
+                    massive_forex_websocket_connections,
+                    kairos_integration::MarketDataStream,
+                    kairos_integration::ExternalParticipantEvent::Market,
+                    "massive.forex"
+                ),
+                22 => poll_family!(
+                    massive_crypto_websocket_connections,
+                    kairos_integration::MarketDataStream,
+                    kairos_integration::ExternalParticipantEvent::Market,
+                    "massive.crypto"
+                ),
+                23 => poll_family!(
+                    ibkr_market_data_connections,
+                    kairos_integration::MarketDataStream,
+                    kairos_integration::ExternalParticipantEvent::Market,
+                    "ibkr.market"
+                ),
                 _ => unreachable!(),
             }
         }
@@ -1836,6 +1924,10 @@ impl ConfluxSystem {
         poll_lifecycle!(ibkr_market_data_connections);
         poll_lifecycle!(massive_stocks_websocket_connections);
         poll_lifecycle!(massive_options_websocket_connections);
+        poll_lifecycle!(massive_futures_websocket_connections);
+        poll_lifecycle!(massive_indices_websocket_connections);
+        poll_lifecycle!(massive_forex_websocket_connections);
+        poll_lifecycle!(massive_crypto_websocket_connections);
     }
 
     fn poll_all_contract_events(
@@ -2068,6 +2160,10 @@ impl ConfluxSystem {
         poll_maintenance!(ibkr_market_data_connections, "ibkr.market");
         poll_maintenance!(massive_stocks_websocket_connections, "massive.stocks");
         poll_maintenance!(massive_options_websocket_connections, "massive.options");
+        poll_maintenance!(massive_futures_websocket_connections, "massive.futures");
+        poll_maintenance!(massive_indices_websocket_connections, "massive.indices");
+        poll_maintenance!(massive_forex_websocket_connections, "massive.forex");
+        poll_maintenance!(massive_crypto_websocket_connections, "massive.crypto");
     }
 
     pub(crate) fn next_wakeup_deadline(
@@ -2145,6 +2241,10 @@ impl ConfluxSystem {
         visit!(ibkr_market_data_connections, "ibkr.market");
         visit!(massive_stocks_websocket_connections, "massive.stocks");
         visit!(massive_options_websocket_connections, "massive.options");
+        visit!(massive_futures_websocket_connections, "massive.futures");
+        visit!(massive_indices_websocket_connections, "massive.indices");
+        visit!(massive_forex_websocket_connections, "massive.forex");
+        visit!(massive_crypto_websocket_connections, "massive.crypto");
         deadline
     }
 }

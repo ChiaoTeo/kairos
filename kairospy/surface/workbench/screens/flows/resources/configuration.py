@@ -36,7 +36,7 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from ...catalog import SECTION_ACTIONS
+from ...catalog import AI_MODEL_ACTIONS, SECTION_ACTIONS
 from ...session import GuidedSession
 from .views import (
     RESOURCE_LABELS,
@@ -45,6 +45,7 @@ from .views import (
     model_catalog_renderable,
     record_summary,
     records_renderable,
+    saved_resource_renderable,
 )
 from .wizard import ResourceWizardState, prepare_model_draft, save_resource_wizard
 from .actions import (
@@ -78,14 +79,22 @@ def context_title(session: GuidedSession, base: str) -> str:
     context = session.context
     if context in {
         ("resources", "account-operations"),
+        ("resources", "account-order-segments"),
         ("resources", "account-orders"),
     }:
         account = _selected_account_id(session.resources.selected)
-        return f"{base} · {account}" if account else base
+        if context == ("resources", "account-order-segments"):
+            root = f"{session.root_label} / 运行准备 / 订单管理"
+            return f"{root} · {account} / 选择交易分区" if account else base
+        title = f"{base} · {account}" if account else base
+        segment = session.account.selected_segment
+        if context == ("resources", "account-orders") and segment:
+            title = f"{title} / {segment}"
+        return title
     kind = session.resources.kind
     label = RESOURCE_LABELS.get(kind or "")
     if len(context) == 2 and context[1] in RESOURCE_LABELS:
-        return f"首页 / 运行准备 / {RESOURCE_LABELS[context[1]]}"
+        return f"{session.root_label} / 运行准备 / {RESOURCE_LABELS[context[1]]}"
     if context == ("resources", "selected") and label:
         rid = (
             identity(kind, session.resources.selected)
@@ -195,21 +204,18 @@ def handle_command(
             return _input_error(session, "模型 ID 不能为空或包含空白字符")
         return _ask_model_message(session, model)
     if command == "resource:model-chat":
-        prefix = "test-model-message:"
-        action = str(session.resources.action or "")
-        if not action.startswith(prefix):
+        if session.context != ("resources", "model-chat"):
             return None
         if not value:
-            return _input_error(session, "测试消息不能为空")
-        model = action.removeprefix(prefix)
-        session.resources.action = None
+            return (SetStatus("消息不能为空"),)
+        record = session.resources.selected
+        if record is None:
+            return None
+        model = identity("models", record)
         run = _model_conversation_run(state, session, model, value)
-        return _confirm_or_run(
-            state,
-            session,
-            run.operation,
-            details=Text(f"模型：{model}\n消息：{value}"),
-            title="确认发送模型测试消息",
+        return (
+            _chat_activity("你", value, outcome=ActivityOutcome.NOTICE),
+            run,
         )
     return None
 
@@ -219,6 +225,17 @@ def handle_context(
 ) -> tuple[ScreenEffect, ...] | None:
     if session.context[:1] != ("resources",):
         return None
+    if session.context == ("resources", "ai-models"):
+        resource_kind = action_id(AI_MODEL_ACTIONS, command)
+        if resource_kind is not None:
+            return (
+                _run(
+                    f"resources.list.{resource_kind}",
+                    f"查看 {RESOURCE_LABELS[resource_kind]}",
+                    ResultRoute(ResultKind.RESOURCE_LIST, resource_kind),
+                    lambda: list_records(state, resource_kind),
+                ),
+            )
     if session.context == ("resources", "setup"):
         wizard = session.resources.wizard
         if not isinstance(wizard, ResourceWizardState):
@@ -252,6 +269,7 @@ def handle_context(
             "data-product",
             "credential-mode",
             "credential-id",
+            "endpoint-id",
         }:
             return None
         field = prompt[0]
@@ -267,10 +285,14 @@ def handle_context(
             "data-product": _data_product_actions(wizard),
             "credential-mode": _CREDENTIAL_MODE_ACTIONS,
             "credential-id": _credential_actions(wizard),
+            "endpoint-id": _model_endpoint_actions(wizard),
         }[field]
         value = action_id(actions, command)
         if value is None:
             return None
+        if field == "endpoint-id" and value == "__new_endpoint__":
+            session.resources.parent_wizard = wizard
+            return _start_wizard(state, session, ResourceWizardState("model_endpoints"))
         wizard.accept(field, value)
         if field == "notification-provider" and not wizard.editing:
             wizard.generated_id = _available_notification_id(state, value)
@@ -329,43 +351,14 @@ def handle_context(
                     else "确认账户只读访问"
                 ),
             )
-        if kind == "models" and session.resources.action == "test-model-choice":
-            selected_model = action_id(_saved_model_actions(record), command)
-            if selected_model is None:
-                return None
-            session.resources.action = None
-            if selected_model == "manual":
-                return _ask(
-                    session,
-                    "resource:model-test",
-                    "请输入用于连接测试的模型 ID",
-                    "仅在已知模型中没有目标模型时手动填写；输入 /back 取消。",
-                )
-            model = _selected_saved_model(record, selected_model)
-            if model is None:
-                return None
-            return _ask_model_message(session, model)
         action = action_id(detail_actions(kind), command)
         if action is None:
             return None
         if action == "advanced":
             return (_resource_run(state, session, action),)
-        if action == "models" and kind == "models":
-            body = model_catalog_renderable(record)
-            return _standalone(f"{identity(kind, record)} · 模型状态", body), *_choice(
-                state, session
-            )
         if action == "operations" and kind == "accounts":
-            account = identity(kind, record)
             session.context = ("resources", "account-operations")
-            body = Panel(
-                f"已选择账户 {account}。可直接输入 account --account-id {account} standalone overview 等 kairos 业务命令。",
-                title=f"账户运行查询 · {account}",
-                border_style="cyan",
-            )
-            return _standalone(f"账户运行查询 · {account}", body), *_choice(
-                state, session
-            )
+            return _choice(state, session, status="已进入账户上下文")
         if action == "access" and kind == "accounts":
             session.resources.action = "access-purpose"
             interaction = ChoiceInteraction(
@@ -380,15 +373,21 @@ def handle_context(
                 state, session, ResourceWizardState(kind, dict(record))
             )
         if action == "test" and kind == "models":
-            session.resources.action = "test-model-choice"
-            interaction = ChoiceInteraction(
-                title=f"{_title(session)} · 选择测试模型",
-                summary=Text("选择一个模型并发送一条测试消息。", style="dim"),
-                actions=_saved_model_actions(record),
-            )
+            model_id = identity(kind, record)
+            session.context = ("resources", "model-chat")
+            session.resources.action = "chat"
+            interaction = ChoiceInteraction(title="", summary=None, actions=())
             session.interaction = interaction
-            return SetInteraction(interaction), SetStatus("请选择测试模型")
-        if action == "discover" and kind == "models":
+            return (
+                _chat_activity(
+                    "系统",
+                    f"已进入 {model_id} 对话。直接输入消息；/back 返回模型操作。",
+                    outcome=ActivityOutcome.NOTICE,
+                ),
+                SetInteraction(interaction),
+                SetStatus(f"正在与 {model_id} 对话"),
+            )
+        if action == "discover" and kind == "model_endpoints":
             return (_resource_run(state, session, action),)
         if action in {"test", "toggle", "delete"}:
             return _resource_confirmation(state, session, action)
@@ -402,6 +401,9 @@ def handle_context(
         selected = ResourceRecordView.from_mapping(record)
         session.resources.selected = selected
         session.resources.action = None
+        if session.resources.kind == "accounts":
+            session.context = ("resources", "account-operations")
+            return _choice(state, session, status="已进入账户上下文")
         session.context = ("resources", "selected")
         body = detail_renderable(session.resources.kind, selected)
         return _standalone(
@@ -419,6 +421,16 @@ def handle_context(
                 lambda: summary(state),
             ),
         )
+    if action == "models":
+        session.resources.kind = None
+        session.resources.selected = None
+        session.visible_records = ()
+        session.context = ("resources", "ai-models")
+        interaction = ChoiceInteraction(
+            title=_title(session), summary=None, actions=AI_MODEL_ACTIONS
+        )
+        session.interaction = interaction
+        return SetInteraction(interaction), SetStatus("请选择模型资源")
     session.resources.kind = action
     return (
         _run(
@@ -451,6 +463,32 @@ def handle_success(
     if kind is ResultKind.RESOURCE_ACTION:
         action = spec.route.qualifier
         assert action is not None
+        if action == "model-chat" and isinstance(result, Mapping):
+            model_id = str(result.get("model_id") or "模型")
+            succeeded = result.get("succeeded") is True
+            if succeeded:
+                response = str(result.get("response") or result.get("detail") or "")
+            else:
+                response = _model_chat_failure_message(result)
+            interaction = ChoiceInteraction(title="", summary=None, actions=())
+            session.interaction = interaction
+            return (
+                _chat_activity(
+                    model_id,
+                    response,
+                    outcome=(
+                        ActivityOutcome.SUCCESS
+                        if succeeded
+                        else ActivityOutcome.FAILURE
+                    ),
+                ),
+                SetInteraction(interaction),
+                SetStatus(
+                    f"正在与 {model_id} 对话"
+                    if succeeded
+                    else "模型调用失败 · 可继续重试或 /back 返回"
+                ),
+            )
         resource_kind, selected = session.resources.kind, session.resources.selected
         label = RESOURCE_LABELS.get(resource_kind or "", "运行资源")
         rid = identity(resource_kind, selected) if resource_kind and selected else ""
@@ -502,9 +540,14 @@ def handle_success(
             rid = str(wizard.answers.get("resource-id") or "")
         title = f"{label} · {rid} · 配置结果" if rid else f"{label} · 配置结果"
         body = (
-            mapping_renderable(result, title=title)
-            if isinstance(result, Mapping)
+            saved_resource_renderable(wizard_kind, result, title=title)
+            if wizard_kind is not None and isinstance(result, Mapping)
             else Panel(str(result), title=title)
+        )
+        created_endpoint_id = (
+            str(result.get("endpoint_id") or wizard.answers.get("resource-id") or "")
+            if isinstance(result, Mapping) and isinstance(wizard, ResourceWizardState)
+            else ""
         )
         if isinstance(wizard, ResourceWizardState):
             resource_kind = wizard.kind
@@ -512,6 +555,19 @@ def handle_success(
         else:
             resource_kind = None
         session.resources.wizard = None
+        parent = session.resources.parent_wizard
+        if (
+            resource_kind == "model_endpoints"
+            and isinstance(parent, ResourceWizardState)
+            and created_endpoint_id
+            and state.owner is not None
+        ):
+            session.resources.parent_wizard = None
+            parent.model_endpoints = AgentResourceApplication(
+                state.owner
+            ).model_endpoints()
+            parent.accept("endpoint-id", created_endpoint_id)
+            return _activity(spec, body), *_start_wizard(state, session, parent)
         if resource_kind is not None:
             records = tuple(
                 ResourceRecordView.from_mapping(record)
@@ -523,7 +579,11 @@ def handle_success(
                     session,
                     resource_kind,
                     records,
-                    status="资源配置已完成 · 请选择连接",
+                    status=(
+                        "已保存 · 选择模型开始验证"
+                        if resource_kind == "models"
+                        else "资源配置已完成 · 请选择连接"
+                    ),
                 ),
             )
         return _activity(spec, body), *_choice(state, session, status="资源配置已完成")
@@ -581,8 +641,12 @@ def _enter_resource_list(
         resolved_status = status or f"尚未配置 {RESOURCE_LABELS[resource_kind]}"
     interaction = ChoiceInteraction(
         title=_title(session),
-        summary=records_renderable(
-            resource_kind, tuple(dict(record) for record in records)
+        summary=(
+            None
+            if resource_kind in {"accounts", "models"} or not records
+            else records_renderable(
+                resource_kind, tuple(dict(record) for record in records)
+            )
         ),
         actions=actions,
     )
@@ -595,6 +659,18 @@ def handle_failure(
 ) -> tuple[ScreenEffect, ...] | None:
     if spec.route.kind not in _KINDS:
         return None
+    if (
+        spec.route.kind is ResultKind.RESOURCE_ACTION
+        and spec.route.qualifier == "model-chat"
+        and session.context == ("resources", "model-chat")
+    ):
+        interaction = ChoiceInteraction(title="", summary=None, actions=())
+        session.interaction = interaction
+        return (
+            _chat_activity("错误", error, outcome=ActivityOutcome.FAILURE),
+            SetInteraction(interaction),
+            SetStatus("模型调用失败 · 可继续重试或 /back 返回"),
+        )
     if spec.route.kind is ResultKind.RESOURCE_WIZARD and spec.route.qualifier in {
         "model-discover",
         "model-test",
@@ -684,15 +760,22 @@ def back_wizard(
     if not token.action.startswith("resource:setup"):
         return None
     wizard = session.resources.wizard
-    if not isinstance(wizard, ResourceWizardState) or not wizard.go_back():
+    if not isinstance(wizard, ResourceWizardState):
         return None
+    if not wizard.go_back():
+        parent = session.resources.parent_wizard
+        if not isinstance(parent, ResourceWizardState):
+            return None
+        wizard.clear_secrets()
+        session.resources.parent_wizard = None
+        return _start_wizard(state, session, parent)
     return _advance_wizard(state, session, wizard)
 
 
 def _start_wizard(
     state: Any, session: GuidedSession, wizard: ResourceWizardState
 ) -> tuple[ScreenEffect, ...]:
-    if wizard.kind == "models" and state.owner is not None:
+    if wizard.kind == "model_endpoints" and state.owner is not None:
         wizard.model_providers = tuple(
             dict(value)
             for value in AgentResourceApplication(state.owner).provider_catalog()
@@ -705,6 +788,13 @@ def _start_wizard(
         except (AttributeError, OSError, ValueError):
             configured_credentials = []
         wizard.credentials = tuple(dict(value) for value in configured_credentials)
+    if state.owner is not None and wizard.kind == "models":
+        try:
+            wizard.model_endpoints = AgentResourceApplication(
+                state.owner
+            ).model_endpoints()
+        except (AttributeError, OSError, ValueError):
+            wizard.model_endpoints = ()
     session.resources.wizard = wizard
     session.resources.kind = wizard.kind
     session.context = ("resources", "setup")
@@ -730,11 +820,26 @@ def _advance_wizard(
             "data-product": _data_product_actions(wizard),
             "credential-mode": _CREDENTIAL_MODE_ACTIONS,
             "credential-id": _credential_actions(wizard),
+            "endpoint-id": _model_endpoint_actions(wizard),
         }.get(name)
         if choice_actions is not None:
+            title = f"{_title(session)} · 第 {current}/{total} 步"
+            choice_summary = _wizard_summary(wizard)
+            if name == "endpoint-id" and not wizard.model_endpoints:
+                title = f"{_title(session)} · 准备模型服务"
+                choice_summary = Group(
+                    Text("还没有配置模型服务", style="bold yellow"),
+                    Text(
+                        "使用模型前，需要先连接 OpenAI、Anthropic、Ollama "
+                        "或其他模型服务。配置完成后会自动返回这里。",
+                        style="dim",
+                    ),
+                    Text(),
+                    choice_summary,
+                )
             interaction = ChoiceInteraction(
-                title=f"{_title(session)} · 第 {current}/{total} 步",
-                summary=_wizard_summary(wizard),
+                title=title,
+                summary=choice_summary,
                 actions=choice_actions,
             )
             session.interaction = interaction
@@ -750,6 +855,11 @@ def _advance_wizard(
                 "data-product": "请选择行情产品",
                 "credential-mode": "请选择凭据方式",
                 "credential-id": "请选择已有凭据",
+                "endpoint-id": (
+                    "请先配置模型服务"
+                    if not wizard.model_endpoints
+                    else "请选择模型服务，或添加另一个服务"
+                ),
             }[name]
             return SetInteraction(interaction), SetStatus(status)
         session.ask(
@@ -762,40 +872,6 @@ def _advance_wizard(
         )
         return SetInteraction(session.interaction), SetStatus("等待资源配置")
 
-    if wizard.kind == "models":
-        wizard.model_phase = "discovering"
-
-        def discover() -> Any:
-            if state.dry_run or state.no_exec:
-                return {"draft": None, "models": (), "preview": True}
-            draft = prepare_model_draft(state, wizard)
-            try:
-                models = ModelConnectionDraftApplication(
-                    _workspace_owner(state)
-                ).discover_models(draft)
-            except Exception as error:
-                return {
-                    "draft": draft,
-                    "models": (),
-                    "discovery_error": str(error),
-                    "preview": False,
-                }
-            return {
-                "draft": draft,
-                "models": models,
-                "discovery_error": None,
-                "preview": False,
-            }
-
-        return (
-            _run(
-                "resources.models.discover",
-                "发现模型连接可用模型",
-                ResultRoute(ResultKind.RESOURCE_WIZARD, "model-discover"),
-                discover,
-            ),
-        )
-
     def operation() -> Any:
         if state.dry_run or state.no_exec:
             return {
@@ -807,7 +883,13 @@ def _advance_wizard(
 
     spec = _spec(
         "resources.save",
-        f"保存{wizard.kind}运行资源",
+        "保存"
+        + RESOURCE_LABELS.get(wizard.kind, wizard.kind)
+        + (
+            f" {identity(wizard.kind, wizard.record)}"
+            if wizard.editing
+            else f" {wizard.answers.get('resource-id', '')}".rstrip()
+        ),
         ResultRoute(ResultKind.RESOURCE_WIZARD),
         operation,
     )
@@ -824,7 +906,8 @@ def _advance_wizard(
         spec,
         details=(
             _wizard_summary(wizard, final=True)
-            if wizard.kind in {"accounts", "data", "notifications", "models"}
+            if wizard.kind
+            in {"accounts", "data", "notifications", "models", "model_endpoints"}
             else Pretty(wizard.redacted_summary(), expand_all=True)
         ),
         title=confirmation_title,
@@ -836,7 +919,7 @@ def _wizard_summary(wizard: ResourceWizardState, *, final: bool = False) -> Any:
         return _account_wizard_summary(wizard, final=final)
     if wizard.kind == "data":
         return _data_wizard_summary(wizard, final=final)
-    if wizard.kind == "models":
+    if wizard.kind in {"models", "model_endpoints"}:
         return _model_wizard_summary(wizard, final=final)
     if wizard.kind != "notifications":
         return Pretty(wizard.redacted_summary(), expand_all=True)
@@ -984,6 +1067,36 @@ def _account_wizard_summary(
 
 
 def _model_wizard_summary(wizard: ResourceWizardState, *, final: bool = False) -> Table:
+    if wizard.kind == "models":
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="dim")
+        table.add_column()
+        table.add_row("操作", "修改可用模型" if wizard.editing else "添加可用模型")
+        table.add_row(
+            "模型名称",
+            identity("models", wizard.record)
+            if wizard.editing
+            else str(wizard.answers.get("resource-id") or "待填写"),
+        )
+        table.add_row(
+            "模型服务",
+            str(
+                wizard.answers.get("endpoint-id")
+                or wizard.record.get("endpoint_id")
+                or "待选择"
+            ),
+        )
+        table.add_row(
+            "服务商模型 ID",
+            str(
+                wizard.answers.get("provider-model")
+                or wizard.record.get("provider_model")
+                or "待填写"
+            ),
+        )
+        if final:
+            table.add_row("初始状态", "待验证；保存后可执行对话测试")
+        return table
     provider = (
         wizard.model_provider_label()
         if "model-provider" in wizard.answers or wizard.editing
@@ -992,7 +1105,7 @@ def _model_wizard_summary(wizard: ResourceWizardState, *, final: bool = False) -
     table = Table.grid(padding=(0, 2))
     table.add_column(style="dim")
     table.add_column()
-    table.add_row("操作", "修改模型连接" if wizard.editing else "创建模型连接")
+    table.add_row("操作", "修改模型服务" if wizard.editing else "配置模型服务")
     table.add_row("模型服务", provider)
     if "resource-id" in wizard.answers or wizard.editing:
         connection_id = (
@@ -1000,7 +1113,7 @@ def _model_wizard_summary(wizard: ResourceWizardState, *, final: bool = False) -
             if wizard.editing
             else str(wizard.answers.get("resource-id") or "待填写")
         )
-        table.add_row("连接名称", connection_id)
+        table.add_row("模型服务名称", connection_id)
     if "model-mode" in wizard.answers or (
         "model-provider" in wizard.answers and wizard.model_provider() != "custom"
     ):
@@ -1020,12 +1133,6 @@ def _model_wizard_summary(wizard: ResourceWizardState, *, final: bool = False) -
                 "地址来源",
                 "服务默认地址" if wizard.endpoint_defaulted else "用户配置",
             )
-    if wizard.discovered_models:
-        table.add_row("发现模型", f"{len(wizard.discovered_models)} 个")
-    if wizard.selected_model:
-        table.add_row("验证模型", wizard.selected_model)
-    if wizard.model_phase == "ready":
-        table.add_row("连接测试", "最小文本调用成功")
     if wizard.model_auth_required() and ("secret-primary" in wizard.answers or final):
         credential = (
             "已填写"
@@ -1113,25 +1220,25 @@ def _model_conversation_run(
 ) -> RunOperation:
     record = session.resources.selected
     assert record is not None
-    connection_id = identity("models", record)
+    model_id = identity("models", record)
 
     def converse() -> Any:
         if state.dry_run or state.no_exec:
             return {
                 "status": "preview",
                 "succeeded": True,
-                "model": model,
+                "model_id": model_id,
                 "message": message,
                 "response": "预览模式未执行真实模型调用",
             }
-        return AgentResourceApplication(_workspace_owner(state)).converse_with_model(
-            connection_id, model, message
-        )
+        return AgentResourceApplication(
+            _workspace_owner(state)
+        ).converse_with_available_model(model_id, message)
 
     return _run(
         "resources.models.converse",
-        f"测试模型对话 {connection_id}/{model}",
-        ResultRoute(ResultKind.RESOURCE_ACTION, "test"),
+        f"与模型对话 {model_id}",
+        ResultRoute(ResultKind.RESOURCE_ACTION, "model-chat"),
         converse,
     )
 
@@ -1547,6 +1654,35 @@ def _model_provider_actions(
     )
 
 
+def _model_endpoint_actions(
+    wizard: ResourceWizardState,
+) -> tuple[ActionItem, ...]:
+    existing = tuple(
+        ActionItem(
+            str(value["endpoint_id"]),
+            str(value["endpoint_id"]),
+            str(value.get("provider_label") or value.get("provider") or "模型服务")
+            + " · 已配置",
+            str(index),
+        )
+        for index, value in enumerate(wizard.model_endpoints, 1)
+    )
+    has_existing = bool(existing)
+    return (
+        *existing,
+        ActionItem(
+            "__new_endpoint__",
+            "添加另一个模型服务" if has_existing else "配置模型服务",
+            (
+                "选择服务商，并填写 API Key 或本地服务地址"
+                if not has_existing
+                else "配置完成后返回当前模型"
+            ),
+            str(len(existing) + 1),
+        ),
+    )
+
+
 _MODEL_MODE_ACTIONS = (
     ActionItem("openai-responses", "OpenAI Responses", "兼容 Responses API", "1"),
     ActionItem(
@@ -1675,7 +1811,7 @@ def _choice(
 
 
 def _title(session: GuidedSession) -> str:
-    base = context_label(session.context)
+    base = context_label(session.context, session.root_label)
     kind = session.resources.kind
     label = RESOURCE_LABELS.get(kind or "")
     if (
@@ -1683,13 +1819,23 @@ def _title(session: GuidedSession) -> str:
         and session.context[0] == "resources"
         and session.context[1] in RESOURCE_LABELS
     ):
-        return f"首页 / 运行准备 / {RESOURCE_LABELS[session.context[1]]}"
+        return (
+            f"{session.root_label} / 运行准备 / {RESOURCE_LABELS[session.context[1]]}"
+        )
     if session.context in {
         ("resources", "account-operations"),
+        ("resources", "account-order-segments"),
         ("resources", "account-orders"),
     }:
         account = _account_id(session.resources.selected)
-        return f"{base} · {account}" if account else base
+        if session.context == ("resources", "account-order-segments"):
+            root = f"{session.root_label} / 运行准备 / 订单管理"
+            return f"{root} · {account} / 选择交易分区" if account else base
+        title = f"{base} · {account}" if account else base
+        segment = session.account.selected_segment
+        if session.context == ("resources", "account-orders") and segment:
+            title = f"{title} / {segment}"
+        return title
     if (
         session.context == ("resources", "selected")
         and label
@@ -1720,12 +1866,18 @@ def _account_id(record: Mapping[str, Any] | None) -> str:
 
 def _clear_wizard(session: GuidedSession) -> None:
     wizard = session.resources.wizard
+    parent = session.resources.parent_wizard
     session.resources.wizard = None
+    session.resources.parent_wizard = None
+    if isinstance(parent, ResourceWizardState):
+        parent.clear_secrets()
     if isinstance(wizard, ResourceWizardState):
         wizard.clear_secrets()
         session.context = (
             ("resources", "selected")
             if wizard.editing and session.resources.selected
+            else ("resources", "ai-models")
+            if parent is not None
             else ("resources", wizard.kind)
         )
 
@@ -1746,6 +1898,32 @@ def _activity(
             spec.audit_summary,
         )
     )
+
+
+def _chat_activity(
+    speaker: str,
+    message: str,
+    *,
+    outcome: ActivityOutcome = ActivityOutcome.SUCCESS,
+) -> AppendActivity:
+    return AppendActivity(
+        ActivityRecord(
+            str(uuid4()),
+            ActivityKind.QUERY,
+            outcome,
+            speaker,
+            Text(message),
+            message,
+            f"模型对话 · {speaker}",
+        )
+    )
+
+
+def _model_chat_failure_message(result: Mapping[str, object]) -> str:
+    summary = str(result.get("detail") or "模型调用失败")
+    category = str(result.get("error_category") or "provider_error")
+    detail = str(result.get("error_detail") or "模型服务未提供错误详情")
+    return f"{summary}\n错误类别：{category}\n错误详情：{detail}"
 
 
 def _resource_action_outcome(action: str, result: Any) -> ActivityOutcome:

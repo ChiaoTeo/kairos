@@ -32,6 +32,7 @@ use super::{
     ExecutionOrderOptions, ExecutionRouteQuery, ExecutionRpcActor, IntentAdmissionEvidence,
     MarketObservation, ObservationScope, Quote, QuoteBar, RemoteOrderQuery, SubmitOrder, TradeBar,
 };
+use crate::domain::{AlgorithmExecutionStyle, ExecutionAlgorithmSpec};
 use crate::services::actor::RemoteOrderEvent;
 use crate::services::audit::{ExecutionAudit, IntentAdmissionAuditRecord};
 use crate::services::gateway::{ExecutionConnectionPlan, ExecutionWriterFence};
@@ -139,11 +140,30 @@ impl ExecutionApplication {
             }
         }
         self.refresh_maker_quotes_managed(context).await?;
+        self.advance_due_algorithm_runs_managed(business_now, 64, context)
+            .await?;
         self.advance_due_intent_orders_managed(business_now, 64, context)
             .await?;
         self.expire_due_intents_managed(business_now, context)
             .await?;
         Ok(())
+    }
+
+    async fn advance_due_algorithm_runs_managed(
+        &mut self,
+        now_unix_nanos: u64,
+        limit: usize,
+        context: &mut Context<'_, Self>,
+    ) -> Result<usize, ExecutionError> {
+        let due = self.due_algorithm_intents(now_unix_nanos, limit);
+        for intent_id in &due {
+            self.drive_maker_taker_hedge(intent_id, now_unix_nanos)?;
+        }
+        if !due.is_empty() {
+            self.advance_due_intent_orders_managed(now_unix_nanos, usize::MAX, context)
+                .await?;
+        }
+        Ok(due.len())
     }
 
     async fn advance_due_intent_orders_managed(
@@ -173,6 +193,21 @@ impl ExecutionApplication {
                         {
                             tracing::warn!(component = "execution", error = %cancel_error, "failed to cancel sibling after scheduled order failure");
                         }
+                    }
+                    if due.execution_style == AlgorithmExecutionStyle::TakerImmediate
+                        && !matches!(error, ExecutionError::Indeterminate(_))
+                        && self
+                            .intent(due.intent_id.as_str())
+                            .is_some_and(|state| !state.pending_orders.is_empty())
+                    {
+                        continue;
+                    }
+                    if matches!(
+                        due.execution_style,
+                        AlgorithmExecutionStyle::TakerImmediate
+                            | AlgorithmExecutionStyle::UnwindImmediate
+                    ) {
+                        break;
                     }
                     return Err(error);
                 },
@@ -246,6 +281,27 @@ impl ExecutionApplication {
         intent_id: &str,
         context: &mut Context<'_, Self>,
     ) -> Result<(), ExecutionError> {
+        if self
+            .algorithm_runs()
+            .into_iter()
+            .find(|run| run.intent_id.as_str() == intent_id)
+            .is_some_and(|run| matches!(run.spec, ExecutionAlgorithmSpec::MakerTakerHedge(_)))
+        {
+            let business_now = self
+                .business_time_unix_nanos()
+                .unwrap_or_else(now_unix_nanos);
+            self.drive_maker_taker_hedge(intent_id, business_now)?;
+            let due_at = self
+                .algorithm_runs()
+                .into_iter()
+                .find(|run| run.intent_id.as_str() == intent_id)
+                .and_then(|run| run.last_decision_at)
+                .map(|value| value.get())
+                .unwrap_or(business_now);
+            self.advance_due_intent_orders_managed(due_at, usize::MAX, context)
+                .await?;
+            return Ok(());
+        }
         let Some(prepared) = self.prepare_compensating_hedge(intent_id)? else {
             return Ok(());
         };
@@ -644,6 +700,13 @@ impl ExecutionRpcActor for ExecutionApplication {
     ) -> RpcResult<AdvanceExecutionTimeResponse> {
         self.advance_time(request.event_time_unix_nanos.get())
             .map_err(rpc_execution_error)?;
+        self.advance_due_algorithm_runs_managed(
+            request.event_time_unix_nanos.get(),
+            usize::MAX,
+            context,
+        )
+        .await
+        .map_err(rpc_execution_error)?;
         self.advance_due_intent_orders_managed(
             request.event_time_unix_nanos.get(),
             usize::MAX,
@@ -1357,6 +1420,8 @@ fn decode_contract_intent(
             ratio: value.ratio,
             contract_multiplier: value.contract_multiplier,
             max_unhedged_quantity: value.max_unhedged_quantity,
+            max_unhedged_duration: value.max_unhedged_duration,
+            fallback_execution_route_ids: value.fallback_execution_route_ids,
             compensate_on_failure: value.compensate_on_failure,
             max_compensation_attempts: value.max_compensation_attempts,
         });

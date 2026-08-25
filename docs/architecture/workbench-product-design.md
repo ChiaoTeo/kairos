@@ -221,6 +221,16 @@ Artifact 路径。产品 flow 只能返回 `AppendActivity` effect；只有 `Act
 用户位于底部时新 Activity 自动跟随；用户上滚查看旧结果时保持视口，并由状态栏提示未读数量，执行
 `/bottom` 或 `Ctrl+End` 后回到底部。
 
+Activity Stream 必须把 `ActivityRecord` 和当前 bounded live snapshot 作为展示事实源；RichLog 已经生成的
+字符行只是可丢弃的渲染缓存。终端内容宽度变化后，Workbench 等待短暂的 resize quiet period，再按
+新宽度从事实源重建可见历史。高度变化只调整视口，不重建内容。跟随状态在重建后回到底部；浏览状态
+按 Activity identity 和 Activity 内偏移恢复，不能复用宽度变化前的绝对终端行号。流式输出期间发生过
+宽度变化时，当前 tail 可从 `LiveBuffer` 重建，结束时仍需以最终 bounded snapshot 完成一次稳定渲染。
+
+Workbench 正常支持不小于 60 列、20 行的终端。低于 68 列使用窄屏 chrome，低于 24 行使用矮屏
+chrome；低于正常支持尺寸时隐藏非必要内容并显示明确提示，但必须保留共享命令输入、帮助和退出能力。
+响应式断点由主 Screen 统一发布，产品 flow、Application 和业务模块不得读取终端尺寸或拥有布局分支。
+
 ### 4.2 Interaction Region
 
 Interaction Region 是当前 `InteractionState` 的被动投影，承载动作列表、参数说明、确认摘要、运行状态和
@@ -509,7 +519,7 @@ Execution、Capital 和实例级 Market 的生命周期由 Launch 统一管理�
 
 ### 10.4 运行准备
 
-运行准备按资源类型组织账户、市场数据、模型连接和通知目标。配置向导必须区分普通字段与 Secret，
+运行准备按资源类型组织账户、市场数据、模型服务端点、可用模型和通知目标。配置向导必须区分普通字段与 Secret，
 支持预览、验证、编辑和删除，并在结束时给出资源是否可用于 paper/live 的明确结论。
 
 Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不允许 Execution 或其他模块向 Account
@@ -601,7 +611,7 @@ Workbench 不提供脱离对象的全局“问题诊断”入口。只有 Applic
 #### 10.6.4 不属于本入口的能力
 
 - 项目创建、打开、切换和模板安装属于全局项目管理；无项目时直接显示为启动状态；
-- 账户、市场数据连接、模型连接和通知属于运行前检查；
+- 账户、市场数据连接、模型服务端点、可用模型和通知属于运行前检查；
 - Market runtime profile 属于市场连接或 Launch，Agent Profile 属于 Agent 资源；
 - Risk、Capital 和 Integration 的业务动作属于具体 Launch Instance、资源配置或显式 standalone CLI；
 - Manifest、全部 TOML、配置路径、Application 操作清单和通用 Config Profile 不作为 Workbench 菜单。

@@ -7,7 +7,9 @@ use crate::composition::sources::{binding_observation_capabilities, binding_prov
 pub(crate) fn build_market_universe_resolver(
     sources: &BTreeMap<String, MarketProviderBinding>,
 ) -> crate::application::MarketUniverseResolver {
-    use kairos_primitives::reference::InstrumentKind::{Equity, Future, Option, Perpetual, Spot};
+    use kairos_primitives::reference::InstrumentKind::{
+        Equity, Future, Index, Option, Perpetual, Spot,
+    };
 
     use crate::composition::config::{
         BinanceDerivativeProduct, HyperliquidMarketType, OkxInstrumentType,
@@ -51,6 +53,10 @@ pub(crate) fn build_market_universe_resolver(
                     match product {
                         crate::composition::config::MassiveMarketProduct::Equity => vec![Equity],
                         crate::composition::config::MassiveMarketProduct::Options => vec![Option],
+                        crate::composition::config::MassiveMarketProduct::Futures => vec![Future],
+                        crate::composition::config::MassiveMarketProduct::Indices => vec![Index],
+                        crate::composition::config::MassiveMarketProduct::Forex
+                        | crate::composition::config::MassiveMarketProduct::Crypto => vec![Spot],
                     },
                 ),
                 MarketProviderBinding::Ibkr { .. } => (None, vec![Equity]),

@@ -523,7 +523,9 @@ def handle_success(
             ActionItem(str(i), record.label, record.description, str(i))
             for i, record in enumerate(visible, 1)
         )
-        interaction = ChoiceInteraction(title=context_label(context), actions=actions)
+        interaction = ChoiceInteraction(
+            title=context_label(context, session.root_label), actions=actions
+        )
         session.interaction = interaction
         return SetInteraction(interaction), SetStatus(
             f"找到 {len(records)} 个结果 · 请选择"
@@ -687,7 +689,7 @@ def _advance_wizard(
                 else ()
             )
             interaction = ChoiceInteraction(
-                title=f"{context_label(session.context)} · 选择 Agent 模型",
+                title=f"{context_label(session.context, session.root_label)} · 选择 Agent 模型",
                 summary=Text(
                     "仅显示当前配置下已完成最小文本调用验证的模型。"
                     if wizard.model_refs
@@ -704,7 +706,7 @@ def _advance_wizard(
             )
         if name == "mode":
             interaction = ChoiceInteraction(
-                title=f"{context_label(session.context)} · 运行模式",
+                title=f"{context_label(session.context, session.root_label)} · 运行模式",
                 summary=Text("选择 Launch 的运行边界。", style="dim"),
                 actions=_mode_actions(),
             )
@@ -724,7 +726,7 @@ def _advance_wizard(
                     if item.strip()
                 )
             interaction = ChoiceInteraction(
-                title=f"{context_label(session.context)} · 选择账户",
+                title=f"{context_label(session.context, session.root_label)} · 选择账户",
                 summary=Text(
                     "选择一个或多个 Account；这里不会选择或显示 API Key。"
                     "完成后再决定只读观察或允许交易。",
@@ -748,7 +750,7 @@ def _advance_wizard(
                 except (OSError, ValueError):
                     wizard.provider_connections = ()
             interaction = ChoiceInteraction(
-                title=f"{context_label(session.context)} · 选择行情连接",
+                title=f"{context_label(session.context, session.root_label)} · 选择行情连接",
                 summary=Text(
                     "仅显示启用且声明 market-query 的 Provider Connection。",
                     style="dim",
@@ -759,7 +761,7 @@ def _advance_wizard(
             return SetInteraction(interaction), SetStatus("请选择行情连接")
         if name == "live-trading":
             interaction = ChoiceInteraction(
-                title=f"{context_label(session.context)} · 账户使用方式",
+                title=f"{context_label(session.context, session.root_label)} · 账户使用方式",
                 summary=Text(
                     "只读观察只要求 account-read；允许交易还会要求 order-trade binding、"
                     "Provider 实测交易权限和后续安全约束。",
@@ -946,7 +948,7 @@ def _ask(
 ) -> tuple[ScreenEffect, ...]:
     session.ask(
         ActionToken(Feature.STRATEGY, action),
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         prompt=prompt,
         detail=detail,
         value_summary=summary,
@@ -1015,7 +1017,7 @@ def _choice(
     state: Any, session: GuidedSession, summary: Any | None = None, status: str = "就绪"
 ) -> tuple[ScreenEffect, ...]:
     interaction = ChoiceInteraction(
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         summary=summary,
         actions=context_items(session, state),
     )

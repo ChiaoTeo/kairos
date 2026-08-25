@@ -10,7 +10,7 @@ HOME_ACTIONS = (
     ActionItem("reference", "搜索交易标的", "查找股票、期货、期权和交易所", "2"),
     ActionItem("strategy", "策略管理", "管理运行方案、启动实例并查看运行历史", "3"),
     ActionItem(
-        "resources", "运行前检查", "检查账户、行情、模型连接和通知是否就绪", "4"
+        "resources", "运行前检查", "检查账户、行情、可用模型和通知是否就绪", "4"
     ),
     ActionItem("research", "数据与回测", "准备研究数据并运行策略回测", "5"),
     ActionItem("operations", "运行中心", "查看当前运行拓扑、依赖和异常", "6"),
@@ -47,9 +47,19 @@ STRATEGY_ACTIONS = (
 RESOURCE_ACTIONS = (
     ActionItem("accounts", "交易账户", "账户身份、权限与连接验证", "1"),
     ActionItem("data", "市场数据", "Reference 与行情数据连接", "2"),
-    ActionItem("models", "模型连接", "模型服务、Endpoint、凭据与可用模型", "3"),
+    ActionItem("models", "AI 模型", "模型服务端点、凭据与可用模型", "3"),
     ActionItem("notifications", "通知提醒", "飞书、Telegram 等通知目标", "4"),
     ActionItem("check", "检查所有连接", "汇总未配置、待验证与失败原因", "5"),
+)
+
+AI_MODEL_ACTIONS = (
+    ActionItem("models", "模型列表", "查看、添加和测试可用模型", "1"),
+    ActionItem(
+        "model_endpoints",
+        "供应商账号列表",
+        "管理模型供应商、API 地址和访问凭据",
+        "2",
+    ),
 )
 
 RESEARCH_ACTIONS = (
@@ -81,6 +91,7 @@ SECTION_LABELS: dict[str, str] = {
 
 
 __all__ = [
+    "AI_MODEL_ACTIONS",
     "HOME_ACTIONS",
     "MARKET_ADVANCED_ACTIONS",
     "SECTION_ACTIONS",

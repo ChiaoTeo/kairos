@@ -113,8 +113,10 @@ class WorkspacePaths(ResourceScopePaths):
     def reference_root(self) -> Path:
         return self.child("state", "reference")
 
-    def market_connections_root(self) -> Path:
-        return self.child("config", "market", "connections")
+    def provider_connections_root(self) -> Path:
+        """Integration-owned external provider connection profiles."""
+
+        return self.child("config", "integration", "provider-connections")
 
     def operations_journal(self) -> Path:
         return self.child("state", "operations.jsonl")
@@ -161,7 +163,15 @@ class WorkspacePaths(ResourceScopePaths):
         return self.child("config", "agents", "mcp.toml")
 
     def model_connections_root(self) -> Path:
+        """Legacy Model Connection root retained during the AI-resource migration."""
+
         return self.child("config", "model-connections")
+
+    def model_endpoints_root(self) -> Path:
+        return self.child("config", "ai", "endpoints")
+
+    def available_models_root(self) -> Path:
+        return self.child("config", "ai", "models")
 
     def account_state(self) -> Path:
         return self.child("state", "account", "account-state.json")

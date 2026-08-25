@@ -1440,13 +1440,38 @@ def _workspace_agent_resource_issues(
         return []
     issues: list[str] = []
     if agent.model is not None:
+        if agent.model.ref is not None:
+            model_id = agent.model.ref
+            try:
+                from kairospy.strategy.apps.agent.application import (
+                    AgentResourceApplication,
+                )
+                from kairospy.system.apps.workspace.application import (
+                    WorkspaceApplication,
+                )
+
+                workspace = WorkspaceApplication().open(workspace_root)
+                model = AgentResourceApplication(workspace).available_model(model_id)
+                if model.get("configured") is not True:
+                    issues.append("Agent available model is disabled or incomplete")
+                if model.get("verification_status") != "verified":
+                    issues.append(
+                        "Agent available model test is missing, failed, or stale"
+                    )
+            except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
+                issues.append(f"Agent available model does not exist: {model_id}")
+            return issues
         connection_id = agent.model.connection
         if not _safe_agent_resource_id(connection_id):
             issues.append("Agent model connection id is invalid")
         else:
             try:
-                from kairospy.strategy.apps.agent.application import AgentResourceApplication
-                from kairospy.system.apps.workspace.application import WorkspaceApplication
+                from kairospy.strategy.apps.agent.application import (
+                    AgentResourceApplication,
+                )
+                from kairospy.system.apps.workspace.application import (
+                    WorkspaceApplication,
+                )
 
                 workspace = WorkspaceApplication().open(workspace_root)
                 resources = AgentResourceApplication(workspace)
@@ -1815,7 +1840,9 @@ def _workspace_notification_issues(
     notifications = config.notifications
     if not notifications.get("enabled", False):
         return ()
-    from kairospy.strategy.apps.notification.application import NotificationAdminApplication
+    from kairospy.strategy.apps.notification.application import (
+        NotificationAdminApplication,
+    )
     from kairospy.system.apps.workspace.application import WorkspaceApplication
 
     try:
@@ -1855,7 +1882,9 @@ def _workspace_account_issues(
 ) -> tuple[str, ...]:
     if config.mode == "backtest" or not config.account_refs:
         return ()
-    from kairospy.investment.apps.account.application import AccountConfigurationApplication
+    from kairospy.investment.apps.account.application import (
+        AccountConfigurationApplication,
+    )
     from kairospy.system.apps.workspace.application import WorkspaceApplication
 
     try:
@@ -1918,7 +1947,9 @@ def _workspace_data_provider_issues(
     profile = market.get("profile") if isinstance(market, Mapping) else None
     if profile is None:
         return ()
-    from kairospy.system.apps.integration.application import ProviderConnectionConfigurationApplication
+    from kairospy.system.apps.integration.application import (
+        ProviderConnectionConfigurationApplication,
+    )
     from kairospy.system.apps.workspace.application import WorkspaceApplication
 
     try:
@@ -1929,9 +1960,7 @@ def _workspace_data_provider_issues(
     except (KeyError, FileNotFoundError, OSError, ValueError) as error:
         return (f"Workspace data connection is unavailable: {profile}: {error}",)
     if connection.get("verification_status") != "verified":
-        return (
-            f"Data connection requires a successful manual read test: {profile}",
-        )
+        return (f"Data connection requires a successful manual read test: {profile}",)
     capabilities = connection.get("capabilities_verified")
     verified = (
         {str(value) for value in capabilities}
@@ -1956,10 +1985,16 @@ def _workspace_resource_snapshots(
             "notifications": {},
             "mcp_credentials": {},
         }
-    from kairospy.investment.apps.account.application import AccountConfigurationApplication
+    from kairospy.investment.apps.account.application import (
+        AccountConfigurationApplication,
+    )
     from kairospy.strategy.apps.agent.application import AgentResourceApplication
-    from kairospy.strategy.apps.notification.application import NotificationAdminApplication
-    from kairospy.system.apps.integration.application import ProviderConnectionConfigurationApplication
+    from kairospy.strategy.apps.notification.application import (
+        NotificationAdminApplication,
+    )
+    from kairospy.system.apps.integration.application import (
+        ProviderConnectionConfigurationApplication,
+    )
     from kairospy.system.apps.workspace.application import WorkspaceApplication
 
     workspace = WorkspaceApplication().open(workspace_root)
@@ -1982,9 +2017,15 @@ def _workspace_resource_snapshots(
     agent = AgentLaunchConfig.from_mapping(config.agent, launch_mode=config.mode)
     if agent.enabled and agent.model is not None:
         try:
-            model_snapshots[agent.model.connection] = AgentResourceApplication(
-                workspace
-            ).resource_snapshot(agent.model.connection, model=agent.model.model)
+            resources = AgentResourceApplication(workspace)
+            if agent.model.ref is not None:
+                model_snapshots[agent.model.ref] = resources.available_model_snapshot(
+                    agent.model.ref
+                )
+            else:
+                model_snapshots[agent.model.connection] = resources.resource_snapshot(
+                    agent.model.connection, model=agent.model.model
+                )
         except (KeyError, FileNotFoundError, OSError, RuntimeError, ValueError):
             if agent.required:
                 raise
@@ -2040,10 +2081,16 @@ def _workspace_resource_snapshots(
 def _current_resource_hashes(
     snapshots: Mapping[str, Any], workspace_root: Path
 ) -> dict[str, str]:
-    from kairospy.investment.apps.account.application import AccountConfigurationApplication
+    from kairospy.investment.apps.account.application import (
+        AccountConfigurationApplication,
+    )
     from kairospy.strategy.apps.agent.application import AgentResourceApplication
-    from kairospy.strategy.apps.notification.application import NotificationAdminApplication
-    from kairospy.system.apps.integration.application import ProviderConnectionConfigurationApplication
+    from kairospy.strategy.apps.notification.application import (
+        NotificationAdminApplication,
+    )
+    from kairospy.system.apps.integration.application import (
+        ProviderConnectionConfigurationApplication,
+    )
     from kairospy.system.apps.credentials.application import (
         CredentialConfigurationApplication,
     )

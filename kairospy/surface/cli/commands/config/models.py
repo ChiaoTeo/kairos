@@ -1,4 +1,4 @@
-"""Workspace AI model connection commands."""
+"""Workspace Model Endpoint and Available Model commands."""
 
 from __future__ import annotations
 
@@ -6,7 +6,11 @@ from pathlib import Path
 
 import typer
 
-from kairospy.strategy.apps.agent.application import AgentResourceApplication
+from kairospy.strategy.apps.agent.application import (
+    AgentResourceApplication,
+    AvailableModelApplication,
+    ModelEndpointApplication,
+)
 from kairospy.surface.cli.commands.config import (
     config_app,
     emit,
@@ -15,15 +19,156 @@ from kairospy.surface.cli.commands.config import (
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.system.apps.configuration.application import (
     ConfigurationReferenceApplication,
+    WorkspaceResourceLifecycleApplication,
 )
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 
 
 agent_config_app = typer.Typer(
     no_args_is_help=True,
-    help="Configure and test Workspace AI model connections",
+    help="Configure Model Endpoints and Available Models",
 )
 config_app.add_typer(agent_config_app, name="agent")
+
+
+@agent_config_app.command("endpoint-list")
+def endpoint_list(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(list(AgentResourceApplication(owner).model_endpoints()), output)
+
+
+@agent_config_app.command("model-list")
+def model_list(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(list(AgentResourceApplication(owner).available_models()), output)
+
+
+@agent_config_app.command("endpoint-discover")
+def endpoint_discover(
+    endpoint_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(list(ModelEndpointApplication(owner).discover_models(endpoint_id)), output)
+
+
+@agent_config_app.command("model-test")
+def available_model_test(
+    model_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(AgentResourceApplication(owner).test_available_model(model_id), output)
+
+
+def _set_endpoint_enabled(
+    endpoint_id: str, *, enabled: bool, workspace: Path | None, output: OutputFormat
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(
+        ModelEndpointApplication(owner).set_enabled(endpoint_id, enabled=enabled),
+        output,
+    )
+
+
+@agent_config_app.command("endpoint-enable")
+def endpoint_enable(
+    endpoint_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    _set_endpoint_enabled(endpoint_id, enabled=True, workspace=workspace, output=output)
+
+
+@agent_config_app.command("endpoint-disable")
+def endpoint_disable(
+    endpoint_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    _set_endpoint_enabled(
+        endpoint_id, enabled=False, workspace=workspace, output=output
+    )
+
+
+def _set_available_model_enabled(
+    model_id: str, *, enabled: bool, workspace: Path | None, output: OutputFormat
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(
+        AvailableModelApplication(owner).set_enabled(model_id, enabled=enabled), output
+    )
+
+
+@agent_config_app.command("model-enable")
+def available_model_enable(
+    model_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    _set_available_model_enabled(
+        model_id, enabled=True, workspace=workspace, output=output
+    )
+
+
+@agent_config_app.command("model-disable")
+def available_model_disable(
+    model_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    _set_available_model_enabled(
+        model_id, enabled=False, workspace=workspace, output=output
+    )
+
+
+@agent_config_app.command("migrate-model-resources")
+def migrate_model_resources(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(AgentResourceApplication(owner).migrate_legacy_model_resources(), output)
+
+
+@agent_config_app.command("model-delete")
+def available_model_delete(
+    model_id: str,
+    force: bool = typer.Option(False, "--force"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(
+        WorkspaceResourceLifecycleApplication(owner).delete(
+            "available_model", model_id, force=force
+        ),
+        output,
+    )
+
+
+@agent_config_app.command("endpoint-delete")
+def model_endpoint_delete(
+    endpoint_id: str,
+    force: bool = typer.Option(False, "--force"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    emit(
+        WorkspaceResourceLifecycleApplication(owner).delete(
+            "model_endpoint", endpoint_id, force=force
+        ),
+        output,
+    )
 
 
 @agent_config_app.command("status")
@@ -46,7 +191,7 @@ def agent_config_setup(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Open the single AI model resource form."""
+    """Open the Model Endpoint and Available Model Workbench flow."""
     del provider, connection_id, credential_id, api_mode, base_url, model, output
     open_resource_workbench(workspace)
 
@@ -58,7 +203,7 @@ def agent_config_test(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    """Perform a user-triggered minimum model call and store secret-safe evidence."""
+    """Test a legacy Model Connection during the compatibility window."""
 
     owner = WorkspaceApplication().open(workspace)
     resources = AgentResourceApplication(owner)

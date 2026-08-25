@@ -42,7 +42,7 @@ CONFIG_ACTIONS = (
     ActionItem("explain", "解释指定配置", "按名称查看配置路径和值", "5"),
     ActionItem("operations", "查看可用操作", "列出配置 Application 支持的操作", "6"),
     ActionItem("profiles", "管理 Profiles", "列出、创建并切换 Profile", "7"),
-    ActionItem("models", "管理模型连接", "进入模型连接资源上下文", "8"),
+    ActionItem("models", "管理 AI 模型", "进入模型服务端点与可用模型", "8"),
 )
 
 BUSINESS_ACTIONS = (

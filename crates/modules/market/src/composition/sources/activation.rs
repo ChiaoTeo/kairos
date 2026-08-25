@@ -15,8 +15,12 @@ pub fn default_endpoint(provider: &str) -> &'static str {
             "https://www.okx.com"
         },
         "okx-public-websocket" => "wss://ws.okx.com:8443/ws/v5/public",
-        "massive-equity-websocket" => "http://socket.massiveprivateserver.site/stocks",
-        "massive-options-websocket" => "http://socket.massiveprivateserver.site/options",
+        "massive-equity-websocket" => "wss://socket.massive.com/stocks",
+        "massive-options-websocket" => "wss://socket.massive.com/options",
+        "massive-futures-websocket" => "wss://socket.massive.com/futures",
+        "massive-indices-websocket" => "wss://business.massive.com/indices",
+        "massive-forex-websocket" => "wss://socket.massive.com/forex",
+        "massive-crypto-websocket" => "wss://socket.massive.com/crypto",
         "hyperliquid-info" => "https://api.hyperliquid.xyz/info",
         "hyperliquid-websocket" => "wss://api.hyperliquid.xyz/ws",
         _ => "",
@@ -44,6 +48,22 @@ mod tests {
         assert_eq!(
             default_endpoint("binance-options-websocket"),
             "wss://fstream.binance.com"
+        );
+    }
+
+    #[test]
+    fn massive_streams_use_current_official_product_hosts() {
+        assert_eq!(
+            default_endpoint("massive-equity-websocket"),
+            "wss://socket.massive.com/stocks"
+        );
+        assert_eq!(
+            default_endpoint("massive-indices-websocket"),
+            "wss://business.massive.com/indices"
+        );
+        assert_eq!(
+            default_endpoint("massive-crypto-websocket"),
+            "wss://socket.massive.com/crypto"
         );
     }
 

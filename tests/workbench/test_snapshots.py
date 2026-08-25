@@ -77,6 +77,59 @@ def test_command_help(snap_compare: Any) -> None:
     )
 
 
+def test_command_project_status(snap_compare: Any) -> None:
+    async def show_project_status(pilot: Any) -> None:
+        screen = pilot.app.screen
+        assert isinstance(screen, CommandLineScreen)
+        screen.submit("7")
+        await pilot.pause()
+        screen.submit("1")
+        await pilot.pause(0.1)
+
+    assert snap_compare(
+        KairosWorkbenchApp(_state()),
+        terminal_size=(120, 36),
+        run_before=show_project_status,
+    )
+
+
+def test_command_project_doctor(snap_compare: Any) -> None:
+    async def show_project_doctor(pilot: Any) -> None:
+        screen = pilot.app.screen
+        assert isinstance(screen, CommandLineScreen)
+        screen.session.enter("project")
+        screen._show_context()
+        screen._start_operation(
+            OperationSpec.create(
+                action_name="operations.project.doctor",
+                audit_summary="检查项目",
+                route=ResultRoute(ResultKind.OPERATIONS_PROJECT),
+                running_status="正在检查项目…",
+                operation=lambda: {
+                    "ok": False,
+                    "ready": False,
+                    "issues": [
+                        "launch aapl-paper: Workspace data connection is unavailable: primary-live: 'provider connection does not exist: primary-live'",
+                        "launch btc-paper: Workspace data connection is unavailable: primary-live: 'provider connection does not exist: primary-live'",
+                        "launch aapl-paper: Account requires a successful manual connection test: paper-account",
+                    ],
+                    "missing_directories": [],
+                    "launches": [
+                        {"launch_id": "aapl-paper"},
+                        {"launch_id": "btc-paper"},
+                    ],
+                },
+            )
+        )
+        await pilot.pause(0.1)
+
+    assert snap_compare(
+        KairosWorkbenchApp(_state()),
+        terminal_size=(120, 36),
+        run_before=show_project_doctor,
+    )
+
+
 def test_command_market_argument_guide(snap_compare: Any) -> None:
     async def request_query(pilot: Any) -> None:
         screen = pilot.app.screen

@@ -33,6 +33,8 @@ pub(crate) struct SocketService {
     event_capacity: usize,
 }
 
+pub(crate) struct RetiredSocket(Option<TokioSocket>);
+
 pub(crate) fn normalize_historical_quotes(
     rows: Vec<crate::services::participants::massive::rest::MassiveHistoricalQuote>,
     window: &HistoricalWindow,
@@ -289,6 +291,42 @@ impl SocketService {
         self.state.lifecycle = ConnectionLifecycle::Stopped;
         self.state.authenticated = false;
         Ok(())
+    }
+
+    pub(crate) async fn begin_replacement(&mut self) -> Result<RetiredSocket, IntegrationError> {
+        let replacement = TokioSocket::connect(&self.endpoint, self.event_capacity)
+            .await
+            .map_err(IntegrationError::Transport)?;
+        let mut retired = RetiredSocket(self.socket.replace(replacement));
+        if let Err(error) = self
+            .send(json!({"action":"auth","params":self.api_key}))
+            .await
+        {
+            if let Some(mut failed) = self.socket.take() {
+                failed.close().await;
+            }
+            self.socket = retired.0.take();
+            return Err(error);
+        }
+        Ok(retired)
+    }
+
+    pub(crate) async fn commit_replacement(&mut self, mut retired: RetiredSocket) {
+        if let Some(mut socket) = retired.0.take() {
+            socket.close().await;
+        }
+        self.state.mark_ready(true);
+        self.state.reconnect_count = self.state.reconnect_count.saturating_add(1);
+    }
+
+    pub(crate) async fn rollback_replacement(&mut self, mut retired: RetiredSocket) {
+        if let Some(mut replacement) = self.socket.take() {
+            replacement.close().await;
+        }
+        self.socket = retired.0.take();
+        if self.socket.is_some() {
+            self.state.mark_ready(true);
+        }
     }
 
     pub(crate) fn health(&self) -> ConnectionHealth {

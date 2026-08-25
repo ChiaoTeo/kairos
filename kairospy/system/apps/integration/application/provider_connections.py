@@ -29,7 +29,7 @@ ConnectionProbe = Callable[
 _PROVIDERS: Mapping[str, Mapping[str, object]] = {
     "massive": {
         "default_endpoint": "https://api.massive.com",
-        "products": ("reference", "equity", "options"),
+        "products": ("equity", "options"),
         "purposes": ("reference-catalog", "market-query", "market-stream"),
         "credential_fields": ("api_key",),
     },
@@ -58,7 +58,7 @@ class PreparedProviderConnection:
     def stage(self, transaction: WorkspaceConfigurationTransaction) -> None:
         connection_id = str(self.connection["connection_id"])
         transaction.stage_text(
-            self.workspace.paths.market_connections_root() / f"{connection_id}.toml",
+            self.workspace.paths.provider_connections_root() / f"{connection_id}.toml",
             self.document,
         )
 
@@ -90,6 +90,7 @@ class ProviderConnectionConfigurationApplication:
         products: Sequence[str],
         purposes: Sequence[str],
         endpoint: str | None = None,
+        endpoints: Mapping[str, str] | None = None,
         environment: str = "production",
         enabled: bool = True,
         overwrite: bool = False,
@@ -101,6 +102,7 @@ class ProviderConnectionConfigurationApplication:
             products=products,
             purposes=purposes,
             endpoint=endpoint,
+            endpoints=endpoints,
             environment=environment,
             enabled=enabled,
         )
@@ -124,6 +126,7 @@ class ProviderConnectionConfigurationApplication:
         products: Sequence[str],
         purposes: Sequence[str],
         endpoint: str | None = None,
+        endpoints: Mapping[str, str] | None = None,
         environment: str = "production",
         enabled: bool = True,
         credential_provider: str | None = None,
@@ -140,6 +143,7 @@ class ProviderConnectionConfigurationApplication:
         endpoint = (endpoint or str(definition["default_endpoint"])).strip().rstrip("/")
         if not endpoint.startswith("https://"):
             raise ValueError("provider endpoint must use HTTPS")
+        selected_endpoints = _endpoints(endpoints)
         selected_products = _selection(products, "products")
         selected_purposes = _selection(purposes, "purposes")
         _require_supported(
@@ -179,6 +183,7 @@ class ProviderConnectionConfigurationApplication:
             "provider": provider,
             "environment": environment,
             "endpoint": endpoint,
+            "endpoints": selected_endpoints,
             "credential_id": credential_id,
             "enabled": bool(enabled),
             "products": list(selected_products),
@@ -189,7 +194,7 @@ class ProviderConnectionConfigurationApplication:
         )
 
     def list(self) -> list[dict[str, object]]:
-        root = self.workspace.paths.market_connections_root()
+        root = self.workspace.paths.provider_connections_root()
         if not root.is_dir():
             return []
         records: list[dict[str, object]] = []
@@ -234,6 +239,7 @@ class ProviderConnectionConfigurationApplication:
             products=[str(value) for value in _sequence(current["products"])],
             purposes=[str(value) for value in _sequence(current["purposes"])],
             endpoint=str(current["endpoint"]),
+            endpoints=_string_mapping(current.get("endpoints")),
             environment=str(current["environment"]),
             enabled=enabled,
             overwrite=True,
@@ -445,6 +451,11 @@ class ProviderConnectionConfigurationApplication:
         endpoint = str(value.get("endpoint") or "")
         if not endpoint.startswith("https://"):
             issues.append("provider endpoint must use HTTPS")
+        try:
+            endpoints = _endpoints(_string_mapping(value.get("endpoints")))
+        except ValueError as error:
+            endpoints = {}
+            issues.append(str(error))
         environment = str(value.get("environment") or "production").lower()
         if environment not in _ENVIRONMENTS:
             issues.append("environment must be production or testnet")
@@ -453,6 +464,7 @@ class ProviderConnectionConfigurationApplication:
             "provider": provider,
             "environment": environment,
             "endpoint": endpoint,
+            "endpoints": endpoints,
             "credential_id": credential_id,
             "enabled": bool(value.get("enabled", True)),
             "products": products,
@@ -487,7 +499,7 @@ class ProviderConnectionConfigurationApplication:
         ).hexdigest()
 
     def _path(self, connection_id: str) -> Path:
-        return self.workspace.paths.market_connections_root() / f"{connection_id}.toml"
+        return self.workspace.paths.provider_connections_root() / f"{connection_id}.toml"
 
     def _evidence_path(self, connection_id: str) -> Path:
         return self.workspace.paths.child(
@@ -500,6 +512,7 @@ _FINGERPRINT_FIELDS = (
     "provider",
     "environment",
     "endpoint",
+    "endpoints",
     "credential_id",
     "enabled",
     "products",
@@ -535,7 +548,7 @@ def _require_supported(
 
 
 def _connection_document(connection: Mapping[str, object]) -> str:
-    lines = ["version = 1", "", "[connection]"]
+    lines = ["version = 2", "", "[connection]"]
     for key in (
         "connection_id",
         "provider",
@@ -547,7 +560,41 @@ def _connection_document(connection: Mapping[str, object]) -> str:
         "purposes",
     ):
         lines.append(f"{key} = {_toml_value(connection[key])}")
+    endpoints = _string_mapping(connection.get("endpoints"))
+    if endpoints:
+        lines.extend(("", "[connection.endpoints]"))
+        lines.extend(
+            f"{json.dumps(key)} = {json.dumps(value)}"
+            for key, value in sorted(endpoints.items())
+        )
     return "\n".join(lines) + "\n"
+
+
+def _string_mapping(value: object) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): str(item) for key, item in value.items()}
+
+
+def _endpoints(value: Mapping[str, str] | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw_key, raw_endpoint in (value or {}).items():
+        key = str(raw_key).strip().lower()
+        endpoint = str(raw_endpoint).strip().rstrip("/")
+        if not key or any(character.isspace() for character in key):
+            raise ValueError("provider endpoint keys must be non-empty without spaces")
+        allowed_schemes = (
+            ("http://", "https://", "ws://", "wss://")
+            if key.startswith("market-stream")
+            else ("https://",)
+        )
+        if not endpoint.startswith(allowed_schemes):
+            requirement = (
+                "HTTP(S) or WS(S)" if key.startswith("market-stream") else "HTTPS"
+            )
+            raise ValueError(f"provider endpoint {key} must use {requirement}")
+        result[key] = endpoint
+    return result
 
 
 def _toml_value(value: object) -> str:
@@ -597,7 +644,8 @@ def _probe_market_connection(
     """Run a small provider read; private permission discovery remains explicit."""
 
     provider = str(connection["provider"])
-    endpoint = str(connection["endpoint"])
+    endpoints = _string_mapping(connection.get("endpoints"))
+    endpoint = endpoints.get("market-query", str(connection["endpoint"]))
     product = next(iter(_sequence(connection.get("products"))), "spot")
     if provider == "binance":
         url = f"{endpoint}/api/v3/exchangeInfo?symbol=BTCUSDT"

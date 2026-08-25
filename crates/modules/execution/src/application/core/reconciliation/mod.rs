@@ -406,6 +406,12 @@ impl ExecutionApplication {
             },
             _ => {},
         }
+        if let Some(intent_id) = next.intent_id.as_deref() {
+            self.refresh_intent(intent_id)?;
+            if compensate {
+                self.maybe_submit_compensating_hedge(intent_id, occurred_at)?;
+            }
+        }
         info!(event = "remote_execution_event_reconciled", component = "execution", order_id = %next.order_id, status = ?next.status, "remote execution event reconciled");
         Ok(next)
     }

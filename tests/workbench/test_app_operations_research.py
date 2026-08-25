@@ -28,6 +28,7 @@ from kairospy.surface.workbench.screens.flows import operations, research
 from kairospy.surface.workbench.screens.flows.operations.views import (
     ServiceDisplayState,
     diagnostics_renderable,
+    project_result_renderable,
     service_actions,
     service_status_line,
     service_status_view,
@@ -73,7 +74,7 @@ def test_operations_center_opens_current_runtime_inventory_directly() -> None:
 
     screen_type, context, copy, option_count, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 运行中心 / 运行概览  ›"
+    assert context == "trader / 运行中心 / 运行概览  ›"
     assert option_count == 3
     assert "项目共享服务" in copy
     assert "活动运行实例" in copy
@@ -104,7 +105,7 @@ def test_stale_service_uses_action_only_interaction() -> None:
             screen.session.context = ("operations", "service", "reference")
             screen.session.choose(
                 service_actions(view),
-                title="首页 / 运行中心 / 标的服务",
+                title="trader / 运行中心 / 标的服务",
             )
             screen._interaction().present(screen.session.interaction)
             await pilot.pause()
@@ -145,11 +146,77 @@ def test_project_init_collects_each_field_in_the_shared_bottom_input() -> None:
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页  ›"
+    assert context == "trader  ›"
     assert "demo-project" in output
-    assert "项目操作结果" in output
-    assert "preview" in output
+    assert "项目操作预览" in output
+    assert "尚未写入任何内容" in output
     assert focused
+
+
+def test_project_status_uses_a_project_summary_instead_of_mapping_syntax() -> None:
+    text = renderable_plain_text(
+        project_result_renderable(
+            "operations.project.status",
+            {
+                "workspace_id": "trader",
+                "project_root": "/workspace/trader",
+                "workspace_root": "/workspace/trader/.kairos",
+            },
+        )
+    )
+
+    assert "项目概览" in text
+    assert "当前项目" in text
+    assert "项目已打开" in text
+    assert "'workspace_id'" not in text
+
+
+def test_project_doctor_groups_repeated_resources_and_gives_next_steps() -> None:
+    text = renderable_plain_text(
+        project_result_renderable(
+            "operations.project.doctor",
+            {
+                "ok": False,
+                "ready": False,
+                "issues": [
+                    "launch aapl-paper: Workspace data connection is unavailable: primary-live: 'provider connection does not exist: primary-live'",
+                    "launch btc-paper: Workspace data connection is unavailable: primary-live: 'provider connection does not exist: primary-live'",
+                    "launch aapl-paper: Account requires a successful manual connection test: paper-account",
+                ],
+                "missing_directories": [],
+                "launches": [{"launch_id": "aapl-paper"}, {"launch_id": "btc-paper"}],
+            },
+        )
+    )
+
+    assert "项目检查" in text
+    assert "尚未就绪" in text
+    assert "市场数据连接缺失" in text
+    assert "primary-live" in text
+    assert "2 个运行方案" in text
+    assert "账户连接尚未验证" in text
+    assert "建议下一步" in text
+    assert "--format json" in text
+    assert "'issues'" not in text
+
+
+def test_project_doctor_explains_when_no_launch_is_available() -> None:
+    text = renderable_plain_text(
+        project_result_renderable(
+            "operations.project.doctor",
+            {
+                "ok": True,
+                "ready": False,
+                "issues": [],
+                "missing_directories": [],
+                "launches": [],
+            },
+        )
+    )
+
+    assert "结构正常，但没有可运行方案" in text
+    assert "安装项目模板或创建一个运行方案" in text
+    assert "项目检查通过" not in text
 
 
 def test_operations_service_selection_actions_and_back_use_one_input() -> None:
@@ -173,10 +240,9 @@ def test_operations_service_selection_actions_and_back_use_one_input() -> None:
                 isinstance(interaction, ChoiceInteraction)
                 and interaction.summary is not None
             )
-            selected_status = str(
-                screen.query_one("#command-status", Static).render()
-            )
+            selected_status = str(screen.query_one("#command-status", Static).render())
             screen.submit("/back")
+            screen.submit("1")
             await pilot.pause()
             services = str(screen.query_one("#command-context", Static).render())
             return (
@@ -199,13 +265,13 @@ def test_operations_service_selection_actions_and_back_use_one_input() -> None:
         selected_status,
     ) = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert selected == "首页 / 运行中心 / 标的服务  ›"
+    assert selected == "trader / 运行中心 / 标的服务  ›"
     assert "停止" in selected_actions
     assert "重启" in selected_actions
     assert "行情服务" not in selected_actions
     assert not has_summary
     assert "标的服务 · 运行中" in selected_status
-    assert services == "首页 / 运行中心 / 项目共享服务  ›"
+    assert services == "trader / 运行中心 / 项目共享服务  ›"
     assert focused
 
 
@@ -241,6 +307,7 @@ def test_operations_center_instance_uses_shared_instance_detail() -> None:
             copy = interaction_copy_text(screen.session.interaction)
             activity_count = len(screen._output().activities)
             screen.submit("/back")
+            screen.submit("1")
             await pilot.pause()
             return (
                 detail_context,
@@ -268,14 +335,13 @@ def test_support_process_detail_is_observable_but_not_lifecycle_control() -> Non
             screen.submit("3")
             await pilot.pause()
             assert screen.session.context == ("operations", "supports")
-            group_status = str(
-                screen.query_one("#command-status", Static).render()
-            )
+            group_status = str(screen.query_one("#command-status", Static).render())
             screen.submit("1")
             await pilot.pause()
             detail = interaction_copy_text(screen.session.interaction)
             context = str(screen.query_one("#command-context", Static).render())
             screen.submit("/back")
+            screen.submit("1")
             await pilot.pause()
             return (
                 group_status,
@@ -286,12 +352,12 @@ def test_support_process_detail_is_observable_but_not_lifecycle_control() -> Non
 
     group_status, context, detail, after_back = asyncio.run(run())
     assert group_status == "就绪"
-    assert context == "首页 / 运行中心 / System Supervisor  ›"
+    assert context == "trader / 运行中心 / System Supervisor  ›"
     assert "System Supervisor" in detail
     assert "不提供普通服务启停" in detail
     assert "停止" not in detail
     assert "重启" not in detail
-    assert after_back == "首页 / 运行中心 / 支撑进程  ›"
+    assert after_back == "trader / 运行中心 / 支撑进程  ›"
 
 
 def test_service_status_copy_and_actions_follow_lifecycle_state() -> None:
@@ -437,6 +503,7 @@ def test_operations_service_logs_flow_in_content_without_activity_pollution(
             assert buffer is not None
             unseen = buffer.unseen_lines
             screen.submit("/back")
+            screen.submit("1")
             await pilot.pause()
             return (
                 live_text,
@@ -458,7 +525,7 @@ def test_operations_service_logs_flow_in_content_without_activity_pollution(
     assert refresh_count >= 2
     assert worker_closed
     assert "已结束行情服务日志跟随" in exported
-    assert context == "首页 / 运行中心 / 行情服务  ›"
+    assert context == "trader / 运行中心 / 行情服务  ›"
 
 
 def test_operations_log_rotation_does_not_hide_repeated_first_line() -> None:
@@ -527,7 +594,7 @@ def test_workspace_market_control_uses_single_input_and_inline_confirmation() ->
 
     screen_type, context, output, interaction, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 市场行情 / 运行中 Market  ›"
+    assert context == "trader / 市场行情 / 运行中 Market  ›"
     assert output == ""
     assert interaction.title == "Workspace Market 操作确认"
     assert focused
@@ -562,7 +629,7 @@ def test_research_read_flow_uses_nested_single_input_menu(
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "首页 / 数据研究 / 数据准备  ›"
+    assert context == "trader / 数据研究 / 数据准备  ›"
     assert "dataset-demo" in output
     assert focused
 

@@ -2,14 +2,20 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use kairos_capital::composition::{
+    compose_standalone_capital_transfer, compose_standalone_capital_transfer_history,
+};
 use kairos_capital::{
     CapitalCliRequestKind, CapitalStandaloneOutput, CliCapitalApplication,
-    ConnectedCapitalApplication, ConnectedCapitalOutput,
+    ConnectedCapitalApplication, ConnectedCapitalOutput, ManualCapitalTransferPreview,
+    StandaloneCapitalTransferBinding, StandaloneCapitalTransferPreviewRequest,
 };
 use kairos_capital_contract::{
     CancelFundingObjectiveRequest, CapitalClient, CapitalConnection, ObserveCapitalDemandRequest,
     PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest, ReconcileCapitalPlanRequest,
 };
+use kairos_primitives::capital::CapitalPlanId;
+use kairos_primitives::runtime::IdempotencyKey;
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};
 use serde::Serialize;
@@ -46,6 +52,52 @@ enum StandaloneCommand {
     Doctor(DoctorCommand),
     Preview(PreviewCommand),
     Plan(PlanCommand),
+    #[command(subcommand)]
+    Transfer(StandaloneTransferCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum StandaloneTransferCommand {
+    Preview(StandaloneTransferPreviewCommand),
+    Confirm(StandaloneTransferConfirmCommand),
+    Status(StandaloneTransferStatusCommand),
+    History(StandaloneTransferHistoryCommand),
+}
+
+#[derive(Debug, ClapArgs)]
+struct StandaloneTransferPreviewCommand {
+    #[arg(long)]
+    binding_json: String,
+    #[arg(long)]
+    amount: String,
+    #[arg(long)]
+    idempotency_key: String,
+    #[arg(long, default_value_t = 30)]
+    preview_ttl_seconds: u64,
+}
+
+#[derive(Debug, ClapArgs)]
+struct StandaloneTransferConfirmCommand {
+    #[arg(long)]
+    binding_json: String,
+    #[arg(long)]
+    preview_json: String,
+    #[arg(long)]
+    confirm_live: bool,
+}
+
+#[derive(Debug, ClapArgs)]
+struct StandaloneTransferStatusCommand {
+    #[arg(long)]
+    binding_json: String,
+    #[arg(long)]
+    plan_id: String,
+}
+
+#[derive(Debug, ClapArgs)]
+struct StandaloneTransferHistoryCommand {
+    #[arg(long)]
+    binding_json: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -158,7 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let value = match args.command {
         Command::Standalone(command) => {
-            CapitalCliOutput::Standalone(run_standalone(command, &workspace)?)
+            CapitalCliOutput::Standalone(run_standalone(command, &workspace).await?)
         },
         Command::Connected(command) => {
             CapitalCliOutput::Connected(run_connected(command, &workspace).await?)
@@ -276,7 +328,7 @@ fn read_json_file<T: serde::de::DeserializeOwned>(
     Ok(serde_json::from_str(&data)?)
 }
 
-fn run_standalone(
+async fn run_standalone(
     command: StandaloneCommand,
     workspace: &Workspace,
 ) -> Result<CapitalStandaloneOutput, Box<dyn std::error::Error>> {
@@ -298,6 +350,146 @@ fn run_standalone(
                 &command.availability_files,
             )
             .map(CapitalStandaloneOutput::Plan),
+        StandaloneCommand::Transfer(command) => run_standalone_transfer(command, workspace).await,
+    }
+}
+
+async fn run_standalone_transfer(
+    command: StandaloneTransferCommand,
+    workspace: &Workspace,
+) -> Result<CapitalStandaloneOutput, Box<dyn std::error::Error>> {
+    let observed_at = now_unix_nanos()?;
+    match command {
+        StandaloneTransferCommand::Preview(command) => {
+            if command.preview_ttl_seconds == 0 || command.preview_ttl_seconds > 300 {
+                return Err(
+                    "standalone transfer preview TTL must be between 1 and 300 seconds".into(),
+                );
+            }
+            let binding: StandaloneCapitalTransferBinding =
+                serde_json::from_str(&command.binding_json)?;
+            let amount = command.amount.parse()?;
+            let idempotency_key = IdempotencyKey::new(command.idempotency_key.clone())?;
+            let expires_at = kairos_primitives::time::UnixNanos::new(
+                observed_at
+                    .get()
+                    .checked_add(command.preview_ttl_seconds * 1_000_000_000)
+                    .ok_or("standalone transfer preview expiry overflow")?,
+            );
+            let application =
+                compose_standalone_capital_transfer(workspace, binding, observed_at).await?;
+            application
+                .preview(StandaloneCapitalTransferPreviewRequest {
+                    preview_id: format!("preview:{}", command.idempotency_key),
+                    plan_id: CapitalPlanId::new(format!(
+                        "manual-transfer:{}",
+                        command.idempotency_key
+                    ))?,
+                    idempotency_key,
+                    amount,
+                    source_authority: "standalone-explicit-confirmation".into(),
+                    created_at: observed_at,
+                    expires_at,
+                })
+                .map(CapitalStandaloneOutput::TransferPreview)
+                .map_err(Into::into)
+        },
+        StandaloneTransferCommand::Confirm(command) => {
+            let binding: StandaloneCapitalTransferBinding =
+                serde_json::from_str(&command.binding_json)?;
+            if binding.source.environment.eq_ignore_ascii_case("live") && !command.confirm_live {
+                return Err("live standalone Capital transfer requires --confirm-live".into());
+            }
+            let preview: ManualCapitalTransferPreview =
+                serde_json::from_str(&command.preview_json)?;
+            let mut application =
+                compose_standalone_capital_transfer(workspace, binding, observed_at).await?;
+            application
+                .confirm(preview, observed_at)
+                .await
+                .map(CapitalStandaloneOutput::Transfer)
+                .map_err(Into::into)
+        },
+        StandaloneTransferCommand::Status(command) => {
+            let binding: StandaloneCapitalTransferBinding =
+                serde_json::from_str(&command.binding_json)?;
+            let mut application =
+                compose_standalone_capital_transfer(workspace, binding, observed_at).await?;
+            application
+                .status(CapitalPlanId::new(command.plan_id)?, observed_at)
+                .await
+                .map(CapitalStandaloneOutput::Transfer)
+                .map_err(Into::into)
+        },
+        StandaloneTransferCommand::History(command) => {
+            let binding: StandaloneCapitalTransferBinding =
+                serde_json::from_str(&command.binding_json)?;
+            Ok(CapitalStandaloneOutput::TransferHistory(
+                compose_standalone_capital_transfer_history(workspace, binding)?,
+            ))
+        },
+    }
+}
+
+fn now_unix_nanos() -> Result<kairos_primitives::time::UnixNanos, Box<dyn std::error::Error>> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    Ok(kairos_primitives::time::UnixNanos::new(u64::try_from(
+        nanos,
+    )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Args, Command, StandaloneCommand, StandaloneTransferCommand};
+
+    #[test]
+    fn standalone_transfer_surface_keeps_preview_and_confirm_explicit() {
+        let preview = Args::try_parse_from([
+            "kairos-capital-cli",
+            "--workspace",
+            ".",
+            "standalone",
+            "transfer",
+            "preview",
+            "--binding-json",
+            "{}",
+            "--amount",
+            "10",
+            "--idempotency-key",
+            "transfer-1",
+        ])
+        .unwrap();
+        assert!(matches!(
+            preview.command,
+            Command::Standalone(StandaloneCommand::Transfer(
+                StandaloneTransferCommand::Preview(_)
+            ))
+        ));
+
+        let confirm = Args::try_parse_from([
+            "kairos-capital-cli",
+            "--workspace",
+            ".",
+            "standalone",
+            "transfer",
+            "confirm",
+            "--binding-json",
+            "{}",
+            "--preview-json",
+            "{}",
+            "--confirm-live",
+        ])
+        .unwrap();
+        assert!(matches!(
+            confirm.command,
+            Command::Standalone(StandaloneCommand::Transfer(
+                StandaloneTransferCommand::Confirm(_)
+            ))
+        ));
     }
 }
 

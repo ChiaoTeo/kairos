@@ -72,21 +72,48 @@ class HedgePolicy(object):
         return None
 
     # HedgePolicy
-    def CompensateOnFailure(self):
+    def MaxUnhedgedDurationNanos(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return None
+
+    # HedgePolicy
+    def FallbackExecutionRouteIds(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        if o != 0:
+            a = self._tab.Vector(o)
+            return self._tab.String(a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4))
+        return ""
+
+    # HedgePolicy
+    def FallbackExecutionRouteIdsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # HedgePolicy
+    def FallbackExecutionRouteIdsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        return o == 0
+
+    # HedgePolicy
+    def CompensateOnFailure(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return False
 
     # HedgePolicy
     def MaxCompensationAttempts(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
         return 0
 
 def HedgePolicyStart(builder):
-    builder.StartObject(7)
+    builder.StartObject(9)
 
 def Start(builder):
     HedgePolicyStart(builder)
@@ -121,14 +148,32 @@ def HedgePolicyAddMaxUnhedgedQuantity(builder, maxUnhedgedQuantity):
 def AddMaxUnhedgedQuantity(builder, maxUnhedgedQuantity):
     HedgePolicyAddMaxUnhedgedQuantity(builder, maxUnhedgedQuantity)
 
+def HedgePolicyAddMaxUnhedgedDurationNanos(builder, maxUnhedgedDurationNanos):
+    builder.PrependUint64Slot(5, maxUnhedgedDurationNanos, None)
+
+def AddMaxUnhedgedDurationNanos(builder, maxUnhedgedDurationNanos):
+    HedgePolicyAddMaxUnhedgedDurationNanos(builder, maxUnhedgedDurationNanos)
+
+def HedgePolicyAddFallbackExecutionRouteIds(builder, fallbackExecutionRouteIds):
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(fallbackExecutionRouteIds), 0)
+
+def AddFallbackExecutionRouteIds(builder, fallbackExecutionRouteIds):
+    HedgePolicyAddFallbackExecutionRouteIds(builder, fallbackExecutionRouteIds)
+
+def HedgePolicyStartFallbackExecutionRouteIdsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartFallbackExecutionRouteIdsVector(builder, numElems):
+    return HedgePolicyStartFallbackExecutionRouteIdsVector(builder, numElems)
+
 def HedgePolicyAddCompensateOnFailure(builder, compensateOnFailure):
-    builder.PrependBoolSlot(5, compensateOnFailure, 0)
+    builder.PrependBoolSlot(7, compensateOnFailure, 0)
 
 def AddCompensateOnFailure(builder, compensateOnFailure):
     HedgePolicyAddCompensateOnFailure(builder, compensateOnFailure)
 
 def HedgePolicyAddMaxCompensationAttempts(builder, maxCompensationAttempts):
-    builder.PrependUint32Slot(6, maxCompensationAttempts, 0)
+    builder.PrependUint32Slot(8, maxCompensationAttempts, 0)
 
 def AddMaxCompensationAttempts(builder, maxCompensationAttempts):
     HedgePolicyAddMaxCompensationAttempts(builder, maxCompensationAttempts)

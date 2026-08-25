@@ -75,6 +75,8 @@ pub enum MarketProviderBinding {
         client_id: i32,
         exchange: String,
         currency: String,
+        #[serde(default = "default_ibkr_market_data_line_limit")]
+        market_data_line_limit: usize,
         #[serde(default = "default_source_snapshot_interval_ms")]
         snapshot_interval_ms: u64,
     },
@@ -178,6 +180,10 @@ impl MarketProviderBinding {
                 match product {
                     MassiveMarketProduct::Equity => "equity",
                     MassiveMarketProduct::Options => "options",
+                    MassiveMarketProduct::Futures => "futures",
+                    MassiveMarketProduct::Indices => "indices",
+                    MassiveMarketProduct::Forex => "forex",
+                    MassiveMarketProduct::Crypto => "crypto",
                 },
             ),
             Self::Okx {
@@ -233,6 +239,10 @@ pub enum BinanceDerivativeTransport {
 pub enum MassiveMarketProduct {
     Equity,
     Options,
+    Futures,
+    Indices,
+    Forex,
+    Crypto,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]

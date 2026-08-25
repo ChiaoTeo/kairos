@@ -272,6 +272,22 @@ def test_agent_model_accepts_provider_specific_id_and_rejects_whitespace() -> No
         )
 
 
+def test_agent_model_normalizes_available_model_ref_and_rejects_mixed_shape() -> None:
+    value = AgentModelConfig.from_mapping({"ref": "primary-reasoning"})
+
+    assert value.ref == "primary-reasoning"
+    assert value.normalized()["ref"] == "primary-reasoning"
+    assert "connection" not in value.normalized()
+    with pytest.raises(ValueError, match="cannot be combined"):
+        AgentModelConfig.from_mapping(
+            {
+                "ref": "primary-reasoning",
+                "connection": "legacy-endpoint",
+                "model": "legacy-model",
+            }
+        )
+
+
 def test_agent_config_rejects_unpublishable_required_context_key() -> None:
     with pytest.raises(ValueError, match="unsupported characters"):
         AgentLaunchConfig.from_mapping(

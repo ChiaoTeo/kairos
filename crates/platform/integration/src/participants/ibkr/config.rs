@@ -44,4 +44,7 @@ pub struct IbkrMarketDataConfig {
     pub client_id: i32,
     pub exchange: String,
     pub currency: String,
+    /// User market-data-line allowance reported by TWS. IBKR defaults new
+    /// users to 100; higher entitlements can be configured explicitly.
+    pub market_data_line_limit: usize,
 }

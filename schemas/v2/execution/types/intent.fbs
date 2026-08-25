@@ -123,6 +123,8 @@ table HedgePolicy {
   ratio:Ratio (required);
   contract_multiplier:Ratio (required);
   max_unhedged_quantity:kairos.common.v2.Decimal64 (required);
+  max_unhedged_duration_nanos:ulong = null;
+  fallback_execution_route_ids:[string];
   compensate_on_failure:bool;
   max_compensation_attempts:uint;
 }

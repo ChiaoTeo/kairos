@@ -9,7 +9,9 @@ from typing import Any, cast
 
 from kairospy.investment.apps.account.application import AccountConfigurationApplication
 from kairospy.strategy.apps.agent.application import AgentResourceApplication
-from kairospy.system.apps.configuration.application.references import ConfigurationReferenceApplication
+from kairospy.system.apps.configuration.application.references import (
+    ConfigurationReferenceApplication,
+)
 from kairospy.strategy.apps.notification.application import NotificationAdminApplication
 from kairospy.system.apps.integration.application import (
     ProviderConnectionConfigurationApplication,
@@ -226,9 +228,7 @@ def project_resource_readiness(
         last_tested_at=_optional_text(value.get("last_tested_at")),
         error_category=normalize_error_category(value.get("error_category")),
         issues=issues,
-        tested=tuple(
-            str(item) for item in cast(Any, value.get("tested") or ())
-        ),
+        tested=tuple(str(item) for item in cast(Any, value.get("tested") or ())),
         not_tested=tuple(
             str(item) for item in cast(Any, value.get("not_tested") or ())
         ),
@@ -266,17 +266,19 @@ class RunReadinessApplication:
                     str(value["connection_id"])
                 ),
             )
-            for value in ProviderConnectionConfigurationApplication(self.workspace).list()
+            for value in ProviderConnectionConfigurationApplication(
+                self.workspace
+            ).list()
         )
         result.extend(
             project_resource_readiness(
                 ResourceKind.AI_MODEL,
                 value,
-                references=references.model_connection_references(
-                    str(value["connection_id"])
+                references=references.available_model_references(
+                    str(value["model_id"])
                 ),
             )
-            for value in AgentResourceApplication(self.workspace).model_connections()
+            for value in AgentResourceApplication(self.workspace).available_models()
         )
         result.extend(
             project_resource_readiness(
@@ -341,7 +343,8 @@ class RunReadinessApplication:
         capability_blockers = [
             value.as_dict()
             for value in resources
-            if set(value.capabilities) & required_capability_set and not value.selectable
+            if set(value.capabilities) & required_capability_set
+            and not value.selectable
         ]
         return {
             "groups": groups,
@@ -387,7 +390,7 @@ def _resource_id(kind: ResourceKind, value: Mapping[str, object]) -> str:
     fields = {
         ResourceKind.ACCOUNT: ("account_id",),
         ResourceKind.MARKET_DATA: ("connection_id",),
-        ResourceKind.AI_MODEL: ("connection_id",),
+        ResourceKind.AI_MODEL: ("model_id", "connection_id"),
         ResourceKind.NOTIFICATION: ("destination_id",),
     }[kind]
     for field in fields:
@@ -411,12 +414,9 @@ def _resource_capabilities(
     state: ResourceState,
 ) -> tuple[RuntimeCapability, ...]:
     if kind is ResourceKind.MARKET_DATA:
-        declared = {
-            str(item) for item in cast(Any, value.get("purposes") or ())
-        }
+        declared = {str(item) for item in cast(Any, value.get("purposes") or ())}
         verified = {
-            str(item)
-            for item in cast(Any, value.get("capabilities_verified") or ())
+            str(item) for item in cast(Any, value.get("capabilities_verified") or ())
         }
         aliases = {
             "reference": RuntimeCapability.REFERENCE_CATALOG,
@@ -444,8 +444,7 @@ def _resource_capabilities(
             if isinstance(item, Mapping) and item.get("enabled", True)
         }
         observed = {
-            str(item).lower()
-            for item in cast(Any, value.get("capabilities") or ())
+            str(item).lower() for item in cast(Any, value.get("capabilities") or ())
         }
         result: set[RuntimeCapability] = set()
         if "account-read" in purposes and (not observed or "read" in observed):

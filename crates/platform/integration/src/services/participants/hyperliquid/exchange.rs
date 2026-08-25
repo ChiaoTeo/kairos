@@ -189,11 +189,26 @@ impl ExchangeService {
         match response {
             ExchangeResponseStatus::Err(message) => Ok(rejected(message)),
             ExchangeResponseStatus::Ok(response) => {
-                if let Some(ExchangeDataStatus::Error(message)) = response
+                let status = response
                     .data
-                    .and_then(|data| data.statuses.into_iter().next())
-                {
-                    return Ok(rejected(message));
+                    .and_then(|data| data.statuses.into_iter().next());
+                match status {
+                    Some(ExchangeDataStatus::Error(message)) => return Ok(rejected(message)),
+                    Some(ExchangeDataStatus::Success) => {},
+                    Some(_) => {
+                        return Ok(CommandOutcome::Indeterminate(
+                            IndeterminateCommand::may_have_been_sent(
+                                "Hyperliquid cancel response did not explicitly confirm cancellation",
+                            ),
+                        ));
+                    },
+                    None => {
+                        return Ok(CommandOutcome::Indeterminate(
+                            IndeterminateCommand::may_have_been_sent(
+                                "Hyperliquid cancel response status is missing",
+                            ),
+                        ));
+                    },
                 }
                 Ok(CommandOutcome::Confirmed(OrderEntryEvent {
                     order_id: request.order_id.clone(),
@@ -277,10 +292,17 @@ fn normalize_response(
     let status = response
         .data
         .and_then(|data| data.statuses.into_iter().next())
-        .ok_or_else(|| {
-            IntegrationError::InvalidPayload("Hyperliquid exchange response has no status".into())
-        })?;
-    normalize_status(request, status, default_status)
+        .map_or_else(
+            || {
+                Ok(CommandOutcome::Indeterminate(
+                    IndeterminateCommand::may_have_been_sent(
+                        "Hyperliquid exchange response has no status",
+                    ),
+                ))
+            },
+            |status| normalize_status(request, status, default_status),
+        )?;
+    Ok(status)
 }
 
 fn normalize_status(
@@ -298,7 +320,13 @@ fn normalize_status(
         ),
         ExchangeDataStatus::Success
         | ExchangeDataStatus::WaitingForFill
-        | ExchangeDataStatus::WaitingForTrigger => (default_status, None, None),
+        | ExchangeDataStatus::WaitingForTrigger => {
+            return Ok(CommandOutcome::Indeterminate(
+                IndeterminateCommand::may_have_been_sent(
+                    "Hyperliquid order response has no remote order identity",
+                ),
+            ));
+        },
     };
     Ok(CommandOutcome::Confirmed(OrderEntryEvent {
         order_id: request.order_id.clone(),
@@ -358,7 +386,7 @@ fn normalize_cancel_batch(
         .map(
             |(index, (request, order_id, at_unix_nanos))| match statuses.next() {
                 Some(ExchangeDataStatus::Error(message)) => Ok(rejected(message)),
-                Some(_) => Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+                Some(ExchangeDataStatus::Success) => Ok(CommandOutcome::Confirmed(OrderEntryEvent {
                     order_id: request.order_id.clone(),
                     status: OrderEntryStatus::Canceled,
                     remote_order_id: RemoteOrderId::new(format!(
@@ -370,6 +398,11 @@ fn normalize_cancel_batch(
                     occurred_at_unix_nanos: UnixNanos::from(*at_unix_nanos),
                     reason: String::new(),
                 })),
+                Some(_) => Ok(CommandOutcome::Indeterminate(
+                    IndeterminateCommand::may_have_been_sent(format!(
+                        "Hyperliquid batch cancel response item {index} did not explicitly confirm cancellation"
+                    )),
+                )),
                 None => Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(format!(
                         "Hyperliquid batch cancel response item {index} is missing"
@@ -408,7 +441,32 @@ fn now() -> UnixNanos {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_oid, validate_batch};
+    use hyperliquid_rust_sdk::{ExchangeDataStatus, ExchangeResponse, ExchangeResponseStatus};
+
+    use super::{normalize_response, parse_oid, validate_batch};
+
+    fn request() -> crate::OrderEntryRequest {
+        crate::OrderEntryRequest {
+            order_id: kairos_primitives::execution::OrderId::new("order-1").unwrap(),
+            intent_id: None,
+            account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::account::SegmentKey::new("perp").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("BTC").unwrap(),
+            market_id: None,
+            participant_instrument: crate::ParticipantInstrumentRef::new(
+                crate::ParticipantRef::new(crate::ParticipantKind::Exchange, "hyperliquid")
+                    .unwrap(),
+                None,
+                "BTC",
+            )
+            .unwrap(),
+            side: crate::OrderSide::Buy,
+            quantity: crate::DecimalValue::new(1, 0),
+            order_type: crate::OrderType::Limit,
+            limit_price: Some(crate::DecimalValue::new(100, 0)),
+            options: Default::default(),
+        }
+    }
 
     #[test]
     fn remote_identity_accepts_normalized_and_provider_forms() {
@@ -423,5 +481,48 @@ mod tests {
         assert!(validate_batch(1).is_ok());
         assert!(validate_batch(1_000).is_ok());
         assert!(validate_batch(1_001).is_err());
+    }
+
+    #[test]
+    fn missing_status_or_remote_identity_is_indeterminate() {
+        let missing_status = ExchangeResponseStatus::Ok(ExchangeResponse {
+            response_type: "order".into(),
+            data: None,
+        });
+        assert!(matches!(
+            normalize_response(
+                &request(),
+                missing_status,
+                crate::OrderEntryStatus::Accepted
+            )
+            .unwrap(),
+            crate::CommandOutcome::Indeterminate(_)
+        ));
+
+        for status in [
+            ExchangeDataStatus::Success,
+            ExchangeDataStatus::WaitingForFill,
+            ExchangeDataStatus::WaitingForTrigger,
+        ] {
+            let response: ExchangeResponseStatus = serde_json::from_value(serde_json::json!({
+                "status": "ok",
+                "response": {"type": "order", "data": {"statuses": [status_name(&status)]}}
+            }))
+            .unwrap();
+            assert!(matches!(
+                normalize_response(&request(), response, crate::OrderEntryStatus::Accepted)
+                    .unwrap(),
+                crate::CommandOutcome::Indeterminate(_)
+            ));
+        }
+    }
+
+    fn status_name(status: &ExchangeDataStatus) -> &'static str {
+        match status {
+            ExchangeDataStatus::Success => "success",
+            ExchangeDataStatus::WaitingForFill => "waitingForFill",
+            ExchangeDataStatus::WaitingForTrigger => "waitingForTrigger",
+            _ => unreachable!("test only covers statuses without order identity"),
+        }
     }
 }

@@ -365,6 +365,7 @@ class ModelProviderConnectionApplication:
                 "succeeded": False,
                 "detail": "对话测试失败",
                 "error_category": _probe_error_category(error),
+                "error_detail": _probe_error_detail(error, secret=secret),
                 "model": model,
                 "message": message,
                 "response": None,
@@ -380,6 +381,41 @@ class ModelProviderConnectionApplication:
             }
         verification = self.record_probe(connection_id, model, result)
         return {**result, **verification}
+
+    def converse_config(
+        self,
+        connection: Mapping[str, object],
+        model: str,
+        message: str,
+        *,
+        secret: str | None,
+        probe: ConversationProbe | None = None,
+    ) -> dict[str, object]:
+        """Converse through staged or newly named endpoint configuration."""
+
+        model = _model_id(model)
+        message = _conversation_message(message)
+        try:
+            payload = (probe or _converse_with_model)(
+                connection, secret, model, message
+            )
+            response = _response_text(str(connection["api_mode"]), payload)
+        except Exception as error:
+            return {
+                "succeeded": False,
+                "detail": "对话测试失败",
+                "error_category": _probe_error_category(error),
+                "error_detail": _probe_error_detail(error, secret=secret),
+                "message": message,
+                "response": None,
+            }
+        return {
+            "succeeded": True,
+            "detail": "对话测试成功",
+            "error_category": None,
+            "message": message,
+            "response": response,
+        }
 
     def probe(
         self,
@@ -905,10 +941,17 @@ def _request_json(
     payload: Mapping[str, object] | None = None,
     timeout: float,
 ) -> object:
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": "Kairos/1.0",
+        **dict(headers or {}),
+    }
+    if payload is not None:
+        request_headers.setdefault("Content-Type", "application/json")
     request = Request(
         url,
         data=None if payload is None else json.dumps(payload).encode("utf-8"),
-        headers=dict(headers or {}),
+        headers=request_headers,
         method="GET" if payload is None else "POST",
     )
     with urlopen(request, timeout=timeout) as response:
@@ -929,6 +972,31 @@ def _probe_error_category(error: Exception) -> str:
     if isinstance(error, (json.JSONDecodeError, TypeError, ValueError)):
         return "protocol_or_response_invalid"
     return "provider_error"
+
+
+def _probe_error_detail(error: Exception, *, secret: str | None) -> str:
+    """Return bounded diagnostic text suitable for a user-facing activity log."""
+
+    if isinstance(error, HTTPError):
+        status = f"HTTP {error.code} {error.reason}".strip()
+        try:
+            provider_detail = error.read(4097).decode("utf-8", errors="replace")
+        except (OSError, ValueError):
+            provider_detail = ""
+        detail = " · ".join(
+            value for value in (status, provider_detail) if value.strip()
+        )
+    else:
+        message = str(error).strip()
+        detail = (
+            f"{type(error).__name__}: {message}" if message else type(error).__name__
+        )
+    if secret:
+        detail = detail.replace(secret, "[REDACTED]")
+    detail = " ".join(detail.split())
+    if len(detail) > 1000:
+        return f"{detail[:997]}..."
+    return detail or "模型服务未提供错误详情"
 
 
 def _safe_id(value: str, name: str) -> str:

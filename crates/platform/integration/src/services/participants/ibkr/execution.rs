@@ -11,7 +11,6 @@ use ibapi::contracts::Contract;
 use ibapi::orders::{OrderData, OrderUpdate, Orders};
 use ibapi::subscriptions::{Subscription, SubscriptionItemStreamExt};
 use kairos_primitives::execution::{ClientOrderId, FillId, OrderId};
-use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{Currency, Symbol};
 use kairos_primitives::time::UnixNanos;
 use tokio::sync::Mutex;
@@ -21,7 +20,7 @@ use crate::domain::ConnectionLifecycle;
 use crate::{
     CommandOutcome, CommandResult, ConnectionDescriptor, DecimalValue, ExternalEventEnvelope,
     ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery, IndeterminateCommand,
-    IntegrationError, OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, OrderSide, OrderType,
+    IntegrationError, OrderEntryEvent, OrderEntryRequest, OrderSide, OrderType,
 };
 
 const CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -184,7 +183,12 @@ impl OrderCommandService {
         )
         .await
         {
-            Ok(Ok(())) => {},
+            Ok(Ok(())) => {
+                return Ok(awaiting_callback(
+                    "IBKR submit was sent; awaiting openOrder/orderStatus/execDetails callback",
+                    order_id,
+                ));
+            },
             Ok(Err(error)) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
@@ -196,29 +200,23 @@ impl OrderCommandService {
                 ));
             },
         }
-        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
-            order_id: request.order_id.clone(),
-            status: OrderEntryStatus::Accepted,
-            remote_order_id: Some(
-                RemoteOrderId::new(format!("ibkr:{order_id}"))
-                    .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
-            ),
-            filled_quantity: None,
-            occurred_at_unix_nanos: now_nanos().into(),
-            reason: String::new(),
-        }))
     }
 
     pub(crate) async fn cancel(
         &mut self,
-        request: &OrderEntryRequest,
+        _request: &OrderEntryRequest,
         remote_order_id: &str,
-        at_unix_nanos: u64,
+        _at_unix_nanos: u64,
     ) -> CommandResult<OrderEntryEvent> {
         let order_id = parse_remote_order_id(remote_order_id)?;
         let client = self.session.client().await?;
         match tokio::time::timeout(COMMAND_TIMEOUT, client.cancel_order(order_id, "")).await {
-            Ok(Ok(_subscription)) => {},
+            Ok(Ok(_subscription)) => {
+                return Ok(awaiting_callback(
+                    "IBKR cancel was sent; awaiting orderStatus/error callback",
+                    order_id,
+                ));
+            },
             Ok(Err(error)) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
@@ -230,18 +228,13 @@ impl OrderCommandService {
                 ));
             },
         }
-        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
-            order_id: request.order_id.clone(),
-            status: OrderEntryStatus::Canceled,
-            remote_order_id: Some(
-                RemoteOrderId::new(remote_order_id)
-                    .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
-            ),
-            filled_quantity: None,
-            occurred_at_unix_nanos: at_unix_nanos.into(),
-            reason: String::new(),
-        }))
     }
+}
+
+fn awaiting_callback<T>(message: &str, order_id: i32) -> CommandOutcome<T> {
+    let mut command = IndeterminateCommand::may_have_been_sent(message);
+    command.participant_request_id = Some(format!("ibkr:{order_id}"));
+    CommandOutcome::Indeterminate(command)
 }
 
 pub(crate) struct OrderQueryService {
@@ -805,6 +798,16 @@ mod tests {
         assert_eq!(parse_remote_order_id("ibkr:42").unwrap(), 42);
         assert_eq!(parse_remote_order_id("42").unwrap(), 42);
         assert!(parse_remote_order_id("ibkr:not-a-number").is_err());
+    }
+
+    #[test]
+    fn sent_command_waits_for_callback_before_confirmation() {
+        let outcome: crate::CommandOutcome<crate::OrderEntryEvent> =
+            awaiting_callback("awaiting callback", 42);
+        let crate::CommandOutcome::Indeterminate(command) = outcome else {
+            panic!("IBKR send completion is not an order acknowledgement");
+        };
+        assert_eq!(command.participant_request_id.as_deref(), Some("ibkr:42"));
     }
 
     #[test]

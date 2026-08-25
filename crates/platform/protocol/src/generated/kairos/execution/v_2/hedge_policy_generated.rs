@@ -25,8 +25,10 @@ impl<'a> HedgePolicy<'a> {
     pub const VT_RATIO: ::flatbuffers::VOffsetT = 8;
     pub const VT_CONTRACT_MULTIPLIER: ::flatbuffers::VOffsetT = 10;
     pub const VT_MAX_UNHEDGED_QUANTITY: ::flatbuffers::VOffsetT = 12;
-    pub const VT_COMPENSATE_ON_FAILURE: ::flatbuffers::VOffsetT = 14;
-    pub const VT_MAX_COMPENSATION_ATTEMPTS: ::flatbuffers::VOffsetT = 16;
+    pub const VT_MAX_UNHEDGED_DURATION_NANOS: ::flatbuffers::VOffsetT = 14;
+    pub const VT_FALLBACK_EXECUTION_ROUTE_IDS: ::flatbuffers::VOffsetT = 16;
+    pub const VT_COMPENSATE_ON_FAILURE: ::flatbuffers::VOffsetT = 18;
+    pub const VT_MAX_COMPENSATION_ATTEMPTS: ::flatbuffers::VOffsetT = 20;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -43,7 +45,13 @@ impl<'a> HedgePolicy<'a> {
         args: &'args HedgePolicyArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<HedgePolicy<'bldr>> {
         let mut builder = HedgePolicyBuilder::new(_fbb);
+        if let Some(x) = args.max_unhedged_duration_nanos {
+            builder.add_max_unhedged_duration_nanos(x);
+        }
         builder.add_max_compensation_attempts(args.max_compensation_attempts);
+        if let Some(x) = args.fallback_execution_route_ids {
+            builder.add_fallback_execution_route_ids(x);
+        }
         if let Some(x) = args.max_unhedged_quantity {
             builder.add_max_unhedged_quantity(x);
         }
@@ -118,6 +126,29 @@ impl<'a> HedgePolicy<'a> {
         }
     }
     #[inline]
+    pub fn max_unhedged_duration_nanos(&self) -> Option<u64> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(HedgePolicy::VT_MAX_UNHEDGED_DURATION_NANOS, None)
+        }
+    }
+    #[inline]
+    pub fn fallback_execution_route_ids(
+        &self,
+    ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>,
+            >>(HedgePolicy::VT_FALLBACK_EXECUTION_ROUTE_IDS, None)
+        }
+    }
+    #[inline]
     pub fn compensate_on_failure(&self) -> bool {
         // Safety:
         // Created from valid Table for this object
@@ -165,6 +196,18 @@ impl ::flatbuffers::Verifiable for HedgePolicy<'_> {
                 Self::VT_MAX_UNHEDGED_QUANTITY,
                 true,
             )?
+            .visit_field::<u64>(
+                "max_unhedged_duration_nanos",
+                Self::VT_MAX_UNHEDGED_DURATION_NANOS,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<&'_ str>>,
+            >>(
+                "fallback_execution_route_ids",
+                Self::VT_FALLBACK_EXECUTION_ROUTE_IDS,
+                false,
+            )?
             .visit_field::<bool>(
                 "compensate_on_failure",
                 Self::VT_COMPENSATE_ON_FAILURE,
@@ -185,6 +228,12 @@ pub struct HedgePolicyArgs<'a> {
     pub ratio: Option<&'a Ratio>,
     pub contract_multiplier: Option<&'a Ratio>,
     pub max_unhedged_quantity: Option<&'a super::super::common::v_2::Decimal64>,
+    pub max_unhedged_duration_nanos: Option<u64>,
+    pub fallback_execution_route_ids: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>,
+        >,
+    >,
     pub compensate_on_failure: bool,
     pub max_compensation_attempts: u32,
 }
@@ -197,6 +246,8 @@ impl<'a> Default for HedgePolicyArgs<'a> {
             ratio: None,                 // required field
             contract_multiplier: None,   // required field
             max_unhedged_quantity: None, // required field
+            max_unhedged_duration_nanos: None,
+            fallback_execution_route_ids: None,
             compensate_on_failure: false,
             max_compensation_attempts: 0,
         }
@@ -242,6 +293,25 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> HedgePolicyBuilder<'a, 'b, A>
                 HedgePolicy::VT_MAX_UNHEDGED_QUANTITY,
                 max_unhedged_quantity,
             );
+    }
+    #[inline]
+    pub fn add_max_unhedged_duration_nanos(&mut self, max_unhedged_duration_nanos: u64) {
+        self.fbb_.push_slot_always::<u64>(
+            HedgePolicy::VT_MAX_UNHEDGED_DURATION_NANOS,
+            max_unhedged_duration_nanos,
+        );
+    }
+    #[inline]
+    pub fn add_fallback_execution_route_ids(
+        &mut self,
+        fallback_execution_route_ids: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<&'b str>>,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            HedgePolicy::VT_FALLBACK_EXECUTION_ROUTE_IDS,
+            fallback_execution_route_ids,
+        );
     }
     #[inline]
     pub fn add_compensate_on_failure(&mut self, compensate_on_failure: bool) {
@@ -299,6 +369,14 @@ impl ::core::fmt::Debug for HedgePolicy<'_> {
         ds.field("ratio", &self.ratio());
         ds.field("contract_multiplier", &self.contract_multiplier());
         ds.field("max_unhedged_quantity", &self.max_unhedged_quantity());
+        ds.field(
+            "max_unhedged_duration_nanos",
+            &self.max_unhedged_duration_nanos(),
+        );
+        ds.field(
+            "fallback_execution_route_ids",
+            &self.fallback_execution_route_ids(),
+        );
         ds.field("compensate_on_failure", &self.compensate_on_failure());
         ds.field(
             "max_compensation_attempts",

@@ -14,16 +14,16 @@ from kairospy.system.apps.workspace.application import WorkspaceApplication
 HELP = """`kairos capital` runs standalone Capital tools.
 
 Canonical standalone commands:
-  schema, doctor, preview, plan
+  schema, doctor, preview, plan, transfer
 
 Runtime Capital facts and controls are connected through scoped component
 commands:
   kairos system component capital ...
   kairos launch instance component capital ...
 
-Standalone Capital tools explain, validate, and locally summarize typed request
-files. They do not publish funding objectives, observe demands, reconcile
-plans, or move funds.
+Standalone Capital tools also provide explicit one-shot internal transfer
+preview, confirmation, status, and history commands. They never publish
+funding objectives or mutate a connected Capital runtime.
 """
 
 CONNECTED_COMMANDS = {
@@ -38,7 +38,6 @@ CONNECTED_COMMANDS = {
     "publish-funding-objective",
     "reconcile-plan",
     "status",
-    "transfer",
 }
 
 

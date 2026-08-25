@@ -94,6 +94,7 @@ mod tests {
             events: Vec::new(),
             intent_events: Vec::new(),
             fills: Vec::new(),
+            algorithm_runs: Vec::new(),
             unknown_remote_orders: Vec::new(),
             exchange_event_watermark_unix_nanos: UnixNanos::new(0),
         };
@@ -181,6 +182,7 @@ mod tests {
             reason: event.reason.clone(),
             dependency_watermarks: watermarks,
             pending_orders: Vec::new(),
+            dormant_orders: Vec::new(),
             pending_order_due_unix_nanos: BTreeMap::new(),
             quote_version: 0,
             last_quote_refresh_unix_nanos: None,

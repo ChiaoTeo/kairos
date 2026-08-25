@@ -50,6 +50,30 @@ impl ExecutionActor {
         }
     }
 
+    pub(crate) fn schedule_pending_order(
+        &mut self,
+        intent_id: &str,
+        request: SubmitOrder,
+        due_at_unix_nanos: UnixNanos,
+    ) -> Result<(), String> {
+        let state = self
+            .intents
+            .get_mut(intent_id)
+            .ok_or_else(|| "pending order owner intent is missing".to_string())?;
+        if !state
+            .pending_orders
+            .iter()
+            .any(|pending| pending.order_id == request.order_id)
+        {
+            state.pending_orders.push(request.clone());
+        }
+        state
+            .pending_order_due_unix_nanos
+            .insert(request.order_id, due_at_unix_nanos);
+        self.generation = self.generation.saturating_add(1);
+        Ok(())
+    }
+
     pub(crate) fn remove_pending_order(&mut self, intent_id: &str, order_id: &OrderId) {
         if let Some(state) = self.intents.get_mut(intent_id) {
             state
@@ -80,10 +104,15 @@ impl ExecutionActor {
         order_id: &str,
     ) -> Result<(), String> {
         let (plan_id, leg_id) = {
-            let plan = self
+            let state = self
                 .intents
                 .get_mut(intent_id)
-                .ok_or_else(|| "intent plan owner is missing".to_string())?
+                .ok_or_else(|| "intent plan owner is missing".to_string())?;
+            let order_id = OrderId::new(order_id.to_owned())?;
+            if !state.order_ids.iter().any(|value| value == &order_id) {
+                state.order_ids.push(order_id.clone());
+            }
+            let plan = state
                 .plan
                 .as_mut()
                 .ok_or_else(|| "intent has no execution plan".to_string())?;
@@ -93,8 +122,8 @@ impl ExecutionActor {
                 .iter_mut()
                 .find(|leg| leg.leg_id == leg_id)
                 .ok_or_else(|| "intent plan leg is missing".to_string())?;
-            if !leg.order_ids.iter().any(|value| value == order_id) {
-                leg.order_ids.push(OrderId::new(order_id.to_owned())?);
+            if !leg.order_ids.iter().any(|value| value == &order_id) {
+                leg.order_ids.push(order_id);
             }
             if leg.lifecycle == LegLifecycle::Pending {
                 leg.transition(LegLifecycle::Ready, "child order prepared")?;
@@ -105,6 +134,31 @@ impl ExecutionActor {
             (plan_id, leg.leg_id.clone())
         };
         self.attach_plan_identity(order_id, plan_id, leg_id);
+        Ok(())
+    }
+
+    pub(crate) fn attach_intent_algorithm_order(
+        &mut self,
+        intent_id: &str,
+        leg_id: crate::domain::LegId,
+        order_id: &str,
+    ) -> Result<(), String> {
+        let order_id = OrderId::new(order_id.to_owned())?;
+        let plan_id = {
+            let state = self
+                .intents
+                .get_mut(intent_id)
+                .ok_or_else(|| "intent owner is missing".to_string())?;
+            if !state.order_ids.iter().any(|value| value == &order_id) {
+                state.order_ids.push(order_id.clone());
+            }
+            state
+                .plan
+                .as_ref()
+                .map(|plan| plan.plan_id.clone())
+                .ok_or_else(|| "intent has no execution plan".to_string())?
+        };
+        self.attach_plan_identity(order_id.as_str(), plan_id, leg_id);
         Ok(())
     }
 

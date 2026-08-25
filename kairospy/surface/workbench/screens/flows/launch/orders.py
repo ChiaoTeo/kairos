@@ -22,6 +22,36 @@ ORDER_ACTIONS = (
     ActionItem("replace", "修改订单", "撤换为新的订单请求", "7"),
 )
 
+_SEGMENT_DESCRIPTIONS = {
+    "funding": "资金账户",
+    "spot": "现货交易",
+    "cross_margin": "全仓杠杆",
+    "isolated_margin": "逐仓杠杆",
+    "usd_m_futures": "U 本位合约",
+    "coin_m_futures": "币本位合约",
+    "options": "期权",
+}
+
+
+def order_segments(account: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the configured order scopes in their account-owned order."""
+
+    return tuple(str(item) for item in account.get("segments") or ())
+
+
+def order_segment_actions(account: Mapping[str, Any]) -> tuple[ActionItem, ...]:
+    """Present closed segment values as numbered navigation choices."""
+
+    return tuple(
+        ActionItem(
+            segment,
+            segment,
+            _SEGMENT_DESCRIPTIONS.get(segment, "交易分区"),
+            str(index),
+        )
+        for index, segment in enumerate(order_segments(account), 1)
+    )
+
 
 @dataclass(slots=True)
 class OrderPromptState:
@@ -68,7 +98,8 @@ class OrderPromptState:
             or self.account.get("broker")
             or "unknown",
             "environment": self.account.get("environment") or "unknown",
-            "segment": self.segment or "default",
+            "segment": self.segment
+            or ("待选择" if len(self.segments) > 1 else "default"),
             "action": self.action,
             **self.values,
         }
@@ -79,8 +110,14 @@ class OrderPromptState:
 
     @property
     def segment(self) -> str | None:
-        segments = tuple(str(item) for item in self.account.get("segments") or ())
-        return segments[0] if len(segments) == 1 else None
+        selected = self.values.get("segment")
+        if selected:
+            return selected
+        return self.segments[0] if len(self.segments) == 1 else None
+
+    @property
+    def segments(self) -> tuple[str, ...]:
+        return order_segments(self.account)
 
     def _steps(self) -> tuple[tuple[str, str, str], ...]:
         symbol_default = (
@@ -201,4 +238,11 @@ def preview(prompt: OrderPromptState) -> dict[str, Any]:
     return {"status": "preview", **prompt.summary()}
 
 
-__all__ = ["ORDER_ACTIONS", "OrderPromptState", "execute", "preview"]
+__all__ = [
+    "ORDER_ACTIONS",
+    "OrderPromptState",
+    "execute",
+    "order_segment_actions",
+    "order_segments",
+    "preview",
+]

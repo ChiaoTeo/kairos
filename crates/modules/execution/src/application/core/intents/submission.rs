@@ -208,12 +208,16 @@ impl ExecutionApplication {
                     .map(|planner| planner.dependency_watermarks())
                     .unwrap_or_default(),
                 pending_orders: Vec::new(),
+                dormant_orders: Vec::new(),
                 pending_order_due_unix_nanos: BTreeMap::new(),
                 quote_version: 0,
                 last_quote_refresh_unix_nanos: None,
                 compensation_attempts: 0,
             };
             self.actor.insert_intent(state.clone());
+            self.actor
+                .insert_algorithm_run(AlgorithmRun::completed(intent.intent_id.clone()))
+                .map_err(ExecutionError::Invalid)?;
             self.commit_intent(IntentEvent {
                 intent_id: intent.intent_id.clone(),
                 strategy_decision_id: intent.strategy_decision_id.clone(),
@@ -241,7 +245,126 @@ impl ExecutionApplication {
             ));
         }
         let now = business_now;
-        let plan = build_single_intent_plan(&intent, &planned_orders)?;
+        let mut plan = build_single_intent_plan(&intent, &planned_orders)?;
+        let (algorithm_run, pending_orders, dormant_orders) = if intent.intent_type
+            == IntentType::PairArbitrage
+        {
+            if let Some(policy) = intent.hedge_policy.as_ref() {
+                if plan.legs.len() != 2 {
+                    return Err(ExecutionError::Invalid(
+                        "maker-taker pair execution requires exactly two plan legs".into(),
+                    ));
+                }
+                let leader_target = plan
+                    .legs
+                    .iter()
+                    .find(|leg| leg.leg_id == policy.leader_leg_id)
+                    .map(|leg| leg.target_quantity)
+                    .ok_or_else(|| ExecutionError::Invalid("leader leg is missing".into()))?;
+                plan.legs
+                    .iter()
+                    .find(|leg| leg.leg_id == policy.hedge_leg_id)
+                    .ok_or_else(|| ExecutionError::Invalid("hedge leg is missing".into()))?;
+                let spec = MakerTakerHedgeSpec {
+                    leader_leg_id: policy.leader_leg_id.clone(),
+                    hedge_leg_id: policy.hedge_leg_id.clone(),
+                    hedge_ratio: policy.ratio,
+                    contract_multiplier: policy.contract_multiplier,
+                    max_unhedged_quantity: policy.max_unhedged_quantity,
+                    max_unhedged_duration: policy.max_unhedged_duration,
+                    fallback_execution_route_ids: policy.fallback_execution_route_ids.clone(),
+                };
+                let hedge_target = spec
+                    .required_hedge_quantity(leader_target)
+                    .map_err(ExecutionError::Invalid)?;
+                plan.legs
+                    .iter_mut()
+                    .find(|leg| leg.leg_id == policy.hedge_leg_id)
+                    .expect("validated hedge leg")
+                    .target_quantity = hedge_target;
+                let run = AlgorithmRun::maker_taker_hedge(
+                    intent.intent_id.clone(),
+                    spec,
+                    leader_target,
+                    hedge_target,
+                )
+                .map_err(ExecutionError::Invalid)?;
+                let (dormant, mut pending): (Vec<_>, Vec<_>) =
+                    planned_orders.iter().cloned().partition(|order| {
+                        intent_leg_id(&intent, order) == policy.hedge_leg_id.as_str()
+                    });
+                let hedge_template = dormant.first().ok_or_else(|| {
+                    ExecutionError::Invalid("maker-taker hedge order is missing".into())
+                })?;
+                if hedge_template
+                    .execution_route_id
+                    .as_ref()
+                    .is_some_and(|primary| {
+                        policy
+                            .fallback_execution_route_ids
+                            .iter()
+                            .any(|fallback| fallback == primary)
+                    })
+                {
+                    return Err(ExecutionError::Invalid(
+                        "hedge fallback route duplicates the primary hedge route".into(),
+                    ));
+                }
+                let mut fallback_request = hedge_template.clone();
+                fallback_request.order_type = OrderType::Market;
+                fallback_request.limit_price = None;
+                fallback_request.options.post_only = Some(false);
+                fallback_request.options.time_in_force = None;
+                fallback_request.options.split = None;
+                fallback_request.options.maker = None;
+                for route_id in &policy.fallback_execution_route_ids {
+                    let configured = self.execution_routes.get(route_id).ok_or_else(|| {
+                        ExecutionError::Invalid(format!(
+                            "hedge fallback execution route {route_id} is not configured"
+                        ))
+                    })?;
+                    let mut candidate = configured.candidate.clone();
+                    // Readiness is a runtime fact. Admission verifies the stable route
+                    // capability so a temporarily unavailable fallback can still recover.
+                    candidate.ready = true;
+                    super::super::orders::validate_execution_route(&fallback_request, &candidate)
+                        .map_err(ExecutionError::Invalid)?;
+                }
+                if pending.iter().any(|order| order.limit_price.is_none()) {
+                    return Err(ExecutionError::Invalid(
+                        "maker-first leader requires a limit price".into(),
+                    ));
+                }
+                for order in &mut pending {
+                    order.options.post_only = Some(true);
+                }
+                (run, pending, dormant)
+            } else {
+                (
+                    AlgorithmRun::immediate(
+                        intent.intent_id.clone(),
+                        plan.legs
+                            .iter()
+                            .map(|leg| (leg.leg_id.clone(), leg.target_quantity)),
+                    )
+                    .map_err(ExecutionError::Invalid)?,
+                    planned_orders.clone(),
+                    Vec::new(),
+                )
+            }
+        } else {
+            (
+                AlgorithmRun::immediate(
+                    intent.intent_id.clone(),
+                    plan.legs
+                        .iter()
+                        .map(|leg| (leg.leg_id.clone(), leg.target_quantity)),
+                )
+                .map_err(ExecutionError::Invalid)?,
+                planned_orders.clone(),
+                Vec::new(),
+            )
+        };
         let state = IntentState {
             intent: intent.clone(),
             status: IntentStatus::Accepted,
@@ -255,13 +378,17 @@ impl ExecutionApplication {
                 .as_ref()
                 .map(|planner| planner.dependency_watermarks())
                 .unwrap_or_default(),
-            pending_orders: planned_orders.clone(),
-            pending_order_due_unix_nanos: scheduled_order_due(&intent, &planned_orders, now),
+            pending_orders: pending_orders.clone(),
+            dormant_orders,
+            pending_order_due_unix_nanos: scheduled_order_due(&intent, &pending_orders, now),
             quote_version: 0,
             last_quote_refresh_unix_nanos: None,
             compensation_attempts: 0,
         };
         self.actor.insert_intent(state.clone());
+        self.actor
+            .insert_algorithm_run(algorithm_run)
+            .map_err(ExecutionError::Invalid)?;
         self.commit_intent(IntentEvent {
             intent_id: intent.intent_id.clone(),
             strategy_decision_id: intent.strategy_decision_id.clone(),
@@ -374,6 +501,7 @@ impl ExecutionApplication {
                 .map(|planner| planner.dependency_watermarks())
                 .unwrap_or_default(),
             pending_orders: Vec::new(),
+            dormant_orders: Vec::new(),
             pending_order_due_unix_nanos: BTreeMap::new(),
             quote_version: 0,
             last_quote_refresh_unix_nanos: None,

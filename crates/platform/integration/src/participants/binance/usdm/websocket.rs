@@ -3,11 +3,10 @@ market_websocket_capabilities!(BinanceUsdMWebSocketConnection, "usdm");
 
 #[cfg(test)]
 mod tests {
+    use super::BinanceUsdMWebSocketConnection;
     use crate::participants::binance::BinanceWebSocketConfig;
     use crate::services::participants::binance::market_stream::{StreamRoute, StreamShard};
     use crate::{ConnectionKey, IntegrationError};
-
-    use super::BinanceUsdMWebSocketConnection;
 
     fn config(endpoint: &str) -> BinanceWebSocketConfig {
         BinanceWebSocketConfig {

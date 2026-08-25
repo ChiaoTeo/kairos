@@ -87,6 +87,34 @@ def test_verified_model_refs_are_concrete_launch_choices(tmp_path: Path) -> None
             )["last_tested_at"],
         },
     )
+    assert resources.status()["ready"] is True
+
+
+def test_verified_available_model_ref_is_a_launch_choice(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    resources = AgentResourceApplication(workspace)
+    resources.configure_model_endpoint("local", provider="ollama")
+    resources.configure_available_model(
+        "primary-reasoning", endpoint_id="local", provider_model="qwen3:8b"
+    )
+    resources.test_available_model(
+        "primary-reasoning", probe=lambda *_args: {"ok": True}
+    )
+
+    assert resources.verified_model_refs() == (
+        {
+            "model_ref": "primary-reasoning",
+            "model_id": "primary-reasoning",
+            "endpoint_id": "local",
+            "provider_model": "qwen3:8b",
+            "provider": "ollama",
+            "provider_label": "Ollama",
+            "last_tested_at": resources.available_model("primary-reasoning")[
+                "last_tested_at"
+            ],
+        },
+    )
+    assert resources.status()["ready"] is True
 
 
 def test_model_conversation_returns_reply_and_updates_verification(
@@ -176,3 +204,66 @@ def test_agent_status_cli_is_secret_safe(
     value = json.loads(output.getvalue())
     assert value["model_connections"][0]["verification_status"] == "verified"
     assert "sk-secret-never-persist" not in output.getvalue()
+
+
+def test_available_model_cli_lists_and_toggles_new_resources(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    resources = AgentResourceApplication(workspace)
+    resources.configure_model_endpoint("local", provider="ollama")
+    resources.configure_available_model(
+        "reasoning", endpoint_id="local", provider_model="qwen3:8b"
+    )
+
+    endpoint_output = StringIO()
+    model_output = StringIO()
+    disabled_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "config",
+                "agent",
+                "endpoint-list",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            endpoint_output,
+        )
+        == 0
+    )
+    assert (
+        execute_argv(
+            [
+                "config",
+                "agent",
+                "model-list",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            model_output,
+        )
+        == 0
+    )
+    assert (
+        execute_argv(
+            [
+                "config",
+                "agent",
+                "model-disable",
+                "reasoning",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            disabled_output,
+        )
+        == 0
+    )
+
+    assert json.loads(endpoint_output.getvalue())[0]["endpoint_id"] == "local"
+    assert json.loads(model_output.getvalue())[0]["model_id"] == "reasoning"
+    assert json.loads(disabled_output.getvalue())["enabled"] is False

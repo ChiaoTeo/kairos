@@ -61,7 +61,11 @@ class LayoutMigration:
         )
         self.tree(
             self.root / "market" / "connections",
+            self.root / "config" / "integration" / "provider-connections",
+        )
+        self.tree(
             self.root / "config" / "market" / "connections",
+            self.root / "config" / "integration" / "provider-connections",
         )
 
         self._workspace_runtime()
@@ -208,6 +212,7 @@ class LayoutMigration:
             self.root / "orders",
             self.root / "backups",
             self.root / "market" / "connections",
+            self.root / "config" / "market" / "connections",
             self.root / "logs" / "processes",
             self.root / "logs" / "launches",
             self.root / "snapshots" / "v2",

@@ -6,7 +6,12 @@
 ## Coverage
 
 - [Capability matrix](capability-matrix.md)
+- [Execution venue certification](execution-venue-certification.md)
 - [Binance public market-stream certification](binance-market-stream-certification.md)
+- [OKX public market-stream certification](okx-market-stream-certification.md)
+- [Hyperliquid public market-stream certification](hyperliquid-market-stream-certification.md)
+- [Massive market-stream certification](massive-market-stream-certification.md)
+- [IBKR market-stream certification](ibkr-market-stream-certification.md)
 - [Provider-native account and audit history](provider-native-account-history.md)
 - [Provider-native ordinary-order extensions](provider-native-order-extensions.md)
 

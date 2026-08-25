@@ -5,9 +5,9 @@ use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
-    Bar, Greeks, IntegrationError, MarketBar, MarketDataKind, MarketEvent, MarketEventKind,
-    MarketFeed, MarketFundingRate, MarketGreeks, MarketIndexPrice, MarketMarkPrice,
-    MarketOpenInterest, MarketOrderBook, MarketQuote, MarketTrade, MarketVenueEvidence,
+    Bar, Greeks, IntegrationError, MarketBar, MarketEvent, MarketEventKind, MarketFundingRate,
+    MarketGreeks, MarketIndexPrice, MarketMarkPrice, MarketOpenInterest, MarketOrderBook,
+    MarketQuote, MarketTrade, MarketVenueEvidence,
 };
 
 pub(crate) fn quote(
@@ -171,28 +171,11 @@ fn first_row<'a>(value: &'a Value, label: &str) -> Result<&'a Value, Integration
         .ok_or_else(|| IntegrationError::InvalidPayload(format!("OKX {label} data is missing")))
 }
 
-pub(crate) fn feed_argument(feed: &MarketFeed) -> Result<Value, IntegrationError> {
-    let symbol = feed.symbol.as_ref().ok_or_else(|| {
-        IntegrationError::InvalidRequest(format!("OKX {:?} feed requires a symbol", feed.kind))
-    })?;
-    let channel = match feed.kind {
-        MarketDataKind::Quote | MarketDataKind::Ticker24h => "tickers".into(),
-        MarketDataKind::Trade => "trades".into(),
-        MarketDataKind::OrderBook => match feed.depth {
-            Some(depth) if depth <= 5 => "books5".into(),
-            _ => "books".into(),
-        },
-        MarketDataKind::Bar | MarketDataKind::TradeBar | MarketDataKind::QuoteBar => {
-            format!("candle{}", feed.interval.as_deref().unwrap_or("1m"))
-        },
-        MarketDataKind::MarkPrice => "mark-price".into(),
-        MarketDataKind::IndexPrice => "index-tickers".into(),
-        MarketDataKind::FundingRate => "funding-rate".into(),
-        MarketDataKind::OpenInterest => "open-interest".into(),
-        MarketDataKind::Greeks => "opt-summary".into(),
-        MarketDataKind::InstrumentStatus => "status".into(),
-    };
-    Ok(serde_json::json!({"channel": channel, "instId": symbol.as_str()}))
+#[cfg(test)]
+pub(crate) fn feed_argument(feed: &crate::MarketFeed) -> Result<Value, IntegrationError> {
+    Ok(super::market_stream::MarketStreamPolicy::default()
+        .plan(feed)?
+        .argument())
 }
 
 pub(crate) fn stream_events(value: &Value) -> Result<VecDeque<MarketEvent>, IntegrationError> {
@@ -204,13 +187,22 @@ pub(crate) fn stream_events(value: &Value) -> Result<VecDeque<MarketEvent>, Inte
         .and_then(Value::as_str)
         .unwrap_or_default();
     let argument_symbol = value.pointer("/arg/instId").and_then(Value::as_str);
-    value
+    let mut events = VecDeque::new();
+    for row in value
         .get("data")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .map(|row| stream_event(channel, argument_symbol, value, row))
-        .collect()
+    {
+        let event = stream_event(channel, argument_symbol, value, row)?;
+        if channel == "tickers" {
+            let mut quote = event.clone();
+            quote.kind = MarketEventKind::Quote;
+            events.push_back(quote);
+        }
+        events.push_back(event);
+    }
+    Ok(events)
 }
 
 fn stream_event(
@@ -442,6 +434,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::{MarketDataKind, MarketFeed};
 
     #[test]
     fn feed_mapping_preserves_typed_market_intent() {
@@ -495,6 +488,19 @@ mod tests {
         assert_eq!(event.kind, MarketEventKind::Bar);
         assert_eq!(event.bar.as_ref().unwrap().timeframe, "1m");
         assert_eq!(event.observed_at_unix_nanos.get(), 1_000_000_000);
+    }
+
+    #[test]
+    fn ticker_channel_serves_quote_and_ticker_demands_without_conflating_them() {
+        let events = stream_events(&json!({
+            "arg":{"channel":"tickers","instId":"BTC-USDT"},
+            "data":[{"instId":"BTC-USDT","last":"10","bidPx":"9","askPx":"11","ts":"1000"}]
+        }))
+        .unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, MarketEventKind::Quote);
+        assert_eq!(events[1].kind, MarketEventKind::Ticker24h);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 
 import pytest
 
@@ -59,7 +60,7 @@ def test_configures_supported_provider_connections_without_copying_secrets(
     assert connection["provider"] == provider
     assert connection["verification_status"] == "pending"
     document = (
-        workspace.paths.market_connections_root() / f"{provider}-{product}.toml"
+        workspace.paths.provider_connections_root() / f"{provider}-{product}.toml"
     ).read_text()
     assert "secret" not in document
     assert "passphrase" not in document
@@ -88,6 +89,36 @@ def test_connection_requires_a_matching_complete_credential(tmp_path) -> None:
             products=("spot",),
             purposes=("market-query",),
         )
+
+
+def test_connection_supports_purpose_and_product_specific_endpoints(tmp_path) -> None:
+    workspace = _workspace(tmp_path)
+    _credential(workspace, "massive-readonly", "massive")
+    app = ProviderConnectionConfigurationApplication(workspace)
+
+    connection = app.configure(
+        "massive-main",
+        provider="massive",
+        credential_id="massive-readonly",
+        products=("equity", "options"),
+        purposes=("reference-catalog", "market-query", "market-stream"),
+        endpoints={
+            "reference-catalog": "https://reference.massive.example",
+            "market-stream:equity": "http://stream.massive.example/stocks",
+            "market-stream:options": "wss://stream.massive.example/options",
+        },
+    )
+
+    assert connection["endpoints"] == {
+        "reference-catalog": "https://reference.massive.example",
+        "market-stream:equity": "http://stream.massive.example/stocks",
+        "market-stream:options": "wss://stream.massive.example/options",
+    }
+    document = tomllib.loads(
+        (workspace.paths.provider_connections_root() / "massive-main.toml").read_text()
+    )
+    assert document["version"] == 2
+    assert document["connection"]["endpoints"] == connection["endpoints"]
 
 
 def test_verification_records_capabilities_not_secrets_and_detects_drift(tmp_path) -> None:

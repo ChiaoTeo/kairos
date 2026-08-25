@@ -6,10 +6,14 @@ use crate::services::persistence::JournalCapitalStore;
 use crate::{CapitalApplication, CapitalProcess};
 
 mod connections;
+mod direct;
 mod host;
 pub use connections::{
     CapitalConnectionAccount, CapitalIntegrationConnections,
     compose_capital_integration_connections, validate_capital_transfer_product,
+};
+pub use direct::{
+    compose_standalone_capital_transfer, compose_standalone_capital_transfer_history,
 };
 pub use host::{CapitalHost, CapitalHostConfig, build_capital_host};
 

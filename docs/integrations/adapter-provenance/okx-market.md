@@ -33,3 +33,7 @@
   source epoch and returns to ready.
 - REST ticker snapshots remain a separate async capability selected explicitly with
   `transport = "rest"`; they do not masquerade as a live channel.
+- The 2026-08-25 production-public certification covers Spot trades, Swap mark price, an active
+  expiry Futures quote, and active-family Options Greeks across subscribe, receive,
+  replacement-first reconnect/restore, receive, and unsubscribe. See
+  [OKX public market-stream certification](../okx-market-stream-certification.md).

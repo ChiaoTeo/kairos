@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.widgets import Static
 from rich.text import Text
 
 from kairospy.surface.workbench.screens.activity import (
@@ -33,6 +34,18 @@ class _InteractionApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield InteractionRegion(self.interaction, id="interaction")
+
+
+class _ResizingActivityApp(App[None]):
+    CSS = """
+    Screen { layout: vertical; }
+    ActivityStream { height: 1fr; min-height: 2; }
+    #changing-footer { height: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield ActivityStream(id="activities")
+        yield Static("", id="changing-footer")
 
 
 def test_activity_stream_retains_typed_terminal_records() -> None:
@@ -263,6 +276,167 @@ def test_activity_stream_follows_bottom_until_user_browses_history() -> None:
     assert browsing_y < initial_end
     assert preserved_y == browsing_y
     assert resumed_y > initial_end
+
+
+def test_activity_stream_follows_new_bottom_after_layout_shrinks() -> None:
+    async def run() -> tuple[float, float]:
+        app = _ResizingActivityApp()
+        async with app.run_test(size=(50, 12)) as pilot:
+            stream = app.query_one(ActivityStream)
+            for index in range(30):
+                stream.append_activity(
+                    ActivityRecord(
+                        activity_id=f"operation-{index}",
+                        kind=ActivityKind.OPERATION,
+                        outcome=ActivityOutcome.SUCCESS,
+                        title=f"line {index}",
+                    )
+                )
+            await pilot.pause()
+
+            assert stream.scroll_y == stream.max_scroll_y
+            app.query_one("#changing-footer", Static).styles.height = 6
+            await pilot.pause()
+            return stream.scroll_y, stream.max_scroll_y
+
+    scroll_y, max_scroll_y = asyncio.run(run())
+
+    assert scroll_y == max_scroll_y
+
+
+def test_activity_stream_preserves_browsed_position_when_layout_shrinks() -> None:
+    async def run() -> tuple[float, float]:
+        app = _ResizingActivityApp()
+        async with app.run_test(size=(50, 12)) as pilot:
+            stream = app.query_one(ActivityStream)
+            for index in range(30):
+                stream.append_activity(
+                    ActivityRecord(
+                        activity_id=f"operation-{index}",
+                        kind=ActivityKind.OPERATION,
+                        outcome=ActivityOutcome.SUCCESS,
+                        title=f"line {index}",
+                    )
+                )
+            await pilot.pause()
+            stream.pause_follow()
+            stream.scroll_page_up(animate=False)
+            await pilot.pause()
+            browsed_y = stream.scroll_y
+
+            app.query_one("#changing-footer", Static).styles.height = 6
+            await pilot.pause()
+            return browsed_y, stream.scroll_y
+
+    browsed_y, resized_y = asyncio.run(run())
+
+    assert resized_y == browsed_y
+
+
+def test_activity_stream_reflows_retained_activities_on_terminal_width_change() -> None:
+    async def run() -> tuple[int, int, int, int, int, tuple[str, ...]]:
+        app = _ActivityApp()
+        async with app.run_test(size=(100, 24)) as pilot:
+            stream = app.query_one(ActivityStream)
+            stream.append_activity(
+                ActivityRecord(
+                    activity_id="resize-source",
+                    kind=ActivityKind.QUERY,
+                    outcome=ActivityOutcome.SUCCESS,
+                    title="动态宽度",
+                    body=Text("可重复渲染的内容 " * 20),
+                )
+            )
+            await pilot.pause()
+            wide_lines = len(stream.lines)
+
+            await pilot.resize_terminal(50, 16)
+            await pilot.pause(0.1)
+            narrow_lines = len(stream.lines)
+            narrow_render_width = max(line.cell_length for line in stream.lines)
+            narrow_content_width = stream.scrollable_content_region.width
+
+            await pilot.resize_terminal(100, 24)
+            await pilot.pause(0.1)
+            restored_lines = len(stream.lines)
+            return (
+                wide_lines,
+                narrow_lines,
+                restored_lines,
+                narrow_render_width,
+                narrow_content_width,
+                tuple(activity.activity_id for activity in stream.activities),
+            )
+
+    (
+        wide_lines,
+        narrow_lines,
+        restored_lines,
+        narrow_render_width,
+        narrow_content_width,
+        activity_ids,
+    ) = asyncio.run(run())
+
+    assert narrow_lines > wide_lines
+    assert restored_lines == wide_lines
+    assert narrow_render_width <= narrow_content_width
+    assert activity_ids == ("resize-source",)
+
+
+def test_activity_stream_resize_preserves_semantic_browsing_anchor() -> None:
+    async def run() -> tuple[str | None, str | None]:
+        app = _ActivityApp()
+        async with app.run_test(size=(100, 18)) as pilot:
+            stream = app.query_one(ActivityStream)
+            for index in range(20):
+                stream.append_activity(
+                    ActivityRecord(
+                        activity_id=f"activity-{index}",
+                        kind=ActivityKind.OPERATION,
+                        outcome=ActivityOutcome.SUCCESS,
+                        title=f"activity {index}",
+                        body=Text(f"details for activity {index} " * 5),
+                    )
+                )
+            await pilot.pause()
+            stream.pause_follow()
+            stream.scroll_to(y=stream.max_scroll_y // 2, animate=False, immediate=True)
+            await pilot.pause()
+            before = stream.viewport_activity_id
+
+            await pilot.resize_terminal(60, 18)
+            await pilot.pause(0.1)
+            return before, stream.viewport_activity_id
+
+    before, after = asyncio.run(run())
+
+    assert before is not None
+    assert after == before
+
+
+def test_live_stream_rebuilds_from_retained_lines_after_resize() -> None:
+    async def run() -> tuple[str, str]:
+        app = _ActivityApp()
+        async with app.run_test(size=(100, 18)) as pilot:
+            stream = app.query_one(ActivityStream)
+            stream.begin_live_stream("service logs")
+            stream.append_live_lines(
+                ("first retained line", "second retained line"),
+                retained_lines=("first retained line", "second retained line"),
+            )
+            await pilot.pause()
+            await pilot.resize_terminal(50, 14)
+            await pilot.pause(0.1)
+            narrow = stream.plain_text
+            await pilot.resize_terminal(100, 18)
+            await pilot.pause(0.1)
+            return narrow, stream.plain_text
+
+    narrow, restored = asyncio.run(run())
+
+    for visible in (narrow, restored):
+        assert visible.count("first retained line") == 1
+        assert visible.count("second retained line") == 1
 
 
 def test_live_buffer_is_bounded_and_tracks_hidden_lines() -> None:

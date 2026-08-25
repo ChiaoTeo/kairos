@@ -65,6 +65,7 @@ from .views import (
     operations_overview,
     operations_group_records,
     operations_records,
+    project_result_renderable,
     support_summary,
     support_diagnostics,
 )
@@ -228,7 +229,7 @@ def handle_success(
         session.operations.inventory_records = inventory
         session.operations.group_records = records
         interaction = ChoiceInteraction(
-            title=context_label(session.context),
+            title=context_label(session.context, session.root_label),
             summary=operations_overview(result),
             actions=tuple(
                 ActionItem(str(index), record.label, record.description, str(index))
@@ -254,7 +255,7 @@ def handle_success(
             for i, record in enumerate(visible, 1)
         )
         interaction = ChoiceInteraction(
-            title=context_label(session.context),
+            title=context_label(session.context, session.root_label),
             actions=actions,
         )
         session.interaction = interaction
@@ -271,15 +272,21 @@ def handle_success(
     if title is None:
         return None
     if kind is ResultKind.OPERATIONS_PROJECT:
-        session.home()
-        if spec.action_name.endswith(".scaffold") or state.owner is None:
+        session.root_label = (
+            state.workspace_id if state.owner is not None else "项目入口"
+        )
+        if spec.action_name.endswith((".open", ".init")):
+            session.home()
+        else:
             session.enter("project")
     elif kind is ResultKind.OPERATIONS_PROFILE:
         session.operations.profile_action = None
         session.context = ("operations", "profiles")
     elif kind is ResultKind.BUSINESS:
         session.operations.business_prompt = None
-    if kind is ResultKind.OPERATIONS and spec.route.qualifier == "service-status":
+    if kind is ResultKind.OPERATIONS_PROJECT:
+        body = project_result_renderable(spec.action_name, result)
+    elif kind is ResultKind.OPERATIONS and spec.route.qualifier == "service-status":
         view = service_status_view(result)
         session.operations.selected_service_status = view
         body = service_summary(view)
@@ -418,7 +425,7 @@ def _operations_context(
             session.context = ("operations", name)
             session.visible_records = records
             interaction = ChoiceInteraction(
-                title=context_label(session.context),
+                title=context_label(session.context, session.root_label),
                 summary=(
                     Text("当前没有运行对象", style="dim") if not records else None
                 ),
@@ -560,8 +567,11 @@ def _operations_context(
             return (
                 _run(
                     f"operations.project.{action}",
-                    f"项目 {action}",
-                    ResultKind.OPERATIONS,
+                    {
+                        "status": "查看项目概览",
+                        "doctor": "检查项目",
+                    }[action],
+                    ResultKind.OPERATIONS_PROJECT,
                     lambda: execute_project(state, action),
                 ),
             )
@@ -714,7 +724,11 @@ def _advance_project(
         session,
         _spec(
             f"operations.project.{prompt.action}",
-            f"项目操作 {prompt.action}",
+            {
+                "open": "切换项目",
+                "init": "创建项目",
+                "scaffold": "安装项目模板",
+            }[prompt.action],
             ResultKind.OPERATIONS_PROJECT,
             operation,
         ),
@@ -786,7 +800,7 @@ def _ask(
 ) -> tuple[ScreenEffect, ...]:
     session.ask(
         ActionToken(Feature.OPERATIONS, action),
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         prompt=prompt,
         detail=detail,
         value_summary=summary,
@@ -841,7 +855,7 @@ def _choice(
     state: Any, session: GuidedSession, summary: Any | None = None, status: str = "就绪"
 ) -> tuple[ScreenEffect, ...]:
     interaction = ChoiceInteraction(
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         summary=summary,
         actions=context_items(session, state),
     )

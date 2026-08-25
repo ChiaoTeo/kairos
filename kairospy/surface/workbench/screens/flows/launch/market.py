@@ -143,7 +143,7 @@ def _advance(
         name, label, detail = next_prompt
         session.ask(
             ActionToken(Feature.STRATEGY, f"launch-market:field:{name}"),
-            title=context_label(session.context),
+            title=context_label(session.context, session.root_label),
             prompt=label,
             detail=detail,
             value_summary=Pretty(prompt.summary(), expand_all=True),
@@ -201,7 +201,7 @@ def _choice(
     status: str = "就绪",
 ) -> tuple[ScreenEffect, ...]:
     interaction = ChoiceInteraction(
-        title=context_label(session.context),
+        title=context_label(session.context, session.root_label),
         summary=summary,
         actions=context_items(session, state),
     )

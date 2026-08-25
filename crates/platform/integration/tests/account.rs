@@ -78,6 +78,7 @@ fn ibkr_exposes_separate_virtual_connections() {
             client_id: 8,
             exchange: "SMART".into(),
             currency: "USD".into(),
+            market_data_line_limit: 100,
         },
     )
     .unwrap();

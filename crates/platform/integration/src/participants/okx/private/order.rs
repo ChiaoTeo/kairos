@@ -131,7 +131,13 @@ fn row_ack(
     row: &Value,
     operation: &str,
 ) -> Result<CommandOutcome<OkxOrderOperationAck>, IntegrationError> {
-    let code = row.get("sCode").and_then(Value::as_str).unwrap_or("0");
+    let Some(code) = row.get("sCode").and_then(Value::as_str) else {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent(format!(
+                "OKX {operation} response sCode is missing"
+            )),
+        ));
+    };
     let message = row
         .get("sMsg")
         .and_then(Value::as_str)
@@ -152,9 +158,34 @@ fn row_ack(
                 .map(str::to_owned),
         }));
     }
+    let remote_order_id =
+        match optional_id(row, "ordId", |value| RemoteOrderId::new(value.to_owned())) {
+            Ok(value) => value,
+            Err(error) => {
+                return Ok(CommandOutcome::Indeterminate(
+                    IndeterminateCommand::may_have_been_sent(error.to_string()),
+                ));
+            },
+        };
+    let client_order_id =
+        match optional_id(row, "clOrdId", |value| ClientOrderId::new(value.to_owned())) {
+            Ok(value) => value,
+            Err(error) => {
+                return Ok(CommandOutcome::Indeterminate(
+                    IndeterminateCommand::may_have_been_sent(error.to_string()),
+                ));
+            },
+        };
+    if remote_order_id.is_none() && client_order_id.is_none() {
+        return Ok(CommandOutcome::Indeterminate(
+            IndeterminateCommand::may_have_been_sent(format!(
+                "OKX {operation} response order identity is missing"
+            )),
+        ));
+    }
     Ok(CommandOutcome::Confirmed(OkxOrderOperationAck {
-        remote_order_id: optional_id(row, "ordId", |value| RemoteOrderId::new(value.to_owned()))?,
-        client_order_id: optional_id(row, "clOrdId", |value| ClientOrderId::new(value.to_owned()))?,
+        remote_order_id,
+        client_order_id,
         request_id: row
             .get("reqId")
             .and_then(Value::as_str)
@@ -245,5 +276,24 @@ mod tests {
     fn missing_batch_item_is_indeterminate_not_rejected() {
         let outcomes = batch_acks(&json!({"data":[]}), 1, "batch cancel").unwrap();
         assert!(matches!(outcomes[0], CommandOutcome::Indeterminate(_)));
+    }
+
+    #[test]
+    fn successful_ack_requires_code_and_order_identity() {
+        for payload in [
+            json!({"data":[{}]}),
+            json!({"data":[{"sCode":"0"}]}),
+            json!({"data":[{"sCode":"0","ordId":""}]}),
+        ] {
+            assert!(matches!(
+                one_ack(&payload, "amend").unwrap(),
+                CommandOutcome::Indeterminate(_)
+            ));
+        }
+
+        assert!(matches!(
+            one_ack(&json!({"data":[{"sCode":"0","ordId":"1"}]}), "amend").unwrap(),
+            CommandOutcome::Confirmed(_)
+        ));
     }
 }

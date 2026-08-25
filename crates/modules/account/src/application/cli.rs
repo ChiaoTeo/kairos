@@ -409,6 +409,7 @@ pub struct AccountLocalSegmentResult {
 pub struct AccountTradingBinding {
     pub account_id: AccountId,
     pub remote_account_id: String,
+    pub broker: BrokerId,
     pub integration_adapter: AccountAdapterKind,
     pub environment: String,
     pub segment_key: SegmentKey,
@@ -421,6 +422,10 @@ pub struct AccountTradingBinding {
     pub port: u16,
     pub client_id: i32,
     pub isolated_symbol: Option<String>,
+    /// Account-owned membership metadata used by Capital composition for
+    /// provider-internal transfers. These values never contain credentials.
+    pub capital_controller_account_id: Option<String>,
+    pub participant_account_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -760,13 +765,16 @@ impl CliAccountApplication {
                 .into());
             },
         };
-        let require_trade = matches!(access, "write" | "trade");
-        if !matches!(access, "read" | "write" | "trade") {
+        let require_transfer = access == "transfer";
+        let require_trade = matches!(access, "write" | "trade" | "transfer");
+        if !matches!(access, "read" | "write" | "trade" | "transfer") {
             return Err(format!("unsupported trading binding access: {access}").into());
         }
         let selected = account.credentials.iter().find(|binding| {
             let role = binding.role.trim().to_ascii_lowercase();
-            if require_trade {
+            if require_transfer {
+                matches!(role.as_str(), "transfer" | "admin")
+            } else if require_trade {
                 matches!(role.as_str(), "trade" | "trading" | "transfer" | "admin")
             } else {
                 matches!(
@@ -782,6 +790,29 @@ impl CliAccountApplication {
             .map(|value| value.role.clone())
             .or_else(|| account.credential_role.clone())
             .unwrap_or_else(|| "readonly".into());
+        if require_transfer
+            && !matches!(
+                credential_role.trim().to_ascii_lowercase().as_str(),
+                "transfer" | "admin"
+            )
+        {
+            return Err(
+                format!("account {account_id} has no credential with transfer permission").into(),
+            );
+        }
+        if require_transfer
+            && account
+                .permissions
+                .get("transfer")
+                .is_some_and(|permission| {
+                    !matches!(
+                        permission.trim().to_ascii_lowercase().as_str(),
+                        "granted" | "true" | "enabled" | "allowed"
+                    )
+                })
+        {
+            return Err(format!("account {account_id} denies transfer permission").into());
+        }
         if require_trade
             && !matches!(
                 credential_role.trim().to_ascii_lowercase().as_str(),
@@ -816,6 +847,7 @@ impl CliAccountApplication {
                 .remote_identity
                 .clone()
                 .unwrap_or_else(|| account.account_id.clone()),
+            broker: BrokerId::new(account.broker.clone())?,
             integration_adapter: AccountAdapterKind::new(provider)?,
             environment: account.environment.clone(),
             segment_key: SegmentKey::new(segment.to_owned())?,
@@ -840,6 +872,16 @@ impl CliAccountApplication {
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_default(),
             isolated_symbol: account.values.get("isolated_symbol").cloned(),
+            capital_controller_account_id: account
+                .values
+                .get("capital_controller_account_id")
+                .cloned()
+                .filter(|value| !value.trim().is_empty()),
+            participant_account_ref: account
+                .values
+                .get("participant_account_ref")
+                .cloned()
+                .filter(|value| !value.trim().is_empty()),
         })
     }
 
@@ -3579,6 +3621,7 @@ broker = "binance"
 integration_provider = "binance"
 environment = "live"
 model = "contract"
+capital_controller_account_id = "main"
 
 [segments.spot]
 product_family = "spot"
@@ -3593,6 +3636,10 @@ role = "readonly"
 [credentials.trader]
 ref = "binance-trade"
 role = "trade"
+
+[credentials.transfer]
+ref = "binance-transfer"
+role = "transfer"
 "#,
         )
         .unwrap();
@@ -3616,6 +3663,15 @@ role = "trade"
         assert_eq!(trade.provider_segment, "usd_m_futures");
         assert_eq!(trade.credential_id.as_deref(), Some("binance-trade"));
         assert_eq!(trade.credential_role, "trade");
+        let transfer = application
+            .trading_binding("main", Some("spot"), "transfer")
+            .unwrap();
+        assert_eq!(transfer.credential_id.as_deref(), Some("binance-transfer"));
+        assert_eq!(transfer.credential_role, "transfer");
+        assert_eq!(
+            transfer.capital_controller_account_id.as_deref(),
+            Some("main")
+        );
         let serialized = serde_json::to_value(trade).unwrap();
         assert!(serialized.get("api_key").is_none());
         assert!(serialized.get("secret").is_none());

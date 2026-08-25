@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from .flows.operations.business import BusinessPromptState
     from .flows.operations.views import ServiceStatusView, SupportStatusView
     from .flows.resources.wizard import ResourceWizardState
+    from .flows.resources.account_transfers import TransferPromptState
 
 
 @dataclass(slots=True)
@@ -162,28 +163,36 @@ class ResourcesSession:
     selected: ResourceRecordView | None = None
     action: str | None = None
     wizard: ResourceWizardState | None = None
+    parent_wizard: ResourceWizardState | None = None
 
     def reset(self) -> None:
         if self.wizard is not None:
             self.wizard.clear_secrets()
+        if self.parent_wizard is not None:
+            self.parent_wizard.clear_secrets()
         self.kind = None
         self.selected = None
         self.action = None
         self.wizard = None
+        self.parent_wizard = None
 
 
 @dataclass(slots=True)
 class AccountSession:
     """Account runtime and order prompt state."""
 
+    selected_segment: str | None = None
     order_prompt: OrderPromptState | None = None
+    transfer_prompt: TransferPromptState | None = None
 
     def reset(self) -> None:
+        self.selected_segment = None
         self.order_prompt = None
+        self.transfer_prompt = None
 
     def finish_result(self, kind: ResultKind) -> None:
         if kind is ResultKind.ORDER:
-            self.reset()
+            self.order_prompt = None
 
 
 @dataclass(slots=True)
@@ -253,6 +262,7 @@ class LaunchMarketSession:
 class GuidedSession:
     """Transient presentation state; Applications continue to own business facts."""
 
+    root_label: str = "首页"
     context: tuple[str, ...] = ()
     interaction: InteractionState = ChoiceInteraction()
     suspended_interaction: (

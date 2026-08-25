@@ -9,7 +9,7 @@ use crate::ObservationKind;
 pub(crate) fn binding_observation_capabilities(
     binding: &MarketProviderBinding,
 ) -> Vec<ObservationKind> {
-    use ObservationKind::{Bar, OptionGreeks, OrderBook, Quote, Trade};
+    use ObservationKind::{Bar, IndexPrice, OptionGreeks, OrderBook, Quote, Trade};
     match binding {
         MarketProviderBinding::BinanceSpot {
             transport: BinanceSpotTransport::Rest,
@@ -54,7 +54,14 @@ pub(crate) fn binding_observation_capabilities(
             transport: PublicMarketTransport::Websocket,
             ..
         } => vec![Trade, OrderBook],
-        MarketProviderBinding::Massive { .. } => vec![Quote, Trade],
+        MarketProviderBinding::Massive { product, .. } => match product {
+            config::MassiveMarketProduct::Equity
+            | config::MassiveMarketProduct::Options
+            | config::MassiveMarketProduct::Futures => vec![Quote, Trade, Bar],
+            config::MassiveMarketProduct::Indices => vec![IndexPrice, Bar],
+            config::MassiveMarketProduct::Forex => vec![Quote, Bar],
+            config::MassiveMarketProduct::Crypto => vec![Quote, Trade, Bar],
+        },
         MarketProviderBinding::Ibkr { .. } => vec![Quote],
     }
 }
@@ -78,6 +85,10 @@ pub(crate) fn binding_provider_segment(
             match product {
                 config::MassiveMarketProduct::Equity => "equity",
                 config::MassiveMarketProduct::Options => "options",
+                config::MassiveMarketProduct::Futures => "futures",
+                config::MassiveMarketProduct::Indices => "indices",
+                config::MassiveMarketProduct::Forex => "forex",
+                config::MassiveMarketProduct::Crypto => "crypto",
             },
         ),
         MarketProviderBinding::Okx {

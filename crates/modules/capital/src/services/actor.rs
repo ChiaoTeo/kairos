@@ -7,9 +7,10 @@ use kairos_primitives::time::{Sequence, UnixNanos};
 use crate::application::{
     AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
     CancelFundingObjective, CapitalDemandReceipt, CapitalEvent, CapitalSnapshot,
-    CapitalYieldCandidate, EvaluateCapitalGroup, FundingObjectiveReceipt,
-    MarkCapitalDeliveryStarted, ObserveCapitalDemand, ObserveCapitalFacts,
-    ObserveCapitalMemberAccount, ObserveCapitalSettlement, PublishFundingObjective,
+    CapitalYieldCandidate, ConfirmManualCapitalTransfer, EvaluateCapitalGroup,
+    FundingObjectiveReceipt, ManualCapitalTransferPreview, MarkCapitalDeliveryStarted,
+    ObserveCapitalDemand, ObserveCapitalFacts, ObserveCapitalMemberAccount,
+    ObserveCapitalSettlement, PreviewManualCapitalTransfer, PublishFundingObjective,
     RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
     UpdateCapitalPolicy, UpdateCapitalRoute,
 };
@@ -563,6 +564,234 @@ impl CapitalActor {
             recovery_decided_at: None,
             created_at: command.created_at,
             expires_at: command.expires_at,
+        };
+        self.persist_and_apply_plan(plan.clone(), reservation)?;
+        Ok(plan)
+    }
+
+    pub(crate) fn preview_manual_transfer(
+        &self,
+        command: PreviewManualCapitalTransfer,
+    ) -> Result<ManualCapitalTransferPreview, ActorError> {
+        self.validate_group(&command.capital_group_id)?;
+        if command.preview_id.is_empty() || command.preview_id.trim() != command.preview_id {
+            return Err(ActorError::Invalid(
+                "manual transfer preview_id is required".into(),
+            ));
+        }
+        if !command.amount.is_positive() {
+            return Err(ActorError::Invalid(
+                "manual transfer amount must be positive".into(),
+            ));
+        }
+        if command.expires_at <= command.created_at {
+            return Err(ActorError::Invalid(
+                "manual transfer preview expiry must follow creation".into(),
+            ));
+        }
+        if command.source == command.destination {
+            return Err(ActorError::Invalid(
+                "manual transfer source and destination must differ".into(),
+            ));
+        }
+        if command.source.asset != command.destination.asset {
+            return Err(ActorError::Invalid(
+                "manual transfer cannot change assets".into(),
+            ));
+        }
+        let mut routes = self.routes.values().filter(|route| {
+            route.enabled
+                && matches!(
+                    route.kind,
+                    CapitalRouteKind::InternalTransfer | CapitalRouteKind::AccountTransfer
+                )
+                && route.source == command.source
+                && route.destination == command.destination
+        });
+        let route = routes
+            .next()
+            .cloned()
+            .ok_or_else(|| ActorError::Rejected("manual transfer route was not found".into()))?;
+        if routes.next().is_some() {
+            return Err(ActorError::Rejected(
+                "manual transfer route is ambiguous".into(),
+            ));
+        }
+        if route.required_source_authority != command.source_authority {
+            return Err(ActorError::Rejected(
+                "manual transfer source authority does not match the route".into(),
+            ));
+        }
+        let policy = self
+            .policies
+            .get(&route.destination)
+            .ok_or_else(|| ActorError::Rejected("manual transfer policy was not found".into()))?;
+        self.ensure_route_accounts_ready(&route, command.created_at, policy.max_fact_age_nanos)?;
+        let source = self.facts.get(&route.source).ok_or_else(|| {
+            ActorError::Rejected("manual transfer source facts are unavailable".into())
+        })?;
+        let destination = self.facts.get(&route.destination).ok_or_else(|| {
+            ActorError::Rejected("manual transfer destination facts are unavailable".into())
+        })?;
+        for facts in [source, destination] {
+            if !facts.account_complete || command.created_at < facts.account_observed_at {
+                return Err(ActorError::Rejected(
+                    "manual transfer Account facts are incomplete or from the future".into(),
+                ));
+            }
+            if command.created_at.get() - facts.account_observed_at.get()
+                > policy.max_fact_age_nanos
+            {
+                return Err(ActorError::Rejected(
+                    "manual transfer Account facts are stale".into(),
+                ));
+            }
+        }
+        if command.amount < policy.minimum_movement {
+            return Err(ActorError::Rejected(
+                "manual transfer amount is below the route minimum movement".into(),
+            ));
+        }
+        if command.amount > route.per_operation_limit {
+            return Err(ActorError::Rejected(
+                "manual transfer amount exceeds the per-operation limit".into(),
+            ));
+        }
+        let daily_used = self.daily_used(&route, command.created_at)?;
+        let daily_remaining = if route.daily_limit > daily_used {
+            route
+                .daily_limit
+                .checked_sub(daily_used)
+                .map_err(|error| ActorError::State(error.to_string()))?
+        } else {
+            Quantity::ZERO
+        };
+        if command.amount > daily_remaining {
+            return Err(ActorError::Rejected(
+                "manual transfer amount exceeds the remaining daily limit".into(),
+            ));
+        }
+        let reserved = self.active_reserved_at(&route.source)?;
+        let source_available = if source.observed_available > reserved {
+            source
+                .observed_available
+                .checked_sub(reserved)
+                .map_err(|error| ActorError::State(error.to_string()))?
+        } else {
+            Quantity::ZERO
+        };
+        if command.amount > source_available {
+            return Err(ActorError::Rejected(
+                "manual transfer amount exceeds unreserved source availability".into(),
+            ));
+        }
+        Ok(ManualCapitalTransferPreview {
+            preview_id: command.preview_id,
+            plan_id: command.plan_id,
+            idempotency_key: command.idempotency_key,
+            route_id: route.route_id,
+            route_version: route.version,
+            route_kind: route.kind,
+            source: route.source,
+            destination: route.destination,
+            amount: command.amount,
+            source_authority: command.source_authority,
+            source_account_watermark: source.account_watermark,
+            destination_account_watermark: destination.account_watermark,
+            source_observed_available: source.observed_available,
+            destination_observed_available: destination.observed_available,
+            created_at: command.created_at,
+            expires_at: command.expires_at,
+        })
+    }
+
+    pub(crate) fn confirm_manual_transfer(
+        &mut self,
+        command: ConfirmManualCapitalTransfer,
+    ) -> Result<CapitalPlan, ActorError> {
+        self.validate_group(&command.capital_group_id)?;
+        let preview = command.preview;
+        if let Some(existing) = self.plans.get(&preview.plan_id) {
+            if existing.rebalance_decision_id == format!("manual-transfer:{}", preview.preview_id)
+                && existing.route_id == preview.route_id
+                && existing.amount == preview.amount
+                && existing.idempotency_key == preview.idempotency_key
+            {
+                return Ok(existing.clone());
+            }
+            return Err(ActorError::Rejected(
+                "manual transfer idempotency key already has different state".into(),
+            ));
+        }
+        if command.confirmed_at < preview.created_at || command.confirmed_at >= preview.expires_at {
+            return Err(ActorError::Rejected(
+                "manual transfer preview has expired".into(),
+            ));
+        }
+        let current = self.preview_manual_transfer(PreviewManualCapitalTransfer {
+            capital_group_id: command.capital_group_id,
+            preview_id: preview.preview_id.clone(),
+            plan_id: preview.plan_id.clone(),
+            idempotency_key: preview.idempotency_key.clone(),
+            source: preview.source.clone(),
+            destination: preview.destination.clone(),
+            amount: preview.amount,
+            source_authority: preview.source_authority.clone(),
+            created_at: command.confirmed_at,
+            expires_at: preview.expires_at,
+        })?;
+        if current.route_id != preview.route_id
+            || current.route_version != preview.route_version
+            || current.route_kind != preview.route_kind
+            || current.source_account_watermark != preview.source_account_watermark
+            || current.destination_account_watermark != preview.destination_account_watermark
+            || current.source_observed_available != preview.source_observed_available
+            || current.destination_observed_available != preview.destination_observed_available
+        {
+            return Err(ActorError::Rejected(
+                "manual transfer preview is stale; request a new preview".into(),
+            ));
+        }
+        let reservation_id =
+            CapitalReservationId::new(format!("capital-reservation:{}", preview.plan_id.as_str()))
+                .map_err(|error| ActorError::Invalid(error.to_string()))?;
+        let reservation = CapitalReservation {
+            reservation_id: reservation_id.clone(),
+            plan_id: preview.plan_id.clone(),
+            source: preview.source.clone(),
+            amount: preview.amount,
+            source_account_watermark: preview.source_account_watermark,
+            status: CapitalReservationStatus::Active,
+            created_at: command.confirmed_at,
+            expires_at: preview.expires_at,
+        };
+        let plan = CapitalPlan {
+            plan_id: preview.plan_id,
+            rebalance_decision_id: format!("manual-transfer:{}", preview.preview_id),
+            route_id: preview.route_id,
+            route_version: preview.route_version,
+            route_kind: preview.route_kind,
+            source: preview.source,
+            destination: preview.destination,
+            amount: preview.amount,
+            objective_ids: Vec::new(),
+            demand_ids: Vec::new(),
+            reservation_id,
+            idempotency_key: preview.idempotency_key,
+            selected_earn_product_id: None,
+            source_account_watermark: preview.source_account_watermark,
+            destination_account_watermark: preview.destination_account_watermark,
+            source_observed_available: preview.source_observed_available,
+            destination_observed_available: preview.destination_observed_available,
+            redemption_account_watermark: None,
+            redemption_observed_available: None,
+            earn_principal_before: Quantity::ZERO,
+            status: CapitalPlanStatus::Authorized,
+            recovery_action: CapitalRecoveryAction::None,
+            recovery_reason: None,
+            recovery_decided_at: None,
+            created_at: command.confirmed_at,
+            expires_at: preview.expires_at,
         };
         self.persist_and_apply_plan(plan.clone(), reservation)?;
         Ok(plan)

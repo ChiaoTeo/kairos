@@ -83,7 +83,11 @@ pub fn compose_standalone_market(
                     endpoint,
                     ..
                 }) => provider_profile(workspace_root, connection_id.as_deref())?
-                    .map(|value| value.endpoint)
+                    .and_then(|value| {
+                        value
+                            .endpoint_for("market-query", Some("spot"))
+                            .map(str::to_owned)
+                    })
                     .or(endpoint),
                 _ => None,
             };
@@ -143,7 +147,13 @@ pub fn compose_standalone_market(
                     endpoint: request
                         .endpoint
                         .clone()
-                        .or_else(|| profile.as_ref().map(|value| value.endpoint.clone()))
+                        .or_else(|| {
+                            profile.as_ref().and_then(|value| {
+                                value
+                                    .endpoint_for("market-query", Some("equity"))
+                                    .map(str::to_owned)
+                            })
+                        })
                         .or(endpoint)
                         .unwrap_or_else(|| "https://api.binance.com".into()),
                     credential: Some(BinanceCredential {
@@ -212,7 +222,13 @@ pub fn compose_standalone_market(
                     endpoint: request
                         .endpoint
                         .clone()
-                        .or_else(|| profile.as_ref().map(|value| value.endpoint.clone()))
+                        .or_else(|| {
+                            profile.as_ref().and_then(|value| {
+                                value
+                                    .endpoint_for("market-query", Some("equity"))
+                                    .map(str::to_owned)
+                            })
+                        })
                         .or(endpoint)
                         .unwrap_or_else(|| "https://api.massive.com".into()),
                     api_key,

@@ -357,13 +357,23 @@ fn parse_product(row: &Value) -> Result<EarnProduct, IntegrationError> {
 fn parse_position(row: &Value) -> Result<EarnPosition, IntegrationError> {
     let principal = decimal_field(row, "totalAmount")?;
     let redeeming = optional_decimal(row, "redeemingAmount")?.unwrap_or(Quantity::ZERO);
+    let asset =
+        kairos_primitives::reference::Currency::new(text(row, "asset")?).map_err(payload)?;
+    let accrued_rewards = optional_decimal(row, "cumulativeTotalRewards")?
+        .map(|amount| crate::EarnAccruedReward {
+            asset: asset.clone(),
+            amount,
+            component: None,
+        })
+        .into_iter()
+        .collect();
     Ok(EarnPosition {
         participant_position_id: scalar_string(row.get("positionId")),
         product_id: text(row, "productId")?.into(),
-        asset: kairos_primitives::reference::Currency::new(text(row, "asset")?).map_err(payload)?,
+        asset,
         family: EarnProductFamily::Flexible,
         principal,
-        accrued_rewards: Vec::new(),
+        accrued_rewards,
         redeemable_amount: optional_decimal(row, "freeAmount")?.or(Some(principal)),
         subscribed_at_unix_nanos: None,
         matures_at_unix_nanos: None,
@@ -628,11 +638,30 @@ mod tests {
     fn parses_position_without_mixing_it_with_trade_positions() {
         let position = parse_position(&serde_json::json!({
             "productId":"USDT001", "asset":"USDT", "totalAmount":"125.5",
-            "freeAmount":"120.5", "redeemingAmount":"5"
+            "freeAmount":"120.5", "redeemingAmount":"5",
+            "cumulativeTotalRewards":"0.45459183"
         }))
         .unwrap();
         assert_eq!(position.principal, "125.5".parse().unwrap());
         assert_eq!(position.state, EarnPositionState::Redeeming);
+        assert_eq!(position.accrued_rewards.len(), 1);
+        assert_eq!(position.accrued_rewards[0].asset.as_str(), "USDT");
+        assert_eq!(
+            position.accrued_rewards[0].amount,
+            "0.45459183".parse().unwrap()
+        );
+        assert_eq!(position.accrued_rewards[0].component, None);
+    }
+
+    #[test]
+    fn parses_flexible_position_when_cumulative_rewards_are_not_reported() {
+        let position = parse_position(&serde_json::json!({
+            "productId":"USDT001", "asset":"USDT", "totalAmount":"125.5",
+            "freeAmount":"125.5", "redeemingAmount":"0"
+        }))
+        .unwrap();
+
+        assert!(position.accrued_rewards.is_empty());
     }
 
     #[test]

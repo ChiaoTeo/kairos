@@ -81,6 +81,8 @@ fn install_one(
                                     connection.as_ref(),
                                     endpoint,
                                     default_endpoint("binance-spot-rest"),
+                                    "market-query",
+                                    Some("spot"),
                                 ),
                                 credential: None,
                             },
@@ -106,6 +108,8 @@ fn install_one(
                                     connection.as_ref(),
                                     endpoint,
                                     default_endpoint("binance-spot-websocket"),
+                                    "market-stream",
+                                    Some("spot"),
                                 ),
                                 credential: None,
                                 event_capacity: 4_096,
@@ -155,6 +159,8 @@ fn install_one(
                             connection.as_ref(),
                             endpoint,
                             default_endpoint("binance-equity"),
+                            "market-query",
+                            Some("equity"),
                         ),
                         credential: Some(BinanceCredential {
                             principal_id: credential_id.to_owned(),
@@ -217,6 +223,8 @@ fn install_one(
                             connection.as_ref(),
                             endpoint,
                             default_endpoint(rest_key),
+                            "market-query",
+                            Some(product_name),
                         ),
                         credential: None,
                     };
@@ -250,6 +258,8 @@ fn install_one(
                             connection.as_ref(),
                             endpoint,
                             default_endpoint(ws_key),
+                            "market-stream",
+                            Some(product_name),
                         ),
                         credential: None,
                         event_capacity: 4_096,
@@ -302,6 +312,8 @@ fn install_one(
                                     connection.as_ref(),
                                     endpoint,
                                     default_endpoint("okx-spot-rest"),
+                                    "market-query",
+                                    Some(product),
                                 ),
                             },
                         )
@@ -332,6 +344,8 @@ fn install_one(
                                     connection.as_ref(),
                                     endpoint,
                                     default_endpoint("okx-public-websocket"),
+                                    "market-stream",
+                                    Some(product),
                                 ),
                                 event_capacity: 4_096,
                             },
@@ -443,6 +457,10 @@ fn install_one(
             let (product_name, endpoint_key) = match product {
                 MassiveMarketProduct::Equity => ("equity", "massive-equity-websocket"),
                 MassiveMarketProduct::Options => ("options", "massive-options-websocket"),
+                MassiveMarketProduct::Futures => ("futures", "massive-futures-websocket"),
+                MassiveMarketProduct::Indices => ("indices", "massive-indices-websocket"),
+                MassiveMarketProduct::Forex => ("forex", "massive-forex-websocket"),
+                MassiveMarketProduct::Crypto => ("crypto", "massive-crypto-websocket"),
             };
             let config = MassiveWebSocketConfig {
                 environment: "public".into(),
@@ -450,6 +468,8 @@ fn install_one(
                     connection.as_ref(),
                     endpoint,
                     default_endpoint(endpoint_key),
+                    "market-stream",
+                    Some(product_name),
                 ),
                 api_key,
                 event_capacity: 4_096,
@@ -464,6 +484,22 @@ fn install_one(
                     .connections()
                     .massive_options_websocket
                     .create(connection_key, config),
+                MassiveMarketProduct::Futures => system
+                    .connections()
+                    .massive_futures_websocket
+                    .create(connection_key, config),
+                MassiveMarketProduct::Indices => system
+                    .connections()
+                    .massive_indices_websocket
+                    .create(connection_key, config),
+                MassiveMarketProduct::Forex => system
+                    .connections()
+                    .massive_forex_websocket
+                    .create(connection_key, config),
+                MassiveMarketProduct::Crypto => system
+                    .connections()
+                    .massive_crypto_websocket
+                    .create(connection_key, config),
             }
             .map_err(|error| error.to_string())?;
             let mut descriptor = FeedDescriptor::all_routes(MarketFeedId::new(source_id)?);
@@ -474,8 +510,16 @@ fn install_one(
             descriptor.market_type = Some(crate::domain::market::ProviderSegmentCode::new(
                 product_name,
             )?);
+            let asset_class = match product {
+                MassiveMarketProduct::Forex => "fiat",
+                MassiveMarketProduct::Crypto => "crypto",
+                MassiveMarketProduct::Equity
+                | MassiveMarketProduct::Options
+                | MassiveMarketProduct::Futures
+                | MassiveMarketProduct::Indices => "equity",
+            };
             descriptor.asset_type = Some(
-                "equity"
+                asset_class
                     .parse::<kairos_primitives::reference::AssetClass>()
                     .map_err(|e| e.to_string())?,
             );
@@ -490,7 +534,7 @@ fn install_one(
             client_id,
             exchange,
             currency,
-            snapshot_interval_ms,
+            market_data_line_limit,
             ..
         } => {
             system
@@ -505,6 +549,7 @@ fn install_one(
                         client_id: *client_id,
                         exchange: exchange.clone(),
                         currency: currency.clone(),
+                        market_data_line_limit: *market_data_line_limit,
                     },
                 )
                 .map_err(|error| error.to_string())?;
@@ -522,10 +567,7 @@ fn install_one(
             );
             plans.push(MarketSourcePlan {
                 descriptor: descriptor.with_observation_capabilities(capabilities),
-                mode: MarketSourceMode::Snapshot(positive_interval(
-                    source_id,
-                    *snapshot_interval_ms,
-                )?),
+                mode: MarketSourceMode::Stream,
             });
         },
     }
@@ -553,10 +595,14 @@ fn resolved_endpoint(
     connection: Option<&kairos_integration::composition::ProviderConnectionProfile>,
     source_endpoint: &Option<String>,
     default: &str,
+    purpose: &str,
+    product: Option<&str>,
 ) -> String {
     source_endpoint
         .clone()
-        .or_else(|| connection.map(|value| value.endpoint.clone()))
+        .or_else(|| {
+            connection.and_then(|value| value.endpoint_for(purpose, product).map(str::to_owned))
+        })
         .unwrap_or_else(|| default.to_owned())
 }
 
@@ -592,6 +638,10 @@ fn connection_requirement(
             Some(match product {
                 MassiveMarketProduct::Equity => "equity",
                 MassiveMarketProduct::Options => "options",
+                MassiveMarketProduct::Futures => "futures",
+                MassiveMarketProduct::Indices => "indices",
+                MassiveMarketProduct::Forex => "forex",
+                MassiveMarketProduct::Crypto => "crypto",
             }),
             "market-stream",
         ),
@@ -613,7 +663,7 @@ fn connection_requirement(
             },
         ),
         MarketProviderBinding::Hyperliquid { .. } => ("hyperliquid", None, "market-query"),
-        MarketProviderBinding::Ibkr { .. } => ("ibkr", None, "market-query"),
+        MarketProviderBinding::Ibkr { .. } => ("ibkr", None, "market-stream"),
     }
 }
 
@@ -629,6 +679,7 @@ mod tests {
             provider: "provider".into(),
             environment: "production".into(),
             endpoint: endpoint.into(),
+            endpoints: Default::default(),
             credential_id: "provider-readonly".into(),
             enabled: true,
             products: vec!["equity".into()],
@@ -645,6 +696,8 @@ mod tests {
                 Some(&connection),
                 &Some("wss://stream.provider.example/equity".into()),
                 "wss://default.provider.example",
+                "market-stream",
+                Some("equity"),
             ),
             "wss://stream.provider.example/equity"
         );
@@ -655,7 +708,13 @@ mod tests {
         let connection = connection("https://api.provider.example");
 
         assert_eq!(
-            resolved_endpoint(Some(&connection), &None, "wss://default.provider.example",),
+            resolved_endpoint(
+                Some(&connection),
+                &None,
+                "wss://default.provider.example",
+                "market-stream",
+                Some("equity"),
+            ),
             "https://api.provider.example"
         );
     }
@@ -663,7 +722,33 @@ mod tests {
     #[test]
     fn provider_default_is_used_without_configured_endpoint() {
         assert_eq!(
-            resolved_endpoint(None, &None, "wss://default.provider.example"),
+            resolved_endpoint(
+                None,
+                &None,
+                "wss://default.provider.example",
+                "market-stream",
+                Some("equity"),
+            ),
+            "wss://default.provider.example"
+        );
+    }
+
+    #[test]
+    fn version_two_profile_does_not_reuse_rest_endpoint_for_streaming() {
+        let mut connection = connection("https://api.provider.example");
+        connection.endpoints.insert(
+            "market-query".into(),
+            "https://query.provider.example".into(),
+        );
+
+        assert_eq!(
+            resolved_endpoint(
+                Some(&connection),
+                &None,
+                "wss://default.provider.example",
+                "market-stream",
+                Some("equity"),
+            ),
             "wss://default.provider.example"
         );
     }

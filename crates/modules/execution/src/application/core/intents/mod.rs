@@ -1,5 +1,7 @@
 //! Intent, plan, hedge, split, and maker use cases.
 
+use std::collections::BTreeSet;
+
 use super::*;
 
 mod lifecycle;
@@ -102,6 +104,22 @@ impl ExecutionApplication {
                 .checked_sub(hedge)
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?
         };
+        let algorithm_exposure = self
+            .actor
+            .algorithm_run(intent_id)
+            .and_then(|run| run.exposure.as_ref());
+        let unhedged_since = algorithm_exposure.and_then(|exposure| exposure.unhedged_since);
+        let exposure_deadline = policy
+            .max_unhedged_duration
+            .zip(unhedged_since)
+            .map(|(duration, since)| {
+                since
+                    .get()
+                    .checked_add(duration.get())
+                    .map(UnixNanos::new)
+                    .ok_or_else(|| ExecutionError::Invalid("hedge deadline overflow".into()))
+            })
+            .transpose()?;
         Ok(Some(HedgeRequirement {
             intent_id: typed_intent_id(intent_id),
             leader_leg_id: policy.leader_leg_id.clone(),
@@ -111,6 +129,9 @@ impl ExecutionApplication {
             required_hedge_quantity: required,
             unhedged_quantity: unhedged,
             max_unhedged_quantity: policy.max_unhedged_quantity,
+            unhedged_since,
+            max_unhedged_duration: policy.max_unhedged_duration,
+            exposure_deadline,
             within_tolerance: unhedged <= policy.max_unhedged_quantity,
             compensation_attempts: state.compensation_attempts,
             max_compensation_attempts: policy.max_compensation_attempts,
@@ -124,7 +145,23 @@ impl ExecutionApplication {
     pub(super) fn maybe_submit_compensating_hedge(
         &mut self,
         intent_id: &str,
+        business_time_unix_nanos: u64,
     ) -> Result<(), ExecutionError> {
+        if self
+            .actor
+            .algorithm_run(intent_id)
+            .is_some_and(|run| matches!(run.spec, ExecutionAlgorithmSpec::MakerTakerHedge(_)))
+        {
+            self.drive_maker_taker_hedge(intent_id, business_time_unix_nanos)?;
+            let due_at = self
+                .actor
+                .algorithm_run(intent_id)
+                .and_then(|run| run.last_decision_at)
+                .map(UnixNanos::get)
+                .unwrap_or(business_time_unix_nanos);
+            self.advance_due_intent_orders(due_at, usize::MAX)?;
+            return Ok(());
+        }
         let Some(prepared) = self.prepare_compensating_hedge(intent_id)? else {
             return Ok(());
         };
@@ -132,6 +169,315 @@ impl ExecutionApplication {
             Ok(order) => self.complete_compensating_hedge(&prepared, &order),
             Err(error) => self.fail_compensating_hedge(&prepared, &error),
         }
+    }
+
+    pub(in crate::application) fn drive_maker_taker_hedge(
+        &mut self,
+        intent_id: &str,
+        business_time_unix_nanos: u64,
+    ) -> Result<(), ExecutionError> {
+        let state = self
+            .actor
+            .intent(intent_id)
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("hedge intent disappeared".into()))?;
+        let run = self
+            .actor
+            .algorithm_run(intent_id)
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("hedge algorithm run disappeared".into()))?;
+        let ExecutionAlgorithmSpec::MakerTakerHedge(spec) = &run.spec else {
+            return Ok(());
+        };
+        let exposure = run
+            .exposure
+            .as_ref()
+            .ok_or_else(|| ExecutionError::Invalid("hedge exposure ledger is missing".into()))?;
+        if exposure.unhedged_after_commitment.is_zero() {
+            return Ok(());
+        }
+        let decision_time = run
+            .last_decision_at
+            .map(|last| last.get().max(business_time_unix_nanos))
+            .unwrap_or(business_time_unix_nanos);
+        if !spec
+            .hedge_due(exposure, decision_time.into())
+            .map_err(ExecutionError::Invalid)?
+        {
+            if spec.max_unhedged_duration.is_some() && !exposure.unhedged_filled_quantity.is_zero()
+            {
+                let decision = decide_maker_taker_hedge(
+                    &run,
+                    AlgorithmInput {
+                        business_time: decision_time.into(),
+                        ready_children: Vec::new(),
+                    },
+                )
+                .map_err(ExecutionError::Invalid)?;
+                self.actor
+                    .apply_algorithm_decision(intent_id, decision)
+                    .map_err(ExecutionError::Invalid)?;
+                self.persist_snapshot()?;
+            }
+            return Ok(());
+        }
+        let hedge_failed = run.legs.iter().any(|leg| {
+            leg.leg_id == spec.hedge_leg_id
+                && leg.lifecycle == crate::domain::AlgorithmLegLifecycle::Failed
+        });
+        let template = state
+            .dormant_orders
+            .iter()
+            .find(|order| intent_leg_id(&state.intent, order) == spec.hedge_leg_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("dormant hedge template is missing".into()))?;
+        let fallback_route_id = hedge_failed
+            .then(|| next_fallback_route_id(&run, spec))
+            .flatten();
+        if hedge_failed && fallback_route_id.is_none() {
+            let reason =
+                "taker hedge and configured fallback routes were exhausted with residual exposure";
+            if self.drive_maker_taker_unwind(intent_id, business_time_unix_nanos, reason)? {
+                return Ok(());
+            }
+            let current = self
+                .actor
+                .intent(intent_id)
+                .cloned()
+                .ok_or_else(|| ExecutionError::Invalid("unwind intent disappeared".into()))?;
+            self.commit_intent(IntentEvent {
+                intent_id: typed_intent_id(intent_id),
+                strategy_decision_id: None,
+                event_sequence: 0.into(),
+                previous_status: None,
+                status: IntentStatus::ReconciliationRequired,
+                order_ids: Vec::new(),
+                completed_quantity: current.completed_quantity,
+                occurred_at_unix_nanos: business_time_unix_nanos.into(),
+                reason: format!("automatic emergency unwind unavailable: {reason}"),
+                dependency_watermarks: current.dependency_watermarks,
+            })?;
+            return Ok(());
+        }
+        let selected_route_id = fallback_route_id.or_else(|| template.execution_route_id.clone());
+        let order_id = OrderId::new(format!(
+            "{}:hedge:decision:{}",
+            intent_id,
+            run.decision_sequence.saturating_add(1)
+        ))
+        .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        let decision = decide_maker_taker_hedge(
+            &run,
+            AlgorithmInput {
+                business_time: decision_time.into(),
+                ready_children: vec![AlgorithmChildCandidate {
+                    order_id: order_id.clone(),
+                    leg_id: spec.hedge_leg_id.clone(),
+                    quantity: exposure.unhedged_after_commitment,
+                    execution_style: AlgorithmExecutionStyle::TakerImmediate,
+                    execution_route_id: selected_route_id.clone(),
+                }],
+            },
+        )
+        .map_err(ExecutionError::Invalid)?;
+        let actions = self
+            .actor
+            .apply_algorithm_decision(intent_id, decision)
+            .map_err(ExecutionError::Invalid)?;
+        actions
+            .into_iter()
+            .find(|action| {
+                matches!(
+                    &action.kind,
+                    AlgorithmActionKind::SubmitChild {
+                        order_id: candidate_order_id,
+                        execution_style: AlgorithmExecutionStyle::TakerImmediate,
+                        ..
+                    } if candidate_order_id == &order_id
+                )
+            })
+            .ok_or_else(|| {
+                ExecutionError::Invalid("maker-taker algorithm did not authorize a hedge".into())
+            })?;
+
+        let mut request = template;
+        request.order_id = order_id;
+        request.execution_route_id = selected_route_id;
+        request.quantity = exposure.unhedged_after_commitment;
+        request.order_type = OrderType::Market;
+        request.limit_price = None;
+        request.options.post_only = Some(false);
+        request.options.time_in_force = None;
+        request.options.split = None;
+        request.options.maker = None;
+        self.actor
+            .schedule_pending_order(intent_id, request, decision_time.into())
+            .map_err(ExecutionError::Invalid)?;
+        // The action and reconstructable request become durable together;
+        // direct and managed runtimes dispatch them through the same due loop.
+        self.persist_snapshot()
+    }
+
+    fn drive_maker_taker_unwind(
+        &mut self,
+        intent_id: &str,
+        business_time_unix_nanos: u64,
+        unwind_reason: &str,
+    ) -> Result<bool, ExecutionError> {
+        let state = self
+            .actor
+            .intent(intent_id)
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("unwind intent disappeared".into()))?;
+        let Some(policy) = state.intent.hedge_policy.as_ref() else {
+            return Ok(false);
+        };
+        if state.intent.failure_policy != FailurePolicy::Compensate
+            || !policy.compensate_on_failure
+            || state.compensation_attempts >= policy.max_compensation_attempts
+        {
+            return Ok(false);
+        }
+        let Some(max_slippage_bps) = state.intent.max_slippage_bps else {
+            return Ok(false);
+        };
+        if max_slippage_bps >= 10_000 {
+            return Ok(false);
+        }
+        let run = self
+            .actor
+            .algorithm_run(intent_id)
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("unwind algorithm run disappeared".into()))?;
+        let ExecutionAlgorithmSpec::MakerTakerHedge(spec) = &run.spec else {
+            return Ok(false);
+        };
+        let exposure = run
+            .exposure
+            .as_ref()
+            .ok_or_else(|| ExecutionError::Invalid("unwind exposure ledger is missing".into()))?;
+        if exposure.unhedged_after_commitment.is_zero() {
+            return Ok(false);
+        }
+        let plan = state
+            .plan
+            .as_ref()
+            .ok_or_else(|| ExecutionError::Invalid("unwind execution plan is missing".into()))?;
+        let leader_leg = plan
+            .legs
+            .iter()
+            .find(|leg| leg.leg_id == spec.leader_leg_id)
+            .ok_or_else(|| ExecutionError::Invalid("unwind leader leg is missing".into()))?;
+        let leader_order = leader_leg
+            .order_ids
+            .iter()
+            .find_map(|order_id| self.actor.order_map().get(order_id.as_str()))
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("unwind leader order is missing".into()))?;
+        let reference_price = self
+            .actor
+            .fills()
+            .iter()
+            .filter(|fill| leader_leg.order_ids.iter().any(|id| id == &fill.order_id))
+            .max_by_key(|fill| fill.occurred_at_unix_nanos)
+            .map(|fill| fill.price)
+            .ok_or_else(|| ExecutionError::Invalid("unwind reference fill is missing".into()))?;
+        let unwind_side = match leader_order.side {
+            OrderSide::Buy => OrderSide::Sell,
+            OrderSide::Sell => OrderSide::Buy,
+        };
+        let limit_price = protected_unwind_price(reference_price, unwind_side, max_slippage_bps)?;
+        let unwind_quantity = spec
+            .leader_quantity_for_hedge_exposure(exposure.unhedged_after_commitment)
+            .map_err(ExecutionError::Invalid)?;
+        let order_id = OrderId::new(format!(
+            "{}:unwind:decision:{}",
+            intent_id,
+            run.decision_sequence.saturating_add(1)
+        ))
+        .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        let decision_time = run
+            .last_decision_at
+            .map(|last| last.get().max(business_time_unix_nanos))
+            .unwrap_or(business_time_unix_nanos);
+        let decision = decide_maker_taker_hedge(
+            &run,
+            AlgorithmInput {
+                business_time: decision_time.into(),
+                ready_children: vec![AlgorithmChildCandidate {
+                    order_id: order_id.clone(),
+                    leg_id: spec.leader_leg_id.clone(),
+                    quantity: unwind_quantity,
+                    execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+                    execution_route_id: leader_order.execution_route_id.clone(),
+                }],
+            },
+        )
+        .map_err(ExecutionError::Invalid)?;
+        self.actor
+            .apply_algorithm_decision(intent_id, decision)
+            .map_err(ExecutionError::Invalid)?
+            .into_iter()
+            .find(|action| {
+                matches!(
+                    &action.kind,
+                    AlgorithmActionKind::SubmitChild {
+                        order_id: candidate_order_id,
+                        execution_style: AlgorithmExecutionStyle::UnwindImmediate,
+                        ..
+                    } if candidate_order_id == &order_id
+                )
+            })
+            .ok_or_else(|| {
+                ExecutionError::Invalid("maker-taker algorithm did not authorize unwind".into())
+            })?;
+        let mut options = template_options(&state.intent, spec.leader_leg_id.as_str());
+        options.time_in_force = Some("IOC".into());
+        options.post_only = Some(false);
+        options.split = None;
+        options.maker = None;
+        let request = SubmitOrder {
+            order_id,
+            intent_id: Some(state.intent.intent_id.clone()),
+            strategy_id: Some(typed_strategy_id(state.intent.strategy_id.clone())),
+            account_id: leader_order.account_id.clone(),
+            segment_key: leader_order.segment_key.clone(),
+            instrument_id: leader_order.instrument_id.clone(),
+            market_id: leader_order.market_id.clone(),
+            execution_route_id: leader_order.execution_route_id.clone(),
+            side: unwind_side,
+            order_type: OrderType::Limit,
+            quantity: unwind_quantity,
+            limit_price: Some(limit_price),
+            options,
+            submitted_at_unix_nanos: Some(decision_time.into()),
+        };
+        self.actor.increment_compensation_attempts(intent_id);
+        self.actor
+            .schedule_pending_order(intent_id, request.clone(), decision_time.into())
+            .map_err(ExecutionError::Invalid)?;
+        // Persist the stable action and its reconstructable request atomically.
+        // If the process stops before dispatch, the ordinary due-order loop
+        // resumes this exact order identity and execution style after restart.
+        self.persist_snapshot()?;
+        let current = self
+            .actor
+            .intent(intent_id)
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("unwind intent disappeared".into()))?;
+        self.commit_intent(IntentEvent {
+            intent_id: typed_intent_id(intent_id),
+            strategy_decision_id: None,
+            event_sequence: 0.into(),
+            previous_status: None,
+            status: IntentStatus::Compensating,
+            order_ids: Vec::new(),
+            completed_quantity: current.completed_quantity,
+            occurred_at_unix_nanos: decision_time.into(),
+            reason: format!("emergency unwind scheduled: {unwind_reason}"),
+            dependency_watermarks: current.dependency_watermarks,
+        })?;
+        Ok(true)
     }
 
     pub(crate) fn prepare_compensating_hedge(
@@ -323,4 +669,74 @@ impl ExecutionApplication {
     pub fn drain_intent_events(&mut self) -> Vec<IntentEvent> {
         self.actor.drain_intent_events()
     }
+}
+
+fn next_fallback_route_id(
+    run: &AlgorithmRun,
+    spec: &MakerTakerHedgeSpec,
+) -> Option<ExecutionRouteId> {
+    let attempted = run
+        .actions
+        .iter()
+        .filter_map(|action| match &action.kind {
+            AlgorithmActionKind::SubmitChild {
+                execution_style: AlgorithmExecutionStyle::TakerImmediate,
+                execution_route_id,
+                ..
+            } => execution_route_id.clone(),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    spec.fallback_execution_route_ids
+        .iter()
+        .find(|route_id| !attempted.contains(*route_id))
+        .cloned()
+}
+
+fn protected_unwind_price(
+    reference_price: Price,
+    unwind_side: OrderSide,
+    max_slippage_bps: u32,
+) -> Result<Price, ExecutionError> {
+    const BASIS_POINTS: i128 = 10_000;
+
+    if reference_price.mantissa() <= 0 {
+        return Err(ExecutionError::Invalid(
+            "unwind reference price must be positive".into(),
+        ));
+    }
+    if max_slippage_bps >= BASIS_POINTS as u32 {
+        return Err(ExecutionError::Invalid(
+            "unwind maximum slippage must be below 10,000 bps".into(),
+        ));
+    }
+
+    let reference = i128::from(reference_price.mantissa());
+    let adjustment = i128::from(max_slippage_bps);
+    let protected = match unwind_side {
+        OrderSide::Sell => {
+            reference
+                .checked_mul(BASIS_POINTS - adjustment)
+                .ok_or_else(|| ExecutionError::Invalid("unwind price overflow".into()))?
+                / BASIS_POINTS
+        },
+        OrderSide::Buy => {
+            let numerator = reference
+                .checked_mul(BASIS_POINTS + adjustment)
+                .ok_or_else(|| ExecutionError::Invalid("unwind price overflow".into()))?;
+            numerator
+                .checked_add(BASIS_POINTS - 1)
+                .ok_or_else(|| ExecutionError::Invalid("unwind price overflow".into()))?
+                / BASIS_POINTS
+        },
+    };
+    let protected = i64::try_from(protected)
+        .map_err(|_| ExecutionError::Invalid("unwind price exceeds supported range".into()))?;
+    if protected <= 0 {
+        return Err(ExecutionError::Invalid(
+            "unwind price protection rounded below the minimum positive price".into(),
+        ));
+    }
+    Price::new(protected, reference_price.scale())
+        .map_err(|error| ExecutionError::Invalid(error.to_string()))
 }

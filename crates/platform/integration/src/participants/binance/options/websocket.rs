@@ -7,11 +7,10 @@ market_websocket_capabilities!(BinanceOptionsWebSocketConnection, "options");
 
 #[cfg(test)]
 mod tests {
+    use super::BinanceOptionsWebSocketConnection;
     use crate::ConnectionKey;
     use crate::participants::binance::BinanceWebSocketConfig;
     use crate::services::participants::binance::market_stream::{PlannedStream, StreamRoute};
-
-    use super::BinanceOptionsWebSocketConnection;
 
     fn connection() -> BinanceOptionsWebSocketConnection {
         BinanceOptionsWebSocketConnection::new(

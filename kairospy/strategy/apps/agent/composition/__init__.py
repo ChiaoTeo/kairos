@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.investment.apps.account.application import AccountApplication, SegmentCompleteness
+from kairospy.investment.apps.account.application import (
+    AccountApplication,
+    SegmentCompleteness,
+)
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
 )
@@ -80,7 +83,11 @@ class AgentProcessComposition:
             launch_id=launch_id,
             profile_hash=self.profile_hash,
             runtime=self.config.runtime,
-            model=None if self.config.model is None else self.config.model.model,
+            model=(
+                None
+                if self.config.model is None
+                else self.config.model.ref or self.config.model.model
+            ),
             tool_profiles=tuple(
                 f"{selection['id']}@{_mcp_snapshot_hash(self.config)}"
                 for selection in self.config.mcp
@@ -188,9 +195,14 @@ def _compose_enabled_agent(
         model = config.model
         if model is None:
             raise ValueError("Agent requires model configuration")
-        connection = AgentResourceApplication(workspace).model_connection(
-            model.connection
-        )
+        resources = AgentResourceApplication(workspace)
+        if model.ref is not None:
+            available_model = resources.available_model(model.ref)
+            connection = resources.model_endpoint(str(available_model["endpoint_id"]))
+            provider_model = str(available_model["provider_model"])
+        else:
+            connection = resources.model_connection(model.connection)
+            provider_model = model.model
         credential_id = connection.get("credential_id")
         api_key = (
             CredentialConfigurationApplication(workspace).resolve_field(
@@ -201,7 +213,7 @@ def _compose_enabled_agent(
         )
         runtime = ModelDecisionRuntime(
             instructions=_profile_instructions(profile),
-            model=model.model,
+            model=provider_model,
             api_key=api_key,
             provider=str(connection.get("provider") or "custom"),
             api_mode=str(connection.get("api_mode") or "openai-chat-completions"),
@@ -233,7 +245,9 @@ def _compose_enabled_agent(
     application._bind_health_provider(worker.health)
     application._bind_runtime_metadata(
         runtime=config.runtime,
-        model=None if config.model is None else config.model.model,
+        model=(
+            None if config.model is None else config.model.ref or config.model.model
+        ),
         mcp_servers=len(config.mcp),
         store_ready=True,
     )

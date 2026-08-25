@@ -1,6 +1,6 @@
 # Decision 0016：模型连接与模型引用
 
-- Status: Accepted
+- Status: Superseded by [Decision 0019](0019-model-endpoints-and-available-models.md)
 - Date: 2026-08-25
 - Scope: Agent 模型配置、验证证据、Workbench 运行准备与 Launch
 - Extends: [Decision 0014](0014-unified-textual-workbench.md)

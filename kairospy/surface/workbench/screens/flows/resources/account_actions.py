@@ -16,10 +16,11 @@ ACCOUNT_ACTIONS = (
     ActionItem("orders", "订单管理", "未完成、历史、成交和订单写操作", "4"),
     ActionItem("earn", "理财与质押", "查询 Earn holdings", "5"),
     ActionItem("fees", "费率与等级", "按产品和交易对查询真实费率", "6"),
-    ActionItem("transfer", "资金划转", "检查能力与 preview/确认边界", "7"),
+    ActionItem("transfer", "资金划转", "在同一交易所账户和分区间转移资产", "7"),
     ActionItem("show", "查看账户配置", "显示脱敏配置", "8"),
     ActionItem("doctor", "运行账户诊断", "检查配置和运行准备", "9"),
     ActionItem("credentials", "查看凭据列表", "只显示凭据元数据", "10"),
+    ActionItem("connection", "账户连接设置", "验证、修改或停用当前账户连接", "11"),
 )
 
 
@@ -58,13 +59,16 @@ def execute(
             else str(record.get("credential_role") or "readonly").lower()
             in {"transfer", "admin"}
         )
+        allowed = allowed or bool(
+            str(record.get("capital_controller_account_id") or "").strip()
+        )
         return {
             "account_id": account_id,
             "capability": "transfer",
             "available": allowed,
             "status": "preview-required" if allowed else "not-authorized",
             "message": (
-                "资金划转必须先 preview，再由用户确认执行；当前尚未开放执行。"
+                "资金划转可用；进入后必须先预览，再明确确认执行。"
                 if allowed
                 else "当前账户凭据不具备资金划转能力。"
             ),

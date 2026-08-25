@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from kairospy.investment.apps.account.application import AccountConfigurationApplication
@@ -12,8 +13,10 @@ from kairospy.investment.apps.reference.application import (
     ReferenceProviderConfigurationApplication,
 )
 from kairospy.strategy.apps.agent.application import (
+    AvailableModelApplication,
     ModelConnectionDraft,
     ModelConnectionDraftApplication,
+    ModelEndpointApplication,
 )
 from kairospy.strategy.apps.notification.application import NotificationAdminApplication
 from kairospy.system.apps.credentials.application import (
@@ -22,6 +25,7 @@ from kairospy.system.apps.credentials.application import (
 from kairospy.system.apps.integration.application import (
     ProviderConnectionConfigurationApplication,
 )
+from kairospy.system.apps.workspace.application import WorkspaceConfigurationTransaction
 
 from .views import identity
 
@@ -51,6 +55,7 @@ class ResourceWizardState:
     endpoint_defaulted: bool = False
     model_providers: tuple[dict[str, object], ...] = ()
     credentials: tuple[dict[str, object], ...] = ()
+    model_endpoints: tuple[dict[str, object], ...] = ()
 
     @property
     def editing(self) -> bool:
@@ -75,7 +80,7 @@ class ResourceWizardState:
                     )
                     if self.editing:
                         detail = f"直接回车沿用现有凭据；{detail}"
-                elif self.kind == "models":
+                elif self.kind == "model_endpoints":
                     if self.editing and not self.model_provider_changed():
                         detail = (
                             "直接回车沿用现有 API Key；如需更换，请粘贴新值。"
@@ -99,12 +104,12 @@ class ResourceWizardState:
                     "请输入接收通知的 Chat ID，例如 123456789 或 -1001234567890；"
                     "输入 /back 返回，/cancel 取消向导。"
                 )
-            elif name == "models":
+            elif name == "provider-model":
                 detail = (
-                    "可填写一个或多个模型 ID，并用逗号分隔，例如 gpt-5, gpt-5-mini；"
-                    "也可直接回车，保存连接后再补充。输入 /back 返回，/cancel 取消向导。"
+                    "输入服务商接受的精确模型 ID，例如 gpt-5.6-sol 或 qwen3:8b；"
+                    "输入 /back 返回。"
                 )
-            elif name == "endpoint" and self.kind == "models":
+            elif name == "endpoint" and self.kind == "model_endpoints":
                 provider_default = self.model_provider_default("base_url")
                 current = str(self.record.get("base_url") or "")
                 if provider_default:
@@ -128,7 +133,7 @@ class ResourceWizardState:
     def accept(self, name: str, raw: str) -> None:
         entered = raw.strip()
         value = entered or self._default(name)
-        if name == "endpoint" and self.kind == "models" and not entered:
+        if name == "endpoint" and self.kind == "model_endpoints" and not entered:
             value = str(self.model_provider_default("base_url"))
         if name == "account-mode":
             value = {"1": "paper", "2": "live"}.get(value.lower(), value.lower())
@@ -198,23 +203,33 @@ class ResourceWizardState:
             )
             if not any(item.get("provider") == provider for item in self.credentials):
                 raise ValueError(f"尚无可用的 {provider} 凭据，请选择安全创建新凭据")
-        if name == "endpoint" and self.kind == "models" and not value:
+        if name == "endpoint" and self.kind == "model_endpoints" and not value:
             raise ValueError("自定义模型服务需要 API 地址")
-        if name == "endpoint" and self.kind == "models":
+        if name == "endpoint" and self.kind == "model_endpoints":
             self.endpoint_defaulted = not entered
         if (
             name == "secret-primary"
-            and self.kind == "models"
+            and self.kind == "model_endpoints"
             and self.model_auth_required()
             and not value
             and (not self.editing or self.model_provider_changed())
         ):
             raise ValueError(f"{self.model_provider_label()} 需要 API Key")
-        if name == "models":
-            self.answers[name] = tuple(
-                item.strip() for item in value.split(",") if item.strip()
+        if name == "provider-model" and (
+            not value or any(character.isspace() for character in value)
+        ):
+            raise ValueError("服务商模型 ID 不能为空或包含空白字符")
+        if (
+            name == "resource-id"
+            and self.kind == "models"
+            and not re.fullmatch(
+                r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_-])?", value
             )
-            return
+        ):
+            raise ValueError(
+                "模型名称必须以英文字母或数字开头，且只能包含英文字母、"
+                "数字、内部点号、连字符或下划线（最长 128 个字符）"
+            )
         if name == "resource-id" and not value:
             raise ValueError("资源名称不能为空")
         self.answers[name] = value
@@ -232,7 +247,7 @@ class ResourceWizardState:
                 if provider == "telegram"
                 else "飞书机器人 Webhook 地址"
             )
-        if name == "secret-primary" and self.kind == "models":
+        if name == "secret-primary" and self.kind == "model_endpoints":
             return f"{self.model_provider_label()} API Key"
         return _RESOURCE_PROMPTS[name]
 
@@ -389,7 +404,7 @@ class ResourceWizardState:
                 if provider == "okx":
                     steps.append("secret-tertiary")
             return tuple(steps)
-        if self.kind == "models":
+        if self.kind == "model_endpoints":
             provider = self.model_provider()
             steps = ["model-provider", *identity]
             if provider == "custom":
@@ -398,6 +413,8 @@ class ResourceWizardState:
             if self.model_auth_required():
                 steps.append("secret-primary")
             return tuple(steps)
+        if self.kind == "models":
+            return ("endpoint-id", *identity, "provider-model")
         provider = str(
             self.answers.get("notification-provider")
             or self._default("notification-provider")
@@ -454,6 +471,7 @@ class ResourceWizardState:
                 ),
                 "data": f"{data_provider}-{data_product}",
                 "models": f"{provider}-main",
+                "model_endpoints": f"{provider}-main",
                 "notifications": f"{provider}-alerts",
             }[self.kind],
             "account-segment": next(
@@ -489,7 +507,13 @@ class ResourceWizardState:
                 if self.editing and not provider_changed
                 else model_mode
             ),
-            "models": ",".join(str(item) for item in self.record.get("models") or ()),
+            "endpoint-id": self.record.get("endpoint_id")
+            or (
+                str(self.model_endpoints[0]["endpoint_id"])
+                if self.model_endpoints
+                else ""
+            ),
+            "provider-model": self.record.get("provider_model") or "",
             "notification-provider": self.record.get("provider") or "feishu",
             "chat-id": self.record.get("chat_id") or "",
             "secret-primary": "",
@@ -630,11 +654,52 @@ def save_resource_wizard(state: Any, wizard: ResourceWizardState) -> dict[str, A
             resource_id, product=product
         )
         return connection
+    if wizard.kind == "model_endpoints":
+        provider = str(answers["model-provider"])
+        endpoint_id = resource_id
+        auth_required = wizard.model_auth_required()
+        credential_id = str(record.get("credential_id") or f"{endpoint_id}-auth")
+        secret = str(answers.get("secret-primary") or "")
+        credentials = CredentialConfigurationApplication(owner)
+        prepared_credential = None
+        if auth_required and secret:
+            prepared_credential = credentials.prepare(
+                credential_id,
+                provider=(
+                    provider
+                    if provider in {"openai", "anthropic", "openrouter"}
+                    else "custom-model"
+                ),
+                role="model-inference",
+                values={"api_key": secret},
+            )
+        elif auth_required and not record:
+            raise ValueError("模型服务需要 API Key")
+        prepared_endpoint = ModelEndpointApplication(owner).prepare(
+            endpoint_id,
+            provider=provider,
+            api_mode=str(
+                answers.get("model-mode") or wizard.model_provider_default("api_mode")
+            ),
+            base_url=str(answers["endpoint"]),
+            credential_id=credential_id if auth_required else None,
+            credential_provider=(
+                prepared_credential.provider if prepared_credential else None
+            ),
+        )
+        transaction = WorkspaceConfigurationTransaction(
+            owner, f"model-endpoint:{endpoint_id}"
+        )
+        if prepared_credential is not None:
+            prepared_credential.stage(transaction)
+        prepared_endpoint.stage(transaction)
+        transaction.commit()
+        return ModelEndpointApplication(owner).show(endpoint_id)
     if wizard.kind == "models":
-        if wizard.model_draft is None:
-            raise ValueError("模型连接草稿尚未准备")
-        return ModelConnectionDraftApplication(owner).commit(
-            wizard.model_draft,
+        return AvailableModelApplication(owner).configure(
+            resource_id,
+            endpoint_id=str(answers["endpoint-id"]),
+            provider_model=str(answers["provider-model"]),
             overwrite=bool(record),
         )
     provider = str(answers["notification-provider"])
@@ -689,7 +754,8 @@ _RESOURCE_PROMPTS = {
     "include-options": "是否包含期权目录和行情（yes / no）",
     "model-provider": "模型服务",
     "model-mode": "接口模式",
-    "models": "模型 ID（可填写多个）",
+    "endpoint-id": "模型服务",
+    "provider-model": "服务商模型 ID",
     "notification-provider": "通知渠道",
     "chat-id": "Telegram chat_id",
     "secret-primary": "安全凭据",

@@ -196,6 +196,9 @@ pub struct HedgePolicyRequest {
     pub ratio: Ratio,
     pub contract_multiplier: Ratio,
     pub max_unhedged_quantity: Quantity,
+    pub max_unhedged_duration: Option<DurationNanos>,
+    #[serde(default)]
+    pub fallback_execution_route_ids: Vec<ExecutionRouteId>,
     pub compensate_on_failure: bool,
     pub max_compensation_attempts: u32,
 }

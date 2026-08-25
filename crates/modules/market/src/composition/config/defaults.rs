@@ -19,6 +19,9 @@ pub(super) fn default_snapshot_interval_ms() -> u64 {
 pub(super) fn default_source_snapshot_interval_ms() -> u64 {
     1_000
 }
+pub(super) fn default_ibkr_market_data_line_limit() -> usize {
+    100
+}
 pub(super) fn default_freshness_check_interval_ms() -> u64 {
     250
 }

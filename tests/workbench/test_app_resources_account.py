@@ -13,6 +13,7 @@ import pytest
 from kairospy.strategy.apps.agent.application.model_connections import (
     ModelProviderConnectionApplication,
 )
+from kairospy.strategy.apps.agent.application import AgentResourceApplication
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.investment.apps.reference.application.models import (
     Asset,
@@ -42,12 +43,14 @@ from kairospy.surface.workbench.screens.flows.resources.actions import detail_ac
 from kairospy.surface.workbench.screens.flows.resources.views import (
     action_result_renderable,
     detail_renderable,
+    saved_resource_renderable,
 )
 from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
 from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
     ChoiceInteraction,
+    ConfirmInteraction,
     InputInteraction,
     WorkbenchCommandInput,
     renderable_plain_text,
@@ -64,7 +67,7 @@ from app_support import (
 )
 
 
-def test_resource_list_detail_and_back_stay_in_command_screen(
+def test_account_selection_enters_account_context_and_back_returns_to_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -80,7 +83,7 @@ def test_resource_list_detail_and_back_stay_in_command_screen(
         ),
     )
 
-    async def run() -> tuple[type[object], str, str, str, bool]:
+    async def run() -> tuple[type[object], str, str, str, bool, bool]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -91,23 +94,28 @@ def test_resource_list_detail_and_back_stay_in_command_screen(
             screen.submit("1")
             await pilot.pause()
             selected = str(screen.query_one("#command-context", Static).render())
+            interaction_has_summary = screen.session.interaction.summary is not None
+            selected_account = str(screen.session.resources.selected["account_id"])
             screen.submit("/back")
+            screen.submit("1")
             await pilot.pause()
             results = str(screen.query_one("#command-context", Static).render())
             return (
                 type(app.screen),
                 selected,
                 results,
-                str(screen.session.resources.selected["account_id"]),
+                selected_account,
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
+                interaction_has_summary,
             )
 
-    screen_type, selected, results, account, focused = asyncio.run(run())
+    screen_type, selected, results, account, focused, has_summary = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert selected == "首页 / 运行准备 / 已选运行资源 · 交易账户 · paper-main  ›"
-    assert results == "首页 / 运行准备 / 交易账户  ›"
+    assert selected == "trader / 运行准备 / 交易账户 · paper-main  ›"
+    assert results == "trader / 运行准备 / 交易账户  ›"
     assert account == "paper-main"
     assert focused
+    assert not has_summary
 
 
 def test_account_resource_list_uses_a_human_summary_instead_of_raw_json(
@@ -137,6 +145,7 @@ def test_account_resource_list_uses_a_human_summary_instead_of_raw_json(
             screen.submit("4")
             screen.submit("1")
             await pilot.pause(0.1)
+            assert screen.session.interaction.summary is None
             action = screen.query_one("#guided-actions", ActionList)._options[0]
             return str(action.prompt)
 
@@ -147,6 +156,72 @@ def test_account_resource_list_uses_a_human_summary_instead_of_raw_json(
     )
     assert "account_id" not in prompt
     assert "{" not in prompt
+
+
+def test_available_model_list_uses_compact_actions_without_duplicate_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        resources,
+        "list_records",
+        lambda state, kind: (
+            {
+                "model_id": "gpt5.5",
+                "endpoint_id": "ikun",
+                "provider_model": "gpt-5.4",
+                "enabled": True,
+                "verification_status": "pending",
+            },
+        ),
+    )
+
+    async def run() -> tuple[object | None, tuple[str, ...], str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(120, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "1"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            actions = screen.query_one("#guided-actions", ActionList)
+            return (
+                interaction.summary,
+                tuple(str(option.prompt) for option in actions._options),
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    summary, prompts, status = asyncio.run(run())
+    assert summary is None
+    assert prompts == (
+        "[1]  gpt5.5  ·  gpt-5.4 · ikun · 待验证",
+        "[/n]  添加可用模型  ·  启动安全的单输入配置向导",
+    )
+    assert status == "找到 1 个结果 · 请选择"
+
+
+def test_saved_available_model_emphasizes_status_and_next_step() -> None:
+    content = renderable_plain_text(
+        saved_resource_renderable(
+            "models",
+            {
+                "model_id": "gpt5.5",
+                "endpoint_id": "ikun",
+                "provider_model": "gpt-5.4",
+                "enabled": True,
+                "configured": True,
+                "verification_status": "pending",
+            },
+            title="可用模型 · gpt5.5 · 配置结果",
+        )
+    ).rstrip()
+
+    assert content == (
+        "gpt-5.4 · 模型服务 ikun · 已启用 · 待验证\n"
+        "下一步：选择该模型，开始对话验证。"
+    )
+    assert "配置状态" not in content
 
 
 def test_notification_detail_prioritizes_user_facing_fields() -> None:
@@ -299,7 +374,11 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
     records = {
         "accounts": {"account_id": "paper-main", "broker": "binance"},
         "data": {"connection_id": "massive", "provider": "massive"},
-        "models": {"connection_id": "openai-main", "provider": "openai"},
+        "models": {
+            "model_id": "primary-reasoning",
+            "endpoint_id": "openai-main",
+            "provider_model": "gpt-test",
+        },
         "notifications": {
             "destination_id": "ops-alerts",
             "provider": "feishu",
@@ -308,7 +387,7 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
     labels = {
         "accounts": "交易账户",
         "data": "市场数据",
-        "models": "模型连接",
+        "models": "可用模型",
         "notifications": "通知提醒",
     }
     monkeypatch.setattr(
@@ -327,6 +406,9 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
                 screen.submit("4")
                 screen.submit(str(shortcut))
                 await pilot.pause(0.1)
+                if kind == "models":
+                    screen.submit("1")
+                    await pilot.pause(0.1)
                 listed = str(screen.query_one("#command-context", Static).render())
                 screen.submit("1")
                 await pilot.pause()
@@ -338,12 +420,14 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
     for (kind, record), (listed, selected) in zip(records.items(), contexts):
         resource_id = next(
             str(record[key])
-            for key in ("account_id", "connection_id", "destination_id")
+            for key in ("account_id", "connection_id", "model_id", "destination_id")
             if key in record
         )
-        assert listed == f"首页 / 运行准备 / {labels[kind]}  ›"
+        assert listed == f"trader / 运行准备 / {labels[kind]}  ›"
         assert selected == (
-            f"首页 / 运行准备 / 已选运行资源 · {labels[kind]} · {resource_id}  ›"
+            f"trader / 运行准备 / 交易账户 · {resource_id}  ›"
+            if kind == "accounts"
+            else f"trader / 运行准备 / 已选运行资源 · {labels[kind]} · {resource_id}  ›"
         )
 
 
@@ -375,9 +459,9 @@ def test_check_all_connections_renders_all_resource_groups(
             )
 
     context, output = asyncio.run(run())
-    assert context == "首页 / 运行准备  ›"
+    assert context == "trader / 运行准备  ›"
     assert "运行资源检查" in output
-    for label in ("交易账户", "市场数据", "模型连接", "通知提醒"):
+    for label in ("交易账户", "市场数据", "可用模型", "通知提醒"):
         assert label in output
 
 
@@ -389,7 +473,7 @@ def test_empty_resource_groups_offer_new_configuration_action(
         "list_records",
         lambda state, kind: (),
     )
-    labels = ("交易账户", "市场数据", "模型连接", "通知提醒")
+    labels = ("交易账户", "市场数据", "可用模型", "通知提醒")
 
     async def run() -> list[tuple[str, str, str, int]]:
         states: list[tuple[str, str, str, int]] = []
@@ -401,6 +485,9 @@ def test_empty_resource_groups_offer_new_configuration_action(
                 screen.submit("4")
                 screen.submit(str(shortcut))
                 await pilot.pause(0.1)
+                if shortcut == 3:
+                    screen.submit("1")
+                    await pilot.pause(0.1)
                 actions = screen.query_one("#guided-actions", ActionList)
                 states.append(
                     (
@@ -414,7 +501,7 @@ def test_empty_resource_groups_offer_new_configuration_action(
 
     states = asyncio.run(run())
     for label, (context, status, action, count) in zip(labels, states):
-        assert context == f"首页 / 运行准备 / {label}  ›"
+        assert context == f"trader / 运行准备 / {label}  ›"
         assert status == f"尚未配置 {label}"
         assert f"添加{label}" in action
         assert count == 1
@@ -451,7 +538,7 @@ def test_account_runtime_queries_and_fee_argument_stay_in_resource_context(
             for value in ("4", "1"):
                 screen.submit(value)
                 await pilot.pause(0.1)
-            for value in ("1", "1", "2"):
+            for value in ("1", "2"):
                 screen.submit(value)
             await pilot.pause(0.1)
             screen.submit("6")
@@ -467,7 +554,7 @@ def test_account_runtime_queries_and_fee_argument_stay_in_resource_context(
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert calls == [("assets", None), ("fees", "perpetual:BTCUSDT")]
-    assert context == "首页 / 运行准备 / 账户运行查询 · paper-main  ›"
+    assert context == "trader / 运行准备 / 交易账户 · paper-main  ›"
     assert "paper-main · 账户运行结果" in output
     assert focused
 
@@ -496,6 +583,70 @@ def test_account_runtime_queries_bind_selected_account_as_a_global_cli_option(
         (*prefix, "earn-holdings"),
         (*prefix, "fees", "--product", "spot", "--symbol", "AAPLBUSDT"),
     ]
+
+
+def test_account_balance_result_is_rendered_as_business_columns() -> None:
+    content = renderable_plain_text(
+        account._account_result_renderable(
+            "account.assets",
+            {
+                "account_id": "manual-live-readonly",
+                "source": "direct_provider",
+                "mode": "standalone",
+                "segments_requested": 3,
+                "segments_succeeded": 3,
+                "completeness": "complete",
+                "balances": [
+                    {
+                        "segment": "spot",
+                        "role": "wallet",
+                        "asset": "ETHW",
+                        "total": "0.0000488",
+                        "available": "0.0000488",
+                        "locked": "0",
+                        "borrowed": None,
+                        "interest": None,
+                    },
+                    {
+                        "segment": "usd_m_futures",
+                        "role": "wallet",
+                        "asset": "USDT",
+                        "total": "1",
+                        "available": "1",
+                        "locked": None,
+                        "borrowed": None,
+                        "interest": None,
+                    },
+                ],
+                "collateral": [
+                    {
+                        "segment": "usd_m_futures",
+                        "role": "collateral",
+                        "asset": "USDT",
+                        "total": "1",
+                        "available": "1",
+                        "locked": None,
+                        "borrowed": None,
+                        "interest": None,
+                    }
+                ],
+                "outcomes": [
+                    {"segment": "spot", "outcome": "complete", "message": None}
+                ],
+                "errors": [],
+            },
+            title="manual-live-readonly · 账户运行结果",
+        )
+    )
+
+    for label in ("分区", "类别", "资产", "总额", "可用", "锁定", "借入", "利息"):
+        assert label in content
+    assert "ETHW" in content
+    assert "0.0000488" in content
+    assert "钱包/保证金" in content
+    assert content.count("USDT") == 1
+    for raw_field in ("balances", "collateral", "outcomes", "errors"):
+        assert raw_field not in content
 
 
 def test_account_order_read_and_submit_confirmation_use_one_input(
@@ -531,7 +682,7 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
             for value in ("4", "1"):
                 screen.submit(value)
                 await pilot.pause(0.1)
-            for value in ("1", "1", "4", "1"):
+            for value in ("1", "4", "1"):
                 screen.submit(value)
             await pilot.pause(0.1)
             screen.submit("5")
@@ -551,12 +702,117 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert [action for action, _ in calls] == ["open-orders", "submit"]
+    assert all(values["segment"] == "spot" for _, values in calls)
     assert calls[-1][1]["side"] == "buy"
     assert calls[-1][1]["order-type"] == "market"
-    assert context == "首页 / 运行准备 / 订单管理 · paper-main  ›"
+    assert context == "trader / 运行准备 / 订单管理 · paper-main / spot  ›"
     assert "订单作用域确认" not in output
     assert "paper-main · 订单操作结果" in output
     assert focused
+
+
+def test_account_order_selects_segment_before_action_and_renders_failure_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = {
+        "account_id": "manual-live-readonly",
+        "broker": "binance",
+        "environment": "live",
+        "segments": ["funding", "spot", "usd_m_futures"],
+        "verification_status": "verified",
+    }
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: (record,))
+
+    selected_segments: list[str | None] = []
+
+    def execute(state: object, prompt: object) -> object:
+        selected_segments.append(getattr(prompt, "segment"))
+        raise RuntimeError("provider query failed")
+
+    monkeypatch.setattr(account, "execute_order", execute)
+
+    async def run() -> tuple[str, tuple[str, ...], str, str, str, object]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "1"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            for value in ("1", "4"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            segment_context = str(screen.query_one("#command-context", Static).render())
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            segment_actions = tuple(action.label for action in interaction.actions)
+            screen.submit("3")
+            await pilot.pause(0.1)
+            action_context = str(screen.query_one("#command-context", Static).render())
+            assert screen.session.account.selected_segment == "usd_m_futures"
+            screen.submit("1")
+            await pilot.pause(0.1)
+            return (
+                segment_context,
+                segment_actions,
+                action_context,
+                str(screen.query_one("#command-context", Static).render()),
+                _log_text(screen.query_one("#command-output", RichLog)),
+                screen.session.interaction.summary,
+            )
+
+    segment_context, actions, action_context, failure_context, output, summary = (
+        asyncio.run(run())
+    )
+    assert segment_context == (
+        "trader / 运行准备 / 订单管理 · manual-live-readonly / 选择交易分区  ›"
+    )
+    assert actions == ("funding", "spot", "usd_m_futures")
+    expected = "trader / 运行准备 / 订单管理 · manual-live-readonly / usd_m_futures  ›"
+    assert action_context == expected
+    assert failure_context == expected
+    assert selected_segments == ["usd_m_futures"]
+    assert output.count("provider query failed") == 1
+    assert summary is None
+
+
+def test_account_order_requires_a_configured_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        resources,
+        "list_records",
+        lambda state, kind: (
+            {
+                "account_id": "segment-missing",
+                "broker": "binance",
+                "environment": "live",
+                "segments": [],
+            },
+        ),
+    )
+
+    async def run() -> tuple[tuple[str, ...], str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "1", "1", "4"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            assert interaction.summary is not None
+            return (
+                screen.session.context,
+                renderable_plain_text(interaction.summary),
+                str(screen.query_one("#command-context", Static).render()),
+            )
+
+    context, summary, chrome = asyncio.run(run())
+    assert context == ("resources", "account-order-segments")
+    assert summary == "当前账户没有配置交易分区。\n"
+    assert chrome == ("trader / 运行准备 / 订单管理 · segment-missing / 选择交易分区  ›")
 
 
 def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
@@ -591,6 +847,7 @@ def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
+            screen.submit("11")
             screen.submit("6")
             assert calls == []
             screen.submit("/confirm")
@@ -615,8 +872,9 @@ def test_deleting_model_connection_returns_to_model_list(
 ) -> None:
     records = [
         {
-            "connection_id": "primary-model",
-            "provider": "openai",
+            "model_id": "primary-model",
+            "endpoint_id": "openai-main",
+            "provider_model": "gpt-test",
             "enabled": True,
             "models": ["gpt-test"],
             "verification_status": "verified",
@@ -638,16 +896,16 @@ def test_deleting_model_connection_returns_to_model_list(
         assert kind == "models"
         assert action == "delete"
         records.clear()
-        return {"connection_id": "primary-model", "status": "deleted"}
+        return {"model_id": "primary-model", "status": "deleted"}
 
     monkeypatch.setattr(resources, "execute_action", execute)
 
-    async def run() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    async def run() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "3", "1", "7", "/confirm"):
+            for value in ("4", "3", "1", "1", "2", "/confirm"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             interaction = screen.session.interaction
@@ -659,7 +917,7 @@ def test_deleting_model_connection_returns_to_model_list(
 
     context, actions = asyncio.run(run())
     assert context == ("resources", "models")
-    assert actions == ("添加模型连接",)
+    assert actions == ("添加可用模型",)
 
 
 def test_notification_detail_only_offers_destination_owned_actions() -> None:
@@ -673,6 +931,16 @@ def test_notification_detail_only_offers_destination_owned_actions() -> None:
         "delete",
     ]
     assert "Launch 引用" in actions[3].description
+
+
+def test_model_detail_only_offers_conversation_delete_and_edit() -> None:
+    actions = detail_actions("models")
+
+    assert [(action.id, action.label) for action in actions] == [
+        ("test", "验证并对话"),
+        ("delete", "删除"),
+        ("edit", "修改"),
+    ]
 
 
 def test_existing_notification_can_enter_identity_preserving_edit_wizard(
@@ -708,7 +976,7 @@ def test_existing_notification_can_enter_identity_preserving_edit_wizard(
             )
 
     context, placeholder, has_wizard = asyncio.run(run())
-    assert context == "首页 / 运行准备 / 配置向导 · 通知提醒 · ops-alerts  ›"
+    assert context == "trader / 运行准备 / 配置向导 · 通知提醒 · ops-alerts  ›"
     assert placeholder == "输入编号或命令；Enter 提交"
     assert has_wizard
 
@@ -943,9 +1211,9 @@ def test_notification_wizard_back_preserves_flow_and_cancel_discards_it(
 
 def test_model_wizard_changes_provider_specific_defaults() -> None:
     wizard = ResourceWizardState(
-        "models",
+        "model_endpoints",
         {
-            "connection_id": "primary-model",
+            "endpoint_id": "primary-model",
             "provider": "openai",
             "api_mode": "openai-responses",
             "base_url": "https://api.openai.com/v1",
@@ -958,7 +1226,7 @@ def test_model_wizard_changes_provider_specific_defaults() -> None:
 
 
 def test_model_wizard_uses_provider_specific_product_paths() -> None:
-    hosted = ResourceWizardState("models")
+    hosted = ResourceWizardState("model_endpoints")
     hosted.accept("model-provider", "openai")
     assert hosted._steps() == (
         "model-provider",
@@ -968,12 +1236,12 @@ def test_model_wizard_uses_provider_specific_product_paths() -> None:
     )
     assert hosted._default("endpoint") == "https://api.openai.com/v1"
 
-    local = ResourceWizardState("models")
+    local = ResourceWizardState("model_endpoints")
     local.accept("model-provider", "ollama")
     assert local._steps() == ("model-provider", "resource-id", "endpoint")
     assert local._default("endpoint") == "http://127.0.0.1:11434/v1"
 
-    custom = ResourceWizardState("models")
+    custom = ResourceWizardState("model_endpoints")
     custom.accept("model-provider", "custom")
     assert custom._steps() == (
         "model-provider",
@@ -986,7 +1254,7 @@ def test_model_wizard_uses_provider_specific_product_paths() -> None:
 
 def test_model_wizard_requires_new_hosted_credential_but_reuses_existing() -> None:
     created = ResourceWizardState(
-        "models",
+        "model_endpoints",
         answers={
             "model-provider": "openai",
             "resource-id": "openai-main",
@@ -996,7 +1264,7 @@ def test_model_wizard_requires_new_hosted_credential_but_reuses_existing() -> No
         created.accept("secret-primary", "")
 
     edited = ResourceWizardState(
-        "models",
+        "model_endpoints",
         {
             "connection_id": "openai-main",
             "provider": "openai",
@@ -1022,7 +1290,7 @@ def test_model_provider_is_a_numbered_choice_with_product_summary(
         async with app.run_test(size=(120, 36)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "3", "/new"):
+            for value in ("4", "3", "2", "/new"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             interaction = screen.session.interaction
@@ -1047,7 +1315,7 @@ def test_model_provider_is_a_numbered_choice_with_product_summary(
     assert len(prompts) == 6
     assert prompts[0] == "[1]  OpenAI（推荐）  ·  使用 Responses API"
     assert prompts[3] == "[4]  Ollama（本地）  ·  连接 Ollama，默认无需 API Key"
-    assert "创建模型连接" in summary
+    assert "配置模型服务" in summary
     assert "'kind'" not in summary
     assert "Ollama" in next_summary
     assert "http://127.0.0.1:11434/v1" in next_summary
@@ -1055,129 +1323,219 @@ def test_model_provider_is_a_numbered_choice_with_product_summary(
     assert placeholder == "资源名称"
 
 
-def test_model_connection_wizard_discovers_tests_and_atomically_commits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_model_endpoint_then_available_model_are_added_independently(
+    tmp_path: Path,
 ) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="model-workbench"
     )
     state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
-    monkeypatch.setattr(
-        ModelProviderConnectionApplication,
-        "discover",
-        lambda self, connection, *, secret, probe=None: (
-            {"id": "qwen3:8b", "name": "Qwen 3 8B", "source": "test"},
-            {"id": "deepseek-r1:8b", "name": "DeepSeek R1 8B", "source": "test"},
-        ),
-    )
-    monkeypatch.setattr(
-        ModelProviderConnectionApplication,
-        "probe",
-        lambda self, connection, model, *, secret, probe=None: {
-            "succeeded": True,
-            "detail": "最小文本响应成功",
-            "error_category": None,
-        },
-    )
 
-    async def run() -> tuple[str, str, object, tuple[str, ...]]:
+    async def run() -> str:
         app = KairosWorkbenchApp(state)
         async with app.run_test(size=(120, 36)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "3"):
+            # Start from Model /new, create a supplier account in place, then resume.
+            for value in ("4", "3", "1", "/new"):
                 screen.submit(value)
                 await pilot.pause(0.1)
-            for value in ("/new", "4", "ollama-local", ""):
+            parent = screen.session.resources.wizard
+            assert isinstance(parent, ResourceWizardState)
+            assert parent.kind == "models"
+            screen.submit("1")
+            await pilot.pause(0.1)
+            child = screen.session.resources.wizard
+            assert isinstance(child, ResourceWizardState)
+            assert child.kind == "model_endpoints"
+            assert screen.session.resources.parent_wizard is parent
+            for value in ("4", "ollama-local", "", "/confirm"):
                 screen.submit(value)
                 await pilot.pause(0.1)
-            interaction = screen.session.interaction
-            assert isinstance(interaction, ChoiceInteraction)
-            assert "选择验证模型" in interaction.title
-            assert len(interaction.actions) == 3
-            screen.submit("1")
-            await pilot.pause(0.1)
-            screen.submit("/confirm")
-            await pilot.pause(0.1)
-            list_interaction = screen.session.interaction
-            assert isinstance(list_interaction, ChoiceInteraction)
-            assert screen.session.context == ("resources", "models")
-            assert [action.label for action in list_interaction.actions] == [
-                "ollama-local",
-                "添加模型连接",
-            ]
-            screen.submit("1")
-            await pilot.pause(0.1)
-            detail_interaction = screen.session.interaction
-            assert isinstance(detail_interaction, ChoiceInteraction)
-            return (
-                str(screen.query_one("#command-context", Static).render()),
-                _log_text(screen.query_one("#command-output", RichLog)),
-                screen.session.resources.wizard,
-                tuple(action.label for action in detail_interaction.actions),
+            assert (
+                workspace.paths.model_endpoints_root()
+                .joinpath("ollama-local.toml")
+                .is_file()
             )
+            # The model wizard resumes with the new supplier account selected.
+            for value in (
+                "local-reasoning",
+                "qwen3:8b",
+                "/confirm",
+            ):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            return _log_text(screen.query_one("#command-output", RichLog))
 
-    context, output, wizard, actions = asyncio.run(run())
-    connection = ModelProviderConnectionApplication(workspace).show("ollama-local")
-    assert "模型连接" in context
-    assert "ollama-local" in context
-    assert wizard is None
-    assert connection["models"] == ["qwen3:8b", "deepseek-r1:8b"]
-    assert connection["verification_status"] == "verified"
-    assert connection["verified_models"] == ["qwen3:8b"]
-    assert "发现 2 个模型" in output
-    assert "最小文本响应成功" in output
-    assert "修改配置" in actions
-    assert "删除连接" in actions
+    output = asyncio.run(run())
+    model = AgentResourceApplication(workspace).available_model("local-reasoning")
+    assert model["endpoint_id"] == "ollama-local"
+    assert model["provider_model"] == "qwen3:8b"
+    assert model["verification_status"] == "pending"
+    assert "模型服务" in output
+    assert "可用模型" in output
 
 
-def test_model_catalog_failure_allows_manual_model_and_saves_connection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_new_model_can_choose_existing_or_add_supplier_account(
+    tmp_path: Path,
 ) -> None:
     workspace = WorkspaceApplication().init(
-        tmp_path / "workspace", workspace_id="model-manual"
+        tmp_path / "workspace", workspace_id="model-supplier-choice"
+    )
+    AgentResourceApplication(workspace).configure_model_endpoint(
+        "ollama-local", provider="ollama"
     )
     state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
 
-    def forbidden(*args: object, **kwargs: object) -> object:
-        raise PermissionError("HTTP Error 403: Forbidden")
-
-    monkeypatch.setattr(ModelProviderConnectionApplication, "discover", forbidden)
-    monkeypatch.setattr(
-        ModelProviderConnectionApplication,
-        "probe",
-        lambda self, connection, model, *, secret, probe=None: {
-            "succeeded": True,
-            "detail": "最小文本响应成功",
-            "error_category": None,
-        },
-    )
-
-    async def run() -> tuple[str, tuple[str, ...]]:
+    async def run() -> tuple[tuple[str, ...], tuple[str, ...]]:
         app = KairosWorkbenchApp(state)
         async with app.run_test(size=(120, 36)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "3", "/new", "4", "ikun", ""):
+            for value in ("4", "3", "1", "/new"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             interaction = screen.session.interaction
             assert isinstance(interaction, ChoiceInteraction)
-            labels = tuple(action.label for action in interaction.actions)
-            screen.submit("1")
-            await pilot.pause()
-            screen.submit("gpt-5.6-sol")
-            await pilot.pause(0.1)
-            screen.submit("/confirm")
-            await pilot.pause(0.1)
-            return _log_text(screen.query_one("#command-output", RichLog)), labels
+            return (
+                tuple(action.label for action in interaction.actions),
+                tuple(action.description for action in interaction.actions),
+                tuple(action.shortcut for action in interaction.actions),
+            )
 
-    output, labels = asyncio.run(run())
-    saved = ModelProviderConnectionApplication(workspace).show("ikun")
-    assert labels == ("手动输入模型 ID",)
-    assert "模型目录不可用" in output
-    assert saved["models"] == ["gpt-5.6-sol"]
-    assert saved["verification_status"] == "verified"
+    labels, descriptions, shortcuts = asyncio.run(run())
+    assert labels == ("ollama-local", "添加另一个模型服务")
+    assert descriptions == ("Ollama · 已配置", "配置完成后返回当前模型")
+    assert shortcuts == ("1", "2")
+
+
+def test_available_model_name_accepts_dot_and_rejects_paths_immediately() -> None:
+    wizard = ResourceWizardState("models")
+
+    wizard.accept("resource-id", "gpt5.5")
+
+    assert wizard.answers["resource-id"] == "gpt5.5"
+    with pytest.raises(ValueError, match="模型名称必须以英文字母或数字开头"):
+        wizard.accept("resource-id", "provider/gpt5.5")
+    with pytest.raises(ValueError, match="内部点号"):
+        wizard.accept("resource-id", "gpt5.")
+
+
+def test_new_model_without_service_explains_required_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: ())
+
+    async def run() -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "1", "/new"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            return (
+                interaction.title,
+                renderable_plain_text(interaction.summary),
+                tuple(action.label for action in interaction.actions),
+                tuple(action.description for action in interaction.actions),
+            )
+
+    title, summary, labels, descriptions = asyncio.run(run())
+    assert title.endswith("准备模型服务")
+    assert "第 1/3 步" not in title
+    assert "还没有配置模型服务" in summary
+    assert "配置完成后会自动返回这里" in summary
+    assert labels == ("配置模型服务",)
+    assert descriptions == ("选择服务商，并填写 API Key 或本地服务地址",)
+
+
+def test_model_service_choice_back_returns_to_parent_wizard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: ())
+
+    async def run() -> tuple[str, str, str, tuple[str, ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "1", "/new", "1"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            child = screen.session.resources.wizard
+            assert isinstance(child, ResourceWizardState)
+            assert child.kind == "model_endpoints"
+            child_hints = str(screen.query_one("#command-hints", Static).render())
+            command_input = screen.query_one(
+                "#command-input", WorkbenchCommandInput
+            )
+            command_input.value = "/back"
+            await pilot.pause()
+            preview = screen.session.interaction
+            assert isinstance(preview, ChoiceInteraction)
+            assert all(
+                not action.id.startswith("navigate-back:")
+                for action in preview.actions
+            )
+            command_input.value = ""
+
+            screen.submit("/back")
+            await pilot.pause()
+
+            parent = screen.session.resources.wizard
+            assert isinstance(parent, ResourceWizardState)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ChoiceInteraction)
+            return (
+                child_hints,
+                parent.kind,
+                interaction.title,
+                tuple(action.id for action in interaction.actions),
+            )
+
+    hints, kind, title, action_ids = asyncio.run(run())
+    assert "/back 上一步" in hints
+    assert "/cancel 退出配置" in hints
+    assert kind == "models"
+    assert title.endswith("准备模型服务")
+    assert action_ids == ("__new_endpoint__",)
+
+
+def test_model_service_confirmation_back_reopens_last_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: ())
+
+    async def run() -> tuple[str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "2", "/new", "4", "ollama-local", ""):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            assert isinstance(screen.session.interaction, ConfirmInteraction)
+            confirm_hints = str(screen.query_one("#command-hints", Static).render())
+
+            screen.submit("/back")
+            await pilot.pause()
+
+            interaction = screen.session.interaction
+            assert isinstance(interaction, InputInteraction)
+            return (
+                confirm_hints,
+                interaction.prompt,
+                str(screen.query_one("#command-hints", Static).render()),
+            )
+
+    confirm_hints, prompt, input_hints = asyncio.run(run())
+    assert "/y 保存" in confirm_hints
+    assert "/back 上一步" in confirm_hints
+    assert prompt == "API 地址"
+    assert "Enter 继续" in input_hints
 
 
 def test_saved_model_can_send_message_and_show_reply(
@@ -1186,16 +1544,18 @@ def test_saved_model_can_send_message_and_show_reply(
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="model-conversation"
     )
-    ModelProviderConnectionApplication(workspace).configure(
-        "ollama-local", provider="ollama", models=("qwen3:8b",)
+    resources_app = AgentResourceApplication(workspace)
+    resources_app.configure_model_endpoint("ollama-local", provider="ollama")
+    resources_app.configure_available_model(
+        "local-reasoning", endpoint_id="ollama-local", provider_model="qwen3:8b"
     )
     state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
     monkeypatch.setattr(
-        "kairospy.strategy.apps.agent.application.AgentResourceApplication.converse_with_model",
-        lambda self, connection_id, model, message: {
+        "kairospy.strategy.apps.agent.application.AgentResourceApplication.converse_with_available_model",
+        lambda self, model_id, message: {
             "succeeded": True,
             "verification_status": "verified",
-            "model": model,
+            "model_id": model_id,
             "message": message,
             "response": "你好，我是 Qwen。",
         },
@@ -1210,14 +1570,33 @@ def test_saved_model_can_send_message_and_show_reply(
                 screen.submit(value)
                 await pilot.pause(0.1)
             interaction = screen.session.interaction
-            assert isinstance(interaction, InputInteraction)
+            assert isinstance(interaction, ChoiceInteraction)
+            assert interaction.actions == ()
+            assert interaction.summary is None
+            assert screen.session.context == ("resources", "model-chat")
+            assert screen.query_one("#interaction-content", Static).display is False
+            assert screen.query_one("#guided-actions", ActionList).display is False
             screen.submit("你好，请介绍自己")
-            await pilot.pause()
-            screen.submit("/confirm")
+            command_input = screen.query_one("#command-input", WorkbenchCommandInput)
+            for _ in range(20):
+                if not command_input.disabled:
+                    break
+                await pilot.pause(0.05)
+            assert command_input.disabled is False
+            screen.submit("/back")
+            screen.submit("1")
             await pilot.pause(0.1)
+            assert screen.session.context == ("resources", "selected")
+            detail = screen.session.interaction
+            assert isinstance(detail, ChoiceInteraction)
+            assert tuple(action.label for action in detail.actions) == (
+                "验证并对话",
+                "删除",
+                "修改",
+            )
             return (
                 _log_text(screen.query_one("#command-output", RichLog)),
-                screen.query_one("#command-input", WorkbenchCommandInput).placeholder,
+                command_input.placeholder,
             )
 
     output, placeholder = asyncio.run(run())
@@ -1226,25 +1605,71 @@ def test_saved_model_can_send_message_and_show_reply(
     assert placeholder == "输入编号或命令；Enter 提交"
 
 
-def test_model_connection_home_discards_staged_hosted_credential(
+def test_saved_model_conversation_shows_failure_detail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="model-conversation-failure"
+    )
+    resources_app = AgentResourceApplication(workspace)
+    resources_app.configure_model_endpoint("remote", provider="ollama")
+    resources_app.configure_available_model(
+        "reasoning", endpoint_id="remote", provider_model="gpt-5.4"
+    )
+    state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
+    monkeypatch.setattr(
+        "kairospy.strategy.apps.agent.application.AgentResourceApplication.converse_with_available_model",
+        lambda self, model_id, message: {
+            "succeeded": False,
+            "model_id": model_id,
+            "message": message,
+            "response": None,
+            "detail": "对话测试失败",
+            "error_category": "authentication_or_permission",
+            "error_detail": "HTTP 403 Forbidden · error code: 1010",
+        },
+    )
+
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(120, 36)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("4", "3", "1", "1", "1"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            screen.submit("你好")
+            command_input = screen.query_one("#command-input", WorkbenchCommandInput)
+            for _ in range(20):
+                if not command_input.disabled:
+                    break
+                await pilot.pause(0.05)
+            return (
+                _log_text(screen.query_one("#command-output", RichLog)),
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    output, status = asyncio.run(run())
+    assert "对话测试失败" in output
+    assert "authentication_or_permission" in output
+    assert "HTTP 403 Forbidden · error code: 1010" in output
+    assert "模型调用失败" in status
+
+
+def test_model_endpoint_home_discards_uncommitted_secret(
+    tmp_path: Path,
 ) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="model-cancel"
     )
     state = WorkbenchState(owner=workspace, workspace_arg=workspace.paths.root)
-    monkeypatch.setattr(
-        ModelProviderConnectionApplication,
-        "discover",
-        lambda self, connection, *, secret, probe=None: ({"id": "gpt-test"},),
-    )
 
     async def run() -> tuple[ResourceWizardState, tuple[str, ...]]:
         app = KairosWorkbenchApp(state)
         async with app.run_test(size=(120, 36)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "3"):
+            for value in ("4", "3", "2"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             for value in (
@@ -1258,10 +1683,12 @@ def test_model_connection_home_discards_staged_hosted_credential(
                 await pilot.pause(0.1)
             wizard = screen.session.resources.wizard
             assert isinstance(wizard, ResourceWizardState)
-            assert wizard.model_draft is not None
+            assert wizard.kind == "model_endpoints"
             assert not (
-                workspace.paths.credentials_root() / "openai-main-openai-auth.toml"
+                workspace.paths.credentials_root() / "openai-main-auth.toml"
             ).exists()
+            screen.submit("/cancel")
+            await pilot.pause()
             screen.submit("/home")
             await pilot.pause()
             return wizard, screen.session.context
@@ -1270,10 +1697,8 @@ def test_model_connection_home_discards_staged_hosted_credential(
     assert context == ()
     assert wizard.model_draft is None
     assert wizard.answers["secret-primary"] == ""
-    assert not (
-        workspace.paths.credentials_root() / "openai-main-openai-auth.toml"
-    ).exists()
-    assert not (workspace.paths.model_connections_root() / "openai-main.toml").exists()
+    assert not (workspace.paths.credentials_root() / "openai-main-auth.toml").exists()
+    assert not (workspace.paths.model_endpoints_root() / "openai-main.toml").exists()
 
 
 def test_editing_market_data_preserves_its_credential_identity(
@@ -1373,6 +1798,7 @@ def test_resource_delete_dry_run_previews_without_executing(
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
+            screen.submit("11")
             screen.submit("7")
             await pilot.pause(0.1)
             return (
@@ -1478,4 +1904,4 @@ def test_ctrl_c_during_resource_secret_prompt_clears_staged_credentials(
     wizard, password, context = asyncio.run(run())
     assert wizard is None
     assert not password
-    assert context == "首页 / 运行准备 / 市场数据  ›"
+    assert context == "trader / 运行准备 / 市场数据  ›"

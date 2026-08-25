@@ -1,4 +1,6 @@
-use kairos_primitives::time::{Sequence, UnixNanos};
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::runtime::IdempotencyKey;
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
@@ -92,6 +94,52 @@ pub struct AuthorizeCapitalPlan {
     pub source_authority: String,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
+}
+
+/// Server-produced evidence for one operator-requested internal transfer.
+///
+/// Confirmation must present this value unchanged. The Actor rechecks all
+/// mutable facts before it reserves funds, so a preview never authorizes a
+/// transfer after its route or Account balance has changed.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ManualCapitalTransferPreview {
+    pub preview_id: String,
+    pub plan_id: CapitalPlanId,
+    pub idempotency_key: IdempotencyKey,
+    pub route_id: CapitalRouteId,
+    pub route_version: Generation,
+    pub route_kind: crate::domain::CapitalRouteKind,
+    pub source: FundingLocation,
+    pub destination: FundingLocation,
+    pub amount: Quantity,
+    pub source_authority: String,
+    pub source_account_watermark: Sequence,
+    pub destination_account_watermark: Sequence,
+    pub source_observed_available: Quantity,
+    pub destination_observed_available: Quantity,
+    pub created_at: UnixNanos,
+    pub expires_at: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreviewManualCapitalTransfer {
+    pub capital_group_id: CapitalGroupId,
+    pub preview_id: String,
+    pub plan_id: CapitalPlanId,
+    pub idempotency_key: IdempotencyKey,
+    pub source: FundingLocation,
+    pub destination: FundingLocation,
+    pub amount: Quantity,
+    pub source_authority: String,
+    pub created_at: UnixNanos,
+    pub expires_at: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfirmManualCapitalTransfer {
+    pub capital_group_id: CapitalGroupId,
+    pub preview: ManualCapitalTransferPreview,
+    pub confirmed_at: UnixNanos,
 }
 
 /// Deterministic amount that may leave a liquid balance location without
@@ -349,6 +397,24 @@ impl CapitalApplication {
         command: AuthorizeCapitalPlan,
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor.authorize_plan(command).map_err(map_actor_error)
+    }
+
+    pub fn preview_manual_transfer(
+        &self,
+        command: PreviewManualCapitalTransfer,
+    ) -> Result<ManualCapitalTransferPreview, CapitalError> {
+        self.actor
+            .preview_manual_transfer(command)
+            .map_err(map_actor_error)
+    }
+
+    pub fn confirm_manual_transfer(
+        &mut self,
+        command: ConfirmManualCapitalTransfer,
+    ) -> Result<CapitalPlan, CapitalError> {
+        self.actor
+            .confirm_manual_transfer(command)
+            .map_err(map_actor_error)
     }
 
     pub fn yield_candidate(

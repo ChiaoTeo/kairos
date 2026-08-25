@@ -3,6 +3,7 @@
 pub(crate) mod account;
 pub(crate) mod execution;
 pub(crate) mod market;
+pub(crate) mod market_stream;
 
 use ibapi::orders::OrderStatusKind;
 

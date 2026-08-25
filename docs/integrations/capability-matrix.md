@@ -63,8 +63,8 @@ Remaining Binance production gates:
 
 | Product | Reference | Market query | Market stream | Account query/stream | Order command/query/stream | Certification | Notes |
 |---|---|---|---|---|---|---|---|
-| Perpetual | I/C | I/C | I/C/R | I / I | I / I / I | | Concrete exchange API adds modify and bounded batch submit/modify/cancel; shared capability and business composition are not claimed. |
-| Spot | I/C | I/C | I/C/R | I / I | I / I / I | | Explicit asset-index mapping plus concrete modify/batch operations; business composition remains separate. |
+| Perpetual | I/C | I/C | I/C/R | I / I | I / I / I | L-ro | Public `bbo` subscribe, receive, reconnect/restore and unsubscribe certified 2026-08-25. Concrete exchange API adds modify and bounded batch submit/modify/cancel. |
+| Spot | I/C | I/C | I/C/R | I / I | I / I / I | L-ro | Public L2 subscribe, receive, reconnect/restore and unsubscribe certified 2026-08-25 with an active spot market selected from provider metadata. |
 | HIP-3 DEX | partial | partial | partial | | | | Prefix-aware candle query exists; complete catalog, account, collateral, and execution routing are unproven. |
 | Subaccounts | | | | partial | partial | | Address/vault execution identity is not composed. |
 | Vaults | | | | | | | Provider endpoints are not a current Account/Execution capability. |
@@ -84,10 +84,10 @@ Remaining Hyperliquid production gates:
 |---|---|---|---|---|---|---|---|
 | US Equities | I/C | I/C | I/C/R | - | - | L-ro | Preserves exchange/tape/TRF evidence; Massive is not the canonical venue. |
 | US Options | I/C | I/C | I/C/R | - | - | L-ro | Reference coverage is explicitly bounded by underlying; typed contract snapshot exposes partial Greeks/IV/OI with provider observation time. |
-| Futures | I | I | I | - | - | | Independent `/futures/v1` REST and Futures WebSocket connections; composition and live certification are intentionally separate. |
-| Indices | provider-native I | I | I | - | - | | Typed native catalog plus REST aggregates and dedicated `V/A/AM` socket; shared Reference has no index kind. |
-| Forex | I | I | I | - | - | | Typed spot catalog, bars/quotes and dedicated `C/CA/CAS` socket; no trade feed is claimed. |
-| Crypto | I | I | I | - | - | | Typed spot catalog, bars/quotes/trades and dedicated `XQ/XT/XA/XAS` socket. |
+| Futures | I/C | I | I/C/R | - | - | | Independent `/futures/v1` REST and Futures WebSocket connections; live entitlement is not available in the audit environment. |
+| Indices | provider-native I | I | I/C/R | - | - | | Typed native catalog plus REST aggregates and dedicated `V/A/AM` socket; shared Reference has an index instrument kind but Massive remains a data provider. |
+| Forex | I/C | I | I/C/R | - | - | | Typed spot catalog, bars/quotes and dedicated `C/CA/CAS` socket; no trade feed is claimed. |
+| Crypto | I/C | I | I/C/R | - | - | | Typed spot catalog, bars/quotes/trades and dedicated `XQ/XT/XA/XAS` socket. |
 | Flat Files | - | decision | - | - | - | | Explicitly deferred to a Workspace-owned resumable S3 download plus Market-owned streaming ingest; no ownerless REST facade. |
 
 Remaining Massive production gates:
@@ -102,11 +102,11 @@ Remaining Massive production gates:
 
 | Product | Reference | Market query | Market stream | Account query/stream | Order command/query/stream | Certification | Notes |
 |---|---|---|---|---|---|---|---|
-| Spot | I/C | I/C | I/C/R | I/C/R | I/C/R | | Concrete private REST adds single/batch amend plus batch submit/cancel with per-item outcomes. |
+| Spot | I/C | I/C | I/C/R | I/C/R | I/C/R | L-ro | Public trade subscribe, receive, replacement-first reconnect/restore and unsubscribe certified 2026-08-25. |
 | Margin | I/C | I/C | I/C/R | I/C/R | I/C/R | | Explicit account controls are incomplete. |
-| Swap | I/C | I/C | I/C/R | I/C/R | I/C/R | | WS derivative facts plus concrete single/batch amend and batch submit/cancel. |
-| Expiry Futures | I/C | I/C | I/C/R | I/C/R | I/C/R | | REST typed mark/index/funding/OI snapshots and ordinary order extensions are implemented. |
-| Options | I/C | I/C | I/C/R | I/C/R | I/C/R | | WS Greeks normalization exists. |
+| Swap | I/C | I/C | I/C/R | I/C/R | I/C/R | L-ro | Public mark-price subscribe, receive, replacement-first reconnect/restore and unsubscribe certified 2026-08-25. |
+| Expiry Futures | I/C | I/C | I/C/R | I/C/R | I/C/R | L-ro | An active contract was discovered through public instruments, then quote subscribe/receive/recovery/unsubscribe was certified 2026-08-25. |
+| Options | I/C | I/C | I/C/R | I/C/R | I/C/R | L-ro | An active BTC-USD option was discovered by family, then `opt-summary` Greeks subscribe/receive/recovery/unsubscribe was certified 2026-08-25. |
 | Algo/Business WS | | partial | | | | | Must remain a distinct concrete connection family from ordinary private WS. |
 
 Remaining OKX production gates:
@@ -125,24 +125,24 @@ provider-native inherent method.
 
 ### 4.1 Reference and market
 
-| Capability | Binance | Hyperliquid | Massive | OKX |
-|---|---|---|---|---|
-| `InstrumentCatalogQuery` | Spot, USD-M, COIN-M, Options, Equity, Alpha | Info Spot/Perpetual | Equity/Options/Futures/Forex/Crypto; Indices provider-native | Spot/Margin/Swap/Futures/Options |
-| `MarketQuoteQuery` | Spot, futures, Options, Equity, Alpha | all mids | | ticker endpoint |
-| `MarketTradeQuery` | Spot, futures, Options, Alpha | | historical only | recent trades |
-| `MarketBarQuery` | Spot, futures, Options, Alpha | historical capability only | historical capability only | candles |
-| `MarketOrderBookQuery` | Spot, futures, Options, Alpha | L2 book | | books |
-| `MarketMarkPriceQuery` | USD-M/COIN-M macro-backed families | Info | | REST + stream |
-| `MarketIndexPriceQuery` | USD-M/COIN-M macro-backed families | | | REST + stream |
-| `MarketFundingRateQuery` | USD-M/COIN-M macro-backed families | Info | | REST + stream |
-| `MarketOpenInterestQuery` | USD-M/COIN-M macro-backed families | Info | | REST + stream |
-| `MarketGreeksQuery` | Options | | Options REST snapshot | REST + stream |
-| `MarketTickerQuery` | | | | stream only |
-| `MarketStatusQuery` | | | | stream only |
-| `HistoricalBarQuery` | Spot | Info candle snapshot | Equity/Options/Futures/Indices/Forex/Crypto | |
-| `HistoricalQuoteQuery` | Spot returns unsupported | | Equity/Options/Futures/Forex/Crypto | |
-| `HistoricalTradeQuery` | Spot | | Equity/Options/Futures/Crypto | |
-| `MarketSubscriptionCommand` / stream | Spot, Margin, USD-M, COIN-M, Options, Equity, Alpha | unified public/user socket | Equity/Options/Futures/Indices/Forex/Crypto sockets | public socket |
+| Capability | Binance | Hyperliquid | Massive | OKX | IBKR |
+|---|---|---|---|---|---|
+| `InstrumentCatalogQuery` | Spot, USD-M, COIN-M, Options, Equity, Alpha | Info Spot/Perpetual | Equity/Options/Futures/Forex/Crypto; Indices provider-native | Spot/Margin/Swap/Futures/Options | |
+| `MarketQuoteQuery` | Spot, futures, Options, Equity, Alpha | all mids | | ticker endpoint | Equity snapshot |
+| `MarketTradeQuery` | Spot, futures, Options, Alpha | | historical only | recent trades | |
+| `MarketBarQuery` | Spot, futures, Options, Alpha | historical capability only | historical capability only | candles | |
+| `MarketOrderBookQuery` | Spot, futures, Options, Alpha | L2 book | | books | |
+| `MarketMarkPriceQuery` | USD-M/COIN-M macro-backed families | Info | | REST + stream | |
+| `MarketIndexPriceQuery` | USD-M/COIN-M macro-backed families | | | REST + stream | |
+| `MarketFundingRateQuery` | USD-M/COIN-M macro-backed families | Info | | REST + stream | |
+| `MarketOpenInterestQuery` | USD-M/COIN-M macro-backed families | Info | | REST + stream | |
+| `MarketGreeksQuery` | Options | | Options REST snapshot | REST + stream | |
+| `MarketTickerQuery` | | | | stream only | |
+| `MarketStatusQuery` | | | | stream only | |
+| `HistoricalBarQuery` | Spot | Info candle snapshot | Equity/Options/Futures/Indices/Forex/Crypto | | |
+| `HistoricalQuoteQuery` | Spot returns unsupported | | Equity/Options/Futures/Forex/Crypto | | |
+| `HistoricalTradeQuery` | Spot | | Equity/Options/Futures/Crypto | | |
+| `MarketSubscriptionCommand` / stream | Spot, Margin, USD-M, COIN-M, Options, Equity, Alpha | unified public/user socket | Equity/Options/Futures/Indices/Forex/Crypto sockets | public socket | Level-I equity lines |
 
 An empty cell means no implementation was proven in the 2026-08-25 audit. A
 stream normalizer is not counted as the corresponding bounded query.
@@ -154,10 +154,10 @@ The 2026-08-25 audit applies Decision 0018 without claiming uniform production r
 | Provider | Dedicated component | Current planning/recovery evidence | Availability conclusion |
 |---|---|---|---|
 | Binance | Product-specific connections with a shared private Binance policy | endpoint-class routing, stream deduplication, capacity shards, pacing, server inventory reconciliation, replacement-first reconnect and public live certification | Spot, USD-M, COIN-M and Options public streams are `L-ro`; authenticated and depth-continuity gates remain. |
-| OKX | Dedicated public WebSocket connection | typed channel arguments, per-argument acknowledgements, restore, bounded buffering and order-book sequence recovery | Implemented/composed/recovery-tested, but not live-certified in this audit. |
-| Hyperliquid | Dedicated unified WebSocket connection | typed native subscriptions, acknowledgement handling, restore and bounded public/private event buffering | Implemented/composed/recovery-tested, but not live-certified in this audit. |
-| Massive | Dedicated product WebSocket connections | product-specific feed parameters, acknowledgement handling, restore and bounded buffering | Equities/Options retain existing `L-ro`; other entitled products are not live-certified. |
-| IBKR | Dedicated market-data session, query delivery only | bounded quote query over the IBKR session; no `MarketSubscriptionCommand` implementation | Usable only as a polling/query source; push subscription planning is not implemented. |
+| OKX | Dedicated public WebSocket connection and private planner | Native argument identity, semantic event filtering, 480 operations/hour budgeting with recovery reserve, payload batching, per-argument acknowledgements and replacement-first restore | Spot, Swap, Futures and Options public streams are `L-ro`. |
+| Hyperliquid | Dedicated unified WebSocket connection and private planner | Symbol-scoped `bbo`, shared `activeAssetCtx`, process-shared per-IP subscription/message budgeting, augmented acknowledgement matching, and capacity-aware replacement-first or disconnect-first restore | Spot and Perpetual public streams are `L-ro`; private recovery remains a separate gate. |
+| Massive | Six dedicated product WebSocket connections with one private product policy | Native channel vocabulary, physical ref-counting, 1,000-contract Options quote admission, immediate auth/entitlement/rate classification and replacement-first restore | All six products are implemented/composed/recovery-tested; this environment has no API key for a new entitlement run. |
+| IBKR | Dedicated Level-I market-data session and private line planner | Symbol-level physical sharing, configurable line allowance (100 default, 10% ordinary reserve), 50-message/s control pacing, typed entitlement/pacing errors and reconnect restoration | Implemented/composed/recovery-tested at the planner boundary; live certification requires an external TWS/Gateway session. |
 
 The concrete OKX, Hyperliquid and Massive connections already satisfy the provider-specific ownership
 boundary, so no empty cross-provider planner or wrapper was added. Capacity, traffic-class or
@@ -183,12 +183,12 @@ protocol and production evidence require it.
 | Business module | Binance | Hyperliquid | Massive | OKX |
 |---|---|---|---|---|
 | Reference | Spot, USD-M, COIN-M, Options, Equity | Spot, Perpetual | Equity, bounded Options coverage | all public instrument families |
-| Market | Spot, Equity, USD-M, COIN-M, Options | Spot, Perpetual | Equity, Options | Spot, Swap, Futures, Options |
+| Market | Spot, Equity, USD-M, COIN-M, Options | Spot, Perpetual | Equity, Options, Futures, Indices, Forex, Crypto | Spot, Swap, Futures, Options |
 | Account | Spot, Margin, USD-M, COIN-M, Options, Funding | not composed; Integration capability only | - | Trading Account |
 | Execution | Spot, Margin, USD-M, COIN-M, Options, Equity | not composed; Integration capability only | - | ordinary trading |
 
-Hyperliquid business composition is intentionally outside this proposal. Phase 1 evidence covers
-the Integration capability; recovery and transaction certification remain separate gates.
+IBKR Market composition is also present as a Level-I equity stream backed by its own configured
+TWS/Gateway client ID. Transaction certification remains separate from public/read-only market evidence.
 
 ## 6. Certification record requirements
 

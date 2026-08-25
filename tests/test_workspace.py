@@ -42,7 +42,7 @@ def test_workspace_init_creates_manifest_and_runtime_layout(tmp_path: Path) -> N
         workspace.paths.account_leases()
         == workspace.paths.root / "state" / "account-locks"
     )
-    assert workspace.paths.market_connections_root().is_dir()
+    assert workspace.paths.provider_connections_root().is_dir()
     assert workspace.paths.reference_database() == (
         workspace.paths.root / "state" / "reference" / "reference.sqlite"
     )
@@ -243,22 +243,6 @@ def test_workspace_accepts_json_as_explicit_cli_format(tmp_path: Path) -> None:
     )
 
     assert WorkspaceApplication().open(workspace.paths.root).cli_format == "json"
-
-
-def test_workspace_resolves_market_connection_from_manifest(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "demo", workspace_id="demo")
-    workspace.paths.manifest.write_text(
-        'version = 1\nworkspace_id = "demo"\n\n'
-        "[market.connections.massive-equity]\n"
-        'provider = "massive-rest"\n'
-        'credential_id = "massive-readonly"\n',
-        encoding="utf-8",
-    )
-
-    assert WorkspaceApplication().market_connection(workspace, "massive-equity") == {
-        "provider": "massive-rest",
-        "credential_id": "massive-readonly",
-    }
 
 
 def test_workspace_resolve_discovers_current_ancestor_and_environment(

@@ -132,7 +132,7 @@ class LaunchWizardState:
             if value:
                 connection, separator, model = value.partition("/")
                 if not separator or not connection or not model:
-                    raise ValueError("请选择一条已验证的模型连接和模型")
+                    raise ValueError("请选择一个已验证的可用模型")
             self.answers[name] = value
             return
         if name in {"strategy", "backtest-start", "backtest-end"} and not value:
@@ -398,12 +398,16 @@ class LaunchWizardState:
         else:
             current.pop("fixture_path", None)
             model_ref = str(self.answers["agent-model-ref"])
-            connection, _, model = model_ref.partition("/")
-            current["model"] = {
-                **dict(_mapping(current.get("model"))),
-                "connection": connection,
-                "model": model,
-            }
+            existing = dict(_mapping(current.get("model")))
+            if "/" in model_ref:
+                connection, _, model = model_ref.partition("/")
+                existing.update({"connection": connection, "model": model})
+                existing.pop("ref", None)
+            else:
+                existing["ref"] = model_ref
+                existing.pop("connection", None)
+                existing.pop("model", None)
+            current["model"] = existing
         return current
 
     def _notification_values(self, mode: str) -> dict[str, Any]:

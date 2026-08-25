@@ -19,6 +19,7 @@ use crate::domain::{
     RiskReservationSagaStatus, UnixNanos,
 };
 
+mod algorithms;
 mod events;
 mod fills;
 mod intents;
@@ -49,6 +50,7 @@ pub(crate) struct ExecutionActor {
     events: Vec<ExecutionEvent>,
     pending_events: Vec<ExecutionEvent>,
     fills: Vec<ExecutionFill>,
+    algorithm_runs: BTreeMap<String, crate::domain::AlgorithmRun>,
     unknown_remote_orders: BTreeMap<String, UnknownRemoteOrder>,
     exchange_event_watermark_unix_nanos: u64,
     seen_exchange_events: HashSet<String>,
@@ -70,6 +72,7 @@ impl ExecutionActor {
             events: Vec::new(),
             pending_events: Vec::new(),
             fills: Vec::new(),
+            algorithm_runs: BTreeMap::new(),
             unknown_remote_orders: BTreeMap::new(),
             exchange_event_watermark_unix_nanos: 0,
             seen_exchange_events: HashSet::new(),

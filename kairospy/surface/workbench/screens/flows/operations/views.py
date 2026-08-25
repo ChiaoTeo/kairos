@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Group, RenderableType
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -185,6 +187,160 @@ def operations_overview(snapshot: ObserveSnapshot) -> RenderableType:
     return body
 
 
+def project_result_renderable(action_name: str, result: object) -> RenderableType:
+    """Present project outcomes as operator decisions instead of Python data."""
+
+    if not isinstance(result, Mapping):
+        return Panel(Text(str(result) or "操作已完成"), title="项目操作")
+    if action_name.endswith(".doctor"):
+        return _project_doctor_renderable(result)
+
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style="dim", no_wrap=True)
+    table.add_column()
+    if action_name.endswith(".status"):
+        table.add_row("当前项目", str(result.get("workspace_id") or "—"))
+        table.add_row("项目目录", str(result.get("project_root") or "—"))
+        table.add_row("工作目录", str(result.get("workspace_root") or "—"))
+        table.add_row("状态", Text("项目已打开", style="bold green"))
+        return Panel(table, title="项目概览", border_style="cyan")
+
+    status = str(result.get("status") or "completed")
+    title, label = {
+        "opened": ("项目已切换", "已打开新项目"),
+        "initialized": ("项目已创建", "新项目可以使用"),
+        "scaffolded": ("模板已安装", "项目模板安装完成"),
+        "preview": ("项目操作预览", "尚未写入任何内容"),
+    }.get(status, ("项目操作完成", "操作已完成"))
+    table.add_row("结果", Text(label, style="bold green"))
+    for key, label in (
+        ("workspace_id", "项目名称"),
+        ("project_root", "项目目录"),
+        ("workspace_root", "工作目录"),
+        ("template", "项目模板"),
+        ("action", "计划操作"),
+        ("root", "目标目录"),
+    ):
+        value = result.get(key)
+        if value is not None and value != "":
+            table.add_row(label, str(value))
+    created = result.get("created")
+    if isinstance(created, (list, tuple)):
+        table.add_row("新增文件", f"{len(created)} 个")
+    return Panel(table, title=title, border_style="cyan")
+
+
+def _project_doctor_renderable(report: Mapping[str, Any]) -> RenderableType:
+    ready = bool(report.get("ready"))
+    ok = bool(report.get("ok"))
+    issues = _string_items(report.get("issues"))
+    missing = _string_items(report.get("missing_directories"))
+    launches = report.get("launches")
+    launch_count = len(launches) if isinstance(launches, (list, tuple)) else 0
+    groups: dict[tuple[str, str], set[str]] = {}
+    for issue in issues:
+        launch, detail = _split_launch_issue(issue)
+        label, resource = _classify_project_issue(detail)
+        groups.setdefault((label, resource), set()).add(launch)
+    if missing:
+        groups[("目录缺失", f"{len(missing)} 个必要目录")] = {"项目"}
+
+    summary = Table.grid(padding=(0, 3))
+    summary.add_column(style="dim", no_wrap=True)
+    summary.add_column()
+    if ready:
+        conclusion = Text("可以运行", style="bold green")
+    elif ok:
+        conclusion = Text("结构正常，但没有可运行方案", style="bold yellow")
+    else:
+        conclusion = Text("尚未就绪", style="bold red")
+    summary.add_row("检查结论", conclusion)
+    summary.add_row("运行方案", f"{launch_count} 个")
+    summary.add_row("待处理", f"{len(groups)} 类问题" if groups else "没有发现问题")
+
+    sections: list[RenderableType] = [summary]
+    if groups:
+        problem_table = Table(show_header=True, header_style="bold")
+        problem_table.add_column("问题")
+        problem_table.add_column("资源")
+        problem_table.add_column("影响")
+        for (label, resource), affected in groups.items():
+            named = sorted(name for name in affected if name != "项目")
+            impact = f"{len(named)} 个运行方案" if named else "当前项目"
+            problem_table.add_row(label, resource, impact)
+        sections.extend((Text(), problem_table))
+
+        next_steps = Text()
+        next_steps.append("\n建议下一步\n", style="bold cyan")
+        for index, step in enumerate(_project_next_steps(groups), 1):
+            next_steps.append(f"{index}. {step}\n")
+        next_steps.append(
+            "\n技术详情：kairos project doctor --format json",
+            style="dim",
+        )
+        sections.append(next_steps)
+    elif ready:
+        sections.extend((Text(), Text("项目检查通过。", style="green")))
+    else:
+        next_step = Text()
+        next_step.append("项目结构正常；当前没有可运行方案。\n", style="yellow")
+        next_step.append("\n建议下一步\n", style="bold cyan")
+        next_step.append("1. 安装项目模板或创建一个运行方案。\n")
+        next_step.append(
+            "\n技术详情：kairos project doctor --format json",
+            style="dim",
+        )
+        sections.extend((Text(), next_step))
+    return Panel(Group(*sections), title="项目检查", border_style="cyan")
+
+
+def _string_items(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _split_launch_issue(issue: str) -> tuple[str, str]:
+    match = re.match(r"launch ([^:]+): (.*)", issue)
+    return (match.group(1), match.group(2)) if match else ("项目", issue)
+
+
+def _classify_project_issue(detail: str) -> tuple[str, str]:
+    match = re.search(r"Workspace data connection is unavailable: ([^:]+)", detail)
+    if match:
+        return "市场数据连接缺失", match.group(1).strip(" '\"")
+    match = re.search(r"successful manual connection test: ([^']+)", detail)
+    if match:
+        return "账户连接尚未验证", match.group(1).strip(" '\"")
+    match = re.search(r"account ['\"]?([^'\"]+)['\"]? is not configured", detail)
+    if match:
+        return "交易账户未配置", match.group(1).strip()
+    if "replay file does not exist" in detail:
+        return "回放数据缺失", detail.rsplit(":", 1)[-1].strip()
+    if "workspace manifest" in detail:
+        return "项目 Manifest 无效", "manifest.toml"
+    return "运行方案配置异常", _short_issue(detail)
+
+
+def _short_issue(detail: str) -> str:
+    return detail if len(detail) <= 56 else detail[:53] + "…"
+
+
+def _project_next_steps(groups: Mapping[tuple[str, str], set[str]]) -> tuple[str, ...]:
+    labels = {label for label, _ in groups}
+    steps: list[str] = []
+    if "市场数据连接缺失" in labels:
+        steps.append("进入运行资源，配置并测试缺失的市场数据连接。")
+    if labels & {"账户连接尚未验证", "交易账户未配置"}:
+        steps.append("进入交易账户，补充配置并完成手动连接测试。")
+    if "回放数据缺失" in labels:
+        steps.append("补充运行方案引用的回放数据文件。")
+    if labels & {"项目 Manifest 无效", "目录缺失", "运行方案配置异常"}:
+        steps.append("修复项目结构或运行方案配置后重新检查。")
+    steps.append("处理完成后再次运行“检查项目”。")
+    return tuple(steps)
+
+
 def support_summary(view: SupportStatusView) -> RenderableType:
     table = Table.grid(padding=(0, 3))
     table.add_column(style="dim")
@@ -228,9 +384,7 @@ def service_status_line(view: ServiceStatusView) -> str:
     dependents = view.raw.get("dependents")
     if isinstance(dependents, (list, tuple)):
         parts.append(
-            f"{len(dependents)} 个活动实例正在使用"
-            if dependents
-            else "无活动运行实例"
+            f"{len(dependents)} 个活动实例正在使用" if dependents else "无活动运行实例"
         )
     return " · ".join(parts)
 
@@ -421,9 +575,7 @@ def service_summary(view: ServiceStatusView) -> RenderableType:
             for item in dependents
             if isinstance(item, Mapping)
         ]
-        table.add_row(
-            "正在使用", "、".join(labels) if labels else "无活动运行实例"
-        )
+        table.add_row("正在使用", "、".join(labels) if labels else "无活动运行实例")
     table.add_row("进程", str(view.pid) if view.pid is not None else "无")
     table.add_row("日志", "可用" if view.logs_available else "尚未生成")
     table.add_row("建议", Text(view.recommendation, style="bold"))

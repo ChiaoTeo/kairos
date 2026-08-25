@@ -14,7 +14,9 @@ class WorkspaceResourceLifecycleApplication:
 
     workspace: Workspace
 
-    def deletion_impact(self, resource_kind: str, resource_id: str) -> dict[str, object]:
+    def deletion_impact(
+        self, resource_kind: str, resource_id: str
+    ) -> dict[str, object]:
         return ConfigurationReferenceApplication(self.workspace).deletion_impact(
             resource_kind, resource_id
         )
@@ -29,7 +31,9 @@ class WorkspaceResourceLifecycleApplication:
                 "inspect deletion_impact or explicitly force deletion"
             )
         if resource_kind == "account":
-            from kairospy.investment.apps.account.application import AccountConfigurationApplication
+            from kairospy.investment.apps.account.application import (
+                AccountConfigurationApplication,
+            )
 
             result = AccountConfigurationApplication(self.workspace).delete(
                 resource_id, force=force
@@ -42,14 +46,32 @@ class WorkspaceResourceLifecycleApplication:
             result = ReferenceProviderConfigurationApplication(self.workspace).delete(
                 resource_id
             )
+        elif resource_kind == "available_model":
+            from kairospy.strategy.apps.agent.application import (
+                AvailableModelApplication,
+            )
+
+            result = AvailableModelApplication(self.workspace).delete(resource_id)
+        elif resource_kind == "model_endpoint":
+            from kairospy.strategy.apps.agent.application import (
+                ModelEndpointApplication,
+            )
+
+            result = ModelEndpointApplication(self.workspace).delete(
+                resource_id, force=force
+            )
         elif resource_kind == "ai_model":
-            from kairospy.strategy.apps.agent.application import AgentResourceApplication
+            from kairospy.strategy.apps.agent.application import (
+                AgentResourceApplication,
+            )
 
             result = AgentResourceApplication(self.workspace).delete_model_connection(
                 resource_id
             )
         elif resource_kind == "notification":
-            from kairospy.strategy.apps.notification.application import NotificationAdminApplication
+            from kairospy.strategy.apps.notification.application import (
+                NotificationAdminApplication,
+            )
 
             result = NotificationAdminApplication(self.workspace).delete(resource_id)
         else:

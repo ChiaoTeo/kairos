@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from rich.console import RenderableType
 from rich.panel import Panel
 from rich.table import Table
 
-from ..widgets import ActionItem
+from ..widgets import ActionItem, ChoiceInteraction
 from .flows.resources.account_actions import ACCOUNT_ACTIONS as RESOURCE_ACCOUNT_ACTIONS
-from .catalog import HOME_ACTIONS, SECTION_ACTIONS, SECTION_LABELS
+from .flows.resources.account_transfers import TRANSFER_RESULT_ACTIONS
+from .catalog import AI_MODEL_ACTIONS, HOME_ACTIONS, SECTION_ACTIONS, SECTION_LABELS
 from .flows.launch.execution_actions import (
     EXECUTION_ACTIONS as STRATEGY_EXECUTION_ACTIONS,
 )
@@ -28,7 +30,11 @@ from .flows.operations.views import (
     service_actions,
     service_display_name,
 )
-from .flows.launch.orders import ORDER_ACTIONS as ACCOUNT_ORDER_ACTIONS
+from .flows.launch.orders import (
+    ORDER_ACTIONS as ACCOUNT_ORDER_ACTIONS,
+    order_segment_actions,
+    order_segments,
+)
 from .flows.research.actions import (
     DATA_ACTIONS as RESEARCH_DATA_ACTIONS,
     RESEARCH_ACTIONS as RESEARCH_WORKFLOW_ACTIONS,
@@ -116,6 +122,9 @@ def go_back(session: GuidedSession) -> bool:
         )
     elif len(session.context) > 1 and session.context[0] == "operations":
         session.enter("operations")
+    elif session.context == ("resources", "model-chat"):
+        session.context = ("resources", "selected")
+        session.resources.action = None
     elif session.context == ("resources", "selected"):
         kind = session.resources.kind
         session.context = (
@@ -124,9 +133,31 @@ def go_back(session: GuidedSession) -> bool:
             else ("resources",)
         )
     elif session.context == ("resources", "account-operations"):
-        session.context = ("resources", "selected")
+        kind = session.resources.kind
+        session.resources.selected = None
+        session.context = (
+            ("resources", kind)
+            if kind is not None and session.visible_records
+            else ("resources",)
+        )
     elif session.context == ("resources", "account-orders"):
+        session.account.order_prompt = None
+        record = session.resources.selected or {}
+        if len(order_segments(record)) > 1:
+            session.context = ("resources", "account-order-segments")
+        else:
+            session.account.selected_segment = None
+            session.context = ("resources", "account-operations")
+    elif session.context == ("resources", "account-order-segments"):
+        session.account.reset()
         session.context = ("resources", "account-operations")
+    elif session.context in {
+        ("resources", "models"),
+        ("resources", "model_endpoints"),
+    }:
+        session.context = ("resources", "ai-models")
+        session.resources.kind = None
+        session.visible_records = ()
     elif len(session.context) > 1 and session.context[0] == "resources":
         session.enter("resources")
     elif len(session.context) > 1 and session.context[0] == "research":
@@ -193,6 +224,34 @@ def go_back(session: GuidedSession) -> bool:
     return True
 
 
+def back_targets(session: GuidedSession) -> tuple[tuple[str, ...], ...]:
+    """Return every reachable presentation parent, nearest first."""
+
+    # Semantic parents are not always tuple prefixes. Walking a detached
+    # session keeps the picker governed by the same rules as real navigation.
+    probe = deepcopy(session)
+    probe.interaction = ChoiceInteraction()
+    probe.suspended_interaction = None
+    targets: list[tuple[str, ...]] = []
+    while go_back(probe):
+        targets.append(probe.context)
+    return tuple(targets)
+
+
+def back_target_items(session: GuidedSession) -> tuple[ActionItem, ...]:
+    """Build numbered return destinations for the shared interaction region."""
+
+    return tuple(
+        ActionItem(
+            f"navigate-back:{steps}",
+            context_label(target, session.root_label),
+            "返回上一级" if steps == 1 else "直接返回到此层级",
+            str(steps),
+        )
+        for steps, target in enumerate(back_targets(session), 1)
+    )
+
+
 def action_id(items: tuple[ActionItem, ...], value: str) -> str | None:
     lowered = value.lower()
     for item in items:
@@ -228,10 +287,17 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
         return resource_detail_actions(session.resources.kind)
     if session.context == ("resources", "account-operations"):
         return RESOURCE_ACCOUNT_ACTIONS
+    if session.context == ("resources", "account-order-segments"):
+        record = session.resources.selected
+        return order_segment_actions(record) if record is not None else ()
     if session.context == ("resources", "account-orders"):
         return ACCOUNT_ORDER_ACTIONS
+    if session.context == ("resources", "account-transfer-result"):
+        return TRANSFER_RESULT_ACTIONS
     if session.context == ("resources", "setup"):
         return ()
+    if session.context == ("resources", "ai-models"):
+        return AI_MODEL_ACTIONS
     if (
         len(session.context) == 2
         and session.context[0] == "resources"
@@ -282,12 +348,12 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
     return SECTION_ACTIONS.get(section, ()) if section is not None else ()
 
 
-def context_label(context: tuple[str, ...]) -> str:
+def context_label(context: tuple[str, ...], root_label: str = "首页") -> str:
     if not context:
-        return "首页"
+        return root_label
     if context == ("project",):
-        return "项目管理"
-    parts = ["首页", SECTION_LABELS.get(context[0], context[0])]
+        return f"{root_label} / 项目管理"
+    parts = [root_label, SECTION_LABELS.get(context[0], context[0])]
     if len(context) > 1:
         labels: Mapping[tuple[str, ...], str] = {
             ("market", "selected"): "已选标的",
@@ -301,9 +367,13 @@ def context_label(context: tuple[str, ...]) -> str:
             ("operations", "service"): "服务操作",
             ("operations", "overview"): "运行概览",
             ("resources", "selected"): "已选运行资源",
-            ("resources", "account-operations"): "账户运行查询",
+            ("resources", "model-chat"): "模型对话",
+            ("resources", "account-operations"): "交易账户",
+            ("resources", "account-order-segments"): "订单管理 / 选择交易分区",
             ("resources", "account-orders"): "订单管理",
+            ("resources", "account-transfer-result"): "资金划转",
             ("resources", "setup"): "配置向导",
+            ("resources", "ai-models"): "AI 模型",
             ("research", "data"): "数据准备",
             ("research", "research"): "研究流程",
             ("strategy", "launches"): "运行方案",

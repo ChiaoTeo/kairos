@@ -1348,14 +1348,67 @@ def test_capital_schema_passthrough_uses_owner_standalone_cli(
     )
 
 
+def test_capital_business_surface_exposes_standalone_transfer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "workspace", workspace_id="capital-transfer"
+    )
+    seen: list[tuple[str, list[str]]] = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"status":"previewed"}'
+        stderr = ""
+
+    def invoke(_self, component, arguments):
+        seen.append((component, list(arguments)))
+        return Result()
+
+    monkeypatch.setattr(
+        "kairospy.surface.cli.commands.capital.NativeCliApplication.invoke",
+        invoke,
+    )
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "capital",
+                "transfer",
+                "preview",
+                "--binding-json",
+                "binding.json",
+                "--amount",
+                "1",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        == 0
+    )
+    assert seen == [
+        (
+            "capital",
+            [
+                "standalone",
+                "transfer",
+                "preview",
+                "--binding-json",
+                "binding.json",
+                "--amount",
+                "1",
+            ],
+        )
+    ]
+    assert json.loads(output.getvalue()) == {"status": "previewed"}
+
+
 def test_capital_business_surface_rejects_connected_runtime_commands() -> None:
     output = StringIO()
 
-    assert execute_argv(["capital", "transfer", "--amount", "1"], output) != 0
-    text = output.getvalue()
-    assert "connected Capital runtime command" in text
-    assert "kairos system component capital" in text
-    assert "kairos launch instance component capital" in text
+    assert execute_argv(["capital", "health"], output) != 0
+    assert "connected Capital runtime command" in output.getvalue()
 
 
 def test_system_component_reference_option_coverage_uses_workspace_client(
