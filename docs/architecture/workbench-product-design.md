@@ -102,35 +102,36 @@ Workbench 使用一个垂直布局，从上到下包含：
 | 区域 | 职责 | 内容生命周期 |
 | --- | --- | --- |
 | Workspace 摘要 | 展示当前 Workspace 身份和必要的全局状态 | 会话持续可见 |
-| 内容区 | 展示完整操作、结果、错误、警告和重要反馈 | 追加式，可清屏和复制 |
-| 动作列表 | 展示当前上下文可选择的操作 | 随导航替换 |
+| Activity Stream | 保留当前会话已经到达终态的操作、结果和证据 | 追加式，可清屏和复制 |
+| Interaction Region | 展示当前选择、参数、确认、运行态或持续控制 | 随交互状态原地替换 |
 | 状态栏 | 展示等待、执行中、成功、失败或暂停等瞬时状态 | 单行覆盖更新 |
 | 命令栏 | 展示面包屑、收集当前输入 | 始终只有一个输入框 |
 | 固定提示栏 | 展示全局可用的返回、帮助和退出方式 | 稳定且简短 |
 
-### 4.1 内容区不是聊天记录
+### 4.1 内容区是 Activity Stream
 
-内容区是业务活动和结果流，不是所有键盘输入的逐行转录。导航菜单由动作列表负责，参数引导由命令栏
-和状态栏负责；内容区不得重复这些信息。
+内容区不是 stdout、聊天记录或当前页面模型，而是当前会话已经完成的业务活动和证据。一个有限操作在
+成功、失败或执行后取消时最多形成一个 `ActivityRecord`；导航、候选、参数校验、确认请求、Running
+提示和自动刷新不进入 Activity Stream。空内容区只显示一个不参与复制和 transcript 的弱提示。
 
-内容区保留：
+`ActivityRecord` 使用关闭的 `kind` 和 `outcome`，并显式保存脱敏后的 `copy_text`、审计摘要及可选
+Artifact 路径。产品 flow 只能返回 `AppendActivity` effect；只有 `ActivityStream` renderer 可以调用
+底层 `RichLog.write()`。`/clear` 只清当前可见 Activity，不删除 transcript、Artifact 或业务状态。
 
-- 欢迎与 Workspace 加载异常；
-- 已形成完整业务意图的操作；
-- 查询、预览和执行结果；
-- 警告、错误、取消结果和危险操作确认；
-- 与当前结果直接相关、具有信息增量的恢复建议。
+用户位于底部时新 Activity 自动跟随；用户上滚查看旧结果时保持视口，并由状态栏提示未读数量，执行
+`/bottom` 或 `Ctrl+End` 后回到底部。
 
-内容区不保留：
+### 4.2 Interaction Region
 
-- 导航菜单或动作列表副本；
-- 首页编号和子菜单编号的原始回显；
-- `/back`、`/home` 等导航轨迹；
-- 参数的逐项回显；
-- 固定提示栏已经展示的通用说明；
-- 密码、Token、API Key 或 Authorization 明文。
+Interaction Region 是当前 `InteractionState` 的被动投影，承载动作列表、参数说明、确认摘要、运行状态和
+持续控制。它不保存另一份产品状态，也不直接启动 Worker。快照类 Control 原地替换最新值；日志类
+Control 使用容量为 500 行的 `LiveBuffer`，显示 following、unseen、dropped 和完整日志路径。
 
-### 4.2 动作列表
+Market 自动刷新不产生 Activity；用户明确选择“保存当前快照”时才追加一条 Activity。Launch attach 的
+暂停/继续只改变跟随状态，清空窗口不删除日志源，`/copy` 复制当前窗口；完整日志仍由 Launch 日志 owner
+持有并在 Control 中显示路径。
+
+### 4.3 动作列表
 
 动作列表是当前上下文唯一的菜单呈现。每个动作包含：
 
@@ -142,48 +143,62 @@ Workbench 使用一个垂直布局，从上到下包含：
 数字只在当前上下文中有意义，不进入业务 API、结果标题或长期审计记录。动作列表变化不应向内容区
 追加同一菜单。
 
-### 4.3 命令栏
+### 4.4 命令栏
 
 命令栏始终包含当前上下文和一个输入框。placeholder 只说明此刻需要输入什么，不承载长篇帮助。
 普通导航状态接受编号、动作名和 `/` 命令；参数状态只接受当前参数及允许的取消、帮助和退出命令。
 
 ## 5. 单输入交互模型
 
-输入框具有五种互斥模式：
+唯一输入框由五种互斥的 `InteractionState` 驱动：
 
 | 模式 | 用途 | 输入行为 |
 | --- | --- | --- |
-| Navigation | 选择动作或直接输入命令 | 解析当前动作、全局命令或显式 Kairos 命令 |
-| Argument | 收集一个普通参数 | 接受参数，允许返回、首页、帮助和退出 |
-| Secret | 收集凭据 | 隐藏显示，不进入历史，transcript 只记 `<redacted>` |
-| Confirmation | 等待危险操作确认 | 只接受确认、取消、帮助和退出 |
-| Busy | 后台 worker 正在执行 | 阻止重复提交，允许取消当前操作 |
+| `ChoiceInteraction` | 选择动作或直接输入命令 | 解析当前动作、全局命令或显式 Kairos 命令 |
+| `InputInteraction` | 收集普通或敏感字段 | 通过 `ActionToken(feature, action, field)` 回到所属产品 flow |
+| `ConfirmInteraction` | 等待危险操作确认 | 保存同一个不可变 `OperationSpec`，不产生 Activity |
+| `RunningInteraction` | 后台 worker 正在执行 | 阻止重复提交，允许取消当前操作 |
+| `ControlInteraction` | 行情快照或持续日志 | 保持控制动作可用并原地更新视图 |
 
 任何时刻只能有一个模式和一个输入所有者。参数向导、确认和 worker 不得各自创建第二个常驻输入框。
 
 ### 5.1 状态转换
 
 ```text
-Navigation
-  -> Navigation     纯导航或返回
-  -> Argument       叶子操作缺少普通参数
-  -> Secret         叶子操作缺少敏感参数
-  -> Confirmation   参数齐全且需要确认
-  -> Busy           参数齐全且可直接执行
+Choice
+  -> Input          叶子操作缺少字段
+  -> Confirm        参数齐全且需要确认
+  -> Running        参数齐全且可直接执行
+  -> Control        进入持续快照或日志
 
-Argument / Secret
-  -> Argument       继续收集下一参数
-  -> Confirmation   参数齐全且需要确认
-  -> Busy           参数齐全且可直接执行
-  -> Navigation     取消或完成
-
-Confirmation
-  -> Busy           确认
-  -> Navigation     取消
-
-Busy
-  -> Navigation     成功、失败或取消
+Input -> Input | Confirm | Running | Choice
+Confirm -> Running | Choice
+Running -> Choice | Control
+Control -> Control | Choice
 ```
+
+`GuidedSession` 是唯一交互状态所有者，并组合 Market、Reference、Operations、Research、Resources 和
+Strategy 六个产品 Session。Widget 只投影 Session；Screen 不维护平行 prompt、pending operation 或结果
+route 状态。
+
+### 5.2 已实施的代码边界
+
+```text
+KairosWorkbenchApp
+  -> CommandLineScreen                Textual 事件、Worker 入口、effect 应用
+       -> GuidedSession               唯一交互状态所有者
+       -> screens/flows/*             六类产品的 dispatch/success/failure/cancel
+       -> OperationSpec/RunningTask   不可变操作意图与当前 Worker 绑定
+       -> InteractionRegion           当前 InteractionState 的被动投影
+       -> ActivityStream              终态 ActivityRecord 的追加投影
+       -> LiveBuffer                  持续日志的有界可见窗口
+  -> WorkbenchTranscript              脱敏、append-only 的会话审计
+```
+
+调用方向固定为 `Screen -> product flow -> Application/Contract`。产品 flow 不调用 `query_one`、
+`run_worker`、`set_focus` 或 `push_screen`；Application/Contract 返回的对象由所属 flow 显式转换为
+Interaction 或 Activity。新增产品动作通常只修改所属 flow、产品 Session 和测试，不要求在 Screen 的
+dispatch、成功、错误和取消四处重复登记。
 
 ## 6. 导航与内容记录规则
 
@@ -204,35 +219,14 @@ Busy
 参数输入只进入当前向导状态。普通参数可进入输入历史和脱敏 transcript，但不以
 `kairos › <原始值>` 的形式逐项写入内容区。Secret 参数既不进入输入历史，也不显示明文。
 
-### 6.3 完整业务意图只记录一次
+### 6.3 一个操作、一个意图、一个终态
 
-当叶子操作的必填参数齐全并通过输入校验后，Workbench 才向内容区写入一次完整操作。优先显示可复制
-的等价 CLI：
+参数齐全后，产品 flow 构造一个不可变 `OperationSpec`，其中包含 operation ID、稳定动作名、脱敏审计
+摘要、可选等价 CLI、类型化 `ResultRoute` 和 callable。确认和 Worker 都复用同一个 spec；Screen 只以
+`RunningTask(spec, worker)` 绑定运行实例，不从 Worker name 解析协议。
 
-```text
-kairos › market AAPL
-```
-
-如果该操作没有稳定的显式 CLI，则显示语义化表达：
-
-```text
-市场行情 › 搜索标的并查看行情 · AAPL
-```
-
-不得显示缺少上下文的输入序列：
-
-```text
-kairos › 1
-kairos › AAPL
-```
-
-完整操作记录必须：
-
-- 使用稳定动作名，而不是当前菜单编号；
-- 包含理解结果所需的非敏感参数；
-- 对 Secret 和凭据统一使用 `<redacted>`；
-- 在执行、预览或确认之前产生，确保后续结果具有明确归属；
-- 同一操作只记录一次，不因 worker 状态刷新重复输出。
+操作意图由 transcript 按 operation ID 去重记录。Activity Stream 不展示“开始执行”，只在 Worker 到达
+成功、失败或执行后取消时使用同一个 operation ID 追加一个终态 Activity。确认前取消不产生 Activity。
 
 ### 6.4 特殊控制命令
 
@@ -240,8 +234,10 @@ kairos › AAPL
 | --- | --- |
 | `/back`、`/home` | 不回显，只改变上下文 |
 | `/help` | 不回显命令，展示当前上下文帮助 |
-| `/clear` | 清空内容区，可保留一次“业务状态未改变”的短反馈 |
-| `/copy` | 不污染内容区，通过通知报告复制结果 |
+| `/clear` | 只清空可见 Activity；状态栏反馈，业务状态和 transcript 不变 |
+| `/copy` | 复制 Workspace、当前 Interaction 和 Activity，并统一脱敏 |
+| `/copy-history` | 只复制 Activity Stream |
+| `/bottom` | 跳到最新 Activity 并恢复自动跟随 |
 | `/transcript` | 展示当前脱敏 transcript 路径 |
 | `/exit` | 无任务时退出；有任务时进入明确的取消或退出确认 |
 
@@ -252,10 +248,10 @@ kairos › AAPL
 短提示放在输入框 placeholder，当前阶段放在状态栏。只有在用户必须理解约束、风险或格式示例时，
 内容区才显示一次参数说明面板。
 
-参数错误必须就地恢复：
+参数错误必须在 `InputInteraction.error` 中就地恢复：
 
 - 保留当前叶子操作和已经通过验证的非敏感参数；
-- 在内容区显示具体错误；
+- 在当前 Interaction 中显示具体错误；
 - 在输入框继续请求出错字段；
 - 提供 `/back` 取消当前步骤；
 - 不把格式错误提交给 Application。
@@ -339,16 +335,20 @@ Secret 输入必须满足：
 
 恢复建议必须与当前错误相关。固定的 `/back`、`/home`、`/help` 不应在每条结果后重复。
 
-### 9.3 异步任务
+### 9.3 异步任务与结果路由
 
 耗时操作通过单一 worker 执行：
 
-- 开始时状态栏显示正在执行的完整操作；
+- 开始时 `RunningInteraction` 和状态栏显示正在执行的完整操作；
 - Busy 模式阻止重复提交；
 - `Ctrl+C` 只取消当前可取消操作，不退出整个 Workbench；
 - worker 成功、失败和取消都必须回到稳定的 Navigation 状态；
 - 自动刷新只更新对应视图，不重复追加相同结果和操作记录；
 - 用户在任务运行时提交新输入，才显示一次“任务仍在运行”的针对性反馈。
+
+产品 vertical flow 同时拥有 dispatch、success、failure 和 cancel。它返回关闭的 presentation effects：
+`AppendActivity`、`SetInteraction`、`RunOperation`、`SetStatus`，以及两个仅用于启动 Market/Launch 刷新的
+Control adapter effect。Screen 负责应用 effect 和管理 Textual Worker，不推断产品结果含义。
 
 ## 10. 六大产品入口
 
@@ -424,8 +424,10 @@ Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不�
 transcript 默认写入 Workspace 的 `logs/workbench/`；无法安全创建时可以退化为进程内记录。文件和
 current pointer 使用仅当前用户可读写的权限。
 
-“复制当前页”复制内容区的完整结果，不复制动作列表、输入历史或 Secret。复制前统一脱敏，输出应可
-直接粘贴给 Agent，而不要求 Agent 根据终端颜色或菜单编号重建上下文。
+“复制当前页”按 Workspace/上下文、当前 Interaction、可见 Activity 和相关 Artifact 路径组合；不复制
+输入历史或 Secret。`/copy-history` 只复制 Activity。复制前统一脱敏，输出应可直接粘贴给 Agent，而不
+要求 Agent 根据终端颜色或菜单编号重建上下文。Live Buffer 默认只复制当前窗口，完整范围通过 owner
+提供的日志路径定位。
 
 ## 12. 键盘、终端与可访问性
 
@@ -446,8 +448,9 @@ current pointer 使用仅当前用户可读写的权限。
 3. 判断它是导航分组、对象选择还是叶子操作。
 4. 定义所需参数、Secret、确认条件和结果形式。
 5. 提供语义化操作名称以及可能时的等价 CLI。
-6. 直接调用所属 Application 或 Contract。
-7. 添加行为、边界、错误、Secret 和快照测试。
+6. 在同一个产品 flow 中实现 dispatch、success、failure 和 cancel，并返回类型化 effect。
+7. 直接调用所属 Application 或 Contract。
+8. 添加行为、边界、错误、Secret、Activity 保留策略和快照测试。
 
 不得仅为了新增能力而创建新的 App、首页入口、顶层 UI layer、manager、router、registry 或 UI-owned
 port。只有用户任务确实无法归入现有产品入口时，才讨论增加首页分组。
@@ -473,9 +476,12 @@ port。只有用户任务确实无法归入现有产品入口时，才讨论增�
 ### 14.3 架构
 
 - Workbench 只有一个 App 和一个主工作屏。
+- 主屏只组合一个 `ActivityStream`、一个 `InteractionRegion` 和一个 `WorkbenchCommandInput`。
 - UI 直接使用所属 Application/Contract，不调用 Typer executor 或解析 stdout。
 - 跨业务访问遵守 Contract 边界，界面不拥有业务状态。
 - 自动刷新、回放和跟随输出不创建第二套交互运行时。
+- 产品 flow 不依赖 Textual Screen/App/Widget API；Screen 不保存产品状态转换表。
+- 有限操作最多形成一个终态 Activity，自动刷新不追加 Activity。
 
 ### 14.4 验证证据
 

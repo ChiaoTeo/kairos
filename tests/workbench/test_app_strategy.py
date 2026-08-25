@@ -24,9 +24,15 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.flows import strategy_execution
 from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
 from kairospy.surface.console.models import ObserveSnapshot
-from kairospy.surface.workbench.widgets import ActionList, WorkbenchCommandInput
+from kairospy.surface.workbench.widgets import (
+    ActionList,
+    ControlInteraction,
+    WorkbenchCommandInput,
+    interaction_copy_text,
+)
 from textual.app import App
 from textual.containers import Vertical
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Select, Static
@@ -43,7 +49,8 @@ def test_strategy_launch_list_detail_and_back_stay_in_command_screen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launches",
+        strategy_execution,
+        "load_launches",
         lambda state: (
             {
                 "launch_id": "paper-demo",
@@ -89,11 +96,13 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launches",
+        strategy_execution,
+        "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_instances",
+        strategy_execution,
+        "load_instances",
         lambda state, launch_id: (
             {
                 "instance_id": "run-1",
@@ -103,7 +112,8 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
         ),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_components",
+        strategy_execution,
+        "load_components",
         lambda state, launch_id, instance_id, mode: (
             {"component": "risk", "status": "healthy", "pid": 42},
         ),
@@ -149,17 +159,20 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
 ) -> None:
     calls: list[tuple[str, dict[str, str]]] = []
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launches",
+        strategy_execution,
+        "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_instances",
+        strategy_execution,
+        "load_instances",
         lambda state, launch_id: (
             {"instance_id": "run-1", "mode": "paper", "state": "running"},
         ),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_components",
+        strategy_execution,
+        "load_components",
         lambda state, launch_id, instance_id, mode: (
             {"component": "execution", "status": "healthy"},
         ),
@@ -170,7 +183,8 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
         return {"status": "ok"}
 
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.execute_connected_execution",
+        strategy_execution,
+        "execute_execution",
         execute,
     )
 
@@ -209,7 +223,7 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
     assert [action for action, _ in calls] == ["status", "cancel"]
     assert calls[-1][1] == {"order-id": "order-1", "reason": "manual cancel"}
     assert context == "首页 / 策略运行 / Execution Server  ›"
-    assert "Execution 作用域确认" in output
+    assert "Execution 作用域确认" not in output
     assert focused
 
 
@@ -218,17 +232,20 @@ def test_launch_market_snapshot_and_replay_pause_use_one_input(
 ) -> None:
     calls: list[tuple[str, dict[str, str]]] = []
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launches",
+        strategy_execution,
+        "load_launches",
         lambda state: ({"launch_id": "backtest-demo", "mode": "backtest"},),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_instances",
+        strategy_execution,
+        "load_instances",
         lambda state, launch_id: (
             {"instance_id": "run-1", "mode": "backtest", "state": "running"},
         ),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_components",
+        strategy_execution,
+        "load_components",
         lambda state, launch_id, instance_id, mode: (
             {"component": "market", "status": "healthy"},
         ),
@@ -239,7 +256,8 @@ def test_launch_market_snapshot_and_replay_pause_use_one_input(
         return {"status": "ok"}
 
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.execute_launch_market",
+        strategy_execution,
+        "execute_launch_market",
         execute,
     )
 
@@ -283,21 +301,25 @@ def test_launch_timeline_export_uses_argument_and_inline_confirmation(
 ) -> None:
     exports: list[str] = []
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launches",
+        strategy_execution,
+        "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_instances",
+        strategy_execution,
+        "load_instances",
         lambda state, launch_id: (
             {"instance_id": "run-1", "mode": "paper", "state": "stopped"},
         ),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launch_timeline",
+        strategy_execution,
+        "load_timeline",
         lambda state, launch_id, instance_id, mode: ({"event": "stopped"},),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.export_launch_timeline",
+        strategy_execution,
+        "export_timeline",
         lambda state, launch_id, instance_id, mode, destination: (
             exports.append(destination) or destination
         ),
@@ -338,7 +360,8 @@ def test_launch_attach_python_uses_same_input_and_inline_confirmation(
 ) -> None:
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launches",
+        strategy_execution,
+        "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
     monkeypatch.setattr(
@@ -346,7 +369,8 @@ def test_launch_attach_python_uses_same_input_and_inline_confirmation(
         lambda state, launch_id: {"status": "running", "logs": {"lines": []}},
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.send_launch_python",
+        strategy_execution,
+        "send_python",
         lambda state, launch_id, source: (
             calls.append((launch_id, source)) or {"status": "accepted"}
         ),
@@ -386,7 +410,8 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
 ) -> None:
     refreshes: list[str] = []
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launches",
+        strategy_execution,
+        "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
 
@@ -395,7 +420,12 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
         return {
             "instance": {"instance_id": "run-1"},
             "status": {"state": "running"},
-            "logs": {"lines": ["strategy-ready"]},
+            "logs": {
+                "latest": "/workspace/logs/strategy/process.log",
+                "lines": [
+                    f"strategy-log-{index}" for index in range(1, len(refreshes) + 1)
+                ]
+            },
         }
 
     monkeypatch.setattr(
@@ -403,7 +433,7 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
         snapshot,
     )
 
-    async def run() -> tuple[int, int, int, str]:
+    async def run() -> tuple[int, int, int, int, str, str, ControlInteraction]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -418,20 +448,84 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
             screen.submit("/p")
             await pilot.pause(1.2)
             while_paused = len(refreshes)
+            live_buffer = screen.session.strategy.live_buffer
+            assert live_buffer is not None
+            unseen_while_paused = live_buffer.unseen_lines
             screen.submit("/p")
             await pilot.pause(0.2)
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ControlInteraction)
             return (
                 before_pause,
                 while_paused,
                 len(refreshes),
+                unseen_while_paused,
                 _log_text(screen.query_one("#command-output", RichLog)),
+                interaction_copy_text(interaction),
+                interaction,
             )
 
-    before_pause, while_paused, after_resume, output = asyncio.run(run())
+    (
+        before_pause,
+        while_paused,
+        after_resume,
+        unseen_while_paused,
+        output,
+        control_text,
+        interaction,
+    ) = asyncio.run(run())
     assert before_pause >= 2
-    assert while_paused == before_pause
+    assert while_paused > before_pause
+    assert unseen_while_paused > 0
     assert after_resume > while_paused
-    assert output.count("strategy-ready") == 1
+    assert "strategy-log" not in output
+    assert "strategy-log" in control_text
+    assert "/workspace/logs/strategy/process.log" in control_text
+    assert "Launch 状态刷新" not in output
+    assert interaction.refreshing
+
+
+def test_launch_attach_clear_only_removes_visible_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        strategy_execution,
+        "load_launches",
+        lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
+    )
+    monkeypatch.setattr(
+        "kairospy.surface.workbench.screens.command_line.load_launch_attach_snapshot",
+        lambda *args: {
+            "instance": {"instance_id": "run-1"},
+            "status": {"state": "running"},
+            "logs": {
+                "latest": "/workspace/logs/strategy/process.log",
+                "lines": ["line-one", "line-two"],
+            },
+        },
+    )
+
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("3", "1", "1", "/a"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            screen.submit("/c")
+            await pilot.pause()
+            live_buffer = screen.session.strategy.live_buffer
+            assert live_buffer is not None
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ControlInteraction)
+            return live_buffer.copy_text(), interaction_copy_text(interaction)
+
+    visible_lines, control_text = asyncio.run(run())
+
+    assert visible_lines == ""
+    assert "line-one" not in control_text
+    assert "/workspace/logs/strategy/process.log" in control_text
 
 
 def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
@@ -439,15 +533,18 @@ def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
 ) -> None:
     saved: list[tuple[str, bool]] = []
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.load_launches",
+        strategy_execution,
+        "load_launches",
         lambda state: (),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.open_new_launch_wizard",
+        strategy_execution,
+        "open_new_launch_wizard",
         lambda state, launch_id: LaunchWizardState(launch_id),
     )
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.save_launch_wizard",
+        strategy_execution,
+        "save_launch_wizard",
         lambda state, wizard, publish: (
             saved.append((wizard.launch_id, publish))
             or {"status": "draft", "ready": True}
@@ -491,7 +588,7 @@ def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
     assert screen_type is CommandLineScreen
     assert saved == [("backtest-demo", False)]
     assert context == "首页 / 策略运行 / 已选 Launch  ›"
-    assert "Launch 脱敏摘要" in output
+    assert "Launch 脱敏摘要" not in output
     assert "Launch 配置结果" in output
     assert focused
 

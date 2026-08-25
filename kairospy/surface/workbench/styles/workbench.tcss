@@ -40,26 +40,36 @@ Screen {
     scrollbar-size: 1 1;
 }
 
-#guided-actions {
+#activity-empty {
+    height: 1;
+    margin: 0 3;
+    color: $text-muted;
+}
+
+#interaction-region {
     height: auto;
     min-height: 3;
-    max-height: 9;
+    max-height: 40%;
     margin: 0 2;
+    overflow-y: auto;
+    scrollbar-size: 1 1;
+}
+
+#interaction-content {
+    display: none;
+    height: auto;
+    padding: 0;
+}
+
+#guided-actions {
+    height: auto;
+    max-height: 9;
+    margin: 0;
     padding: 0 1;
 }
 
 #guided-actions > .option-list--option {
     padding: 0 1;
-}
-
-#guided-prompt {
-    display: none;
-    height: auto;
-    min-height: 5;
-    margin: 0 2;
-    padding: 0 2;
-    border: round $primary-muted;
-    background: $surface;
 }
 
 #command-bar {

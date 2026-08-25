@@ -26,7 +26,13 @@ from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
 from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
 from kairospy.surface.console.models import ObserveSnapshot
-from kairospy.surface.workbench.widgets import ActionList, WorkbenchCommandInput
+from kairospy.surface.workbench.widgets import (
+    ActionList,
+    Feature,
+    InputInteraction,
+    WorkbenchCommandInput,
+    interaction_copy_text,
+)
 from textual.app import App
 from textual.containers import Vertical
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Select, Static
@@ -93,10 +99,12 @@ def test_market_menu_keeps_advanced_operations_out_of_primary_choices() -> None:
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.press("1", "enter")
             await pilot.pause()
-            actions = app.screen.query_one("#guided-actions", ActionList)
-            app.screen.submit("/help")
-            return actions.option_count, _log_text(
-                app.screen.query_one("#command-output", RichLog)
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            actions = screen.query_one("#guided-actions", ActionList)
+            screen.submit("/help")
+            return actions.option_count, interaction_copy_text(
+                screen.session.interaction
             )
 
     option_count, output = asyncio.run(run())
@@ -165,19 +173,20 @@ def test_slash_back_cancels_pending_argument_before_leaving_section() -> None:
             assert isinstance(screen, CommandLineScreen)
             screen.enter_section("market")
             screen.submit("1")
-            assert screen.session.pending_action == "market"
+            assert isinstance(screen.session.interaction, InputInteraction)
+            assert screen.session.interaction.action.feature is Feature.MARKET
 
             await pilot.press("slash", "b", "a", "c", "k", "enter")
             await pilot.pause()
             return (
                 str(screen.query_one("#command-context", Static).render()),
-                screen.session.pending_action or "",
+                isinstance(screen.session.interaction, InputInteraction),
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
             )
 
     context, pending, focused = asyncio.run(run())
     assert context == "首页 / 市场行情  ›"
-    assert pending == ""
+    assert not pending
     assert focused
 
 
@@ -193,14 +202,14 @@ def test_ctrl_c_cancels_pending_argument_without_exiting_workbench() -> None:
             await pilot.pause()
             return (
                 app.return_value,
-                screen.session.pending_action or "",
+                isinstance(screen.session.interaction, InputInteraction),
                 str(screen.query_one("#command-context", Static).render()),
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
             )
 
     return_value, pending, context, focused = asyncio.run(run())
     assert return_value is None
-    assert pending == ""
+    assert not pending
     assert context == "首页 / 市场行情  ›"
     assert focused
 
@@ -225,7 +234,7 @@ def test_ctrl_c_rejects_pending_confirmation_without_running_action() -> None:
     return_value, output, focused = asyncio.run(run())
     assert return_value is None
     assert called == []
-    assert "已取消：危险操作" in output
+    assert output == ""
     assert focused
 
 

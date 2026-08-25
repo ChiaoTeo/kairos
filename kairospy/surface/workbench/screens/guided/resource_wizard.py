@@ -20,6 +20,16 @@ from kairospy.system.apps.credentials.application import (
 from .resource_rendering import identity
 
 
+_MODEL_DEFAULTS: dict[str, tuple[str, str]] = {
+    "openai": ("openai-responses", "https://api.openai.com/v1"),
+    "anthropic": ("anthropic-messages", "https://api.anthropic.com/v1"),
+    "openrouter": ("openai-chat-completions", "https://openrouter.ai/api/v1"),
+    "ollama": ("openai-chat-completions", "http://127.0.0.1:11434/v1"),
+    "lmstudio": ("openai-chat-completions", "http://127.0.0.1:1234/v1"),
+    "custom": ("openai-chat-completions", ""),
+}
+
+
 @dataclass(slots=True)
 class ResourceWizardState:
     """One-resource staged values; secrets live only until save/cancel."""
@@ -162,6 +172,18 @@ class ResourceWizardState:
             or self.record.get("provider")
             or "openai"
         )
+        model_provider = str(
+            self.answers.get("model-provider")
+            or self.record.get("provider")
+            or "openai"
+        )
+        provider_changed = bool(
+            self.answers.get("model-provider")
+            and model_provider != str(self.record.get("provider") or model_provider)
+        )
+        model_mode, model_endpoint = _MODEL_DEFAULTS.get(
+            model_provider, _MODEL_DEFAULTS["custom"]
+        )
         defaults: dict[str, object] = {
             "account-mode": self.record.get("environment") or "paper",
             "resource-id": identity(self.kind, self.record)
@@ -182,18 +204,24 @@ class ResourceWizardState:
             "account-balance": "USDT=100000",
             "account-provider": self.record.get("broker") or "binance",
             "account-role": self.record.get("credential_role") or "readonly",
-            "endpoint": self.record.get("endpoint")
-            or self.record.get("base_url")
-            or (
-                "https://api.massive.com"
+            "endpoint": (
+                self.record.get("endpoint") or "https://api.massive.com"
                 if self.kind == "data"
-                else "https://api.openai.com/v1"
+                else (
+                    self.record.get("base_url") or model_endpoint
+                    if self.editing and not provider_changed
+                    else model_endpoint
+                )
             ),
             "include-options": _bool_text(
                 "options" in (self.record.get("capabilities") or ())
             ),
             "model-provider": self.record.get("provider") or "openai",
-            "model-mode": self.record.get("api_mode") or "openai-responses",
+            "model-mode": (
+                self.record.get("api_mode") or model_mode
+                if self.editing and not provider_changed
+                else model_mode
+            ),
             "models": ",".join(str(item) for item in self.record.get("models") or ()),
             "notification-provider": self.record.get("provider") or "feishu",
             "chat-id": self.record.get("chat_id") or "",
@@ -259,9 +287,10 @@ def save_resource_wizard(state: Any, wizard: ResourceWizardState) -> dict[str, A
         )
     if wizard.kind == "data":
         secret = str(answers.get("secret-primary") or "")
+        credential_id = str(record.get("credential_id") or resource_id)
         if secret:
             CredentialConfigurationApplication(owner).configure_secret_values(
-                resource_id,
+                credential_id,
                 provider="massive",
                 values={"api_key": secret},
                 overwrite=bool(record),
@@ -272,7 +301,7 @@ def save_resource_wizard(state: Any, wizard: ResourceWizardState) -> dict[str, A
         if answers["include-options"]:
             capabilities.append("options")
         return ReferenceProviderConfigurationApplication(owner).configure_massive(
-            credential_id=resource_id,
+            credential_id=credential_id,
             endpoint=str(answers["endpoint"]),
             capabilities=capabilities,
         )

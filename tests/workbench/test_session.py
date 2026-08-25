@@ -1,57 +1,99 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from kairospy.surface.workbench.screens.guided.models import (
-    ArgumentPrompt,
-    BusyPrompt,
-    ConfirmationPrompt,
     GuidedSession,
-    IdlePrompt,
-    PromptMode,
+    MarketSession,
+    OperationsSession,
+    ResourcesSession,
+    StrategySession,
 )
+from kairospy.surface.workbench.screens.operation import OperationSpec
+from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
+from kairospy.surface.workbench.widgets import (
+    ActionToken,
+    ChoiceInteraction,
+    ConfirmInteraction,
+    Feature,
+    InputInteraction,
+    InteractionMode,
+    RunningInteraction,
+)
+
+
+def _operation(summary: str, operation: Callable[[], object]) -> OperationSpec:
+    return OperationSpec.create(
+        action_name=summary,
+        audit_summary=summary,
+        route=ResultRoute(ResultKind.CONFIRMED),
+        operation=operation,
+        running_status=f"正在执行：{summary}",
+    )
 
 
 def test_prompt_state_has_one_active_variant() -> None:
     session = GuidedSession()
 
-    assert isinstance(session.prompt, IdlePrompt)
-    assert session.prompt_mode is PromptMode.NAVIGATION
-    assert session.pending_action is None
+    assert isinstance(session.interaction, ChoiceInteraction)
+    assert session.interaction.mode is InteractionMode.CHOICE
+    assert session.interaction.mode is InteractionMode.CHOICE
 
-    session.ask("market")
-    assert session.prompt == ArgumentPrompt("market")
-    assert session.prompt_mode is PromptMode.ARGUMENT
-    assert session.pending_action == "market"
-    assert session.confirmation_prompt is None
+    market = ActionToken(Feature.MARKET, "search")
+    session.ask(market)
+    assert session.interaction.mode is InteractionMode.INPUT
+    assert session.interaction == InputInteraction(market, "search", "", "")
 
-    session.ask("resource:secret", secret=True)
-    assert session.prompt == ArgumentPrompt("resource:secret", secret=True)
-    assert session.prompt_mode is PromptMode.SECRET
-    assert session.pending_action == "resource:secret"
+    secret = ActionToken(Feature.RESOURCES, "setup-secret")
+    session.ask(secret, secret=True)
+    assert session.interaction.mode is InteractionMode.INPUT
+    assert isinstance(session.interaction, InputInteraction)
+    assert session.interaction.action == secret
+    assert session.interaction.secret
 
     def operation() -> str:
         return "done"
 
-    session.confirm("dangerous action", operation, "confirmed")
-    assert session.prompt == ConfirmationPrompt(
-        "dangerous action", operation, "confirmed"
-    )
-    assert session.prompt_mode is PromptMode.CONFIRMATION
-    assert session.pending_action == "dangerous action"
-    assert session.argument_prompt is None
+    spec = _operation("dangerous action", operation)
+    session.confirm(spec)
+    assert session.interaction.mode is InteractionMode.CONFIRM
+    assert isinstance(session.interaction, ConfirmInteraction)
+    assert session.interaction.operation is spec
 
-    session.busy("confirmed")
-    assert session.prompt == BusyPrompt("confirmed")
-    assert session.prompt_mode is PromptMode.BUSY
-    assert session.pending_action == "confirmed"
+    session.busy(spec.route)
+    assert session.interaction.mode is InteractionMode.RUNNING
+    assert isinstance(session.interaction, RunningInteraction)
+    assert session.interaction.route == spec.route
 
     session.finish_prompt()
-    assert isinstance(session.prompt, IdlePrompt)
-    assert session.prompt_mode is PromptMode.NAVIGATION
+    assert isinstance(session.interaction, ChoiceInteraction)
+    assert session.interaction.mode is InteractionMode.CHOICE
 
 
-def test_finishing_prompt_preserves_records_but_navigation_reset_discards_them() -> None:
+def test_confirmation_temporarily_overlays_and_restores_interaction() -> None:
+    session = GuidedSession()
+    session.choose((), title="已选市场")
+    previous = session.interaction
+
+    session.confirm(
+        _operation("是否退出？", lambda: None),
+        title="退出 Workbench",
+    )
+
+    assert isinstance(session.interaction, ConfirmInteraction)
+    assert session.suspended_interaction is previous
+
+    session.finish_prompt()
+
+    assert session.interaction is previous
+    assert session.suspended_interaction is None
+
+
+def test_finishing_prompt_preserves_records_but_navigation_reset_discards_them() -> (
+    None
+):
     session = GuidedSession(visible_records=("record",))
-    session.ask("query")
+    session.ask(ActionToken(Feature.GLOBAL, "query"))
 
     session.finish_prompt()
     assert session.visible_records == ("record",)
@@ -63,33 +105,36 @@ def test_finishing_prompt_preserves_records_but_navigation_reset_discards_them()
 def test_worker_terminal_cleanup_is_owned_by_the_session() -> None:
     marker = object()
     session = GuidedSession(
-        business_prompt=marker,
-        order_prompt=marker,
-        execution_prompt=marker,
-        launch_market_prompt=marker,
-        market_file_prompt=marker,
-        project_prompt=marker,
-        profile_action="create",
-        workspace_market_prompt=marker,
+        market=MarketSession(file_prompt=marker, workspace_prompt=marker),
+        operations=OperationsSession(
+            business_prompt=marker,
+            project_prompt=marker,
+            profile_action="create",
+        ),
+        resources=ResourcesSession(order_prompt=marker),
+        strategy=StrategySession(
+            execution_prompt=marker,
+            launch_market_prompt=marker,
+        ),
     )
 
     for kind in (
-        "business-result",
-        "order-result",
-        "execution-result",
-        "launch-market-result",
-        "market-file-result",
-        "operations-project-result",
-        "operations-profile-result",
-        "workspace-market-result",
+        ResultKind.BUSINESS,
+        ResultKind.ORDER,
+        ResultKind.EXECUTION,
+        ResultKind.LAUNCH_MARKET,
+        ResultKind.MARKET_FILE,
+        ResultKind.OPERATIONS_PROJECT,
+        ResultKind.OPERATIONS_PROFILE,
+        ResultKind.WORKSPACE_MARKET,
     ):
         session.clear_result_flow(kind)
 
-    assert session.business_prompt is None
-    assert session.order_prompt is None
-    assert session.execution_prompt is None
-    assert session.launch_market_prompt is None
-    assert session.market_file_prompt is None
-    assert session.project_prompt is None
-    assert session.profile_action is None
-    assert session.workspace_market_prompt is None
+    assert session.operations.business_prompt is None
+    assert session.resources.order_prompt is None
+    assert session.strategy.execution_prompt is None
+    assert session.strategy.launch_market_prompt is None
+    assert session.market.file_prompt is None
+    assert session.operations.project_prompt is None
+    assert session.operations.profile_action is None
+    assert session.market.workspace_prompt is None

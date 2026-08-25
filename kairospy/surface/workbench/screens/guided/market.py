@@ -200,6 +200,13 @@ def selected_market_actions(market: Any) -> tuple[ActionItem, ...]:
     return tuple(actions)
 
 
+MARKET_CONTROL_ACTIONS = (
+    ActionItem("refresh", "刷新当前行情", "通过上次数据源立即刷新", "r"),
+    ActionItem("watch", "开启或暂停自动刷新", "持续更新当前行情快照", "w"),
+    ActionItem("save-snapshot", "保存当前快照", "将当前行情保留到活动历史", "s"),
+)
+
+
 def provider_actions(routes: tuple[dict[str, Any], ...]) -> tuple[ActionItem, ...]:
     return tuple(
         ActionItem(
@@ -387,6 +394,7 @@ def _safe_filename(value: str) -> str:
 
 
 __all__ = [
+    "MARKET_CONTROL_ACTIONS",
     "MarketFilePromptState",
     "execute_file_action",
     "load_observation",

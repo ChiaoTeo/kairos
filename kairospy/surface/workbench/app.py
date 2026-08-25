@@ -14,7 +14,7 @@ from textual.worker import Worker
 from .screens import CommandLineScreen
 from .state import WorkbenchState
 from .transcript import WorkbenchTranscript, redact_text
-from .widgets import WorkbenchLog
+from .widgets import ActivityStream
 
 
 class KairosWorkbenchApp(App[int]):
@@ -80,7 +80,7 @@ class KairosWorkbenchApp(App[int]):
             )
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-        """Record lifecycle facts; rendered results are captured by WorkbenchLog."""
+        """Record lifecycle facts; rendered results are captured by ActivityStream."""
 
         self.transcript.record(
             "worker_state",
@@ -121,19 +121,21 @@ class KairosWorkbenchApp(App[int]):
             screen.action_interrupt()
 
     def action_copy_page(self) -> None:
-        """Copy every complete result log on the current page for agent handoff."""
+        """Copy the current interaction and stable activity history for handoff."""
 
-        sections: list[str] = []
-        logs = list(self.screen.query(WorkbenchLog))
-        for log in logs:
-            content = log.plain_text
-            if not content:
-                continue
-            if len(logs) > 1 and log.id:
-                sections.append(f"## {log.id}\n{content}")
-            else:
-                sections.append(content)
-        page = redact_text("\n\n".join(sections)).strip()
+        self.copy_current_page()
+
+    def copy_current_page(self, *, history_only: bool = False) -> None:
+        """Copy a redacted page rendering, optionally limiting it to activities."""
+
+        screen = self.screen
+        if isinstance(screen, CommandLineScreen):
+            page = screen.copy_page_text(history_only=history_only)
+        else:
+            page = "\n\n".join(
+                log.plain_text for log in screen.query(ActivityStream) if log.plain_text
+            )
+        page = redact_text(page).strip()
         if not page:
             self.notify("当前页面没有可复制的结果", title="未复制", severity="warning")
             return
@@ -149,6 +151,7 @@ class KairosWorkbenchApp(App[int]):
         self.transcript.record(
             "page_copied",
             screen=type(self.screen).__name__,
+            history_only=history_only,
             characters=len(page),
         )
         self.notify(

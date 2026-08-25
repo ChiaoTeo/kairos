@@ -28,6 +28,7 @@ class WorkbenchTranscript:
         self.session_id = f"wb-{uuid4().hex[:12]}"
         self.path = path
         self._events: list[dict[str, Any]] = []
+        self._started_operation_ids: set[str] = set()
         self._lock = Lock()
 
     @classmethod
@@ -101,6 +102,15 @@ class WorkbenchTranscript:
         value = redact_text(text).strip()
         if value:
             self.record("output", screen=screen, widget=widget, text=value)
+
+    def claim_operation(self, operation_id: str) -> bool:
+        """Allow one immutable operation intent to be recorded exactly once."""
+
+        with self._lock:
+            if operation_id in self._started_operation_ids:
+                return False
+            self._started_operation_ids.add(operation_id)
+            return True
 
     @property
     def events(self) -> tuple[dict[str, Any], ...]:

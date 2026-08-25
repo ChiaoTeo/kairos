@@ -29,6 +29,7 @@ from .guided.research import (
     RESEARCH_ACTIONS as RESEARCH_WORKFLOW_ACTIONS,
 )
 from .guided.resources import detail_actions as resource_detail_actions
+from .guided.resource_rendering import RESOURCE_LABELS, identity, record_summary
 from .guided.strategy import (
     ATTACH_ACTIONS as STRATEGY_ATTACH_ACTIONS,
     INSTANCE_ACTIONS as STRATEGY_INSTANCE_ACTIONS,
@@ -37,6 +38,7 @@ from .guided.strategy import (
 )
 from .guided.workspace_market import WORKSPACE_MARKET_ACTIONS
 from .guided.market import (
+    MARKET_CONTROL_ACTIONS,
     provider_actions as market_provider_actions,
     selected_market_actions,
 )
@@ -49,16 +51,16 @@ def go_back(session: GuidedSession) -> bool:
         return False
     if session.context == ("market", "providers"):
         session.context = ("market", "selected")
-        session.visible_records = session.market_records
+        session.visible_records = session.market.records
     elif session.context == ("market", "connected"):
         session.enter("market")
     elif session.context == ("market", "selected"):
         session.context = (
-            ("market", "results") if session.market_records else ("market",)
+            ("market", "results") if session.market.records else ("market",)
         )
-        session.visible_records = session.market_records
+        session.visible_records = session.market.records
     elif session.context == ("reference", "selected"):
-        kind = session.reference_kind
+        kind = session.reference.kind
         session.context = (
             ("reference", kind)
             if kind is not None and session.visible_records
@@ -76,7 +78,7 @@ def go_back(session: GuidedSession) -> bool:
     elif len(session.context) > 1 and session.context[0] == "operations":
         session.enter("operations")
     elif session.context == ("resources", "selected"):
-        kind = session.resource_kind
+        kind = session.resources.kind
         session.context = (
             ("resources", kind)
             if kind is not None and session.visible_records
@@ -92,14 +94,16 @@ def go_back(session: GuidedSession) -> bool:
         session.enter("research")
     elif session.context == ("strategy", "selected"):
         session.context = (
-            ("strategy", "launches") if session.launch_records else ("strategy",)
+            ("strategy", "launches")
+            if session.strategy.launch_records
+            else ("strategy",)
         )
-        session.visible_records = session.launch_records
+        session.visible_records = session.strategy.launch_records
     elif session.context in {("strategy", "attach"), ("strategy", "instances")}:
         if session.context == ("strategy", "attach"):
-            session.launch_attach_paused = True
+            session.strategy.attach_paused = True
         session.context = ("strategy", "selected")
-        session.visible_records = session.launch_records
+        session.visible_records = session.strategy.launch_records
     elif session.context in {
         ("strategy", "instance"),
         ("strategy", "components"),
@@ -112,22 +116,22 @@ def go_back(session: GuidedSession) -> bool:
             ("strategy", "timeline"),
         }:
             session.context = ("strategy", "instance")
-            session.visible_records = session.launch_instance_records
+            session.visible_records = session.strategy.instance_records
         elif session.context in {
             ("strategy", "execution"),
             ("strategy", "market"),
         }:
             session.context = ("strategy", "components")
-            session.visible_records = session.launch_component_records
+            session.visible_records = session.strategy.component_records
         else:
             session.context = ("strategy", "instances")
-            session.visible_records = session.launch_instance_records
+            session.visible_records = session.strategy.instance_records
     elif len(session.context) > 1 and session.context[0] == "strategy":
         session.enter("strategy")
     elif len(session.context) > 1 and session.context[0] == "reference":
         if (
             session.context[1] == "instruments"
-            and session.reference_instrument_type is not None
+            and session.reference.instrument_type is not None
         ):
             session.context = ("reference", "instrument-types")
             session.visible_records = ()
@@ -153,9 +157,14 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
         return HOME_ACTIONS
     if session.context == ("market", "selected"):
         market = getattr(state, "selected_market", None)
-        return selected_market_actions(market) if market is not None else ()
+        if market is None:
+            return ()
+        actions = selected_market_actions(market)
+        if session.market.snapshot is not None:
+            actions = (*actions, *MARKET_CONTROL_ACTIONS)
+        return actions
     if session.context == ("market", "providers"):
-        return market_provider_actions(session.market_routes)
+        return market_provider_actions(session.market.routes)
     if session.context == ("market", "connected"):
         return WORKSPACE_MARKET_ACTIONS
     if session.context == ("operations", "project"):
@@ -171,13 +180,31 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
     if session.context == ("operations", "service"):
         return OPERATIONS_SERVICE_ACTIONS
     if session.context == ("resources", "selected"):
-        return resource_detail_actions(session.resource_kind)
+        return resource_detail_actions(session.resources.kind)
     if session.context == ("resources", "account-operations"):
         return RESOURCE_ACCOUNT_ACTIONS
     if session.context == ("resources", "account-orders"):
         return ACCOUNT_ORDER_ACTIONS
     if session.context == ("resources", "setup"):
         return ()
+    if (
+        len(session.context) == 2
+        and session.context[0] == "resources"
+        and session.context[1] in RESOURCE_LABELS
+    ):
+        kind = session.context[1]
+        if session.visible_records:
+            return tuple(
+                ActionItem(
+                    str(index),
+                    identity(kind, record),
+                    record_summary(kind, record),
+                    str(index),
+                )
+                for index, record in enumerate(session.visible_records, 1)
+            )
+        label = RESOURCE_LABELS[kind]
+        return (ActionItem("new", f"添加{label}", "启动安全的单输入配置向导", "new"),)
     if session.context == ("research", "data"):
         return RESEARCH_DATA_ACTIONS
     if session.context == ("research", "research"):
@@ -279,6 +306,9 @@ def record_description(record: Any) -> str:
         ]
         return " · ".join(values) or "查看详情"
     values = []
+    exchange_id = getattr(record, "exchange_id", None)
+    if exchange_id:
+        values.append(str(exchange_id).rsplit(":", 1)[-1])
     for name in ("name", "instrument_kind", "instrument_type", "asset_class", "status"):
         value = getattr(record, name, None)
         if value and str(value) not in values:

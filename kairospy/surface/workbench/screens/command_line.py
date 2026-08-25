@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
@@ -28,147 +27,63 @@ from kairospy.surface.console.models import (
 
 from ..transcript import redact_text
 from ..widgets import (
-    ActionItem,
-    GuidedActionList,
+    ActionToken,
+    ActivityStream,
+    ChoiceInteraction,
+    ConfirmInteraction,
+    ControlInteraction,
+    Feature,
+    InputInteraction,
+    InteractionRegion,
+    InteractionState,
+    RunningInteraction,
     WorkbenchCommandInput,
-    WorkbenchLog as RichLog,
     WorkspaceHeader,
+    interaction_copy_text,
+    renderable_plain_text,
+)
+from .activity import ActivityKind, ActivityOutcome, ActivityRecord
+from .effects import (
+    AppendActivity,
+    RefreshLaunchControl,
+    RefreshMarketControl,
+    RunOperation,
+    ScreenEffect,
+    SetInteraction,
+    SetStatus,
+)
+from .flows import (
+    market_reference,
+    operations_research,
+    resources_account,
+    strategy_execution,
 )
 from .navigation import (
     action_id,
     context_items,
     context_label,
     go_back,
-    record_description,
     record_label,
 )
-from .results import ResultKey, ResultKind, parse_result_kind
+from .operation import OperationSpec, RunningTask
+from .results import ResultKind, ResultRoute
 
 if TYPE_CHECKING:
     from ..app import KairosWorkbenchApp
-from .guided.catalog import (
-    HOME_ACTIONS,
-    MARKET_ADVANCED_ACTIONS,
-    SECTION_ACTIONS,
-    SECTION_LABELS,
-)
-from .guided.account import (
-    ACCOUNT_ACTIONS as RESOURCE_ACCOUNT_ACTIONS,
-    execute as execute_account_action,
-)
-from .guided.business import (
-    BusinessPromptState,
-    actions as business_actions,
-    execute as execute_business,
-)
+from .guided.catalog import HOME_ACTIONS, SECTION_ACTIONS
 from .guided.market import (
-    MarketFilePromptState,
-    execute_file_action as execute_market_file_action,
-    load_datasets as load_market_datasets,
     load_observation as load_market_observation,
-    load_routes as load_market_routes,
     observation_renderable as market_observation_renderable,
-    provider_actions as market_provider_actions,
-    preview_file_action as preview_market_file_action,
-    route_diagnostic_renderable,
-    run_diagnostic as run_market_diagnostic,
-    selected_market_actions,
 )
-from .guided.launch_market import (
-    MARKET_COMPONENT_ACTIONS as STRATEGY_MARKET_ACTIONS,
-    LaunchMarketPromptState,
-    execute as execute_launch_market,
-    preview as preview_launch_market,
-)
-from .guided.models import GuidedSession, PromptMode
-from .guided.operations import (
-    BUSINESS_ACTIONS as OPERATIONS_BUSINESS_ACTIONS,
-    CONFIG_ACTIONS as OPERATIONS_CONFIG_ACTIONS,
-    PROJECT_ACTIONS as OPERATIONS_PROJECT_ACTIONS,
-    PROFILE_ACTIONS as OPERATIONS_PROFILE_ACTIONS,
-    SERVICE_ACTIONS as OPERATIONS_SERVICE_ACTIONS,
-    ProjectPromptState,
-    execute_config as execute_operations_config,
-    execute_operation,
-    execute_project as execute_operations_project,
-    execute_project_write as execute_operations_project_write,
-    execute_service as execute_operations_service,
-    list_services as list_operations_services,
-    mutate_profile as mutate_operations_profile,
-)
-from .guided.orders import (
-    ORDER_ACTIONS as ACCOUNT_ORDER_ACTIONS,
-    OrderPromptState,
-    execute as execute_order,
-    preview as preview_order,
-)
+from .guided.models import GuidedSession
 from .guided.kairos_command import (
     is_dangerous as is_dangerous_kairos_command,
     preview as preview_kairos_command,
     run as run_kairos_command,
 )
-from .guided.execution import (
-    EXECUTION_ACTIONS as STRATEGY_EXECUTION_ACTIONS,
-    ExecutionPromptState,
-    execute as execute_connected_execution,
-    preview as preview_connected_execution,
-)
-from .guided.reference import (
-    INSTRUMENT_TYPE_ACTIONS,
-    detail_actions as reference_detail_actions,
-    detail_renderable as reference_detail_renderable,
-    load_instrument_markets as load_reference_instrument_markets,
-    load_records as load_reference_records,
-    load_related as load_related_reference,
-    records_renderable as reference_records_renderable,
-)
-from .guided.resources import (
-    ResourceWizardState,
-    detail_actions as resource_detail_actions,
-    detail_renderable as resource_detail_renderable,
-    execute_action as execute_resource_action,
-    identity as resource_identity,
-    list_records as list_resource_records,
-    preview_action as preview_resource_action,
-    records_renderable as resource_records_renderable,
-    save_resource_wizard,
-    summary as summarize_resources,
-    summary_renderable as resource_summary_renderable,
-)
-from .guided.research import (
-    DATA_ACTIONS as RESEARCH_DATA_ACTIONS,
-    RESEARCH_ACTIONS as RESEARCH_WORKFLOW_ACTIONS,
-    execute as execute_research,
-    preview as preview_research,
-)
 from .guided.strategy import (
     ATTACH_ACTIONS as STRATEGY_ATTACH_ACTIONS,
-    INSTANCE_ACTIONS as STRATEGY_INSTANCE_ACTIONS,
-    LAUNCH_ACTIONS as STRATEGY_LAUNCH_ACTIONS,
-    TIMELINE_ACTIONS as STRATEGY_TIMELINE_ACTIONS,
-    LaunchWizardState,
     attach_snapshot as load_launch_attach_snapshot,
-    components_renderable as launch_components_renderable,
-    execute as execute_launch,
-    export_timeline as export_launch_timeline,
-    instance_overview as load_launch_instance_overview,
-    instances_renderable as launch_instances_renderable,
-    load_components as load_launch_components,
-    load_instances as load_launch_instances,
-    load_launches,
-    load_timeline as load_launch_timeline,
-    open_edit_launch_wizard,
-    open_new_launch_wizard,
-    preview as preview_launch,
-    records_renderable as launch_records_renderable,
-    save_launch_wizard,
-    send_python as send_launch_python,
-)
-from .guided.workspace_market import (
-    WORKSPACE_MARKET_ACTIONS,
-    WorkspaceMarketPromptState,
-    execute as execute_workspace_market,
-    preview as preview_workspace_market,
 )
 
 
@@ -180,19 +95,26 @@ class CommandLineScreen(Screen[None]):
     BINDINGS = [
         Binding("ctrl+l", "clear", "清屏", show=False),
         Binding("escape", "back", "取消或返回", show=False),
+        Binding("pageup", "scroll_output_up", "内容区向上翻页", show=False),
+        Binding("pagedown", "scroll_output_down", "内容区向下翻页", show=False),
+        Binding("alt+up", "scroll_output_line_up", "内容区向上滚动", show=False),
+        Binding("alt+down", "scroll_output_line_down", "内容区向下滚动", show=False),
+        Binding("ctrl+end", "follow_output", "回到底部并继续跟随", show=False),
+        Binding("alt+pageup", "scroll_interaction_up", "交互区向上滚动", show=False),
+        Binding(
+            "alt+pagedown",
+            "scroll_interaction_down",
+            "交互区向下滚动",
+            show=False,
+        ),
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self._interrupt_exit_pending = False
-        self._active_worker: Worker[Any] | None = None
+        self._running_task: RunningTask | None = None
         self._attach_refresh_worker: Worker[Any] | None = None
-        self._pending_operation: tuple[str, str] | None = None
-        self._pending_action_name: str | None = None
-        self._pending_operation_arguments: tuple[str, ...] = ()
-        self._pending_equivalent_command: tuple[str, ...] | None = None
-        self._operation_committed = False
-        self._skip_next_operation_output = False
+        self._market_refresh_worker: Worker[Any] | None = None
         self.session = GuidedSession()
 
     @property
@@ -203,24 +125,26 @@ class CommandLineScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield WorkspaceHeader()
-        yield RichLog(
+        yield ActivityStream(
             id="command-output",
             wrap=True,
             highlight=False,
             markup=False,
         )
-        yield GuidedActionList(
-            *HOME_ACTIONS,
-            id="guided-actions",
-            classes="action-cards guided-actions",
-            spacious=False,
+        yield Static(
+            "本会话完成的操作和结果会保留在这里",
+            id="activity-empty",
         )
-        yield Static(id="guided-prompt")
+        yield InteractionRegion(
+            ChoiceInteraction(actions=HOME_ACTIONS),
+            id="interaction-region",
+        )
         with Horizontal(id="command-bar"):
             yield Static("首页  /", id="command-context")
             yield WorkbenchCommandInput(id="command-input")
         yield Static(
-            "数字选择  ·  /back 返回  ·  /help 帮助  ·  /exit 退出",
+            "数字选择  ·  /back 返回  ·  /help 帮助  ·  /exit 退出\n"
+            "Alt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新",
             id="command-hints",
         )
 
@@ -228,15 +152,17 @@ class CommandLineScreen(Screen[None]):
         self._show_context()
         self.app.set_focus(self._input())
         self.set_interval(1.0, self._refresh_launch_attach)
+        self.set_interval(2.0, self._refresh_market_control)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command-input":
             return
         value = event.value.strip()
-        if not value and self.session.argument_prompt is None:
+        interaction = self.session.interaction
+        if not value and not isinstance(interaction, InputInteraction):
             return
         command_input = self._input()
-        if self.session.prompt_mode is not PromptMode.SECRET:
+        if not (isinstance(interaction, InputInteraction) and interaction.secret):
             command_input.remember(value)
         command_input.value = ""
         self.submit(value)
@@ -245,22 +171,21 @@ class CommandLineScreen(Screen[None]):
         """Execute input through the same path used by the visible prompt."""
 
         value = value.strip()
-        if not value and self.session.argument_prompt is None:
+        interaction = self.session.interaction
+        if not value and not isinstance(interaction, InputInteraction):
             return
-        if self._active_worker is not None:
-            self._write(
-                Text("当前任务仍在运行；按 Ctrl+C 取消后再输入。", style="yellow")
-            )
+        if self._running_task is not None:
+            self._set_status("当前任务仍在运行 · Ctrl+C 取消")
             self.app.set_focus(self._input())
             return
-        is_secret = self.session.prompt_mode is PromptMode.SECRET
+        is_secret = isinstance(interaction, InputInteraction) and interaction.secret
         self.workbench_app.transcript.record(
             "input",
             screen=type(self).__name__,
             value="<redacted>" if is_secret else value,
             secret=is_secret,
         )
-        if self.session.confirmation_prompt is not None:
+        if isinstance(interaction, ConfirmInteraction):
             command, arguments = _parse_command(value)
             is_allowed = value.startswith("/") and command in {
                 "confirm",
@@ -273,20 +198,14 @@ class CommandLineScreen(Screen[None]):
             }
             if not is_allowed or arguments:
                 self._interrupt_exit_pending = False
-                self._write(
-                    Text(
-                        "当前正在等待确认；请输入 /confirm、/cancel 或 /exit。",
-                        style="yellow",
-                    )
-                )
+                self._set_status("等待确认 · 请输入 /confirm 或 /cancel")
                 self.app.set_focus(self._input())
                 return
             self._interrupt_exit_pending = False
             self._dispatch(command, arguments)
             self.app.set_focus(self._input())
             return
-        argument_prompt = self.session.argument_prompt
-        if argument_prompt is not None:
+        if isinstance(interaction, InputInteraction):
             pending_command, pending_arguments = _parse_command(value)
             is_workbench_command = value.startswith("/")
             if (
@@ -312,7 +231,7 @@ class CommandLineScreen(Screen[None]):
                 self.session.reset_prompt()
                 self._input().password = False
                 if is_secret:
-                    self._cancel_resource_wizard()
+                    self._cancel_input(interaction.action)
                 self.session.home()
                 self._show_context()
                 return
@@ -321,14 +240,14 @@ class CommandLineScreen(Screen[None]):
                 and pending_command in {"help", "?"}
                 and not pending_arguments
             ):
-                self._write_guidance(_help_renderable(self.session.context))
-                self._write_next_step("当前仍在等待参数；输入 /back 取消本步。")
+                self._interaction().present(self.session.interaction)
+                self._set_status("仍在等待参数 · /back 取消")
                 return
-            pending = argument_prompt.action
+            pending = interaction.action
             self.session.finish_prompt()
             self._input().password = False
             self._input().placeholder = "输入命令；Enter 提交"
-            self._dispatch(pending, (value,))
+            self._dispatch_input(pending, value)
             self.app.set_focus(self._input())
             return
         if not value.startswith("/") and not value.isdecimal():
@@ -336,10 +255,37 @@ class CommandLineScreen(Screen[None]):
             return
         command, arguments = _parse_command(value)
         if command == "market":
-            self.session.market_purpose = "search"
-        self._prepare_context_operation(command, arguments)
+            self.session.market.purpose = "search"
         self._dispatch(command, arguments)
         self.app.set_focus(self._input())
+
+    def _dispatch_input(self, token: ActionToken, value: str) -> None:
+        """Route a typed continuation to its owning product flow."""
+
+        effects: tuple[ScreenEffect, ...] | None
+        if token.feature in {Feature.MARKET, Feature.REFERENCE}:
+            effects = market_reference.handle_input(
+                self.workbench_app.state, self.session, token, value
+            )
+        elif token.feature in {Feature.OPERATIONS, Feature.RESEARCH}:
+            effects = operations_research.handle_input(
+                self.workbench_app.state, self.session, token, value
+            )
+        elif token.feature is Feature.RESOURCES:
+            effects = resources_account.handle_input(
+                self.workbench_app.state, self.session, token, value
+            )
+        elif token.feature is Feature.STRATEGY:
+            effects = strategy_execution.handle_input(
+                self.workbench_app.state, self.session, token, value
+            )
+        else:
+            effects = None
+        if effects is None:
+            self._set_status("输入上下文已经失效 · 请返回后重试")
+            self._show_context()
+            return
+        self._apply_effects(effects)
 
     def _dispatch_kairos(self, value: str) -> None:
         try:
@@ -352,34 +298,26 @@ class CommandLineScreen(Screen[None]):
             return
         equivalent = ("kairos", *argv)
         if argv in {("observe",), ("observe", "--once")}:
-            self._record_action(
-                "system.observe",
-                argv[1:],
-                equivalent_command=self._observe_command(),
-            )
-            self._run("observe", self._read_observe)
+            self._start_operation(self._observe_spec())
             return
-        self._record_action(
-            "kairos.command",
-            argv,
-            equivalent_command=equivalent,
-        )
 
         def operation() -> Any:
             if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
                 return preview_kairos_command(argv)
             return run_kairos_command(self.workbench_app.state, argv)
 
-        if is_dangerous_kairos_command(argv) and not self.workbench_app.state.yes:
-            self.request_confirmation(
-                shlex.join(equivalent), operation, result_kind="kairos-command"
-            )
-            return
-        self._run(
-            "kairos-command",
-            operation,
-            status=f"正在执行 {shlex.join(equivalent)}…",
+        spec = OperationSpec.create(
+            action_name="kairos.command",
+            audit_summary=redact_text(shlex.join(equivalent)),
+            route=ResultRoute(ResultKind.KAIROS_COMMAND),
+            operation=operation,
+            running_status=f"正在执行 {shlex.join(equivalent)}…",
+            equivalent_command=equivalent,
         )
+        if is_dangerous_kairos_command(argv) and not self.workbench_app.state.yes:
+            self._present_confirmation(spec)
+            return
+        self._start_operation(spec)
 
     def _dispatch(self, command: str, arguments: tuple[str, ...]) -> None:
         if command in {"home", "/"}:
@@ -390,56 +328,68 @@ class CommandLineScreen(Screen[None]):
         elif command in {"back", "b"}:
             self.action_back()
         elif command in {"help", "?"}:
-            self._write(_help_renderable(self.session.context))
+            self._present_help()
         elif command == "clear":
             self.action_clear()
         elif command == "copy":
             self.workbench_app.action_copy_page()
+        elif command == "copy-history":
+            self.workbench_app.copy_current_page(history_only=True)
+        elif command == "bottom":
+            self._output().resume_follow()
+            self._set_status("已回到最新活动")
         elif command == "transcript":
-            self._write(
-                Text(
+            self.session.choose(
+                context_items(self.session, self.workbench_app.state),
+                title=self._context_label(),
+                summary=Text(
                     str(
                         self.workbench_app.transcript.path
                         or "Transcript 仅当前进程可用"
                     ),
                     style="dim",
-                )
+                ),
             )
-        elif command.startswith("reference:"):
-            kind = command.partition(":")[2]
-            query = " ".join(arguments).strip()
-            self._run(
-                f"reference:{kind}",
-                lambda: self._find_reference_records(kind, query),
-            )
-        elif self._dispatch_operations_command(command, arguments):
-            pass
-        elif self._dispatch_research_command(command, arguments):
-            pass
-        elif self._dispatch_resource_command(command, arguments):
-            pass
-        elif self._dispatch_strategy_command(command, arguments):
-            pass
-        elif self._dispatch_flow_field_command(command, arguments):
-            pass
-        elif command == "observe":
-            self._record_action(
-                "system.observe",
+            self._interaction().present(self.session.interaction)
+            self._set_status("Transcript 位置已显示")
+        elif (
+            effects := market_reference.handle_command(
+                self.workbench_app.state,
+                self.session,
+                command,
                 arguments,
-                equivalent_command=self._observe_command(),
             )
-            self._run("observe", self._read_observe)
-        elif command == "market":
-            query = " ".join(arguments).strip()
-            if query:
-                self._record_action("market.find", arguments)
-                self._run("market", lambda: self._find_markets(query))
-            else:
-                self._request_argument(
-                    "market",
-                    "输入代码或名称",
-                    "例如 AAPL、比特币或 BTCUSDT。",
-                )
+        ) is not None:
+            self._apply_effects(effects)
+        elif (
+            effects := operations_research.handle_command(
+                self.workbench_app.state,
+                self.session,
+                command,
+                arguments,
+            )
+        ) is not None:
+            self._apply_effects(effects)
+        elif (
+            effects := resources_account.handle_command(
+                self.workbench_app.state,
+                self.session,
+                command,
+                arguments,
+            )
+        ) is not None:
+            self._apply_effects(effects)
+        elif (
+            effects := strategy_execution.handle_command(
+                self.workbench_app.state,
+                self.session,
+                command,
+                arguments,
+            )
+        ) is not None:
+            self._apply_effects(effects)
+        elif command == "observe":
+            self._start_operation(self._observe_spec())
         elif command in {"confirm", "yes", "y"}:
             self._confirm_pending()
         elif command in {"cancel", "no", "n"}:
@@ -449,1253 +399,6 @@ class CommandLineScreen(Screen[None]):
                 return
             self._write_error(f"未知操作：{command or value_or_unknown(arguments)}")
             self._show_context()
-
-    def _dispatch_strategy_command(
-        self, command: str, arguments: tuple[str, ...]
-    ) -> bool:
-        is_strategy_new = command == "new" and self.session.context[:1] == ("strategy",)
-        if not (is_strategy_new or command.startswith("strategy:")):
-            return False
-
-        if command == "new" and self.session.context[:1] == ("strategy",):
-            self._request_argument(
-                "strategy:launch-id",
-                "请输入新 Launch ID",
-                "例如 paper-demo；输入 /back 取消。",
-            )
-        elif command == "strategy:launch-id":
-            launch_id = " ".join(arguments).strip()
-            try:
-                wizard = open_new_launch_wizard(self.workbench_app.state, launch_id)
-            except (OSError, ValueError) as error:
-                self._write_error(str(error))
-                self._request_argument(
-                    "strategy:launch-id",
-                    "请输入新 Launch ID",
-                    "例如 paper-demo；输入 /back 取消。",
-                )
-            else:
-                self._start_launch_wizard(wizard)
-        elif command.startswith("strategy:launch-field:"):
-            field_name = command.removeprefix("strategy:launch-field:")
-            wizard = self.session.launch_wizard
-            if not isinstance(wizard, LaunchWizardState):
-                self._write_error("Launch 配置向导已经失效，请重新开始。")
-                self.session.enter("strategy")
-                self._show_context()
-            else:
-                try:
-                    wizard.accept(field_name, " ".join(arguments))
-                except ValueError as error:
-                    self._write_error(str(error))
-                    prompt = wizard.next_prompt()
-                    if prompt is not None:
-                        name, label, detail = prompt
-                        self._request_argument(
-                            f"strategy:launch-field:{name}", label, detail
-                        )
-                else:
-                    self._advance_launch_wizard()
-        elif command == "strategy:launch-save-mode":
-            mode = " ".join(arguments).strip().lower() or "draft"
-            if mode not in {"draft", "publish"}:
-                self._write_error("请输入 draft 或 publish")
-                self._request_argument(
-                    "strategy:launch-save-mode",
-                    "保存方式（draft / publish）",
-                    "draft 仅保存草稿；publish 校验并发布。",
-                )
-            else:
-                self._request_launch_wizard_confirmation(publish=mode == "publish")
-        elif command == "strategy:timeline-export":
-            destination = " ".join(arguments).strip()
-            record = self.session.selected_launch_record
-            if record is None:
-                self._write_error("实例上下文已经失效，请重新选择。")
-                self.session.enter("strategy")
-                self._show_context()
-            else:
-                launch_id = str(record["launch_id"])
-                instance_id = str(record["instance_id"])
-                mode = str(record["mode"])
-
-                def export_operation() -> Any:
-                    if (
-                        self.workbench_app.state.dry_run
-                        or self.workbench_app.state.no_exec
-                    ):
-                        return {
-                            "status": "preview",
-                            "action": "timeline-export",
-                            "destination": destination,
-                        }
-                    return export_launch_timeline(
-                        self.workbench_app.state,
-                        launch_id,
-                        instance_id,
-                        mode,
-                        destination,
-                    )
-
-                if (
-                    self.workbench_app.state.yes
-                    or self.workbench_app.state.dry_run
-                    or self.workbench_app.state.no_exec
-                ):
-                    self._run("strategy-timeline-export", export_operation)
-                else:
-                    self.request_confirmation(
-                        f"导出时间线到 {destination}",
-                        export_operation,
-                        result_kind="strategy-timeline-export",
-                    )
-        elif command == "strategy:python":
-            record = self.session.selected_launch_record
-            source = " ".join(arguments)
-            if record is None:
-                self._write_error("Launch 上下文已经失效，请重新选择。")
-                self.session.enter("strategy")
-                self._show_context()
-            else:
-                launch_id = str(record["launch_id"])
-
-                def python_operation() -> Any:
-                    if (
-                        self.workbench_app.state.dry_run
-                        or self.workbench_app.state.no_exec
-                    ):
-                        return {
-                            "status": "preview",
-                            "action": "interactive.python",
-                            "launch_id": launch_id,
-                            "source": source,
-                        }
-                    return send_launch_python(
-                        self.workbench_app.state, launch_id, source
-                    )
-
-                if (
-                    self.workbench_app.state.yes
-                    or self.workbench_app.state.dry_run
-                    or self.workbench_app.state.no_exec
-                ):
-                    self._run("strategy-attach", python_operation)
-                else:
-                    self.request_confirmation(
-                        f"向 Launch {launch_id} 发送 Strategy Python",
-                        python_operation,
-                        result_kind="strategy-attach",
-                    )
-        return True
-
-    def _dispatch_flow_field_command(
-        self, command: str, arguments: tuple[str, ...]
-    ) -> bool:
-        prefixes = (
-            "business:field:",
-            "execution:field:",
-            "launch-market:field:",
-            "market-file:field:",
-            "workspace-market:field:",
-        )
-        if not command.startswith(prefixes):
-            return False
-
-        if command.startswith("business:field:"):
-            field_name = command.removeprefix("business:field:")
-            prompt = self.session.business_prompt
-            if not isinstance(prompt, BusinessPromptState):
-                self._write_error("业务工具参数向导已经失效，请重新选择操作。")
-                self.session.enter("operations", "business")
-                self._show_context()
-            else:
-                try:
-                    prompt.accept(field_name, " ".join(arguments))
-                except ValueError as error:
-                    self._write_error(str(error))
-                self._advance_business_prompt()
-        elif command.startswith("execution:field:"):
-            field_name = command.removeprefix("execution:field:")
-            prompt = self.session.execution_prompt
-            if not isinstance(prompt, ExecutionPromptState):
-                self._write_error("Execution 参数向导已经失效，请重新选择操作。")
-                self.session.context = ("strategy", "execution")
-                self._show_context()
-            else:
-                try:
-                    prompt.accept(field_name, " ".join(arguments))
-                except ValueError as error:
-                    self._write_error(str(error))
-                self._advance_execution_prompt()
-        elif command.startswith("launch-market:field:"):
-            field_name = command.removeprefix("launch-market:field:")
-            prompt = self.session.launch_market_prompt
-            if not isinstance(prompt, LaunchMarketPromptState):
-                self._write_error("Market 参数向导已经失效，请重新选择操作。")
-                self.session.context = ("strategy", "market")
-                self._show_context()
-            else:
-                try:
-                    prompt.accept(field_name, " ".join(arguments))
-                except ValueError as error:
-                    self._write_error(str(error))
-                self._advance_launch_market_prompt()
-        elif command.startswith("market-file:field:"):
-            field_name = command.removeprefix("market-file:field:")
-            prompt = self.session.market_file_prompt
-            if not isinstance(prompt, MarketFilePromptState):
-                self._write_error("Market 文件操作参数向导已经失效，请重新选择操作。")
-                self.session.enter("market")
-                self._show_context()
-            else:
-                try:
-                    prompt.accept(field_name, " ".join(arguments))
-                except ValueError as error:
-                    self._write_error(str(error))
-                self._advance_market_file_prompt()
-        elif command.startswith("workspace-market:field:"):
-            field_name = command.removeprefix("workspace-market:field:")
-            prompt = self.session.workspace_market_prompt
-            if not isinstance(prompt, WorkspaceMarketPromptState):
-                self._write_error("Workspace Market 参数向导已经失效。")
-                self.session.context = ("market", "connected")
-                self._show_context()
-            else:
-                try:
-                    prompt.accept(field_name, " ".join(arguments))
-                except ValueError as error:
-                    self._write_error(str(error))
-                self._advance_workspace_market_prompt()
-        return True
-
-    def _dispatch_resource_command(
-        self, command: str, arguments: tuple[str, ...]
-    ) -> bool:
-        is_resource_new = command == "new" and self.session.context[:1] == (
-            "resources",
-        )
-        if not (
-            command.startswith("resource:")
-            or is_resource_new
-            or command == "account:fees"
-            or command.startswith("order:field:")
-        ):
-            return False
-
-        if command.startswith("resource:"):
-            action = command.partition(":")[2]
-            value = " ".join(arguments).strip()
-            if action.startswith("setup-field:"):
-                field_name = action.removeprefix("setup-field:")
-                wizard = self.session.resource_wizard
-                if not isinstance(wizard, ResourceWizardState):
-                    self._write_error("资源配置向导已经失效，请重新开始。")
-                    self.session.enter("resources")
-                    self._show_context()
-                else:
-                    try:
-                        wizard.accept(field_name, value)
-                    except ValueError as error:
-                        self._write_error(str(error))
-                        self._advance_resource_wizard()
-                    else:
-                        self._advance_resource_wizard()
-            elif action == "model-test":
-                self._request_resource_confirmation("test", value=value)
-            elif action == "notification-mode":
-                self._run_resource_action("validate", value=value or "paper")
-            elif action in {"notification-attach", "notification-detach"}:
-                self.session.resource_action = (
-                    "attach" if action == "notification-attach" else "detach"
-                )
-                self.session.resource_launch_id = value
-                if self.session.resource_action == "attach":
-                    self._request_argument(
-                        "resource:notification-route",
-                        "请输入通知 route；直接回车使用 signals",
-                        "输入 /back 取消。",
-                    )
-                else:
-                    self._request_resource_confirmation("detach", launch_id=value)
-            elif action == "notification-route":
-                self._request_resource_confirmation(
-                    "attach",
-                    value=value or "signals",
-                    launch_id=self.session.resource_launch_id,
-                )
-        elif command == "new" and self.session.context[:1] == ("resources",):
-            kind = self.session.resource_kind
-            if kind is None:
-                self._write_error("请先进入交易账户、市场数据、AI 模型或通知提醒列表。")
-                self._show_context()
-            else:
-                self._start_resource_wizard(ResourceWizardState(kind))
-        elif command == "account:fees":
-            record = self.session.selected_resource
-            if record is None:
-                self._write_error("账户上下文已经失效，请重新选择。")
-                self.session.enter("resources")
-                self._show_context()
-            else:
-                value = " ".join(arguments).strip()
-                self._run(
-                    "account-result",
-                    lambda: execute_account_action(
-                        self.workbench_app.state,
-                        record,
-                        "fees",
-                        value,
-                    ),
-                )
-        elif command.startswith("order:field:"):
-            field_name = command.removeprefix("order:field:")
-            prompt = self.session.order_prompt
-            if not isinstance(prompt, OrderPromptState):
-                self._write_error("订单参数向导已经失效，请重新选择操作。")
-                self.session.context = ("resources", "account-orders")
-                self._show_context()
-            else:
-                try:
-                    prompt.accept(field_name, " ".join(arguments))
-                except ValueError as error:
-                    self._write_error(str(error))
-                self._advance_order_prompt()
-        return True
-
-    def _dispatch_operations_command(
-        self, command: str, arguments: tuple[str, ...]
-    ) -> bool:
-        if not (
-            command == "operations-config:explain"
-            or command.startswith("operations-project:field:")
-            or command == "operations-profile:name"
-        ):
-            return False
-
-        if command == "operations-config:explain":
-            name = " ".join(arguments).strip()
-            self._run(
-                "operations-result",
-                lambda: execute_operations_config(
-                    self.workbench_app.state, "explain", name
-                ),
-            )
-        elif command.startswith("operations-project:field:"):
-            field_name = command.removeprefix("operations-project:field:")
-            prompt = self.session.project_prompt
-            if not isinstance(prompt, ProjectPromptState):
-                self._write_error("项目参数向导已经失效，请重新选择操作。")
-                self.session.enter("operations", "project")
-                self._show_context()
-            else:
-                try:
-                    prompt.accept(field_name, " ".join(arguments))
-                except ValueError as error:
-                    self._write_error(str(error))
-                self._advance_project_prompt()
-        elif command == "operations-profile:name":
-            action = self.session.profile_action
-            name = " ".join(arguments).strip()
-            if action not in {"create", "use"} or not name:
-                self._write_error("Profile 操作或名称无效，请重新选择。")
-                self.session.profile_action = None
-                self.session.context = ("operations", "profiles")
-                self._show_context()
-            else:
-
-                def profile_operation() -> Any:
-                    if (
-                        self.workbench_app.state.dry_run
-                        or self.workbench_app.state.no_exec
-                    ):
-                        return {"status": "preview", "action": action, "profile": name}
-                    return mutate_operations_profile(
-                        self.workbench_app.state, action, name
-                    )
-
-                if (
-                    self.workbench_app.state.yes
-                    or self.workbench_app.state.dry_run
-                    or self.workbench_app.state.no_exec
-                ):
-                    self._run("operations-profile-result", profile_operation)
-                else:
-                    self.request_confirmation(
-                        f"{action} Profile {name}",
-                        profile_operation,
-                        result_kind="operations-profile-result",
-                    )
-        return True
-
-    def _dispatch_research_command(
-        self, command: str, arguments: tuple[str, ...]
-    ) -> bool:
-        if not command.startswith("research:"):
-            return False
-        action = command.partition(":")[2]
-        value = " ".join(arguments)
-        if action == "execute-data":
-            self.session.research_action = action
-            self.session.research_primary = value
-            self._request_argument(
-                "research:execute-data-hash",
-                "请输入已审阅的 plan hash；直接回车可跳过",
-                "输入 /back 取消。",
-            )
-        elif action == "publish-gate":
-            self.session.research_action = action
-            self.session.research_primary = value
-            self._request_argument(
-                "research:publish-gate-evidence",
-                "请输入 research-evidence.json 路径",
-                "输入 /back 取消。",
-            )
-        elif action == "execute-data-hash":
-            self._request_research_confirmation(
-                "execute-data", self.session.research_primary, value or None
-            )
-        elif action == "publish-gate-evidence":
-            self._request_research_confirmation(
-                "publish-gate", self.session.research_primary, value
-            )
-        elif action == "lock-plan":
-            self._request_research_confirmation(action, value, None)
-        else:
-            self._run(
-                "research-result",
-                lambda: execute_research(self.workbench_app.state, action, value),
-            )
-        return True
-
-    def _dispatch_strategy_context(self, command: str) -> bool:
-        """Handle Strategy section and nested contexts."""
-
-        section = "strategy"
-        if section == "strategy" and self.session.context[1:] == ("attach",):
-            record = self.session.selected_launch_record
-            if record is None:
-                self.session.enter("strategy")
-                self._show_context()
-                return True
-            action = action_id(STRATEGY_ATTACH_ACTIONS, command)
-            if action is None:
-                return False
-            if action == "refresh":
-                self._refresh_launch_attach(force=True)
-            elif action == "pause":
-                self.session.launch_attach_paused = (
-                    not self.session.launch_attach_paused
-                )
-                self._write(
-                    Text(
-                        "已暂停后台刷新。"
-                        if self.session.launch_attach_paused
-                        else "已继续后台刷新。",
-                        style="dim",
-                    )
-                )
-                if not self.session.launch_attach_paused:
-                    self._refresh_launch_attach(force=True)
-                self._show_context()
-            else:
-                self._request_argument(
-                    "strategy:python",
-                    "请输入一行发送到当前 Strategy 的 Python",
-                    "执行前会再次确认；输入 /back 取消。",
-                )
-            return True
-
-        if section == "strategy" and self.session.context[1:] == ("instance",):
-            record = self.session.selected_launch_record
-            if record is None:
-                self.session.enter("strategy")
-                self._show_context()
-                return True
-            action = action_id(STRATEGY_INSTANCE_ACTIONS, command)
-            if action is None:
-                return False
-            launch_id = str(record["launch_id"])
-            instance_id = str(record["instance_id"])
-            mode = str(record["mode"])
-            if action == "overview":
-                self._run(
-                    "strategy-instance-result",
-                    lambda: load_launch_instance_overview(
-                        self.workbench_app.state,
-                        launch_id,
-                        instance_id,
-                    ),
-                )
-            elif action == "components":
-                self._run(
-                    "strategy-components",
-                    lambda: load_launch_components(
-                        self.workbench_app.state,
-                        launch_id,
-                        instance_id,
-                        mode,
-                    ),
-                )
-            else:
-                self._run(
-                    "strategy-timeline",
-                    lambda: load_launch_timeline(
-                        self.workbench_app.state,
-                        launch_id,
-                        instance_id,
-                        mode,
-                    ),
-                )
-            return True
-
-        if section == "strategy" and self.session.context[1:] == ("timeline",):
-            record = self.session.selected_launch_record
-            if record is None:
-                self.session.enter("strategy")
-                self._show_context()
-                return True
-            action = action_id(STRATEGY_TIMELINE_ACTIONS, command)
-            if action is None:
-                return False
-            if action == "refresh":
-                self._run(
-                    "strategy-timeline",
-                    lambda: load_launch_timeline(
-                        self.workbench_app.state,
-                        str(record["launch_id"]),
-                        str(record["instance_id"]),
-                        str(record["mode"]),
-                    ),
-                )
-            else:
-                self._request_argument(
-                    "strategy:timeline-export",
-                    "请输入导出文件路径",
-                    f"例如 {record['launch_id']}-{record['instance_id']}-timeline.jsonl；"
-                    "输入 /back 取消。",
-                )
-            return True
-
-        if section == "strategy" and self.session.context[1:] == ("execution",):
-            record = self.session.selected_launch_record
-            if record is None:
-                self.session.enter("strategy")
-                self._show_context()
-                return True
-            action = action_id(STRATEGY_EXECUTION_ACTIONS, command)
-            if action is None:
-                return False
-            self.session.execution_prompt = ExecutionPromptState(action, record)
-            self._advance_execution_prompt()
-            return True
-
-        if section == "strategy" and self.session.context[1:] == ("market",):
-            record = self.session.selected_launch_record
-            if record is None:
-                self.session.enter("strategy")
-                self._show_context()
-                return True
-            action = action_id(STRATEGY_MARKET_ACTIONS, command)
-            if action is None:
-                return False
-            selected_market = self.workbench_app.state.selected_market
-            default_market = (
-                str(selected_market.id)
-                if selected_market is not None and hasattr(selected_market, "id")
-                else ""
-            )
-            self.session.launch_market_prompt = LaunchMarketPromptState(
-                action, record, default_market
-            )
-            self._advance_launch_market_prompt()
-            return True
-
-        if (
-            section == "strategy"
-            and self.session.context[1:] == ("components",)
-            and self.session.visible_records
-        ):
-            record = _record_choice(self.session.visible_records, command)
-            if record is None:
-                return False
-            if str(record.get("component") or "") == "market":
-                self.session.context = ("strategy", "market")
-                self._write(Panel(Pretty(record, expand_all=True), title="Market"))
-                self._show_context()
-                return True
-            if str(record.get("component") or "") == "execution":
-                self.session.context = ("strategy", "execution")
-                self._write(Panel(Pretty(record, expand_all=True), title="Execution"))
-                self._show_context()
-                return True
-            self._write(Panel(Pretty(record, expand_all=True), title="实例组件"))
-            self._show_context()
-            return True
-
-        if (
-            section == "strategy"
-            and self.session.context[1:] == ("instances",)
-            and self.session.visible_records
-        ):
-            instance = _record_choice(self.session.visible_records, command)
-            if instance is None:
-                return False
-            selected = dict(self.session.selected_launch_record or {})
-            selected.update(dict(instance))
-            self.session.selected_launch_record = selected
-            self.session.context = ("strategy", "instance")
-            self.workbench_app.state.selected_launch_instance = str(
-                instance["instance_id"]
-            )
-            self.workbench_app.state.selected_launch_mode = str(instance["mode"])
-            self._write(Panel(Pretty(instance, expand_all=True), title="运行实例"))
-            self._show_context()
-            return True
-
-        if section == "strategy" and self.session.context[1:] == ("selected",):
-            record = self.session.selected_launch_record
-            if record is None:
-                self.session.enter("strategy")
-                self._show_context()
-                return True
-            action = action_id(STRATEGY_LAUNCH_ACTIONS, command)
-            if action is None:
-                return False
-            if action == "edit":
-                try:
-                    wizard = open_edit_launch_wizard(self.workbench_app.state, record)
-                except (OSError, ValueError) as error:
-                    self._write_error(str(error))
-                    self._show_context()
-                else:
-                    self._start_launch_wizard(wizard)
-                return True
-            if action == "attach":
-                self.session.context = ("strategy", "attach")
-                self.session.launch_attach_paused = False
-                self.session.launch_attach_seen = ()
-                self._show_context()
-                self._refresh_launch_attach(force=True)
-                return True
-            if action == "instances":
-                launch_id = str(record["launch_id"])
-                self._run(
-                    "strategy-instances",
-                    lambda: load_launch_instances(self.workbench_app.state, launch_id),
-                )
-                return True
-
-            def launch_operation() -> Any:
-                if action in {"start", "stop", "restart"} and (
-                    self.workbench_app.state.dry_run or self.workbench_app.state.no_exec
-                ):
-                    return preview_launch(record, action)
-                return execute_launch(self.workbench_app.state, record, action)
-
-            if (
-                action in {"start", "stop", "restart"}
-                and not self.workbench_app.state.yes
-                and not (
-                    self.workbench_app.state.dry_run or self.workbench_app.state.no_exec
-                )
-            ):
-                self.request_confirmation(
-                    f"kairos launch {action} {record['launch_id']}",
-                    launch_operation,
-                    result_kind="strategy-result",
-                )
-            else:
-                self._run("strategy-result", launch_operation)
-            return True
-
-        if (
-            section == "strategy"
-            and self.session.context[1:] == ("launches",)
-            and self.session.visible_records
-        ):
-            record = _record_choice(self.session.visible_records, command)
-            if record is None:
-                return False
-            selected = dict(record)
-            self.session.selected_launch_record = selected
-            self.session.context = ("strategy", "selected")
-            self.workbench_app.state.selected_launch = str(selected["launch_id"])
-            self._write(Panel(Pretty(selected, expand_all=True), title="Launch"))
-            self._show_context()
-            return True
-        action = action_id(SECTION_ACTIONS[section], command)
-        if action is None:
-            return False
-        if action in {"once", "observe", "doctor"}:
-            self._run("observe", self._read_observe)
-        elif action == "launch":
-            self._run(
-                "strategy-launches",
-                lambda: load_launches(self.workbench_app.state),
-            )
-        return True
-
-    def _dispatch_resource_context(self, command: str) -> bool:
-        """Handle Resource section and nested Account contexts."""
-
-        section = "resources"
-        if section == "resources" and self.session.context[1:] == ("selected",):
-            kind = self.session.resource_kind
-            record = self.session.selected_resource
-            if kind is None or record is None:
-                self.session.enter("resources")
-                self._show_context()
-                return True
-            action = action_id(resource_detail_actions(kind), command)
-            if action is None:
-                return False
-            if action == "advanced":
-                self._run_resource_action(action)
-            elif action == "models" and kind == "models":
-                self._write(
-                    Panel(
-                        Pretty({"models": list(record.get("models") or ())}),
-                        title="已保存模型",
-                    )
-                )
-                self._show_context()
-            elif action == "operations" and kind == "accounts":
-                account = resource_identity(kind, record)
-                self._write(
-                    Panel(
-                        f"已选择账户 {account}。可直接输入 "
-                        f"account overview {account} 等 kairos 业务命令。",
-                        title="账户运行查询",
-                        border_style="cyan",
-                    )
-                )
-                self.session.context = ("resources", "account-operations")
-                self._show_context()
-            elif action == "edit":
-                self._start_resource_wizard(ResourceWizardState(kind, dict(record)))
-            elif action == "test" and kind == "models":
-                self._request_argument(
-                    "resource:model-test",
-                    "请输入用于连接测试的模型 ID",
-                    "输入 /back 取消。",
-                )
-            elif action == "validate" and kind == "notifications":
-                self._request_argument(
-                    "resource:notification-mode",
-                    "请输入运行模式；直接回车使用 paper",
-                    "输入 /back 取消。",
-                )
-            elif action in {"attach", "detach"} and kind == "notifications":
-                self._request_argument(
-                    f"resource:notification-{action}",
-                    "请输入 Launch ID",
-                    "输入 /back 取消。",
-                )
-            elif action in {"test", "toggle", "delete"}:
-                self._request_resource_confirmation(action)
-            else:
-                self._write_error(f"{action} 正在迁移为单输入参数/确认向导。")
-                self._show_context()
-            return True
-
-        if section == "resources" and self.session.context[1:] == (
-            "account-operations",
-        ):
-            record = self.session.selected_resource
-            if record is None:
-                self.session.enter("resources")
-                self._show_context()
-                return True
-            action = action_id(RESOURCE_ACCOUNT_ACTIONS, command)
-            if action is None:
-                return False
-            if action == "fees":
-                self._request_argument(
-                    "account:fees",
-                    "费率范围（产品:交易对）",
-                    "直接回车使用 spot:BTCUSDT；输入 /back 取消。",
-                )
-            elif action == "orders":
-                self.session.context = ("resources", "account-orders")
-                self._show_context()
-            else:
-                self._run(
-                    "account-result",
-                    lambda: execute_account_action(
-                        self.workbench_app.state,
-                        record,
-                        action,
-                    ),
-                )
-            return True
-
-        if section == "resources" and self.session.context[1:] == ("account-orders",):
-            record = self.session.selected_resource
-            if record is None:
-                self.session.enter("resources")
-                self._show_context()
-                return True
-            action = action_id(ACCOUNT_ORDER_ACTIONS, command)
-            if action is None:
-                return False
-            self.session.order_prompt = OrderPromptState(action, dict(record))
-            self._advance_order_prompt()
-            return True
-
-        if (
-            section == "resources"
-            and len(self.session.context) > 1
-            and self.session.visible_records
-        ):
-            record = _record_choice(self.session.visible_records, command)
-            if record is None:
-                return False
-            kind = self.session.resource_kind
-            if kind is None:
-                return False
-            selected = dict(record)
-            self.session.selected_resource = selected
-            self.session.context = ("resources", "selected")
-            if kind == "accounts":
-                self.workbench_app.state.selected_account = resource_identity(
-                    kind, selected
-                )
-            self._write(resource_detail_renderable(kind, selected))
-            self._show_context()
-            return True
-        action = action_id(SECTION_ACTIONS[section], command)
-        if action is None:
-            return False
-        if action == "check":
-            self._run(
-                "resources-summary",
-                lambda: summarize_resources(self.workbench_app.state),
-            )
-        else:
-            self.session.resource_kind = action
-            self._run(
-                f"resources-list:{action}",
-                lambda: list_resource_records(self.workbench_app.state, action),
-            )
-        return True
-
-    def _dispatch_operations_context(self, command: str) -> bool:
-        """Handle System Operations section and nested contexts."""
-
-        section = "operations"
-        if section == "operations" and self.session.context[1:] == ("service",):
-            component = self.session.selected_service
-            if component is None:
-                self.session.enter("operations")
-                self._show_context()
-                return True
-            action = action_id(OPERATIONS_SERVICE_ACTIONS, command)
-            if action is None:
-                return False
-
-            def service_operation() -> Any:
-                if action in {"start", "stop", "restart"} and (
-                    self.workbench_app.state.dry_run or self.workbench_app.state.no_exec
-                ):
-                    return {
-                        "status": "preview",
-                        "component": component,
-                        "action": action,
-                    }
-                return execute_operations_service(
-                    self.workbench_app.state, component, action
-                )
-
-            if (
-                action in {"start", "stop", "restart"}
-                and not self.workbench_app.state.yes
-                and not (
-                    self.workbench_app.state.dry_run or self.workbench_app.state.no_exec
-                )
-            ):
-                self.request_confirmation(
-                    f"kairos system {action} --component {component}",
-                    service_operation,
-                )
-            else:
-                self._run("operations-result", service_operation)
-            return True
-
-        if section == "operations" and self.session.context[1:] == ("project",):
-            action = action_id(OPERATIONS_PROJECT_ACTIONS, command)
-            if action is None:
-                return False
-            if action in {"status", "doctor"}:
-                self._run(
-                    "operations-result",
-                    lambda: execute_operations_project(
-                        self.workbench_app.state, action
-                    ),
-                )
-            else:
-                self.session.project_prompt = ProjectPromptState(action)
-                self._advance_project_prompt()
-            return True
-
-        if section == "operations" and self.session.context[1:] == ("config",):
-            action = action_id(OPERATIONS_CONFIG_ACTIONS, command)
-            if action is None:
-                return False
-            if action == "explain":
-                self._request_argument(
-                    "operations-config:explain",
-                    "请输入配置名称",
-                    "例如 launches/demo-backtest；输入 /back 取消。",
-                )
-            elif action == "models":
-                self.session.resource_kind = "models"
-                self._run(
-                    "resources-list:models",
-                    lambda: list_resource_records(self.workbench_app.state, "models"),
-                )
-            elif action == "profiles":
-                self.session.context = ("operations", "profiles")
-                self._show_context()
-            else:
-                self._run(
-                    "operations-result",
-                    lambda: execute_operations_config(self.workbench_app.state, action),
-                )
-            return True
-
-        if section == "operations" and self.session.context[1:] == ("profiles",):
-            action = action_id(OPERATIONS_PROFILE_ACTIONS, command)
-            if action is None:
-                return False
-            if action == "list":
-                self._run(
-                    "operations-profile-result",
-                    lambda: execute_operations_config(
-                        self.workbench_app.state, "profiles"
-                    ),
-                )
-            else:
-                self.session.profile_action = action
-                self._request_argument(
-                    "operations-profile:name",
-                    "请输入 Profile 名称",
-                    "写入前会显示确认；输入 /back 取消。",
-                )
-            return True
-
-        if section == "operations" and self.session.context[1:] == ("business",):
-            action = action_id(OPERATIONS_BUSINESS_ACTIONS, command)
-            if action is None:
-                return False
-            self.session.enter("operations", "business", action)
-            self._show_context()
-            return True
-
-        if (
-            section == "operations"
-            and len(self.session.context) == 3
-            and self.session.context[1] == "business"
-        ):
-            tool = self.session.context[2]
-            action = action_id(business_actions(tool), command)
-            if action is None:
-                return False
-            self.session.business_prompt = BusinessPromptState(tool, action)
-            self._advance_business_prompt()
-            return True
-
-        if section == "operations" and self.session.context[1:] == ("services",):
-            if self.session.visible_records:
-                record = _record_choice(self.session.visible_records, command)
-                if record is None:
-                    return False
-                component = str(record.get("component") or "")
-                if not component:
-                    self._write_error("所选服务没有组件标识。")
-                    return True
-                self.session.selected_service = component
-                self.session.context = ("operations", "service")
-                self._write(Panel(Pretty(record, expand_all=True), title=component))
-                self._show_context()
-                return True
-
-        action = action_id(SECTION_ACTIONS[section], command)
-        if action is None:
-            return False
-        if action == "observe":
-            self._run("observe", self._read_observe)
-        elif action in {"doctor", "migration", "workspace"}:
-            self._run(
-                "operations-result",
-                lambda: execute_operation(self.workbench_app.state, action),
-            )
-        elif action == "repair":
-
-            def operation() -> Any:
-                if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                    return {"status": "preview", "action": "repair"}
-                return execute_operation(self.workbench_app.state, action)
-
-            if (
-                self.workbench_app.state.yes
-                or self.workbench_app.state.dry_run
-                or self.workbench_app.state.no_exec
-            ):
-                self._run("operations-result", operation)
-            else:
-                self.request_confirmation("修复 stale 运行资源", operation)
-        elif action == "services":
-            self._run(
-                "operations-services",
-                lambda: list_operations_services(self.workbench_app.state),
-            )
-        elif action in {"project", "config", "business"}:
-            self.session.enter("operations", action)
-            self._show_context()
-        return True
-
-    def _dispatch_research_context(self, command: str) -> bool:
-        if len(self.session.context) == 1:
-            action = action_id(SECTION_ACTIONS["research"], command)
-            if action is None:
-                return False
-            self.session.enter("research", action)
-            self._show_context()
-            return True
-
-        items = (
-            RESEARCH_DATA_ACTIONS
-            if self.session.context[1] == "data"
-            else RESEARCH_WORKFLOW_ACTIONS
-        )
-        action = action_id(items, command)
-        if action is None:
-            return False
-        if action in {"datasets", "sets"}:
-            self._run(
-                "research-result",
-                lambda: execute_research(self.workbench_app.state, action),
-            )
-            return True
-        prompts = {
-            "inspect": "请输入 Dataset ID",
-            "plan-data": "请输入 requirements.json 路径",
-            "execute-data": "请输入 requirements.json 路径",
-            "execution": "请输入 plan hash",
-            "set": "请输入 Dataset Set alias",
-            "data-gate": "请输入 composition hash",
-            "lock-plan": "请输入 research-plan.json 路径",
-            "show-plan": "请输入 plan hash",
-            "publish-gate": "请输入 research-plan.json 路径",
-            "show-gate": "请输入 plan hash",
-        }
-        self._request_argument(
-            f"research:{action}",
-            prompts[action],
-            "输入 /back 取消。",
-        )
-        return True
-
-    def _dispatch_market_context(self, command: str) -> bool:
-        if self.session.context[1:] == ("selected",):
-            market = self.workbench_app.state.selected_market
-            if market is None:
-                self.session.enter("market")
-                self._show_context()
-                return True
-            action = action_id(selected_market_actions(market), command)
-            if action is None:
-                return False
-            if action in {"validate", "universe"}:
-                self._run(
-                    f"market-diagnostic:{action}",
-                    lambda: run_market_diagnostic(
-                        self.workbench_app.state, market, action
-                    ),
-                )
-            else:
-                self.session.market_observation = action
-                self._run(
-                    "market-routes",
-                    lambda: load_market_routes(
-                        self.workbench_app.state, market, action
-                    ),
-                )
-            return True
-
-        if self.session.context[1:] == ("connected",):
-            action = action_id(WORKSPACE_MARKET_ACTIONS, command)
-            if action is None:
-                return False
-            selected_market = self.workbench_app.state.selected_market
-            default_market = (
-                str(selected_market.id)
-                if selected_market is not None and hasattr(selected_market, "id")
-                else ""
-            )
-            self.session.workspace_market_prompt = WorkspaceMarketPromptState(
-                action, default_market
-            )
-            self._advance_workspace_market_prompt()
-            return True
-
-        if len(self.session.context) > 1 and self.session.visible_records:
-            record = _record_choice(self.session.visible_records, command)
-            if record is None:
-                return False
-            if self.session.context[1] == "providers":
-                provider = str(record.get("provider") or "")
-                if not provider:
-                    self._write_error("所选数据源没有 Provider 标识。")
-                    return True
-                self._request_market_observation(provider)
-                return True
-            self.workbench_app.state.selected_market = record
-            self.session.context = ("market", "selected")
-            if self.session.market_purpose in {"download", "replay"}:
-                self.session.market_file_prompt = MarketFilePromptState(
-                    self.session.market_purpose, record
-                )
-                self._advance_market_file_prompt()
-            else:
-                self._show_context()
-                self._set_status(f"已选择 {record_label(record)} · 请选择行情")
-            return True
-
-        action = action_id(
-            (*SECTION_ACTIONS["market"], *MARKET_ADVANCED_ACTIONS), command
-        )
-        if action is None:
-            return False
-        if action in {"search", "download", "replay", "diagnostics", "advanced"}:
-            self.session.market_purpose = action
-            prompt, detail = self._market_prompt_copy()
-            self._request_argument(
-                "market",
-                prompt,
-                detail,
-            )
-        elif action == "datasets":
-            self._run(
-                "market-datasets",
-                lambda: load_market_datasets(self.workbench_app.state),
-            )
-        elif action == "connected":
-            self.session.context = ("market", "connected")
-            self._show_context()
-        return True
-
-    def _market_prompt_copy(self) -> tuple[str, str]:
-        return {
-            "search": (
-                "输入代码或名称",
-                "例如 AAPL、比特币或 BTCUSDT。",
-            ),
-            "download": (
-                "输入要下载的标的",
-                "可输入代码、名称或完整 Market ID。",
-            ),
-            "replay": (
-                "输入要回放的标的",
-                "可输入代码、名称或完整 Market ID。",
-            ),
-            "diagnostics": (
-                "输入要诊断的标的",
-                "可输入代码、名称或完整 Market ID。",
-            ),
-            "advanced": (
-                "输入完整 Market ID",
-                "使用高级市场标识精确定位标的。",
-            ),
-        }.get(
-            self.session.market_purpose,
-            ("输入代码或名称", "例如 AAPL、比特币或 BTCUSDT。"),
-        )
-
-    def _dispatch_reference_context(self, command: str) -> bool:
-        if self.session.context[1:] == ("instrument-types",):
-            instrument_type = action_id(INSTRUMENT_TYPE_ACTIONS, command)
-            if instrument_type is None:
-                return False
-            self.session.reference_kind = "instruments"
-            self.session.reference_instrument_type = instrument_type
-            self._request_argument(
-                "reference:instruments",
-                "输入代码或名称；直接回车浏览",
-                "输入 /back 或按 Esc 取消并返回合约类型菜单。",
-            )
-            return True
-
-        if self.session.context[1:] == ("selected",):
-            record = self.workbench_app.state.selected_reference
-            kind = self.session.reference_kind
-            if record is None or kind is None:
-                self.session.enter("reference")
-                self._show_context()
-                return True
-            action = action_id(reference_detail_actions(kind), command)
-            if action is None:
-                return False
-            if action in {"summary", "technical"}:
-                self._write(
-                    reference_detail_renderable(
-                        record, kind, technical=action == "technical"
-                    )
-                )
-                self._show_context()
-            elif action == "markets" and kind in {"instruments", "option-chain"}:
-                self._run(
-                    "reference-related",
-                    lambda: load_reference_instrument_markets(
-                        self.workbench_app.state,
-                        record,
-                    ),
-                )
-            else:
-                self._run(
-                    "reference-related",
-                    lambda: load_related_reference(
-                        self.workbench_app.state,
-                        kind,
-                        record,
-                    ),
-                )
-            return True
-
-        if len(self.session.context) > 1 and self.session.visible_records:
-            record = _record_choice(self.session.visible_records, command)
-            if record is None:
-                return False
-            self.workbench_app.state.selected_reference = record
-            self.session.context = ("reference", "selected")
-            self._write(
-                reference_detail_renderable(record, self.session.reference_kind)
-            )
-            self._show_context()
-            return True
-
-        action = action_id(SECTION_ACTIONS["reference"], command)
-        if action is None:
-            return False
-        if action == "instruments":
-            self.session.reference_kind = action
-            self.session.reference_instrument_type = None
-            self.session.context = ("reference", "instrument-types")
-            self._show_context()
-            return True
-        prompt = (
-            "请输入标的合约 ID"
-            if action == "option-chain"
-            else "输入代码或名称；直接回车浏览"
-        )
-        self.session.reference_kind = action
-        self.session.reference_instrument_type = None
-        self._request_argument(
-            f"reference:{action}",
-            prompt,
-            "输入 /back 或按 Esc 取消并返回当前菜单。",
-        )
-        return True
 
     def _dispatch_context(self, command: str, arguments: tuple[str, ...]) -> bool:
         if arguments:
@@ -1708,25 +411,53 @@ class CommandLineScreen(Screen[None]):
             return True
 
         section = self.session.context[0]
-        if section == "market":
-            return self._dispatch_market_context(command)
-        if section == "reference":
-            return self._dispatch_reference_context(command)
+        if section in {"market", "reference"}:
+            effects = market_reference.handle_context(
+                self.workbench_app.state,
+                self.session,
+                command,
+            )
+            if effects is None:
+                return False
+            self._apply_effects(effects)
+            return True
+        if section in {"operations", "research"}:
+            effects = operations_research.handle_context(
+                self.workbench_app.state,
+                self.session,
+                command,
+            )
+            if effects is None:
+                return False
+            self._apply_effects(effects)
+            return True
         if section == "strategy":
-            return self._dispatch_strategy_context(command)
+            effects = strategy_execution.handle_context(
+                self.workbench_app.state,
+                self.session,
+                command,
+            )
+            if effects is None:
+                return False
+            self._apply_effects(effects)
+            return True
         if section == "resources":
-            return self._dispatch_resource_context(command)
-        if section == "research":
-            return self._dispatch_research_context(command)
-        if section == "operations":
-            return self._dispatch_operations_context(command)
+            effects = resources_account.handle_context(
+                self.workbench_app.state,
+                self.session,
+                command,
+            )
+            if effects is None:
+                return False
+            self._apply_effects(effects)
+            return True
         return False
 
     def enter_section(self, section: str) -> None:
         """Enter one product context without replacing the command screen."""
 
         if section == "observe":
-            self._run("observe", self._read_observe)
+            self._start_operation(self._observe_spec())
             return
         if section not in SECTION_ACTIONS:
             self._write_error(f"未知产品入口：{section}")
@@ -1742,188 +473,143 @@ class CommandLineScreen(Screen[None]):
     ) -> None:
         """Translate launch CLI deep links into this screen's session context."""
 
-        record: dict[str, Any] = {"launch_id": launch_id}
-        if source is not None:
-            record["config"] = str(source)
-            record["draft"] = True
-        self.workbench_app.state.selected_launch = launch_id
-        self.session.selected_launch_record = record
-        self.session.context = ("strategy", "selected")
-        self._write(
-            Panel(
-                (
-                    f"已进入 Launch {launch_id} 的"
-                    f"{'跟随输出' if action == 'attach' else '配置'}流程。"
-                ),
-                title="Launch 深链",
-                border_style="cyan",
-            )
+        effects = strategy_execution.enter_deep_link(
+            self.workbench_app.state,
+            self.session,
+            launch_id,
+            action,
+            source,
         )
-        if action == "attach":
-            self.session.context = ("strategy", "attach")
-            self.session.launch_attach_paused = False
-            self.session.launch_attach_seen = ()
-            self._show_context()
-            self._refresh_launch_attach(force=True)
-            return
-        if action == "setup":
-            try:
-                wizard = LaunchWizardState.open(
-                    launch_id, Path(str(source)) if source is not None else None
-                )
-            except (OSError, ValueError) as error:
-                self._write_error(str(error))
-                self._show_context()
-            else:
-                self._start_launch_wizard(wizard)
-            return
-        self._show_context()
+        self._apply_effects(effects)
 
     def action_back(self) -> None:
-        if self.session.prompt_mode in {
-            PromptMode.ARGUMENT,
-            PromptMode.SECRET,
-            PromptMode.CONFIRMATION,
-        }:
+        if isinstance(self.session.interaction, (InputInteraction, ConfirmInteraction)):
             self.action_cancel_pending()
             return
         if not go_back(self.session):
-            self._write(Text("当前已经在首页。", style="dim"))
             self._show_context()
+            self._set_status("当前已经在首页")
             return
         self._show_context()
 
-    def _request_argument(self, command: str, prompt: str, detail: str) -> None:
-        self.session.ask(command)
-        self._show_prompt_chrome(command, prompt, detail)
-        self._set_status(f"{self._prompt_title(command)} · 等待输入")
-        self._input().placeholder = prompt
-
-    def _request_secret(self, command: str, prompt: str, detail: str) -> None:
-        self.session.ask(command, secret=True)
-        self._show_prompt_chrome(command, prompt, detail)
-        self._input().password = True
-        self._set_status(f"等待安全输入 · {command}")
-        self._input().placeholder = prompt
-
-    def _show_prompt_chrome(self, command: str, prompt: str, detail: str) -> None:
-        """Give an argument step the whole action area and one clear exit path."""
-
-        actions = self.query_one("#guided-actions", GuidedActionList)
-        actions.replace_items(())
-        actions.display = False
-        guided_prompt = self.query_one("#guided-prompt", Static)
-        guided_prompt.update(
-            Group(
-                Text(self._prompt_title(command), style="bold cyan"),
-                Text(prompt, style="bold"),
-                Text(detail, style="dim"),
-            )
-        )
-        guided_prompt.display = True
-        self.query_one("#command-context", Static).update(
-            f"{self._prompt_title(command)}  ›"
-        )
-        verb = (
-            "搜索"
-            if command == "market" and self.session.market_purpose == "search"
-            else "确认"
-        )
-        self.query_one("#command-hints", Static).update(f"Enter {verb}  ·  Esc 返回")
-        self.app.set_focus(self._input())
-        self.call_after_refresh(self.app.set_focus, self._input())
-
-    def _prompt_title(self, command: str) -> str:
-        if command == "market":
-            return {
-                "search": "搜索市场",
-                "download": "选择历史行情标的",
-                "replay": "选择回放标的",
-                "diagnostics": "选择待诊断标的",
-                "advanced": "高级市场标识",
-            }.get(self.session.market_purpose, "搜索市场")
-        return context_label(self.session.context)
-
     def action_clear(self) -> None:
-        self._output().clear()
-        self._write(Text("输出已清空；业务状态没有改变。", style="dim"))
+        self._output().clear_visible_history()
+        self.query_one("#activity-empty", Static).display = True
         self._show_context()
+        self._set_status("活动记录已清空 · Transcript 和业务状态未改变")
+
+    def copy_page_text(self, *, history_only: bool = False) -> str:
+        """Build the redacted handoff view from state and visible activities."""
+
+        activity_text = self._output().plain_text
+        if history_only:
+            return activity_text
+        sections = [
+            f"Workspace: {self.workbench_app.state.workspace_id}",
+            f"Context: {context_label(self.session.context)}",
+        ]
+        interaction_text = interaction_copy_text(self.session.interaction)
+        if interaction_text:
+            sections.append(f"## 当前交互\n{interaction_text}")
+        if activity_text:
+            sections.append(f"## 活动记录\n{activity_text}")
+        return redact_text("\n\n".join(sections))
+
+    def _present_help(self) -> None:
+        context = self._context_label()
+        self.session.choose(
+            context_items(self.session, self.workbench_app.state),
+            title=f"{context} · 帮助",
+            summary=_help_table(self.session.context),
+        )
+        self._interaction().present(self.session.interaction)
+        self._set_status("帮助 · 选择动作或输入 /back 返回")
+
+    def action_scroll_interaction_up(self) -> None:
+        """Page the bounded interaction region without moving input focus."""
+
+        self._interaction().scroll_page_up(animate=False)
+
+    def action_scroll_interaction_down(self) -> None:
+        """Page the bounded interaction region without moving input focus."""
+
+        self._interaction().scroll_page_down(animate=False)
+
+    def action_scroll_output_up(self) -> None:
+        """Browse older output while leaving command input ownership unchanged."""
+
+        output = self._output()
+        output.pause_follow()
+        output.scroll_page_up(animate=False)
+
+    def action_scroll_output_down(self) -> None:
+        """Browse newer output while leaving command input ownership unchanged."""
+
+        self._output().scroll_page_down(animate=False)
+
+    def action_scroll_output_line_up(self) -> None:
+        """Move one line toward older output without moving input focus."""
+
+        output = self._output()
+        output.pause_follow()
+        output.scroll_up(animate=False)
+
+    def action_scroll_output_line_down(self) -> None:
+        """Move one line toward newer output without moving input focus."""
+
+        self._output().scroll_down(animate=False)
+
+    def action_follow_output(self) -> None:
+        """Return to the newest output and resume automatic following."""
+
+        self._output().resume_follow()
 
     def action_cancel_pending(self) -> None:
-        self._reset_operation()
-        self._skip_next_operation_output = False
-        argument_prompt = self.session.argument_prompt
-        if argument_prompt is not None:
-            command = argument_prompt.action
+        interaction = self.session.interaction
+        if isinstance(interaction, InputInteraction):
             self._input().password = False
-            if command.startswith("research:"):
-                self.session.research_action = None
-                self.session.research_primary = None
-            elif command.startswith("resource:"):
-                self.session.resource_action = None
-                self.session.resource_launch_id = None
-                if command.startswith("resource:setup"):
-                    self._cancel_resource_wizard()
-            elif command.startswith("strategy:launch"):
-                self._cancel_launch_wizard()
-            elif command.startswith("business:field:"):
-                self.session.business_prompt = None
-            elif command.startswith("order:field:"):
-                self.session.order_prompt = None
-            elif command.startswith("execution:field:"):
-                self.session.execution_prompt = None
-            elif command.startswith("launch-market:field:"):
-                self.session.launch_market_prompt = None
-            elif command.startswith("market-file:field:"):
-                self.session.market_file_prompt = None
-            elif command.startswith("operations-project:field:"):
-                self.session.project_prompt = None
-            elif command.startswith("workspace-market:field:"):
-                self.session.workspace_market_prompt = None
-            elif command == "operations-profile:name":
-                self.session.profile_action = None
+            self._cancel_input(interaction.action)
             self.session.reset_prompt()
             self._input().placeholder = "输入命令；Enter 提交"
-            self._write(Text(f"已取消 {command} 输入。", style="dim"))
             self._set_status("就绪")
             self._show_context()
             return
-        confirmation_prompt = self.session.confirmation_prompt
-        if confirmation_prompt is not None:
-            summary = confirmation_prompt.summary
-            result_kind = confirmation_prompt.result_kind
+        if isinstance(interaction, ConfirmInteraction):
+            result_kind = interaction.operation.route.kind
             self._interrupt_exit_pending = False
-            if result_kind == "resource-wizard-result":
-                self._cancel_resource_wizard()
-            elif result_kind == "strategy-wizard-result":
-                self._cancel_launch_wizard()
-            elif result_kind == "order-result":
-                self.session.order_prompt = None
-            elif result_kind == "execution-result":
-                self.session.execution_prompt = None
-            elif result_kind == "launch-market-result":
-                self.session.launch_market_prompt = None
-            elif result_kind == "market-file-result":
-                self.session.market_file_prompt = None
-            elif result_kind == "operations-profile-result":
-                self.session.profile_action = None
-            elif result_kind == "operations-project-result":
-                self.session.project_prompt = None
-            elif result_kind == "workspace-market-result":
-                self.session.workspace_market_prompt = None
+            if result_kind is ResultKind.RESOURCE_WIZARD:
+                resources_account.cancel_input(
+                    self.session,
+                    ActionToken(Feature.RESOURCES, "resource:setup"),
+                )
+            elif result_kind is ResultKind.STRATEGY_WIZARD:
+                strategy_execution.cancel_input(
+                    self.session,
+                    ActionToken(Feature.STRATEGY, "strategy:launch"),
+                )
+            else:
+                self.session.clear_result_flow(result_kind)
             self.session.reset_prompt()
-            self._write(Text(f"已取消：{summary}", style="dim"))
             self._set_status("就绪")
             self._show_context()
             return
         cancelled = self.workers.cancel_node(self)
         if cancelled:
-            self._write(Text(f"已取消 {len(cancelled)} 个当前任务。", style="dim"))
-            self._set_status("就绪")
+            self._set_status(f"已请求取消 {len(cancelled)} 个当前任务")
             self.app.set_focus(self._input())
             return
-        self._write(Text("当前没有可取消的输入或任务。", style="dim"))
         self._show_context()
+        self._set_status("当前没有可取消的输入或任务")
+
+    def _cancel_input(self, token: ActionToken) -> None:
+        if token.feature in {Feature.MARKET, Feature.REFERENCE}:
+            market_reference.cancel_input(self.session, token)
+        elif token.feature in {Feature.OPERATIONS, Feature.RESEARCH}:
+            operations_research.cancel_input(self.session, token)
+        elif token.feature is Feature.RESOURCES:
+            resources_account.cancel_input(self.session, token)
+        elif token.feature is Feature.STRATEGY:
+            strategy_execution.cancel_input(self.session, token)
 
     def action_interrupt(self) -> None:
         """Cancel active work, or ask before exiting when completely idle."""
@@ -1935,17 +621,17 @@ class CommandLineScreen(Screen[None]):
             self.app.exit(130)
             return
         if (
-            self.session.prompt_mode
-            in {PromptMode.ARGUMENT, PromptMode.SECRET, PromptMode.CONFIRMATION}
-            or self._active_worker is not None
+            isinstance(self.session.interaction, (InputInteraction, ConfirmInteraction))
+            or self._running_task is not None
         ):
             self.action_cancel_pending()
             return
         self.request_confirmation(
-            "当前没有运行中的任务，是否退出 Kairos Workbench？"
-            "再次按 Ctrl+C 可强制退出。",
+            "当前没有运行中的任务，是否退出？",
             self.workbench_app.action_quit,
-            show_operation=False,
+            route=ResultRoute(ResultKind.CONFIRMED, "exit"),
+            title="退出 Workbench",
+            force_hint="再次按 Ctrl+C 强制退出，返回码 130。",
         )
         self._interrupt_exit_pending = True
 
@@ -1954,709 +640,189 @@ class CommandLineScreen(Screen[None]):
         summary: str,
         action: Callable[[], Any],
         *,
-        result_kind: str = "confirmed",
-        show_operation: bool = True,
+        route: ResultRoute = ResultRoute(ResultKind.CONFIRMED),
+        title: str = "需要确认",
+        details: RenderableType | None = None,
+        force_hint: str | None = None,
     ) -> None:
-        """Stage a dangerous action in the command stream, without a modal."""
+        """Stage a dangerous action in the interaction region, without a modal."""
 
         self._interrupt_exit_pending = False
-        if show_operation:
-            self._emit_operation(summary, details=summary)
-        self._skip_next_operation_output = True
-        self.session.confirm(summary, action, result_kind)
+        operation = OperationSpec.create(
+            action_name=("workbench.exit" if route.qualifier == "exit" else summary),
+            audit_summary=redact_text(summary),
+            route=route,
+            operation=action,
+            running_status=f"正在执行：{summary}",
+        )
+        self._present_confirmation(
+            operation,
+            title=title,
+            details=details,
+            force_hint=force_hint,
+        )
+
+    def _present_confirmation(
+        self,
+        operation: OperationSpec,
+        *,
+        title: str = "需要确认",
+        details: RenderableType | None = None,
+        force_hint: str | None = None,
+    ) -> None:
+        """Present the immutable operation which acceptance will start."""
+
+        self.session.confirm(
+            operation,
+            title=title,
+            display_summary=details,
+            force_hint=force_hint,
+        )
         self.workbench_app.transcript.record(
-            "confirmation_requested", screen=type(self).__name__, summary=summary
+            "confirmation_requested",
+            screen=type(self).__name__,
+            operation_id=operation.operation_id,
+            summary=operation.audit_summary,
         )
-        self._write(
-            Panel(
-                Text.from_markup(
-                    f"{summary}\n\n输入 [bold]/confirm[/bold] 继续，输入 "
-                    "[bold]/cancel[/bold] 或按 Esc 取消。"
-                ),
-                title="需要确认",
-                border_style="yellow",
-            )
-        )
+        self._interaction().present(self.session.interaction)
+        self._input().placeholder = "输入 /confirm 或 /cancel"
+        self._set_hints("/confirm 继续  ·  /cancel 或 Esc 取消")
         self._set_status("等待确认")
 
-    def _request_research_confirmation(
-        self, action: str, value: str | None, extra: str | None
-    ) -> None:
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return preview_research(action, value, extra)
-            return execute_research(self.workbench_app.state, action, value, extra)
-
-        self.session.research_action = None
-        self.session.research_primary = None
-        if (
-            self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("research-result", operation)
-        else:
-            self.request_confirmation(
-                f"kairos research {action} {value or ''}",
-                operation,
-                result_kind="research-result",
-            )
-
-    def _run_resource_action(
-        self,
-        action: str,
-        *,
-        value: str | None = None,
-        launch_id: str | None = None,
-    ) -> None:
-        kind = self.session.resource_kind
-        record = self.session.selected_resource
-        if kind is None or record is None:
-            self._write_error("资源上下文已经失效，请重新选择资源。")
-            self.session.enter("resources")
-            self._show_context()
-            return
-
-        def operation() -> Any:
-            if action in {"test", "toggle", "delete", "attach", "detach"} and (
-                self.workbench_app.state.dry_run or self.workbench_app.state.no_exec
-            ):
-                return preview_resource_action(
-                    kind, record, action, value=value, launch_id=launch_id
-                )
-            return execute_resource_action(
-                self.workbench_app.state,
-                kind,
-                record,
-                action,
-                value=value,
-                launch_id=launch_id,
-            )
-
-        self._run(f"resource-action:{action}", operation)
-
-    def _request_resource_confirmation(
-        self,
-        action: str,
-        *,
-        value: str | None = None,
-        launch_id: str | None = None,
-    ) -> None:
-        kind = self.session.resource_kind
-        record = self.session.selected_resource
-        if kind is None or record is None:
-            self._run_resource_action(action, value=value, launch_id=launch_id)
-            return
-
-        resource_id = resource_identity(kind, record)
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return preview_resource_action(
-                    kind, record, action, value=value, launch_id=launch_id
-                )
-            return execute_resource_action(
-                self.workbench_app.state,
-                kind,
-                record,
-                action,
-                value=value,
-                launch_id=launch_id,
-            )
-
-        self.session.resource_action = None
-        self.session.resource_launch_id = None
-        if (
-            self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run(f"resource-action:{action}", operation)
-        else:
-            self.request_confirmation(
-                f"kairos resource {action} {resource_id}",
-                operation,
-                result_kind=f"resource-action:{action}",
-            )
-
-    def _start_resource_wizard(self, wizard: ResourceWizardState) -> None:
-        self.session.resource_wizard = wizard
-        self.session.resource_kind = wizard.kind
-        self.session.context = ("resources", "setup")
-        self._show_context()
-        self._write(
-            Panel(
-                f"{'修改' if wizard.editing else '添加'}运行资源。"
-                "每次只填写一个字段；安全凭据会切换为遮罩输入。",
-                title="资源配置向导",
-                border_style="cyan",
-            )
-        )
-        self._advance_resource_wizard()
-
-    def _advance_resource_wizard(self) -> None:
-        wizard = self.session.resource_wizard
-        if not isinstance(wizard, ResourceWizardState):
-            self._write_error("资源配置向导已经失效，请重新开始。")
-            return
-        prompt = wizard.next_prompt()
-        if prompt is not None:
-            name, label, detail, secret = prompt
-            command = f"resource:setup-field:{name}"
-            if secret:
-                self._request_secret(command, label, detail)
-            else:
-                self._request_argument(command, label, detail)
-            return
-        self._write(
-            Panel(
-                Pretty(wizard.redacted_summary(), expand_all=True),
-                title="资源配置脱敏摘要",
-                border_style="cyan",
-            )
-        )
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return {
-                    "status": "preview",
-                    "action": "resource-save",
-                    "summary": wizard.redacted_summary(),
-                }
-            return save_resource_wizard(self.workbench_app.state, wizard)
-
-        if (
-            self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("resource-wizard-result", operation)
-        else:
-            self.request_confirmation(
-                f"保存{wizard.kind}运行资源",
-                operation,
-                result_kind="resource-wizard-result",
-            )
-
-    def _cancel_resource_wizard(self) -> None:
-        wizard = self.session.resource_wizard
-        self.session.resource_wizard = None
-        if not isinstance(wizard, ResourceWizardState):
-            return
-        wizard.clear_secrets()
-        if wizard.editing and self.session.selected_resource is not None:
-            self.session.context = ("resources", "selected")
-        else:
-            self.session.context = ("resources", wizard.kind)
-        self._write(Text("已取消资源配置向导；暂存凭据已清除。", style="dim"))
-
-    def _advance_business_prompt(self) -> None:
-        prompt = self.session.business_prompt
-        if not isinstance(prompt, BusinessPromptState):
-            self._write_error("业务工具参数向导已经失效，请重新选择操作。")
-            return
-        next_prompt = prompt.next_prompt()
-        if next_prompt is not None:
-            name, label, detail = next_prompt
-            self._request_argument(f"business:field:{name}", label, detail)
-            return
-        self._run(
-            "business-result",
-            lambda: execute_business(self.workbench_app.state, prompt),
-        )
-
-    def _advance_order_prompt(self) -> None:
-        prompt = self.session.order_prompt
-        if not isinstance(prompt, OrderPromptState):
-            self._write_error("订单参数向导已经失效，请重新选择操作。")
-            return
-        next_prompt = prompt.next_prompt()
-        if next_prompt is not None:
-            name, label, detail = next_prompt
-            self._request_argument(f"order:field:{name}", label, detail)
-            return
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return preview_order(prompt)
-            return execute_order(self.workbench_app.state, prompt)
-
-        if (
-            not prompt.dangerous
-            or self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("order-result", operation)
-        else:
-            self._write(
-                Panel(
-                    Pretty(prompt.summary(), expand_all=True),
-                    title="订单作用域确认",
-                    border_style="yellow",
-                )
-            )
-            self.request_confirmation(
-                f"{prompt.action} account={prompt.account_id}",
-                operation,
-                result_kind="order-result",
-            )
-
-    def _advance_execution_prompt(self) -> None:
-        prompt = self.session.execution_prompt
-        if not isinstance(prompt, ExecutionPromptState):
-            self._write_error("Execution 参数向导已经失效，请重新选择操作。")
-            return
-        next_prompt = prompt.next_prompt()
-        if next_prompt is not None:
-            name, label, detail = next_prompt
-            self._request_argument(f"execution:field:{name}", label, detail)
-            return
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return preview_connected_execution(prompt)
-            return execute_connected_execution(self.workbench_app.state, prompt)
-
-        if (
-            not prompt.dangerous
-            or self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("execution-result", operation)
-        else:
-            self._write(
-                Panel(
-                    Pretty(prompt.summary(), expand_all=True),
-                    title="Execution 作用域确认",
-                    border_style="yellow",
-                )
-            )
-            self.request_confirmation(
-                f"Execution {prompt.action} {prompt.launch_id}/{prompt.instance_id}",
-                operation,
-                result_kind="execution-result",
-            )
-
-    def _advance_launch_market_prompt(self) -> None:
-        prompt = self.session.launch_market_prompt
-        if not isinstance(prompt, LaunchMarketPromptState):
-            self._write_error("Market 参数向导已经失效，请重新选择操作。")
-            return
-        next_prompt = prompt.next_prompt()
-        if next_prompt is not None:
-            name, label, detail = next_prompt
-            self._request_argument(f"launch-market:field:{name}", label, detail)
-            return
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return preview_launch_market(prompt)
-            return execute_launch_market(self.workbench_app.state, prompt)
-
-        if (
-            not prompt.dangerous
-            or self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("launch-market-result", operation)
-        else:
-            self.request_confirmation(
-                f"Market {prompt.action} {prompt.launch.get('launch_id')}/"
-                f"{prompt.launch.get('instance_id')}",
-                operation,
-                result_kind="launch-market-result",
-            )
-
-    def _advance_market_file_prompt(self) -> None:
-        prompt = self.session.market_file_prompt
-        if not isinstance(prompt, MarketFilePromptState):
-            self._write_error("Market 文件操作参数向导已经失效，请重新选择操作。")
-            return
-        next_prompt = prompt.next_prompt()
-        if next_prompt is not None:
-            name, label, detail = next_prompt
-            self._request_argument(f"market-file:field:{name}", label, detail)
-            return
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return preview_market_file_action(prompt)
-            return execute_market_file_action(self.workbench_app.state, prompt)
-
-        self._write(
-            Panel(
-                Pretty(prompt.summary(), expand_all=True),
-                title="Market 文件操作范围",
-                border_style="yellow",
-            )
-        )
-        if (
-            self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("market-file-result", operation)
-        else:
-            self.request_confirmation(
-                f"Market {prompt.action} {prompt.market.id}",
-                operation,
-                result_kind="market-file-result",
-            )
-
-    def _advance_project_prompt(self) -> None:
-        prompt = self.session.project_prompt
-        if not isinstance(prompt, ProjectPromptState):
-            self._write_error("项目参数向导已经失效，请重新选择操作。")
-            return
-        next_prompt = prompt.next_prompt()
-        if next_prompt is not None:
-            name, label, detail = next_prompt
-            self._request_argument(f"operations-project:field:{name}", label, detail)
-            return
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return {"status": "preview", **prompt.summary()}
-            return execute_operations_project_write(self.workbench_app.state, prompt)
-
-        self._write(
-            Panel(
-                Pretty(prompt.summary(), expand_all=True),
-                title="项目写入范围",
-                border_style="yellow",
-            )
-        )
-        if (
-            self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("operations-project-result", operation)
-        else:
-            self.request_confirmation(
-                f"项目操作 {prompt.action}",
-                operation,
-                result_kind="operations-project-result",
-            )
-
-    def _advance_workspace_market_prompt(self) -> None:
-        prompt = self.session.workspace_market_prompt
-        if not isinstance(prompt, WorkspaceMarketPromptState):
-            self._write_error("Workspace Market 参数向导已经失效。")
-            return
-        next_prompt = prompt.next_prompt()
-        if next_prompt is not None:
-            name, label, detail = next_prompt
-            self._request_argument(f"workspace-market:field:{name}", label, detail)
-            return
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return preview_workspace_market(prompt)
-            return execute_workspace_market(self.workbench_app.state, prompt)
-
-        if (
-            not prompt.dangerous
-            or self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("workspace-market-result", operation)
-        else:
-            self.request_confirmation(
-                f"Workspace Market {prompt.action}",
-                operation,
-                result_kind="workspace-market-result",
-            )
-
-    def _start_launch_wizard(self, wizard: LaunchWizardState) -> None:
-        self.session.launch_wizard = wizard
-        self.session.context = ("strategy", "setup")
-        self._show_context()
-        self._write(
-            Panel(
-                f"开始配置 Launch {wizard.launch_id}。每次只填写一个字段；"
-                "直接回车使用当前默认值。",
-                title="Launch 配置向导",
-                border_style="cyan",
-            )
-        )
-        self._advance_launch_wizard()
-
-    def _advance_launch_wizard(self) -> None:
-        wizard = self.session.launch_wizard
-        if not isinstance(wizard, LaunchWizardState):
-            self._write_error("Launch 配置向导已经失效，请重新开始。")
-            return
-        prompt = wizard.next_prompt()
-        if prompt is not None:
-            name, label, detail = prompt
-            self._request_argument(f"strategy:launch-field:{name}", label, detail)
-            return
-        self._write(
-            Panel(wizard.preview(), title="Launch 脱敏摘要", border_style="cyan")
-        )
-        self._request_argument(
-            "strategy:launch-save-mode",
-            "保存方式（draft / publish）",
-            "draft 仅保存草稿；publish 校验并发布。",
-        )
-
-    def _request_launch_wizard_confirmation(self, *, publish: bool) -> None:
-        wizard = self.session.launch_wizard
-        if not isinstance(wizard, LaunchWizardState):
-            self._write_error("Launch 配置向导已经失效，请重新开始。")
-            return
-
-        def operation() -> Any:
-            if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
-                return {
-                    "status": "preview",
-                    "action": "publish" if publish else "save-draft",
-                    "launch_id": wizard.launch_id,
-                    "summary": wizard.preview(),
-                }
-            return save_launch_wizard(self.workbench_app.state, wizard, publish=publish)
-
-        if (
-            self.workbench_app.state.yes
-            or self.workbench_app.state.dry_run
-            or self.workbench_app.state.no_exec
-        ):
-            self._run("strategy-wizard-result", operation)
-        else:
-            self.request_confirmation(
-                f"{'发布' if publish else '保存草稿'} Launch {wizard.launch_id}",
-                operation,
-                result_kind="strategy-wizard-result",
-            )
-
-    def _cancel_launch_wizard(self) -> None:
-        wizard = self.session.launch_wizard
-        self.session.launch_wizard = None
-        if self.session.selected_launch_record is not None:
-            self.session.context = ("strategy", "selected")
-        elif self.session.launch_records:
-            self.session.context = ("strategy", "launches")
-            self.session.visible_records = self.session.launch_records
-        else:
-            self.session.context = ("strategy",)
-        if isinstance(wizard, LaunchWizardState):
-            self._write(
-                Text(f"已取消 Launch {wizard.launch_id} 配置向导。", style="dim")
-            )
-
     def _confirm_pending(self) -> None:
-        confirmation_prompt = self.session.confirmation_prompt
-        if confirmation_prompt is None:
-            self._write(Text("当前没有等待确认的操作。", style="dim"))
+        interaction = self.session.interaction
+        if not isinstance(interaction, ConfirmInteraction):
+            self._set_status("当前没有等待确认的操作")
             return
-        summary = confirmation_prompt.summary
-        action = confirmation_prompt.operation
-        result_kind = confirmation_prompt.result_kind
+        operation = interaction.operation
+        summary = operation.audit_summary
         self._interrupt_exit_pending = False
         self.session.finish_prompt()
         self.workbench_app.transcript.record(
-            "confirmation_accepted", screen=type(self).__name__, summary=summary
+            "confirmation_accepted",
+            screen=type(self).__name__,
+            operation_id=operation.operation_id,
+            summary=summary,
         )
-        self._run(result_kind, action, status=f"正在执行：{summary}")
+        if operation.route == ResultRoute(ResultKind.CONFIRMED, "exit"):
+            operation.operation()
+            return
+        self._start_operation(operation)
 
-    def _run(
-        self,
-        kind: str,
-        operation: Callable[[], Any],
-        *,
-        status: str | None = None,
-    ) -> None:
-        if self._skip_next_operation_output:
-            self._skip_next_operation_output = False
-        else:
-            self._emit_operation(
-                self._operation_fallback(kind, status),
-                details=self._operation_details(kind),
+    def _start_operation(self, spec: OperationSpec) -> None:
+        equivalent = spec.equivalent_command
+        arguments = (
+            equivalent[1:] if equivalent and equivalent[:1] == ("kairos",) else ()
+        )
+        if self.workbench_app.transcript.claim_operation(spec.operation_id):
+            self.workbench_app.transcript.record(
+                "action",
+                screen=type(self).__name__,
+                operation_id=spec.operation_id,
+                action=spec.action_name,
+                display=spec.audit_summary,
+                arguments=list(_redact_arguments(arguments)),
+                equivalent_command=shlex.join(equivalent) if equivalent else None,
             )
-        self.session.busy(kind)
+            self.workbench_app.transcript.record(
+                "operation_started",
+                operation_id=spec.operation_id,
+                action=spec.action_name,
+                summary=spec.audit_summary,
+                route=spec.route.kind.value,
+                qualifier=spec.route.qualifier,
+            )
+        self.session.busy(spec.route, message=spec.running_status)
+        self._interaction().present(self.session.interaction)
         self._input().disabled = True
-        self._set_status(status or _running_status(kind))
-        self._active_worker = self.run_worker(
-            operation,
-            name=f"command-{kind}",
+        self._set_status(spec.running_status)
+        worker = self.run_worker(
+            spec.operation,
+            name=f"command-{spec.route.kind.value}",
             group="guided-command",
             thread=True,
             exclusive=True,
             exit_on_error=False,
         )
+        self._running_task = RunningTask(spec, worker)
+
+    def _apply_effects(self, effects: tuple[ScreenEffect, ...]) -> None:
+        for effect in effects:
+            if isinstance(effect, AppendActivity):
+                self._output().append_activity(effect.activity)
+                self.query_one("#activity-empty", Static).display = False
+            elif isinstance(effect, SetInteraction):
+                self.session.interaction = effect.interaction
+                if isinstance(effect.interaction, ConfirmInteraction):
+                    self.workbench_app.transcript.record(
+                        "confirmation_requested",
+                        screen=type(self).__name__,
+                        summary=effect.interaction.operation.audit_summary,
+                    )
+                self._interaction().present(effect.interaction)
+                self._sync_input_to_interaction(effect.interaction)
+                self._sync_context_chrome()
+            elif isinstance(effect, RunOperation):
+                self._start_operation(effect.operation)
+            elif isinstance(effect, SetStatus):
+                self._set_status(effect.message)
+            elif isinstance(effect, RefreshMarketControl):
+                self._refresh_market_control(force=effect.force)
+            elif isinstance(effect, RefreshLaunchControl):
+                self._present_launch_control()
+                self._sync_input_to_interaction(self.session.interaction)
+                self._sync_context_chrome()
+                self._refresh_launch_attach(force=effect.force)
+        self._report_unseen_activity()
+
+    def _report_unseen_activity(self) -> None:
+        unseen = self._output().new_activity_count
+        if unseen:
+            self._set_status(f"有 {unseen} 条新活动 · Ctrl+End 查看")
+
+    def _sync_input_to_interaction(self, interaction: InteractionState) -> None:
+        command_input = self._input()
+        command_input.disabled = isinstance(interaction, RunningInteraction)
+        command_input.password = (
+            isinstance(interaction, InputInteraction) and interaction.secret
+        )
+        if isinstance(interaction, InputInteraction):
+            command_input.placeholder = interaction.prompt
+        elif isinstance(interaction, ConfirmInteraction):
+            command_input.placeholder = "输入 /confirm 或 /cancel"
+        else:
+            command_input.placeholder = "输入编号或命令；Enter 提交"
+        if not command_input.disabled:
+            self.app.set_focus(command_input)
+
+    def _sync_context_chrome(self) -> None:
+        interaction = self.session.interaction
+        context = (
+            interaction.title
+            if isinstance(interaction, InputInteraction) and interaction.title
+            else self._context_label()
+        )
+        self.query_one("#command-context", Static).update(f"{context}  ›")
+        if isinstance(interaction, InputInteraction):
+            verb = (
+                "搜索"
+                if interaction.action == ActionToken(Feature.MARKET, "search")
+                and self.session.market.purpose == "search"
+                else "确认"
+            )
+            self._set_hints(f"Enter {verb}  ·  Esc 返回")
+            return
+        if len(self.session.context) > 1 and self.session.visible_records:
+            self.query_one("#command-hints", Static).update(
+                "输入结果编号查看详情  ·  Esc 返回"
+            )
+        else:
+            self.query_one("#command-hints", Static).update(
+                "数字选择  ·  /back 返回  ·  /help 更多操作  ·  /exit 退出"
+            )
 
     def _read_observe(self) -> ObserveSnapshot | None:
         return self.workbench_app.state.refresh_snapshot()
-
-    def _record_action(
-        self,
-        action: str,
-        arguments: tuple[str, ...],
-        *,
-        equivalent_command: tuple[str, ...] | None = None,
-    ) -> None:
-        self._pending_action_name = action
-        self._operation_committed = False
-        if equivalent_command is not None:
-            command = (
-                equivalent_command[1:]
-                if equivalent_command[:1] == ("kairos",)
-                else equivalent_command
-            )
-            self._pending_operation = ("command", shlex.join(command))
-        elif action == "market.find":
-            self._pending_operation = (
-                "semantic",
-                "首页 / 市场行情 › 搜索标的并查看行情",
-            )
-        elif self._pending_operation is None:
-            self._pending_operation = ("semantic", action)
-        self._pending_operation_arguments = arguments
-        self._pending_equivalent_command = equivalent_command
-
-    def _prepare_context_operation(
-        self, command: str, arguments: tuple[str, ...]
-    ) -> None:
-        """Remember a selected action until it proves to be navigation or execution."""
-
-        if arguments:
-            return
-        items = context_items(self.session, self.workbench_app.state)
-        selected_id = action_id(items, command)
-        if selected_id is None:
-            return
-        selected = next(item for item in items if item.id == selected_id)
-        self._pending_operation = (
-            "semantic",
-            f"{context_label(self.session.context)} › {selected.label}",
-        )
-        self._operation_committed = False
-        path = ".".join(self.session.context) or "home"
-        self._pending_action_name = f"{path}.{selected.id}"
-        self._pending_operation_arguments = ()
-        self._pending_equivalent_command = None
-
-    def _emit_operation(self, fallback: str, *, details: str | None = None) -> None:
-        """Write one complete, redacted operation at the execution boundary."""
-
-        if self._operation_committed:
-            return
-        had_pending = self._pending_operation is not None
-        operation = self._pending_operation or ("semantic", fallback)
-        style, value = operation
-        arguments = self._pending_operation_arguments
-        if style == "semantic" and arguments:
-            value = f"{value} · {shlex.join(arguments)}"
-        elif style == "semantic" and had_pending and details:
-            value = f"{value} · {details}"
-        value = redact_text(value)
-        if style == "command":
-            rendered = Text("kairos › ", style="bold bright_blue")
-            rendered.append(value)
-        else:
-            rendered = Text(value, style="bold bright_blue")
-        self._output().write(rendered)
-        self.workbench_app.transcript.record(
-            "action",
-            screen=type(self).__name__,
-            action=self._pending_action_name or value,
-            display=value,
-            arguments=list(_redact_arguments(arguments)),
-            equivalent_command=(
-                shlex.join(self._pending_equivalent_command)
-                if self._pending_equivalent_command is not None
-                else None
-            ),
-        )
-        self._operation_committed = True
-        self._clear_pending_operation()
-
-    def _operation_fallback(self, kind: str, status: str | None) -> str:
-        labels = {
-            "observe": "刷新系统状态",
-            "market": "搜索标的并查看行情",
-            "market-observation": "读取市场行情",
-            "market-routes": "读取行情数据源",
-            "market-file-result": "执行行情文件操作",
-            "workspace-market-result": "执行 Workspace Market 操作",
-            "launch-market-result": "执行 Launch Market 操作",
-            "strategy-launches": "查看 Launch 列表",
-            "strategy-instances": "查看运行实例",
-            "strategy-components": "查看实例组件",
-            "strategy-instance-result": "查看实例概览",
-            "strategy-timeline": "查看实例时间线",
-            "strategy-timeline-export": "导出实例时间线",
-            "strategy-result": "执行 Launch 操作",
-            "strategy-attach": "操作 Launch 运行会话",
-            "strategy-wizard-result": "保存 Launch 配置",
-            "resources-summary": "检查运行资源",
-            "resource-wizard-result": "保存运行资源",
-            "research-result": "执行数据研究操作",
-            "operations-result": "执行系统维护操作",
-            "operations-services": "查看系统服务",
-            "operations-profile-result": "执行 Profile 操作",
-            "operations-project-result": "执行项目操作",
-            "business-result": "执行业务工具",
-            "account-result": "执行账户查询",
-            "order-result": "执行订单操作",
-            "execution-result": "执行 Execution 操作",
-            "kairos-command": "执行 Kairos 命令",
-        }
-        if kind.startswith("reference:"):
-            label = "查找 Reference 记录"
-        elif kind.startswith("resource-action:"):
-            label = "执行运行资源操作"
-        elif kind.startswith("resources-list:"):
-            label = "查看运行资源"
-        elif kind.startswith("market-diagnostic:"):
-            label = "诊断市场定义"
-        else:
-            label = labels.get(kind)
-        if label is None and status:
-            label = status.removeprefix("正在").rstrip("…。")
-        return f"{context_label(self.session.context)} › {label or '执行操作'}"
-
-    def _operation_details(self, kind: str) -> str | None:
-        prompt: Any | None = None
-        if kind == "order-result":
-            prompt = self.session.order_prompt
-        elif kind == "execution-result":
-            prompt = self.session.execution_prompt
-        elif kind == "launch-market-result":
-            prompt = self.session.launch_market_prompt
-        elif kind == "market-file-result":
-            prompt = self.session.market_file_prompt
-        elif kind == "workspace-market-result":
-            prompt = self.session.workspace_market_prompt
-        elif kind == "operations-project-result":
-            prompt = self.session.project_prompt
-        if prompt is not None and callable(getattr(prompt, "summary", None)):
-            summary = prompt.summary()
-            if isinstance(summary, Mapping):
-                return _format_operation_details(summary)
-        if kind == "business-result" and isinstance(
-            self.session.business_prompt, BusinessPromptState
-        ):
-            business = self.session.business_prompt
-            return _format_operation_details(
-                {"tool": business.tool, "action": business.action, **business.values}
-            )
-        return None
-
-    def _clear_pending_operation(self) -> None:
-        self._pending_operation = None
-        self._pending_action_name = None
-        self._pending_operation_arguments = ()
-        self._pending_equivalent_command = None
-
-    def _reset_operation(self) -> None:
-        self._clear_pending_operation()
-        self._operation_committed = False
 
     def _observe_command(self) -> tuple[str, ...]:
         state = self.workbench_app.state
@@ -2666,48 +832,63 @@ class CommandLineScreen(Screen[None]):
         command.append("--once")
         return tuple(command)
 
-    def _find_markets(self, query: str) -> tuple[Any, ...]:
-        return load_reference_records(
-            self.workbench_app.state,
-            "markets",
-            query,
+    def _observe_spec(self) -> OperationSpec:
+        return OperationSpec.create(
+            action_name="system.observe",
+            audit_summary="刷新系统状态",
+            route=ResultRoute(ResultKind.OBSERVE),
+            operation=self._read_observe,
+            running_status=_running_status(ResultKind.OBSERVE),
+            equivalent_command=self._observe_command(),
         )
 
-    def _find_reference_records(self, kind: str, query: str) -> tuple[Any, ...]:
-        return load_reference_records(
-            self.workbench_app.state,
-            kind,
-            query,
-            instrument_type=self.session.reference_instrument_type,
-        )
-
-    def _request_market_observation(self, provider: str) -> None:
-        market = self.workbench_app.state.selected_market
-        observation = self.session.market_observation
-        if market is None or observation is None:
-            self._write_error("行情上下文已经失效，请重新选择标的。")
-            self.session.enter("market")
-            self._show_context()
+    def _refresh_market_control(self, *, force: bool = False) -> None:
+        if self.session.context != ("market", "selected"):
             return
-        self._run(
-            "market-observation",
+        if not force and not self.session.market.refresh_enabled:
+            return
+        if self._market_refresh_worker is not None:
+            return
+        market = self.workbench_app.state.selected_market
+        observation = self.session.market.observation
+        provider = self.session.market.provider
+        if market is None or observation is None or provider is None:
+            return
+        self._market_refresh_worker = self.run_worker(
             lambda: load_market_observation(
                 self.workbench_app.state,
                 market,
                 observation,
                 provider,
             ),
-            status=f"正在通过 {provider} 读取行情…",
+            name="market-control-stream",
+            group="market-control-stream",
+            thread=True,
+            exclusive=True,
+            exit_on_error=False,
         )
+
+    def _present_market_control(self) -> None:
+        if self.session.context != ("market", "selected"):
+            return
+        market = self.workbench_app.state.selected_market
+        snapshot = self.session.market.snapshot
+        if market is None or snapshot is None:
+            return
+        self.session.control(
+            _market_identity_label(market),
+            market_observation_renderable(snapshot),
+            context_items(self.session, self.workbench_app.state),
+            refreshing=self.session.market.refresh_enabled,
+        )
+        self._interaction().present(self.session.interaction)
 
     def _refresh_launch_attach(self, *, force: bool = False) -> None:
         if self.session.context != ("strategy", "attach"):
             return
-        if self.session.launch_attach_paused and not force:
-            return
         if self._attach_refresh_worker is not None:
             return
-        record = self.session.selected_launch_record
+        record = self.session.strategy.selected_record
         if record is None:
             return
         launch_id = str(record["launch_id"])
@@ -2722,31 +903,106 @@ class CommandLineScreen(Screen[None]):
 
     def _render_launch_attach_snapshot(self, result: Any) -> None:
         if not isinstance(result, Mapping):
-            self._write(Panel(Pretty(result, expand_all=True), title="Launch 运行输出"))
-            return
-        runtime = result.get("status")
-        instance = result.get("instance")
-        self._write(
-            Panel(
-                Pretty({"instance": instance, "status": runtime}, expand_all=True),
-                title="Launch 状态刷新",
-                border_style="cyan",
+            self.session.strategy.attach_snapshot = Pretty(result, expand_all=True)
+        else:
+            runtime = result.get("status")
+            instance = result.get("instance")
+            self.session.strategy.attach_snapshot = Pretty(
+                {"instance": instance, "status": runtime}, expand_all=True
             )
-        )
+        self._present_launch_control()
+        if not isinstance(result, Mapping):
+            return
         logs = result.get("logs")
         raw_lines = logs.get("lines", ()) if isinstance(logs, Mapping) else ()
         lines = tuple(str(line) for line in raw_lines)
-        seen = self.session.launch_attach_seen
+        seen = self.session.strategy.source_tail
         overlap = 0
         for size in range(min(len(seen), len(lines)), 0, -1):
             if seen[-size:] == lines[:size]:
                 overlap = size
                 break
-        for line in lines[overlap:]:
-            self._write(Text(line))
-        self.session.launch_attach_seen = lines
+        live_buffer = self.session.strategy.live_buffer
+        if live_buffer is None:
+            self.session.strategy.reset_live_buffer("launch-attach")
+            live_buffer = self.session.strategy.live_buffer
+        assert live_buffer is not None
+        if isinstance(logs, Mapping):
+            full_log = logs.get("latest") or logs.get("path")
+            if full_log:
+                live_buffer.full_log_path = Path(str(full_log))
+        live_buffer.extend(lines[overlap:])
+        self.session.strategy.source_tail = lines[-live_buffer.capacity :]
+        self._present_launch_control()
+
+    def _present_launch_control(self) -> None:
+        if self.session.context != ("strategy", "attach"):
+            return
+        record = self.session.strategy.selected_record or {}
+        launch_id = str(record.get("launch_id") or "Launch")
+        status_snapshot = self.session.strategy.attach_snapshot or Text(
+            "等待首次运行状态…", style="dim"
+        )
+        live_buffer = self.session.strategy.live_buffer
+        tail = (
+            Text("\n".join(live_buffer.lines))
+            if live_buffer is not None and live_buffer.lines
+            else None
+        )
+        live_status = (
+            Text(
+                f"可见 {len(live_buffer.lines)} 行"
+                f" · 未读 {live_buffer.unseen_lines}"
+                f" · 已丢弃 {live_buffer.dropped_lines}",
+                style="dim",
+            )
+            if live_buffer is not None
+            else None
+        )
+        full_log = (
+            Text(f"完整日志 {live_buffer.full_log_path}", style="dim")
+            if live_buffer is not None and live_buffer.full_log_path is not None
+            else Text("完整日志 当前数据源未提供路径 · /copy 仅复制当前窗口", style="dim")
+        )
+        snapshot = Group(
+            *(
+                part
+                for part in (status_snapshot, tail, live_status, full_log)
+                if part is not None
+            )
+        )
+        self.session.control(
+            f"Launch {launch_id}",
+            snapshot,
+            STRATEGY_ATTACH_ACTIONS,
+            refreshing=not self.session.strategy.attach_paused,
+        )
+        self._interaction().present(self.session.interaction)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.group == "market-control-stream":
+            if event.worker is not self._market_refresh_worker:
+                return
+            self._market_refresh_worker = None
+            if self.session.context != ("market", "selected"):
+                return
+            if event.state.name == "SUCCESS":
+                self.session.market.snapshot = event.worker.result
+                if self.session.market.refresh_enabled:
+                    self._present_market_control()
+                else:
+                    self._show_context()
+                self._set_status(
+                    "行情自动刷新中"
+                    if self.session.market.refresh_enabled
+                    else "行情已刷新"
+                )
+            elif event.state.name == "ERROR":
+                self.session.market.refresh_enabled = False
+                self._write_error(str(event.worker.error))
+                self._show_context()
+                self._set_status("行情刷新失败 · 已暂停")
+            return
         if event.worker.group == "launch-attach-stream":
             if event.worker is not self._attach_refresh_worker:
                 return
@@ -2757,59 +1013,164 @@ class CommandLineScreen(Screen[None]):
                     self._set_status("跟随输出 · 后台刷新中")
             elif event.state.name == "ERROR":
                 self._attach_refresh_worker = None
-                self.session.launch_attach_paused = True
+                self.session.strategy.attach_paused = True
                 if self.session.context == ("strategy", "attach"):
                     self._write_error(str(event.worker.error))
+                    self.session.strategy.attach_snapshot = Text(
+                        "刷新失败；可重试、继续或返回。", style="yellow"
+                    )
+                    self._present_launch_control()
                     self._set_status("跟随输出失败 · 已暂停")
-                    self._write_next_step("输入 1 重试，/p 继续，/back 返回。")
             elif event.state.name == "CANCELLED":
                 self._attach_refresh_worker = None
             return
         if event.worker.group != "guided-command":
             return
-        if event.worker is not self._active_worker:
+        running_task = self._running_task
+        if running_task is None or event.worker is not running_task.worker:
             return
-        kind = parse_result_kind(event.worker.name.removeprefix("command-"))
+        route = running_task.spec.route
         if event.state.name == "SUCCESS":
             self._set_status("就绪")
-            self._active_worker = None
+            self._running_task = None
             self._restore_navigation_input()
-            self._render_result(kind, event.worker.result)
-            self._reset_operation()
+            effects = market_reference.handle_success(
+                self.workbench_app.state,
+                self.session,
+                running_task.spec,
+                event.worker.result,
+            )
+            if effects is not None:
+                self._apply_effects(effects)
+                return
+            effects = operations_research.handle_success(
+                self.workbench_app.state,
+                self.session,
+                running_task.spec,
+                event.worker.result,
+            )
+            if effects is not None:
+                self._apply_effects(effects)
+                return
+            effects = resources_account.handle_success(
+                self.workbench_app.state,
+                self.session,
+                running_task.spec,
+                event.worker.result,
+            )
+            if effects is not None:
+                self._apply_effects(effects)
+                return
+            effects = strategy_execution.handle_success(
+                self.workbench_app.state,
+                self.session,
+                running_task.spec,
+                event.worker.result,
+            )
+            if effects is not None:
+                self._apply_effects(effects)
+                return
+            self._append_terminal_activity(
+                running_task.spec,
+                ActivityOutcome.SUCCESS,
+                body=_shell_result_body(route.kind, event.worker.result),
+            )
+            self._show_context()
+            self._report_unseen_activity()
         elif event.state.name == "ERROR":
-            self._write_error(str(event.worker.error))
-            self._active_worker = None
+            error = str(event.worker.error)
+            self._running_task = None
             self._restore_navigation_input()
-            self._clear_terminal_flow(kind)
-            if kind == ResultKind.MARKET:
-                prompt, detail = self._market_prompt_copy()
-                self._request_argument("market", prompt, detail)
-                self._set_status(f"{self._prompt_title('market')}失败 · 请重试")
+            effects = market_reference.handle_failure(
+                self.workbench_app.state,
+                self.session,
+                running_task.spec,
+                error,
+            )
+            if effects is not None:
+                self._apply_effects(effects)
             else:
-                self._set_status("失败 · 可继续输入")
-                self._write_next_step(
-                    "操作失败；可重新输入，/back 返回，/help 查看帮助。"
+                effects = operations_research.handle_failure(
+                    self.workbench_app.state,
+                    self.session,
+                    running_task.spec,
+                    error,
                 )
-            self._reset_operation()
+                if effects is not None:
+                    self._apply_effects(effects)
+                else:
+                    effects = resources_account.handle_failure(
+                        self.workbench_app.state,
+                        self.session,
+                        running_task.spec,
+                        error,
+                    )
+                    if effects is not None:
+                        self._apply_effects(effects)
+                    else:
+                        effects = strategy_execution.handle_failure(
+                            self.workbench_app.state,
+                            self.session,
+                            running_task.spec,
+                            error,
+                        )
+                        if effects is not None:
+                            self._apply_effects(effects)
+                        else:
+                            self._append_terminal_activity(
+                                running_task.spec,
+                                ActivityOutcome.FAILURE,
+                                body=Text(error, style="red"),
+                                copy_text=error,
+                            )
+                            self._show_context()
+                            self._set_status("操作失败 · 可重试、返回或查看帮助")
+                            self._report_unseen_activity()
         elif event.state.name == "CANCELLED":
             self._set_status("已取消 · 可继续输入")
-            self._active_worker = None
+            self._running_task = None
             self._restore_navigation_input()
-            self._clear_terminal_flow(kind)
-            if kind == ResultKind.MARKET:
-                self.session.enter("market")
-                self._show_context()
+            effects = market_reference.handle_cancel(
+                self.workbench_app.state,
+                self.session,
+                running_task.spec,
+            )
+            if effects is not None:
+                self._apply_effects(effects)
             else:
-                self._write_next_step("操作已取消；可继续输入。")
-            self._reset_operation()
-
-    def _clear_terminal_flow(self, kind: ResultKey) -> None:
-        if kind is ResultKind.RESOURCE_WIZARD:
-            self._cancel_resource_wizard()
-        elif kind is ResultKind.STRATEGY_WIZARD:
-            self._cancel_launch_wizard()
-        else:
-            self.session.clear_result_flow(str(kind))
+                effects = operations_research.handle_cancel(
+                    self.workbench_app.state,
+                    self.session,
+                    running_task.spec,
+                )
+                if effects is not None:
+                    self._apply_effects(effects)
+                else:
+                    effects = resources_account.handle_cancel(
+                        self.workbench_app.state,
+                        self.session,
+                        running_task.spec,
+                    )
+                    if effects is not None:
+                        self._apply_effects(effects)
+                    else:
+                        effects = strategy_execution.handle_cancel(
+                            self.workbench_app.state,
+                            self.session,
+                            running_task.spec,
+                        )
+                        if effects is not None:
+                            self._apply_effects(effects)
+                        else:
+                            self._append_terminal_activity(
+                                running_task.spec,
+                                ActivityOutcome.CANCELLED,
+                                body=Text("操作在开始执行后被取消。", style="yellow"),
+                                copy_text="操作在开始执行后被取消。",
+                            )
+                            self._show_context()
+                            self._set_status("操作已取消 · 可继续输入")
+                            self._report_unseen_activity()
 
     def _restore_navigation_input(self) -> None:
         self.session.finish_prompt()
@@ -2818,395 +1179,115 @@ class CommandLineScreen(Screen[None]):
         self.app.set_focus(self._input())
         self.call_after_refresh(self.app.set_focus, self._input())
 
-    def _render_market_reference_result(
-        self, kind: ResultKey | None, result: Any
-    ) -> bool:
-        if not (
-            kind is not None
-            and (
-                kind == ResultKind.MARKET
-                or kind.startswith("reference:")
-                or kind
-                in {
-                    ResultKind.REFERENCE_RELATED,
-                    ResultKind.MARKET_ROUTES,
-                    ResultKind.MARKET_OBSERVATION,
-                    ResultKind.MARKET_DATASETS,
-                }
-            )
-        ):
-            return False
-
-        if kind == ResultKind.MARKET:
-            records = tuple(result or ())
-            self.session.market_records = records
-            if records:
-                self._show_record_choices("market", records)
-            else:
-                self._write(_markets_renderable(records))
-                self.session.enter("market")
-                self._show_context()
-        elif kind is not None and kind.startswith("reference:"):
-            records = tuple(result or ())
-            reference_kind = kind.partition(":")[2]
-            if records:
-                self._show_record_choices("reference", records, kind=reference_kind)
-            else:
-                self._write(reference_records_renderable(reference_kind, records))
-                self.session.enter("reference")
-                self._show_context()
-        elif kind == "reference-related":
-            related_kind, records = result
-            self._write(reference_records_renderable(related_kind, tuple(records)))
-            self._show_context()
-        elif kind == "market-routes":
-            routes = tuple(dict(route) for route in (result or ()))
-            self.session.market_routes = routes
-            market = self.workbench_app.state.selected_market
-            observation = self.session.market_observation or "quote"
-            if market is None:
-                self._write_error("行情上下文已经失效，请重新选择标的。")
-                self.session.enter("market")
-                self._show_context()
-            elif not routes:
-                self._write(
-                    route_diagnostic_renderable(
-                        self.workbench_app.state,
-                        market,
-                        observation,
-                    )
-                )
-                self.session.context = ("market", "selected")
-                self.session.visible_records = self.session.market_records
-                self._show_context()
-            elif len(routes) == 1:
-                self._request_market_observation(str(routes[0].get("provider") or ""))
-            else:
-                self.session.context = ("market", "providers")
-                self.session.visible_records = routes
-                self._show_context()
-        elif kind == "market-observation":
-            self._write(market_observation_renderable(result))
-            self.session.context = ("market", "selected")
-            self.session.visible_records = self.session.market_records
-            self._show_context()
-        elif kind == "market-datasets":
-            self._write(Panel(Pretty(result, expand_all=True), title="本地行情数据"))
-            self._show_context()
-        return True
-
-    def _render_operations_result(self, kind: ResultKey | None, result: Any) -> bool:
-        if kind not in {
-            ResultKind.KAIROS_COMMAND,
-            ResultKind.OPERATIONS_SERVICES,
-            ResultKind.OPERATIONS,
-            ResultKind.OPERATIONS_PROJECT,
-            ResultKind.OPERATIONS_PROFILE,
-            ResultKind.BUSINESS,
-            ResultKind.ACCOUNT,
-            ResultKind.ORDER,
-            ResultKind.EXECUTION,
-            ResultKind.LAUNCH_MARKET,
-            ResultKind.MARKET_FILE,
-            ResultKind.WORKSPACE_MARKET,
-        }:
-            return False
-
-        if kind == ResultKind.KAIROS_COMMAND:
-            self._write(Panel(Pretty(result, expand_all=True), title="kairos 命令结果"))
-            self._show_context()
-        elif kind == "operations-services":
-            records = tuple(result or ())
-            self._write(_services_renderable(records))
-            self._show_record_choices("operations", records, kind="services")
-        elif kind == "operations-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="系统维护结果"))
-            self._show_context()
-        elif kind == "operations-project-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="项目操作结果"))
-            self.session.project_prompt = None
-            self.session.context = ("operations", "project")
-            self._show_context()
-        elif kind == "operations-profile-result":
-            self._write(
-                Panel(Pretty(result, expand_all=True), title="Profile 操作结果")
-            )
-            self.session.profile_action = None
-            self.session.context = ("operations", "profiles")
-            self._show_context()
-        elif kind == "business-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="业务工具结果"))
-            self.session.business_prompt = None
-            self._show_context()
-        elif kind == "account-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="账户运行结果"))
-            self._show_context()
-        elif kind == "order-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="订单操作结果"))
-            self.session.order_prompt = None
-            self._show_context()
-        elif kind == "execution-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="Execution 结果"))
-            self.session.execution_prompt = None
-            self._show_context()
-        elif kind == "launch-market-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="Market 组件结果"))
-            self.session.launch_market_prompt = None
-            self._show_context()
-        elif kind == "market-file-result":
-            self._write(
-                Panel(Pretty(result, expand_all=True), title="Market 文件操作结果")
-            )
-            self.session.market_file_prompt = None
-            self.session.context = ("market", "selected")
-            self.session.visible_records = self.session.market_records
-            self._show_context()
-        elif kind == "workspace-market-result":
-            self._write(
-                Panel(Pretty(result, expand_all=True), title="Workspace Market 结果")
-            )
-            self.session.workspace_market_prompt = None
-            self.session.context = ("market", "connected")
-            self._show_context()
-        return True
-
-    def _render_resource_result(self, kind: ResultKey | None, result: Any) -> bool:
-        if not (
-            kind is not None
-            and (
-                kind in {ResultKind.RESOURCES_SUMMARY, ResultKind.RESOURCE_WIZARD}
-                or kind.startswith("resources-list:")
-                or kind.startswith("resource-action:")
-            )
-        ):
-            return False
-
-        if kind == ResultKind.RESOURCES_SUMMARY:
-            self._write(resource_summary_renderable(result))
-            self._show_context()
-        elif kind is not None and kind.startswith("resources-list:"):
-            resource_kind = kind.partition(":")[2]
-            records = tuple(dict(record) for record in (result or ()))
-            self.session.resource_kind = resource_kind
-            self._write(resource_records_renderable(resource_kind, records))
-            self._show_record_choices("resources", records, kind=resource_kind)
-        elif kind is not None and kind.startswith("resource-action:"):
-            action = kind.partition(":")[2]
-            self._write(Panel(Pretty(result, expand_all=True), title="资源操作结果"))
-            if action == "delete":
-                selected = self.session.selected_resource
-                resource_kind = self.session.resource_kind
-                if selected is not None and resource_kind is not None:
-                    selected_id = resource_identity(resource_kind, selected)
-                    self.session.visible_records = tuple(
-                        record
-                        for record in self.session.visible_records
-                        if resource_identity(resource_kind, record) != selected_id
-                    )
-                self.session.selected_resource = None
-                self.session.context = ("resources",)
-            elif isinstance(result, Mapping) and any(
-                key in result
-                for key in ("account_id", "connection_id", "destination_id")
-            ):
-                self.session.selected_resource = dict(result)
-            self._show_context()
-        elif kind == "resource-wizard-result":
-            wizard = self.session.resource_wizard
-            self._write(Panel(Pretty(result, expand_all=True), title="资源配置结果"))
-            if isinstance(wizard, ResourceWizardState):
-                preview = (
-                    isinstance(result, Mapping) and result.get("status") == "preview"
-                )
-                if preview:
-                    self.session.selected_resource = None
-                    self.session.context = ("resources", wizard.kind)
-                else:
-                    selected = dict(result) if isinstance(result, Mapping) else {}
-                    self.session.selected_resource = selected
-                    self.session.context = ("resources", "selected")
-                    if wizard.kind == "accounts" and selected:
-                        self.workbench_app.state.selected_account = resource_identity(
-                            wizard.kind, selected
-                        )
-                wizard.clear_secrets()
-            self.session.resource_wizard = None
-            self._show_context()
-        return True
-
-    def _render_strategy_result(self, kind: ResultKey | None, result: Any) -> bool:
-        if not (kind is not None and kind.startswith("strategy")):
-            return False
-
-        if kind == ResultKind.STRATEGY_LAUNCHES:
-            records = tuple(dict(record) for record in (result or ()))
-            self.session.launch_records = records
-            self._write(launch_records_renderable(records))
-            self._show_record_choices("strategy", records, kind="launches")
-        elif kind == "strategy-instances":
-            records = tuple(dict(record) for record in (result or ()))
-            self.session.launch_instance_records = records
-            self._write(launch_instances_renderable(records))
-            self._show_record_choices("strategy", records, kind="instances")
-        elif kind == "strategy-components":
-            records = tuple(dict(record) for record in (result or ()))
-            self.session.launch_component_records = records
-            self._write(launch_components_renderable(records))
-            self._show_record_choices("strategy", records, kind="components")
-        elif kind == "strategy-instance-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="实例概览"))
-            self._show_context()
-        elif kind == "strategy-timeline":
-            records = tuple(result or ())
-            self._write(
-                Panel(
-                    Pretty(records, expand_all=True),
-                    title=f"实例时间线 · {len(records)} 条",
-                )
-            )
-            self.session.context = ("strategy", "timeline")
-            self._show_context()
-        elif kind == "strategy-timeline-export":
-            self._write(Panel(Pretty(result, expand_all=True), title="时间线导出结果"))
-            self.session.context = ("strategy", "timeline")
-            self._show_context()
-        elif kind == "strategy-attach":
-            self._write(Panel(Pretty(result, expand_all=True), title="Launch 运行输出"))
-            self.session.context = ("strategy", "attach")
-            self._show_context()
-        elif kind == "strategy-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="Launch 结果"))
-            self._show_context()
-        elif kind == "strategy-wizard-result":
-            wizard = self.session.launch_wizard
-            self._write(Panel(Pretty(result, expand_all=True), title="Launch 配置结果"))
-            if isinstance(wizard, LaunchWizardState):
-                record = {
-                    "launch_id": wizard.launch_id,
-                    "config": str(
-                        result.get("path")
-                        if isinstance(result, Mapping) and result.get("path")
-                        else wizard.source or ""
-                    ),
-                    "draft": not (
-                        isinstance(result, Mapping)
-                        and result.get("status") == "published"
-                    ),
-                    "mode": wizard.answers.get("mode"),
-                }
-                self.session.selected_launch_record = record
-                self.workbench_app.state.selected_launch = wizard.launch_id
-            self.session.launch_wizard = None
-            self.session.context = ("strategy", "selected")
-            self._show_context()
-        return True
-
-    def _render_result(self, kind: ResultKey | None, result: Any) -> None:
-        if isinstance(kind, str):
-            kind = parse_result_kind(kind)
-        if kind is ResultKind.OBSERVE:
-            self._write(
-                Text("当前没有可用的系统观察结果。", style="dim")
-                if result is None
-                else _observe_renderable(result)
-            )
-        elif self._render_market_reference_result(kind, result):
-            pass
-        elif self._render_operations_result(kind, result):
-            pass
-        elif self._render_resource_result(kind, result):
-            pass
-        elif kind == "research-result":
-            self._write(Panel(Pretty(result, expand_all=True), title="数据研究结果"))
-            self._show_context()
-        elif self._render_strategy_result(kind, result):
-            pass
-        elif kind is not None and kind.startswith("market-diagnostic:"):
-            self._write(Panel(Pretty(result, expand_all=True), title="Market 诊断"))
-            self.session.context = ("market", "selected")
-            self.session.visible_records = self.session.market_records
-            self._show_context()
-        else:
-            self._write(Panel(str(result), title="完成", border_style="green"))
-
     def _show_context(self) -> None:
-        self._reset_operation()
-        if self.session.prompt_mode is PromptMode.NAVIGATION:
+        if isinstance(
+            self.session.interaction, (ChoiceInteraction, ControlInteraction)
+        ):
             self._input().disabled = False
         items = context_items(self.session, self.workbench_app.state)
-        actions = self.query_one("#guided-actions", GuidedActionList)
-        actions.replace_items(items)
-        actions.display = bool(items)
-        self.query_one("#guided-prompt", Static).display = False
+        context = self._context_label()
+        if (
+            self.session.context == ("market", "selected")
+            and self.session.market.snapshot is not None
+            and self.session.market.refresh_enabled
+        ):
+            self._present_market_control()
+        elif self.session.context == ("strategy", "attach"):
+            self._present_launch_control()
+        else:
+            self.session.choose(items, title=context)
+            self._interaction().present(self.session.interaction)
+        self.query_one("#command-context", Static).update(f"{context}  ›")
+        self._input().placeholder = "输入编号或命令；Enter 提交"
+        empty_resource_label = resources_account.empty_resource_label(self.session)
+        if empty_resource_label is not None:
+            self._set_hints("输入 /new 开始配置  ·  Esc 返回")
+        else:
+            self._set_hints("数字选择  ·  /back 返回  ·  /help 更多操作  ·  /exit 退出")
+        if (
+            self.session.context == ("market", "selected")
+            and self.session.market.snapshot is not None
+        ):
+            self._set_status(
+                "行情自动刷新中"
+                if self.session.market.refresh_enabled
+                else "行情已就绪"
+            )
+        elif self.session.context == ("strategy", "attach"):
+            self._set_status(
+                "跟随输出 · 已暂停"
+                if self.session.strategy.attach_paused
+                else "跟随输出 · 后台刷新中"
+            )
+        elif empty_resource_label is not None:
+            self._set_status(f"尚未配置 {empty_resource_label}")
+        else:
+            self._set_status("就绪")
+        self.app.set_focus(self._input())
+        self.call_after_refresh(self.app.set_focus, self._input())
+
+    def _context_label(self) -> str:
         context = context_label(self.session.context)
         if self.session.context == ("market", "selected"):
             market = self.workbench_app.state.selected_market
             if market is not None:
-                context = f"{context} · {record_label(market)}"
-        self.query_one("#command-context", Static).update(f"{context}  ›")
-        self._input().placeholder = "输入编号或命令；Enter 提交"
-        self.query_one("#command-hints", Static).update(
-            "数字选择  ·  /back 返回  ·  /help 更多操作  ·  /exit 退出"
-        )
-        self._set_status("就绪")
-        self.app.set_focus(self._input())
-        self.call_after_refresh(self.app.set_focus, self._input())
-
-    def _show_record_choices(
-        self,
-        section: str,
-        records: tuple[Any, ...],
-        *,
-        kind: str | None = None,
-    ) -> None:
-        self.session.context = (section, kind or "results")
-        self.session.visible_records = records
-        items = tuple(
-            ActionItem(
-                str(index),
-                record_label(record),
-                record_description(record),
-                str(index),
-            )
-            for index, record in enumerate(records, 1)
-        )
-        actions = self.query_one("#guided-actions", GuidedActionList)
-        actions.replace_items(items)
-        actions.display = bool(items)
-        self.query_one("#guided-prompt", Static).display = False
-        context = context_label(self.session.context)
-        self.query_one("#command-context", Static).update(f"{context}  ›")
-        self.query_one("#command-hints", Static).update(
-            "输入结果编号查看详情  ·  Esc 返回"
-        )
-        self._set_status(f"找到 {len(records)} 个结果 · 请选择")
-        self.app.set_focus(self._input())
-        self.call_after_refresh(self.app.set_focus, self._input())
-
-    def _write_next_step(self, value: str) -> None:
-        self._write_guidance(Text(value, style="dim"))
+                return f"{context} · {_market_identity_label(market)}"
+        if self.session.context[:1] == ("resources",):
+            return resources_account.context_title(self.session, context)
+        return context
 
     def _write_error(self, value: str) -> None:
-        self._write_guidance(Panel(value, title="命令失败", border_style="red"))
+        if self.session.reject_input(value):
+            self._interaction().present(self.session.interaction)
+            self._set_status("输入有误 · 请修正")
+            return
+        self.session.choose(
+            context_items(self.session, self.workbench_app.state),
+            title=self._context_label(),
+            summary=Text(value, style="red"),
+        )
+        self._interaction().present(self.session.interaction)
+        self._sync_context_chrome()
+        self._set_status("命令失败 · 可返回或查看帮助")
 
-    def _write(self, renderable: RenderableType) -> None:
-        if self._pending_operation is not None:
-            self._emit_operation("执行操作")
-        self._output().write(renderable)
+    def _append_terminal_activity(
+        self,
+        spec: OperationSpec,
+        outcome: ActivityOutcome,
+        *,
+        body: RenderableType,
+        copy_text: str | None = None,
+    ) -> None:
+        rendered_text = copy_text or renderable_plain_text(body)
+        self.query_one("#activity-empty", Static).display = False
+        self._output().append_activity(
+            ActivityRecord(
+                activity_id=spec.operation_id,
+                kind=_activity_kind(spec.route.kind),
+                outcome=outcome,
+                title=spec.audit_summary,
+                body=body,
+                copy_text=redact_text(rendered_text),
+                audit_summary=spec.audit_summary,
+            )
+        )
 
-    def _write_guidance(self, renderable: RenderableType) -> None:
-        """Write prompting or validation output without committing an operation."""
-
-        self._output().write(renderable)
-
-    def _output(self) -> RichLog:
-        return self.query_one("#command-output", RichLog)
+    def _output(self) -> ActivityStream:
+        return self.query_one("#command-output", ActivityStream)
 
     def _input(self) -> WorkbenchCommandInput:
         return self.query_one("#command-input", WorkbenchCommandInput)
 
+    def _interaction(self) -> InteractionRegion:
+        return self.query_one("#interaction-region", InteractionRegion)
+
     def _set_status(self, value: str) -> None:
         self.query_one(WorkspaceHeader).set_status(value)
+
+    def _set_hints(self, primary: str) -> None:
+        self.query_one("#command-hints", Static).update(
+            f"{primary}\nAlt+↑↓ 滚动  ·  PgUp/PgDn 翻页  ·  Ctrl+End 最新"
+        )
 
 
 def _parse_command(value: str) -> tuple[str, tuple[str, ...]]:
@@ -3224,7 +1305,76 @@ def value_or_unknown(arguments: tuple[str, ...]) -> str:
     return " ".join(arguments) or "<无法解析>"
 
 
-def _help_renderable(context: tuple[str, ...] = ()) -> RenderableType:
+def _activity_kind(kind: ResultKind) -> ActivityKind:
+    if kind in {
+        ResultKind.OBSERVE,
+        ResultKind.MARKET,
+        ResultKind.MARKET_ROUTES,
+        ResultKind.MARKET_OBSERVATION,
+        ResultKind.MARKET_DATASETS,
+        ResultKind.REFERENCE_RECORDS,
+        ResultKind.REFERENCE_RELATED,
+        ResultKind.RESOURCES_SUMMARY,
+        ResultKind.RESOURCE_LIST,
+        ResultKind.OPERATIONS_SERVICES,
+        ResultKind.STRATEGY_LAUNCHES,
+        ResultKind.STRATEGY_INSTANCES,
+        ResultKind.STRATEGY_COMPONENTS,
+        ResultKind.STRATEGY_INSTANCE,
+        ResultKind.STRATEGY_TIMELINE,
+    }:
+        return ActivityKind.QUERY
+    if kind is ResultKind.STRATEGY_TIMELINE_EXPORT:
+        return ActivityKind.ARTIFACT
+    return ActivityKind.OPERATION
+
+
+def _shell_result_body(kind: ResultKind, result: Any) -> RenderableType:
+    """Render the small set of non-product operations owned by the shell."""
+
+    if kind is ResultKind.OBSERVE:
+        return (
+            Text("当前没有可用的系统观察结果。", style="dim")
+            if result is None
+            else _observe_renderable(result)
+        )
+    if kind is ResultKind.KAIROS_COMMAND:
+        return Panel(
+            Pretty(_redact_result(result), expand_all=True), title="kairos 命令结果"
+        )
+    return Panel(str(result), title="完成", border_style="green")
+
+
+def _redact_result(value: Any) -> Any:
+    """Redact nested shell results before they become a visible Rich renderable."""
+
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, Mapping):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            normalized = name.casefold().replace("-", "_")
+            if any(
+                marker in normalized
+                for marker in ("token", "secret", "password", "api_key", "credential")
+            ):
+                redacted[name] = "<redacted>"
+            elif name == "command" and isinstance(item, (list, tuple)):
+                redacted[name] = list(
+                    _redact_arguments(tuple(str(part) for part in item))
+                )
+            else:
+                redacted[name] = _redact_result(item)
+        return redacted
+    if isinstance(value, tuple):
+        return tuple(_redact_result(item) for item in value)
+    if isinstance(value, list):
+        return [_redact_result(item) for item in value]
+    return value
+
+
+def _help_table(context: tuple[str, ...] = ()) -> Table:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True)
     table.add_column()
@@ -3243,35 +1393,26 @@ def _help_renderable(context: tuple[str, ...] = ()) -> RenderableType:
     table.add_row("/clear", "清空当前输出显示")
     table.add_row("/transcript", "显示当前 Agent 可读会话记录的路径")
     table.add_row("/copy", "复制当前页完整输出，可直接粘贴给 Agent")
+    table.add_row("/copy-history", "只复制当前会话的活动记录")
+    table.add_row("/bottom", "回到最新活动并恢复自动跟随")
     table.add_row("/confirm /cancel", "继续或取消等待中的步骤")
+    table.add_row("PgUp / PgDn", "翻阅内容区；输入焦点保持在命令框")
+    table.add_row("Ctrl+End", "回到内容区底部并继续跟随新输出")
+    table.add_row("Alt+PgUp / PgDn", "滚动内容超出高度上限的交互区")
     table.add_row("/help", "显示这份帮助")
-    return Panel(
-        table,
-        title=f"{context_label(context)} · 帮助",
-        border_style="cyan",
-    )
+    return table
 
 
-def _record_choice(records: tuple[Any, ...], value: str) -> Any | None:
-    try:
-        index = int(value)
-    except ValueError:
-        return None
-    return records[index - 1] if 1 <= index <= len(records) else None
-
-
-def _record_detail_renderable(record: Any, *, section: str) -> RenderableType:
-    if is_dataclass(record):
-        value = {field.name: getattr(record, field.name) for field in fields(record)}
-    elif hasattr(record, "__dict__"):
-        value = vars(record)
-    else:
-        value = record
-    return Panel(
-        Pretty(value, expand_all=True),
-        title=f"{record_label(record)} · {'行情标的' if section == 'market' else 'Reference'}",
-        border_style="cyan",
-    )
+def _market_identity_label(market: Any) -> str:
+    """Return the stable identity needed to distinguish a selected market."""
+    values = [record_label(market)]
+    exchange_id = getattr(market, "exchange_id", None)
+    if exchange_id:
+        values.append(str(exchange_id).rsplit(":", 1)[-1])
+    instrument_kind = getattr(market, "instrument_kind", None)
+    if instrument_kind:
+        values.append(str(instrument_kind))
+    return " · ".join(values)
 
 
 def _observe_renderable(snapshot: ObserveSnapshot) -> RenderableType:
@@ -3291,86 +1432,10 @@ def _observe_renderable(snapshot: ObserveSnapshot) -> RenderableType:
     return Panel(Group(summary, table), title="系统状态", border_style="cyan")
 
 
-def _markets_renderable(
-    markets: tuple[Any, ...], *, numbered: bool = False
-) -> RenderableType:
-    if not markets:
-        return Panel("没有找到匹配的有效标的。", title="市场搜索")
-    table = Table(show_header=True, header_style="bold")
-    if numbered:
-        table.add_column("#", justify="right", style="bold cyan")
-    table.add_column("代码")
-    table.add_column("交易所")
-    table.add_column("类型")
-    table.add_column("计价")
-    table.add_column("状态")
-    for index, market in enumerate(markets, 1):
-        row = (
-            str(market.venue_symbol or market.instrument.display_symbol),
-            str(market.exchange_id).rsplit(":", 1)[-1],
-            str(market.instrument_kind),
-            str(market.quote_asset or "—"),
-            str(market.status),
-        )
-        table.add_row(str(index), *row) if numbered else table.add_row(*row)
-    return Panel(table, title=f"找到 {len(markets)} 个标的", border_style="cyan")
-
-
-def _reference_records_renderable(
-    kind: str, records: tuple[Any, ...]
-) -> RenderableType:
-    titles = {
-        "assets": "资产",
-        "exchanges": "交易所",
-        "instruments": "合约",
-        "markets": "交易标的",
-        "option-chain": "期权链",
-    }
-    if not records:
-        return Panel("没有找到匹配的记录。", title=titles.get(kind, "Reference"))
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("#", justify="right", style="bold cyan")
-    table.add_column("名称")
-    table.add_column("说明")
-    table.add_column("ID", style="dim")
-    for index, record in enumerate(records, 1):
-        table.add_row(
-            str(index),
-            record_label(record),
-            record_description(record),
-            str(getattr(record, "id", "—")),
-        )
-    return Panel(
-        table,
-        title=f"找到 {len(records)} 条{titles.get(kind, 'Reference')}记录",
-        border_style="cyan",
-    )
-
-
-def _services_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
-    if not records:
-        return Panel("当前没有 Workspace 服务记录。", title="系统服务")
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("#", justify="right", style="bold cyan")
-    table.add_column("组件")
-    table.add_column("状态")
-    table.add_column("PID")
-    table.add_column("详情")
-    for index, record in enumerate(records, 1):
-        table.add_row(
-            str(index),
-            str(record.get("component") or "—"),
-            str(record.get("status") or "unknown"),
-            str(record.get("pid") or "—"),
-            str(record.get("error") or record.get("detail") or "—"),
-        )
-    return Panel(table, title=f"{len(records)} 个 Workspace 服务", border_style="cyan")
-
-
-def _running_status(kind: str) -> str:
+def _running_status(kind: ResultKind) -> str:
     return {
-        "observe": "正在读取系统状态…",
-        "market": "正在搜索市场标的…",
+        ResultKind.OBSERVE: "正在读取系统状态…",
+        ResultKind.MARKET: "正在搜索市场标的…",
     }.get(kind, "正在执行…")
 
 
@@ -3405,24 +1470,3 @@ def _redact_arguments(arguments: tuple[str, ...]) -> tuple[str, ...]:
             continue
         redacted.append(redact_text(argument))
     return tuple(redacted)
-
-
-def _format_operation_details(values: Mapping[str, Any]) -> str:
-    """Render stable, compact fields for one semantic operation line."""
-
-    parts: list[str] = []
-    for name, value in values.items():
-        if value is None or value == "" or value == () or value == []:
-            continue
-        if isinstance(value, Mapping):
-            rendered = ",".join(
-                f"{key}:{item}"
-                for key, item in value.items()
-                if item is not None and item != ""
-            )
-        elif isinstance(value, (list, tuple)):
-            rendered = ",".join(str(item) for item in value)
-        else:
-            rendered = str(value)
-        parts.append(f"{name}={rendered}")
-    return " · ".join(parts)

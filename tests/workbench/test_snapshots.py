@@ -14,6 +14,9 @@ from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.console.models import ObserveSnapshot
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.flows import market_reference
+from kairospy.surface.workbench.screens.operation import OperationSpec
+from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
 
 
 def _state() -> WorkbenchState:
@@ -85,9 +88,18 @@ def test_command_market_results(snap_compare: Any) -> None:
     async def show_results(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
-        screen._record_action("market.find", ("AAPL",))
-        screen._emit_operation("搜索市场标的")
-        screen._render_result("market", (_market(),))
+        spec = OperationSpec.create(
+            action_name="market.find",
+            audit_summary="搜索市场标的 · AAPL",
+            route=ResultRoute(ResultKind.MARKET),
+            operation=lambda: None,
+            running_status="正在搜索市场标的…",
+        )
+        effects = market_reference.handle_success(
+            pilot.app.state, screen.session, spec, (_market(),)
+        )
+        assert effects is not None
+        screen._apply_effects(effects)
         await pilot.pause()
 
     assert snap_compare(
@@ -97,7 +109,7 @@ def test_command_market_results(snap_compare: Any) -> None:
     )
 
 
-def test_command_confirmation_stays_in_output_stream(snap_compare: Any) -> None:
+def test_command_confirmation_uses_interaction_region(snap_compare: Any) -> None:
     async def request_confirmation(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
@@ -133,14 +145,9 @@ def test_command_observe_degraded_state(snap_compare: Any) -> None:
     async def show_snapshot(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
-        screen._record_action(
-            "system.observe",
-            (),
-            equivalent_command=("kairos", "observe", "--once"),
-        )
-        screen._emit_operation("刷新系统状态")
-        screen._render_result("observe", snapshot)
-        await pilot.pause()
+        screen._read_observe = lambda: snapshot  # type: ignore[method-assign]
+        screen.submit("/observe")
+        await pilot.pause(0.1)
 
     assert snap_compare(
         KairosWorkbenchApp(_state()),

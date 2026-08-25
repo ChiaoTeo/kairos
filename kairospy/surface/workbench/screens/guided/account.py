@@ -35,10 +35,11 @@ def execute(
     if not account_id:
         raise ValueError("所选账户缺少 Account ID")
     application = AccountCliApplication(state.owner)
+    query = ("--account-id", account_id, "standalone")
     if action in {"overview", "assets", "positions"}:
-        return application.run((action, account_id))
+        return application.run((*query, action))
     if action == "earn":
-        return application.run(("earn-holdings", account_id))
+        return application.run((*query, "earn-holdings"))
     if action == "fees":
         scope = (value or "spot:BTCUSDT").strip()
         if ":" not in scope:
@@ -47,7 +48,7 @@ def execute(
         if not product or not symbol:
             raise ValueError("产品和交易对不能为空")
         return application.run(
-            ("fees", account_id, "--product", product, "--symbol", symbol)
+            (*query, "fees", "--product", product, "--symbol", symbol)
         )
     if action == "transfer":
         capabilities = record.get("capabilities")

@@ -63,13 +63,17 @@ class ExecutionPromptState:
             default for field, _label, default in self._steps() if field == name
         )
         value = raw.strip() or default
-        if name in {
-            "order-id",
-            "account-id",
-            "instrument-id",
-            "quantity",
-            "route-id",
-        } and not value:
+        if (
+            name
+            in {
+                "order-id",
+                "account-id",
+                "instrument-id",
+                "quantity",
+                "route-id",
+            }
+            and not value
+        ):
             raise ValueError(f"{name} 不能为空")
         if name == "side" and value not in {"buy", "sell"}:
             raise ValueError("side 必须是 buy 或 sell")

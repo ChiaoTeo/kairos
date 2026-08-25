@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 
 class ResultKind(StrEnum):
+    CONFIRMED = "confirmed"
     OBSERVE = "observe"
     MARKET = "market"
     MARKET_ROUTES = "market-routes"
@@ -36,18 +38,18 @@ class ResultKind(StrEnum):
     STRATEGY_ATTACH = "strategy-attach"
     STRATEGY = "strategy-result"
     STRATEGY_WIZARD = "strategy-wizard-result"
+    REFERENCE_RECORDS = "reference-records"
+    RESOURCE_LIST = "resource-list"
+    RESOURCE_ACTION = "resource-action"
+    MARKET_DIAGNOSTIC = "market-diagnostic"
 
 
-ResultKey = ResultKind | str
+@dataclass(frozen=True, slots=True)
+class ResultRoute:
+    """Closed result category plus a validated product-specific qualifier."""
+
+    kind: ResultKind
+    qualifier: str | None = None
 
 
-def parse_result_kind(value: str) -> ResultKey:
-    """Return the closed kind when known and preserve scoped dynamic kinds."""
-
-    try:
-        return ResultKind(value)
-    except ValueError:
-        return value
-
-
-__all__ = ["ResultKey", "ResultKind", "parse_result_kind"]
+__all__ = ["ResultKind", "ResultRoute"]

@@ -24,9 +24,14 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.flows import operations_research
 from kairospy.surface.workbench.screens.guided.strategy import LaunchWizardState
 from kairospy.surface.console.models import ObserveSnapshot
-from kairospy.surface.workbench.widgets import ActionList, WorkbenchCommandInput
+from kairospy.surface.workbench.widgets import (
+    ActionList,
+    ConfirmInteraction,
+    WorkbenchCommandInput,
+)
 from textual.app import App
 from textual.containers import Vertical
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Select, Static
@@ -91,7 +96,7 @@ def test_project_init_collects_each_field_in_the_shared_bottom_input() -> None:
 
 
 def test_profile_create_uses_inline_confirmation_and_back_returns_to_config() -> None:
-    async def run() -> tuple[str, str, str, bool]:
+    async def run() -> tuple[str, str, ConfirmInteraction, str, bool]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -101,18 +106,22 @@ def test_profile_create_uses_inline_confirmation_and_back_returns_to_config() ->
             await pilot.pause()
             status = str(screen.query_one("#command-status", Static).render())
             output = _log_text(screen.query_one("#command-output", RichLog))
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ConfirmInteraction)
             screen.submit("/cancel")
             screen.submit("/back")
             return (
                 status,
                 output,
+                interaction,
                 str(screen.query_one("#command-context", Static).render()),
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
             )
 
-    status, output, context, focused = asyncio.run(run())
+    status, output, interaction, context, focused = asyncio.run(run())
     assert status == "等待确认"
-    assert "create Profile paper" in output
+    assert output == ""
+    assert "create Profile paper" in str(interaction.summary)
     assert context == "首页 / 系统维护 / 高级配置  ›"
     assert focused
 
@@ -132,9 +141,7 @@ def test_risk_preview_collects_legacy_arguments_in_one_input(
         )
         return {"decision": "allow"}
 
-    monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.execute_business", execute
-    )
+    monkeypatch.setattr(operations_research, "execute_business", execute)
 
     async def run() -> tuple[type[object], str, str, bool]:
         app = KairosWorkbenchApp(_state())
@@ -169,7 +176,8 @@ def test_integration_capability_and_nested_back_use_one_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.execute_business",
+        operations_research,
+        "execute_business",
         lambda state, prompt: {"capability": getattr(prompt, "action")},
     )
 
@@ -197,7 +205,8 @@ def test_operations_service_selection_actions_and_back_use_one_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.list_operations_services",
+        operations_research,
+        "list_services",
         lambda state: ({"component": "market", "status": "ready", "pid": 42},),
     )
 
@@ -231,7 +240,7 @@ def test_operations_service_selection_actions_and_back_use_one_input(
 
 
 def test_workspace_market_control_uses_single_input_and_inline_confirmation() -> None:
-    async def run() -> tuple[type[object], str, str, bool]:
+    async def run() -> tuple[type[object], str, str, ConfirmInteraction, bool]:
         state = _state()
         app = KairosWorkbenchApp(state)
         async with app.run_test(size=(100, 30)) as pilot:
@@ -241,18 +250,21 @@ def test_workspace_market_control_uses_single_input_and_inline_confirmation() ->
             screen.submit("/c")
             screen.submit("/p")
             await pilot.pause()
+            interaction = screen.session.interaction
+            assert isinstance(interaction, ConfirmInteraction)
             return (
                 type(app.screen),
                 str(screen.query_one("#command-context", Static).render()),
                 _log_text(screen.query_one("#command-output", RichLog)),
+                interaction,
                 screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
             )
 
-    screen_type, context, output, focused = asyncio.run(run())
+    screen_type, context, output, interaction, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert context == "首页 / 市场行情 / 运行中 Market  ›"
-    assert "Workspace Market pause" in output
-    assert "/confirm" in output
+    assert output == ""
+    assert interaction.title == "Workspace Market 操作确认"
     assert focused
 
 
@@ -260,7 +272,8 @@ def test_research_read_flow_uses_nested_single_input_menu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "kairospy.surface.workbench.screens.command_line.execute_research",
+        operations_research,
+        "execute_research",
         lambda state, action, value=None, extra=None: {
             "action": action,
             "value": value,
@@ -297,16 +310,16 @@ def test_research_multistep_cancel_clears_staged_values() -> None:
             assert isinstance(screen, CommandLineScreen)
             for value in ("5", "1", "4", "requirements.json"):
                 screen.submit(value)
-            assert screen.session.research_primary == "requirements.json"
+            assert screen.session.research.primary == "requirements.json"
             await pilot.press("slash", "b", "a", "c", "k", "enter")
             await pilot.pause()
             return (
-                screen.session.research_action,
-                screen.session.research_primary,
-                screen.session.prompt_mode.value,
+                screen.session.research.action,
+                screen.session.research.primary,
+                screen.session.interaction.mode.value,
             )
 
     action, primary, mode = asyncio.run(run())
     assert action is None
     assert primary is None
-    assert mode == "navigation"
+    assert mode == "choice"

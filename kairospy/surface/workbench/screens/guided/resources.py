@@ -71,9 +71,10 @@ def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
             ActionItem("attach", "绑定到 Launch", "添加通知 route", "2"),
             ActionItem("detach", "从 Launch 解绑", "移除相关 route", "3"),
             ActionItem("validate", "校验通知配置", "检查指定运行模式", "4"),
-            ActionItem("advanced", "安全与高级信息", "查看版本、状态和引用", "5"),
-            ActionItem("toggle", "启用或停用", "切换通知提醒状态", "6"),
-            ActionItem("delete", "删除提醒", "移除配置和验证记录", "7"),
+            ActionItem("edit", "修改配置", "更新渠道、安全凭据和目标", "5"),
+            ActionItem("advanced", "安全与高级信息", "查看版本、状态和引用", "6"),
+            ActionItem("toggle", "启用或停用", "切换通知提醒状态", "7"),
+            ActionItem("delete", "删除提醒", "移除配置和验证记录", "8"),
         )
     return common
 

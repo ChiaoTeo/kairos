@@ -33,6 +33,55 @@ def identity(kind: str, record: Mapping[str, Any]) -> str:
     return "unknown"
 
 
+def record_summary(kind: str, record: Mapping[str, Any]) -> str:
+    """Return the concise, user-facing facts shown in a resource list."""
+
+    facts: list[str] = []
+    provider = record.get("provider") or record.get("broker") or record.get("sender")
+    if provider:
+        facts.append(str(provider))
+
+    if kind == "accounts":
+        environment = record.get("environment")
+        if environment:
+            facts.append(str(environment))
+        segments = record.get("segments") or ()
+        if segments:
+            facts.append("/".join(map(str, segments)))
+        role = record.get("credential_role")
+        if role:
+            facts.append(str(role))
+    elif kind == "models":
+        models = record.get("models") or ()
+        if models:
+            facts.append(f"{len(models)} 个模型")
+    elif kind == "notifications":
+        channel = record.get("channel") or record.get("route")
+        if channel:
+            facts.append(str(channel))
+
+    if (
+        not record.get("enabled", True)
+        or str(record.get("status") or "").lower() == "disabled"
+    ):
+        facts.append("已停用")
+    else:
+        verification = {
+            "verified": "已验证",
+            "pending": "待验证",
+            "failed": "验证失败",
+            "retest_required": "需重新验证",
+            "disabled": "已停用",
+        }.get(str(record.get("verification_status") or "pending"))
+        if verification:
+            facts.append(verification)
+
+    issues = record.get("issues") or ()
+    if issues:
+        facts.append("；".join(map(str, issues)))
+    return " · ".join(facts) or "查看详情"
+
+
 def records_renderable(
     kind: str, records: tuple[dict[str, Any], ...]
 ) -> RenderableType:
@@ -91,6 +140,7 @@ __all__ = [
     "RESOURCE_LABELS",
     "detail_renderable",
     "identity",
+    "record_summary",
     "records_renderable",
     "summary_renderable",
 ]

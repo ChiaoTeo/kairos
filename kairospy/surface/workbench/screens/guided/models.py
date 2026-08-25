@@ -2,59 +2,176 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Callable
+from dataclasses import dataclass, field, replace
+from typing import Any
+
+from rich.console import RenderableType
+
+from ...widgets import (
+    ActionToken,
+    ActionItem,
+    ChoiceInteraction,
+    ConfirmInteraction,
+    ControlInteraction,
+    InputInteraction,
+    InteractionState,
+    RunningInteraction,
+)
+from ..live import LiveBuffer
+from ..operation import OperationSpec
+from ..results import ResultKind, ResultRoute
 
 
-class PromptMode(Enum):
-    """What the one visible input is collecting right now."""
+@dataclass(slots=True)
+class MarketSession:
+    """Market-owned transient selections, prompts, and live presentation state."""
 
-    NAVIGATION = "navigation"
-    ARGUMENT = "argument"
-    SECRET = "secret"
-    CONFIRMATION = "confirmation"
-    BUSY = "busy"
+    purpose: str = "search"
+    observation: str | None = None
+    provider: str | None = None
+    snapshot: Any | None = None
+    refresh_enabled: bool = False
+    records: tuple[Any, ...] = ()
+    routes: tuple[dict[str, Any], ...] = ()
+    file_prompt: Any | None = None
+    workspace_prompt: Any | None = None
+
+    def reset_control(self) -> None:
+        self.provider = None
+        self.snapshot = None
+        self.refresh_enabled = False
+
+    def reset(self) -> None:
+        self.purpose = "search"
+        self.observation = None
+        self.records = ()
+        self.routes = ()
+        self.file_prompt = None
+        self.workspace_prompt = None
+        self.reset_control()
 
 
-@dataclass(frozen=True, slots=True)
-class IdlePrompt:
-    """The shared input is ready for navigation."""
+@dataclass(slots=True)
+class ReferenceSession:
+    """Reference-owned search vocabulary and current result kind."""
 
-    mode: PromptMode = PromptMode.NAVIGATION
+    kind: str | None = None
+    instrument_type: str | None = None
+
+    def reset(self) -> None:
+        self.kind = None
+        self.instrument_type = None
 
 
-@dataclass(frozen=True, slots=True)
-class ArgumentPrompt:
-    """The shared input is collecting one ordinary or secret value."""
+@dataclass(slots=True)
+class OperationsSession:
+    """Operations-owned selections and multi-step prompts."""
 
-    action: str
-    secret: bool = False
+    selected_service: str | None = None
+    project_prompt: Any | None = None
+    profile_action: str | None = None
+    business_prompt: Any | None = None
+
+    def reset(self) -> None:
+        self.selected_service = None
+        self.project_prompt = None
+        self.profile_action = None
+        self.business_prompt = None
+
+    def finish_result(self, kind: ResultKind) -> None:
+        if kind is ResultKind.BUSINESS:
+            self.business_prompt = None
+        elif kind is ResultKind.OPERATIONS_PROJECT:
+            self.project_prompt = None
+        elif kind is ResultKind.OPERATIONS_PROFILE:
+            self.profile_action = None
+
+
+@dataclass(slots=True)
+class ResearchSession:
+    """Research-owned current workflow input."""
+
+    action: str | None = None
+    primary: str | None = None
+
+    def reset(self) -> None:
+        self.action = None
+        self.primary = None
+
+
+@dataclass(slots=True)
+class ResourcesSession:
+    """Resources, Account, and Order transient presentation state."""
+
+    kind: str | None = None
+    selected: dict[str, Any] | None = None
+    action: str | None = None
+    launch_id: str | None = None
+    wizard: Any | None = None
+    order_prompt: Any | None = None
+
+    def reset(self) -> None:
+        self.kind = None
+        self.selected = None
+        self.action = None
+        self.launch_id = None
+        self.wizard = None
+        self.order_prompt = None
+
+    def finish_result(self, kind: ResultKind) -> None:
+        if kind is ResultKind.ORDER:
+            self.order_prompt = None
+
+
+@dataclass(slots=True)
+class StrategySession:
+    """Strategy, Execution, and Launch Market transient presentation state."""
+
+    launch_records: tuple[dict[str, Any], ...] = ()
+    instance_records: tuple[dict[str, Any], ...] = ()
+    component_records: tuple[dict[str, Any], ...] = ()
+    selected_record: dict[str, Any] | None = None
+    wizard: Any | None = None
+    attach_snapshot: Any | None = None
+    live_buffer: LiveBuffer | None = None
+    source_tail: tuple[str, ...] = ()
+    execution_prompt: Any | None = None
+    launch_market_prompt: Any | None = None
 
     @property
-    def mode(self) -> PromptMode:
-        return PromptMode.SECRET if self.secret else PromptMode.ARGUMENT
+    def attach_paused(self) -> bool:
+        return self.live_buffer is not None and not self.live_buffer.following
 
+    @attach_paused.setter
+    def attach_paused(self, paused: bool) -> None:
+        if self.live_buffer is None:
+            self.live_buffer = LiveBuffer("launch-attach")
+        if paused:
+            self.live_buffer.pause()
+        else:
+            self.live_buffer.resume()
 
-@dataclass(frozen=True, slots=True)
-class ConfirmationPrompt:
-    """A dangerous action is waiting for an explicit confirmation."""
+    def reset_live_buffer(self, source: str) -> None:
+        self.live_buffer = LiveBuffer(source)
+        self.source_tail = ()
 
-    summary: str
-    operation: Callable[[], Any]
-    result_kind: str
-    mode: PromptMode = PromptMode.CONFIRMATION
+    def reset(self) -> None:
+        self.launch_records = ()
+        self.instance_records = ()
+        self.component_records = ()
+        self.selected_record = None
+        self.wizard = None
+        self.attach_snapshot = None
+        self.live_buffer = None
+        self.source_tail = ()
+        self.execution_prompt = None
+        self.launch_market_prompt = None
 
-
-@dataclass(frozen=True, slots=True)
-class BusyPrompt:
-    """A worker owns the shared input until it reaches a terminal state."""
-
-    result_kind: str
-    mode: PromptMode = PromptMode.BUSY
-
-
-PromptState = IdlePrompt | ArgumentPrompt | ConfirmationPrompt | BusyPrompt
+    def finish_result(self, kind: ResultKind) -> None:
+        if kind is ResultKind.EXECUTION:
+            self.execution_prompt = None
+        elif kind is ResultKind.LAUNCH_MARKET:
+            self.launch_market_prompt = None
 
 
 @dataclass(slots=True)
@@ -62,42 +179,26 @@ class GuidedSession:
     """Transient presentation state; Applications continue to own business facts."""
 
     context: tuple[str, ...] = ()
-    prompt: PromptState = IdlePrompt()
+    interaction: InteractionState = ChoiceInteraction()
+    suspended_interaction: (
+        ChoiceInteraction | InputInteraction | ControlInteraction | None
+    ) = None
     visible_records: tuple[Any, ...] = ()
-    reference_kind: str | None = None
-    reference_instrument_type: str | None = None
-    market_purpose: str = "search"
-    market_observation: str | None = None
-    market_records: tuple[Any, ...] = ()
-    market_routes: tuple[dict[str, Any], ...] = ()
-    market_file_prompt: Any | None = None
-    workspace_market_prompt: Any | None = None
-    selected_service: str | None = None
-    project_prompt: Any | None = None
-    profile_action: str | None = None
-    resource_kind: str | None = None
-    selected_resource: dict[str, Any] | None = None
-    resource_action: str | None = None
-    resource_launch_id: str | None = None
-    resource_wizard: Any | None = None
-    research_action: str | None = None
-    research_primary: str | None = None
-    launch_records: tuple[dict[str, Any], ...] = ()
-    launch_instance_records: tuple[dict[str, Any], ...] = ()
-    launch_component_records: tuple[dict[str, Any], ...] = ()
-    selected_launch_record: dict[str, Any] | None = None
-    launch_wizard: Any | None = None
-    launch_attach_paused: bool = False
-    launch_attach_seen: tuple[str, ...] = ()
-    business_prompt: Any | None = None
-    order_prompt: Any | None = None
-    execution_prompt: Any | None = None
-    launch_market_prompt: Any | None = None
+    market: MarketSession = field(default_factory=MarketSession)
+    reference: ReferenceSession = field(default_factory=ReferenceSession)
+    operations: OperationsSession = field(default_factory=OperationsSession)
+    research: ResearchSession = field(default_factory=ResearchSession)
+    resources: ResourcesSession = field(default_factory=ResourcesSession)
+    strategy: StrategySession = field(default_factory=StrategySession)
 
     def home(self) -> None:
         self.context = ()
-        self.research_action = None
-        self.research_primary = None
+        self.market.reset()
+        self.reference.reset()
+        self.operations.reset()
+        self.research.reset()
+        self.resources.reset()
+        self.strategy.reset()
         self.reset_prompt()
 
     def enter(self, *parts: str) -> None:
@@ -108,78 +209,128 @@ class GuidedSession:
         self.context = self.context[:-1]
         self.reset_prompt()
 
-    @property
-    def prompt_mode(self) -> PromptMode:
-        return self.prompt.mode
-
-    @property
-    def pending_action(self) -> str | None:
-        if isinstance(self.prompt, ArgumentPrompt):
-            return self.prompt.action
-        if isinstance(self.prompt, ConfirmationPrompt):
-            return self.prompt.summary
-        if isinstance(self.prompt, BusyPrompt):
-            return self.prompt.result_kind
-        return None
-
-    @property
-    def argument_prompt(self) -> ArgumentPrompt | None:
-        return self.prompt if isinstance(self.prompt, ArgumentPrompt) else None
-
-    @property
-    def confirmation_prompt(self) -> ConfirmationPrompt | None:
-        return self.prompt if isinstance(self.prompt, ConfirmationPrompt) else None
-
-    def ask(self, action: str, *, secret: bool = False) -> None:
-        self.prompt = ArgumentPrompt(action, secret=secret)
+    def ask(
+        self,
+        action: ActionToken,
+        *,
+        title: str | None = None,
+        prompt: str = "",
+        detail: str = "",
+        value_summary: RenderableType | None = None,
+        secret: bool = False,
+    ) -> None:
+        self.suspended_interaction = None
+        self.interaction = InputInteraction(
+            action=action,
+            title=title or action.action,
+            prompt=prompt,
+            detail=detail,
+            value_summary=value_summary,
+            secret=secret,
+        )
 
     def confirm(
         self,
-        summary: str,
-        operation: Callable[[], Any],
-        result_kind: str,
+        operation: OperationSpec,
+        *,
+        title: str = "需要确认",
+        display_summary: RenderableType | None = None,
+        force_hint: str | None = None,
     ) -> None:
-        self.prompt = ConfirmationPrompt(summary, operation, result_kind)
+        if isinstance(
+            self.interaction, (ChoiceInteraction, InputInteraction, ControlInteraction)
+        ):
+            self.suspended_interaction = self.interaction
+        self.interaction = ConfirmInteraction(
+            title=title,
+            summary=display_summary or operation.audit_summary,
+            operation=operation,
+            force_hint=force_hint,
+        )
 
-    def busy(self, result_kind: str) -> None:
-        self.prompt = BusyPrompt(result_kind)
+    def reject_input(self, message: str) -> bool:
+        """Attach validation feedback to the active input without creating history."""
+
+        if not isinstance(self.interaction, InputInteraction):
+            return False
+        self.interaction = replace(self.interaction, error=message)
+        return True
+
+    def busy(self, route: ResultRoute, *, message: str | None = None) -> None:
+        self.suspended_interaction = None
+        self.interaction = RunningInteraction(
+            route=route,
+            title="正在执行",
+            message=message or route.kind.value,
+        )
+
+    def choose(
+        self,
+        actions: tuple[ActionItem, ...],
+        *,
+        title: str = "",
+        summary: RenderableType | None = None,
+    ) -> None:
+        """Present navigation or recovery actions without changing business state."""
+
+        self.suspended_interaction = None
+        self.interaction = ChoiceInteraction(
+            title=title,
+            summary=summary,
+            actions=actions,
+        )
+
+    def control(
+        self,
+        title: str,
+        snapshot: RenderableType,
+        actions: tuple[ActionItem, ...],
+        *,
+        refreshing: bool,
+    ) -> None:
+        """Present a live snapshot while keeping keyboard controls available."""
+
+        self.suspended_interaction = None
+        self.interaction = ControlInteraction(
+            title=title,
+            snapshot=snapshot,
+            actions=actions,
+            refreshing=refreshing,
+        )
 
     def finish_prompt(self) -> None:
         """Return the input to navigation without discarding visible records."""
 
-        self.prompt = IdlePrompt()
+        if self.suspended_interaction is not None:
+            self.interaction = self.suspended_interaction
+            self.suspended_interaction = None
+        elif not isinstance(self.interaction, (ChoiceInteraction, ControlInteraction)):
+            self.interaction = ChoiceInteraction()
 
-    def clear_result_flow(self, result_kind: str) -> None:
+    def clear_result_flow(self, result_kind: ResultKind) -> None:
         """Clear feature prompt state after a worker terminal state."""
 
-        if result_kind == "business-result":
-            self.business_prompt = None
-        elif result_kind == "order-result":
-            self.order_prompt = None
-        elif result_kind == "execution-result":
-            self.execution_prompt = None
-        elif result_kind == "launch-market-result":
-            self.launch_market_prompt = None
-        elif result_kind == "market-file-result":
-            self.market_file_prompt = None
-        elif result_kind == "operations-project-result":
-            self.project_prompt = None
-        elif result_kind == "operations-profile-result":
-            self.profile_action = None
-        elif result_kind == "workspace-market-result":
-            self.workspace_market_prompt = None
+        self.operations.finish_result(result_kind)
+        self.resources.finish_result(result_kind)
+        self.strategy.finish_result(result_kind)
+        if result_kind is ResultKind.MARKET_FILE:
+            self.market.file_prompt = None
+        elif result_kind is ResultKind.WORKSPACE_MARKET:
+            self.market.workspace_prompt = None
 
     def reset_prompt(self) -> None:
         self.finish_prompt()
+        self.suspended_interaction = None
+        self.interaction = ChoiceInteraction()
         self.visible_records = ()
 
 
 __all__ = [
-    "ArgumentPrompt",
-    "BusyPrompt",
-    "ConfirmationPrompt",
     "GuidedSession",
-    "IdlePrompt",
-    "PromptMode",
-    "PromptState",
+    "MarketSession",
+    "OperationsSession",
+    "ReferenceSession",
+    "ResearchSession",
+    "ResourcesSession",
+    "StrategySession",
 ]

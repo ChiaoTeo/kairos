@@ -64,6 +64,7 @@ INSTANCE_ACTIONS = (
 ATTACH_ACTIONS = (
     ActionItem("refresh", "刷新运行输出", "读取当前状态与最近日志", "1"),
     ActionItem("pause", "暂停或继续", "控制后台运行输出刷新", "p"),
+    ActionItem("clear", "清空当前窗口", "只清除当前可见日志，不删除日志源", "c"),
     ActionItem("python", "发送 Strategy Python", "向当前 Strategy 提交一行代码", "2"),
 )
 
