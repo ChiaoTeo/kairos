@@ -1,5 +1,7 @@
 //! Intent acceptance, planning handoff, and idempotent submission.
 
+use std::collections::BTreeSet;
+
 use super::super::*;
 use super::planning::plan_simulated_intent;
 
@@ -114,6 +116,20 @@ impl ExecutionApplication {
                 "maker-taker hedge requires a pair-arbitrage intent".into(),
             ));
         }
+        if intent.intent_type == IntentType::QuoteProvisioning
+            && !matches!(intent.algorithm, ExecutionAlgorithmPolicy::PassiveLimit(_))
+        {
+            return Err(ExecutionError::Invalid(
+                "quote provisioning requires the passive-limit algorithm".into(),
+            ));
+        }
+        if matches!(intent.algorithm, ExecutionAlgorithmPolicy::PassiveLimit(_))
+            && intent.intent_type != IntentType::QuoteProvisioning
+        {
+            return Err(ExecutionError::Invalid(
+                "passive-limit currently requires a quote-provisioning intent".into(),
+            ));
+        }
         if intent.intent_type == IntentType::OptionSpread {
             if intent.legs.len() != 2 {
                 return Err(ExecutionError::Invalid(
@@ -169,6 +185,20 @@ impl ExecutionApplication {
                 .transpose()
                 .map_err(ExecutionError::Invalid)?;
         }
+        let business_now = match (
+            self.business_time_unix_nanos(),
+            intent.source_event_time_unix_nanos.map(UnixNanos::get),
+        ) {
+            (Some(current), Some(source)) => current.max(source),
+            (Some(current), None) => current,
+            (None, Some(source)) => source,
+            (None, None) => {
+                return Err(ExecutionError::Invalid(
+                    "intent execution requires explicit business time".into(),
+                ));
+            },
+        };
+        self.advance_time(business_now)?;
         if let Some(existing) = self.actor.intent(intent.intent_id.as_str()) {
             if existing.intent.strategy_decision_id != intent.strategy_decision_id {
                 return Err(ExecutionError::Invalid(
@@ -192,12 +222,24 @@ impl ExecutionApplication {
         } else {
             plan_simulated_intent(&intent)?
         };
-        let planned_orders = expand_child_orders(&intent, planned_orders)?;
-        let business_now = intent
-            .source_event_time_unix_nanos
-            .map(UnixNanos::get)
-            .unwrap_or_else(now_nanos);
+        let mut planned_orders = expand_child_orders(&intent, planned_orders)?;
+        for order in &mut planned_orders {
+            order.submitted_at_unix_nanos = Some(business_now.into());
+            if let ExecutionAlgorithmPolicy::PassiveLimit(policy) = &intent.algorithm {
+                let maker = order.options.maker.get_or_insert(MakerExecutionPolicy {
+                    max_inventory_abs: None,
+                    target_inventory: None,
+                    max_quote_age: None,
+                });
+                maker.max_quote_age = Some(policy.max_quote_age);
+            }
+        }
         if planned_orders.is_empty() {
+            if !intent.execution_benchmarks.is_empty() {
+                return Err(ExecutionError::Invalid(
+                    "execution benchmark requires an executable plan leg".into(),
+                ));
+            }
             let now = business_now;
             let state = IntentState {
                 intent: intent.clone(),
@@ -217,6 +259,7 @@ impl ExecutionApplication {
                 pending_order_due_unix_nanos: BTreeMap::new(),
                 quote_version: 0,
                 last_quote_refresh_unix_nanos: None,
+                pending_quote_refresh: None,
                 compensation_attempts: 0,
             };
             self.actor.insert_intent(state.clone());
@@ -251,7 +294,7 @@ impl ExecutionApplication {
         }
         let now = business_now;
         let mut plan = build_single_intent_plan(&intent, &planned_orders)?;
-        let (algorithm_run, pending_orders, dormant_orders) = if intent.intent_type
+        let (mut algorithm_run, pending_orders, dormant_orders) = if intent.intent_type
             == IntentType::PairArbitrage
         {
             if let ExecutionAlgorithmPolicy::MakerTakerHedge(policy) = &intent.algorithm {
@@ -358,6 +401,7 @@ impl ExecutionApplication {
                 Vec::new(),
             )
         };
+        attach_execution_benchmarks(&mut algorithm_run, &intent, &plan, now)?;
         let state = IntentState {
             intent: intent.clone(),
             status: IntentStatus::Accepted,
@@ -381,6 +425,7 @@ impl ExecutionApplication {
             ),
             quote_version: 0,
             last_quote_refresh_unix_nanos: None,
+            pending_quote_refresh: None,
             compensation_attempts: 0,
         };
         self.actor.insert_intent(state.clone());
@@ -481,10 +526,14 @@ impl ExecutionApplication {
         intent: ExecuteStrategyIntent,
         reason: String,
     ) -> Result<(), ExecutionError> {
-        let now = intent
-            .source_event_time_unix_nanos
-            .map(UnixNanos::get)
-            .unwrap_or_else(now_nanos);
+        let now = self
+            .business_time_unix_nanos()
+            .or_else(|| intent.source_event_time_unix_nanos.map(UnixNanos::get))
+            .ok_or_else(|| {
+                ExecutionError::Invalid(
+                    "rejected intent recording requires explicit business time".into(),
+                )
+            })?;
         let state = IntentState {
             intent: intent.clone(),
             status: IntentStatus::Rejected,
@@ -503,6 +552,7 @@ impl ExecutionApplication {
             pending_order_due_unix_nanos: BTreeMap::new(),
             quote_version: 0,
             last_quote_refresh_unix_nanos: None,
+            pending_quote_refresh: None,
             compensation_attempts: 0,
         };
         self.actor.insert_intent(state.clone());
@@ -519,6 +569,64 @@ impl ExecutionApplication {
             dependency_watermarks: state.dependency_watermarks,
         })
     }
+}
+
+fn attach_execution_benchmarks(
+    run: &mut AlgorithmRun,
+    intent: &ExecuteStrategyIntent,
+    plan: &ExecutionPlan,
+    start_at: u64,
+) -> Result<(), ExecutionError> {
+    let mut assigned = BTreeSet::new();
+    for observation in &intent.execution_benchmarks {
+        if observation.observed_at_unix_nanos.get() > start_at {
+            return Err(ExecutionError::Invalid(
+                "execution benchmark observation cannot be in the future".into(),
+            ));
+        }
+        let leg = match &observation.leg_id {
+            Some(leg_id) => plan.legs.iter().find(|leg| &leg.leg_id == leg_id),
+            None if plan.legs.len() == 1 => plan.legs.first(),
+            None => {
+                return Err(ExecutionError::Invalid(
+                    "multi-leg execution benchmark requires an explicit leg_id".into(),
+                ));
+            },
+        }
+        .ok_or_else(|| {
+            ExecutionError::Invalid("execution benchmark references an unknown leg".into())
+        })?;
+        if leg.instrument_id != observation.instrument_id {
+            return Err(ExecutionError::Invalid(
+                "execution benchmark instrument does not match its plan leg".into(),
+            ));
+        }
+        if leg.market_id.as_ref() != Some(&observation.market_id) {
+            return Err(ExecutionError::Invalid(
+                "execution benchmark market does not match its plan leg".into(),
+            ));
+        }
+        if !assigned.insert(leg.leg_id.clone()) {
+            return Err(ExecutionError::Invalid(
+                "an execution leg may have only one arrival benchmark".into(),
+            ));
+        }
+        let run_leg = run
+            .legs
+            .iter_mut()
+            .find(|run_leg| run_leg.leg_id == leg.leg_id)
+            .ok_or_else(|| {
+                ExecutionError::Invalid("algorithm run is missing a benchmarked plan leg".into())
+            })?;
+        run_leg.benchmark = Some(AlgorithmLegBenchmark {
+            kind: observation.kind,
+            instrument_id: observation.instrument_id.clone(),
+            market_id: observation.market_id.clone(),
+            price: observation.price,
+            observed_at_unix_nanos: observation.observed_at_unix_nanos,
+        });
+    }
+    run.validate().map_err(ExecutionError::Invalid)
 }
 
 fn standard_algorithm_run(
@@ -552,6 +660,33 @@ fn standard_algorithm_run(
                     slice_count: policy.slice_count,
                 },
                 leg.target_quantity,
+            )
+            .map_err(ExecutionError::Invalid)
+        },
+        ExecutionAlgorithmPolicy::PassiveLimit(policy) => {
+            if intent.intent_type != IntentType::QuoteProvisioning {
+                return Err(ExecutionError::Invalid(
+                    "passive-limit currently requires a quote-provisioning intent".into(),
+                ));
+            }
+            if planned_orders.iter().any(|order| {
+                order.order_type != OrderType::Limit
+                    || order.limit_price.is_none()
+                    || order.options.post_only != Some(true)
+            }) {
+                return Err(ExecutionError::Invalid(
+                    "passive-limit requires post-only limit children".into(),
+                ));
+            }
+            AlgorithmRun::passive_limit(
+                intent.intent_id.clone(),
+                PassiveLimitSpec {
+                    reprice_interval: policy.reprice_interval,
+                    max_quote_age: policy.max_quote_age,
+                },
+                plan.legs
+                    .iter()
+                    .map(|leg| (leg.leg_id.clone(), leg.target_quantity)),
             )
             .map_err(ExecutionError::Invalid)
         },

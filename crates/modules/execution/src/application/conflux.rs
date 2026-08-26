@@ -10,17 +10,20 @@ use kairos_conflux::{
 use kairos_execution_contract::{
     AdvanceExecutionTimeRequest, AdvanceExecutionTimeResponse, CancelOrderRequest,
     CompletionPolicy as ContractCompletionPolicy, ExecutionAlgorithmPolicyRequest,
-    ExecutionBacktestBar, ExecutionBacktestMarketObservation, ExecutionBacktestMarketRequest,
+    ExecutionAttemptCommand, ExecutionAttemptEvidenceResponse, ExecutionBacktestBar,
+    ExecutionBacktestMarketObservation, ExecutionBacktestMarketRequest,
     ExecutionBacktestMarketResponse, ExecutionBacktestMetrics, ExecutionBacktestObservationScope,
     ExecutionBacktestOrder, ExecutionBacktestOrderRequest, ExecutionBacktestOrderStatus,
     ExecutionBacktestRequest, ExecutionBacktestRunResponse, ExecutionBacktestSimulationConfig,
-    ExecutionBacktestSimulationFill, ExecutionCommandStatus, ExecutionControlError,
-    ExecutionHealthResponse, ExecutionIntentRequest, ExecutionOrderOptionsRequest,
-    ExecutionReconcileResponse, ExecutionRouteCandidateResponse, ExecutionRouteHealth,
-    ExecutionRoutesQuery, ExecutionRoutesResponse, FailurePolicy as ContractFailurePolicy,
-    HedgePolicyRequest, IntentAdmissionEvidenceRequest,
+    ExecutionBacktestSimulationFill, ExecutionBenchmarkKind as ContractExecutionBenchmarkKind,
+    ExecutionCommandStatus, ExecutionControlError, ExecutionDeliveryCertainty,
+    ExecutionHealthResponse, ExecutionIntentRequest, ExecutionOrderAuditEventResponse,
+    ExecutionOrderAuditQuery, ExecutionOrderAuditResponse, ExecutionOrderLifecycle,
+    ExecutionOrderOptionsRequest, ExecutionReconcileResponse, ExecutionRouteCandidateResponse,
+    ExecutionRouteHealth, ExecutionRouteSelection, ExecutionRoutesQuery, ExecutionRoutesResponse,
+    FailurePolicy as ContractFailurePolicy, HedgePolicyRequest, IntentAdmissionEvidenceRequest,
     IntentLegRequest as ContractIntentLegRequest, IntentType as ContractIntentType,
-    ReconcileExecutionRequest, ReplaceOrderRequest, SubmitIntentRequest,
+    PassiveLimitPolicyRequest, ReconcileExecutionRequest, ReplaceOrderRequest, SubmitIntentRequest,
 };
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
@@ -33,7 +36,10 @@ use super::{
     IntentAdmissionEvidence, MarketObservation, ObservationScope, Quote, QuoteBar,
     RemoteOrderQuery, SubmitOrder, TradeBar,
 };
-use crate::domain::{AlgorithmExecutionStyle, ExecutionAlgorithmSpec};
+use crate::domain::{
+    AlgorithmExecutionStyle, DeliveryCertainty, ExecutionAlgorithmSpec, ExecutionAttempt,
+    ExecutionCommandKind, ExecutionOrderStatus, RouteSelectionKind,
+};
 use crate::services::actor::RemoteOrderEvent;
 use crate::services::audit::{ExecutionAudit, IntentAdmissionAuditRecord};
 use crate::services::gateway::{ExecutionConnectionPlan, ExecutionWriterFence};
@@ -54,6 +60,7 @@ pub(crate) struct ExecutionConfluxState {
     audit: Option<ExecutionAudit>,
     pending_admissions: Vec<IntentAdmissionAuditRecord>,
     simulated_account_settlement: Option<SimulatedAccountSettlement>,
+    wall_clock_business_time: bool,
 }
 
 impl Default for ExecutionConfluxState {
@@ -67,6 +74,7 @@ impl Default for ExecutionConfluxState {
             audit: None,
             pending_admissions: Vec::new(),
             simulated_account_settlement: None,
+            wall_clock_business_time: false,
         }
     }
 }
@@ -90,6 +98,13 @@ impl ExecutionApplication {
         self.conflux.audit = Some(audit);
         self.conflux.simulated_account_settlement = simulated_account_settlement;
         Ok(())
+    }
+
+    /// Select the live/paper processing-time source at composition. Backtest
+    /// and replay leave this disabled and advance time only through their
+    /// explicit event-time input.
+    pub(crate) fn configure_wall_clock_business_time(&mut self, enabled: bool) {
+        self.conflux.wall_clock_business_time = enabled;
     }
 
     fn register_managed_streams(
@@ -121,8 +136,13 @@ impl ExecutionApplication {
     }
 
     async fn maintain(&mut self, context: &mut Context<'_, Self>) -> Result<(), ExecutionError> {
-        let now = now_unix_nanos();
-        let business_now = self.business_time_unix_nanos().unwrap_or(now);
+        let business_now = if self.conflux.wall_clock_business_time {
+            let sampled = now_unix_nanos();
+            self.advance_time(sampled)?;
+            Some(sampled)
+        } else {
+            self.business_time_unix_nanos()
+        };
         if !self.conflux.plans.is_empty() {
             match self
                 .reconcile_managed_orders(
@@ -140,13 +160,16 @@ impl ExecutionApplication {
                 },
             }
         }
-        self.refresh_maker_quotes_managed(context).await?;
-        self.advance_due_algorithm_runs_managed(business_now, 64, context)
-            .await?;
-        self.advance_due_intent_orders_managed(business_now, 64, context)
-            .await?;
-        self.expire_due_intents_managed(business_now, context)
-            .await?;
+        if let Some(business_now) = business_now {
+            self.refresh_maker_quotes_managed(business_now, context)
+                .await?;
+            self.advance_due_algorithm_runs_managed(business_now, 64, context)
+                .await?;
+            self.advance_due_intent_orders_managed(business_now, 64, context)
+                .await?;
+            self.expire_due_intents_managed(business_now, context)
+                .await?;
+        }
         Ok(())
     }
 
@@ -156,6 +179,7 @@ impl ExecutionApplication {
         limit: usize,
         context: &mut Context<'_, Self>,
     ) -> Result<usize, ExecutionError> {
+        self.advance_time(now_unix_nanos)?;
         let due = self.prepare_due_algorithm_runs(now_unix_nanos, limit)?;
         if !due.is_empty() {
             self.advance_due_intent_orders_managed(now_unix_nanos, usize::MAX, context)
@@ -170,6 +194,7 @@ impl ExecutionApplication {
         limit: usize,
         context: &mut Context<'_, Self>,
     ) -> Result<usize, ExecutionError> {
+        self.advance_time(now_unix_nanos)?;
         let mut submitted = 0;
         while submitted < limit {
             let Some(due) = self.take_due_intent_order(now_unix_nanos)? else {
@@ -238,9 +263,10 @@ impl ExecutionApplication {
 
     async fn refresh_maker_quotes_managed(
         &mut self,
+        business_time_unix_nanos: u64,
         context: &mut Context<'_, Self>,
     ) -> Result<usize, ExecutionError> {
-        let requests = self.maker_quote_refresh_requests()?;
+        let requests = self.maker_quote_refresh_requests(business_time_unix_nanos)?;
         let mut refreshed = 0;
         'refresh: for request in requests {
             let prepared = match self.prepare_quote_refresh(request) {
@@ -257,18 +283,21 @@ impl ExecutionApplication {
                     continue 'refresh;
                 }
             }
-            let mut orders = Vec::with_capacity(prepared.submissions.len());
-            for (leg_id, submission) in prepared.submissions.clone() {
-                match self.submit_managed_order(submission, context).await {
-                    Ok(order) => orders.push((leg_id, order)),
-                    Err(error) => {
-                        self.fail_prepared_quote_refresh(&prepared, &error)?;
-                        tracing::warn!(component = "execution", error = %error, "maker quote refresh submission failed");
-                        continue 'refresh;
-                    },
-                }
+            let prepared = self.authorize_prepared_quote_refresh(prepared)?;
+            self.activate_prepared_quote_refresh(&prepared)?;
+            if let Err(error) = self
+                .advance_due_intent_orders_managed(
+                    prepared.replacement_dispatch_time().get(),
+                    prepared.submissions.len(),
+                    context,
+                )
+                .await
+            {
+                self.fail_prepared_quote_refresh(&prepared, &error)?;
+                tracing::warn!(component = "execution", error = %error, "passive-limit replacement submission failed");
+                continue 'refresh;
             }
-            self.complete_prepared_quote_refresh(prepared, orders)?;
+            self.complete_prepared_quote_refresh(prepared)?;
             refreshed += 1;
         }
         Ok(refreshed)
@@ -285,9 +314,11 @@ impl ExecutionApplication {
             .find(|run| run.intent_id.as_str() == intent_id)
             .is_some_and(|run| matches!(run.spec, ExecutionAlgorithmSpec::MakerTakerHedge(_)))
         {
-            let business_now = self
-                .business_time_unix_nanos()
-                .unwrap_or_else(now_unix_nanos);
+            let business_now = self.business_time_unix_nanos().ok_or_else(|| {
+                ExecutionError::Invalid(
+                    "maker-taker hedge dispatch requires explicit business time".into(),
+                )
+            })?;
             self.drive_maker_taker_hedge(intent_id, business_now)?;
             let due_at = self
                 .algorithm_runs()
@@ -372,6 +403,7 @@ impl ExecutionApplication {
                 ))
             })?;
         let key = ConnectionKey::new(plan.entry_key.clone()).map_err(ExecutionError::Gateway)?;
+        self.begin_cancel_dispatch(prepared.order.order_id.as_str())?;
         let outcome = managed_cancel_order(
             context,
             &key,
@@ -558,6 +590,11 @@ impl ConfluxActor for ExecutionApplication {
                 debug_assert_eq!(event.connection_key, identity.descriptor.connection_key);
                 let event = remote_order_event(event);
                 if self.accept_remote_event_identity(&event.event_id) {
+                    let event_time = self
+                        .business_time_unix_nanos()
+                        .map(|current| current.max(event.event.occurred_at_unix_nanos.get()))
+                        .unwrap_or_else(|| event.event.occurred_at_unix_nanos.get());
+                    self.advance_time(event_time)?;
                     match self.apply_remote_execution_event_deferred(event.event) {
                         Ok(order) => {
                             if let Some(intent_id) = order.intent_id.as_deref() {
@@ -623,6 +660,50 @@ impl ExecutionRpcActor for ExecutionApplication {
             .map_err(rpc_execution_error)?;
         self.publish(context).map_err(rpc_execution_error)?;
         Ok(ExecutionRoutesResponse { routes })
+    }
+
+    async fn order_audit(
+        &mut self,
+        query: ExecutionOrderAuditQuery,
+        _context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionOrderAuditResponse> {
+        if query.limit == 0 || query.limit > 10_000 {
+            return Err(rpc_execution_error(ExecutionError::Invalid(
+                "Execution order audit limit must be between 1 and 10000".into(),
+            )));
+        }
+        if query
+            .since_unix_nanos
+            .zip(query.until_unix_nanos)
+            .is_some_and(|(since, until)| since > until)
+        {
+            return Err(rpc_execution_error(ExecutionError::Invalid(
+                "Execution order audit since must not exceed until".into(),
+            )));
+        }
+        let internal = crate::services::audit::ExecutionAuditQuery {
+            order_id: query.order_id,
+            remote_order_id: query.remote_order_id,
+            status: query
+                .lifecycle
+                .map(|value| audit_lifecycle_name(value).into()),
+            since_unix_nanos: query.since_unix_nanos,
+            until_unix_nanos: query.until_unix_nanos,
+            limit: Some(query.limit),
+        };
+        let mut audit = self.conflux.audit.take().ok_or_else(|| {
+            rpc_execution_error(ExecutionError::Persistence(
+                "Execution audit storage is not configured".into(),
+            ))
+        })?;
+        let result = audit.query(&internal);
+        self.conflux.audit = Some(audit);
+        let events = result
+            .map_err(|error| rpc_execution_error(ExecutionError::Persistence(error)))?
+            .into_iter()
+            .map(audit_event_response)
+            .collect();
+        Ok(ExecutionOrderAuditResponse { events })
     }
 
     async fn submit_intent(
@@ -766,7 +847,15 @@ impl ExecutionApplication {
                 })
             })
             .ok_or_else(|| ExecutionError::Invalid("idempotency_key is required".into()));
-        let decoded = decode_contract_intent(request.intent);
+        let decoded = decode_contract_intent(request.intent).and_then(|intent| {
+            if intent.source_event_time_unix_nanos.is_none()
+                && self.business_time_unix_nanos().is_none()
+                && self.conflux.wall_clock_business_time
+            {
+                self.advance_time(now_unix_nanos())?;
+            }
+            Ok(intent)
+        });
         let prepared = decoded.and_then(|intent| {
             let evidence = decode_intent_admission_evidence(request.admission_evidence, &intent)?;
             Ok((intent, evidence))
@@ -784,7 +873,12 @@ impl ExecutionApplication {
                         if !duplicate {
                             let business_now = self
                                 .business_time_unix_nanos()
-                                .unwrap_or_else(now_unix_nanos);
+                                .ok_or_else(|| {
+                                    ExecutionError::Invalid(
+                                        "intent dispatch requires explicit business time".into(),
+                                    )
+                                })
+                                .map_err(rpc_execution_error)?;
                             if let Err(error) = self
                                 .advance_due_intent_orders_managed(
                                     business_now,
@@ -842,10 +936,21 @@ impl ExecutionApplication {
             .into_iter()
             .find(|order| order.order_id == order_id)
             .ok_or_else(|| ExecutionError::Invalid("order not found".into()))?;
+        if original.status.terminal() {
+            return Err(ExecutionError::Invalid(
+                "terminal order cannot be replaced".into(),
+            ));
+        }
         let options = patch
             .options
             .map(decode_contract_options)
             .unwrap_or_default();
+        let requested_total = patch.quantity.unwrap_or(original.quantity);
+        let remaining_quantity = crate::application::core::orders::replacement_remaining_quantity(
+            requested_total,
+            original.filled_quantity,
+        )
+        .map_err(ExecutionError::Invalid)?;
         let replacement = SubmitOrder {
             order_id: kairos_primitives::execution::OrderId::new(format!(
                 "{}:replacement",
@@ -861,27 +966,31 @@ impl ExecutionApplication {
             execution_route_id: original.execution_route_id,
             side: original.side,
             order_type: original.order_type,
-            quantity: patch.quantity.unwrap_or(original.quantity),
+            quantity: remaining_quantity,
             limit_price: patch.limit_price.or(original.limit_price),
             options,
             submitted_at_unix_nanos: None,
         };
-        if !original.status.terminal() {
-            self.cancel_managed_order(
+        let canceled = self
+            .cancel_managed_order(
                 CancelOrder {
                     order_id,
-                    reason: "replaced".into(),
+                    reason: patch.reason.unwrap_or_else(|| "replaced".into()),
                 },
                 context,
             )
             .await?;
+        if canceled.status != crate::ExecutionOrderStatus::Canceled {
+            return Err(ExecutionError::Indeterminate(
+                "replacement is blocked until cancellation is authoritative".into(),
+            ));
         }
         self.submit_managed_order(replacement, context)
             .await
             .map(|order| command_status("accepted", Some(order.order_id.to_string())))
     }
 
-    fn contract_health(&mut self) -> ExecutionHealthResponse {
+    pub(crate) fn contract_health(&mut self) -> ExecutionHealthResponse {
         let routes = self
             .conflux
             .route_status
@@ -906,14 +1015,25 @@ impl ExecutionApplication {
             .map(|entry| entry.created_at_unix_nanos)
             .min()
             .map(|created_at| now.saturating_sub(created_at) / 1_000_000);
+        let operational = self.operational_health();
         ExecutionHealthResponse {
-            status: if routes_ready && self.writer_recovery_ready() && outbox_error.is_none() {
+            status: if routes_ready
+                && self.writer_recovery_ready()
+                && operational.ready()
+                && outbox_error.is_none()
+            {
                 "ready"
             } else {
                 "degraded"
             }
             .into(),
             writer_recovery_ready: self.writer_recovery_ready(),
+            risk_recovery_ready: operational.risk_recovery_ready,
+            risk_recovery_error: operational.risk_recovery_error,
+            reconciliation_required_orders: operational.reconciliation_required_orders,
+            reconciliation_required_intents: operational.reconciliation_required_intents,
+            unresolved_remote_orders: operational.unresolved_remote_orders,
+            indeterminate_algorithm_actions: operational.indeterminate_algorithm_actions,
             outbox_backlog: pending.len() as u64,
             oldest_outbox_event_age_ms,
             outbox_error,
@@ -1019,33 +1139,11 @@ impl ExecutionApplication {
             applied_event_sequence: snapshot.event_sequence.get(),
             published_at_unix_nanos: now_unix_nanos(),
         };
-        for kind in [
-            ExecutionViewKind::ActiveOrders,
-            ExecutionViewKind::CurrentExecution,
-            ExecutionViewKind::ActiveIntents,
-        ] {
+        for kind in [ExecutionViewKind::CurrentExecution] {
             let key = ExecutionViewKey::from_identity(&self.conflux.identity, kind.clone());
             let bytes = match kind {
-                ExecutionViewKind::ActiveOrders => {
-                    crate::services::publication::encode_active_orders(
-                        actor_id,
-                        &self.conflux.identity,
-                        snapshot.generation.get(),
-                        &key,
-                        &snapshot,
-                    )
-                },
                 ExecutionViewKind::CurrentExecution => {
                     crate::services::publication::encode_current_execution(
-                        actor_id,
-                        &self.conflux.identity,
-                        snapshot.generation.get(),
-                        &key,
-                        &snapshot,
-                    )
-                },
-                ExecutionViewKind::ActiveIntents => {
-                    crate::services::publication::encode_active_intents(
                         actor_id,
                         &self.conflux.identity,
                         snapshot.generation.get(),
@@ -1097,17 +1195,24 @@ fn remote_order_event(
     let event_id = envelope.participant_event_id.clone().unwrap_or_else(|| {
         format!(
             "{}:{:?}:{}",
-            envelope.payload.order_id,
+            envelope.payload.remote_order_id,
             envelope.payload.status,
             envelope.payload.occurred_at_unix_nanos.get()
         )
     });
+    let source_cursor = super::OrderFactCursor {
+        connection_id: envelope.connection_key.to_string(),
+        channel_id: envelope.channel_id,
+        channel_epoch: envelope.channel_epoch,
+        participant_sequence: envelope.participant_sequence.map(Into::into),
+    };
     let event = envelope.payload;
     RemoteOrderEvent {
         event_id,
         connection_id: envelope.connection_key.to_string(),
         event: super::RemoteOrderUpdate {
-            order_id: event.order_id,
+            remote_order_id: event.remote_order_id,
+            client_order_id: event.client_order_id,
             symbol: event.symbol,
             status: super::remote_status(&format!("{:?}", event.status)),
             fill_quantity: event.fill_quantity.and_then(|v| decimal(v).parse().ok()),
@@ -1115,6 +1220,7 @@ fn remote_order_event(
             execution_id: event.execution_id,
             fee_currency: event.fee_currency,
             fee_amount: event.fee_amount.and_then(|v| decimal(v).parse().ok()),
+            source_cursor: Some(source_cursor),
             occurred_at_unix_nanos: event.occurred_at_unix_nanos,
             reason: event.reason,
         },
@@ -1341,6 +1447,82 @@ fn simulation_fill_response(value: SimulationFill) -> ExecutionBacktestSimulatio
     }
 }
 
+fn audit_lifecycle_name(value: ExecutionOrderLifecycle) -> &'static str {
+    match value {
+        ExecutionOrderLifecycle::Pending => "Pending",
+        ExecutionOrderLifecycle::Submitting => "Submitting",
+        ExecutionOrderLifecycle::Accepted => "Accepted",
+        ExecutionOrderLifecycle::PartiallyFilled => "PartiallyFilled",
+        ExecutionOrderLifecycle::Filled => "Filled",
+        ExecutionOrderLifecycle::CancelRequested => "CancelRequested",
+        ExecutionOrderLifecycle::Canceled => "Canceled",
+        ExecutionOrderLifecycle::Rejected => "Rejected",
+        ExecutionOrderLifecycle::Expired => "Expired",
+        ExecutionOrderLifecycle::Unknown => "Unknown",
+        ExecutionOrderLifecycle::Failed => "Failed",
+    }
+}
+
+fn audit_event_response(
+    value: crate::services::audit::ExecutionAuditEvent,
+) -> ExecutionOrderAuditEventResponse {
+    ExecutionOrderAuditEventResponse {
+        sequence: value.sequence,
+        order_id: value.order_id,
+        lifecycle: order_lifecycle(value.status),
+        remote_order_id: value.remote_order_id,
+        occurred_at_unix_nanos: value.occurred_at_unix_nanos,
+        reason: value.reason,
+        attempt: value.attempt.map(attempt_evidence_response),
+    }
+}
+
+fn order_lifecycle(value: ExecutionOrderStatus) -> ExecutionOrderLifecycle {
+    match value {
+        ExecutionOrderStatus::Pending => ExecutionOrderLifecycle::Pending,
+        ExecutionOrderStatus::Submitting => ExecutionOrderLifecycle::Submitting,
+        ExecutionOrderStatus::Accepted => ExecutionOrderLifecycle::Accepted,
+        ExecutionOrderStatus::PartiallyFilled => ExecutionOrderLifecycle::PartiallyFilled,
+        ExecutionOrderStatus::Filled => ExecutionOrderLifecycle::Filled,
+        ExecutionOrderStatus::CancelRequested => ExecutionOrderLifecycle::CancelRequested,
+        ExecutionOrderStatus::Canceled => ExecutionOrderLifecycle::Canceled,
+        ExecutionOrderStatus::Rejected => ExecutionOrderLifecycle::Rejected,
+        ExecutionOrderStatus::Expired => ExecutionOrderLifecycle::Expired,
+        ExecutionOrderStatus::Unknown => ExecutionOrderLifecycle::Unknown,
+        ExecutionOrderStatus::Failed => ExecutionOrderLifecycle::Failed,
+    }
+}
+
+fn attempt_evidence_response(value: ExecutionAttempt) -> ExecutionAttemptEvidenceResponse {
+    ExecutionAttemptEvidenceResponse {
+        attempt_id: value.attempt_id,
+        command: match value.command {
+            ExecutionCommandKind::Submit => ExecutionAttemptCommand::Submit,
+            ExecutionCommandKind::Cancel => ExecutionAttemptCommand::Cancel,
+        },
+        route_id: value.selected_route.route_id,
+        broker_id: value.selected_route.broker_id,
+        execution_channel: value.selected_route.execution_channel,
+        order_entry_symbol: value.selected_route.order_entry_symbol,
+        destination_market_id: value.selected_route.destination_market_id,
+        route_selected_at_unix_nanos: value.selected_route.selected_at_unix_nanos,
+        route_selection: match value.selected_route.selection_kind {
+            RouteSelectionKind::Explicit => ExecutionRouteSelection::Explicit,
+            RouteSelectionKind::UniqueCandidate => ExecutionRouteSelection::UniqueCandidate,
+        },
+        provider_connection_id: value.provider_connection_id,
+        command_started_at_unix_nanos: value.command_started_at_unix_nanos,
+        delivery_certainty: match value.delivery_certainty {
+            DeliveryCertainty::NotSent => ExecutionDeliveryCertainty::NotSent,
+            DeliveryCertainty::Indeterminate => ExecutionDeliveryCertainty::Indeterminate,
+            DeliveryCertainty::Confirmed => ExecutionDeliveryCertainty::Confirmed,
+            DeliveryCertainty::Rejected => ExecutionDeliveryCertainty::Rejected,
+            DeliveryCertainty::Reconciled => ExecutionDeliveryCertainty::Reconciled,
+        },
+        remote_order_id: value.remote_order_id,
+    }
+}
+
 fn route_response(
     route: super::ExecutionRouteCandidate,
 ) -> Result<ExecutionRouteCandidateResponse, ExecutionError> {
@@ -1429,6 +1611,13 @@ fn decode_contract_intent(
                 slice_interval: policy.slice_interval,
             })
         },
+        ExecutionAlgorithmPolicyRequest::PassiveLimit(PassiveLimitPolicyRequest {
+            reprice_interval,
+            max_quote_age,
+        }) => ExecutionAlgorithmPolicy::PassiveLimit(crate::domain::PassiveLimitPolicy {
+            reprice_interval,
+            max_quote_age,
+        }),
         ExecutionAlgorithmPolicyRequest::MakerTakerHedge(policy) => {
             ExecutionAlgorithmPolicy::MakerTakerHedge(hedge_policy(policy))
         },
@@ -1455,6 +1644,22 @@ fn decode_contract_intent(
         completion_policy,
         failure_policy,
         legs: request.legs.into_iter().map(leg).collect(),
+        execution_benchmarks: request
+            .execution_benchmarks
+            .into_iter()
+            .map(|benchmark| crate::application::IntentExecutionBenchmark {
+                kind: match benchmark.kind {
+                    ContractExecutionBenchmarkKind::Arrival => {
+                        crate::domain::ExecutionBenchmarkKind::Arrival
+                    },
+                },
+                leg_id: benchmark.leg_id,
+                instrument_id: benchmark.instrument_id,
+                market_id: benchmark.market_id,
+                price: benchmark.price,
+                observed_at_unix_nanos: benchmark.observed_at_unix_nanos,
+            })
+            .collect(),
         deadline_unix_nanos: request.deadline_unix_nanos,
         min_edge_bps: request.min_edge_bps,
         max_slippage_bps: request.max_slippage_bps,
@@ -1483,9 +1688,6 @@ fn decode_contract_options(value: ExecutionOrderOptionsRequest) -> ExecutionOrde
         maker: value
             .maker
             .map(|maker| crate::domain::MakerExecutionPolicy {
-                min_interval: maker.min_interval,
-                max_orders_per_window: maker.max_orders_per_window,
-                window: maker.window,
                 max_inventory_abs: maker.max_inventory_abs,
                 target_inventory: maker.target_inventory,
                 max_quote_age: maker.max_quote_age,

@@ -474,7 +474,11 @@ impl ExecutionStreamService {
                 self.execution_accounts
                     .insert(execution.order_id, execution.account_number.clone());
                 ExternalExecutionEvent {
-                    order_id: typed_order_id(execution.order_id)?,
+                    remote_order_id: kairos_primitives::integration::RemoteOrderId::new(
+                        execution.order_id.to_string(),
+                    )
+                    .map_err(invalid_payload)?,
+                    client_order_id: None,
                     symbol: typed_symbol(&symbol)?,
                     status: kairos_primitives::integration::OrderStatus::Filled,
                     side: Some(
@@ -504,7 +508,11 @@ impl ExecutionStreamService {
                     return Ok(None);
                 };
                 ExternalExecutionEvent {
-                    order_id: typed_order_id(order_id)?,
+                    remote_order_id: kairos_primitives::integration::RemoteOrderId::new(
+                        order_id.to_string(),
+                    )
+                    .map_err(invalid_payload)?,
+                    client_order_id: None,
                     symbol: typed_symbol(
                         self.order_symbols
                             .get(&order_id)
@@ -654,7 +662,9 @@ fn execution_event(
     remaining_quantity: Option<DecimalValue>,
 ) -> Result<ExternalExecutionEvent, IntegrationError> {
     Ok(ExternalExecutionEvent {
-        order_id: typed_order_id(order_id)?,
+        remote_order_id: kairos_primitives::integration::RemoteOrderId::new(order_id.to_string())
+            .map_err(invalid_payload)?,
+        client_order_id: None,
         symbol: typed_symbol(symbol)?,
         status,
         side,
@@ -712,7 +722,7 @@ fn ibkr_event_id(event: &ExternalExecutionEvent) -> String {
     }
     format!(
         "ibkr:{}:{:?}:{}:{}:{}:{}:{}:{}",
-        event.order_id,
+        event.remote_order_id,
         event.status,
         decimal(event.filled_quantity),
         decimal(event.remaining_quantity),

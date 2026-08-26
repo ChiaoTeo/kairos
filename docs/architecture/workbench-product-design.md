@@ -218,6 +218,22 @@ Workbench 使用一个垂直布局，从上到下包含：
 Artifact 路径。产品 flow 只能返回 `AppendActivity` effect；只有 `ActivityStream` renderer 可以调用
 底层 `RichLog.write()`。`/clear` 只清当前可见 Activity，不删除 transcript、Artifact 或业务状态。
 
+每条可见 Activity 在一个 Workbench 会话内获得单调递增的显示编号 `A001`、`A002`……。该编号是
+Activity identity 的 UI 投影，不是业务序列；`/clear` 后不重用。内容区可通过 Tab 或鼠标单击聚焦，
+普通单击会单选并以全宽矩形高亮对应 Activity，方向键移动 Activity 游标，Space 多选，`C` 复制所选项。
+再次单击同一条目会取消选择；Command/Control+单击切换一条选择，Shift+单击
+扩展连续范围。每个 Activity 统一在条目下方绘制分隔线，再保留一行非高亮空白，避免相邻内容过于
+拥挤；分隔线始终展开到内容区有效宽度，不随条目内容长度或选择状态改变，首条不绘制额外顶边框。选择以
+Activity identity 为单位，不以受终端宽度和换行影响的物理行号为单位；实时 tail 完成并形成终态
+Activity 前不参与选择。内容区首次聚焦默认定位最新 Activity；没有显式选择时，
+该游标条目作为默认复制目标显示全宽矩形高亮，`C` 直接复制它。终端能够转发时也接受
+`Command+C`，但它不能作为 macOS 终端的可靠入口。之后恢复会话内最后
+一次游标。切换到交互区或输入区时清空内容区的临时选择和高亮，但保留历史游标；再次进入内容区后
+由该游标恢复默认复制目标。新 Activity 不得抢走历史游标，`/bottom` 明确回到最新 Activity。
+Workspace Header 使用品牌、工作区和运行状态三段信息，底部以当前主题主色的弱化横线与内容区分隔；
+该线属于区域边界，不随 Activity 滚动。头部状态采用响应式降级：100 列及以上显示完整状态，68–99 列
+显示精简状态，低于 68 列隐藏右侧状态，优先保留工作区身份且不增加第二行。
+
 用户位于底部时新 Activity 自动跟随；用户上滚查看旧结果时保持视口，并由状态栏提示未读数量，执行
 `/bottom` 或 `Ctrl+End` 后回到底部。
 
@@ -355,7 +371,11 @@ dispatch、成功、错误和取消四处重复登记。
 | `/help` | 不回显命令，展示当前上下文帮助 |
 | `/clear` | 只清空可见 Activity；状态栏反馈，业务状态和 transcript 不变 |
 | `/copy` | 复制 Workspace、当前 Interaction 和 Activity，并统一脱敏 |
+| `/copy 12`、`/copy 12-18` | 按稳定显示编号复制单条或连续 Activity |
+| `/copy-selected` | 复制内容区中用 Space 选中的 Activity；没有显式选择时复制当前高亮条目 |
 | `/copy-history` | 只复制 Activity Stream |
+| `/goto 12` | 定位并聚焦指定 Activity |
+| `/up 20`、`/down 20` | 按指定渲染行数滚动内容区；上滚暂停自动跟随 |
 | `/bottom` | 跳到最新 Activity 并恢复自动跟随 |
 | `/transcript` | 展示当前脱敏 transcript 路径 |
 | `/project` | 进入全局项目管理；不向 Activity Stream 追加导航记录 |
@@ -410,7 +430,7 @@ live、外部写入、删除、停止、发布和其他不可轻易恢复的操�
 - 模式（backtest、paper、live）；
 - 主要后果。
 
-确认模式只接受明确的确认、取消、帮助和退出。普通文本、编号或回车不得被解释为同意。
+确认模式默认聚焦“取消”；Tab 或 Shift+Tab 在取消和确认之间切换，Enter 执行当前选项。单独按 Enter 不得被解释为同意，`/y` 和 `/n` 仅作为兼容快捷方式保留。
 
 ### 8.3 `--yes`、`--dry-run` 与 `--no-exec`
 
@@ -645,17 +665,26 @@ current pointer 使用仅当前用户可读写的权限。
 “复制当前页”按 Workspace/上下文、当前 Interaction、可见 Activity 和相关 Artifact 路径组合；不复制
 输入历史或 Secret。`/copy-history` 只复制 Activity。复制前统一脱敏，输出应可直接粘贴给 Agent，而不
 要求 Agent 根据终端颜色或菜单编号重建上下文。Live Buffer 默认只复制当前窗口，完整范围通过 owner
-提供的日志路径定位。
+提供的日志路径定位。Activity 选择和编号范围复制直接从保留的 `ActivityRecord` 生成文本，不截取
+RichLog 的屏幕行。macOS 同时使用系统 `pbcopy` 兜底。Terminal 和 iTerm 通常会自行消费
+`Command+C`，Workbench 无法可靠接收；终端确实转发时仍接受该快捷键，但普通 `C` 和
+`/copy-selected` 必须始终可用。
 
 ## 12. 键盘、终端与可访问性
 
 - 所有核心流程必须只用键盘完成。
 - Enter 提交当前输入；Esc 或 `/back` 取消当前参数步骤或返回上一级。
 - `Ctrl+C` 取消当前任务，`Ctrl+Q` 退出，`Ctrl+P` 打开命令面板。
+- Tab / Shift+Tab 在命令输入、可用交互选项和非空内容区之间循环焦点；内容区聚焦时使用方向键、
+  Space 和 `C` 完成定位、选择和复制。
+- macOS 不得要求用户配置 Option/Meta 键。`Fn+↑` / `Fn+↓` 可以承担 PageUp / PageDown，但
+  `/up`、`/down`、`/bottom` 和复制命令是跨终端的可靠入口。
 - 颜色只用于增强层级，状态和错误不能只依赖颜色表达。
 - 60×20 终端必须保持输入框、当前上下文和主要动作可用；80×24 是标准快照尺寸。
 - 长内容允许纵向滚动，核心表格需要换行或裁剪，不能依赖横向滚动才能理解关键结果。
-- 禁用终端鼠标捕获，保留原生文本拖选；鼠标不得成为任何流程的必要条件。
+- 启用终端鼠标事件以支持 Activity 单击聚焦和组合键多选；原生终端文本框选使用 Shift+拖拽。鼠标
+  不得成为任何流程的必要条件，所有选择和复制能力必须保留等价键盘与命令入口。
+- 交互区中的鼠标点击只移动高亮选项，不确认、不执行；用户必须按 Enter 提交当前高亮项。
 
 ## 13. 产品扩展规则
 

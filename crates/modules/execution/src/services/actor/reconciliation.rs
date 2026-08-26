@@ -11,15 +11,32 @@ impl ExecutionActor {
         self.exchange_event_watermark_unix_nanos
     }
 
+    pub(crate) fn observe_order_fact_cursor(
+        &mut self,
+        order_id: &str,
+        cursor: crate::domain::OrderFactCursor,
+    ) -> Result<bool, String> {
+        let order = self
+            .orders
+            .get_mut(order_id)
+            .ok_or_else(|| "cursor references unknown order".to_string())?;
+        if order.last_order_fact_cursor.as_ref() == Some(&cursor) {
+            return Ok(false);
+        }
+        order.last_order_fact_cursor = Some(cursor);
+        Ok(true)
+    }
+
     pub(crate) fn find_remote_order(
         &self,
-        remote_or_client_order_id: &str,
+        remote_order_id: &str,
+        client_order_id: Option<&str>,
     ) -> Option<ExecutionOrder> {
         self.orders
             .values()
             .find(|order| {
-                order.order_id.as_str() == remote_or_client_order_id
-                    || order.remote_order_id.as_deref() == Some(remote_or_client_order_id)
+                client_order_id.is_some_and(|client| order.order_id.as_str() == client)
+                    || order.remote_order_id.as_deref() == Some(remote_order_id)
             })
             .cloned()
     }
@@ -31,6 +48,7 @@ impl ExecutionActor {
         status: ExecutionOrderStatus,
         occurred_at: u64,
         reason: String,
+        source_cursor: Option<crate::domain::OrderFactCursor>,
     ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
         let mut order = self
             .order(local_order_id)
@@ -40,9 +58,62 @@ impl ExecutionActor {
             remote_order_id.to_owned(),
         )?);
         order.status = status;
+        order.reconciliation_cause = match status {
+            ExecutionOrderStatus::Unknown => {
+                Some(crate::domain::OrderReconciliationCause::AuthoritativeFactConflict)
+            },
+            _ => None,
+        };
         order.updated_at_unix_nanos = UnixNanos::new(occurred_at);
         order.reason = reason.clone();
+        if let Some(source_cursor) = source_cursor {
+            order.last_order_fact_cursor = Some(source_cursor);
+        }
+        if status != ExecutionOrderStatus::Unknown {
+            if let Some(cancel_attempt) = order.attempts.iter_mut().rev().find(|attempt| {
+                attempt.command == crate::domain::ExecutionCommandKind::Cancel
+                    && attempt.delivery_certainty == crate::domain::DeliveryCertainty::Indeterminate
+            }) {
+                cancel_attempt.delivery_certainty = crate::domain::DeliveryCertainty::Reconciled;
+            }
+        }
         let event = order_event(&order, occurred_at, reason);
+        self.orders.insert(order.order_id.clone(), order.clone());
+        Ok((order, event))
+    }
+
+    pub(crate) fn mark_authoritative_fact_conflict(
+        &mut self,
+        local_order_id: &str,
+        remote_order_id: Option<&str>,
+        applied_at: u64,
+        reason: String,
+        source_cursor: Option<crate::domain::OrderFactCursor>,
+    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
+        let mut order = self
+            .order(local_order_id)
+            .cloned()
+            .ok_or_else(|| "conflicting order disappeared".to_string())?;
+        if let Some(remote_order_id) = remote_order_id {
+            let remote_order_id = crate::domain::RemoteOrderId::new(remote_order_id.to_owned())?;
+            if order
+                .remote_order_id
+                .as_ref()
+                .is_some_and(|current| current != &remote_order_id)
+            {
+                return Err("conflicting fact has a different remote order identity".into());
+            }
+            order.remote_order_id = Some(remote_order_id);
+        }
+        order.status = ExecutionOrderStatus::Unknown;
+        order.reconciliation_cause =
+            Some(crate::domain::OrderReconciliationCause::AuthoritativeFactConflict);
+        order.updated_at_unix_nanos = applied_at.into();
+        order.reason = reason.clone();
+        if let Some(source_cursor) = source_cursor {
+            order.last_order_fact_cursor = Some(source_cursor);
+        }
+        let event = order_event(&order, applied_at, reason);
         self.orders.insert(order.order_id.clone(), order.clone());
         Ok((order, event))
     }
@@ -80,6 +151,7 @@ impl ExecutionActor {
             unknown.status,
             unknown.last_seen_at_unix_nanos.get(),
             "linked from unknown remote order reconciliation".into(),
+            unknown.source_cursor.clone(),
         )?;
         self.resolve_unknown_remote_order(
             remote_order_id,
@@ -114,10 +186,19 @@ impl ExecutionActor {
         &mut self,
         event: &RemoteOrderUpdate,
     ) -> Result<(), String> {
-        let remote_order_id = crate::domain::RemoteOrderId::new(event.order_id.to_string())?;
+        if self
+            .unknown_remote_orders
+            .get(event.remote_order_id.as_str())
+            .and_then(|order| order.source_cursor.as_ref())
+            .zip(event.source_cursor.as_ref())
+            .is_some_and(|(previous, incoming)| incoming.regresses(previous))
+        {
+            return Ok(());
+        }
+        let remote_order_id = event.remote_order_id.clone();
         let entry = self
             .unknown_remote_orders
-            .entry(event.order_id.to_string())
+            .entry(event.remote_order_id.to_string())
             .or_insert_with(|| UnknownRemoteOrder {
                 remote_order_id: remote_order_id.clone(),
                 symbol: event.symbol.clone(),
@@ -127,6 +208,7 @@ impl ExecutionActor {
                 fill_price: event.fill_price,
                 fee_currency: event.fee_currency.clone(),
                 fee_amount: event.fee_amount,
+                source_cursor: event.source_cursor.clone(),
                 first_seen_at_unix_nanos: event.occurred_at_unix_nanos,
                 last_seen_at_unix_nanos: event.occurred_at_unix_nanos,
                 resolution: UnknownRemoteOrderResolution::Pending,
@@ -139,6 +221,7 @@ impl ExecutionActor {
         entry.fill_price = event.fill_price;
         entry.fee_currency = event.fee_currency.clone();
         entry.fee_amount = event.fee_amount;
+        entry.source_cursor = event.source_cursor.clone();
         entry.last_seen_at_unix_nanos = event.occurred_at_unix_nanos;
         entry.reason = event.reason.clone();
         Ok(())

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from rich.cells import cell_len
 from rich.text import Text
-from textual.events import Resize
+from textual.events import MouseDown, Resize
 from textual.widgets.option_list import Option
 
 from ..theme import PRIMARY, rich_theme_foreground, rich_theme_muted
@@ -13,6 +13,30 @@ from .action_list import ActionItem, ActionList
 
 class GuidedActionList(ActionList):
     """Render actions that may be selected directly or by typed shortcut."""
+
+    _mouse_selection_pending = False
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        """Highlight a mouse target and mark its click as selection-only."""
+
+        clicked_option = event.style.meta.get("option")
+        if not isinstance(clicked_option, int):
+            return
+        option = self.get_option_at_index(clicked_option)
+        if option.disabled:
+            return
+        self.focus()
+        self.highlighted = clicked_option
+        self._mouse_selection_pending = True
+        event.stop()
+
+    def action_select(self) -> None:
+        """Require Enter after a mouse click has highlighted an option."""
+
+        if self._mouse_selection_pending:
+            self._mouse_selection_pending = False
+            return
+        super().action_select()
 
     def on_focus(self) -> None:
         """Give keyboard navigation a deterministic starting point."""
@@ -112,9 +136,7 @@ def _guided_action_prompt(
 
 
 def _action_heading_cell_width(item: ActionItem) -> int:
-    shortcut = (
-        f"[{_display_shortcut(item.shortcut)}]  " if item.shortcut else ""
-    )
+    shortcut = f"[{_display_shortcut(item.shortcut)}]  " if item.shortcut else ""
     return cell_len(shortcut) + cell_len(item.label)
 
 

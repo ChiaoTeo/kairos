@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::task::{Context, Poll};
 
 use kairos_primitives::account::SegmentKey;
-use kairos_primitives::execution::{FillId, OrderId};
+use kairos_primitives::execution::{ClientOrderId, FillId, OrderId};
 use kairos_primitives::reference::Symbol;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
@@ -357,7 +357,14 @@ impl HyperliquidWebSocketConnection {
                 observed_at_unix_nanos: observed,
                 received_at_unix_nanos: stream::now(),
                 payload: ExternalExecutionEvent {
-                    order_id,
+                    remote_order_id: kairos_primitives::integration::RemoteOrderId::new(&oid)
+                        .map_err(payload)?,
+                    client_order_id: order
+                        .get("cloid")
+                        .and_then(Value::as_str)
+                        .map(ClientOrderId::new)
+                        .transpose()
+                        .map_err(payload)?,
                     symbol: Symbol::new(coin).map_err(payload)?,
                     status: crate::domain::execution::normalize_order_status(status),
                     side: order.get("side").and_then(Value::as_str).map(|v| {
@@ -460,7 +467,9 @@ impl HyperliquidWebSocketConnection {
                 observed_at_unix_nanos: observed,
                 received_at_unix_nanos: stream::now(),
                 payload: ExternalExecutionEvent {
-                    order_id: OrderId::new(&oid).map_err(payload)?,
+                    remote_order_id: kairos_primitives::integration::RemoteOrderId::new(&oid)
+                        .map_err(payload)?,
+                    client_order_id: None,
                     symbol: Symbol::new(coin).map_err(payload)?,
                     status: crate::OrderStatus::PartiallyFilled,
                     side: None,
@@ -908,7 +917,11 @@ mod tests {
             },
             other => panic!("expected account order event, got {other:?}"),
         }
-        assert_eq!(execution.payload.order_id.as_str(), "client-42");
+        assert_eq!(execution.payload.remote_order_id.as_str(), "42");
+        assert_eq!(
+            execution.payload.client_order_id.as_deref(),
+            Some("client-42")
+        );
     }
 
     #[test]

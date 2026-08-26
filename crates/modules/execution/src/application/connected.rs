@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 use kairos_execution_contract::{
     CancelOrderRequest, ExecutionClient, ExecutionCommandStatus, ExecutionControlRpcClient,
-    ExecutionReconcileResponse, ExecutionRoutesQuery, ExecutionRoutesResponse,
-    ReconcileExecutionRequest, ReplaceOrderRequest, SubmitIntentRequest,
+    ExecutionOrderAuditQuery, ExecutionOrderAuditResponse, ExecutionReconcileResponse,
+    ExecutionRoutesQuery, ExecutionRoutesResponse, ReconcileExecutionRequest, ReplaceOrderRequest,
+    SubmitIntentRequest,
 };
 use kairos_primitives::execution::OrderId;
 use kairos_primitives::runtime::InstanceIdentity;
@@ -147,6 +148,7 @@ pub enum ConnectedExecutionOutput {
     Order(ExecutionOrderResult),
     Events(ExecutionEventsResult),
     Fills(ExecutionFillsResult),
+    Audit(ExecutionOrderAuditResponse),
     Routes(ExecutionRoutesResponse),
     Reconcile(ExecutionReconcileResponse),
     Command(ExecutionCommandStatus),
@@ -208,33 +210,13 @@ impl ConnectedExecutionApplication {
         self.read_current()
     }
 
-    pub fn orders(
+    pub fn active_orders(
         &self,
         account_id: Option<&str>,
     ) -> Result<ExecutionOrdersResult, Box<dyn std::error::Error>> {
         let current = self.read_current()?;
         Ok(ExecutionOrdersResult {
-            orders: filter_orders(current.orders, account_id, None),
-        })
-    }
-
-    pub fn open_orders(
-        &self,
-        account_id: Option<&str>,
-    ) -> Result<ExecutionOrdersResult, Box<dyn std::error::Error>> {
-        let current = self.read_current()?;
-        Ok(ExecutionOrdersResult {
-            orders: filter_orders(current.orders, account_id, Some(false)),
-        })
-    }
-
-    pub fn history(
-        &self,
-        account_id: Option<&str>,
-    ) -> Result<ExecutionOrdersResult, Box<dyn std::error::Error>> {
-        let current = self.read_current()?;
-        Ok(ExecutionOrdersResult {
-            orders: filter_orders(current.orders, account_id, Some(true)),
+            orders: filter_orders(current.orders, account_id),
         })
     }
 
@@ -247,7 +229,7 @@ impl ConnectedExecutionApplication {
         })
     }
 
-    pub fn order_status(
+    pub fn active_order(
         &self,
         order_id: &str,
     ) -> Result<ExecutionOrderResult, Box<dyn std::error::Error>> {
@@ -259,7 +241,7 @@ impl ConnectedExecutionApplication {
             .ok_or_else(|| format!("unknown order: {order_id}").into())
     }
 
-    pub fn events(
+    pub fn recent_order_events(
         &self,
         order_id: Option<&str>,
     ) -> Result<ExecutionEventsResult, Box<dyn std::error::Error>> {
@@ -269,30 +251,7 @@ impl ConnectedExecutionApplication {
         })
     }
 
-    pub fn trace(
-        &self,
-        order_id: &str,
-    ) -> Result<ExecutionEventsResult, Box<dyn std::error::Error>> {
-        let current = self.read_current()?;
-        Ok(ExecutionEventsResult {
-            events: filter_events(current.events, Some(order_id), None, None, None),
-        })
-    }
-
-    pub fn audit(
-        &self,
-        order_id: Option<&str>,
-        remote_order_id: Option<&str>,
-        status: Option<&str>,
-        limit: Option<u32>,
-    ) -> Result<ExecutionEventsResult, Box<dyn std::error::Error>> {
-        let current = self.read_current()?;
-        Ok(ExecutionEventsResult {
-            events: filter_events(current.events, order_id, remote_order_id, status, limit),
-        })
-    }
-
-    pub fn fills(
+    pub fn recent_fills(
         &self,
         order_id: Option<&str>,
     ) -> Result<ExecutionFillsResult, Box<dyn std::error::Error>> {
@@ -312,6 +271,15 @@ impl ConnectedExecutionApplication {
     ) -> Result<ExecutionRoutesResponse, Box<dyn std::error::Error>> {
         let response: ExecutionRoutesResponse =
             ExecutionControlRpcClient::routes(&self.client.control(), query).await?;
+        Ok(response)
+    }
+
+    pub async fn order_audit(
+        &self,
+        query: ExecutionOrderAuditQuery,
+    ) -> Result<ExecutionOrderAuditResponse, Box<dyn std::error::Error>> {
+        let response =
+            ExecutionControlRpcClient::order_audit(&self.client.control(), query).await?;
         Ok(response)
     }
 
@@ -527,14 +495,10 @@ impl ConnectedExecutionApplication {
 fn filter_orders(
     values: Vec<ExecutionOrderResult>,
     account_id: Option<&str>,
-    terminal: Option<bool>,
 ) -> Vec<ExecutionOrderResult> {
     values
         .into_iter()
-        .filter(|value| {
-            account_id.is_none_or(|expected| value.account_id == expected)
-                && terminal.is_none_or(|expected| value.terminal == expected)
-        })
+        .filter(|value| account_id.is_none_or(|expected| value.account_id == expected))
         .collect()
 }
 

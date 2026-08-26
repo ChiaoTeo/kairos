@@ -14,7 +14,6 @@ pub struct SelectedExecutionRoute {
     pub route_id: ExecutionRouteId,
     pub broker_id: BrokerId,
     pub execution_channel: ExecutionChannelCode,
-    #[serde(alias = "provider_symbol")]
     pub order_entry_symbol: OrderEntrySymbol,
     #[serde(default)]
     pub destination_market_id: Option<MarketId>,
@@ -36,11 +35,22 @@ pub enum DeliveryCertainty {
     Indeterminate,
     Confirmed,
     Rejected,
+    Reconciled,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionCommandKind {
+    #[default]
+    Submit,
+    Cancel,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionAttempt {
     pub attempt_id: String,
+    #[serde(default)]
+    pub command: ExecutionCommandKind,
     pub selected_route: SelectedExecutionRoute,
     /// Stable identity of the configured connection binding used by this
     /// attempt. It is copied rather than resolved from a mutable route view.

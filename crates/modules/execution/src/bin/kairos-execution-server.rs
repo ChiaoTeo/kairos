@@ -1,7 +1,8 @@
 use clap::Parser;
 use kairos_credentials::CredentialStore;
 use kairos_execution::composition::{
-    ExecutionConnectionOptions, ExecutionHostConfig, ExecutionWriterFence, build_execution_host,
+    ExecutionConnectionOptions, ExecutionHostConfig, ExecutionVenueEnvironment,
+    ExecutionWriterFence, build_execution_host,
 };
 use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
 use serde::Deserialize;
@@ -156,7 +157,7 @@ fn acquire_execution_writer_leases(
 struct Args {
     #[arg(long)]
     workspace: String,
-    #[arg(long, visible_alias = "launch-mode", default_value = "paper")]
+    #[arg(long, default_value = "paper")]
     launch_mode: String,
     #[arg(long)]
     launch_id: String,
@@ -186,6 +187,7 @@ struct ExecutionRouteConfig {
     segment_key: String,
     broker_id: String,
     execution_channel: String,
+    environment: ExecutionVenueEnvironment,
     #[serde(default)]
     trading_mode: Option<String>,
     #[serde(default)]
@@ -305,6 +307,18 @@ impl Args {
                     .into(),
             );
         }
+        validate_launch_route_environment(&self.launch_mode, &route.broker_id, route.environment)?;
+        if route.environment.is_external_non_live()
+            && !route.broker_id.eq_ignore_ascii_case("ibkr")
+            && (route.base_url.as_deref().is_none_or(str::is_empty)
+                || route.websocket_url.as_deref().is_none_or(str::is_empty))
+        {
+            return Err(format!(
+                "non-live external Execution route {} requires explicit base_url and websocket_url",
+                route.route_id
+            )
+            .into());
+        }
         let credentials = CredentialStore::for_workspace(workspace)?;
         let stored = credentials.find_provider(&route.broker_id, route.credential_id.as_deref());
         let (default_base_url, default_websocket_url) =
@@ -316,6 +330,7 @@ impl Args {
             segment_key: route.segment_key,
             broker_id: route.broker_id,
             execution_channel: route.execution_channel,
+            environment: route.environment,
             trading_mode: route.trading_mode,
             api_key: stored
                 .and_then(|value| value.value("api_key").cloned())
@@ -368,6 +383,34 @@ impl Args {
     }
 }
 
+fn validate_launch_route_environment(
+    launch_mode: &str,
+    broker_id: &str,
+    environment: ExecutionVenueEnvironment,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mode = launch_mode.trim().to_ascii_lowercase();
+    let simulated = matches!(
+        broker_id.trim().to_ascii_lowercase().as_str(),
+        "simulated" | "paper"
+    );
+    if simulated && environment != ExecutionVenueEnvironment::Paper {
+        return Err("simulated Execution routes require environment=paper".into());
+    }
+    if matches!(mode.as_str(), "paper" | "backtest")
+        && environment != ExecutionVenueEnvironment::Paper
+    {
+        return Err(format!(
+            "{mode} launch cannot compose an external {} Execution route",
+            environment.as_str()
+        )
+        .into());
+    }
+    if mode == "live" && environment == ExecutionVenueEnvironment::Paper {
+        return Err("live launch cannot compose an environment=paper Execution route".into());
+    }
+    Ok(())
+}
+
 fn provider_endpoints(provider: &str, execution_channel: &str) -> (&'static str, &'static str) {
     match (
         provider.trim().to_ascii_lowercase().as_str(),
@@ -396,24 +439,28 @@ fn provider_endpoints(provider: &str, execution_channel: &str) -> (&'static str,
 
 #[cfg(test)]
 mod tests {
-    use kairos_execution::composition::ExecutionConnectionOptions;
+    use kairos_execution::composition::{ExecutionConnectionOptions, ExecutionVenueEnvironment};
     use kairos_workspace::workspace::Workspace;
     use secrecy::SecretString;
 
     use super::{
         Args, ExecutionRouteConfig, acquire_exclusive_provider_process_locks,
-        acquire_execution_writer_leases, provider_endpoints,
+        acquire_execution_writer_leases, provider_endpoints, validate_launch_route_environment,
     };
 
     #[test]
     fn route_config_accepts_credential_references_and_rejects_inline_secrets() {
         let routes: Vec<ExecutionRouteConfig> = serde_json::from_str(
-            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","broker_id":"okx","execution_channel":"swap","credential_id":"okx-main"}]"#,
+            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","broker_id":"okx","execution_channel":"swap","environment":"live","credential_id":"okx-main"}]"#,
         )
         .unwrap();
         assert_eq!(routes[0].credential_id.as_deref(), Some("okx-main"));
         assert!(serde_json::from_str::<Vec<ExecutionRouteConfig>>(
-            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","broker_id":"okx","execution_channel":"swap","api_key":"secret"}]"#,
+            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","broker_id":"okx","execution_channel":"swap","environment":"live","api_key":"secret"}]"#,
+        )
+        .is_err());
+        assert!(serde_json::from_str::<Vec<ExecutionRouteConfig>>(
+            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","broker_id":"okx","execution_channel":"swap"}]"#,
         )
         .is_err());
     }
@@ -427,7 +474,7 @@ mod tests {
         std::fs::create_dir_all(instance.paths().config_root()).unwrap();
         std::fs::write(
             instance.normalized_config().unwrap(),
-            r#"{"accounts":["secondary"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","broker_id":"simulated","execution_channel":"swap"}]}}"#,
+            r#"{"accounts":["secondary"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","broker_id":"simulated","execution_channel":"swap","environment":"paper"}]}}"#,
         )
         .unwrap();
         let args = Args {
@@ -448,7 +495,7 @@ mod tests {
 
         std::fs::write(
             instance.normalized_config().unwrap(),
-            r#"{"accounts":["main"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","broker_id":"simulated","execution_channel":"swap"}]}}"#,
+            r#"{"accounts":["main"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","broker_id":"simulated","execution_channel":"swap","environment":"paper"}]}}"#,
         )
         .unwrap();
         let error = args
@@ -456,6 +503,73 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("account not enabled by the launch"));
+    }
+
+    #[test]
+    fn non_live_external_routes_require_explicit_endpoints() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "test").unwrap();
+        let instance = workspace.instance("live", "launch", "instance").unwrap();
+        instance.prepare().unwrap();
+        std::fs::create_dir_all(instance.paths().config_root()).unwrap();
+        std::fs::write(
+            instance.normalized_config().unwrap(),
+            r#"{"accounts":["main"],"execution":{"enabled":true,"routes":[{"route_id":"binance-testnet","account_id":"main","segment_key":"spot","broker_id":"binance","execution_channel":"spot","environment":"testnet"}]}}"#,
+        )
+        .unwrap();
+        let args = Args {
+            workspace: workspace.root().display().to_string(),
+            launch_mode: "live".into(),
+            launch_id: "launch".into(),
+            instance_id: "instance".into(),
+            confirm_live: false,
+            aeron_dir: None,
+            aeron_channel: kairos_conflux::DEFAULT_AERON_CHANNEL.into(),
+            execution_events_stream_id: kairos_conflux::output_stream_ids::EXECUTION_EVENTS,
+        };
+        let error = args
+            .connection_options_list(&workspace)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("requires explicit base_url and websocket_url"));
+
+        std::fs::write(
+            instance.normalized_config().unwrap(),
+            r#"{"accounts":["main"],"execution":{"enabled":true,"routes":[{"route_id":"binance-testnet","account_id":"main","segment_key":"spot","broker_id":"binance","execution_channel":"spot","environment":"testnet","base_url":"https://rest.test.invalid","websocket_url":"wss://stream.test.invalid"}]}}"#,
+        )
+        .unwrap();
+        let routes = args.connection_options_list(&workspace).unwrap();
+        assert_eq!(routes[0].environment, ExecutionVenueEnvironment::Testnet);
+        assert_eq!(routes[0].base_url, "https://rest.test.invalid");
+        assert_eq!(routes[0].websocket_url, "wss://stream.test.invalid");
+    }
+
+    #[test]
+    fn launch_mode_and_route_environment_cannot_cross() {
+        assert!(
+            validate_launch_route_environment(
+                "live",
+                "binance",
+                ExecutionVenueEnvironment::Testnet,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_launch_route_environment(
+                "paper",
+                "binance",
+                ExecutionVenueEnvironment::Testnet,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_launch_route_environment(
+                "live",
+                "simulated",
+                ExecutionVenueEnvironment::Paper,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -469,6 +583,7 @@ mod tests {
             segment_key: "equity".into(),
             broker_id: "ibkr".into(),
             execution_channel: "equity".into(),
+            environment: ExecutionVenueEnvironment::Paper,
             trading_mode: None,
             api_key: SecretString::from(String::new()),
             secret: SecretString::from(String::new()),

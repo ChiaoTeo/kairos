@@ -27,6 +27,7 @@ class WorkspaceHeader(Horizontal):
         with Horizontal(id="workspace-status"):
             yield Static(id="status-indicator")
             yield Static(id="command-status")
+            yield Static(id="compact-command-status")
 
     def on_mount(self) -> None:
         self.app.theme_changed_signal.subscribe(self, self._theme_changed)
@@ -43,12 +44,12 @@ class WorkspaceHeader(Horizontal):
         app = cast("KairosWorkbenchApp", self.app)
         state = app.state
         colors = rich_theme_colors(self.app.current_theme)
-        title = Text("◆ KAIROS", style=f"bold {colors.primary}")
-        title.append("  /  ", style="dim")
+        title = Text("KAIROS", style=f"bold {colors.primary}")
+        title.append("  ·  ", style=colors.muted)
         if state.owner is None:
             title.append("未打开项目", style=f"bold {colors.warning}")
         else:
-            title.append(state.workspace_id, style="bold")
+            title.append(state.workspace_id)
         self.query_one("#workspace-title", Static).update(title)
         self.screen.title = f"Kairos · {state.workspace_id}"
 
@@ -61,6 +62,9 @@ class WorkspaceHeader(Horizontal):
         )
         self.query_one("#status-indicator", Static).update(Text(marker, style=style))
         self.query_one("#command-status", Static).update(Text(value, style=style))
+        self.query_one("#compact-command-status", Static).update(
+            Text(_compact_status(value), style=style)
+        )
 
 
 def _status_presentation(value: str, colors: RichThemeColors) -> tuple[str, str]:
@@ -72,4 +76,13 @@ def _status_presentation(value: str, colors: RichThemeColors) -> tuple[str, str]
         return "✓", colors.success
     if "取消" in value:
         return "■", colors.warning
-    return "●", "dim"
+    return "•", colors.muted
+
+
+def _compact_status(value: str) -> str:
+    """Keep the operational state readable when header width is constrained."""
+
+    if value.startswith("已选择 "):
+        count = value.removeprefix("已选择 ").partition(" 条")[0]
+        return f"已选 {count} 条"
+    return value.partition(" · ")[0]

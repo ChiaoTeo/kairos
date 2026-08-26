@@ -131,6 +131,71 @@ def test_activity_stream_uses_dividers_and_redacts_equivalent_commands() -> None
     )
 
 
+def test_activity_stream_reserves_a_stable_gutter_for_the_whole_activity() -> None:
+    async def run() -> tuple[str, str]:
+        app = _ActivityApp()
+        async with app.run_test(size=(60, 20)) as pilot:
+            stream = app.query_one(ActivityStream)
+            stream.append_activity(
+                ActivityRecord(
+                    activity_id="quote-1",
+                    kind=ActivityKind.QUERY,
+                    outcome=ActivityOutcome.SUCCESS,
+                    title="AAPL · quote",
+                    body=Text("买盘 BID\n309.51"),
+                )
+            )
+            await pilot.pause()
+            unfocused = stream.plain_text
+            stream.focus()
+            assert stream.focus_sequence(1)
+            await pilot.pause()
+            return unfocused, stream.plain_text
+
+    unfocused, focused = asyncio.run(run())
+
+    assert "[A001]" in unfocused
+    assert "  买盘 BID" in unfocused
+    assert "┃ [A001]" in focused
+    assert "  买盘 BID" in focused
+
+
+def test_activity_stream_compacts_long_commands_but_exports_the_full_command() -> None:
+    async def run() -> tuple[str, str]:
+        app = _ActivityApp()
+        async with app.run_test(size=(60, 20)) as pilot:
+            stream = app.query_one(ActivityStream)
+            stream.append_activity(
+                ActivityRecord(
+                    activity_id="quote-1",
+                    kind=ActivityKind.QUERY,
+                    outcome=ActivityOutcome.SUCCESS,
+                    title="AAPL · quote",
+                    equivalent_command=(
+                        "kairos",
+                        "market",
+                        "--workspace",
+                        "/workspace/.kairos",
+                        "standalone",
+                        "once",
+                        "--market-id",
+                        "market:nasdaq:equity:AAPL:USD",
+                        "--observation-kind",
+                        "quote",
+                    ),
+                )
+            )
+            await pilot.pause()
+            return stream.plain_text, stream.export_plain_text()
+
+    visible, exported = asyncio.run(run())
+
+    assert "$ kairos market … --observation-kind quote" in visible
+    assert "C 复制完整 Activity" in visible
+    assert "market:nasdaq:equity:AAPL:USD" not in visible
+    assert "market:nasdaq:equity:AAPL:USD" in exported
+
+
 def test_clear_visible_activity_does_not_need_a_persistent_owner() -> None:
     async def run() -> tuple[tuple[ActivityRecord, ...], str]:
         app = _ActivityApp()

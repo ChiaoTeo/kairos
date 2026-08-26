@@ -122,7 +122,16 @@ impl IntentPlanningContext {
         }
         if self.market_snapshot.is_some() {
             let quotes = self.read_market_quotes_for_orders(&orders)?;
-            validate_quote_freshness(&orders, &quotes)?;
+            let business_time = self
+                .business_time_unix_nanos
+                .ok_or_else(|| "intent planning requires explicit business time".to_string())?;
+            let authoritative_max_age = match &intent.algorithm {
+                crate::domain::ExecutionAlgorithmPolicy::PassiveLimit(policy) => {
+                    Some(policy.max_quote_age)
+                },
+                _ => None,
+            };
+            validate_quote_freshness(&orders, &quotes, business_time, authoritative_max_age)?;
         }
         Ok(orders)
     }

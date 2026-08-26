@@ -63,7 +63,6 @@ _V2_EVENT_ROOTS = {
     b"EOC2": "OrderCanceled",
     b"EOX2": "OrderExpired",
     b"EFV2": "FillRecorded",
-    b"EXV2": "ReconciliationRequired",
 }
 
 
@@ -153,20 +152,6 @@ def _v2_payload(root_name: str, root: Any) -> tuple[str | None, dict[str, object
             "plan_id": _text(value.PlanId()),
             "intent_id": _text(value.IntentId()),
         }
-    if root_name == "ReconciliationRequired":
-        return None, {
-            "reconciliation_id": _required_text(
-                root.ReconciliationId(), "reconciliation_id"
-            ),
-            "reason": int(root.Reason()),
-            "intent_id": _text(root.IntentId()),
-            "plan_id": _text(root.PlanId()),
-            "leg_id": _text(root.LegId()),
-            "order_id": _text(root.OrderId()),
-            "account_id": _text(root.AccountId()),
-            "details": _text(root.Details()) or "",
-            "kind": root_name,
-        }
     return None, {"intent_id": _required_text(root.IntentId(), "intent_id")}
 
 
@@ -188,8 +173,31 @@ def _v2_intent(value: Any) -> dict[str, object]:
         "instance_id": _required_text(value.InstanceId(), "intent instance_id"),
         "instrument_id": _required_text(first.InstrumentId(), "intent instrument_id"),
         "account_ids": account_ids,
+        "execution_benchmarks": [
+            _v2_execution_benchmark(value.ExecutionBenchmarks(index))
+            for index in range(value.ExecutionBenchmarksLength())
+        ],
         "target_quantity": None,
         "reason": _text(value.Reason()) or "",
+    }
+
+
+def _v2_execution_benchmark(value: Any) -> dict[str, object]:
+    kind = int(value.Kind())
+    if kind != 1:
+        raise ValueError("Execution benchmark kind is unspecified or unsupported")
+    price = _decimal(value.Price())
+    if price is None:
+        raise ValueError("Execution benchmark price is required")
+    return {
+        "kind": "arrival",
+        "leg_id": _text(value.LegId()),
+        "instrument_id": _required_text(
+            value.InstrumentId(), "benchmark instrument_id"
+        ),
+        "market_id": _required_text(value.MarketId(), "benchmark market_id"),
+        "price": price,
+        "observed_at_unix_nanos": int(value.ObservedAtUnixNanos()),
     }
 
 
@@ -267,6 +275,7 @@ def _v2_attempt(value: Any) -> dict[str, object]:
     selected_route = value.SelectedRoute()
     return {
         "attempt_id": _required_text(value.AttemptId(), "attempt_id"),
+        "command": int(value.Command()),
         "selected_route": _v2_selected_route(selected_route),
         "provider_connection_id": _required_text(
             value.ProviderConnectionId(), "provider_connection_id"

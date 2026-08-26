@@ -286,7 +286,11 @@ impl OrderAdmissionContext {
                 .read_market_quote(request.market_id.as_deref(), request.instrument_id.as_str())?
                 .map(|(quote, _)| vec![quote])
                 .unwrap_or_default();
-            validate_quote_freshness(std::slice::from_ref(request), &quotes)?;
+            let business_time = request
+                .submitted_at_unix_nanos
+                .map(UnixNanos::get)
+                .ok_or_else(|| "order admission requires explicit business time".to_string())?;
+            validate_quote_freshness(std::slice::from_ref(request), &quotes, business_time, None)?;
         }
         Ok(commitment)
     }

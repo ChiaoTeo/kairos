@@ -256,10 +256,20 @@ pub mod kairos {
     pub mod execution {
         pub use super::{common, intent};
         pub mod v_2 {
-            mod active_intents_view_generated;
-            pub use active_intents_view_generated::*;
-            mod active_orders_view_generated;
-            pub use active_orders_view_generated::*;
+            mod algorithm_leg_benchmark_quality_generated;
+            pub use algorithm_leg_benchmark_quality_generated::*;
+            mod algorithm_leg_execution_quality_generated;
+            pub use algorithm_leg_execution_quality_generated::*;
+            mod algorithm_leg_lifecycle_generated;
+            pub use algorithm_leg_lifecycle_generated::*;
+            mod algorithm_leg_role_generated;
+            pub use algorithm_leg_role_generated::*;
+            mod algorithm_leg_state_generated;
+            pub use algorithm_leg_state_generated::*;
+            mod algorithm_run_lifecycle_generated;
+            pub use algorithm_run_lifecycle_generated::*;
+            mod algorithm_run_state_generated;
+            pub use algorithm_run_state_generated::*;
             mod completion_policy_generated;
             pub use completion_policy_generated::*;
             mod commitment_basis_kind_generated;
@@ -278,8 +288,16 @@ pub mod kairos {
             pub use execution_algorithm_generated::*;
             mod execution_attempt_generated;
             pub use execution_attempt_generated::*;
+            mod execution_benchmark_kind_generated;
+            pub use execution_benchmark_kind_generated::*;
+            mod execution_benchmark_observation_generated;
+            pub use execution_benchmark_observation_generated::*;
+            mod execution_command_kind_generated;
+            pub use execution_command_kind_generated::*;
             mod execution_funding_requirement_generated;
             pub use execution_funding_requirement_generated::*;
+            mod execution_fee_total_generated;
+            pub use execution_fee_total_generated::*;
             mod execution_intent_generated;
             pub use execution_intent_generated::*;
             mod execution_leg_state_generated;
@@ -298,6 +316,8 @@ pub mod kairos {
             pub use hedge_policy_generated::*;
             mod immediate_algorithm_generated;
             pub use immediate_algorithm_generated::*;
+            mod passive_limit_policy_generated;
+            pub use passive_limit_policy_generated::*;
             mod intent_accepted_generated;
             pub use intent_accepted_generated::*;
             mod intent_leg_generated;
@@ -348,10 +368,6 @@ pub mod kairos {
             pub use quantity_semantics_generated::*;
             mod ratio_generated;
             pub use ratio_generated::*;
-            mod reconciliation_reason_generated;
-            pub use reconciliation_reason_generated::*;
-            mod reconciliation_required_generated;
-            pub use reconciliation_required_generated::*;
             mod risk_reservation_saga_lifecycle_generated;
             pub use risk_reservation_saga_lifecycle_generated::*;
             mod risk_reservation_saga_state_generated;

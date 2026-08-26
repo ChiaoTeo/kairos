@@ -6,6 +6,7 @@ import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import replace
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
@@ -19,6 +20,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.events import Resize
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import Input, OptionList, Static
 from textual.worker import Worker
 
@@ -30,6 +32,9 @@ from kairospy.surface.presentation import (
 from ..widgets import (
     ActionItem,
     ActionToken,
+    ActivityCopyRequested,
+    ActivityFocusExitRequested,
+    ActivitySelectionChanged,
     ActivityStream,
     ChoiceInteraction,
     ConfirmInteraction,
@@ -93,6 +98,16 @@ _BACK_ALIAS_PREFIX_PATTERN = re.compile(r"^/b(?:a(?:c(?:k)?)?)?$", re.IGNORECASE
 _BACK_SELECTION_PATTERN = re.compile(
     r"^/(?:b|back)\s+(?P<selection>\d*)$", re.IGNORECASE
 )
+_ACTIVITY_RANGE_PATTERN = re.compile(
+    r"^(?:a)?(?P<start>\d+)(?:-(?:a)?(?P<end>\d+))?$", re.IGNORECASE
+)
+
+
+class InteractionPanelMode(StrEnum):
+    """Session-local layout modes for the shared interaction region."""
+
+    DEFAULT = "default"
+    COLLAPSED = "collapsed"
 
 
 class CommandLineScreen(Screen[None]):
@@ -108,6 +123,13 @@ class CommandLineScreen(Screen[None]):
         Binding("alt+up", "scroll_output_line_up", "内容区向上滚动", show=False),
         Binding("alt+down", "scroll_output_line_down", "内容区向下滚动", show=False),
         Binding("ctrl+end", "follow_output", "回到底部并继续跟随", show=False),
+        Binding(
+            "ctrl+o",
+            "cycle_interaction_panel",
+            "展开或收起交互区",
+            show=False,
+            priority=True,
+        ),
         Binding("alt+pageup", "scroll_interaction_up", "交互区向上滚动", show=False),
         Binding(
             "alt+pagedown",
@@ -115,10 +137,11 @@ class CommandLineScreen(Screen[None]):
             "交互区向下滚动",
             show=False,
         ),
+        Binding("tab", "focus_next_region", "切换焦点", show=False, priority=True),
         Binding(
-            "tab,shift+tab",
-            "toggle_interaction_focus",
-            "切换交互区焦点",
+            "shift+tab",
+            "focus_previous_region",
+            "反向切换焦点",
             show=False,
             priority=True,
         ),
@@ -136,6 +159,7 @@ class CommandLineScreen(Screen[None]):
         self._back_preview_hint: str | None = None
         self._theme_preview_interaction: InteractionState | None = None
         self._theme_preview_hint: str | None = None
+        self._interaction_panel_mode = InteractionPanelMode.DEFAULT
 
     @property
     def workbench_app(self) -> KairosWorkbenchApp:
@@ -157,6 +181,7 @@ class CommandLineScreen(Screen[None]):
         )
         yield Static("", id="activity-empty")
         with Vertical(id="operation-dock"):
+            yield Static("", id="interaction-collapsed-summary")
             yield InteractionRegion(
                 ChoiceInteraction(actions=HOME_ACTIONS),
                 id="interaction-region",
@@ -244,9 +269,7 @@ class CommandLineScreen(Screen[None]):
                 return
         self._restore_back_preview()
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         """Execute a focused interaction choice through the normal input path."""
 
         if event.option_list.id != "guided-actions":
@@ -262,17 +285,55 @@ class CommandLineScreen(Screen[None]):
         if self._is_back_target_picker():
             self._discard_back_preview()
         self._input().value = ""
-        self.submit(selected.shortcut or selected.id)
-        self.call_after_refresh(self._focus_actions_if_available)
+        submitted = selected.shortcut or selected.id
+        was_confirmation = isinstance(self.session.interaction, ConfirmInteraction)
+        if was_confirmation:
+            submitted = f"/{submitted}"
+        self.submit(submitted)
+        if not was_confirmation:
+            self.call_after_refresh(self._focus_actions_if_available)
+
+    def action_focus_next_region(self) -> None:
+        """Move focus through input, available actions, and retained activities."""
+
+        self._cycle_region_focus(1)
+
+    def action_focus_previous_region(self) -> None:
+        """Move focus through the same regions in reverse order."""
+
+        self._cycle_region_focus(-1)
 
     def action_toggle_interaction_focus(self) -> None:
-        """Move focus between the shared input and available interaction choices."""
+        """Preserve the former action name for callers while using the new cycle."""
 
+        self.action_focus_next_region()
+
+    def _cycle_region_focus(self, delta: int) -> None:
         actions = self.query_one("#guided-actions", GuidedActionList)
-        if self.app.focused is actions or not actions.display or not actions.option_count:
-            self.app.set_focus(self._input())
+        if isinstance(self.session.interaction, ConfirmInteraction):
+            if not actions.has_focus:
+                self.app.set_focus(actions)
+                return
+            highlighted = actions.highlighted or 0
+            actions.highlighted = (highlighted + delta) % actions.option_count
             return
-        self.app.set_focus(actions)
+        output = self._output()
+        regions: list[Widget] = [self._input()]
+        if actions.display and actions.option_count:
+            regions.append(actions)
+        if output.activities:
+            regions.append(output)
+        focused = self.app.focused
+        try:
+            current = regions.index(focused) if focused is not None else 0
+        except ValueError:
+            current = 0
+        target = regions[(current + delta) % len(regions)]
+        self.app.set_focus(target)
+        if target is output:
+            self._set_status("内容区 · ↑↓ 定位 · Space 多选 · C 复制 · Esc 返回")
+        elif target is self._input():
+            self._set_status("就绪")
 
     def _focus_actions_if_available(self) -> None:
         """Keep a direct-selection workflow in the interaction region."""
@@ -288,6 +349,11 @@ class CommandLineScreen(Screen[None]):
         interaction = self.session.interaction
         if not value and not isinstance(interaction, InputInteraction):
             return
+        command, arguments = _parse_command(value)
+        if value.startswith("/") and command == "panel":
+            self._dispatch(command, arguments)
+            self.app.set_focus(self._input())
+            return
         if self._running_task is not None:
             self._set_status("当前任务仍在运行 · Ctrl+C 取消")
             self.app.set_focus(self._input())
@@ -299,8 +365,19 @@ class CommandLineScreen(Screen[None]):
             value="<redacted>" if is_secret else value,
             secret=is_secret,
         )
+        if value.startswith("/") and command in {
+            "bottom",
+            "copy",
+            "copy-history",
+            "copy-selected",
+            "down",
+            "goto",
+            "up",
+        }:
+            self._dispatch(command, arguments)
+            self.app.set_focus(self._input())
+            return
         if isinstance(interaction, ConfirmInteraction):
-            command, arguments = _parse_command(value)
             is_allowed = value.startswith("/") and command in {
                 "confirm",
                 "yes",
@@ -315,9 +392,10 @@ class CommandLineScreen(Screen[None]):
                 "help",
                 "?",
                 "theme",
+                "panel",
             }
             if not is_allowed or arguments:
-                self._set_status("等待确认 · 请输入 /y 或 /n")
+                self._set_status("等待确认 · Tab 切换，Enter 执行")
                 self.app.set_focus(self._input())
                 return
             self._dispatch(command, arguments)
@@ -494,6 +572,8 @@ class CommandLineScreen(Screen[None]):
             self._present_help()
         elif command == "clear":
             self.action_clear()
+        elif command == "panel":
+            self._dispatch_panel(arguments)
         elif command == "theme":
             if not arguments:
                 self.present_theme_picker()
@@ -507,12 +587,18 @@ class CommandLineScreen(Screen[None]):
                     "everforest / dracula"
                 )
         elif command == "copy":
-            self.workbench_app.action_copy_page()
+            self._copy_command(arguments)
+        elif command == "copy-selected":
+            self._copy_selected_activities(arguments)
         elif command == "copy-history":
             self.workbench_app.copy_current_page(history_only=True)
+        elif command in {"up", "down"}:
+            self._scroll_output_lines(command, arguments)
+        elif command == "goto":
+            self._goto_activity(arguments)
         elif command == "bottom":
-            self._output().resume_follow()
-            self._set_status("已回到最新活动")
+            self.action_follow_output()
+            self._set_status("已回到底部并恢复实时跟随")
         elif command == "transcript":
             self.session.choose(
                 context_items(self.session, self.workbench_app.state),
@@ -841,6 +927,118 @@ class CommandLineScreen(Screen[None]):
         self._show_context()
         self._set_status("活动记录已清空 · Transcript 和业务状态未改变")
 
+    def on_activity_selection_changed(self, event: ActivitySelectionChanged) -> None:
+        event.stop()
+        if event.focus_lost:
+            self._set_status("就绪")
+            return
+        self._set_status(
+            f"已选择 {event.count} 条 Activity · C 复制"
+            if event.count
+            else "内容区 · ↑↓ 定位 · Space 多选 · C 复制 · Esc 返回"
+        )
+
+    def on_activity_copy_requested(self, event: ActivityCopyRequested) -> None:
+        event.stop()
+        self.workbench_app.copy_workbench_text(event.text, label=event.label)
+
+    def on_activity_focus_exit_requested(
+        self, event: ActivityFocusExitRequested
+    ) -> None:
+        event.stop()
+        self.app.set_focus(self._input())
+        self._set_status("就绪")
+
+    def _copy_command(self, arguments: tuple[str, ...]) -> None:
+        if not arguments:
+            self.workbench_app.action_copy_page()
+            return
+        if arguments == ("selected",):
+            self._copy_selected_activities(())
+            return
+        if len(arguments) != 1:
+            self._set_status("用法：/copy、/copy 12、/copy 12-18")
+            return
+        match = _ACTIVITY_RANGE_PATTERN.fullmatch(arguments[0])
+        if match is None:
+            self._set_status("Activity 范围格式无效 · 示例 /copy 12-18")
+            return
+        start = int(match.group("start"))
+        end = int(match.group("end") or start)
+        if start <= 0 or end < start:
+            self._set_status("复制范围应为正数，并从较小编号到较大编号")
+            return
+        output = self._output()
+        if (
+            output.activity_for_sequence(start) is None
+            or output.activity_for_sequence(end) is None
+        ):
+            missing = start if output.activity_for_sequence(start) is None else end
+            self._set_status(f"未找到 Activity A{missing:03d}")
+            return
+        activities = output.activities_in_sequence_range(start, end)
+        label = (
+            f"A{start:03d}"
+            if start == end
+            else f"A{start:03d}–A{end:03d}，共 {len(activities)} 条 Activity"
+        )
+        self.workbench_app.copy_workbench_text(
+            output.export_plain_text(activities), label=label
+        )
+
+    def _copy_selected_activities(self, arguments: tuple[str, ...]) -> None:
+        if arguments:
+            self._set_status("/copy-selected 不接受参数")
+            return
+        output = self._output()
+        activities = output.copy_target_activities()
+        if not activities:
+            self._set_status("当前没有可复制的 Activity")
+            return
+        self.workbench_app.copy_workbench_text(
+            output.export_plain_text(activities),
+            label=f"所选 {len(activities)} 条 Activity",
+        )
+
+    def _scroll_output_lines(self, direction: str, arguments: tuple[str, ...]) -> None:
+        if len(arguments) > 1:
+            self._set_status(f"用法：/{direction} [行数]")
+            return
+        raw_count = arguments[0] if arguments else "10"
+        try:
+            count = int(raw_count)
+        except ValueError:
+            self._set_status("滚动行数必须是正整数")
+            return
+        if count <= 0:
+            self._set_status("滚动行数必须是正整数")
+            return
+        count = min(count, 100_000)
+        if direction == "up":
+            if self.session.context[:2] == ("operations", "service-logs"):
+                buffer = self.session.operations.live_buffer
+                if buffer is not None:
+                    buffer.pause()
+            count = -count
+        self._output().scroll_lines(count)
+        self._set_status(f"已向{'上' if count < 0 else '下'}滚动 {abs(count)} 行")
+
+    def _goto_activity(self, arguments: tuple[str, ...]) -> None:
+        if len(arguments) != 1:
+            self._set_status("用法：/goto 12")
+            return
+        value = arguments[0].lower().removeprefix("a")
+        if not value.isdecimal() or int(value) <= 0:
+            self._set_status("Activity 编号必须是正整数 · 示例 /goto 12")
+            return
+        sequence = int(value)
+        output = self._output()
+        if not output.focus_sequence(sequence):
+            self._set_status(f"未找到 Activity A{sequence:03d}")
+            return
+        self.call_after_refresh(self.app.set_focus, output)
+        self._set_status(f"已定位到 Activity A{sequence:03d}")
+
     def copy_page_text(self, *, history_only: bool = False) -> str:
         """Build the redacted handoff view from state and visible activities."""
 
@@ -877,6 +1075,59 @@ class CommandLineScreen(Screen[None]):
         """Page the bounded interaction region without moving input focus."""
 
         self._interaction().scroll_page_down(animate=False)
+
+    def action_cycle_interaction_panel(self) -> None:
+        """Toggle the interaction region between its default and collapsed modes."""
+
+        mode = (
+            InteractionPanelMode.COLLAPSED
+            if self._interaction_panel_mode is InteractionPanelMode.DEFAULT
+            else InteractionPanelMode.DEFAULT
+        )
+        self._set_interaction_panel_mode(mode)
+
+    def _dispatch_panel(self, arguments: tuple[str, ...]) -> None:
+        if not arguments:
+            self.action_cycle_interaction_panel()
+            return
+        if len(arguments) != 1:
+            self._set_status("用法：/panel [default|collapsed]")
+            return
+        try:
+            mode = InteractionPanelMode(arguments[0].lower())
+        except ValueError:
+            self._set_status("交互区模式无效 · default / collapsed")
+            return
+        self._set_interaction_panel_mode(mode)
+
+    def _set_interaction_panel_mode(self, mode: InteractionPanelMode) -> None:
+        self._interaction_panel_mode = mode
+        self.set_class(mode is InteractionPanelMode.COLLAPSED, "interaction-collapsed")
+        self._render_interaction_collapsed_summary()
+        focused = self.app.focused
+        actions = self.query_one("#guided-actions", GuidedActionList)
+        if mode is InteractionPanelMode.COLLAPSED and focused is actions:
+            self.app.set_focus(self._input())
+        labels = {
+            InteractionPanelMode.DEFAULT: "交互区已恢复默认大小",
+            InteractionPanelMode.COLLAPSED: "交互区已收起 · Ctrl+O 恢复",
+        }
+        self._set_status(labels[mode])
+
+    def _render_interaction_collapsed_summary(self) -> None:
+        summary = self.query_one("#interaction-collapsed-summary", Static)
+        interaction = self.session.interaction
+        if isinstance(interaction, RunningInteraction):
+            value = f"运行中 · {interaction.message}"
+        elif isinstance(interaction, ConfirmInteraction):
+            value = f"等待确认 · {interaction.title}"
+        elif isinstance(interaction, InputInteraction):
+            value = f"等待输入 · {interaction.title} · {interaction.prompt}"
+        elif isinstance(interaction, ControlInteraction):
+            value = f"控制 · {interaction.title}"
+        else:
+            value = interaction.title or self._context_label()
+        summary.update(f"{redact_text(value)} · Ctrl+O 恢复")
 
     def action_scroll_output_up(self) -> None:
         """Browse older output while leaving command input ownership unchanged."""
@@ -1034,9 +1285,10 @@ class CommandLineScreen(Screen[None]):
             summary=operation.audit_summary,
         )
         self._interaction().present(self.session.interaction)
-        self._input().placeholder = "输入 /y 或 /n"
-        self._set_hints("/y 继续  ·  /n 或 Esc 取消")
+        self._input().placeholder = "Tab 切换选项，Enter 执行"
+        self._set_hints("Tab 切换  ·  Enter 执行  ·  Esc 取消")
         self._set_status("等待确认")
+        self.call_after_refresh(self._focus_actions_if_available)
 
     def _confirm_pending(self) -> None:
         interaction = self.session.interaction
@@ -1176,7 +1428,7 @@ class CommandLineScreen(Screen[None]):
         if isinstance(interaction, InputInteraction):
             command_input.placeholder = interaction.prompt
         elif isinstance(interaction, ConfirmInteraction):
-            command_input.placeholder = "输入 /y 或 /n"
+            command_input.placeholder = "Tab 切换选项，Enter 执行"
         else:
             command_input.placeholder = "输入编号或命令；Enter 提交"
         if not command_input.disabled:
@@ -1187,17 +1439,13 @@ class CommandLineScreen(Screen[None]):
         self.query_one("#command-context", Static).update(f"{self._context_label()}  ›")
         if self._resource_wizard_active():
             if isinstance(interaction, ConfirmInteraction):
-                self._set_hints(
-                    "/y 保存  ·  /b 或 /back 上一步  ·  /cancel 退出配置"
-                )
+                self._set_hints("Tab 切换  ·  Enter 执行  ·  Esc 取消  ·  /back 上一步")
             elif isinstance(interaction, InputInteraction):
                 self._set_hints(
                     "Enter 继续  ·  /b 或 /back 上一步  ·  /cancel 退出配置"
                 )
             else:
-                self._set_hints(
-                    "数字选择  ·  /b 或 /back 上一步  ·  /cancel 退出配置"
-                )
+                self._set_hints("数字选择  ·  /b 或 /back 上一步  ·  /cancel 退出配置")
             return
         if isinstance(interaction, InputInteraction):
             verb = (
@@ -1719,6 +1967,8 @@ class CommandLineScreen(Screen[None]):
 
     def _set_status(self, value: str) -> None:
         self.query_one(WorkspaceHeader).set_status(value)
+        if self.is_mounted:
+            self._render_interaction_collapsed_summary()
 
     def _set_hints(self, primary: str) -> None:
         self._primary_hint = primary
@@ -1731,9 +1981,7 @@ class CommandLineScreen(Screen[None]):
         elif self.has_class("viewport-compact") or self.has_class("viewport-short"):
             hints.update(self._primary_hint)
         else:
-            hints.update(
-                f"{self._primary_hint}  ·  Alt+↑↓  ·  PgUp/PgDn  ·  Ctrl+End"
-            )
+            hints.update(f"{self._primary_hint}  ·  Tab 内容区  ·  /up 20  ·  /bottom")
 
 
 def _parse_command(value: str) -> tuple[str, tuple[str, ...]]:
@@ -1828,19 +2076,26 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
         table.add_row("/d", "诊断市场定义和 Reference 映射")
         table.add_row("/a", "输入完整 Market ID")
     table.add_row("/clear", "清空当前输出显示")
+    table.add_row("/panel [模式]", "切换或指定交互区默认、收起状态")
     table.add_row(
         "/theme [名称]",
         "选择或切换 Tokyo Night、Catppuccin、Nord、Gruvbox、Everforest、Dracula",
     )
     table.add_row("/transcript", "显示当前 Agent 可读会话记录的路径")
     table.add_row("/copy", "复制当前页完整输出，可直接粘贴给 Agent")
+    table.add_row("/copy 12-18", "按稳定 Activity 编号跨页复制")
+    table.add_row("/copy-selected", "复制内容区中用 Space 选中的 Activity")
     table.add_row("/copy-history", "只复制当前会话的活动记录")
+    table.add_row("/goto 12", "定位并聚焦 Activity A012")
+    table.add_row("/up 20 /down 20", "按指定显示行数滚动内容区")
     table.add_row("/bottom", "回到最新活动并恢复自动跟随")
     table.add_row("/y /n", "继续或取消等待中的步骤")
-    table.add_row("PgUp / PgDn", "翻阅内容区；输入焦点保持在命令框")
-    table.add_row("Ctrl+End", "回到内容区底部并继续跟随新输出")
-    table.add_row("Alt+PgUp / PgDn", "滚动内容超出高度上限的交互区")
-    table.add_row("Tab / Shift+Tab", "在交互选项和命令输入之间切换焦点")
+    table.add_row("PgUp / PgDn", "翻阅内容区；Mac 可使用 Fn+↑ / Fn+↓")
+    table.add_row("Ctrl+End / /bottom", "回到底部并继续跟随新输出")
+    table.add_row("Alt/⌥+PgUp/PgDn", "滚动内容超出高度上限的交互区")
+    table.add_row("Ctrl+O", "收起或恢复交互区")
+    table.add_row("Tab / Shift+Tab", "在输入、交互选项和内容区之间切换焦点")
+    table.add_row("内容区 ↑↓ / Space / C", "定位、多选并复制 Activity")
     table.add_row("↑ / ↓, Enter", "在聚焦的交互区移动并执行选中项")
     table.add_row("/help", "显示这份帮助")
     return table

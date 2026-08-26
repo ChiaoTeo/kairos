@@ -32,8 +32,8 @@ use serde::{Deserialize, Serialize};
 pub use snapshot::*;
 
 use crate::domain::{
-    AlgorithmRun, CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionAttempt, ExecutionFill,
-    ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, IntentType,
-    MakerExecutionPolicy, OrderCommitment, OrderSide, OrderType, RiskReservationEvidence,
-    SplitOrderPolicy,
+    AlgorithmRun, CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionAttempt,
+    ExecutionBenchmarkKind, ExecutionFill, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan,
+    FailurePolicy, IntentType, MakerExecutionPolicy, OrderCommitment, OrderSide, OrderType,
+    RiskReservationEvidence, SplitOrderPolicy,
 };

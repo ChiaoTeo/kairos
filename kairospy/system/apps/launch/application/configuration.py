@@ -306,6 +306,7 @@ class LaunchConfig:
                     "segment_key": "spot",
                     "broker_id": "simulated",
                     "execution_channel": "spot",
+                    "environment": "paper",
                 }
                 for account_id in account_ids
             ]
@@ -863,10 +864,44 @@ class LaunchConfig:
                         "segment_key",
                         "broker_id",
                         "execution_channel",
+                        "environment",
                     ):
                         value = route.get(field)
                         if not isinstance(value, str) or not value.strip():
                             issues.append(f"{prefix}.{field} is required")
+                    provider = str(route.get("broker_id") or "").strip().lower()
+                    environment = str(route.get("environment") or "").strip().lower()
+                    allowed_environments = {
+                        "simulated": {"paper"},
+                        "paper": {"paper"},
+                        "binance": {"live", "testnet"},
+                        "okx": {"live"},
+                        "okex": {"live"},
+                        "ibkr": {"live", "paper"},
+                    }
+                    if (
+                        provider in allowed_environments
+                        and environment not in allowed_environments[provider]
+                    ):
+                        expected = ", ".join(sorted(allowed_environments[provider]))
+                        issues.append(
+                            f"{prefix}.environment for {provider} must be one of: {expected}"
+                        )
+                    if mode in {"backtest", "paper"} and environment != "paper":
+                        issues.append(
+                            f"{prefix}.environment must be paper for a {mode} launch"
+                        )
+                    if mode == "live" and environment == "paper":
+                        issues.append(
+                            f"{prefix}.environment must not be paper for a live launch"
+                        )
+                    if environment in {"testnet", "demo"} and provider != "ibkr":
+                        for endpoint_field in ("base_url", "websocket_url"):
+                            endpoint = route.get(endpoint_field)
+                            if not isinstance(endpoint, str) or not endpoint.strip():
+                                issues.append(
+                                    f"{prefix}.{endpoint_field} is required for environment={environment}"
+                                )
                     route_id = route.get("route_id")
                     if isinstance(route_id, str) and route_id.strip():
                         if route_id in route_ids:
@@ -1910,6 +1945,22 @@ def _workspace_account_issues(
             )
             continue
         environment = str(account.get("environment") or "").lower()
+        expected_route_environment = (
+            "paper" if environment in {"paper", "simulated"} else environment
+        )
+        route_environments = {
+            str(route.get("environment") or "").strip().lower()
+            for route in config.execution.get("routes", ())
+            if isinstance(route, Mapping)
+            and str(route.get("account_id") or "") == account_id
+        }
+        for route_environment in sorted(route_environments):
+            if route_environment != expected_route_environment:
+                issues.append(
+                    "Execution route environment does not match Account: "
+                    f"{account_id} ({route_environment or 'missing'} != "
+                    f"{expected_route_environment or 'unknown'})"
+                )
         if config.mode == "live" and environment not in {"live", "testnet"}:
             issues.append(
                 f"Account environment is not live-compatible: {account_id} "

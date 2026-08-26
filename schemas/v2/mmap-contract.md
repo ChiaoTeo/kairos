@@ -60,7 +60,7 @@ Examples:
 
 # Instance Risk and Execution
 <instance>/snapshots/v2/risk/risk-default/current.e1.mmap
-<instance>/snapshots/v2/execution/execution-default/active-intents.e1.mmap
+<view-root>/execution/views/<workspace>/launch=<launch>/instance=<instance>/current-execution/current.snapshot
 ```
 
 `publisher-resource-id` and filenames are System/composition-owned safe
@@ -350,23 +350,24 @@ new reservation and must not infer capacity from a stale mmap alone.
 
 ## 11. Execution mmap resources
 
-One Execution Actor exposes:
+One Execution Actor exposes one replaceable current view:
 
 | Resource | Root | Logical content |
 | --- | --- | --- |
-| `active-intents` | `ECI2 ActiveIntentsView` | non-terminal intents and their current plans/legs |
-| `active-orders` | `ECO2 ActiveOrdersView` | non-terminal exchange-facing orders |
+| `current-execution` | `ECV2 CurrentExecutionView` | operational intents, AlgorithmRuns, exchange-facing orders, commitments, reservations, and unresolved remote facts |
 
-Terminal intents, orders, and fills are query/audit records. They do not remain
-in mmap merely to provide history.
+Terminal intents and orders are query/audit records. They do not remain in
+mmap merely to provide history. The single view avoids cross-file generation
+joins and overlapping current-state APIs. Its explicitly bounded recent event
+and fill windows are operational diagnostics, not durable history.
 
-The two resources are deliberately independent: order updates are more
-frequent, and an order-only reader should not copy every intent/plan. Their
-generations cannot be joined. A caller needing an atomic Execution audit uses
-an Execution query.
+The resource cardinality is one view per composed ExecutionActor,
+not one view per Intent. `intents`, `algorithm_runs`, and `orders` are bounded
+operational collections. One launch instance owns one ExecutionActor;
+same-instance executor sharding and multiple writers are not supported.
 
 Execution publishes after its state-store transition succeeds. A fill is an
-event/query fact and does not create a third current-view resource.
+event/query fact and does not create another current-view resource.
 
 ## 12. System mmap resources
 

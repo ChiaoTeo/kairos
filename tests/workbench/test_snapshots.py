@@ -260,3 +260,55 @@ def test_reproducible_activity_stream_60x20(snap_compare: Any) -> None:
         terminal_size=(60, 20),
         run_before=show_activities,
     )
+
+
+def test_focused_activity_multiselect(snap_compare: Any) -> None:
+    async def select_activities(pilot: Any) -> None:
+        screen = pilot.app.screen
+        assert isinstance(screen, CommandLineScreen)
+        output = screen._output()
+        for index in range(1, 4):
+            output.append_activity(
+                ActivityRecord(
+                    activity_id=f"selection-{index}",
+                    kind=ActivityKind.QUERY,
+                    outcome=ActivityOutcome.SUCCESS,
+                    title=f"Activity 结果 {index}",
+                    body=Text(f"这是第 {index} 条可跨页选择和复制的内容。"),
+                )
+            )
+        await pilot.pause()
+        await pilot.press("tab", "tab", "home", "space", "down", "space")
+        await pilot.pause()
+
+    assert snap_compare(
+        KairosWorkbenchApp(_state()),
+        terminal_size=(100, 30),
+        run_before=select_activities,
+    )
+
+
+def test_focused_activity_has_default_copy_target(snap_compare: Any) -> None:
+    async def focus_latest_activity(pilot: Any) -> None:
+        screen = pilot.app.screen
+        assert isinstance(screen, CommandLineScreen)
+        output = screen._output()
+        for index in range(1, 4):
+            output.append_activity(
+                ActivityRecord(
+                    activity_id=f"default-copy-{index}",
+                    kind=ActivityKind.QUERY,
+                    outcome=ActivityOutcome.SUCCESS,
+                    title=f"默认复制目标 {index}",
+                    body=Text(f"这是第 {index} 条内容。"),
+                )
+            )
+        await pilot.pause()
+        await pilot.press("tab", "tab")
+        await pilot.pause()
+
+    assert snap_compare(
+        KairosWorkbenchApp(_state()),
+        terminal_size=(100, 30),
+        run_before=focus_latest_activity,
+    )

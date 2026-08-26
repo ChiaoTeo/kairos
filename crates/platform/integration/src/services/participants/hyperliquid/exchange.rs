@@ -449,6 +449,7 @@ mod tests {
         crate::OrderEntryRequest {
             order_id: kairos_primitives::execution::OrderId::new("order-1").unwrap(),
             intent_id: None,
+            submitted_at_unix_nanos: 1.into(),
             account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
             segment_key: kairos_primitives::account::SegmentKey::new("perp").unwrap(),
             instrument_id: kairos_primitives::reference::InstrumentId::new("BTC").unwrap(),

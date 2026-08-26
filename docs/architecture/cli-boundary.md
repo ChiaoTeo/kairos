@@ -633,8 +633,8 @@ Reference 的短路径价值很高，因为用户经常需要查 market/listing/
 | `order backtest` | 否 | 否 | 否 | 删除用户短路径；Execution 内部 backtest application/contract 可继续服务 launch/backtest workflow。 |
 | `execution connected snapshot` | 否 | 否 | 是 | 当前 Execution current view/API，产品入口是 launch instance component。 |
 | `execution connected routes` | 否 | 否 | 是 | 当前 runtime order route candidates/API。 |
-| `execution connected orders/open-orders/history/status/inspect` | 账户下有 direct 查询短路径 | `order/open-orders/history` 直接查询 provider | 是 | standalone 与 connected 名称可相同，但目标由入口上下文决定。 |
-| `execution connected events/trace/audit/journal/fills` | 仅 fills 有 direct 短路径 | `fills` 直接查询 provider | 是 | event/trace/audit/journal 只属于 runtime；不提供本地 evidence 产品模式。 |
+| `execution connected active-orders/active-order` | 账户下有 direct 查询短路径 | `order/open-orders/history` 直接查询 provider | 是 | connected 名称明确表示单一 operational mmap；不复用 provider 历史查询名称。 |
+| `execution connected recent-order-events/recent-fills/audit` | 仅 fills 有 direct 短路径 | `fills` 直接查询 provider | 是 | `recent-*` 是 mmap 有界诊断；`audit` 是持久化 JSON-RPC query，不能互相替代。 |
 | `execution connected submit/cancel/replace` | 是 | 是，使用账户 binding 直接调用 provider | 是 | standalone 不启动或发现 server；connected 只操作所选 instance。 |
 | `execution connected reconcile/unknown-remote-orders` | 否 | 否 | 是 | runtime reconciliation/control，必须 component/API 对齐；`link-unknown` 尚未进入 ExecutionControlRpc，不能作为半入口暴露。 |
 | `execution connected fill` | 否 | 否 | 否 | 删除半入口；Execution 成交事实来自 provider event/reconciliation，不提供人工 fill reporting CLI。Account paper/simulated settlement 走 Account component。 |
@@ -726,7 +726,7 @@ Python surface 是用户真正看到的 `kairos` 入口。它可以比 Rust modu
 | `launch instance component account snapshot/balances/positions/open-orders/refresh/reconcile` | Account connected | 否 | 某次 launch instance 的 Account current view 和 runtime control；`open-orders` 读取 Account observed-orders mmap；`refresh/reconcile` 进入 Account owner CLI connected。 |
 | `launch instance component market status/sources/snapshot/freshness` | Market connected | 否 | 某次 launch instance 的 Market current view/API；sources/snapshot/freshness 与 system scope 使用相同 Market owner connected 语义。 |
 | `launch instance component execution status` | Execution component observe | 否 | 查看某个 instance 的 Execution 组件进程状态。 |
-| `launch instance component execution snapshot/routes/orders/open-orders/history/fills/events/audit/inspect/trace/journal/reconcile/unknown-remote-orders/submit/cancel/replace` | Execution connected | 否 | 解析 launch instance 后调用 Execution owner CLI connected/API 投影；不通过 `kairos order` 顶层；未进入 owner contract/RPC 的 `link-unknown` 不暴露。 |
+| `launch instance component execution snapshot/routes/active-orders/active-order/recent-fills/recent-order-events/audit/reconcile/unknown-remote-orders/submit/cancel/replace` | Execution connected | 否 | 解析 launch instance 后调用 Execution owner CLI；当前状态只读单一 mmap，完整订单审计只走持久化 query。 |
 | `launch instance component reference status/health/catalog` | Reference connected | 否 | 某次 launch instance 绑定的 Reference 事实。 |
 | `launch instance component risk status/health/latest/limits/reservations/circuits/pre-trade-check/authorize-reserve/release/consume/resize/open-circuit/close-circuit/publish-policy/advance-time` | Risk connected | 否 | 某次 launch instance 的 Risk 进程状态、owner contract/mmap 读取和 typed runtime control/authorization。 |
 | `launch instance component capital status/health/current/objectives/demands/availabilities/routes/plans/reservations/operations/alerts/publish-funding-objective/observe-demand/cancel-funding-objective/reconcile-plan` | Capital connected | 否 | 某次 launch instance 的 Capital 进程状态、owner contract/mmap 读取和 typed runtime control。 |
@@ -1659,7 +1659,7 @@ python3 scripts/check/check_cli_boundary.py
   不能把它们折叠成通用 command。
 - Execution 没有 workspace-scoped 用户入口；运行态订单事实和动作必须只通过
   `launch instance component execution ...`。检查脚本至少保护
-  `snapshot/routes/orders/open-orders/history/fills/events/audit/inspect/trace/journal/reconcile/unknown-remote-orders/submit/cancel/replace`，
+  `snapshot/routes/active-orders/active-order/recent-fills/recent-order-events/audit/reconcile/unknown-remote-orders/submit/cancel/replace`，
   且继续禁止 `link-unknown` 和人工 `fill` 半入口。
 - Execution owner Rust CLI 的 connected mode 也必须保护同一组真实
   contract/current view command：查询类读取 typed mmap/current view，动作类调用

@@ -23,16 +23,17 @@ impl<'a> CurrentExecutionView<'a> {
     pub const VT_METADATA: ::flatbuffers::VOffsetT = 4;
     pub const VT_ORDERS: ::flatbuffers::VOffsetT = 6;
     pub const VT_INTENTS: ::flatbuffers::VOffsetT = 8;
-    pub const VT_FILLS: ::flatbuffers::VOffsetT = 10;
-    pub const VT_ORDER_EVENTS: ::flatbuffers::VOffsetT = 12;
-    pub const VT_INTENT_EVENTS: ::flatbuffers::VOffsetT = 14;
-    pub const VT_UNKNOWN_REMOTE_ORDERS: ::flatbuffers::VOffsetT = 16;
-    pub const VT_COMMITMENTS: ::flatbuffers::VOffsetT = 18;
-    pub const VT_RISK_RESERVATIONS: ::flatbuffers::VOffsetT = 20;
-    pub const VT_EXCHANGE_EVENT_WATERMARK_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
-    pub const VT_FILL_HISTORY_TRUNCATED: ::flatbuffers::VOffsetT = 24;
-    pub const VT_ORDER_EVENT_HISTORY_TRUNCATED: ::flatbuffers::VOffsetT = 26;
-    pub const VT_INTENT_EVENT_HISTORY_TRUNCATED: ::flatbuffers::VOffsetT = 28;
+    pub const VT_ALGORITHM_RUNS: ::flatbuffers::VOffsetT = 10;
+    pub const VT_FILLS: ::flatbuffers::VOffsetT = 12;
+    pub const VT_ORDER_EVENTS: ::flatbuffers::VOffsetT = 14;
+    pub const VT_INTENT_EVENTS: ::flatbuffers::VOffsetT = 16;
+    pub const VT_UNKNOWN_REMOTE_ORDERS: ::flatbuffers::VOffsetT = 18;
+    pub const VT_COMMITMENTS: ::flatbuffers::VOffsetT = 20;
+    pub const VT_RISK_RESERVATIONS: ::flatbuffers::VOffsetT = 22;
+    pub const VT_EXCHANGE_EVENT_WATERMARK_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_FILL_HISTORY_TRUNCATED: ::flatbuffers::VOffsetT = 26;
+    pub const VT_ORDER_EVENT_HISTORY_TRUNCATED: ::flatbuffers::VOffsetT = 28;
+    pub const VT_INTENT_EVENT_HISTORY_TRUNCATED: ::flatbuffers::VOffsetT = 30;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -67,6 +68,9 @@ impl<'a> CurrentExecutionView<'a> {
         }
         if let Some(x) = args.fills {
             builder.add_fills(x);
+        }
+        if let Some(x) = args.algorithm_runs {
+            builder.add_algorithm_runs(x);
         }
         if let Some(x) = args.intents {
             builder.add_intents(x);
@@ -124,6 +128,21 @@ impl<'a> CurrentExecutionView<'a> {
                 .get::<::flatbuffers::ForwardsUOffset<
                     ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<IntentState>>,
                 >>(CurrentExecutionView::VT_INTENTS, None)
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn algorithm_runs(
+        &self,
+    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<AlgorithmRunState<'a>>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<
+                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<AlgorithmRunState>>,
+                >>(CurrentExecutionView::VT_ALGORITHM_RUNS, None)
                 .unwrap()
         }
     }
@@ -305,6 +324,9 @@ impl ::flatbuffers::Verifiable for CurrentExecutionView<'_> {
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<IntentState>>,
             >>("intents", Self::VT_INTENTS, true)?
             .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<AlgorithmRunState>>,
+            >>("algorithm_runs", Self::VT_ALGORITHM_RUNS, true)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Fill>>,
             >>("fills", Self::VT_FILLS, true)?
             .visit_field::<::flatbuffers::ForwardsUOffset<
@@ -365,6 +387,11 @@ pub struct CurrentExecutionViewArgs<'a> {
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<IntentState<'a>>>,
         >,
     >,
+    pub algorithm_runs: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<AlgorithmRunState<'a>>>,
+        >,
+    >,
     pub fills: Option<
         ::flatbuffers::WIPOffset<
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Fill<'a>>>,
@@ -410,6 +437,7 @@ impl<'a> Default for CurrentExecutionViewArgs<'a> {
             metadata: None,              // required field
             orders: None,                // required field
             intents: None,               // required field
+            algorithm_runs: None,        // required field
             fills: None,                 // required field
             order_events: None,          // required field
             intent_events: None,         // required field
@@ -462,6 +490,18 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> CurrentExecutionViewBuilder<'
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             CurrentExecutionView::VT_INTENTS,
             intents,
+        );
+    }
+    #[inline]
+    pub fn add_algorithm_runs(
+        &mut self,
+        algorithm_runs: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<AlgorithmRunState<'b>>>,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            CurrentExecutionView::VT_ALGORITHM_RUNS,
+            algorithm_runs,
         );
     }
     #[inline]
@@ -592,6 +632,8 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> CurrentExecutionViewBuilder<'
         self.fbb_
             .required(o, CurrentExecutionView::VT_INTENTS, "intents");
         self.fbb_
+            .required(o, CurrentExecutionView::VT_ALGORITHM_RUNS, "algorithm_runs");
+        self.fbb_
             .required(o, CurrentExecutionView::VT_FILLS, "fills");
         self.fbb_
             .required(o, CurrentExecutionView::VT_ORDER_EVENTS, "order_events");
@@ -619,6 +661,7 @@ impl ::core::fmt::Debug for CurrentExecutionView<'_> {
         ds.field("metadata", &self.metadata());
         ds.field("orders", &self.orders());
         ds.field("intents", &self.intents());
+        ds.field("algorithm_runs", &self.algorithm_runs());
         ds.field("fills", &self.fills());
         ds.field("order_events", &self.order_events());
         ds.field("intent_events", &self.intent_events());

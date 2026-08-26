@@ -26,7 +26,7 @@ impl BlockingOrderCommand for SimulatedOrderEntry {
             ))
             .ok(),
             filled_quantity: Some(DecimalValue::new(0, request.quantity.scale)),
-            occurred_at_unix_nanos: now_nanos().into(),
+            occurred_at_unix_nanos: request.submitted_at_unix_nanos,
             reason: String::new(),
         }))
     }
@@ -46,11 +46,4 @@ impl BlockingOrderCommand for SimulatedOrderEntry {
             reason: String::new(),
         }))
     }
-}
-
-fn now_nanos() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
 }

@@ -158,7 +158,9 @@ impl ExecutionApplication {
                 .algorithm_run(intent_id)
                 .and_then(|run| run.last_decision_at)
                 .map(UnixNanos::get)
-                .unwrap_or(business_time_unix_nanos);
+                .unwrap_or(business_time_unix_nanos)
+                .max(business_time_unix_nanos)
+                .max(self.business_time_unix_nanos().unwrap_or_default());
             self.advance_due_intent_orders(due_at, usize::MAX)?;
             return Ok(());
         }
@@ -310,6 +312,7 @@ impl ExecutionApplication {
         request.options.time_in_force = None;
         request.options.split = None;
         request.options.maker = None;
+        request.submitted_at_unix_nanos = Some(decision_time.into());
         self.actor
             .schedule_pending_order(intent_id, request, decision_time.into())
             .map_err(ExecutionError::Invalid)?;
@@ -525,6 +528,7 @@ impl ExecutionApplication {
         if missing <= requirement.max_unhedged_quantity.mantissa() {
             return Ok(None);
         }
+        let business_time = self.require_business_time("compensating hedge preparation")?;
         if state.compensation_attempts >= policy.max_compensation_attempts {
             self.commit_intent(IntentEvent {
                 intent_id: typed_intent_id(intent_id),
@@ -534,7 +538,7 @@ impl ExecutionApplication {
                 status: IntentStatus::ReconciliationRequired,
                 order_ids: Vec::new(),
                 completed_quantity: state.completed_quantity,
-                occurred_at_unix_nanos: now_nanos().into(),
+                occurred_at_unix_nanos: business_time.into(),
                 reason: format!(
                     "compensation breaker opened after {} attempts; unhedged={missing}",
                     state.compensation_attempts
@@ -557,7 +561,7 @@ impl ExecutionApplication {
                 status: IntentStatus::ReconciliationRequired,
                 order_ids: Vec::new(),
                 completed_quantity: current.completed_quantity,
-                occurred_at_unix_nanos: now_nanos().into(),
+                occurred_at_unix_nanos: business_time.into(),
                 reason: "hedge exposure exceeds tolerance and compensation is disabled".into(),
                 dependency_watermarks: current.dependency_watermarks,
             })?;
@@ -603,7 +607,7 @@ impl ExecutionApplication {
                 .expect("validated compensating quantity"),
             limit_price: template.limit_price,
             options,
-            submitted_at_unix_nanos: Some(template.submitted_at_unix_nanos),
+            submitted_at_unix_nanos: Some(business_time.into()),
         };
         self.actor.increment_compensation_attempts(intent_id);
         Ok(Some(PreparedCompensatingHedge {
@@ -618,6 +622,7 @@ impl ExecutionApplication {
         prepared: &PreparedCompensatingHedge,
         order: &ExecutionOrder,
     ) -> Result<(), ExecutionError> {
+        let business_time = self.require_business_time("compensating hedge completion")?;
         self.attach_plan_order(
             prepared.intent_id.as_str(),
             &prepared.leg_id,
@@ -636,7 +641,7 @@ impl ExecutionApplication {
             status: IntentStatus::Compensating,
             order_ids: vec![order.order_id.clone()],
             completed_quantity: state.completed_quantity,
-            occurred_at_unix_nanos: now_nanos().into(),
+            occurred_at_unix_nanos: business_time.into(),
             reason: "leader fill exceeded active hedge quantity".into(),
             dependency_watermarks: state.dependency_watermarks,
         })
@@ -647,6 +652,7 @@ impl ExecutionApplication {
         prepared: &PreparedCompensatingHedge,
         error: &ExecutionError,
     ) -> Result<(), ExecutionError> {
+        let business_time = self.require_business_time("compensating hedge failure")?;
         let state = self
             .actor
             .intent(prepared.intent_id.as_str())
@@ -660,7 +666,7 @@ impl ExecutionApplication {
             status: IntentStatus::ReconciliationRequired,
             order_ids: Vec::new(),
             completed_quantity: state.completed_quantity,
-            occurred_at_unix_nanos: now_nanos().into(),
+            occurred_at_unix_nanos: business_time.into(),
             reason: format!("compensating hedge failed: {error}"),
             dependency_watermarks: state.dependency_watermarks,
         })

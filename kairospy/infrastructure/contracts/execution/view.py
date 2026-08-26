@@ -1,4 +1,4 @@
-"""Execution v2 active mmap views."""
+"""Execution v2 current mmap view."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ sys.modules.setdefault("kairos", _generated_kairos)
 
 
 class ExecutionViewKind(str, Enum):
-    ACTIVE_ORDERS = "active-orders"
-    ACTIVE_INTENTS = "active-intents"
     CURRENT_EXECUTION = "current-execution"
 
 
@@ -43,6 +41,8 @@ class ExecutionViewKey:
             / "execution"
             / "views"
             / _component(self.workspace_id)
+            / f"launch={_component(self.launch_id) if self.launch_id else '_'}"
+            / f"instance={_component(self.instance_id) if self.instance_id else '_'}"
             / self.kind.value
             / "current.snapshot"
         )
@@ -57,8 +57,6 @@ class ExecutionViewFrame:
 
 
 _VIEW_ROOTS: dict[ExecutionViewKind, tuple[bytes, str]] = {
-    ExecutionViewKind.ACTIVE_ORDERS: (b"ECO2", "ActiveOrdersView"),
-    ExecutionViewKind.ACTIVE_INTENTS: (b"ECI2", "ActiveIntentsView"),
     ExecutionViewKind.CURRENT_EXECUTION: (b"ECV2", "CurrentExecutionView"),
 }
 

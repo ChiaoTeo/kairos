@@ -4,7 +4,10 @@ use crate::application::ExecutionEvent;
 use crate::domain::{ExecutionFill, ExecutionOrder};
 
 pub(crate) enum FillTransition {
-    Duplicate(ExecutionOrder),
+    Duplicate {
+        order: ExecutionOrder,
+        cursor_changed: bool,
+    },
     Conflict(ExecutionFill),
     Applied {
         order: ExecutionOrder,

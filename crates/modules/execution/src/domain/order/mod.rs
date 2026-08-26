@@ -5,7 +5,7 @@ pub use kairos_primitives::execution::{
 };
 pub use kairos_primitives::integration::RemoteOrderId;
 pub use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
-pub use kairos_primitives::time::UnixNanos;
+pub use kairos_primitives::time::{Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 mod commitment;

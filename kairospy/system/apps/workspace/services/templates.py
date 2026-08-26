@@ -190,6 +190,7 @@ account_id = "demo-paper"
 segment_key = "spot"
 broker_id = "simulated"
 execution_channel = "spot"
+environment = "paper"
 
 [backtest]
 data_root = "data"

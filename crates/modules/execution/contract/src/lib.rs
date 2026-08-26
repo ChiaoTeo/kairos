@@ -12,19 +12,23 @@ pub mod view;
 
 pub use control::{
     AdvanceExecutionTimeRequest, AdvanceExecutionTimeResponse, CancelOrderRequest, CommandEnvelope,
-    CompletionPolicy, ExecutionAlgorithmPolicyRequest, ExecutionBacktestBar,
-    ExecutionBacktestEquityPoint, ExecutionBacktestFill, ExecutionBacktestMarketObservation,
-    ExecutionBacktestMarketRequest, ExecutionBacktestMarketResponse, ExecutionBacktestMetrics,
-    ExecutionBacktestObservationScope, ExecutionBacktestOrder, ExecutionBacktestOrderRequest,
-    ExecutionBacktestOrderStatus, ExecutionBacktestQuote, ExecutionBacktestQuoteBar,
-    ExecutionBacktestRequest, ExecutionBacktestRunResponse, ExecutionBacktestSimulationConfig,
-    ExecutionBacktestSimulationFill, ExecutionBacktestTradeBar, ExecutionCommandStatus,
-    ExecutionControlError, ExecutionControlResponse, ExecutionControlRpcClient,
-    ExecutionControlRpcServer, ExecutionHealthResponse, ExecutionIntentRequest,
-    ExecutionOrderOptionsRequest, ExecutionReconcileResponse, ExecutionRouteCandidateResponse,
-    ExecutionRouteHealth, ExecutionRoutesQuery, ExecutionRoutesResponse, FailurePolicy,
-    HedgePolicyRequest, IntentAdmissionEvidenceRequest, IntentLegRequest, IntentType,
-    MakerExecutionPolicyRequest, ReconcileExecutionRequest, ReplaceOrderRequest,
+    CompletionPolicy, ExecutionAlgorithmPolicyRequest, ExecutionAttemptCommand,
+    ExecutionAttemptEvidenceResponse, ExecutionBacktestBar, ExecutionBacktestEquityPoint,
+    ExecutionBacktestFill, ExecutionBacktestMarketObservation, ExecutionBacktestMarketRequest,
+    ExecutionBacktestMarketResponse, ExecutionBacktestMetrics, ExecutionBacktestObservationScope,
+    ExecutionBacktestOrder, ExecutionBacktestOrderRequest, ExecutionBacktestOrderStatus,
+    ExecutionBacktestQuote, ExecutionBacktestQuoteBar, ExecutionBacktestRequest,
+    ExecutionBacktestRunResponse, ExecutionBacktestSimulationConfig,
+    ExecutionBacktestSimulationFill, ExecutionBacktestTradeBar, ExecutionBenchmarkKind,
+    ExecutionBenchmarkRequest, ExecutionCommandStatus, ExecutionControlError,
+    ExecutionControlResponse, ExecutionControlRpcClient, ExecutionControlRpcServer,
+    ExecutionDeliveryCertainty, ExecutionHealthResponse, ExecutionIntentRequest,
+    ExecutionOrderAuditEventResponse, ExecutionOrderAuditQuery, ExecutionOrderAuditResponse,
+    ExecutionOrderLifecycle, ExecutionOrderOptionsRequest, ExecutionReconcileResponse,
+    ExecutionRouteCandidateResponse, ExecutionRouteHealth, ExecutionRouteSelection,
+    ExecutionRoutesQuery, ExecutionRoutesResponse, FailurePolicy, HedgePolicyRequest,
+    IntentAdmissionEvidenceRequest, IntentLegRequest, IntentType, MakerExecutionPolicyRequest,
+    PassiveLimitPolicyRequest, ReconcileExecutionRequest, ReplaceOrderRequest,
     SplitOrderPolicyRequest, SubmitIntentRequest, TwapPolicyRequest,
 };
 pub use encode::{EncodeContext, event_metadata, view_metadata};
@@ -61,26 +65,6 @@ impl ExecutionClient {
                 .require_aeron_endpoint()
                 .map_err(|error| ContractError::Transport(error.to_string()))?,
             capacity,
-        )
-    }
-
-    pub fn active_orders(
-        &self,
-        identity: &kairos_primitives::runtime::InstanceIdentity,
-    ) -> ContractResult<ActiveOrders> {
-        ActiveOrders::open(
-            self.require_view_root()?,
-            ExecutionViewKey::from_identity(identity, ExecutionViewKind::ActiveOrders),
-        )
-    }
-
-    pub fn active_intents(
-        &self,
-        identity: &kairos_primitives::runtime::InstanceIdentity,
-    ) -> ContractResult<ActiveIntents> {
-        ActiveIntents::open(
-            self.require_view_root()?,
-            ExecutionViewKey::from_identity(identity, ExecutionViewKind::ActiveIntents),
         )
     }
 
@@ -145,18 +129,6 @@ macro_rules! execution_view_handle {
     };
 }
 
-execution_view_handle!(
-    ActiveOrders,
-    ActiveOrdersSnapshot,
-    view::ActiveOrdersView<'_>,
-    active_orders
-);
-execution_view_handle!(
-    ActiveIntents,
-    ActiveIntentsSnapshot,
-    view::ActiveIntentsView<'_>,
-    active_intents
-);
 execution_view_handle!(
     CurrentExecution,
     CurrentExecutionSnapshot,

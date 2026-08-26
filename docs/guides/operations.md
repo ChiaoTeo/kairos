@@ -271,6 +271,7 @@ account_id = "main"
 segment_key = "spot"
 broker_id = "simulated"
 execution_channel = "spot"
+environment = "paper"
 
 [[execution.routes]]
 route_id = "secondary-spot"
@@ -278,6 +279,7 @@ account_id = "secondary"
 segment_key = "spot"
 broker_id = "simulated"
 execution_channel = "spot"
+environment = "paper"
 ```
 
 使用内置交互策略时，可以把 Python 代码直接发送到当前 Strategy instance：

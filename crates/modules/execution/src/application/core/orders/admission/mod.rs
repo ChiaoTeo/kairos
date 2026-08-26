@@ -1,7 +1,7 @@
 //! Pure order-admission rules and exact decimal conversions.
 
 use kairos_primitives::decimal::{Money, Price, Quantity, SignedQuantity};
-use kairos_primitives::time::UnixNanos;
+use kairos_primitives::time::{DurationNanos, UnixNanos};
 use kairos_reference_contract::Market;
 #[cfg(test)]
 use kairos_risk_contract::Amount as RiskAmount;
@@ -217,15 +217,17 @@ pub(crate) fn validate_quote_provisioning(orders: &[SubmitOrder]) -> Result<(), 
 pub(crate) fn validate_quote_freshness(
     orders: &[SubmitOrder],
     quotes: &[PlanningQuote],
+    business_time_unix_nanos: u64,
+    authoritative_max_age: Option<DurationNanos>,
 ) -> Result<(), String> {
-    let now = now_unix_nanos();
     for order in orders {
-        let Some(max_age) = order
-            .options
-            .maker
-            .as_ref()
-            .and_then(|policy| policy.max_quote_age)
-        else {
+        let Some(max_age) = authoritative_max_age.or_else(|| {
+            order
+                .options
+                .maker
+                .as_ref()
+                .and_then(|policy| policy.max_quote_age)
+        }) else {
             continue;
         };
         let quote = quotes
@@ -240,7 +242,13 @@ pub(crate) fn validate_quote_freshness(
                         .is_none_or(|market_id| quote.market_id == market_id)
             })
             .ok_or_else(|| format!("market quote is unavailable: {}", order.instrument_id))?;
-        let age = now.saturating_sub(quote.observed_at_unix_nanos);
+        if quote.observed_at_unix_nanos > business_time_unix_nanos {
+            return Err(format!(
+                "market quote observation is in the future for {}",
+                order.instrument_id
+            ));
+        }
+        let age = business_time_unix_nanos.saturating_sub(quote.observed_at_unix_nanos);
         if age > max_age.get() {
             return Err(format!(
                 "market quote is stale for {}: age={}ms exceeds {}ms",
@@ -359,13 +367,6 @@ pub(crate) fn risk_amount(value: Decimal) -> Result<RiskAmount, String> {
         value.scale() as u8,
     )
     .map_err(|error| error.to_string())
-}
-
-pub(crate) fn now_unix_nanos() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
 }
 
 #[cfg(test)]

@@ -75,6 +75,11 @@ class LaunchDraft:
                     "segment_key": segment_key,
                     "broker_id": self.execution_broker_id,
                     "execution_channel": channel,
+                    "environment": (
+                        "paper"
+                        if self.execution_broker_id in {"simulated", "paper"}
+                        else self.mode
+                    ),
                 }
                 for account in route_accounts
             ]

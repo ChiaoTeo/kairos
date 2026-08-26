@@ -27,6 +27,17 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0020 | [Durable Execution algorithm runs and action-first dispatch](0020-durable-execution-algorithm-runs.md) | Accepted |
 | 0021 | [Fill-driven maker-first and taker-hedge execution](0021-maker-first-taker-hedge.md) | Accepted |
 | 0022 | [Explicit single-path Execution algorithm selection](0022-explicit-execution-algorithm-selection.md) | Accepted |
+| 0023 | [Explicit Execution venue environment](0023-explicit-execution-venue-environment.md) | Accepted |
+| 0024 | [Evidence-backed Execution venue certification](0024-evidence-backed-execution-venue-certification.md) | Accepted |
+| 0025 | [Actor-owned Execution business time](0025-actor-owned-execution-business-time.md) | Accepted |
+| 0026 | [Execution order fact ordering and terminal conflicts](0026-execution-order-fact-ordering-and-conflicts.md) | Accepted |
+| 0027 | [Durable cancel evidence and fail-closed replacement](0027-durable-cancel-and-replacement.md) | Accepted |
+| 0028 | [Actor-derived per-leg execution quality](0028-actor-derived-execution-quality.md) | Accepted |
+| 0029 | [Two-phase PassiveLimit quote refresh](0029-passive-limit-two-phase-refresh.md) | Accepted |
+| 0030 | [Explicit per-leg execution benchmark](0030-explicit-execution-benchmark.md) | Accepted |
+| 0031 | [Single-purpose Execution delivery surfaces](0031-execution-delivery-surfaces.md) | Superseded by 0033 |
+| 0032 | [Actor-derived Execution operational health](0032-actor-derived-execution-health.md) | Accepted |
+| 0033 | [Single Execution current view and durable audit query](0033-single-execution-current-view-and-audit-query.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

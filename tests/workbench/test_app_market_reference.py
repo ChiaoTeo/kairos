@@ -233,7 +233,7 @@ def test_market_search_owns_action_area_until_results_are_ready(
     assert prompt_context == "trader / 市场行情  ›"
     assert not prompt_actions_visible
     assert prompt_hints == (
-        "Enter 搜索  ·  Esc 返回  ·  Alt+↑↓  ·  PgUp/PgDn  ·  Ctrl+End"
+        "Enter 搜索  ·  Esc 返回  ·  Tab 内容区  ·  /up 20  ·  /bottom"
     )
     assert context == "trader / 市场行情 / 查询结果  ›"
     assert option_count == 1
@@ -388,12 +388,15 @@ def test_single_market_route_appends_quote_to_activity_stream(
 
     assert len(activities) == 1
     assert "AAPL   QUOTE" in output
+    assert "买盘 BID" in output
+    assert "卖盘 ASK" in output
     assert "226.50" in output
     assert "226.75" in output
     assert "massive · REST · Provider 直连" in output
     assert "市场时间" in output
     assert "获取时间" in output
     assert "数据年龄  1.0 秒" in output
+    assert "较旧" not in output
     assert "重新执行" in output
     command = activities[0].equivalent_command
     assert command is not None
@@ -518,6 +521,32 @@ def test_workspace_snapshot_identifies_current_view_provenance() -> None:
     assert "massive · Workspace 当前视图" in output
     assert "市场时间" in output
     assert "获取时间" in output
+
+
+def test_stale_quote_makes_data_age_visible_without_obscuring_prices() -> None:
+    rendered = observation_renderable(
+        {
+            "symbol": "AAPL",
+            "data_type": "quote",
+            "provider": "massive",
+            "bid_price": "309.51",
+            "ask_price": "309.87",
+            "bid_quantity": "80",
+            "ask_quantity": "480",
+            "observed_at_unix_nanos": 1_787_733_778_000_000_000,
+            "_fetched_at_unix_nanos": 1_787_733_834_800_000_000,
+            "_source_mode": "provider-direct",
+            "_transport": "REST",
+        }
+    )
+    with Console(width=80, record=True) as console:
+        console.print(rendered)
+    output = console.export_text()
+
+    assert "买盘 BID" in output
+    assert "309.51" in output
+    assert "数量  80" in output
+    assert "56.8 秒  ⚠ 较旧" in output
 
 
 def test_market_replay_result_identifies_local_files_as_source() -> None:

@@ -32,8 +32,15 @@ class ExecutionAttempt(object):
         return None
 
     # ExecutionAttempt
-    def SelectedRoute(self):
+    def Command(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
+    # ExecutionAttempt
+    def SelectedRoute(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             x = self._tab.Indirect(o + self._tab.Pos)
             from kairos.execution.v2.SelectedExecutionRoute import SelectedExecutionRoute
@@ -44,34 +51,34 @@ class ExecutionAttempt(object):
 
     # ExecutionAttempt
     def ProviderConnectionId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionAttempt
     def CommandStartedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # ExecutionAttempt
     def DeliveryCertainty(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # ExecutionAttempt
     def RemoteOrderId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
 def ExecutionAttemptStart(builder):
-    builder.StartObject(6)
+    builder.StartObject(7)
 
 def Start(builder):
     ExecutionAttemptStart(builder)
@@ -82,32 +89,38 @@ def ExecutionAttemptAddAttemptId(builder, attemptId):
 def AddAttemptId(builder, attemptId):
     ExecutionAttemptAddAttemptId(builder, attemptId)
 
+def ExecutionAttemptAddCommand(builder, command):
+    builder.PrependUint8Slot(1, command, 0)
+
+def AddCommand(builder, command):
+    ExecutionAttemptAddCommand(builder, command)
+
 def ExecutionAttemptAddSelectedRoute(builder, selectedRoute):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(selectedRoute), 0)
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(selectedRoute), 0)
 
 def AddSelectedRoute(builder, selectedRoute):
     ExecutionAttemptAddSelectedRoute(builder, selectedRoute)
 
 def ExecutionAttemptAddProviderConnectionId(builder, providerConnectionId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(providerConnectionId), 0)
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(providerConnectionId), 0)
 
 def AddProviderConnectionId(builder, providerConnectionId):
     ExecutionAttemptAddProviderConnectionId(builder, providerConnectionId)
 
 def ExecutionAttemptAddCommandStartedAtUnixNanos(builder, commandStartedAtUnixNanos):
-    builder.PrependUint64Slot(3, commandStartedAtUnixNanos, 0)
+    builder.PrependUint64Slot(4, commandStartedAtUnixNanos, 0)
 
 def AddCommandStartedAtUnixNanos(builder, commandStartedAtUnixNanos):
     ExecutionAttemptAddCommandStartedAtUnixNanos(builder, commandStartedAtUnixNanos)
 
 def ExecutionAttemptAddDeliveryCertainty(builder, deliveryCertainty):
-    builder.PrependUint8Slot(4, deliveryCertainty, 0)
+    builder.PrependUint8Slot(5, deliveryCertainty, 0)
 
 def AddDeliveryCertainty(builder, deliveryCertainty):
     ExecutionAttemptAddDeliveryCertainty(builder, deliveryCertainty)
 
 def ExecutionAttemptAddRemoteOrderId(builder, remoteOrderId):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
 
 def AddRemoteOrderId(builder, remoteOrderId):
     ExecutionAttemptAddRemoteOrderId(builder, remoteOrderId)

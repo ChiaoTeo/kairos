@@ -14,6 +14,13 @@ pub struct ExecutionSnapshot {
     pub fills: Vec<ExecutionFill>,
     #[serde(default)]
     pub algorithm_runs: Vec<AlgorithmRun>,
+    /// Latest admitted algorithm/business time owned by ExecutionActor.
+    ///
+    /// `None` is accepted only when restoring snapshots written before the
+    /// business clock became durable. New snapshots always persist the clock
+    /// after its first explicit advance.
+    #[serde(default)]
+    pub business_time_unix_nanos: Option<UnixNanos>,
     #[serde(default)]
     pub commitments: Vec<OrderCommitment>,
     #[serde(default)]
@@ -42,6 +49,7 @@ pub struct ExecutionCurrentView {
     pub intent_events: Vec<IntentEvent>,
     pub fills: Vec<ExecutionFill>,
     pub algorithm_runs: Vec<AlgorithmRun>,
+    pub business_time_unix_nanos: Option<UnixNanos>,
     pub unknown_remote_orders: Vec<UnknownRemoteOrder>,
     pub exchange_event_watermark_unix_nanos: UnixNanos,
 }

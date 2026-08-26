@@ -62,11 +62,6 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<ExecutionEvent<'_>> {
         root_as_fill_recorded,
         FillRecorded
     );
-    root!(
-        reconciliation_required_buffer_has_identifier,
-        root_as_reconciliation_required,
-        ReconciliationRequired
-    );
     Err(ContractError::Invalid(
         "unknown Execution v2 event identifier".into(),
     ))

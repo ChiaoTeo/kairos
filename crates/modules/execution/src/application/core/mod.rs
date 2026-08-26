@@ -1,23 +1,22 @@
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::execution::{ExecutionRouteId, FillId, IntentId, LegId, OrderId};
-use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::Currency;
 use kairos_primitives::runtime::{ActorId, StrategyId};
-use kairos_primitives::time::{DurationNanos, UnixNanos};
+use kairos_primitives::time::UnixNanos;
 
 use super::RemoteOrderUpdate;
 use super::model::*;
 use crate::domain::{
     AlgorithmActionKind, AlgorithmActionStatus, AlgorithmChildCandidate, AlgorithmExecutionStyle,
-    AlgorithmInput, AlgorithmRun, CommitmentBasis, CommitmentResource, CommitmentStatus,
-    CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionAlgorithmSpec, ExecutionFill,
-    ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, IntentType,
-    MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderSide, OrderType,
-    RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy, TwapSpec,
-    decide_immediate, decide_maker_taker_hedge, decide_twap, split_quantity,
+    AlgorithmInput, AlgorithmLegBenchmark, AlgorithmRun, CommitmentBasis, CommitmentResource,
+    CommitmentStatus, CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionAlgorithmSpec,
+    ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan,
+    FailurePolicy, IntentType, MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment,
+    OrderSide, OrderType, PassiveLimitSpec, RiskReservationEvidence, RiskReservationSagaStatus,
+    SplitOrderPolicy, TwapSpec, decide_immediate, decide_maker_taker_hedge, decide_passive_limit,
+    decide_twap, split_quantity,
 };
 use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 use crate::services::dependencies::{ExecutionOrderAdmissionService, QueuedExecutionIntentPlanner};
@@ -153,7 +152,6 @@ pub struct ExecutionApplication {
     writer_recovery_ready: bool,
     risk_recovery_ready: bool,
     risk_recovery_error: Option<String>,
-    business_time_unix_nanos: Option<u64>,
     pub(crate) conflux: super::conflux::ExecutionConfluxState,
 }
 
@@ -175,29 +173,45 @@ pub(crate) struct ExecutionApplicationWiring {
 }
 
 impl ExecutionApplication {
-    /// Advance the replay business clock and its composition-owned
-    /// dependencies.  The application remains the state owner; concrete
-    /// Dependency reads stay behind the intent-planning boundary.
+    /// Advance the durable ExecutionActor business clock and the planning
+    /// dependency context from the same explicit time input.
     pub fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), ExecutionError> {
-        if self
-            .business_time_unix_nanos
-            .is_some_and(|current| event_time_unix_nanos < current)
-        {
-            return Err(ExecutionError::Invalid(
-                "execution business time cannot move backwards".into(),
-            ));
+        if let Some(current) = self.actor.business_time_unix_nanos() {
+            if event_time_unix_nanos < current.get() {
+                return Err(ExecutionError::Invalid(format!(
+                    "execution business time cannot move backwards: current={}, requested={event_time_unix_nanos}",
+                    current.get()
+                )));
+            }
         }
         if let Some(intent_planner) = self.intent_planner.as_mut() {
             intent_planner
                 .advance_time(event_time_unix_nanos)
                 .map_err(ExecutionError::Invalid)?;
         }
-        self.business_time_unix_nanos = Some(event_time_unix_nanos);
+        if self
+            .actor
+            .advance_business_time(event_time_unix_nanos.into())
+            .map_err(ExecutionError::Invalid)?
+        {
+            self.persist_snapshot()?;
+        }
         Ok(())
     }
 
     pub const fn business_time_unix_nanos(&self) -> Option<u64> {
-        self.business_time_unix_nanos
+        match self.actor.business_time_unix_nanos() {
+            Some(value) => Some(value.get()),
+            None => None,
+        }
+    }
+
+    pub(crate) fn require_business_time(&self, operation: &str) -> Result<u64, ExecutionError> {
+        self.business_time_unix_nanos().ok_or_else(|| {
+            ExecutionError::Invalid(format!(
+                "{operation} requires explicit execution business time"
+            ))
+        })
     }
     pub(crate) fn assemble(
         actor_id: impl Into<String>,
@@ -223,7 +237,6 @@ impl ExecutionApplication {
             writer_recovery_ready: true,
             risk_recovery_ready: true,
             risk_recovery_error: None,
-            business_time_unix_nanos: None,
             conflux: Default::default(),
         };
         let mut recovered_algorithm_state = false;
@@ -239,6 +252,7 @@ impl ExecutionApplication {
                     snapshot.fills,
                     snapshot.unknown_remote_orders,
                     snapshot.exchange_event_watermark_unix_nanos.get(),
+                    snapshot.business_time_unix_nanos,
                 );
                 application
                     .actor
@@ -341,6 +355,7 @@ impl ExecutionApplication {
             events: self.actor.events().to_vec(),
             fills: self.actor.fills().to_vec(),
             algorithm_runs: self.actor.algorithm_runs().cloned().collect(),
+            business_time_unix_nanos: self.actor.business_time_unix_nanos(),
             commitments: self.actor.commitments().cloned().collect(),
             risk_reservations: self.actor.risk_reservations().cloned().collect(),
             intents: self.actor.intents().cloned().collect(),
@@ -363,6 +378,7 @@ impl ExecutionApplication {
             intent_events: self.actor.intent_events().to_vec(),
             fills: self.actor.fills().to_vec(),
             algorithm_runs: self.actor.algorithm_runs().cloned().collect(),
+            business_time_unix_nanos: self.actor.business_time_unix_nanos(),
             unknown_remote_orders: self.actor.unknown_remote_orders().cloned().collect(),
             exchange_event_watermark_unix_nanos: self.actor.remote_watermark().into(),
         }
@@ -374,6 +390,44 @@ impl ExecutionApplication {
 
     pub fn algorithm_runs(&self) -> Vec<AlgorithmRun> {
         self.actor.algorithm_runs().cloned().collect()
+    }
+
+    pub(crate) fn operational_health(&self) -> ExecutionOperationalHealth {
+        ExecutionOperationalHealth {
+            risk_recovery_ready: self.risk_recovery_ready,
+            risk_recovery_error: self.risk_recovery_error.clone(),
+            reconciliation_required_orders: self
+                .actor
+                .order_map()
+                .values()
+                .filter(|order| {
+                    order.status == ExecutionOrderStatus::Unknown
+                        || order.reconciliation_cause.is_some()
+                })
+                .count() as u64,
+            reconciliation_required_intents: self
+                .actor
+                .intents()
+                .filter(|intent| intent.status == IntentStatus::ReconciliationRequired)
+                .count() as u64,
+            unresolved_remote_orders: self
+                .actor
+                .unknown_remote_orders()
+                .filter(|order| {
+                    matches!(
+                        order.resolution,
+                        UnknownRemoteOrderResolution::Pending
+                            | UnknownRemoteOrderResolution::ManualReview
+                    )
+                })
+                .count() as u64,
+            indeterminate_algorithm_actions: self
+                .actor
+                .algorithm_runs()
+                .flat_map(|run| &run.actions)
+                .filter(|action| action.status == AlgorithmActionStatus::Indeterminate)
+                .count() as u64,
+        }
     }
 
     pub fn drain_events(&mut self) -> Vec<ExecutionEvent> {
@@ -419,8 +473,15 @@ impl ExecutionApplication {
         self.writer_recovery_ready
     }
 
-    pub(crate) fn attach_intent_planner(&mut self, planner: QueuedExecutionIntentPlanner) {
+    pub(crate) fn attach_intent_planner(
+        &mut self,
+        mut planner: QueuedExecutionIntentPlanner,
+    ) -> Result<(), String> {
+        if let Some(business_time) = self.actor.business_time_unix_nanos() {
+            planner.advance_time(business_time.get())?;
+        }
         self.intent_planner = Some(planner);
+        Ok(())
     }
 
     pub(crate) fn attach_order_admission(&mut self, admission: ExecutionOrderAdmissionService) {
@@ -555,6 +616,7 @@ fn to_connection_request(
     Ok(OrderEntryRequest {
         order_id: order.order_id.clone(),
         intent_id: order.intent_id.clone(),
+        submitted_at_unix_nanos: order.submitted_at_unix_nanos,
         account_id: order.account_id.clone(),
         segment_key: kairos_primitives::account::SegmentKey::new(segment_key)
             .map_err(|error| error.to_string())?,
@@ -690,7 +752,7 @@ fn intent_leg_id(intent: &ExecuteStrategyIntent, order: &SubmitOrder) -> String 
 }
 
 fn scheduled_order_due(
-    intent: &ExecuteStrategyIntent,
+    _intent: &ExecuteStrategyIntent,
     orders: &[SubmitOrder],
     algorithm_run: &AlgorithmRun,
     now_unix_nanos: u64,
@@ -708,46 +770,28 @@ fn scheduled_order_due(
             })
             .collect();
     }
-    let mut last_due: BTreeMap<String, u64> = BTreeMap::new();
-    let mut due = BTreeMap::new();
-    for order in orders {
-        let leg_id = intent_leg_id(intent, order);
-        let interval = order
-            .options
-            .maker
-            .as_ref()
-            .and_then(|policy| policy.min_interval)
-            .unwrap_or(DurationNanos::new(0));
-        let window_cadence = order
-            .options
-            .maker
-            .as_ref()
-            .and_then(|policy| policy.max_orders_per_window.zip(policy.window))
-            .map(|(maximum, window)| DurationNanos::new(window.get().div_ceil(u64::from(maximum))))
-            .unwrap_or(DurationNanos::new(0));
-        let interval_nanos = interval.get().max(window_cadence.get());
-        let next = last_due
-            .get(&leg_id)
-            .copied()
-            .unwrap_or(now_unix_nanos)
-            .saturating_add(if last_due.contains_key(&leg_id) {
-                interval_nanos
-            } else {
-                0
-            });
-        due.insert(order.order_id.clone(), next.into());
-        last_due.insert(leg_id, next);
-    }
-    due
+    orders
+        .iter()
+        .map(|order| (order.order_id.clone(), now_unix_nanos.into()))
+        .collect()
 }
 
 fn template_options(intent: &ExecuteStrategyIntent, leg_id: &str) -> ExecutionOrderOptions {
-    intent
+    let mut options = intent
         .legs
         .iter()
         .find(|leg| leg.leg_id == leg_id)
         .map(|leg| leg.options.clone())
-        .unwrap_or_else(|| intent.order_options.clone())
+        .unwrap_or_else(|| intent.order_options.clone());
+    if let ExecutionAlgorithmPolicy::PassiveLimit(policy) = &intent.algorithm {
+        let maker = options.maker.get_or_insert(MakerExecutionPolicy {
+            max_inventory_abs: None,
+            target_inventory: None,
+            max_quote_age: None,
+        });
+        maker.max_quote_age = Some(policy.max_quote_age);
+    }
+    options
 }
 
 fn build_single_intent_plan(
@@ -816,13 +860,6 @@ pub(crate) fn apply_connection_event(
     Ok(())
 }
 
-fn now_nanos() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
-}
-
 fn remote_order(order: kairos_conflux::ExternalOrder) -> RemoteOrder {
     RemoteOrder {
         binding_id: order.connection_key.to_string(),
@@ -880,4 +917,38 @@ fn audit_matches(event: &ExecutionAuditEvent, query: &ExecutionAuditQuery) -> bo
         && query
             .until_unix_nanos
             .is_none_or(|value| event.occurred_at_unix_nanos <= value)
+}
+
+fn terminal_status_conflict(current: ExecutionOrderStatus, incoming: ExecutionOrderStatus) -> bool {
+    current.terminal() && incoming.terminal() && current != incoming
+}
+
+fn non_advancing_order_fact(current: ExecutionOrderStatus, incoming: ExecutionOrderStatus) -> bool {
+    current.terminal()
+        || (current != ExecutionOrderStatus::Unknown
+            && provider_status_progress(incoming) <= provider_status_progress(current))
+}
+
+fn regresses_order_fact_cursor(
+    previous: Option<&crate::domain::OrderFactCursor>,
+    incoming: Option<&crate::domain::OrderFactCursor>,
+) -> bool {
+    let (Some(previous), Some(incoming)) = (previous, incoming) else {
+        return false;
+    };
+    incoming.regresses(previous)
+}
+
+const fn provider_status_progress(status: ExecutionOrderStatus) -> u8 {
+    match status {
+        ExecutionOrderStatus::Pending | ExecutionOrderStatus::Unknown => 0,
+        ExecutionOrderStatus::Submitting => 1,
+        ExecutionOrderStatus::Accepted | ExecutionOrderStatus::CancelRequested => 2,
+        ExecutionOrderStatus::PartiallyFilled => 3,
+        ExecutionOrderStatus::Filled
+        | ExecutionOrderStatus::Canceled
+        | ExecutionOrderStatus::Rejected
+        | ExecutionOrderStatus::Expired
+        | ExecutionOrderStatus::Failed => 4,
+    }
 }

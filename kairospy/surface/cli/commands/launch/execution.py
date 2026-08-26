@@ -84,9 +84,9 @@ def launch_instance_component_execution_routes(
 
 
 @instance_component_execution_app.command(
-    "orders", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+    "active-orders", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
 )
-def launch_instance_component_execution_orders(
+def launch_instance_component_execution_active_orders(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
@@ -94,16 +94,16 @@ def launch_instance_component_execution_orders(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """List launch-scoped Execution orders."""
+    """List operational launch-scoped Execution orders."""
     _execution_connected_passthrough(
-        ctx, launch_id, instance, mode, workspace, output, "orders"
+        ctx, launch_id, instance, mode, workspace, output, "active-orders"
     )
 
 
 @instance_component_execution_app.command(
-    "open-orders", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+    "recent-fills", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
 )
-def launch_instance_component_execution_open_orders(
+def launch_instance_component_execution_recent_fills(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
@@ -111,16 +111,16 @@ def launch_instance_component_execution_open_orders(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """List launch-scoped open Execution orders."""
+    """Read the bounded recent Execution fill window."""
     _execution_connected_passthrough(
-        ctx, launch_id, instance, mode, workspace, output, "open-orders"
+        ctx, launch_id, instance, mode, workspace, output, "recent-fills"
     )
 
 
 @instance_component_execution_app.command(
-    "history", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+    "recent-order-events", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
 )
-def launch_instance_component_execution_history(
+def launch_instance_component_execution_recent_order_events(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
@@ -128,43 +128,9 @@ def launch_instance_component_execution_history(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """List launch-scoped closed Execution orders."""
+    """Read the bounded recent Execution order-event window."""
     _execution_connected_passthrough(
-        ctx, launch_id, instance, mode, workspace, output, "history"
-    )
-
-
-@instance_component_execution_app.command(
-    "fills", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
-)
-def launch_instance_component_execution_fills(
-    ctx: typer.Context,
-    launch_id: str,
-    instance: str | None = typer.Option(None, "--instance"),
-    mode: str | None = typer.Option(None, "--mode"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
-) -> None:
-    """List launch-scoped Execution fills."""
-    _execution_connected_passthrough(
-        ctx, launch_id, instance, mode, workspace, output, "fills"
-    )
-
-
-@instance_component_execution_app.command(
-    "events", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
-)
-def launch_instance_component_execution_events(
-    ctx: typer.Context,
-    launch_id: str,
-    instance: str | None = typer.Option(None, "--instance"),
-    mode: str | None = typer.Option(None, "--mode"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
-) -> None:
-    """List launch-scoped Execution lifecycle events."""
-    _execution_connected_passthrough(
-        ctx, launch_id, instance, mode, workspace, output, "events"
+        ctx, launch_id, instance, mode, workspace, output, "recent-order-events"
     )
 
 
@@ -186,9 +152,9 @@ def launch_instance_component_execution_audit(
 
 
 @instance_component_execution_app.command(
-    "inspect", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
+    "active-order", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
 )
-def launch_instance_component_execution_inspect(
+def launch_instance_component_execution_active_order(
     ctx: typer.Context,
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
@@ -196,43 +162,9 @@ def launch_instance_component_execution_inspect(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Inspect one launch-scoped Execution order."""
+    """Inspect one operational launch-scoped Execution order."""
     _execution_connected_passthrough(
-        ctx, launch_id, instance, mode, workspace, output, "inspect"
-    )
-
-
-@instance_component_execution_app.command(
-    "trace", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
-)
-def launch_instance_component_execution_trace(
-    ctx: typer.Context,
-    launch_id: str,
-    instance: str | None = typer.Option(None, "--instance"),
-    mode: str | None = typer.Option(None, "--mode"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
-) -> None:
-    """Trace one launch-scoped Execution order."""
-    _execution_connected_passthrough(
-        ctx, launch_id, instance, mode, workspace, output, "trace"
-    )
-
-
-@instance_component_execution_app.command(
-    "journal", context_settings=_EXECUTION_PASSTHROUGH_CONTEXT
-)
-def launch_instance_component_execution_journal(
-    ctx: typer.Context,
-    launch_id: str,
-    instance: str | None = typer.Option(None, "--instance"),
-    mode: str | None = typer.Option(None, "--mode"),
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
-) -> None:
-    """Read the journal for one launch-scoped Execution order."""
-    _execution_connected_passthrough(
-        ctx, launch_id, instance, mode, workspace, output, "journal"
+        ctx, launch_id, instance, mode, workspace, output, "active-order"
     )
 
 

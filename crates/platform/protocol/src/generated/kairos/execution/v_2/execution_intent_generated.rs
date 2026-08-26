@@ -37,6 +37,7 @@ impl<'a> ExecutionIntent<'a> {
     pub const VT_EVIDENCE: ::flatbuffers::VOffsetT = 32;
     pub const VT_REASON: ::flatbuffers::VOffsetT = 34;
     pub const VT_STRATEGY_DECISION_ID: ::flatbuffers::VOffsetT = 36;
+    pub const VT_EXECUTION_BENCHMARKS: ::flatbuffers::VOffsetT = 38;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -55,6 +56,9 @@ impl<'a> ExecutionIntent<'a> {
         let mut builder = ExecutionIntentBuilder::new(_fbb);
         if let Some(x) = args.deadline_unix_nanos {
             builder.add_deadline_unix_nanos(x);
+        }
+        if let Some(x) = args.execution_benchmarks {
+            builder.add_execution_benchmarks(x);
         }
         if let Some(x) = args.strategy_decision_id {
             builder.add_strategy_decision_id(x);
@@ -307,6 +311,25 @@ impl<'a> ExecutionIntent<'a> {
         }
     }
     #[inline]
+    pub fn execution_benchmarks(
+        &self,
+    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<ExecutionBenchmarkObservation<'a>>>
+    {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<
+                    ::flatbuffers::Vector<
+                        'a,
+                        ::flatbuffers::ForwardsUOffset<ExecutionBenchmarkObservation>,
+                    >,
+                >>(ExecutionIntent::VT_EXECUTION_BENCHMARKS, None)
+                .unwrap()
+        }
+    }
+    #[inline]
     #[allow(non_snake_case)]
     pub fn algorithm_as_immediate_algorithm(&self) -> Option<ImmediateAlgorithm<'a>> {
         if self.algorithm_type() == ExecutionAlgorithm::ImmediateAlgorithm {
@@ -343,6 +366,20 @@ impl<'a> ExecutionIntent<'a> {
             // Created from a valid Table for this object
             // Which contains a valid union in this slot
             Some(unsafe { HedgePolicy::init_from_table(u) })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    #[allow(non_snake_case)]
+    pub fn algorithm_as_passive_limit_policy(&self) -> Option<PassiveLimitPolicy<'a>> {
+        if self.algorithm_type() == ExecutionAlgorithm::PassiveLimitPolicy {
+            let u = self.algorithm();
+            // Safety:
+            // Created from a valid Table for this object
+            // Which contains a valid union in this slot
+            Some(unsafe { PassiveLimitPolicy::init_from_table(u) })
         } else {
             None
         }
@@ -399,6 +436,11 @@ impl ::flatbuffers::Verifiable for ExecutionIntent<'_> {
                             "ExecutionAlgorithm::HedgePolicy",
                             pos,
                         ),
+                    ExecutionAlgorithm::PassiveLimitPolicy => v
+                        .verify_union_variant::<::flatbuffers::ForwardsUOffset<PassiveLimitPolicy>>(
+                            "ExecutionAlgorithm::PassiveLimitPolicy",
+                            pos,
+                        ),
                     _ => Ok(()),
                 },
             )?
@@ -427,6 +469,12 @@ impl ::flatbuffers::Verifiable for ExecutionIntent<'_> {
                 Self::VT_STRATEGY_DECISION_ID,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<
+                    '_,
+                    ::flatbuffers::ForwardsUOffset<ExecutionBenchmarkObservation>,
+                >,
+            >>("execution_benchmarks", Self::VT_EXECUTION_BENCHMARKS, true)?
             .finish();
         Ok(())
     }
@@ -460,6 +508,14 @@ pub struct ExecutionIntentArgs<'a> {
     >,
     pub reason: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub strategy_decision_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub execution_benchmarks: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<
+                'a,
+                ::flatbuffers::ForwardsUOffset<ExecutionBenchmarkObservation<'a>>,
+            >,
+        >,
+    >,
 }
 impl<'a> Default for ExecutionIntentArgs<'a> {
     #[inline]
@@ -482,6 +538,7 @@ impl<'a> Default for ExecutionIntentArgs<'a> {
             evidence: None, // required field
             reason: None,
             strategy_decision_id: None,
+            execution_benchmarks: None, // required field
         }
     }
 }
@@ -622,6 +679,21 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionIntentBuilder<'a, 'b
         );
     }
     #[inline]
+    pub fn add_execution_benchmarks(
+        &mut self,
+        execution_benchmarks: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<
+                'b,
+                ::flatbuffers::ForwardsUOffset<ExecutionBenchmarkObservation<'b>>,
+            >,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            ExecutionIntent::VT_EXECUTION_BENCHMARKS,
+            execution_benchmarks,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> ExecutionIntentBuilder<'a, 'b, A> {
@@ -647,6 +719,11 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionIntentBuilder<'a, 'b
         self.fbb_.required(o, ExecutionIntent::VT_LEGS, "legs");
         self.fbb_
             .required(o, ExecutionIntent::VT_EVIDENCE, "evidence");
+        self.fbb_.required(
+            o,
+            ExecutionIntent::VT_EXECUTION_BENCHMARKS,
+            "execution_benchmarks",
+        );
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -691,6 +768,16 @@ impl ::core::fmt::Debug for ExecutionIntent<'_> {
                     )
                 }
             },
+            ExecutionAlgorithm::PassiveLimitPolicy => {
+                if let Some(x) = self.algorithm_as_passive_limit_policy() {
+                    ds.field("algorithm", &x)
+                } else {
+                    ds.field(
+                        "algorithm",
+                        &"InvalidFlatbuffer: Union discriminant does not match value.",
+                    )
+                }
+            },
             _ => {
                 let x: Option<()> = None;
                 ds.field("algorithm", &x)
@@ -706,6 +793,7 @@ impl ::core::fmt::Debug for ExecutionIntent<'_> {
         ds.field("evidence", &self.evidence());
         ds.field("reason", &self.reason());
         ds.field("strategy_decision_id", &self.strategy_decision_id());
+        ds.field("execution_benchmarks", &self.execution_benchmarks());
         ds.finish()
     }
 }

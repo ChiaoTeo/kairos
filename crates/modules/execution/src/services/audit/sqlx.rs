@@ -201,21 +201,18 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 }
 
 fn audit_status(value: &str) -> ExecutionOrderStatus {
-    let normalized = value.to_ascii_lowercase();
-    if normalized.contains("partial") && normalized.contains("fill") {
-        ExecutionOrderStatus::PartiallyFilled
-    } else if normalized.contains("fill") {
-        ExecutionOrderStatus::Filled
-    } else if normalized.contains("cancel") {
-        ExecutionOrderStatus::Canceled
-    } else if normalized.contains("reject") {
-        ExecutionOrderStatus::Rejected
-    } else if normalized.contains("expire") {
-        ExecutionOrderStatus::Expired
-    } else if normalized.contains("submit") || normalized.contains("accept") {
-        ExecutionOrderStatus::Accepted
-    } else {
-        ExecutionOrderStatus::Unknown
+    match value.to_ascii_lowercase().replace(['-', '_'], "").as_str() {
+        "pending" => ExecutionOrderStatus::Pending,
+        "submitting" => ExecutionOrderStatus::Submitting,
+        "accepted" => ExecutionOrderStatus::Accepted,
+        "partiallyfilled" => ExecutionOrderStatus::PartiallyFilled,
+        "filled" => ExecutionOrderStatus::Filled,
+        "cancelrequested" => ExecutionOrderStatus::CancelRequested,
+        "canceled" => ExecutionOrderStatus::Canceled,
+        "rejected" => ExecutionOrderStatus::Rejected,
+        "expired" => ExecutionOrderStatus::Expired,
+        "failed" => ExecutionOrderStatus::Failed,
+        _ => ExecutionOrderStatus::Unknown,
     }
 }
 
@@ -284,6 +281,52 @@ mod tests {
             .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].remote_order_id.as_deref(), Some("exchange-1"));
+    }
+
+    #[test]
+    fn sqlx_audit_preserves_every_order_lifecycle_exactly() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut audit = SqlxExecutionAudit::new(directory.path().join("audit.sqlite")).unwrap();
+        let statuses = [
+            ExecutionOrderStatus::Pending,
+            ExecutionOrderStatus::Submitting,
+            ExecutionOrderStatus::Accepted,
+            ExecutionOrderStatus::PartiallyFilled,
+            ExecutionOrderStatus::Filled,
+            ExecutionOrderStatus::CancelRequested,
+            ExecutionOrderStatus::Canceled,
+            ExecutionOrderStatus::Rejected,
+            ExecutionOrderStatus::Expired,
+            ExecutionOrderStatus::Unknown,
+            ExecutionOrderStatus::Failed,
+        ];
+        for (index, status) in statuses.iter().copied().enumerate() {
+            audit
+                .publish(&ExecutionEvent {
+                    order_id: kairos_primitives::execution::OrderId::new(format!("order-{index}"))
+                        .unwrap(),
+                    intent_id: None,
+                    plan_id: None,
+                    leg_id: None,
+                    status,
+                    remote_order_id: None,
+                    occurred_at_unix_nanos: (index as u64 + 1).into(),
+                    reason: String::new(),
+                    fill_id: None,
+                    filled_quantity: None,
+                    attempt: None,
+                })
+                .unwrap();
+        }
+
+        let restored = audit.query(&ExecutionAuditQuery::default()).unwrap();
+        assert_eq!(
+            restored
+                .iter()
+                .map(|event| event.status)
+                .collect::<Vec<_>>(),
+            statuses
+        );
     }
 
     #[test]

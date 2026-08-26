@@ -74,6 +74,84 @@ fn pending_action_survives_serialization_without_changing_identity() {
     );
 }
 
+fn passive_run() -> AlgorithmRun {
+    AlgorithmRun::passive_limit(
+        IntentId::new("intent:passive").unwrap(),
+        PassiveLimitSpec {
+            reprice_interval: DurationNanos::new(10),
+            max_quote_age: DurationNanos::new(20),
+        },
+        [
+            (LegId::new("bid").unwrap(), Quantity::new(2, 0).unwrap()),
+            (LegId::new("ask").unwrap(), Quantity::new(2, 0).unwrap()),
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn passive_limit_authorizes_all_unique_legs_in_stable_order() {
+    let run = passive_run();
+    let decision = decide_passive_limit(
+        &run,
+        AlgorithmInput {
+            business_time: UnixNanos::new(100),
+            ready_children: vec![
+                AlgorithmChildCandidate {
+                    order_id: OrderId::new("order:passive:ask").unwrap(),
+                    leg_id: LegId::new("ask").unwrap(),
+                    quantity: Quantity::new(2, 0).unwrap(),
+                    execution_style: AlgorithmExecutionStyle::PassiveLimit,
+                    execution_route_id: None,
+                },
+                AlgorithmChildCandidate {
+                    order_id: OrderId::new("order:passive:bid").unwrap(),
+                    leg_id: LegId::new("bid").unwrap(),
+                    quantity: Quantity::new(1, 0).unwrap(),
+                    execution_style: AlgorithmExecutionStyle::PassiveLimit,
+                    execution_route_id: None,
+                },
+            ],
+        },
+    )
+    .unwrap();
+
+    assert_eq!(decision.actions.len(), 2);
+    assert!(matches!(
+        &decision.actions[0],
+        AlgorithmActionKind::SubmitChild { order_id, quantity, .. }
+            if order_id.as_str() == "order:passive:ask"
+                && *quantity == Quantity::new(2, 0).unwrap()
+    ));
+    assert!(matches!(
+        &decision.actions[1],
+        AlgorithmActionKind::SubmitChild { order_id, quantity, .. }
+            if order_id.as_str() == "order:passive:bid"
+                && *quantity == Quantity::new(1, 0).unwrap()
+    ));
+}
+
+#[test]
+fn passive_limit_pending_action_prevents_a_duplicate_refresh_decision() {
+    let mut run = passive_run();
+    let input = AlgorithmInput {
+        business_time: UnixNanos::new(100),
+        ready_children: vec![AlgorithmChildCandidate {
+            order_id: OrderId::new("order:passive:bid").unwrap(),
+            leg_id: LegId::new("bid").unwrap(),
+            quantity: Quantity::new(2, 0).unwrap(),
+            execution_style: AlgorithmExecutionStyle::PassiveLimit,
+            execution_route_id: None,
+        }],
+    };
+    run.apply_decision(decide_passive_limit(&run, input.clone()).unwrap())
+        .unwrap();
+
+    let replay = decide_passive_limit(&run, input).unwrap();
+    assert!(replay.actions.is_empty());
+    assert_eq!(replay.next_status, AlgorithmRunStatus::Waiting);
+}
+
 #[test]
 fn stale_sequence_and_regressing_business_time_are_rejected() {
     let mut run = run();

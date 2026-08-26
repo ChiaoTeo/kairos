@@ -437,7 +437,7 @@ credential_id = "massive"
     }
 
     #[test]
-    fn perpetual_quote_route_discovers_enabled_binance_usdm_provider() {
+    fn perpetual_direct_routes_discover_enabled_binance_usdm_capabilities() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory.path().join("workspace.toml"),

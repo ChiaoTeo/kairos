@@ -1,0 +1,91 @@
+include "../../common/decimal.fbs";
+include "benchmark.fbs";
+
+namespace kairos.execution.v2;
+
+enum AlgorithmRunLifecycle:ubyte {
+  UNSPECIFIED = 0,
+  PLANNED = 1,
+  RUNNING = 2,
+  WAITING = 3,
+  COMPLETED = 4,
+  UNWOUND = 5,
+  FAILED = 6,
+  RECONCILIATION_REQUIRED = 7
+}
+
+enum AlgorithmLegRole:ubyte {
+  UNSPECIFIED = 0,
+  IMMEDIATE = 1,
+  TWAP = 2,
+  LEADER_MAKER = 3,
+  HEDGE_TAKER = 4,
+  UNWIND = 5,
+  PASSIVE_LIMIT = 6
+}
+
+enum AlgorithmLegLifecycle:ubyte {
+  UNSPECIFIED = 0,
+  DORMANT = 1,
+  READY = 2,
+  ACTIVE = 3,
+  COMPLETED = 4,
+  FAILED = 5,
+  RECONCILIATION_REQUIRED = 6
+}
+
+table ExecutionFeeTotal {
+  currency:string (required);
+  amount:kairos.common.v2.Decimal64 (required);
+}
+
+table AlgorithmLegBenchmarkQuality {
+  kind:ExecutionBenchmarkKind = UNSPECIFIED;
+  instrument_id:string (required);
+  market_id:string (required);
+  price:kairos.common.v2.Decimal64 (required);
+  observed_at_unix_nanos:ulong;
+  benchmark_notional:kairos.common.v2.Decimal64 (required);
+  implementation_shortfall:kairos.common.v2.Decimal64;
+}
+
+table AlgorithmLegExecutionQuality {
+  order_count:ulong;
+  fill_count:ulong;
+  cancel_attempt_count:ulong;
+  filled_quantity:kairos.common.v2.Decimal64 (required);
+  gross_notional:kairos.common.v2.Decimal64 (required);
+  average_fill_price:kairos.common.v2.Decimal64;
+  first_order_submitted_at_unix_nanos:ulong = null;
+  first_fill_at_unix_nanos:ulong = null;
+  last_fill_at_unix_nanos:ulong = null;
+  time_to_first_fill_nanos:ulong = null;
+  time_to_last_fill_nanos:ulong = null;
+  fee_totals:[ExecutionFeeTotal] (required);
+  benchmark:AlgorithmLegBenchmarkQuality;
+}
+
+table AlgorithmLegState {
+  leg_id:string (required);
+  role:AlgorithmLegRole = UNSPECIFIED;
+  lifecycle:AlgorithmLegLifecycle = UNSPECIFIED;
+  target_quantity:kairos.common.v2.Decimal64 (required);
+  committed_quantity:kairos.common.v2.Decimal64 (required);
+  filled_quantity:kairos.common.v2.Decimal64 (required);
+  quality:AlgorithmLegExecutionQuality (required);
+}
+
+table AlgorithmRunState {
+  algorithm_run_id:string (required);
+  algorithm_version:uint;
+  intent_id:string (required);
+  algorithm_kind:string (required);
+  lifecycle:AlgorithmRunLifecycle = UNSPECIFIED;
+  decision_sequence:ulong;
+  last_decision_at_unix_nanos:ulong = null;
+  next_wake_at_unix_nanos:ulong = null;
+  action_count:ulong;
+  pending_action_count:ulong;
+  indeterminate_action_count:ulong;
+  legs:[AlgorithmLegState] (required);
+}

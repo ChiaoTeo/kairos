@@ -1,5 +1,5 @@
 use kairos_primitives::account::SegmentKey;
-use kairos_primitives::execution::{FillId, OrderId};
+use kairos_primitives::execution::{ClientOrderId, FillId, OrderId};
 use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{AssetId, Currency, Symbol};
 use kairos_primitives::time::UnixNanos;
@@ -50,9 +50,13 @@ pub(crate) fn execution_event(
         })?,
         _ => return Ok(None),
     };
-    let order_id = field(row, "c", "clientOrderId")
-        .or_else(|| field(row, "i", "orderId"))
-        .ok_or_else(|| IntegrationError::InvalidPayload("Binance order id is missing".into()))?;
+    let remote_order_id = field(row, "i", "orderId").ok_or_else(|| {
+        IntegrationError::InvalidPayload("Binance remote order id is missing".into())
+    })?;
+    let client_order_id = field(row, "c", "clientOrderId")
+        .map(ClientOrderId::new)
+        .transpose()
+        .map_err(payload)?;
     let symbol = field(row, "s", "symbol").ok_or_else(|| {
         IntegrationError::InvalidPayload("Binance order symbol is missing".into())
     })?;
@@ -73,7 +77,8 @@ pub(crate) fn execution_event(
         observed_at_unix_nanos: observed,
         received_at_unix_nanos: now(),
         payload: ExternalExecutionEvent {
-            order_id: OrderId::new(order_id).map_err(payload)?,
+            remote_order_id: RemoteOrderId::new(remote_order_id).map_err(payload)?,
+            client_order_id,
             symbol: Symbol::new(symbol).map_err(payload)?,
             status: normalize_order_status(
                 field(row, "X", "orderStatus")
@@ -450,4 +455,58 @@ fn now() -> UnixNanos {
 
 fn payload(error: impl std::fmt::Display) -> IntegrationError {
     IntegrationError::InvalidPayload(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execution_event;
+
+    #[test]
+    fn execution_event_preserves_remote_and_client_order_identities() {
+        let event = execution_event(
+            &crate::ConnectionKey::new("execution.binance.spot.trading.spot").unwrap(),
+            7,
+            &serde_json::json!({
+                "e": "executionReport",
+                "E": 1_700_000_000_000_u64,
+                "s": "BTCUSDT",
+                "c": "local-42",
+                "i": 9876,
+                "X": "PARTIALLY_FILLED",
+                "S": "BUY",
+                "o": "LIMIT",
+                "q": "2",
+                "p": "100.5",
+                "z": "0.25",
+                "l": "0.25",
+                "L": "100.5",
+                "t": 99,
+                "n": "0.01",
+                "N": "USDT"
+            }),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(event.payload.remote_order_id.as_str(), "9876");
+        assert_eq!(event.payload.client_order_id.as_deref(), Some("local-42"));
+    }
+
+    #[test]
+    fn execution_event_requires_a_remote_order_identity() {
+        let error = execution_event(
+            &crate::ConnectionKey::new("execution.binance.spot.trading.spot").unwrap(),
+            7,
+            &serde_json::json!({
+                "e": "executionReport",
+                "E": 1_700_000_000_000_u64,
+                "s": "BTCUSDT",
+                "c": "local-42",
+                "X": "NEW"
+            }),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("remote order id is missing"));
+    }
 }

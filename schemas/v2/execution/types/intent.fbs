@@ -1,5 +1,6 @@
 include "../../common/decimal.fbs";
 include "../../common/types.fbs";
+include "benchmark.fbs";
 
 namespace kairos.execution.v2;
 
@@ -102,10 +103,12 @@ table TwapPolicy {
   slice_interval_nanos:ulong;
 }
 
+table PassiveLimitPolicy {
+  reprice_interval_nanos:ulong;
+  max_quote_age_nanos:ulong;
+}
+
 table MakerExecutionPolicy {
-  min_interval_nanos:ulong = null;
-  max_orders_per_window:uint = null;
-  window_nanos:ulong = null;
   max_inventory_abs:kairos.common.v2.Decimal64;
   target_inventory:kairos.common.v2.Decimal64;
   max_quote_age_nanos:ulong = null;
@@ -138,7 +141,8 @@ table HedgePolicy {
 union ExecutionAlgorithm {
   ImmediateAlgorithm,
   TwapPolicy,
-  HedgePolicy
+  HedgePolicy,
+  PassiveLimitPolicy
 }
 
 table IntentLeg {
@@ -174,4 +178,5 @@ table ExecutionIntent {
   // Opaque Strategy-owned causal decision identity. Optional for legacy and
   // non-Strategy callers during migration.
   strategy_decision_id:string;
+  execution_benchmarks:[ExecutionBenchmarkObservation] (required);
 }

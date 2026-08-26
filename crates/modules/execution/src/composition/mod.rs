@@ -11,8 +11,9 @@ mod launch;
 mod persistence;
 
 pub use connections::{
-    ExecutionConnectionOptions, ExecutionInstrumentRoute, ExecutionWriterFence,
-    SimulatedOrderEntry, compose_order_entry, load_execution_routes_from_reference_markets,
+    ExecutionConnectionOptions, ExecutionInstrumentRoute, ExecutionVenueEnvironment,
+    ExecutionWriterFence, SimulatedOrderEntry, compose_order_entry,
+    load_execution_routes_from_reference_markets,
 };
 pub use dependencies::{configure_execution_dependencies, configure_simulated_risk};
 pub use direct::compose_standalone_execution;

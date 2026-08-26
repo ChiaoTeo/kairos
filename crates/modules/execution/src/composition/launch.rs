@@ -120,16 +120,13 @@ pub fn build_execution_host(
         ExecutionAudit::from(audit),
         settlement,
     )?;
+    application.configure_wall_clock_business_time(!config.backtest);
     let event_endpoint = kairos_execution_contract::AeronEndpoint::from_parts(
         config.aeron_dir.as_deref(),
         config.aeron_channel.clone(),
         config.execution_events_stream_id,
     )?;
-    for kind in [
-        ExecutionViewKind::ActiveOrders,
-        ExecutionViewKind::CurrentExecution,
-        ExecutionViewKind::ActiveIntents,
-    ] {
+    for kind in [ExecutionViewKind::CurrentExecution] {
         let key = ExecutionViewKey::from_identity(&transport_identity, kind);
         let resource_key = key.canonical_key();
         let path = ExecutionViewPublisher::resolved_path(&config.view_root, &key)?;

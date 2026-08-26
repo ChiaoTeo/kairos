@@ -377,6 +377,9 @@ impl CliExecutionApplication {
         Ok(OrderEntryRequest {
             order_id: request.order_id.clone(),
             intent_id: request.intent_id.clone(),
+            submitted_at_unix_nanos: request
+                .submitted_at_unix_nanos
+                .unwrap_or_else(|| now_unix_nanos().into()),
             account_id: request.account_id.clone(),
             segment_key: request.segment_key.clone(),
             instrument_id: request.instrument_id.clone(),
@@ -402,6 +405,9 @@ impl CliExecutionApplication {
         Ok(OrderEntryRequest {
             order_id: order.order_id.clone(),
             intent_id: None,
+            submitted_at_unix_nanos: order
+                .occurred_at_unix_nanos
+                .unwrap_or_else(|| now_unix_nanos().into()),
             account_id: AccountId::new(self.binding.account_id.clone()).map_err(display)?,
             segment_key: SegmentKey::new(self.binding.segment_key.clone()).map_err(display)?,
             instrument_id: InstrumentId::new(order.symbol.to_string()).map_err(display)?,

@@ -42,6 +42,26 @@ pub struct TwapPolicy {
     pub slice_interval: DurationNanos,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PassiveLimitPolicy {
+    /// Minimum business-time interval between accepted quote revisions.
+    pub reprice_interval: DurationNanos,
+    /// Maximum age of the market observation that supplies replacement prices.
+    pub max_quote_age: DurationNanos,
+}
+
+impl PassiveLimitPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.reprice_interval.get() == 0 || self.max_quote_age.get() == 0 {
+            return Err(
+                "passive-limit reprice interval and maximum quote age must be positive".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl TwapPolicy {
     pub fn validate(&self) -> Result<(), String> {
         if self.slice_count < 2 || self.slice_interval.get() == 0 {
@@ -51,17 +71,10 @@ impl TwapPolicy {
     }
 }
 
-/// A maker quote is allowed to be throttled by both order cadence and
-/// inventory.  This is a guardrail consumed by the execution scheduler; it
-/// is not a signal-generation policy.
+/// Admission-only inventory and quote-freshness guardrails for maker orders.
+/// Algorithm cadence belongs exclusively to the selected algorithm spec.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MakerExecutionPolicy {
-    #[serde(default)]
-    pub min_interval: Option<DurationNanos>,
-    #[serde(default)]
-    pub max_orders_per_window: Option<u32>,
-    #[serde(default)]
-    pub window: Option<DurationNanos>,
     #[serde(default)]
     pub max_inventory_abs: Option<SignedQuantity>,
     #[serde(default)]
@@ -72,12 +85,9 @@ pub struct MakerExecutionPolicy {
 
 impl MakerExecutionPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.min_interval.is_some_and(|value| value.get() == 0)
-            || self.max_orders_per_window.is_some_and(|value| value == 0)
-            || self.window.is_some_and(|value| value.get() == 0)
-            || self
-                .max_inventory_abs
-                .is_some_and(|value| value.is_negative())
+        if self
+            .max_inventory_abs
+            .is_some_and(|value| value.is_negative())
             || self.max_quote_age.is_some_and(|value| value.get() == 0)
         {
             return Err("maker execution policy contains an invalid limit".into());
@@ -180,6 +190,7 @@ impl HedgePolicy {
 pub enum ExecutionAlgorithmPolicy {
     Immediate,
     Twap(TwapPolicy),
+    PassiveLimit(PassiveLimitPolicy),
     MakerTakerHedge(HedgePolicy),
 }
 
@@ -188,6 +199,7 @@ impl ExecutionAlgorithmPolicy {
         match self {
             Self::Immediate => Ok(()),
             Self::Twap(policy) => policy.validate(),
+            Self::PassiveLimit(policy) => policy.validate(),
             Self::MakerTakerHedge(policy) => policy.validate(),
         }
     }
@@ -195,7 +207,7 @@ impl ExecutionAlgorithmPolicy {
     pub fn hedge_policy(&self) -> Option<&HedgePolicy> {
         match self {
             Self::MakerTakerHedge(policy) => Some(policy),
-            Self::Immediate | Self::Twap(_) => None,
+            Self::Immediate | Self::Twap(_) | Self::PassiveLimit(_) => None,
         }
     }
 }

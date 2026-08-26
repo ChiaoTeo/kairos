@@ -9,10 +9,12 @@ from kairospy.investment.apps.execution.application import IntentAdmissionEviden
 
 from kairospy.strategy import (
     ArbitrageLegRequest,
+    ExecutionBenchmark,
     HedgePolicy,
     ImmediateAlgorithm,
     MakerTakerHedgeAlgorithm,
     MakerExecutionPolicy,
+    PassiveLimitAlgorithm,
     PairArbitrageRequest,
     PortfolioRebalanceRequest,
     PortfolioRebalanceTarget,
@@ -64,6 +66,18 @@ class DirectOrderClient:
         self.calls.append((method, params))
         order_id = params[0] if params else None
         return {"order_id": order_id or "order-1", "status": "accepted"}
+
+
+def test_execution_control_order_audit_uses_the_durable_query_method() -> None:
+    transport = RecordingClient()
+    client = ExecutionControlClient.__new__(ExecutionControlClient)
+    client._client = transport
+
+    client.order_audit({"order_id": "order-1", "limit": 100})
+
+    assert transport.calls == [
+        ("execution_order_audit", [{"order_id": "order-1", "limit": 100}])
+    ]
 
 
 def test_market_port_adapts_typed_subscription_to_owner_command() -> None:
@@ -205,6 +219,69 @@ def test_execution_client_encodes_decimal_intent_without_vendor_payloads() -> No
     assert body["intent"]["strategy_id"] == "sma"
     assert body["intent"]["segment_key"] == "usd_m_futures"
     assert body["intent"]["algorithm"] == {"type": "immediate"}
+
+
+def test_execution_client_encodes_explicit_arrival_benchmark() -> None:
+    client = RecordingClient()
+    port = ExecutionCommandClient(client)
+
+    port.target_position(
+        TargetPositionRequest(
+            "BTCUSDT",
+            Decimal("2"),
+            algorithm=ImmediateAlgorithm(),
+            account_id="main",
+            execution_benchmarks=(
+                ExecutionBenchmark(
+                    instrument_id="BTCUSDT",
+                    market_id="market:binance:spot:BTCUSDT",
+                    price=Decimal("100.25"),
+                    observed_at_unix_nanos=123,
+                ),
+            ),
+        ),
+        strategy_id="benchmark",
+        instance_id="instance-1",
+        request_id="request-benchmark",
+    )
+
+    intent = client.calls[0][1][0]["intent"]
+    assert intent["execution_benchmarks"] == [
+        {
+            "kind": "arrival",
+            "leg_id": None,
+            "instrument_id": "BTCUSDT",
+            "market_id": "market:binance:spot:BTCUSDT",
+            "price": "100.25",
+            "observed_at_unix_nanos": 123,
+        }
+    ]
+
+
+def test_execution_benchmark_rejects_invalid_or_duplicate_leg_identity() -> None:
+    with pytest.raises(ValueError, match="kind must be arrival"):
+        ExecutionBenchmark(
+            instrument_id="BTCUSDT",
+            market_id="market:binance:spot:BTCUSDT",
+            price=Decimal("100"),
+            observed_at_unix_nanos=123,
+            kind="limit_price",
+        )
+
+    benchmark = ExecutionBenchmark(
+        instrument_id="BTCUSDT",
+        market_id="market:binance:spot:BTCUSDT",
+        price=Decimal("100"),
+        observed_at_unix_nanos=123,
+        leg_id="leg-0",
+    )
+    with pytest.raises(ValueError, match="leg_id values must be unique"):
+        PairArbitrageRequest(
+            ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), "main"),
+            ArbitrageLegRequest("ETHUSDT", "Sell", Decimal("1"), "main"),
+            algorithm=ImmediateAlgorithm(),
+            execution_benchmarks=(benchmark, benchmark),
+        )
 
 
 def test_kairospy_encodes_twap_and_rejects_removed_algorithm_aliases() -> None:
@@ -408,7 +485,7 @@ def test_pair_request_exposes_split_maker_and_hedge_controls() -> None:
                 "maker-main",
                 split=SplitOrderPolicy(child_count=4),
                 maker=MakerExecutionPolicy(
-                    min_interval_millis=25, max_inventory_abs=Decimal("200")
+                    max_inventory_abs=Decimal("200")
                 ),
             ),
             ArbitrageLegRequest("USDCUSDT-PERP", "Sell", Decimal("100"), "maker-hedge"),
@@ -437,9 +514,12 @@ def test_quote_provisioning_is_a_two_sided_execution_intent() -> None:
             Decimal("100"),
             Decimal("1.0002"),
             Decimal("100"),
-            algorithm=ImmediateAlgorithm(),
+            algorithm=PassiveLimitAlgorithm(
+                reprice_interval_nanos=100_000_000,
+                max_quote_age_nanos=500_000_000,
+            ),
             account_id="main",
-            maker=MakerExecutionPolicy(min_interval_millis=100),
+            maker=MakerExecutionPolicy(max_quote_age_millis=500),
         ),
         strategy_id="maker",
         instance_id="instance-1",
@@ -448,7 +528,27 @@ def test_quote_provisioning_is_a_two_sided_execution_intent() -> None:
     assert handle.status == "accepted"
     intent = client.calls[0][1][0]["intent"]
     assert intent["intent_type"] == "QuoteProvisioning"
+    assert intent["algorithm"] == {
+        "type": "passive_limit",
+        "policy": {
+            "reprice_interval": 100_000_000,
+            "max_quote_age": 500_000_000,
+        },
+    }
     assert [leg["side"] for leg in intent["legs"]] == ["Buy", "Sell"]
+
+
+def test_quote_provisioning_rejects_the_removed_immediate_path() -> None:
+    with pytest.raises(ValueError, match="requires PassiveLimit"):
+        QuoteProvisioningRequest(
+            "USDCUSDT",
+            Decimal("0.9998"),
+            Decimal("100"),
+            Decimal("1.0002"),
+            Decimal("100"),
+            algorithm=ImmediateAlgorithm(),
+            account_id="main",
+        )
 
 
 def test_quote_refresh_uses_execution_owner_replace_boundary() -> None:

@@ -45,6 +45,7 @@ impl ExecutionActor {
         order.execution_route_id = request.execution_route_id.clone();
         order.attempts.push(crate::domain::ExecutionAttempt {
             attempt_id: format!("{}:attempt:1", order.order_id),
+            command: crate::domain::ExecutionCommandKind::Submit,
             provider_connection_id: selected_route.route_id.to_string(),
             selected_route: selected_route.clone(),
             command_started_at_unix_nanos: now.into(),
@@ -185,7 +186,13 @@ impl ExecutionActor {
         let occurred_at = event.occurred_at_unix_nanos;
         crate::application::apply_connection_event(&mut order, event)
             .map_err(|error| error.to_string())?;
-        if let Some(attempt) = order.attempts.last_mut() {
+        order.reconciliation_cause = None;
+        if let Some(attempt) = order
+            .attempts
+            .iter_mut()
+            .rev()
+            .find(|attempt| attempt.command == crate::domain::ExecutionCommandKind::Submit)
+        {
             attempt.delivery_certainty = if order.status == ExecutionOrderStatus::Rejected {
                 crate::domain::DeliveryCertainty::Rejected
             } else {
@@ -212,6 +219,12 @@ impl ExecutionActor {
         let mut order = self.order(order_id)?.clone();
         order.status = status;
         order.reason = reason.clone();
+        order.reconciliation_cause = match status {
+            ExecutionOrderStatus::Unknown => {
+                Some(crate::domain::OrderReconciliationCause::DeliveryIndeterminate)
+            },
+            _ => None,
+        };
         order.updated_at_unix_nanos = UnixNanos::new(now);
         if let Some(attempt) = order.attempts.last_mut() {
             attempt.delivery_certainty = match status {
@@ -232,12 +245,83 @@ impl ExecutionActor {
         now: u64,
     ) -> Option<(ExecutionOrder, ExecutionEvent)> {
         let mut order = self.order(order_id)?.clone();
-        let attempt = order.attempts.last_mut()?;
+        let attempt = order
+            .attempts
+            .iter_mut()
+            .rev()
+            .find(|attempt| attempt.command == crate::domain::ExecutionCommandKind::Submit)?;
         attempt.command_started_at_unix_nanos = now.into();
         attempt.delivery_certainty = crate::domain::DeliveryCertainty::Indeterminate;
         order.updated_at_unix_nanos = now.into();
         let event = order_event(&order, now, "order-entry command dispatch started".into());
         self.orders.insert(order.order_id.clone(), order.clone());
         Some((order, event))
+    }
+
+    pub(crate) fn begin_cancel_attempt(
+        &mut self,
+        order_id: &str,
+        now: u64,
+    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
+        let mut order = self
+            .order(order_id)
+            .cloned()
+            .ok_or_else(|| "unknown order".to_string())?;
+        if order.attempts.iter().rev().any(|attempt| {
+            attempt.command == crate::domain::ExecutionCommandKind::Cancel
+                && attempt.delivery_certainty == crate::domain::DeliveryCertainty::Indeterminate
+        }) {
+            return Err("order has an indeterminate cancel attempt; reconcile before retry".into());
+        }
+        let selected_route = order
+            .selected_route
+            .clone()
+            .ok_or_else(|| "order has no durable selected route".to_string())?;
+        let cancel_sequence = order
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.command == crate::domain::ExecutionCommandKind::Cancel)
+            .count()
+            + 1;
+        order.attempts.push(crate::domain::ExecutionAttempt {
+            attempt_id: format!("{}:cancel:{cancel_sequence}", order.order_id),
+            command: crate::domain::ExecutionCommandKind::Cancel,
+            provider_connection_id: selected_route.route_id.to_string(),
+            selected_route,
+            command_started_at_unix_nanos: now.into(),
+            delivery_certainty: crate::domain::DeliveryCertainty::Indeterminate,
+            remote_order_id: order.remote_order_id.clone(),
+        });
+        order.updated_at_unix_nanos = now.into();
+        let event = order_event(&order, now, "order-cancel command dispatch started".into());
+        self.orders.insert(order.order_id.clone(), order.clone());
+        Ok((order, event))
+    }
+
+    pub(crate) fn resolve_cancel_attempt(
+        &mut self,
+        order_id: &str,
+        certainty: crate::domain::DeliveryCertainty,
+        now: u64,
+    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
+        let mut order = self
+            .order(order_id)
+            .cloned()
+            .ok_or_else(|| "unknown order".to_string())?;
+        let attempt = order
+            .attempts
+            .iter_mut()
+            .rev()
+            .find(|attempt| attempt.command == crate::domain::ExecutionCommandKind::Cancel)
+            .ok_or_else(|| "cancel attempt is missing".to_string())?;
+        attempt.delivery_certainty = certainty;
+        order.updated_at_unix_nanos = now.into();
+        let event = order_event(
+            &order,
+            now,
+            "order-cancel delivery evidence resolved".into(),
+        );
+        self.orders.insert(order.order_id.clone(), order.clone());
+        Ok((order, event))
     }
 }

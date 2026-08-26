@@ -189,7 +189,7 @@ def test_workspace_header_remains_project_identity_during_navigation() -> None:
     operations_header, operations_context = asyncio.run(run("6"))
     project_header, project_context = asyncio.run(run("p"))
 
-    assert operations_header == project_header == "◆ KAIROS  /  trader"
+    assert operations_header == project_header == "KAIROS  ·  trader"
     assert operations_context == "trader / 运行中心 / 运行概览  ›"
     assert project_context == "trader / 项目管理  ›"
 

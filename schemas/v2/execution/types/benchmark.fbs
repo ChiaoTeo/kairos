@@ -1,0 +1,17 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.execution.v2;
+
+enum ExecutionBenchmarkKind:ubyte {
+  UNSPECIFIED = 0,
+  ARRIVAL = 1
+}
+
+table ExecutionBenchmarkObservation {
+  kind:ExecutionBenchmarkKind = UNSPECIFIED;
+  leg_id:string;
+  instrument_id:string (required);
+  market_id:string (required);
+  price:kairos.common.v2.Decimal64 (required);
+  observed_at_unix_nanos:ulong;
+}

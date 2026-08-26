@@ -7,3 +7,4 @@ class ExecutionAlgorithm(object):
     ImmediateAlgorithm = 1
     TwapPolicy = 2
     HedgePolicy = 3
+    PassiveLimitPolicy = 4

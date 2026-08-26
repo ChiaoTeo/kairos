@@ -27,17 +27,8 @@ pub trait FillEncoder {
     fn encode_fill_recorded(&self, context: &EncodeContext) -> ContractResult<Vec<u8>>;
 }
 
-pub trait ReconciliationEncoder {
-    fn encode_reconciliation_required(&self, context: &EncodeContext) -> ContractResult<Vec<u8>>;
-}
-
-pub trait ActiveViewEncoder {
-    fn encode_active_orders(
-        &self,
-        context: &EncodeContext,
-        key: &ExecutionViewKey,
-    ) -> ContractResult<Vec<u8>>;
-    fn encode_active_intents(
+pub trait CurrentExecutionViewEncoder {
+    fn encode_current_execution(
         &self,
         context: &EncodeContext,
         key: &ExecutionViewKey,

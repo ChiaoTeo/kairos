@@ -9,10 +9,12 @@ from typing import Any, Mapping
 
 from kairospy.strategy import CommandHandle, CommandEnvelope
 from kairospy.investment.apps.execution.application import (
+    ExecutionBenchmark,
     ExecutionAlgorithmPolicy,
     HedgePolicy,
     ImmediateAlgorithm,
     MakerTakerHedgeAlgorithm,
+    PassiveLimitAlgorithm,
     MakerExecutionPolicy,
     OptionSpreadRequest,
     PairArbitrageRequest,
@@ -121,6 +123,9 @@ class ExecutionCommandClient:
             "execution_route_id": request.execution_route_id,
             "intent_type": "TargetPosition",
             "algorithm": _execution_algorithm(request.algorithm),
+            "execution_benchmarks": _execution_benchmarks(
+                request.execution_benchmarks
+            ),
             "target_quantity": _decimal(request.quantity),
             "limit_price": None
             if request.limit_price is None
@@ -303,6 +308,9 @@ class ExecutionCommandClient:
             "reason": request.reason,
             "intent_type": "PairArbitrage",
             "algorithm": _execution_algorithm(request.algorithm),
+            "execution_benchmarks": _execution_benchmarks(
+                request.execution_benchmarks
+            ),
             "completion_policy": request.completion_policy,
             "failure_policy": request.failure_policy,
             "legs": payload_legs,
@@ -365,6 +373,9 @@ class ExecutionCommandClient:
             "reason": request.reason,
             "intent_type": "OptionSpread",
             "algorithm": _execution_algorithm(request.algorithm),
+            "execution_benchmarks": _execution_benchmarks(
+                request.execution_benchmarks
+            ),
             "completion_policy": request.completion_policy,
             "failure_policy": request.failure_policy,
             "minimum_net_credit": _decimal(request.minimum_net_credit),
@@ -449,6 +460,9 @@ class ExecutionCommandClient:
             "reason": request.reason,
             "intent_type": "PortfolioRebalance",
             "algorithm": _execution_algorithm(request.algorithm),
+            "execution_benchmarks": _execution_benchmarks(
+                request.execution_benchmarks
+            ),
             "completion_policy": request.completion_policy,
             "failure_policy": request.failure_policy,
             "legs": payload_legs,
@@ -507,6 +521,9 @@ class ExecutionCommandClient:
             "reason": request.reason,
             "intent_type": "QuoteProvisioning",
             "algorithm": _execution_algorithm(request.algorithm),
+            "execution_benchmarks": _execution_benchmarks(
+                request.execution_benchmarks
+            ),
             "completion_policy": "BestEffort",
             "failure_policy": "ContinueOtherLegs",
             "legs": [
@@ -638,6 +655,7 @@ def _single_order_intent(
         "limit_price": None,
         "intent_type": "SingleOrder",
         "algorithm": _execution_algorithm(ImmediateAlgorithm()),
+        "execution_benchmarks": [],
         "completion_policy": "AllLegsSatisfied",
         "failure_policy": "CancelRemaining",
         "reason": "",
@@ -737,13 +755,6 @@ def _execution_options(
         }
     if maker is not None:
         options["maker"] = {
-            "min_interval": None
-            if maker.min_interval_millis is None
-            else maker.min_interval_millis * 1_000_000,
-            "max_orders_per_window": maker.max_orders_per_window,
-            "window": None
-            if maker.window_millis is None
-            else maker.window_millis * 1_000_000,
             "max_inventory_abs": None
             if maker.max_inventory_abs is None
             else _decimal(maker.max_inventory_abs),
@@ -816,6 +827,7 @@ _INTENT_FIELDS = frozenset(
         "reason",
         "intent_type",
         "algorithm",
+        "execution_benchmarks",
         "completion_policy",
         "failure_policy",
         "legs",
@@ -861,6 +873,7 @@ def _contract_intent_body(value: Mapping[str, object]) -> dict[str, object]:
         "source_snapshot_id": None,
         "source_event_sequence": None,
         "source_event_time_unix_nanos": None,
+        "execution_benchmarks": [],
         "completion_policy": "AllLegsSatisfied",
         "failure_policy": "CancelRemaining",
         "legs": [],
@@ -884,6 +897,19 @@ def _original_intent_body(
     if evidence.outcome == "approved":
         return original
     request = evidence.original_intent
+    if isinstance(
+        request,
+        (
+            TargetPositionRequest,
+            PairArbitrageRequest,
+            OptionSpreadRequest,
+            PortfolioRebalanceRequest,
+            QuoteProvisioningRequest,
+        ),
+    ):
+        original["execution_benchmarks"] = _execution_benchmarks(
+            request.execution_benchmarks
+        )
     if isinstance(request, TargetPositionRequest):
         original["target_quantity"] = _decimal(request.quantity)
         original["limit_price"] = (
@@ -941,12 +967,36 @@ def _execution_algorithm(policy: ExecutionAlgorithmPolicy) -> dict[str, object]:
                 "slice_interval": policy.slice_interval_nanos,
             },
         }
+    if isinstance(policy, PassiveLimitAlgorithm):
+        return {
+            "type": "passive_limit",
+            "policy": {
+                "reprice_interval": policy.reprice_interval_nanos,
+                "max_quote_age": policy.max_quote_age_nanos,
+            },
+        }
     if isinstance(policy, MakerTakerHedgeAlgorithm):
         hedge = _hedge_policy(policy.hedge)
         if hedge is None:
             raise ValueError("maker-taker hedge algorithm requires hedge policy")
         return {"type": "maker_taker_hedge", "policy": hedge}
     raise TypeError(f"Unsupported execution algorithm: {type(policy).__name__}")
+
+
+def _execution_benchmarks(
+    benchmarks: tuple[ExecutionBenchmark, ...],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "kind": benchmark.kind,
+            "leg_id": benchmark.leg_id,
+            "instrument_id": benchmark.instrument_id,
+            "market_id": benchmark.market_id,
+            "price": _decimal(benchmark.price),
+            "observed_at_unix_nanos": benchmark.observed_at_unix_nanos,
+        }
+        for benchmark in benchmarks
+    ]
 
 
 def _handle(request_id: str, status: int, value: Mapping[str, Any]) -> CommandHandle:

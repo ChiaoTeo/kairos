@@ -237,7 +237,7 @@ def test_launch_instance_component_market_snapshot_uses_manifest_view_root(
     }
 
 
-def test_launch_instance_component_execution_orders_uses_connected_owner_cli(
+def test_launch_instance_component_execution_active_orders_uses_connected_owner_cli(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init(
@@ -265,7 +265,7 @@ def test_launch_instance_component_execution_orders_uses_connected_owner_cli(
                 "instance",
                 "component",
                 "execution",
-                "orders",
+                "active-orders",
                 "btc",
                 "--instance",
                 "run-1",
@@ -302,7 +302,7 @@ def test_launch_instance_component_execution_orders_uses_connected_owner_cli(
             "btc",
             "--instance-id",
             "run-1",
-            "orders",
+        "active-orders",
             "--account-id",
             "main",
         ],

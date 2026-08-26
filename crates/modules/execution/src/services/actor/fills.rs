@@ -4,7 +4,8 @@ impl ExecutionActor {
     pub(crate) fn record_fill(
         &mut self,
         request: &ExecutionFillReport,
-        now: u64,
+        occurred_at: u64,
+        applied_at: u64,
     ) -> Result<FillTransition, String> {
         if let Some(existing) = self
             .fills
@@ -30,10 +31,25 @@ impl ExecutionActor {
                     .is_none_or(|value| value == existing.occurred_at_unix_nanos);
             if same_fact {
                 let order = self
-                    .order(request.order_id.as_str())
-                    .cloned()
+                    .orders
+                    .get_mut(request.order_id.as_str())
                     .ok_or_else(|| "duplicate fill references unknown order".to_string())?;
-                return Ok(FillTransition::Duplicate(order));
+                let cursor_changed = request.source_cursor.as_ref().is_some_and(|incoming| {
+                    if order
+                        .last_order_fact_cursor
+                        .as_ref()
+                        .is_some_and(|previous| incoming.regresses(previous))
+                        || order.last_order_fact_cursor.as_ref() == Some(incoming)
+                    {
+                        return false;
+                    }
+                    order.last_order_fact_cursor = Some(incoming.clone());
+                    true
+                });
+                return Ok(FillTransition::Duplicate {
+                    order: order.clone(),
+                    cursor_changed,
+                });
             }
             return Ok(FillTransition::Conflict(existing));
         }
@@ -58,13 +74,31 @@ impl ExecutionActor {
             return Err("cumulative fill exceeds order quantity".into());
         }
         let mut order = current;
+        if let Some(remote_order_id) = request.remote_order_id.as_ref() {
+            if order
+                .remote_order_id
+                .as_ref()
+                .is_some_and(|current| current != remote_order_id)
+            {
+                return Err(format!(
+                    "fill remote order identity {} conflicts with order identity {}",
+                    remote_order_id,
+                    order.remote_order_id.as_deref().unwrap_or_default()
+                ));
+            }
+            order.remote_order_id = Some(remote_order_id.clone());
+        }
         order.filled_quantity = filled;
-        order.updated_at_unix_nanos = UnixNanos::new(now);
+        order.updated_at_unix_nanos = UnixNanos::new(applied_at);
         order.status = if filled == order.quantity {
             ExecutionOrderStatus::Filled
         } else {
             ExecutionOrderStatus::PartiallyFilled
         };
+        order.reconciliation_cause = None;
+        if let Some(source_cursor) = request.source_cursor.as_ref() {
+            order.last_order_fact_cursor = Some(source_cursor.clone());
+        }
         let fill = ExecutionFill {
             fill_id: request.fill_id.clone(),
             order_id: order.order_id.clone(),
@@ -85,9 +119,10 @@ impl ExecutionActor {
             price: request.price,
             fee: request.fee,
             fee_currency: request.fee_currency.clone(),
-            occurred_at_unix_nanos: UnixNanos::new(now),
+            source_cursor: request.source_cursor.clone(),
+            occurred_at_unix_nanos: UnixNanos::new(occurred_at),
         };
-        let mut event = order_event(&order, now, String::new());
+        let mut event = order_event(&order, applied_at, String::new());
         event.fill_id = Some(request.fill_id.clone());
         event.filled_quantity = Some(filled);
         self.orders.insert(order.order_id.clone(), order.clone());

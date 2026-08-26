@@ -138,10 +138,9 @@ def interaction_copy_text(interaction: InteractionState, *, width: int = 100) ->
     renderable = _interaction_renderable(interaction)
     if renderable is not None:
         console.print(renderable, markup=False, highlight=False)
-    if isinstance(interaction, (ChoiceInteraction, ControlInteraction)):
-        for item in interaction.actions:
-            shortcut = f"[{item.shortcut}] " if item.shortcut else ""
-            console.print(f"{shortcut}{item.label} — {item.description}")
+    for item in _interaction_actions(interaction):
+        shortcut = f"[{item.shortcut}] " if item.shortcut else ""
+        console.print(f"{shortcut}{item.label} — {item.description}")
     return redact_text(output.getvalue()).strip()
 
 
@@ -200,6 +199,21 @@ class InteractionRegion(Vertical):
 def _interaction_actions(interaction: InteractionState) -> tuple[ActionItem, ...]:
     if isinstance(interaction, (ChoiceInteraction, ControlInteraction)):
         return interaction.actions
+    if isinstance(interaction, ConfirmInteraction):
+        return (
+            ActionItem(
+                id="confirm:cancel",
+                label=interaction.cancel_label,
+                description="返回，不执行操作",
+                shortcut="n",
+            ),
+            ActionItem(
+                id="confirm:accept",
+                label=interaction.confirm_label,
+                description="执行当前操作",
+                shortcut="y",
+            ),
+        )
     return ()
 
 
@@ -226,15 +240,9 @@ def _interaction_renderable(
             Group(*body), title=interaction.title, border_style=colors.primary
         )
     if isinstance(interaction, ConfirmInteraction):
-        commands = Text()
-        commands.append(
-            f"[/y] {interaction.confirm_label}", style=f"bold {colors.warning}"
-        )
-        commands.append("    ")
-        commands.append(f"[/n] {interaction.cancel_label}", style="bold")
-        parts: list[RenderableType] = [interaction.summary, Text(), commands]
+        parts: list[RenderableType] = [interaction.summary]
         if interaction.force_hint:
-            parts.append(Text(interaction.force_hint, style=colors.muted))
+            parts.extend((Text(), Text(interaction.force_hint, style=colors.muted)))
         return Panel(
             Group(*parts), title=interaction.title, border_style=colors.warning
         )

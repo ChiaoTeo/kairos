@@ -10,8 +10,8 @@ use kairos_conflux::OrderEntryEvent;
 use kairos_primitives::time::Sequence;
 
 use crate::application::{
-    ExecutionEvent, ExecutionFillReport, IntentEvent, IntentState, SubmitOrder, UnknownRemoteOrder,
-    UnknownRemoteOrderResolution,
+    ExecutionEvent, ExecutionFillReport, IntentEvent, IntentState, QuoteRefreshTransaction,
+    SubmitOrder, UnknownRemoteOrder, UnknownRemoteOrderResolution,
 };
 use crate::domain::{
     CommitmentBasis, CommitmentStatus, ExecutionFill, ExecutionOrder, ExecutionOrderStatus,
@@ -51,6 +51,7 @@ pub(crate) struct ExecutionActor {
     pending_events: Vec<ExecutionEvent>,
     fills: Vec<ExecutionFill>,
     algorithm_runs: BTreeMap<String, crate::domain::AlgorithmRun>,
+    business_time_unix_nanos: Option<UnixNanos>,
     unknown_remote_orders: BTreeMap<String, UnknownRemoteOrder>,
     exchange_event_watermark_unix_nanos: u64,
     seen_exchange_events: HashSet<String>,
@@ -75,6 +76,7 @@ impl ExecutionActor {
             pending_events: Vec::new(),
             fills: Vec::new(),
             algorithm_runs: BTreeMap::new(),
+            business_time_unix_nanos: None,
             unknown_remote_orders: BTreeMap::new(),
             exchange_event_watermark_unix_nanos: 0,
             seen_exchange_events: HashSet::new(),
@@ -107,6 +109,7 @@ impl ExecutionActor {
         fills: Vec<ExecutionFill>,
         unknown_remote_orders: Vec<UnknownRemoteOrder>,
         exchange_event_watermark_unix_nanos: u64,
+        business_time_unix_nanos: Option<UnixNanos>,
     ) {
         self.generation = generation;
         self.event_sequence = event_sequence;
@@ -130,6 +133,28 @@ impl ExecutionActor {
             .map(|order| (order.remote_order_id.to_string(), order))
             .collect();
         self.exchange_event_watermark_unix_nanos = exchange_event_watermark_unix_nanos;
+        self.business_time_unix_nanos = business_time_unix_nanos;
+    }
+
+    pub(crate) const fn business_time_unix_nanos(&self) -> Option<UnixNanos> {
+        self.business_time_unix_nanos
+    }
+
+    pub(crate) fn advance_business_time(
+        &mut self,
+        event_time_unix_nanos: UnixNanos,
+    ) -> Result<bool, String> {
+        if self
+            .business_time_unix_nanos
+            .is_some_and(|current| event_time_unix_nanos < current)
+        {
+            return Err("execution business time cannot move backwards".into());
+        }
+        if self.business_time_unix_nanos == Some(event_time_unix_nanos) {
+            return Ok(false);
+        }
+        self.business_time_unix_nanos = Some(event_time_unix_nanos);
+        Ok(true)
     }
 
     pub(crate) fn generation(&self) -> u64 {
@@ -280,6 +305,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             0,
+            None,
         );
         let order_id = OrderId::new("order-reflection").unwrap();
         assert!(actor.reconcile_account_commitment_observation(

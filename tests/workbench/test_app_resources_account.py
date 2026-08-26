@@ -1531,7 +1531,7 @@ def test_model_service_confirmation_back_reopens_last_field(
             )
 
     confirm_hints, prompt, input_hints = asyncio.run(run())
-    assert "/y 保存" in confirm_hints
+    assert "Tab 切换  ·  Enter 执行  ·  Esc 取消" in confirm_hints
     assert "/back 上一步" in confirm_hints
     assert prompt == "API 地址"
     assert "Enter 继续" in input_hints

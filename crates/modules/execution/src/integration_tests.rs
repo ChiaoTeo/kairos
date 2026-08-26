@@ -8,11 +8,15 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures_util::{SinkExt, StreamExt};
 use kairos_conflux::{
-    BlockingOrderCommand as OrderCommand, BlockingOrderQuery as OrderQuery, CommandOutcome,
-    Conflux, ConfluxConfig, ConfluxSystem, ConnectionKey, ExternalOrder, ExternalOrderQuery,
-    IndeterminateCommand, IntegrationError, JsonRpcRuntimeConfig, MmapOutputDeclaration,
-    OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, OrderType as ConnectionOrderType,
+    AeronEndpoint, AeronOutputDeclaration, BlockingOrderCommand as OrderCommand,
+    BlockingOrderQuery as OrderQuery, CommandOutcome, Conflux, ConfluxConfig, ConfluxEvent,
+    ConfluxSystem, ConnectionDescriptor, ConnectionKey, ExternalEventEnvelope,
+    ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery, ExternalParticipantEvent,
+    IndeterminateCommand, IntegrationError, IntegrationEvent, JsonRpcRuntimeConfig,
+    ManagedConnectionIdentity, MmapOutputDeclaration, OrderEntryEvent, OrderEntryRequest,
+    OrderEntryStatus, OrderStatus as ConnectionOrderStatus, OrderType as ConnectionOrderType,
     ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
     ShutdownMode, TimeInForce,
 };
@@ -28,8 +32,10 @@ use kairos_execution::composition::{
 };
 use kairos_execution::{
     AlgorithmActionKind, AlgorithmActionStatus, AlgorithmExecutionStyle, AlgorithmRunStatus,
-    ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
-    MarketObservation, OrderSide, OrderType, Quote, SplitOrderPolicy, UnknownRemoteOrderResolution,
+    DeliveryCertainty, ExecutionApplication, ExecutionCommandKind, ExecutionError, ExecutionEvent,
+    ExecutionOrderStatus, HedgePolicy, MarketObservation, OrderFactCursor,
+    OrderReconciliationCause, OrderSide, OrderType, Quote, SplitOrderPolicy,
+    UnknownRemoteOrderResolution,
 };
 use kairos_execution_contract::{
     ExecutionControlRpcServer, ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
@@ -39,8 +45,9 @@ use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::execution::{
     ClientOrderId, ExecutionRouteId, FillId, IntentId, LegId, OrderId,
 };
+use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId, Symbol};
-use kairos_primitives::time::{DurationNanos, UnixNanos};
+use kairos_primitives::time::{DurationNanos, Sequence, UnixNanos};
 use secrecy::SecretString;
 
 use crate::services::audit::{ExecutionAudit, MemoryExecutionAudit};
@@ -68,6 +75,16 @@ fn fill_report(
         execution_channel: None,
         order_entry_symbol: None,
         remote_order_id: None,
+        source_cursor: None,
+    }
+}
+
+fn order_fact_cursor(epoch: u64, sequence: u64) -> OrderFactCursor {
+    OrderFactCursor {
+        connection_id: "execution.test.private".into(),
+        channel_id: "orders".into(),
+        channel_epoch: epoch,
+        participant_sequence: Some(Sequence::new(sequence)),
     }
 }
 
@@ -97,7 +114,7 @@ fn submit_order(
         quantity: Quantity::new(quantity, 0).unwrap(),
         limit_price: limit_price.map(|value| Price::new(value, 0).unwrap()),
         options: Default::default(),
-        submitted_at_unix_nanos: None,
+        submitted_at_unix_nanos: Some(100.into()),
     }
 }
 
@@ -121,13 +138,14 @@ fn strategy_intent(
         limit_price: limit_price.map(|value| Price::new(value, 0).unwrap()),
         source_snapshot_id: None,
         source_event_sequence: None,
-        source_event_time_unix_nanos: None,
+        source_event_time_unix_nanos: Some(100.into()),
         reason: String::new(),
         intent_type: Default::default(),
         algorithm: kairos_execution::ExecutionAlgorithmPolicy::Immediate,
         completion_policy: Default::default(),
         failure_policy: Default::default(),
         legs: Vec::new(),
+        execution_benchmarks: Vec::new(),
         deadline_unix_nanos: None,
         min_edge_bps: None,
         max_slippage_bps: None,
@@ -135,6 +153,23 @@ fn strategy_intent(
         minimum_net_credit: None,
         maximum_loss: None,
         order_options: Default::default(),
+    }
+}
+
+fn arrival_benchmark(
+    leg_id: Option<&str>,
+    instrument_id: &str,
+    market_id: &str,
+    price: i64,
+    observed_at_unix_nanos: u64,
+) -> kairos_execution::IntentExecutionBenchmark {
+    kairos_execution::IntentExecutionBenchmark {
+        kind: kairos_execution::ExecutionBenchmarkKind::Arrival,
+        leg_id: leg_id.map(|value| LegId::new(value).unwrap()),
+        instrument_id: InstrumentId::new(instrument_id).unwrap(),
+        market_id: MarketId::new(market_id).unwrap(),
+        price: Price::new(price, 0).unwrap(),
+        observed_at_unix_nanos: UnixNanos::new(observed_at_unix_nanos),
     }
 }
 
@@ -162,6 +197,56 @@ fn intent_leg(
         target_position: false,
         options: Default::default(),
     }
+}
+
+fn quote_provisioning_intent(intent_id: &str) -> ExecuteStrategyIntent {
+    let mut intent = strategy_intent(intent_id, 0, None);
+    intent.strategy_id = "maker".into();
+    intent.intent_type = kairos_execution::IntentType::QuoteProvisioning;
+    intent.algorithm = kairos_execution::ExecutionAlgorithmPolicy::PassiveLimit(
+        kairos_execution::PassiveLimitPolicy {
+            reprice_interval: DurationNanos::new(10),
+            max_quote_age: DurationNanos::new(5),
+        },
+    );
+    intent.completion_policy = kairos_execution::CompletionPolicy::BestEffort;
+    intent.failure_policy = kairos_execution::FailurePolicy::ContinueOtherLegs;
+    intent.order_options.maker = Some(kairos_execution::MakerExecutionPolicy {
+        max_inventory_abs: None,
+        target_inventory: None,
+        max_quote_age: Some(DurationNanos::new(5)),
+    });
+    intent.legs = vec![
+        {
+            let mut leg = intent_leg(
+                "bid",
+                "main",
+                "spot",
+                "BTCUSDT",
+                None,
+                OrderSide::Buy,
+                2,
+                Some(100),
+            );
+            leg.options.post_only = Some(true);
+            leg
+        },
+        {
+            let mut leg = intent_leg(
+                "ask",
+                "main",
+                "spot",
+                "BTCUSDT",
+                None,
+                OrderSide::Sell,
+                2,
+                Some(101),
+            );
+            leg.options.post_only = Some(true);
+            leg
+        },
+    ];
+    intent
 }
 
 struct FailingOrderEntry {
@@ -508,6 +593,40 @@ impl OrderCommand for InvalidAcknowledgementOrderEntry {
     }
 }
 
+struct NonCancelAcknowledgementOrderEntry;
+
+impl OrderCommand for NonCancelAcknowledgementOrderEntry {
+    fn submit_order(
+        &mut self,
+        request: &OrderEntryRequest,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+            order_id: request.order_id.clone(),
+            status: OrderEntryStatus::Accepted,
+            remote_order_id: Some(RemoteOrderId::new("remote:non-cancel").unwrap()),
+            filled_quantity: None,
+            occurred_at_unix_nanos: request.submitted_at_unix_nanos,
+            reason: String::new(),
+        }))
+    }
+
+    fn cancel_order(
+        &mut self,
+        request: &OrderEntryRequest,
+        remote_order_id: &str,
+        at_unix_nanos: u64,
+    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+            order_id: request.order_id.clone(),
+            status: OrderEntryStatus::Accepted,
+            remote_order_id: Some(RemoteOrderId::new(remote_order_id).unwrap()),
+            filled_quantity: None,
+            occurred_at_unix_nanos: at_unix_nanos.into(),
+            reason: "cancel not yet authoritative".into(),
+        }))
+    }
+}
+
 fn application(path: &std::path::Path) -> ExecutionApplication {
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
@@ -516,6 +635,7 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         segment_key: "spot".into(),
         broker_id: "simulated".into(),
         execution_channel: "spot".into(),
+        environment: kairos_execution::composition::ExecutionVenueEnvironment::Paper,
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -584,6 +704,38 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
     );
     attach_simulated_risk(&mut application, test_risk());
     application
+}
+
+struct TestAeronDriver(std::process::Child);
+
+impl Drop for TestAeronDriver {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn start_test_aeron_driver(root: &std::path::Path) -> (std::path::PathBuf, TestAeronDriver) {
+    let driver_bin = std::env::var("KAIROS_AERON_DRIVER_BIN")
+        .expect("set KAIROS_AERON_DRIVER_BIN to the kairos-aeron-driver executable");
+    let aeron_dir = root.join("aeron");
+    let health_path = root.join("aeron-ready.json");
+    let driver = std::process::Command::new(driver_bin)
+        .args(["--aeron-dir", aeron_dir.to_str().unwrap(), "--health-file"])
+        .arg(&health_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !health_path.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Aeron Media Driver readiness timed out"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    (aeron_dir, TestAeronDriver(driver))
 }
 
 fn configure_test_access(application: &mut ExecutionApplication) {
@@ -911,10 +1063,6 @@ fn decimal(value: &str) -> kairos_conflux::DecimalValue {
     }
 }
 
-fn order_id(value: &str) -> OrderId {
-    OrderId::new(value).unwrap()
-}
-
 fn symbol(value: &str) -> Symbol {
     Symbol::new(value).unwrap()
 }
@@ -950,6 +1098,7 @@ fn normalized_remote_execution_event_reconciles_a_fill() {
         segment_key: "spot".into(),
         broker_id: "simulated".into(),
         execution_channel: "spot".into(),
+        environment: kairos_execution::composition::ExecutionVenueEnvironment::Paper,
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -995,7 +1144,8 @@ fn normalized_remote_execution_event_reconciles_a_fill() {
     .unwrap();
     let order = app
         .apply_remote_execution_event(RemoteOrderUpdate {
-            order_id: order_id("local-1"),
+            remote_order_id: RemoteOrderId::new("simulated:local-1").unwrap(),
+            client_order_id: Some(ClientOrderId::new("local-1").unwrap()),
             symbol: symbol("BTCUSDT"),
             status: ExecutionOrderStatus::Filled,
             fill_quantity: Some(quantity("1")),
@@ -1003,6 +1153,7 @@ fn normalized_remote_execution_event_reconciles_a_fill() {
             execution_id: Some(fill_id("exec-1")),
             fee_currency: None,
             fee_amount: None,
+            source_cursor: None,
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
         })
@@ -1075,6 +1226,7 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         segment_key: "spot".into(),
         broker_id: "simulated".into(),
         execution_channel: "spot".into(),
+        environment: kairos_execution::composition::ExecutionVenueEnvironment::Paper,
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -1106,20 +1258,23 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
     )
     .unwrap();
     configure_test_access(&mut app);
-    app.submit(submit_order(
-        "local-recovered-fill",
-        None,
-        "main",
-        "BTCUSDT",
-        OrderSide::Buy,
-        OrderType::Limit,
-        1,
-        Some(100),
-        None,
-    ))
-    .unwrap();
+    let (pending_order, _) = app
+        .prepare_submission(submit_order(
+            "local-recovered-fill",
+            None,
+            "main",
+            "BTCUSDT",
+            OrderSide::Buy,
+            OrderType::Limit,
+            1,
+            Some(100),
+            None,
+        ))
+        .unwrap();
+    app.begin_order_dispatch(pending_order.order_id.as_str())
+        .unwrap();
 
-    assert_eq!(app.reconcile_remote_orders(Default::default()).unwrap(), 2);
+    assert_eq!(app.reconcile_remote_orders(Default::default()).unwrap(), 1);
     let order = &app.orders(None)[0];
     assert_eq!(order.status, ExecutionOrderStatus::Filled);
     assert_eq!(order.filled_quantity.mantissa(), 1);
@@ -1150,7 +1305,8 @@ fn remote_partial_fill_status_is_not_promoted_to_filled() {
     .unwrap();
     let order = app
         .apply_remote_execution_event(RemoteOrderUpdate {
-            order_id: order_id("partial-status-order"),
+            remote_order_id: RemoteOrderId::new("simulated:partial-status-order").unwrap(),
+            client_order_id: Some(ClientOrderId::new("partial-status-order").unwrap()),
             symbol: symbol("BTCUSDT"),
             status: ExecutionOrderStatus::PartiallyFilled,
             fill_quantity: None,
@@ -1158,6 +1314,7 @@ fn remote_partial_fill_status_is_not_promoted_to_filled() {
             execution_id: None,
             fee_currency: None,
             fee_amount: None,
+            source_cursor: None,
             occurred_at_unix_nanos: 42.into(),
             reason: "remote partial status".into(),
         })
@@ -1183,7 +1340,8 @@ fn remote_fill_preserves_fee_payment_currency() {
     .unwrap();
 
     app.apply_remote_execution_event(RemoteOrderUpdate {
-        order_id: order_id("fee-currency-order"),
+        remote_order_id: RemoteOrderId::new("simulated:fee-currency-order").unwrap(),
+        client_order_id: Some(ClientOrderId::new("fee-currency-order").unwrap()),
         symbol: symbol("BTCUSDT"),
         status: ExecutionOrderStatus::Filled,
         fill_quantity: Some(quantity("1")),
@@ -1191,6 +1349,7 @@ fn remote_fill_preserves_fee_payment_currency() {
         execution_id: Some(fill_id("fee-currency-fill")),
         fee_currency: Some(currency("BNB")),
         fee_amount: Some(money("0.01")),
+        source_cursor: None,
         occurred_at_unix_nanos: 42.into(),
         reason: String::new(),
     })
@@ -1200,11 +1359,54 @@ fn remote_fill_preserves_fee_payment_currency() {
 }
 
 #[test]
+fn remote_fill_rejects_a_conflicting_venue_order_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    app.submit(submit_order(
+        "identity-conflict-order",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Limit,
+        1,
+        Some(100),
+        None,
+    ))
+    .unwrap();
+
+    let error = app
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            remote_order_id: RemoteOrderId::new("different-remote-order").unwrap(),
+            client_order_id: Some(ClientOrderId::new("identity-conflict-order").unwrap()),
+            symbol: symbol("BTCUSDT"),
+            status: ExecutionOrderStatus::Filled,
+            fill_quantity: Some(quantity("1")),
+            fill_price: Some(price("100")),
+            execution_id: Some(fill_id("identity-conflict-fill")),
+            fee_currency: None,
+            fee_amount: None,
+            source_cursor: None,
+            occurred_at_unix_nanos: 42.into(),
+            reason: String::new(),
+        })
+        .unwrap_err();
+
+    assert!(error.to_string().contains("remote order identity"));
+    assert!(app.fills(None).is_empty());
+    assert_eq!(
+        app.orders(None)[0].remote_order_id.as_deref(),
+        Some("simulated:identity-conflict-order")
+    );
+}
+
+#[test]
 fn unknown_remote_order_can_be_linked_to_local_order_for_recovery() {
     let directory = tempfile::tempdir().unwrap();
     let mut app = application(&directory.path().join("execution.json"));
     app.apply_remote_execution_event(RemoteOrderUpdate {
-        order_id: order_id("exchange-link-1"),
+        remote_order_id: RemoteOrderId::new("exchange-link-1").unwrap(),
+        client_order_id: None,
         symbol: symbol("BTCUSDT"),
         status: ExecutionOrderStatus::Accepted,
         fill_quantity: None,
@@ -1212,6 +1414,7 @@ fn unknown_remote_order_can_be_linked_to_local_order_for_recovery() {
         execution_id: None,
         fee_currency: None,
         fee_amount: None,
+        source_cursor: None,
         occurred_at_unix_nanos: 42.into(),
         reason: "observed while local state was unavailable".into(),
     })
@@ -1252,7 +1455,8 @@ fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
 
     let error = app
         .apply_remote_execution_event(RemoteOrderUpdate {
-            order_id: order_id("remote-unknown-1"),
+            remote_order_id: RemoteOrderId::new("remote-unknown-1").unwrap(),
+            client_order_id: None,
             symbol: symbol("BTCUSDT"),
             status: ExecutionOrderStatus::Filled,
             fill_quantity: Some(quantity("1")),
@@ -1260,6 +1464,7 @@ fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
             execution_id: Some(fill_id("remote-fill-1")),
             fee_currency: Some(currency("USDT")),
             fee_amount: Some(money("0.1")),
+            source_cursor: None,
             occurred_at_unix_nanos: 42.into(),
             reason: "stream arrived before local recovery".into(),
         })
@@ -1270,8 +1475,12 @@ fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
         app.unknown_remote_orders()[0].resolution,
         UnknownRemoteOrderResolution::Pending
     );
+    let health = app.contract_health();
+    assert_eq!(health.status, "degraded");
+    assert_eq!(health.unresolved_remote_orders, 1);
+    assert_eq!(health.reconciliation_required_orders, 0);
 
-    let restored = ExecutionApplication::assemble_for_test_with_query(
+    let mut restored = ExecutionApplication::assemble_for_test_with_query(
         "execution",
         None,
         None,
@@ -1282,6 +1491,12 @@ fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
     assert_eq!(
         restored.unknown_remote_orders()[0].remote_order_id,
         "remote-unknown-1"
+    );
+    let restored_health = restored.contract_health();
+    assert_eq!(restored_health.status, health.status);
+    assert_eq!(
+        restored_health.unresolved_remote_orders,
+        health.unresolved_remote_orders
     );
 }
 
@@ -1320,7 +1535,13 @@ fn one_shot_execution_application_does_not_need_server() {
         canceled.status,
         kairos_execution::ExecutionOrderStatus::Canceled
     );
-    assert_eq!(second.trace("order-1").len(), 4);
+    assert_eq!(second.trace("order-1").len(), 5);
+    assert_eq!(canceled.attempts.len(), 2);
+    assert_eq!(canceled.attempts[1].command, ExecutionCommandKind::Cancel);
+    assert_eq!(
+        canceled.attempts[1].delivery_certainty,
+        DeliveryCertainty::Confirmed
+    );
 }
 
 #[test]
@@ -1334,6 +1555,7 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
         segment_key: "spot".into(),
         broker_id: "simulated".into(),
         execution_channel: "spot".into(),
+        environment: kairos_execution::composition::ExecutionVenueEnvironment::Paper,
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -1398,6 +1620,7 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
         segment_key: "spot".into(),
         broker_id: "simulated".into(),
         execution_channel: "spot".into(),
+        environment: kairos_execution::composition::ExecutionVenueEnvironment::Paper,
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -1735,7 +1958,14 @@ fn not_sent_cancel_keeps_the_original_order_state() {
         app.orders(Some("main"))[0].status,
         ExecutionOrderStatus::Accepted
     );
-    assert_eq!(app.trace("cancel-not-sent").len(), 3);
+    assert_eq!(app.trace("cancel-not-sent").len(), 5);
+    let order = app.orders(Some("main")).remove(0);
+    assert_eq!(order.attempts.len(), 2);
+    assert_eq!(order.attempts[1].command, ExecutionCommandKind::Cancel);
+    assert_eq!(
+        order.attempts[1].delivery_certainty,
+        DeliveryCertainty::NotSent
+    );
     assert_eq!(
         app.commitments()[0].status,
         kairos_execution::application::CommitmentStatus::Active
@@ -1775,7 +2005,13 @@ fn indeterminate_cancel_marks_the_order_unknown_for_reconciliation() {
         app.orders(Some("main"))[0].status,
         ExecutionOrderStatus::Unknown
     );
-    assert_eq!(app.trace("cancel-indeterminate").len(), 4);
+    assert_eq!(app.trace("cancel-indeterminate").len(), 5);
+    let order = app.orders(Some("main")).remove(0);
+    assert_eq!(order.attempts[1].command, ExecutionCommandKind::Cancel);
+    assert_eq!(
+        order.attempts[1].delivery_certainty,
+        DeliveryCertainty::Indeterminate
+    );
     assert_eq!(
         app.commitments()[0].status,
         kairos_execution::application::CommitmentStatus::Uncertain
@@ -1783,6 +2019,112 @@ fn indeterminate_cancel_marks_the_order_unknown_for_reconciliation() {
     assert_eq!(
         app.risk_reservations()[0].status,
         kairos_execution::application::RiskReservationSagaStatus::Active
+    );
+    drop(app);
+
+    let mut restored = application(&path);
+    let retry = restored.cancel(CancelOrder {
+        order_id: OrderId::new("cancel-indeterminate").unwrap(),
+        reason: "unsafe retry".into(),
+    });
+    assert!(matches!(retry, Err(ExecutionError::Invalid(_))));
+    assert!(
+        retry
+            .unwrap_err()
+            .to_string()
+            .contains("indeterminate cancel attempt")
+    );
+
+    restored
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            remote_order_id: RemoteOrderId::new("simulated:cancel-indeterminate").unwrap(),
+            client_order_id: Some(ClientOrderId::new("cancel-indeterminate").unwrap()),
+            symbol: symbol("BTCUSDT"),
+            status: ExecutionOrderStatus::Accepted,
+            fill_quantity: None,
+            fill_price: None,
+            execution_id: None,
+            fee_currency: None,
+            fee_amount: None,
+            source_cursor: None,
+            occurred_at_unix_nanos: 2.into(),
+            reason: "authoritative query still observes an open order".into(),
+        })
+        .unwrap();
+    let reconciled = restored.orders(None).remove(0);
+    assert_eq!(
+        reconciled.attempts[1].delivery_certainty,
+        DeliveryCertainty::Reconciled
+    );
+    assert_eq!(
+        restored
+            .cancel(CancelOrder {
+                order_id: OrderId::new("cancel-indeterminate").unwrap(),
+                reason: "retry after reconciliation".into(),
+            })
+            .unwrap()
+            .status,
+        ExecutionOrderStatus::Canceled
+    );
+}
+
+#[test]
+fn non_cancel_acknowledgement_never_authorizes_replace_or_retry() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::assemble_for_test(
+        "execution",
+        Some(Box::new(NonCancelAcknowledgementOrderEntry)),
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    configure_test_access(&mut app);
+    attach_simulated_risk(&mut app, test_risk());
+    app.submit(submit_order(
+        "cancel-non-terminal-ack",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Limit,
+        1,
+        Some(100),
+        None,
+    ))
+    .unwrap();
+
+    let result = app.cancel(CancelOrder {
+        order_id: OrderId::new("cancel-non-terminal-ack").unwrap(),
+        reason: "replace".into(),
+    });
+
+    assert!(matches!(result, Err(ExecutionError::Indeterminate(_))));
+    let order = app.orders(None).remove(0);
+    assert_eq!(order.status, ExecutionOrderStatus::Unknown);
+    assert_eq!(order.attempts[1].command, ExecutionCommandKind::Cancel);
+    assert_eq!(
+        order.attempts[1].delivery_certainty,
+        DeliveryCertainty::Indeterminate
+    );
+}
+
+#[test]
+fn replacement_quantity_is_the_unfilled_remainder_of_the_requested_total() {
+    assert_eq!(
+        crate::application::core::orders::replacement_remaining_quantity(
+            Quantity::new(10, 0).unwrap(),
+            Quantity::new(3, 0).unwrap(),
+        )
+        .unwrap(),
+        Quantity::new(7, 0).unwrap()
+    );
+    assert!(
+        crate::application::core::orders::replacement_remaining_quantity(
+            Quantity::new(3, 0).unwrap(),
+            Quantity::new(3, 0).unwrap(),
+        )
+        .unwrap_err()
+        .contains("must exceed")
     );
 }
 
@@ -1943,6 +2285,16 @@ fn missing_risk_mmap_evidence_keeps_live_admission_closed() {
     restored.configure_live_trading(true, true);
     assert!(restored.recover_risk_reservations().is_err());
     restored.complete_writer_reconciliation();
+    let health = restored.contract_health();
+    assert_eq!(health.status, "degraded");
+    assert!(health.writer_recovery_ready);
+    assert!(!health.risk_recovery_ready);
+    assert!(
+        health
+            .risk_recovery_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Risk mmap has no reservation"))
+    );
     let error = restored
         .prepare_submission(submit_order(
             "blocked-by-risk-recovery",
@@ -2062,15 +2414,66 @@ fn algorithm_run_is_actor_owned_and_restored_with_order_progress() {
 }
 
 #[test]
-fn historical_snapshot_without_algorithm_runs_remains_readable() {
+fn historical_snapshot_without_algorithm_runs_or_business_time_remains_readable() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
     let app = application(&path);
     let mut encoded = serde_json::to_value(app.snapshot()).unwrap();
     encoded.as_object_mut().unwrap().remove("algorithm_runs");
+    encoded
+        .as_object_mut()
+        .unwrap()
+        .remove("business_time_unix_nanos");
 
     let restored: kairos_execution::ExecutionSnapshot = serde_json::from_value(encoded).unwrap();
     assert!(restored.algorithm_runs.is_empty());
+    assert_eq!(restored.business_time_unix_nanos, None);
+}
+
+#[test]
+fn historical_algorithm_run_without_quality_is_rebuilt_and_checkpointed() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let state = app
+        .submit_intent(strategy_intent("intent:historical-quality", 2, None))
+        .unwrap();
+    let mut report = fill_report(
+        "historical-quality-fill",
+        state.order_ids[0].to_string(),
+        2,
+        101,
+        3,
+        Some(120),
+    );
+    report.fee_currency = Some(Currency::new("USDT").unwrap());
+    app.record_fill(report).unwrap();
+    drop(app);
+
+    let mut encoded: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    encoded["algorithm_runs"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("quality");
+    std::fs::write(&path, serde_json::to_vec_pretty(&encoded).unwrap()).unwrap();
+
+    let restored = application(&path);
+    let quality = &restored.algorithm_runs()[0].quality.legs[0];
+    assert_eq!(quality.order_count, 1);
+    assert_eq!(quality.fill_count, 1);
+    assert_eq!(quality.filled_quantity, Quantity::new(2, 0).unwrap());
+    assert_eq!(quality.gross_notional, Money::new(202, 0).unwrap());
+    assert_eq!(
+        quality.average_fill_price,
+        Some(Price::new(101, 0).unwrap())
+    );
+    assert_eq!(quality.fee_totals[0].amount, Money::new(3, 0).unwrap());
+    drop(restored);
+
+    let checkpoint: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(checkpoint["algorithm_runs"][0].get("quality").is_some());
 }
 
 #[test]
@@ -2174,14 +2577,36 @@ fn indeterminate_immediate_action_enters_reconciliation_and_restores() {
     assert_eq!(run.status, AlgorithmRunStatus::ReconciliationRequired);
     assert_eq!(run.actions.len(), 1);
     assert_eq!(run.actions[0].status, AlgorithmActionStatus::Indeterminate);
+    let health = app.contract_health();
+    assert_eq!(health.status, "degraded");
+    assert!(health.risk_recovery_ready);
+    assert!(health.risk_recovery_error.is_none());
+    assert_eq!(health.reconciliation_required_orders, 1);
+    assert_eq!(health.reconciliation_required_intents, 1);
+    assert_eq!(health.unresolved_remote_orders, 0);
+    assert_eq!(health.indeterminate_algorithm_actions, 1);
 
-    let restored = ExecutionApplication::assemble_for_test(
+    let mut restored = ExecutionApplication::assemble_for_test(
         "execution",
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
     )
     .unwrap();
     assert_eq!(restored.algorithm_runs(), vec![run]);
+    let restored_health = restored.contract_health();
+    assert_eq!(restored_health.status, health.status);
+    assert_eq!(
+        restored_health.reconciliation_required_orders,
+        health.reconciliation_required_orders
+    );
+    assert_eq!(
+        restored_health.reconciliation_required_intents,
+        health.reconciliation_required_intents
+    );
+    assert_eq!(
+        restored_health.indeterminate_algorithm_actions,
+        health.indeterminate_algorithm_actions
+    );
 }
 
 #[test]
@@ -2670,6 +3095,7 @@ fn shared_algorithm_preparation_routes_twap_to_the_due_order_path() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "local venue conformance: run make execution-venue-check"]
 async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connection() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener
@@ -2748,11 +3174,7 @@ async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connectio
             },
         )
         .unwrap();
-    for kind in [
-        ExecutionViewKind::ActiveOrders,
-        ExecutionViewKind::CurrentExecution,
-        ExecutionViewKind::ActiveIntents,
-    ] {
+    for kind in [ExecutionViewKind::CurrentExecution] {
         let key = ExecutionViewKey::from_identity(&identity, kind);
         system
             .outputs()
@@ -2853,42 +3275,45 @@ async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connectio
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "local venue conformance: run make execution-venue-check"]
 async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
     let submit_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let submit_endpoint = format!("http://{}", submit_listener.local_addr().unwrap());
-    let submit_server = std::thread::spawn(move || loop {
-        let (mut stream, _) = submit_listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut buffer = [0_u8; 16 * 1024];
-        let size = stream.read(&mut buffer).unwrap();
-        let request = String::from_utf8_lossy(&buffer[..size]);
-        let request_line = request.lines().next().unwrap_or_default();
-        let submitted = request_line.contains("/api/v3/order");
-        assert!(
-            submitted || request_line.contains("/api/v3/time"),
-            "unexpected Binance submit request: {request_line}"
-        );
-        let body = if submitted {
-            // The venue accepted the order but its acknowledgement lost the
-            // required identity. Execution must reconcile instead of retrying.
-            "{}".to_owned()
-        } else {
-            let now_millis = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            format!(r#"{{"serverTime":{now_millis}}}"#)
-        };
-        write!(
+    let submit_server = std::thread::spawn(move || {
+        loop {
+            let (mut stream, _) = submit_listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = [0_u8; 16 * 1024];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_line = request.lines().next().unwrap_or_default();
+            let submitted = request_line.contains("/api/v3/order");
+            assert!(
+                submitted || request_line.contains("/api/v3/time"),
+                "unexpected Binance submit request: {request_line}"
+            );
+            let body = if submitted {
+                // The venue accepted the order but its acknowledgement lost the
+                // required identity. Execution must reconcile instead of retrying.
+                "{}".to_owned()
+            } else {
+                let now_millis = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis();
+                format!(r#"{{"serverTime":{now_millis}}}"#)
+            };
+            write!(
             stream,
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()
         )
         .unwrap();
-        if submitted {
-            break;
+            if submitted {
+                break;
+            }
         }
     });
 
@@ -2938,11 +3363,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
             },
         )
         .unwrap();
-    for kind in [
-        ExecutionViewKind::ActiveOrders,
-        ExecutionViewKind::CurrentExecution,
-        ExecutionViewKind::ActiveIntents,
-    ] {
+    for kind in [ExecutionViewKind::CurrentExecution] {
         let key = ExecutionViewKey::from_identity(&identity, kind);
         first_system
             .outputs()
@@ -3009,13 +3430,19 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
         })
         .await;
     submit_server.join().unwrap();
-    let uncertain_order_id = first_actor
-        .orders(None)
-        .into_iter()
-        .find(|order| order.status == ExecutionOrderStatus::Unknown)
-        .expect("response loss leaves one uncertain order")
-        .order_id
-        .to_string();
+    let uncertain_order_id = match &first_actor.algorithm_runs()[0].actions[1].kind {
+        AlgorithmActionKind::SubmitChild { order_id, .. } => order_id.to_string(),
+        other => panic!("expected the second TWAP child action, received {other:?}"),
+    };
+    assert_eq!(
+        first_actor
+            .orders(None)
+            .into_iter()
+            .find(|order| order.order_id.as_str() == uncertain_order_id)
+            .unwrap()
+            .status,
+        ExecutionOrderStatus::Unknown
+    );
 
     let query_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let query_endpoint = format!("http://{}", query_listener.local_addr().unwrap());
@@ -3112,11 +3539,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
             },
         )
         .unwrap();
-    for kind in [
-        ExecutionViewKind::ActiveOrders,
-        ExecutionViewKind::CurrentExecution,
-        ExecutionViewKind::ActiveIntents,
-    ] {
+    for kind in [ExecutionViewKind::CurrentExecution] {
         let key = ExecutionViewKey::from_identity(&identity, kind);
         restored_system
             .outputs()
@@ -3212,6 +3635,478 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "local venue conformance: run make execution-venue-check"]
+async fn conflux_private_execution_event_preserves_explicit_order_identities_across_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let (aeron_dir, _driver) = start_test_aeron_driver(directory.path());
+
+    let state_path = directory.path().join("execution.json");
+    let identity = kairos_primitives::runtime::InstanceIdentity::new(
+        "workspace:test",
+        "launch:test",
+        "instance:private-stream",
+    )
+    .unwrap();
+    let mut app = application(&state_path);
+    let (pending_order, _) = app
+        .prepare_submission(submit_order(
+            "local-private-42",
+            None,
+            "main",
+            "BTCUSDT",
+            OrderSide::Buy,
+            OrderType::Limit,
+            1,
+            Some(100),
+            None,
+        ))
+        .unwrap();
+    app.begin_order_dispatch(pending_order.order_id.as_str())
+        .unwrap();
+    while app.pending_business_event().is_some() {
+        app.acknowledge_business_event();
+    }
+    app.configure_conflux(
+        Vec::new(),
+        Vec::new(),
+        identity.clone(),
+        ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+        None,
+    )
+    .unwrap();
+
+    let mut system = ConfluxSystem::new();
+    for kind in [ExecutionViewKind::CurrentExecution] {
+        let key = ExecutionViewKey::from_identity(&identity, kind);
+        system
+            .outputs()
+            .mmap
+            .declare(
+                key.canonical_key(),
+                MmapOutputDeclaration {
+                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
+                    slot_capacity: 1024 * 1024,
+                    revision: 1,
+                },
+            )
+            .unwrap();
+    }
+    system
+        .outputs()
+        .aeron
+        .declare(
+            "execution-events".to_owned(),
+            AeronOutputDeclaration {
+                endpoint: AeronEndpoint::new(Some(aeron_dir), "aeron:ipc", 29_042).unwrap(),
+                revision: 1,
+            },
+        )
+        .unwrap();
+
+    let connection_key = ConnectionKey::new("execution.binance.spot.private").unwrap();
+    let descriptor = ConnectionDescriptor::new(
+        connection_key.to_string(),
+        ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
+        "execution-stream",
+    )
+    .unwrap();
+    let event = ConfluxEvent::Integration(IntegrationEvent {
+        identity: ManagedConnectionIdentity {
+            descriptor,
+            generation: 1,
+        },
+        event: ExternalParticipantEvent::Execution(ExternalEventEnvelope {
+            participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
+            connection_key,
+            channel_id: "execution.binance.spot.private.user".into(),
+            channel_epoch: 1,
+            participant_event_id: Some("binance:trade:99".into()),
+            participant_sequence: Some(7),
+            delivery: Default::default(),
+            observed_at_unix_nanos: 42.into(),
+            received_at_unix_nanos: 43.into(),
+            payload: ExternalExecutionEvent {
+                remote_order_id: RemoteOrderId::new("9876").unwrap(),
+                client_order_id: Some(ClientOrderId::new("local-private-42").unwrap()),
+                symbol: Symbol::new("BTCUSDT").unwrap(),
+                status: ConnectionOrderStatus::Filled,
+                side: Some(kairos_conflux::OrderSide::Buy),
+                order_type: Some(ConnectionOrderType::Limit),
+                quantity: Some(kairos_conflux::DecimalValue::new(1, 0)),
+                limit_price: Some(kairos_conflux::DecimalValue::new(100, 0)),
+                filled_quantity: Some(kairos_conflux::DecimalValue::new(1, 0)),
+                remaining_quantity: Some(kairos_conflux::DecimalValue::new(0, 0)),
+                fill_quantity: Some(kairos_conflux::DecimalValue::new(1, 0)),
+                fill_price: Some(kairos_conflux::DecimalValue::new(100, 0)),
+                execution_id: Some(FillId::new("binance:trade:99").unwrap()),
+                fee_currency: Some(Currency::new("USDT").unwrap()),
+                fee_amount: Some(kairos_conflux::DecimalValue::new(1, 2)),
+                occurred_at_unix_nanos: 42.into(),
+                reason: String::new(),
+            },
+        }),
+    });
+    let (conflux, handle) = Conflux::new(app, system, ConfluxConfig::default()).unwrap();
+
+    tokio::task::LocalSet::new()
+        .run_until(async move {
+            let process = tokio::task::spawn_local(conflux.run());
+            handle.handle(event).await.unwrap();
+            handle
+                .rpc_actor_invocation(Duration::from_secs(5))
+                .call(|application, _| {
+                    Box::pin(async move {
+                        let order = application
+                            .orders(None)
+                            .into_iter()
+                            .find(|order| order.order_id.as_str() == "local-private-42")
+                            .unwrap();
+                        assert_eq!(order.status, ExecutionOrderStatus::Filled);
+                        assert_eq!(order.remote_order_id.as_deref(), Some("9876"));
+                        let cursor = order.last_order_fact_cursor.as_ref().unwrap();
+                        assert_eq!(cursor.channel_epoch, 1);
+                        assert_eq!(cursor.participant_sequence, Some(Sequence::new(7)));
+                        assert_eq!(application.fills(None).len(), 1);
+                        Ok(())
+                    })
+                })
+                .await
+                .unwrap();
+            handle.shutdown(ShutdownMode::Drain);
+            process.await.unwrap().unwrap();
+        })
+        .await;
+
+    let restored = application(&state_path);
+    let order = restored
+        .orders(None)
+        .into_iter()
+        .find(|order| order.order_id.as_str() == "local-private-42")
+        .unwrap();
+    assert_eq!(order.status, ExecutionOrderStatus::Filled);
+    assert_eq!(order.remote_order_id.as_deref(), Some("9876"));
+    assert_eq!(
+        order
+            .last_order_fact_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.participant_sequence),
+        Some(Sequence::new(7))
+    );
+    assert_eq!(restored.fills(None).len(), 1);
+    assert_eq!(
+        restored.fills(None)[0]
+            .source_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.participant_sequence),
+        Some(Sequence::new(7))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "local venue conformance: run make execution-venue-check"]
+async fn managed_binance_private_stream_reconnects_and_converges_without_duplicate_fill() {
+    let rest_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    rest_listener.set_nonblocking(true).unwrap();
+    let rest_endpoint = format!("http://{}", rest_listener.local_addr().unwrap());
+    let rest_server = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut served = 0_u8;
+        while served < 2 {
+            match rest_listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut buffer = [0_u8; 16 * 1024];
+                    let size = stream.read(&mut buffer).unwrap();
+                    let request = String::from_utf8_lossy(&buffer[..size]);
+                    assert!(
+                        request
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .starts_with("POST /api/v3/userDataStream"),
+                        "unexpected Binance listen-key request: {request}"
+                    );
+                    served += 1;
+                    let body = format!(r#"{{"listenKey":"session-{served}"}}"#);
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .unwrap();
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "Binance listen-key reconnect was not attempted"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                },
+                Err(error) => panic!("listen-key server failed: {error}"),
+            }
+        }
+        served
+    });
+
+    let websocket_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let websocket_endpoint = format!("ws://{}", websocket_listener.local_addr().unwrap());
+    let websocket_server = tokio::spawn(async move {
+        let first = tokio::time::timeout(Duration::from_secs(10), websocket_listener.accept())
+            .await
+            .expect("first Binance private socket was not opened")
+            .unwrap()
+            .0;
+        let mut first = tokio_tungstenite::accept_hdr_async(
+            first,
+            |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                assert_eq!(request.uri().path(), "/session-1");
+                Ok(response)
+            },
+        )
+        .await
+        .unwrap();
+        first
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::json!({
+                    "e": "executionReport",
+                    "E": 1_900_000_000_000_u64,
+                    "s": "BTCUSDT",
+                    "c": "local-reconnect-42",
+                    "i": 9876,
+                    "X": "PARTIALLY_FILLED",
+                    "S": "BUY",
+                    "o": "LIMIT",
+                    "q": "1",
+                    "p": "100",
+                    "z": "0.4",
+                    "l": "0.4",
+                    "L": "100",
+                    "t": 101,
+                    "n": "0.01",
+                    "N": "USDT"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        first.close(None).await.unwrap();
+        drop(first);
+
+        let second = tokio::time::timeout(Duration::from_secs(10), websocket_listener.accept())
+            .await
+            .expect("Binance private socket was not reconnected")
+            .unwrap()
+            .0;
+        let mut second = tokio_tungstenite::accept_hdr_async(
+            second,
+            |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                assert_eq!(request.uri().path(), "/session-2");
+                Ok(response)
+            },
+        )
+        .await
+        .unwrap();
+        second
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::json!({
+                    "e": "executionReport",
+                    "E": 1_900_000_000_001_u64,
+                    "s": "BTCUSDT",
+                    "c": "local-reconnect-42",
+                    "i": 9876,
+                    "X": "FILLED",
+                    "S": "BUY",
+                    "o": "LIMIT",
+                    "q": "1",
+                    "p": "100",
+                    "z": "1",
+                    "l": "0.6",
+                    "L": "100",
+                    "t": 102,
+                    "n": "0.01",
+                    "N": "USDT"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        while second.next().await.is_some() {}
+    });
+
+    let directory = tempfile::tempdir().unwrap();
+    let (aeron_dir, _driver) = start_test_aeron_driver(directory.path());
+    let state_path = directory.path().join("execution.json");
+    let identity = kairos_primitives::runtime::InstanceIdentity::new(
+        "workspace:test",
+        "launch:test",
+        "instance:private-reconnect",
+    )
+    .unwrap();
+    let stream_key = ConnectionKey::new("execution.binance.spot.private-reconnect").unwrap();
+    let plan = ExecutionConnectionPlan {
+        route_id: "binance-reconnect".into(),
+        required: true,
+        account_id: AccountId::new("main").unwrap(),
+        segment_key: SegmentKey::new("spot").unwrap(),
+        instrument_type: ParticipantInstrumentTypeRef::new("spot").unwrap(),
+        entry_key: "execution.binance.spot.unused-command".into(),
+        query_key: "execution.binance.spot.unused-query".into(),
+        stream_key: stream_key.to_string(),
+    };
+    let mut app = application(&state_path);
+    let (pending_order, _) = app
+        .prepare_submission(submit_order(
+            "local-reconnect-42",
+            None,
+            "main",
+            "BTCUSDT",
+            OrderSide::Buy,
+            OrderType::Limit,
+            1,
+            Some(100),
+            None,
+        ))
+        .unwrap();
+    app.begin_order_dispatch(pending_order.order_id.as_str())
+        .unwrap();
+    while app.pending_business_event().is_some() {
+        app.acknowledge_business_event();
+    }
+    app.configure_conflux(
+        vec![plan],
+        Vec::new(),
+        identity.clone(),
+        ExecutionAudit::from(MemoryExecutionAudit::new(Vec::new())),
+        None,
+    )
+    .unwrap();
+
+    let mut system = ConfluxSystem::new();
+    system
+        .connections()
+        .binance_spot_user_websocket
+        .create_with_options(
+            stream_key,
+            kairos_conflux::BinanceUserWebSocketConfig {
+                environment: "test".into(),
+                rest_endpoint,
+                websocket_endpoint,
+                credential: kairos_conflux::BinanceCredential {
+                    principal_id: "test".into(),
+                    api_key: SecretString::from("test-api-key".to_owned()),
+                    secret: SecretString::from("test-secret".to_owned()),
+                },
+                event_capacity: 16,
+                segment_key: "spot".into(),
+            },
+            kairos_conflux::ConnectionCreateOptions {
+                required: true,
+                recovery: kairos_conflux::RecoveryPolicy {
+                    initial_backoff: Duration::from_millis(10),
+                    maximum_backoff: Duration::from_millis(10),
+                    maximum_attempts: Some(3),
+                },
+            },
+        )
+        .unwrap();
+    for kind in [ExecutionViewKind::CurrentExecution] {
+        let key = ExecutionViewKey::from_identity(&identity, kind);
+        system
+            .outputs()
+            .mmap
+            .declare(
+                key.canonical_key(),
+                MmapOutputDeclaration {
+                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
+                    slot_capacity: 1024 * 1024,
+                    revision: 1,
+                },
+            )
+            .unwrap();
+    }
+    system
+        .outputs()
+        .aeron
+        .declare(
+            "execution-events".to_owned(),
+            AeronOutputDeclaration {
+                endpoint: AeronEndpoint::new(Some(aeron_dir), "aeron:ipc", 29_043).unwrap(),
+                revision: 1,
+            },
+        )
+        .unwrap();
+    let (conflux, handle) = Conflux::new(app, system, ConfluxConfig::default()).unwrap();
+
+    tokio::task::LocalSet::new()
+        .run_until(async move {
+            let process = tokio::task::spawn_local(conflux.run());
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let converged = handle
+                        .rpc_actor_invocation(Duration::from_secs(2))
+                        .call(|application, _| {
+                            Box::pin(async move {
+                                let order = application
+                                    .orders(None)
+                                    .into_iter()
+                                    .find(|order| order.order_id.as_str() == "local-reconnect-42")
+                                    .unwrap();
+                                Ok(order.status == ExecutionOrderStatus::Filled
+                                    && order.remote_order_id.as_deref() == Some("9876")
+                                    && application.fills(None).len() == 2)
+                            })
+                        })
+                        .await
+                        .unwrap();
+                    if converged {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("Execution did not converge after Binance private-stream reconnect");
+            handle
+                .rpc_actor_invocation(Duration::from_secs(2))
+                .call(|application, _| {
+                    Box::pin(async move {
+                        assert_eq!(application.orders(None).len(), 1);
+                        assert_eq!(application.fills(None).len(), 2);
+                        assert_eq!(
+                            application
+                                .fills(None)
+                                .iter()
+                                .map(|fill| fill.quantity)
+                                .fold(Quantity::ZERO, |total, value| {
+                                    total.checked_add(value).unwrap()
+                                }),
+                            Quantity::new(1, 0).unwrap()
+                        );
+                        Ok(())
+                    })
+                })
+                .await
+                .unwrap();
+            handle.shutdown(ShutdownMode::Drain);
+            process.await.unwrap().unwrap();
+        })
+        .await;
+
+    websocket_server.await.unwrap();
+    assert_eq!(rest_server.join().unwrap(), 2);
+    let restored = application(&state_path);
+    let order = &restored.orders(None)[0];
+    assert_eq!(order.status, ExecutionOrderStatus::Filled);
+    assert_eq!(order.remote_order_id.as_deref(), Some("9876"));
+    assert_eq!(restored.fills(None).len(), 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
 #[ignore = "cross-language certification: requires uv and the Kairospy workspace"]
 async fn kairospy_explicit_algorithm_round_trips_through_execution_json_rpc() {
     let directory = tempfile::tempdir().unwrap();
@@ -3219,9 +4114,11 @@ async fn kairospy_explicit_algorithm_round_trips_through_execution_json_rpc() {
     let socket_path = directory.path().join("execution.sock");
     let mut application = application(&state_path);
     let mut intent = strategy_intent("intent:kairospy-rpc-immediate", 2, None);
+    intent.source_event_time_unix_nanos = None;
     intent.strategy_decision_id = Some("decision:kairospy-rpc-immediate".into());
     intent.strategy_id = "python-strategy".into();
     intent.reason = "cross-language contract certification".into();
+    application.advance_time(100).unwrap();
     application
         .submit_intent_with_idempotency(intent, "request:kairospy-rpc-immediate".into())
         .unwrap();
@@ -3246,11 +4143,7 @@ async fn kairospy_explicit_algorithm_round_trips_through_execution_json_rpc() {
         )
         .unwrap();
     let mut system = ConfluxSystem::new();
-    for kind in [
-        ExecutionViewKind::ActiveOrders,
-        ExecutionViewKind::CurrentExecution,
-        ExecutionViewKind::ActiveIntents,
-    ] {
+    for kind in [ExecutionViewKind::CurrentExecution] {
         let key = ExecutionViewKey::from_identity(&identity, kind);
         system
             .outputs()
@@ -3346,6 +4239,8 @@ except RuntimeError as error:
     legacy_rejected = "hedge_policy" in legacy_error or "Invalid params" in legacy_error
 assert legacy_rejected, legacy_error
 health = dict(control.health())
+audit = dict(control.order_audit({"limit": 100}))
+assert audit["events"], audit
 UnixJsonRpcClient(socket_path, timeout=5).call(
     "system_stop",
     [{"immediate": False, "reason": "cross-language certification complete"}],
@@ -3355,6 +4250,7 @@ print(json.dumps({
     "intent_id": result.result["intent_id"],
     "legacy_rejected": legacy_rejected,
     "health": health["status"],
+    "audit_event_count": len(audit["events"]),
 }))
 "#;
             let python_socket = socket_path.clone();
@@ -3380,6 +4276,7 @@ print(json.dumps({
             assert_eq!(evidence["intent_id"], "intent:kairospy-rpc-immediate");
             assert_eq!(evidence["legacy_rejected"], true);
             assert_eq!(evidence["health"], "ready");
+            assert!(evidence["audit_event_count"].as_u64().unwrap() > 0);
 
             let outcome = process.await.unwrap().unwrap();
             assert_eq!(outcome.actor.intents().len(), 1);
@@ -3581,6 +4478,152 @@ fn maker_taker_threshold_and_restart_preserve_dormant_then_active_hedge() {
 }
 
 #[test]
+fn maker_taker_out_of_order_leader_fills_hedge_each_increment_exactly_once() {
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct Outcome {
+        leader_filled: Quantity,
+        required_hedge: Quantity,
+        hedge_committed: Quantity,
+        unhedged_after_commitment: Quantity,
+        taker_actions: usize,
+        hedge_order_quantities: Vec<Quantity>,
+    }
+
+    let mut outcomes = Vec::new();
+    for delivery_order in [
+        [("early", 110_u64), ("late", 120_u64)],
+        [("late", 120), ("early", 110)],
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("execution.json");
+        let mut app = application(&path);
+        let state = app
+            .submit_intent(maker_taker_pair_intent(
+                "intent:maker-taker-out-of-order",
+                2,
+                1,
+                0,
+            ))
+            .unwrap();
+        let leader_order_id = state.order_ids[0].clone();
+
+        for (index, (fill_suffix, occurred_at)) in delivery_order.into_iter().enumerate() {
+            let report = fill_report(
+                format!("leader-fill-{fill_suffix}"),
+                leader_order_id.to_string(),
+                1,
+                100,
+                0,
+                Some(occurred_at),
+            );
+            app.record_fill(report.clone()).unwrap();
+            let hedge_count = app
+                .orders(None)
+                .iter()
+                .filter(|order| order.order_id.contains(":hedge:decision:"))
+                .count();
+            assert_eq!(hedge_count, index + 1);
+
+            let event_sequence = app.event_sequence();
+            app.record_fill(report).unwrap();
+            assert_eq!(app.event_sequence(), event_sequence);
+            assert_eq!(
+                app.orders(None)
+                    .iter()
+                    .filter(|order| order.order_id.contains(":hedge:decision:"))
+                    .count(),
+                hedge_count
+            );
+        }
+
+        let hedge_count_before_stale_ack = app
+            .orders(None)
+            .iter()
+            .filter(|order| order.order_id.contains(":hedge:decision:"))
+            .count();
+        let leader = app
+            .orders(None)
+            .into_iter()
+            .find(|order| order.order_id == leader_order_id)
+            .unwrap();
+        app.apply_order_entry_event(
+            leader_order_id.as_str(),
+            OrderEntryEvent {
+                order_id: leader_order_id.clone(),
+                status: OrderEntryStatus::Accepted,
+                remote_order_id: leader.remote_order_id,
+                filled_quantity: Some(kairos_conflux::DecimalValue::new(0, 0)),
+                occurred_at_unix_nanos: 105.into(),
+                reason: "late maker acknowledgement".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            app.orders(None)
+                .iter()
+                .filter(|order| order.order_id.contains(":hedge:decision:"))
+                .count(),
+            hedge_count_before_stale_ack
+        );
+
+        drop(app);
+        let mut restored = application(&path);
+        for (fill_suffix, occurred_at) in delivery_order {
+            restored
+                .record_fill(fill_report(
+                    format!("leader-fill-{fill_suffix}"),
+                    leader_order_id.to_string(),
+                    1,
+                    100,
+                    0,
+                    Some(occurred_at),
+                ))
+                .unwrap();
+        }
+        let run = restored.algorithm_runs().pop().unwrap();
+        let exposure = run.exposure.unwrap();
+        let mut hedge_order_quantities = restored
+            .orders(None)
+            .into_iter()
+            .filter(|order| order.order_id.contains(":hedge:decision:"))
+            .map(|order| order.quantity)
+            .collect::<Vec<_>>();
+        hedge_order_quantities.sort();
+        outcomes.push(Outcome {
+            leader_filled: exposure.leader_filled_quantity,
+            required_hedge: exposure.required_hedge_quantity,
+            hedge_committed: exposure.hedge_committed_quantity,
+            unhedged_after_commitment: exposure.unhedged_after_commitment,
+            taker_actions: run
+                .actions
+                .iter()
+                .filter(|action| {
+                    matches!(
+                        action.kind,
+                        AlgorithmActionKind::SubmitChild {
+                            execution_style: AlgorithmExecutionStyle::TakerImmediate,
+                            ..
+                        }
+                    )
+                })
+                .count(),
+            hedge_order_quantities,
+        });
+    }
+
+    assert_eq!(outcomes[0], outcomes[1]);
+    assert_eq!(outcomes[0].leader_filled, Quantity::new(2, 0).unwrap());
+    assert_eq!(outcomes[0].required_hedge, Quantity::new(2, 0).unwrap());
+    assert_eq!(outcomes[0].hedge_committed, Quantity::new(2, 0).unwrap());
+    assert_eq!(outcomes[0].unhedged_after_commitment, Quantity::ZERO);
+    assert_eq!(outcomes[0].taker_actions, 2);
+    assert_eq!(
+        outcomes[0].hedge_order_quantities,
+        vec![Quantity::new(1, 0).unwrap(), Quantity::new(1, 0).unwrap()]
+    );
+}
+
+#[test]
 fn maker_taker_tail_hedge_is_driven_by_persisted_business_time_deadline() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
@@ -3628,6 +4671,31 @@ fn maker_taker_tail_hedge_is_driven_by_persisted_business_time_deadline() {
     assert_eq!(hedge.quantity, Quantity::new(1, 0).unwrap());
     assert_eq!(hedge.order_type, OrderType::Market);
     assert_eq!(app.algorithm_runs()[0].next_wake_at, None);
+}
+
+#[test]
+fn execution_actor_business_time_survives_restart_and_rejects_regression() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    assert_eq!(app.business_time_unix_nanos(), None);
+
+    app.advance_time(100).unwrap();
+    assert_eq!(
+        app.snapshot().business_time_unix_nanos,
+        Some(UnixNanos::new(100))
+    );
+    drop(app);
+
+    let mut restored = application(&path);
+    assert_eq!(restored.business_time_unix_nanos(), Some(100));
+    let error = restored.advance_time(99).unwrap_err();
+    assert!(error.to_string().contains("cannot move backwards"));
+    assert_eq!(restored.business_time_unix_nanos(), Some(100));
+
+    restored.advance_time(101).unwrap();
+    drop(restored);
+    assert_eq!(application(&path).business_time_unix_nanos(), Some(101));
 }
 
 #[test]
@@ -4231,7 +5299,8 @@ fn partial_unwind_terminal_event_submits_only_the_remaining_exposure() {
     );
 
     app.apply_remote_execution_event(RemoteOrderUpdate {
-        order_id: OrderId::new(format!("remote:{}", first_unwind.order_id)).unwrap(),
+        remote_order_id: RemoteOrderId::new(format!("remote:{}", first_unwind.order_id)).unwrap(),
+        client_order_id: Some(ClientOrderId::new(first_unwind.order_id.to_string()).unwrap()),
         symbol: symbol("BTCUSDT"),
         status: ExecutionOrderStatus::Canceled,
         fill_quantity: None,
@@ -4239,6 +5308,7 @@ fn partial_unwind_terminal_event_submits_only_the_remaining_exposure() {
         execution_id: None,
         fee_currency: None,
         fee_amount: None,
+        source_cursor: None,
         occurred_at_unix_nanos: 522.into(),
         reason: "IOC remainder canceled".into(),
     })
@@ -4541,6 +5611,13 @@ fn maker_taker_fill_path_completes_and_restores_with_zero_exposure() {
         run.exposure.as_ref().unwrap().unhedged_after_commitment,
         Quantity::ZERO
     );
+    assert_eq!(run.quality.legs.len(), 2);
+    assert!(run.quality.legs.iter().all(|quality| {
+        quality.order_count == 1
+            && quality.fill_count == 1
+            && quality.filled_quantity == Quantity::new(2, 0).unwrap()
+            && quality.average_fill_price == Some(Price::new(100, 0).unwrap())
+    }));
 
     let restored = application(&path);
     assert_eq!(restored.algorithm_runs(), vec![run]);
@@ -4559,51 +5636,15 @@ fn quote_refresh_replaces_both_legs_in_the_same_execution_plan() {
     let path = directory.path().join("execution.json");
     let mut app = application(&path);
     let state = app
-        .submit_intent({
-            let mut intent = strategy_intent("intent:quote-refresh", 0, None);
-            intent.strategy_id = "maker".into();
-            intent.intent_type = kairos_execution::IntentType::QuoteProvisioning;
-            intent.completion_policy = kairos_execution::CompletionPolicy::BestEffort;
-            intent.failure_policy = kairos_execution::FailurePolicy::ContinueOtherLegs;
-            intent.legs = vec![
-                {
-                    let mut leg = intent_leg(
-                        "bid",
-                        "main",
-                        "spot",
-                        "BTCUSDT",
-                        None,
-                        OrderSide::Buy,
-                        2,
-                        Some(100),
-                    );
-                    leg.options.post_only = Some(true);
-                    leg
-                },
-                {
-                    let mut leg = intent_leg(
-                        "ask",
-                        "main",
-                        "spot",
-                        "BTCUSDT",
-                        None,
-                        OrderSide::Sell,
-                        2,
-                        Some(101),
-                    );
-                    leg.options.post_only = Some(true);
-                    leg
-                },
-            ];
-            intent
-        })
+        .submit_intent(quote_provisioning_intent("intent:quote-refresh"))
         .unwrap();
     let refreshed = app
         .refresh_quote_intent(RefreshQuoteIntent {
             intent_id: state.intent.intent_id.clone(),
             bid_price: Price::new(99, 0).unwrap(),
             ask_price: Price::new(102, 0).unwrap(),
-            quote_observed_at: 0.into(),
+            quote_observed_at: 98.into(),
+            business_time_unix_nanos: 100.into(),
             reason: "new market quote".into(),
         })
         .unwrap();
@@ -4615,6 +5656,252 @@ fn quote_refresh_replaces_both_legs_in_the_same_execution_plan() {
         order.order_id.starts_with("intent:quote-refresh:quote:1:")
             && order.status == ExecutionOrderStatus::Accepted
     }));
+    drop(app);
+
+    let mut restored = application(&path);
+    assert_eq!(restored.business_time_unix_nanos(), Some(100));
+    assert_eq!(
+        restored
+            .intent("intent:quote-refresh")
+            .unwrap()
+            .last_quote_refresh_unix_nanos,
+        Some(UnixNanos::new(100))
+    );
+    let cadence_error = restored
+        .refresh_quote_intent(RefreshQuoteIntent {
+            intent_id: IntentId::new("intent:quote-refresh").unwrap(),
+            bid_price: Price::new(98, 0).unwrap(),
+            ask_price: Price::new(103, 0).unwrap(),
+            quote_observed_at: 104.into(),
+            business_time_unix_nanos: 105.into(),
+            reason: "too soon".into(),
+        })
+        .unwrap_err();
+    assert!(cadence_error.to_string().contains("reprice interval"));
+    assert_eq!(restored.business_time_unix_nanos(), Some(100));
+    drop(restored);
+
+    let mut replayed = application(&path);
+    let replay_error = replayed
+        .refresh_quote_intent(RefreshQuoteIntent {
+            intent_id: IntentId::new("intent:quote-refresh").unwrap(),
+            bid_price: Price::new(98, 0).unwrap(),
+            ask_price: Price::new(103, 0).unwrap(),
+            quote_observed_at: 104.into(),
+            business_time_unix_nanos: 105.into(),
+            reason: "same replayed decision".into(),
+        })
+        .unwrap_err();
+    assert!(replay_error.to_string().contains("reprice interval"));
+    assert_eq!(replayed.business_time_unix_nanos(), Some(100));
+}
+
+#[test]
+fn quote_provisioning_rejects_the_immediate_algorithm() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    let mut intent = quote_provisioning_intent("intent:quote-immediate-rejected");
+    intent.algorithm = kairos_execution::ExecutionAlgorithmPolicy::Immediate;
+
+    let error = app.submit_intent(intent).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("quote provisioning requires the passive-limit algorithm")
+    );
+    assert!(app.intents().is_empty());
+}
+
+#[test]
+fn passive_refresh_cancel_response_loss_blocks_replacement_after_late_fill_and_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let state = app
+        .submit_intent(quote_provisioning_intent(
+            "intent:quote-refresh-cancel-loss",
+        ))
+        .unwrap();
+    let original_order_id = app
+        .orders(None)
+        .into_iter()
+        .find(|order| order.side == OrderSide::Buy)
+        .unwrap()
+        .order_id;
+    let refresh = RefreshQuoteIntent {
+        intent_id: state.intent.intent_id.clone(),
+        bid_price: Price::new(99, 0).unwrap(),
+        ask_price: Price::new(102, 0).unwrap(),
+        quote_observed_at: 98.into(),
+        business_time_unix_nanos: 100.into(),
+        reason: "network-disorder refresh".into(),
+    };
+    app.install_order_entry(Box::new(FailingOrderEntry::cancel_indeterminate()));
+
+    let error = app.refresh_quote_intent(refresh.clone()).unwrap_err();
+    assert!(matches!(error, ExecutionError::Indeterminate(_)));
+    let failed = app.intent("intent:quote-refresh-cancel-loss").unwrap();
+    assert_eq!(
+        failed.status,
+        kairos_execution::IntentStatus::ReconciliationRequired
+    );
+    assert!(failed.pending_quote_refresh.is_some());
+    assert!(failed.pending_orders.is_empty());
+    assert!(app.orders(None).iter().all(|order| {
+        !order
+            .order_id
+            .starts_with("intent:quote-refresh-cancel-loss:quote:1:")
+    }));
+
+    let late_fill = fill_report(
+        "late-fill-before-lost-cancel",
+        original_order_id.to_string(),
+        1,
+        100,
+        0,
+        Some(99),
+    );
+    app.record_fill(late_fill.clone()).unwrap();
+    let sequence_after_fill = app.event_sequence();
+    app.record_fill(late_fill).unwrap();
+    assert_eq!(app.event_sequence(), sequence_after_fill);
+    assert_eq!(
+        app.orders(None)
+            .into_iter()
+            .find(|order| order.order_id == original_order_id)
+            .unwrap()
+            .filled_quantity,
+        Quantity::new(1, 0).unwrap()
+    );
+    drop(app);
+
+    let mut restored = application(&path);
+    let restored_state = restored.intent("intent:quote-refresh-cancel-loss").unwrap();
+    assert!(restored_state.pending_quote_refresh.is_some());
+    assert!(restored_state.pending_orders.is_empty());
+    assert_eq!(
+        restored.advance_due_intent_orders(100, usize::MAX).unwrap(),
+        0
+    );
+    assert!(restored.orders(None).iter().all(|order| {
+        !order
+            .order_id
+            .starts_with("intent:quote-refresh-cancel-loss:quote:1:")
+    }));
+
+    restored.install_order_entry(Box::new(FailingOrderEntry::cancel_indeterminate()));
+    let replay_error = restored.refresh_quote_intent(refresh.clone()).unwrap_err();
+    assert!(
+        replay_error
+            .to_string()
+            .contains("indeterminate cancel attempt")
+    );
+    let mut competing = refresh;
+    competing.bid_price = Price::new(98, 0).unwrap();
+    let competing_error = restored.refresh_quote_intent(competing).unwrap_err();
+    assert!(
+        competing_error
+            .to_string()
+            .contains("different passive-limit quote refresh")
+    );
+    assert!(restored.orders(None).iter().all(|order| {
+        !order
+            .order_id
+            .starts_with("intent:quote-refresh-cancel-loss:quote:1:")
+    }));
+}
+
+#[test]
+fn passive_refresh_recomputes_remaining_quantity_after_late_fill_and_staging_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let refresh = RefreshQuoteIntent {
+        intent_id: IntentId::new("intent:quote-refresh-late-fill").unwrap(),
+        bid_price: Price::new(99, 0).unwrap(),
+        ask_price: Price::new(102, 0).unwrap(),
+        quote_observed_at: 98.into(),
+        business_time_unix_nanos: 100.into(),
+        reason: "late fill before cancel acknowledgement".into(),
+    };
+    let mut app = application(&path);
+    app.submit_intent(quote_provisioning_intent("intent:quote-refresh-late-fill"))
+        .unwrap();
+    let original_bid = app
+        .orders(None)
+        .into_iter()
+        .find(|order| order.side == OrderSide::Buy)
+        .unwrap()
+        .order_id;
+    let staged = app.prepare_quote_refresh(refresh.clone()).unwrap();
+    assert_eq!(staged.phase, kairos_execution::QuoteRefreshPhase::Canceling);
+    assert!(
+        app.intent("intent:quote-refresh-late-fill")
+            .unwrap()
+            .pending_orders
+            .is_empty()
+    );
+    drop(app);
+
+    let mut restored = application(&path);
+    restored.advance_time(150).unwrap();
+    restored
+        .record_fill(fill_report(
+            "late-fill-after-refresh-staging",
+            original_bid.to_string(),
+            1,
+            100,
+            0,
+            Some(99),
+        ))
+        .unwrap();
+    let prepared = restored.prepare_quote_refresh(refresh).unwrap();
+    for cancellation in prepared.cancellations.clone() {
+        restored.cancel(cancellation).unwrap();
+    }
+    let authorized = restored.authorize_prepared_quote_refresh(prepared).unwrap();
+    assert_eq!(
+        authorized.phase,
+        kairos_execution::QuoteRefreshPhase::ReplacementAuthorized
+    );
+    assert_eq!(
+        authorized.replacement_authorized_at_unix_nanos,
+        Some(UnixNanos::new(150))
+    );
+    let bid = authorized
+        .submissions
+        .iter()
+        .find(|(leg_id, _)| leg_id.as_str() == "bid")
+        .unwrap();
+    let ask = authorized
+        .submissions
+        .iter()
+        .find(|(leg_id, _)| leg_id.as_str() == "ask")
+        .unwrap();
+    assert_eq!(bid.1.quantity, Quantity::new(1, 0).unwrap());
+    assert_eq!(ask.1.quantity, Quantity::new(2, 0).unwrap());
+
+    restored
+        .activate_prepared_quote_refresh(&authorized)
+        .unwrap();
+    assert_eq!(restored.advance_due_intent_orders(150, 2).unwrap(), 2);
+    let completed = restored
+        .complete_prepared_quote_refresh(authorized)
+        .unwrap();
+    assert_eq!(completed.quote_version, 1);
+    assert!(completed.pending_quote_refresh.is_none());
+    assert_eq!(
+        restored
+            .orders(None)
+            .into_iter()
+            .find(|order| {
+                order.order_id
+                    == OrderId::new("intent:quote-refresh-late-fill:quote:1:bid").unwrap()
+            })
+            .unwrap()
+            .quantity,
+        Quantity::new(1, 0).unwrap()
+    );
 }
 
 #[test]
@@ -4678,11 +5965,11 @@ fn due_intent_is_expired_by_runtime_tick() {
     let mut app = application(&path);
     app.submit_intent({
         let mut intent = strategy_intent("intent:deadline", 1, None);
-        intent.deadline_unix_nanos = Some(1.into());
+        intent.deadline_unix_nanos = Some(101.into());
         intent
     })
     .unwrap();
-    assert_eq!(app.expire_due_intents(2).unwrap(), 1);
+    assert_eq!(app.expire_due_intents(102).unwrap(), 1);
     assert_eq!(
         app.intents()[0].status,
         kairos_execution::IntentStatus::Expired
@@ -4700,6 +5987,7 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
         segment_key: "spot".into(),
         broker_id: "simulated".into(),
         execution_channel: "spot".into(),
+        environment: kairos_execution::composition::ExecutionVenueEnvironment::Paper,
         trading_mode: None,
         api_key: String::new().into(),
         secret: String::new().into(),
@@ -5080,6 +6368,565 @@ fn fills_are_recorded_cumulatively_and_restore_with_order_state() {
         restored.orders(None)[0].status,
         ExecutionOrderStatus::Filled
     );
+}
+
+#[test]
+fn immediate_quality_is_weighted_deterministic_and_restart_safe() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let state = app
+        .submit_intent(strategy_intent("intent:quality-immediate", 10, Some(105)))
+        .unwrap();
+    let order_id = state.order_ids[0].clone();
+    let mut first = fill_report("quality-fill-1", order_id.to_string(), 4, 100, 1, Some(110));
+    first.fee_currency = Some(Currency::new("USDT").unwrap());
+    app.record_fill(first).unwrap();
+    let mut second = fill_report("quality-fill-2", order_id.to_string(), 6, 102, 2, Some(120));
+    second.fee_currency = Some(Currency::new("USDT").unwrap());
+    app.record_fill(second).unwrap();
+
+    let run = app.algorithm_runs().pop().unwrap();
+    let quality = &run.quality.legs[0];
+    assert_eq!(quality.order_count, 1);
+    assert_eq!(quality.fill_count, 2);
+    assert_eq!(quality.cancel_attempt_count, 0);
+    assert_eq!(quality.filled_quantity, Quantity::new(10, 0).unwrap());
+    assert_eq!(quality.gross_notional, Money::new(1012, 0).unwrap());
+    assert_eq!(
+        quality.average_fill_price,
+        Some(Price::new(1012, 1).unwrap())
+    );
+    assert_eq!(quality.first_order_submitted_at, Some(UnixNanos::new(100)));
+    assert_eq!(quality.first_fill_at, Some(UnixNanos::new(110)));
+    assert_eq!(quality.last_fill_at, Some(UnixNanos::new(120)));
+    assert_eq!(quality.time_to_first_fill, Some(DurationNanos::new(10)));
+    assert_eq!(quality.time_to_last_fill, Some(DurationNanos::new(20)));
+    assert_eq!(quality.fee_totals.len(), 1);
+    assert_eq!(
+        quality.fee_totals[0].currency,
+        Currency::new("USDT").unwrap()
+    );
+    assert_eq!(quality.fee_totals[0].amount, Money::new(3, 0).unwrap());
+
+    drop(app);
+    let restored = application(&path);
+    assert_eq!(restored.algorithm_runs(), vec![run]);
+}
+
+#[test]
+fn arrival_benchmark_shortfall_is_fill_order_independent_and_restart_safe() {
+    let mut outcomes = Vec::new();
+    for delivery_order in [
+        [
+            ("benchmark-fill-a", 101_i64, 110_u64),
+            ("benchmark-fill-b", 102, 120),
+        ],
+        [
+            ("benchmark-fill-b", 102, 120),
+            ("benchmark-fill-a", 101, 110),
+        ],
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("execution.json");
+        let mut app = application(&path);
+        let mut intent = strategy_intent("intent:arrival-benchmark", 2, Some(105));
+        intent.market_id = Some(MarketId::new("market:test:BTCUSDT").unwrap());
+        intent.execution_benchmarks = vec![arrival_benchmark(
+            None,
+            "BTCUSDT",
+            "market:test:BTCUSDT",
+            100,
+            90,
+        )];
+        let state = app.submit_intent(intent).unwrap();
+        let order_id = state.order_ids[0].clone();
+
+        for (fill_id, price, occurred_at) in delivery_order {
+            let report = fill_report(
+                fill_id,
+                order_id.to_string(),
+                1,
+                price,
+                0,
+                Some(occurred_at),
+            );
+            app.record_fill(report.clone()).unwrap();
+            let sequence_after_fill = app.event_sequence();
+            app.record_fill(report).unwrap();
+            assert_eq!(app.event_sequence(), sequence_after_fill);
+        }
+
+        let run = app.algorithm_runs().pop().unwrap();
+        assert!(run.legs[0].benchmark.is_some());
+        let benchmark = run.quality.legs[0].benchmark.as_ref().unwrap();
+        assert_eq!(benchmark.price, Price::new(100, 0).unwrap());
+        assert_eq!(benchmark.benchmark_notional, Money::new(200, 0).unwrap());
+        assert_eq!(
+            benchmark.implementation_shortfall,
+            Some(Money::new(3, 0).unwrap())
+        );
+        outcomes.push(run.quality.clone());
+
+        drop(app);
+        let restored = application(&path);
+        assert_eq!(restored.algorithm_runs(), vec![run]);
+    }
+    assert_eq!(outcomes[0], outcomes[1]);
+}
+
+#[test]
+fn arrival_benchmark_shortfall_uses_order_side_sign() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    let mut intent = strategy_intent("intent:sell-arrival-benchmark", 2, None);
+    intent.intent_type = kairos_execution::IntentType::SingleOrder;
+    intent.legs = vec![intent_leg(
+        "sell",
+        "main",
+        "spot",
+        "BTCUSDT",
+        Some("market:test:BTCUSDT"),
+        OrderSide::Sell,
+        2,
+        None,
+    )];
+    intent.execution_benchmarks = vec![arrival_benchmark(
+        Some("sell"),
+        "BTCUSDT",
+        "market:test:BTCUSDT",
+        100,
+        90,
+    )];
+    let state = app.submit_intent(intent).unwrap();
+    app.record_fill(fill_report(
+        "sell-benchmark-fill",
+        state.order_ids[0].to_string(),
+        2,
+        99,
+        0,
+        Some(110),
+    ))
+    .unwrap();
+
+    let run = app.algorithm_runs().pop().unwrap();
+    let benchmark = run.quality.legs[0].benchmark.as_ref().unwrap();
+    assert_eq!(benchmark.benchmark_notional, Money::new(200, 0).unwrap());
+    assert_eq!(
+        benchmark.implementation_shortfall,
+        Some(Money::new(2, 0).unwrap())
+    );
+}
+
+#[test]
+fn execution_benchmark_admission_requires_exact_plan_identity_and_time() {
+    let cases = [
+        (
+            "intent:benchmark-future",
+            arrival_benchmark(None, "BTCUSDT", "market:test:BTCUSDT", 100, 101),
+            "cannot be in the future",
+        ),
+        (
+            "intent:benchmark-instrument-mismatch",
+            arrival_benchmark(None, "ETHUSDT", "market:test:BTCUSDT", 100, 90),
+            "instrument does not match",
+        ),
+        (
+            "intent:benchmark-market-mismatch",
+            arrival_benchmark(None, "BTCUSDT", "market:test:OTHER", 100, 90),
+            "market does not match",
+        ),
+    ];
+    for (intent_id, benchmark, expected) in cases {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = application(&directory.path().join("execution.json"));
+        let mut intent = strategy_intent(intent_id, 1, Some(105));
+        intent.market_id = Some(MarketId::new("market:test:BTCUSDT").unwrap());
+        intent.execution_benchmarks = vec![benchmark];
+        let error = app.submit_intent(intent).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(app.intents().is_empty());
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    let mut multi = maker_taker_pair_intent("intent:benchmark-ambiguous", 1, 1, 0);
+    multi.execution_benchmarks = vec![arrival_benchmark(
+        None,
+        "BTCUSDT",
+        "market:test:BTCUSDT",
+        100,
+        90,
+    )];
+    let error = app.submit_intent(multi).unwrap_err();
+    assert!(error.to_string().contains("requires an explicit leg_id"));
+    assert!(app.intents().is_empty());
+
+    let mut no_plan = strategy_intent("intent:benchmark-no-plan", 0, None);
+    no_plan.market_id = Some(MarketId::new("market:test:BTCUSDT").unwrap());
+    no_plan.execution_benchmarks = vec![arrival_benchmark(
+        None,
+        "BTCUSDT",
+        "market:test:BTCUSDT",
+        100,
+        90,
+    )];
+    let error = app.submit_intent(no_plan).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires an executable plan leg")
+    );
+}
+
+#[test]
+fn late_fill_and_stale_ack_preserve_monotonic_actor_state_across_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    app.submit(submit_order(
+        "order-out-of-order",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Limit,
+        10,
+        Some(100),
+        None,
+    ))
+    .unwrap();
+
+    app.record_fill(fill_report(
+        "fill-observed-first",
+        "order-out-of-order",
+        4,
+        100,
+        0,
+        Some(120),
+    ))
+    .unwrap();
+    let filled = app
+        .record_fill(fill_report(
+            "fill-occurred-first",
+            "order-out-of-order",
+            6,
+            100,
+            0,
+            Some(110),
+        ))
+        .unwrap();
+    assert_eq!(filled.status, ExecutionOrderStatus::Filled);
+    assert_eq!(filled.updated_at_unix_nanos, UnixNanos::new(120));
+    assert_eq!(app.business_time_unix_nanos(), Some(120));
+    assert_eq!(
+        app.fills(Some("order-out-of-order"))[1].occurred_at_unix_nanos,
+        UnixNanos::new(110)
+    );
+
+    let sequence_before_stale_ack = app.event_sequence();
+    let unchanged = app
+        .apply_order_entry_event(
+            "order-out-of-order",
+            OrderEntryEvent {
+                order_id: OrderId::new("order-out-of-order").unwrap(),
+                status: OrderEntryStatus::Accepted,
+                remote_order_id: RemoteOrderId::new("simulated:order-out-of-order").ok(),
+                filled_quantity: Some(kairos_conflux::DecimalValue::new(0, 0)),
+                occurred_at_unix_nanos: 105.into(),
+                reason: "late acknowledgement".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(unchanged.status, ExecutionOrderStatus::Filled);
+    assert_eq!(app.event_sequence(), sequence_before_stale_ack);
+
+    let restored = application(&path);
+    assert_eq!(restored.business_time_unix_nanos(), Some(120));
+    assert_eq!(
+        restored.orders(None)[0].status,
+        ExecutionOrderStatus::Filled
+    );
+    assert_eq!(restored.fills(Some("order-out-of-order")).len(), 2);
+}
+
+#[test]
+fn terminal_ack_conflict_is_durable_idempotent_and_query_recoverable() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    app.submit(submit_order(
+        "order-terminal-conflict",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Limit,
+        10,
+        Some(100),
+        None,
+    ))
+    .unwrap();
+    app.record_fill(fill_report(
+        "fill-terminal-conflict",
+        "order-terminal-conflict",
+        10,
+        100,
+        0,
+        Some(120),
+    ))
+    .unwrap();
+
+    let conflict = OrderEntryEvent {
+        order_id: OrderId::new("order-terminal-conflict").unwrap(),
+        status: OrderEntryStatus::Canceled,
+        remote_order_id: RemoteOrderId::new("simulated:order-terminal-conflict").ok(),
+        filled_quantity: Some(kairos_conflux::DecimalValue::new(10, 0)),
+        occurred_at_unix_nanos: 130.into(),
+        reason: "late cancel terminal".into(),
+    };
+    let conflicted = app
+        .apply_order_entry_event("order-terminal-conflict", conflict.clone())
+        .unwrap();
+    assert_eq!(conflicted.status, ExecutionOrderStatus::Unknown);
+    assert_eq!(
+        conflicted.reconciliation_cause,
+        Some(OrderReconciliationCause::AuthoritativeFactConflict)
+    );
+    assert_eq!(
+        app.commitments()[0].status,
+        kairos_execution::application::CommitmentStatus::Uncertain
+    );
+    assert_eq!(
+        app.risk_reservations()[0].status,
+        kairos_execution::application::RiskReservationSagaStatus::Uncertain
+    );
+    let sequence_after_conflict = app.event_sequence();
+    assert_eq!(
+        app.apply_order_entry_event("order-terminal-conflict", conflict)
+            .unwrap()
+            .status,
+        ExecutionOrderStatus::Unknown
+    );
+    assert_eq!(app.event_sequence(), sequence_after_conflict);
+    drop(app);
+
+    let remote = ExternalOrder {
+        connection_key: ConnectionKey::new("execution.fixture.query").unwrap(),
+        order_id: OrderId::new("simulated:order-terminal-conflict").unwrap(),
+        remote_order_id: RemoteOrderId::new("simulated:order-terminal-conflict").unwrap(),
+        client_order_id: Some(ClientOrderId::new("order-terminal-conflict").unwrap()),
+        symbol: Symbol::new("BTCUSDT").unwrap(),
+        side: kairos_conflux::OrderSide::Buy,
+        order_type: kairos_conflux::OrderType::Limit,
+        status: kairos_primitives::integration::OrderStatus::Filled,
+        quantity: decimal("10"),
+        filled_quantity: decimal("10"),
+        average_fill_price: Some(decimal("100")),
+        occurred_at_unix_nanos: Some(140.into()),
+    };
+    let mut restored = application(&path);
+    assert_eq!(
+        restored.orders(None)[0].reconciliation_cause,
+        Some(OrderReconciliationCause::AuthoritativeFactConflict)
+    );
+    restored.install_order_query(Box::new(RecoveryOrderQuery::new(vec![remote])));
+    assert_eq!(
+        restored
+            .reconcile_remote_orders(Default::default())
+            .unwrap(),
+        1
+    );
+    let recovered = &restored.orders(None)[0];
+    assert_eq!(recovered.status, ExecutionOrderStatus::Filled);
+    assert_eq!(recovered.reconciliation_cause, None);
+}
+
+#[test]
+fn private_terminal_conflict_enters_reconciliation_without_overwriting_fill_truth() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    app.submit(submit_order(
+        "order-private-terminal-conflict",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Limit,
+        1,
+        Some(100),
+        None,
+    ))
+    .unwrap();
+    app.record_fill(fill_report(
+        "fill-private-terminal-conflict",
+        "order-private-terminal-conflict",
+        1,
+        100,
+        0,
+        Some(120),
+    ))
+    .unwrap();
+
+    let conflicted = app
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            remote_order_id: RemoteOrderId::new("simulated:order-private-terminal-conflict")
+                .unwrap(),
+            client_order_id: Some(ClientOrderId::new("order-private-terminal-conflict").unwrap()),
+            symbol: Symbol::new("BTCUSDT").unwrap(),
+            status: ExecutionOrderStatus::Canceled,
+            fill_quantity: None,
+            fill_price: None,
+            execution_id: None,
+            fee_currency: None,
+            fee_amount: None,
+            source_cursor: None,
+            occurred_at_unix_nanos: 130.into(),
+            reason: "private cancel conflicts with complete fill".into(),
+        })
+        .unwrap();
+    assert_eq!(conflicted.status, ExecutionOrderStatus::Unknown);
+    assert_eq!(
+        conflicted.reconciliation_cause,
+        Some(OrderReconciliationCause::AuthoritativeFactConflict)
+    );
+    assert_eq!(app.fills(Some("order-private-terminal-conflict")).len(), 1);
+}
+
+#[test]
+fn private_order_sequence_rejects_regression_and_accepts_reconnect_epoch_reset() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    app.submit(submit_order(
+        "order-private-sequence",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Limit,
+        2,
+        Some(100),
+        None,
+    ))
+    .unwrap();
+
+    let remote_order_id = RemoteOrderId::new("simulated:order-private-sequence").unwrap();
+    let client_order_id = Some(ClientOrderId::new("order-private-sequence").unwrap());
+    let partial = app
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            remote_order_id: remote_order_id.clone(),
+            client_order_id: client_order_id.clone(),
+            symbol: Symbol::new("BTCUSDT").unwrap(),
+            status: ExecutionOrderStatus::PartiallyFilled,
+            fill_quantity: Some(quantity("1")),
+            fill_price: Some(price("100")),
+            execution_id: Some(fill_id("private-sequence-fill")),
+            fee_currency: None,
+            fee_amount: None,
+            source_cursor: Some(order_fact_cursor(1, 20)),
+            occurred_at_unix_nanos: 200.into(),
+            reason: "sequence 20".into(),
+        })
+        .unwrap();
+    assert_eq!(partial.status, ExecutionOrderStatus::PartiallyFilled);
+    let sequence_after_partial = app.event_sequence();
+
+    let stale = app
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            remote_order_id: remote_order_id.clone(),
+            client_order_id: client_order_id.clone(),
+            symbol: Symbol::new("BTCUSDT").unwrap(),
+            status: ExecutionOrderStatus::Canceled,
+            fill_quantity: None,
+            fill_price: None,
+            execution_id: None,
+            fee_currency: None,
+            fee_amount: None,
+            source_cursor: Some(order_fact_cursor(1, 19)),
+            occurred_at_unix_nanos: 300.into(),
+            reason: "late sequence 19".into(),
+        })
+        .unwrap();
+    assert_eq!(stale.status, ExecutionOrderStatus::PartiallyFilled);
+    assert_eq!(app.event_sequence(), sequence_after_partial);
+
+    let reconnected = app
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            remote_order_id: remote_order_id.clone(),
+            client_order_id: client_order_id.clone(),
+            symbol: Symbol::new("BTCUSDT").unwrap(),
+            status: ExecutionOrderStatus::Accepted,
+            fill_quantity: None,
+            fill_price: None,
+            execution_id: None,
+            fee_currency: None,
+            fee_amount: None,
+            source_cursor: Some(order_fact_cursor(2, 1)),
+            occurred_at_unix_nanos: 400.into(),
+            reason: "new connection epoch".into(),
+        })
+        .unwrap();
+    assert_eq!(reconnected.status, ExecutionOrderStatus::PartiallyFilled);
+    assert_eq!(
+        reconnected
+            .last_order_fact_cursor
+            .as_ref()
+            .map(|cursor| (cursor.channel_epoch, cursor.participant_sequence)),
+        Some((2, Some(Sequence::new(1))))
+    );
+
+    let sequence_before_duplicate_fill = app.event_sequence();
+    let duplicate_fill = app
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            remote_order_id: remote_order_id.clone(),
+            client_order_id: client_order_id.clone(),
+            symbol: Symbol::new("BTCUSDT").unwrap(),
+            status: ExecutionOrderStatus::PartiallyFilled,
+            fill_quantity: Some(quantity("1")),
+            fill_price: Some(price("100")),
+            execution_id: Some(fill_id("private-sequence-fill")),
+            fee_currency: None,
+            fee_amount: None,
+            source_cursor: Some(order_fact_cursor(2, 2)),
+            occurred_at_unix_nanos: 200.into(),
+            reason: "duplicate fill on reconnected channel".into(),
+        })
+        .unwrap();
+    assert_eq!(duplicate_fill.status, ExecutionOrderStatus::PartiallyFilled);
+    assert_eq!(app.event_sequence(), sequence_before_duplicate_fill);
+    assert_eq!(
+        duplicate_fill
+            .last_order_fact_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.participant_sequence),
+        Some(Sequence::new(2))
+    );
+
+    let old_epoch = app
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            remote_order_id,
+            client_order_id,
+            symbol: Symbol::new("BTCUSDT").unwrap(),
+            status: ExecutionOrderStatus::Canceled,
+            fill_quantity: None,
+            fill_price: None,
+            execution_id: None,
+            fee_currency: None,
+            fee_amount: None,
+            source_cursor: Some(order_fact_cursor(1, 21)),
+            occurred_at_unix_nanos: 500.into(),
+            reason: "old epoch after reconnect".into(),
+        })
+        .unwrap();
+    assert_eq!(old_epoch.status, ExecutionOrderStatus::PartiallyFilled);
+
+    drop(app);
+    let restored = application(&path);
+    let restored_orders = restored.orders(None);
+    let cursor = restored_orders[0].last_order_fact_cursor.as_ref().unwrap();
+    assert_eq!(cursor.channel_epoch, 2);
+    assert_eq!(cursor.participant_sequence, Some(Sequence::new(2)));
 }
 
 #[test]

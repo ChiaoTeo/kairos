@@ -9,6 +9,7 @@ from textual.widgets import Input
 
 COMMAND_SUGGESTIONS = (
     "help",
+    "panel ",
     "clear",
     "observe",
     "market ",

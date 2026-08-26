@@ -6,7 +6,7 @@ Screen {
 #workspace-header {
     height: 2;
     margin: 1 3 0 3;
-    border-bottom: solid $boost;
+    border-bottom: heavy $primary 45%;
 }
 
 #viewport-warning {
@@ -38,6 +38,13 @@ Screen {
     content-align: right middle;
 }
 
+#compact-command-status {
+    display: none;
+    width: auto;
+    height: 1;
+    content-align: right middle;
+}
+
 #command-output {
     height: 1fr;
     min-height: 5;
@@ -47,6 +54,11 @@ Screen {
     background: $background;
     overflow-x: hidden;
     scrollbar-size: 1 1;
+}
+
+#command-output:focus {
+    background: $background;
+    background-tint: transparent;
 }
 
 #activity-empty {
@@ -64,6 +76,14 @@ Screen {
     border: none;
 }
 
+#interaction-collapsed-summary {
+    display: none;
+    height: 1;
+    padding: 0 2;
+    color: $text-muted;
+    background: $surface;
+}
+
 #interaction-region {
     height: auto;
     min-height: 1;
@@ -73,6 +93,14 @@ Screen {
     background: $surface;
     overflow-y: auto;
     scrollbar-size: 1 1;
+}
+
+Screen.interaction-collapsed #interaction-region {
+    display: none;
+}
+
+Screen.interaction-collapsed #interaction-collapsed-summary {
+    display: block;
 }
 
 #interaction-region:focus-within {
@@ -155,6 +183,14 @@ Screen.viewport-narrow #workspace-header {
     margin: 0 1;
 }
 
+Screen.viewport-compact #command-status {
+    display: none;
+}
+
+Screen.viewport-compact #compact-command-status {
+    display: block;
+}
+
 Screen.viewport-narrow #workspace-status {
     display: none;
 }
@@ -167,6 +203,10 @@ Screen.viewport-narrow #command-output {
 
 Screen.viewport-narrow #operation-dock {
     margin: 0;
+}
+
+Screen.viewport-narrow #interaction-collapsed-summary {
+    padding: 0;
 }
 
 Screen.viewport-narrow #guided-actions {
@@ -207,6 +247,7 @@ Screen.viewport-short #command-hints {
 
 Screen.viewport-too-small #workspace-header,
 Screen.viewport-too-small #command-output,
+Screen.viewport-too-small #interaction-collapsed-summary,
 Screen.viewport-too-small #interaction-region {
     display: none;
 }

@@ -1,7 +1,8 @@
 use std::fmt;
 
-use kairos_primitives::decimal::{Quantity, Ratio};
+use kairos_primitives::decimal::{Money, Price, Quantity, Ratio};
 use kairos_primitives::execution::{ExecutionRouteId, IntentId, LegId, OrderId};
+use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
 use kairos_primitives::time::{DurationNanos, UnixNanos};
 use serde::{Deserialize, Serialize};
 
@@ -145,6 +146,23 @@ pub struct TwapSpec {
     pub slice_count: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PassiveLimitSpec {
+    pub reprice_interval: DurationNanos,
+    pub max_quote_age: DurationNanos,
+}
+
+impl PassiveLimitSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.reprice_interval.get() == 0 || self.max_quote_age.get() == 0 {
+            return Err(
+                "passive-limit reprice interval and maximum quote age must be positive".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl TwapSpec {
     pub fn validate(&self) -> Result<(), String> {
         if self.slice_interval.get() == 0 || self.slice_count < 2 {
@@ -171,6 +189,7 @@ impl TwapSpec {
 pub enum ExecutionAlgorithmSpec {
     Immediate,
     Twap(TwapSpec),
+    PassiveLimit(PassiveLimitSpec),
     MakerTakerHedge(MakerTakerHedgeSpec),
 }
 
@@ -189,6 +208,7 @@ pub enum AlgorithmRunStatus {
 pub enum AlgorithmLegRole {
     Immediate,
     Twap,
+    PassiveLimit,
     LeaderMaker,
     HedgeTaker,
     Unwind,
@@ -204,6 +224,22 @@ pub enum AlgorithmLegLifecycle {
     ReconciliationRequired,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ExecutionBenchmarkKind {
+    Arrival,
+}
+
+/// Immutable market observation used to evaluate one algorithm leg. It is an
+/// explicit input, never inferred from an order limit or processing clock.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AlgorithmLegBenchmark {
+    pub kind: ExecutionBenchmarkKind,
+    pub instrument_id: InstrumentId,
+    pub market_id: MarketId,
+    pub price: Price,
+    pub observed_at_unix_nanos: UnixNanos,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AlgorithmLegState {
     pub leg_id: LegId,
@@ -213,6 +249,8 @@ pub struct AlgorithmLegState {
     /// Quantity that may still fill on non-terminal or indeterminate orders.
     pub committed_quantity: Quantity,
     pub filled_quantity: Quantity,
+    #[serde(default)]
+    pub benchmark: Option<AlgorithmLegBenchmark>,
 }
 
 impl AlgorithmLegState {
@@ -227,6 +265,7 @@ impl AlgorithmLegState {
             target_quantity,
             committed_quantity: Quantity::ZERO,
             filled_quantity: Quantity::ZERO,
+            benchmark: None,
         })
     }
 
@@ -264,6 +303,7 @@ pub enum AlgorithmActionStatus {
 pub enum AlgorithmExecutionStyle {
     Immediate,
     TwapSlice,
+    PassiveLimit,
     MakerPostOnly,
     TakerImmediate,
     UnwindImmediate,
@@ -291,6 +331,51 @@ pub struct AlgorithmAction {
     pub decision_sequence: u64,
     pub status: AlgorithmActionStatus,
     pub kind: AlgorithmActionKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionFeeTotal {
+    pub currency: Currency,
+    pub amount: Money,
+}
+
+/// Realized execution facts for one semantic algorithm leg. Ratios are
+/// represented by their exact numerator facts rather than rounded floats.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AlgorithmLegExecutionQuality {
+    pub leg_id: LegId,
+    pub order_count: u64,
+    pub fill_count: u64,
+    pub cancel_attempt_count: u64,
+    pub filled_quantity: Quantity,
+    pub gross_notional: Money,
+    pub average_fill_price: Option<Price>,
+    pub first_order_submitted_at: Option<UnixNanos>,
+    pub first_fill_at: Option<UnixNanos>,
+    pub last_fill_at: Option<UnixNanos>,
+    pub time_to_first_fill: Option<DurationNanos>,
+    pub time_to_last_fill: Option<DurationNanos>,
+    pub fee_totals: Vec<ExecutionFeeTotal>,
+    #[serde(default)]
+    pub benchmark: Option<AlgorithmLegBenchmarkQuality>,
+}
+
+/// Positive implementation shortfall means execution was worse than the
+/// benchmark for the order side; a negative value is price improvement.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AlgorithmLegBenchmarkQuality {
+    pub kind: ExecutionBenchmarkKind,
+    pub instrument_id: InstrumentId,
+    pub market_id: MarketId,
+    pub price: Price,
+    pub observed_at_unix_nanos: UnixNanos,
+    pub benchmark_notional: Money,
+    pub implementation_shortfall: Option<Money>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AlgorithmExecutionQuality {
+    pub legs: Vec<AlgorithmLegExecutionQuality>,
 }
 
 /// Exposure expressed in hedge-leg quantity units. Filled exposure and
@@ -329,6 +414,9 @@ pub struct AlgorithmRun {
     pub exposure: Option<NormalizedExposureLedger>,
     pub legs: Vec<AlgorithmLegState>,
     pub actions: Vec<AlgorithmAction>,
+    /// Deterministically rebuilt from Actor-owned order and fill truth.
+    #[serde(default)]
+    pub quality: AlgorithmExecutionQuality,
 }
 
 impl AlgorithmRun {
@@ -355,6 +443,7 @@ impl AlgorithmRun {
             exposure: None,
             legs,
             actions: Vec::new(),
+            quality: AlgorithmExecutionQuality::default(),
         };
         run.validate()?;
         Ok(run)
@@ -373,6 +462,7 @@ impl AlgorithmRun {
             exposure: None,
             legs: Vec::new(),
             actions: Vec::new(),
+            quality: AlgorithmExecutionQuality::default(),
         }
     }
 
@@ -402,8 +492,54 @@ impl AlgorithmRun {
                 target_quantity,
                 committed_quantity: Quantity::ZERO,
                 filled_quantity: Quantity::ZERO,
+                benchmark: None,
             }],
             actions: Vec::new(),
+            quality: AlgorithmExecutionQuality::default(),
+        };
+        run.validate()?;
+        Ok(run)
+    }
+
+    pub fn passive_limit(
+        intent_id: IntentId,
+        spec: PassiveLimitSpec,
+        legs: impl IntoIterator<Item = (LegId, Quantity)>,
+    ) -> Result<Self, String> {
+        spec.validate()?;
+        let legs = legs
+            .into_iter()
+            .map(|(leg_id, target_quantity)| {
+                if target_quantity.is_zero() {
+                    return Err("passive-limit leg target quantity must be positive".to_string());
+                }
+                Ok(AlgorithmLegState {
+                    leg_id,
+                    role: AlgorithmLegRole::PassiveLimit,
+                    lifecycle: AlgorithmLegLifecycle::Ready,
+                    target_quantity,
+                    committed_quantity: Quantity::ZERO,
+                    filled_quantity: Quantity::ZERO,
+                    benchmark: None,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if legs.is_empty() {
+            return Err("passive-limit run requires at least one leg".into());
+        }
+        let run = Self {
+            algorithm_run_id: AlgorithmRunId::for_intent(&intent_id),
+            algorithm_version: 1,
+            intent_id,
+            spec: ExecutionAlgorithmSpec::PassiveLimit(spec),
+            status: AlgorithmRunStatus::Planned,
+            decision_sequence: 0,
+            last_decision_at: None,
+            next_wake_at: None,
+            exposure: None,
+            legs,
+            actions: Vec::new(),
+            quality: AlgorithmExecutionQuality::default(),
         };
         run.validate()?;
         Ok(run)
@@ -423,6 +559,7 @@ impl AlgorithmRun {
             target_quantity: leader_target_quantity,
             committed_quantity: Quantity::ZERO,
             filled_quantity: Quantity::ZERO,
+            benchmark: None,
         };
         let hedge = AlgorithmLegState {
             leg_id: spec.hedge_leg_id.clone(),
@@ -431,6 +568,7 @@ impl AlgorithmRun {
             target_quantity: hedge_target_quantity,
             committed_quantity: Quantity::ZERO,
             filled_quantity: Quantity::ZERO,
+            benchmark: None,
         };
         if leader_target_quantity.is_zero() || hedge_target_quantity.is_zero() {
             return Err("maker-taker leg targets must be positive".into());
@@ -458,6 +596,7 @@ impl AlgorithmRun {
             }),
             legs: vec![leader, hedge],
             actions: Vec::new(),
+            quality: AlgorithmExecutionQuality::default(),
         };
         run.validate()?;
         Ok(run)
@@ -521,6 +660,16 @@ impl AlgorithmRun {
                 return Err("TWAP run contains more slices than its schedule".into());
             }
         }
+        if let ExecutionAlgorithmSpec::PassiveLimit(spec) = &self.spec {
+            spec.validate()?;
+            if self
+                .legs
+                .iter()
+                .any(|leg| leg.role != AlgorithmLegRole::PassiveLimit)
+            {
+                return Err("passive-limit run contains a non-passive leg".into());
+            }
+        }
         let mut action_ids = std::collections::BTreeSet::new();
         for action in &self.actions {
             if !action_ids.insert(action.action_id.as_str()) {
@@ -528,6 +677,22 @@ impl AlgorithmRun {
             }
             if action.decision_sequence > self.decision_sequence {
                 return Err("algorithm action references a future decision".into());
+            }
+        }
+        if !self.quality.legs.is_empty() {
+            let run_leg_ids = self
+                .legs
+                .iter()
+                .map(|leg| &leg.leg_id)
+                .collect::<std::collections::BTreeSet<_>>();
+            let quality_leg_ids = self
+                .quality
+                .legs
+                .iter()
+                .map(|leg| &leg.leg_id)
+                .collect::<std::collections::BTreeSet<_>>();
+            if quality_leg_ids.len() != self.quality.legs.len() || quality_leg_ids != run_leg_ids {
+                return Err("algorithm quality legs must match algorithm run legs".into());
             }
         }
         Ok(())

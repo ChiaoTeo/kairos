@@ -89,10 +89,7 @@ JSON-RPC. FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Execution | event | `OrderCanceled` | `EOC2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |
 | DRAFT | Execution | event | `OrderExpired` | `EOX2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |
 | DRAFT | Execution | event | `FillRecorded` | `EFV2` | Execution Actor | Account settlement, Strategy | Execution event stream / retained target |
-| DRAFT | Execution | event | `ReconciliationRequired` | `EXV2` | Execution Actor | operations, Strategy | Execution event stream / retained target |
-| DRAFT | Execution | active view | `ActiveIntentsView` | `ECI2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer |
-| DRAFT | Execution | active view | `ActiveOrdersView` | `ECO2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer |
-| DRAFT | Execution | current view | `CurrentExecutionView` | `ECV2` | Execution Actor | CLI, Strategy, operations, reconciliation | KSS1 mmap / one writer |
+| DRAFT | Execution | current view | `CurrentExecutionView` | `ECV2` | Execution Actor | CLI, Strategy, operations, reconciliation | KSS1 mmap / one writer; operational state only |
 | DRAFT | Capital | current view | `CapitalCurrentView` | `CPV2` | Capital Actor | Portfolio, Strategy, operations, audit | KSS1 mmap / one writer |
 | DRAFT | Capital | event | `FundingObjectiveChanged` | `COV2` | Capital Actor | Strategy, audit | Capital event stream / retained target |
 | DRAFT | Capital | event | `CapitalDemandChanged` | `CDV2` | Capital Actor | Strategy, audit | Capital event stream / retained target |

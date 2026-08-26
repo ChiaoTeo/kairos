@@ -29,6 +29,11 @@ from kairospy.investment.apps.reference.application.models import (
 from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.activity import (
+    ActivityKind,
+    ActivityOutcome,
+    ActivityRecord,
+)
 from kairospy.surface.workbench.screens.flows import market
 from kairospy.surface.workbench.screens.operation import OperationSpec
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
@@ -39,6 +44,7 @@ from kairospy.surface.workbench.widgets import (
     ConfirmInteraction,
     Feature,
     InputInteraction,
+    InteractionRegion,
     RunningInteraction,
     WorkbenchCommandInput,
     interaction_copy_text,
@@ -50,14 +56,14 @@ from app_support import (
 )
 
 
-def test_workbench_leaves_mouse_dragging_to_the_terminal(monkeypatch) -> None:
+def test_workbench_enables_mouse_activity_focus_by_default(monkeypatch) -> None:
     runs: list[dict[str, object]] = []
     monkeypatch.setattr(App, "run", lambda self, **kwargs: runs.append(kwargs))
 
     KairosWorkbenchApp(_state()).run()
-    KairosWorkbenchApp(_state()).run(mouse=True)
+    KairosWorkbenchApp(_state()).run(mouse=False)
 
-    assert runs == [{"mouse": False}, {"mouse": True}]
+    assert runs == [{"mouse": True}, {"mouse": False}]
 
 
 def test_workbench_starts_as_one_guided_command_screen() -> None:
@@ -99,11 +105,118 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
     assert is_command_screen
     assert subtitle == "命令"
     assert output == ""
-    assert workspace_title == "◆ KAIROS  /  trader"
+    assert workspace_title == "KAIROS  ·  trader"
     assert context == "trader  ›"
     assert option_count == 7
     assert actions_can_focus
     assert input_focused
+
+
+def test_interaction_panel_toggles_default_and_collapsed_with_ctrl_o() -> None:
+    async def run() -> tuple[
+        tuple[bool, bool, bool, str],
+        tuple[bool, bool, bool],
+    ]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen.query_one("#command-output", RichLog)
+            interaction = screen.query_one("#interaction-region", InteractionRegion)
+            summary = screen.query_one("#interaction-collapsed-summary", Static)
+
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            collapsed = (
+                screen.has_class("interaction-collapsed"),
+                interaction.display,
+                summary.display,
+                str(summary.render()),
+            )
+
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            restored = (
+                screen.has_class("interaction-collapsed"),
+                output.display,
+                interaction.display,
+            )
+            return collapsed, restored
+
+    collapsed, restored = asyncio.run(run())
+
+    assert collapsed[:3] == (True, False, True)
+    assert "Ctrl+O 恢复" in collapsed[3]
+    assert restored == (False, True, True)
+
+
+def test_panel_command_is_available_during_confirmation_and_keeps_summary() -> None:
+    async def run() -> tuple[str, str, str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.request_confirmation("部署策略", lambda: None)
+            screen.submit("/panel collapsed")
+            await pilot.pause()
+            summary = str(
+                screen.query_one("#interaction-collapsed-summary", Static).render()
+            )
+            mode = screen.session.interaction.mode.value
+            screen.submit("/panel default")
+            await pilot.pause()
+            status = str(screen.query_one("#command-status", Static).render())
+            return summary, mode, status, screen._input().has_focus
+
+    summary, interaction_mode, status, input_focused = asyncio.run(run())
+
+    assert "等待确认 · 需要确认 · Ctrl+O 恢复" in summary
+    assert interaction_mode == "confirm"
+    assert status == "交互区已恢复默认大小"
+    assert input_focused
+
+
+def test_workspace_header_uses_compact_status_below_100_columns() -> None:
+    async def run() -> tuple[bool, bool, str, bool, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen._set_status("已选择 12 条 Activity · C 复制")
+            await pilot.pause()
+            full = screen.query_one("#command-status", Static)
+            compact = screen.query_one("#compact-command-status", Static)
+            compact_state = (full.display, compact.display, str(compact.render()))
+
+            await pilot.resize_terminal(100, 30)
+            await pilot.pause()
+            return (*compact_state, full.display, compact.display)
+
+    compact_full, compact_visible, compact_text, wide_full, wide_compact = asyncio.run(
+        run()
+    )
+
+    assert not compact_full
+    assert compact_visible
+    assert compact_text == "已选 12 条"
+    assert wide_full
+    assert not wide_compact
+
+
+def test_workspace_header_divider_follows_theme_primary_color() -> None:
+    async def run() -> tuple[str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            header = app.screen.query_one("#workspace-header")
+            nord_border = str(header.styles.border_bottom)
+            app.theme = "kairos-dracula"
+            await pilot.pause()
+            return nord_border, str(header.styles.border_bottom)
+
+    nord_border, dracula_border = asyncio.run(run())
+
+    assert "Color(136, 192, 208, a=0.45)" in nord_border
+    assert "Color(189, 147, 249, a=0.45)" in dracula_border
 
 
 def test_focusing_interaction_controls_does_not_tint_the_whole_region() -> None:
@@ -158,6 +271,378 @@ def test_copy_page_copies_complete_redacted_output_for_agent() -> None:
     assert any(event["event"] == "page_copied" for event in events)
 
 
+def test_tab_focuses_activity_stream_and_space_multiselects_for_copy() -> None:
+    async def run() -> tuple[bool, int, str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen._output()
+            for index in range(1, 4):
+                output.append_activity(
+                    ActivityRecord(
+                        activity_id=f"activity-{index}",
+                        kind=ActivityKind.QUERY,
+                        outcome=ActivityOutcome.SUCCESS,
+                        title=f"结果 {index}",
+                        copy_text=f"payload {index}",
+                    )
+                )
+            await pilot.pause()
+            await pilot.press("tab", "tab")
+            await pilot.pause()
+            await pilot.press("home", "down", "space", "down", "space", "c")
+            await pilot.pause()
+            copied_with_c = app._clipboard
+            app._clipboard = ""
+            await pilot.press("super+c")
+            await pilot.pause()
+            return (
+                output.has_focus,
+                output.selected_count,
+                copied_with_c,
+                app._clipboard,
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    focused, selected_count, copied_with_c, copied_with_command_c, status = asyncio.run(
+        run()
+    )
+
+    assert focused
+    assert selected_count == 2
+    assert copied_with_command_c == copied_with_c
+    assert "[A002] 结果 2" in copied_with_c
+    assert "[A003] 结果 3" in copied_with_c
+    assert "结果 1" not in copied_with_c
+    assert status == "已选择 2 条 Activity · C 复制"
+
+
+def test_mouse_focuses_activity_and_modifier_clicks_select_a_range() -> None:
+    async def run() -> tuple[
+        bool, int, tuple[str, ...], int | None, int, tuple[str, ...]
+    ]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen._output()
+            for index in range(1, 4):
+                output.append_activity(
+                    ActivityRecord(
+                        activity_id=f"mouse-{index}",
+                        kind=ActivityKind.QUERY,
+                        outcome=ActivityOutcome.SUCCESS,
+                        title=f"鼠标结果 {index}",
+                    )
+                )
+            await pilot.pause()
+            output.scroll_home(animate=False, immediate=True)
+
+            def click_y(index: int) -> int:
+                rendered_range = output._rendered_ranges[index]
+                return rendered_range.start - int(output.scroll_y)
+
+            await pilot.click(output, offset=(2, click_y(0)))
+            single_count = output.selected_count
+            single_titles = tuple(
+                activity.title for activity in output.selected_activities()
+            )
+            await pilot.click(output, offset=(2, click_y(1)), meta=True)
+            await pilot.click(output, offset=(2, click_y(2)), shift=True)
+            await pilot.pause()
+            return (
+                output.has_focus,
+                single_count,
+                single_titles,
+                output.cursor_sequence,
+                output.selected_count,
+                tuple(activity.title for activity in output.selected_activities()),
+            )
+
+    (
+        focused,
+        single_count,
+        single_titles,
+        cursor_sequence,
+        selected_count,
+        selected_titles,
+    ) = asyncio.run(run())
+
+    assert focused
+    assert single_count == 1
+    assert single_titles == ("鼠标结果 1",)
+    assert cursor_sequence == 3
+    assert selected_count == 2
+    assert selected_titles == ("鼠标结果 2", "鼠标结果 3")
+
+
+def test_activity_click_toggles_selection_and_blur_clears_it() -> None:
+    async def run() -> tuple[int, tuple[str, ...], int, int, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen._output()
+            for index in range(1, 3):
+                output.append_activity(
+                    ActivityRecord(
+                        activity_id=f"toggle-{index}",
+                        kind=ActivityKind.QUERY,
+                        outcome=ActivityOutcome.SUCCESS,
+                        title=f"切换选择 {index}",
+                    )
+                )
+            await pilot.pause()
+            output.scroll_home(animate=False, immediate=True)
+
+            def click_y(index: int) -> int:
+                rendered_range = output._rendered_ranges[index]
+                return rendered_range.start - int(output.scroll_y)
+
+            await pilot.click(output, offset=(2, click_y(0)))
+            await pilot.click(output, offset=(2, click_y(0)))
+            count_after_second_click = output.selected_count
+            targets_after_second_click = tuple(
+                activity.activity_id for activity in output.copy_target_activities()
+            )
+
+            await pilot.click(output, offset=(2, click_y(1)))
+            count_before_blur = output.selected_count
+            app.set_focus(screen._input())
+            await pilot.pause()
+            return (
+                count_after_second_click,
+                targets_after_second_click,
+                count_before_blur,
+                output.selected_count,
+                output.has_focus,
+            )
+
+    (
+        count_after_second_click,
+        targets_after_second_click,
+        count_before_blur,
+        count_after_blur,
+        output_focused,
+    ) = asyncio.run(run())
+
+    assert count_after_second_click == 0
+    assert targets_after_second_click == ()
+    assert count_before_blur == 1
+    assert count_after_blur == 0
+    assert not output_focused
+
+
+def test_focused_activity_stream_copies_default_target_without_full_tint() -> None:
+    async def run() -> tuple[float, str, int | None, int, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen._output()
+            output.append_activity(
+                ActivityRecord(
+                    activity_id="focus-without-tint",
+                    kind=ActivityKind.SYSTEM,
+                    outcome=ActivityOutcome.NOTICE,
+                    title="未选中的内容",
+                )
+            )
+            await pilot.pause()
+            await pilot.press("tab", "tab")
+            await pilot.pause()
+            await pilot.press("super+c")
+            await pilot.pause()
+            shortcut_copy = app._clipboard
+            app._clipboard = ""
+            screen.submit("/copy-selected")
+            await pilot.pause()
+            return (
+                output.styles.background_tint.a,
+                str(output.styles.background),
+                output.cursor_sequence,
+                output.selected_count,
+                shortcut_copy,
+                app._clipboard,
+            )
+
+    (
+        tint_alpha,
+        background,
+        cursor_sequence,
+        selected_count,
+        shortcut_copy,
+        command_copy,
+    ) = asyncio.run(run())
+
+    assert tint_alpha == 0
+    assert background == "Color(46, 52, 64)"
+    assert cursor_sequence == 1
+    assert selected_count == 0
+    assert "[A001] 未选中的内容" in shortcut_copy
+    assert command_copy == shortcut_copy
+
+
+def test_activity_focus_defaults_latest_then_restores_history_until_bottom() -> None:
+    async def run() -> tuple[int | None, int | None, int | None]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen._output()
+            for index in range(1, 4):
+                output.append_activity(
+                    ActivityRecord(
+                        activity_id=f"history-{index}",
+                        kind=ActivityKind.SYSTEM,
+                        outcome=ActivityOutcome.NOTICE,
+                        title=f"历史结果 {index}",
+                    )
+                )
+            await pilot.pause()
+            await pilot.press("tab", "tab")
+            await pilot.pause()
+            first_focus = output.cursor_sequence
+            await pilot.press("up", "tab")
+            output.append_activity(
+                ActivityRecord(
+                    activity_id="history-4",
+                    kind=ActivityKind.SYSTEM,
+                    outcome=ActivityOutcome.NOTICE,
+                    title="历史结果 4",
+                )
+            )
+            await pilot.press("tab", "tab")
+            await pilot.pause()
+            restored_focus = output.cursor_sequence
+            screen.submit("/bottom")
+            await pilot.pause()
+            return first_focus, restored_focus, output.cursor_sequence
+
+    first_focus, restored_focus, bottom_focus = asyncio.run(run())
+
+    assert first_focus == 3
+    assert restored_focus == 2
+    assert bottom_focus == 4
+
+
+def test_activity_commands_scroll_goto_and_copy_stable_ranges() -> None:
+    async def run() -> tuple[float, float, bool, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen._output()
+            for index in range(1, 4):
+                output.append_activity(
+                    ActivityRecord(
+                        activity_id=f"activity-{index}",
+                        kind=ActivityKind.QUERY,
+                        outcome=ActivityOutcome.SUCCESS,
+                        title=f"结果 {index}",
+                        copy_text=(
+                            "api_key=should-not-leak"
+                            if index == 2
+                            else f"payload {index}"
+                        ),
+                    )
+                )
+            for index in range(30):
+                output.write(f"raw line {index}")
+            await pilot.pause()
+            initial_y = output.scroll_y
+            screen.submit("/up 5")
+            after_up = output.scroll_y
+            screen.submit("/copy 1-2")
+            copied = app._clipboard
+            screen.submit("/goto A003")
+            await pilot.pause()
+            return (
+                initial_y,
+                after_up,
+                output.has_focus,
+                copied,
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    initial_y, after_up, focused, clipboard, status = asyncio.run(run())
+
+    assert after_up == max(initial_y - 5, 0)
+    assert focused
+    assert "[A001] 结果 1" in clipboard
+    assert "[A002] 结果 2" in clipboard
+    assert "[A003]" not in clipboard
+    assert "api_key=<redacted>" in clipboard
+    assert "should-not-leak" not in clipboard
+    assert status == "已定位到 Activity A003"
+
+
+def test_activity_display_sequences_are_not_reused_after_clear() -> None:
+    async def run() -> tuple[str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            output = screen._output()
+            output.append_activity(
+                ActivityRecord(
+                    activity_id="before-clear",
+                    kind=ActivityKind.SYSTEM,
+                    outcome=ActivityOutcome.NOTICE,
+                    title="清理前",
+                )
+            )
+            screen.action_clear()
+            output.append_activity(
+                ActivityRecord(
+                    activity_id="after-clear",
+                    kind=ActivityKind.SYSTEM,
+                    outcome=ActivityOutcome.NOTICE,
+                    title="清理后",
+                )
+            )
+            await pilot.pause()
+            return output.export_plain_text(), output.activity_for_sequence(1) is None
+
+    exported, first_was_removed = asyncio.run(run())
+
+    assert first_was_removed
+    assert "[A002] 清理后" in exported
+
+
+def test_activity_view_commands_do_not_consume_a_guided_input_prompt() -> None:
+    async def run() -> tuple[bool, str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("/market")
+            prompt = screen.session.interaction
+            assert isinstance(prompt, InputInteraction)
+            screen._output().append_activity(
+                ActivityRecord(
+                    activity_id="copy-during-prompt",
+                    kind=ActivityKind.SYSTEM,
+                    outcome=ActivityOutcome.NOTICE,
+                    title="提示期间仍可复制",
+                )
+            )
+            screen.submit("/copy 1")
+            await pilot.pause()
+            return (
+                screen.session.interaction is prompt,
+                app._clipboard,
+                screen._input().has_focus,
+            )
+
+    prompt_preserved, clipboard, input_focused = asyncio.run(run())
+
+    assert prompt_preserved
+    assert "[A001] 提示期间仍可复制" in clipboard
+    assert input_focused
+
+
 def test_worker_busy_state_blocks_reentry_and_ctrl_c_restores_input() -> None:
     release = threading.Event()
 
@@ -208,7 +693,7 @@ def test_worker_busy_state_blocks_reentry_and_ctrl_c_restores_input() -> None:
 
 
 def test_idle_ctrl_c_requests_exit_confirmation_in_interaction_region() -> None:
-    async def run() -> tuple[int | None, str, str, ConfirmInteraction, bool]:
+    async def run() -> tuple[int | None, str, str, ConfirmInteraction, bool, int]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
@@ -219,20 +704,77 @@ def test_idle_ctrl_c_requests_exit_confirmation_in_interaction_region() -> None:
             output = _log_text(screen.query_one("#command-output", RichLog))
             interaction = screen.session.interaction
             assert isinstance(interaction, ConfirmInteraction)
-            focused = screen.query_one(
-                "#command-input", WorkbenchCommandInput
-            ).has_focus
-            screen.submit("/y")
+            actions = screen.query_one("#guided-actions", ActionList)
+            focused = actions.has_focus
+            highlighted = actions.highlighted
+            await pilot.press("tab", "enter")
             await pilot.pause()
-            return app.return_value, status, output, interaction, focused
+            return app.return_value, status, output, interaction, focused, highlighted
 
-    return_value, status, output, interaction, focused = asyncio.run(run())
+    return_value, status, output, interaction, focused, highlighted = asyncio.run(run())
     assert return_value == 0
     assert status == "等待确认"
     assert output == ""
     assert interaction.summary == "当前没有运行中的任务，是否退出？"
     assert interaction.force_hint is None
     assert focused
+    assert highlighted == 0
+
+
+def test_exit_confirmation_enter_defaults_to_cancel() -> None:
+    async def run() -> tuple[int | None, str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            return (
+                app.return_value,
+                screen.session.interaction.mode.value,
+                screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
+            )
+
+    return_value, mode, focused = asyncio.run(run())
+    assert return_value is None
+    assert mode == "choice"
+    assert focused
+
+
+def test_confirmation_mouse_click_only_selects_until_enter() -> None:
+    async def run() -> tuple[int | None, str, int | None, list[str]]:
+        executed: list[str] = []
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.request_confirmation("执行测试操作", lambda: executed.append("done"))
+            await pilot.pause()
+            actions = screen.query_one("#guided-actions", ActionList)
+
+            await pilot.click(actions, offset=(4, 2))
+            await pilot.pause()
+            mode_after_click = screen.session.interaction.mode.value
+            highlighted_after_click = actions.highlighted
+            executed_after_click = list(executed)
+
+            await pilot.press("enter")
+            await pilot.pause()
+            return (
+                highlighted_after_click,
+                mode_after_click,
+                app.return_value,
+                executed_after_click + executed,
+            )
+
+    highlighted, mode_after_click, return_value, execution_states = asyncio.run(run())
+
+    assert highlighted == 1
+    assert mode_after_click == "confirm"
+    assert return_value is None
+    assert execution_states == ["done"]
 
 
 def test_ctrl_c_clears_non_empty_command_input_before_interrupting() -> None:
@@ -241,9 +783,7 @@ def test_ctrl_c_clears_non_empty_command_input_before_interrupting() -> None:
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            command_input = screen.query_one(
-                "#command-input", WorkbenchCommandInput
-            )
+            command_input = screen.query_one("#command-input", WorkbenchCommandInput)
             command_input.value = "/help"
             await pilot.press("ctrl+c")
             await pilot.pause()
@@ -628,7 +1168,7 @@ def test_command_screen_renders_in_supported_terminal_themes(theme: str) -> None
             await pilot.pause()
             return str(app.screen.query_one("#workspace-title", Static).render())
 
-    assert asyncio.run(run()) == "◆ KAIROS  /  trader"
+    assert asyncio.run(run()) == "KAIROS  ·  trader"
 
 
 def test_command_screen_renders_when_no_color_is_requested(
@@ -642,7 +1182,7 @@ def test_command_screen_renders_when_no_color_is_requested(
             await pilot.pause()
             return str(app.screen.query_one("#workspace-title", Static).render())
 
-    assert asyncio.run(run()) == "◆ KAIROS  /  trader"
+    assert asyncio.run(run()) == "KAIROS  ·  trader"
 
 
 def test_workspace_identity_is_visible_in_shared_header_context() -> None:
@@ -778,7 +1318,7 @@ def test_command_layout_runs_at_supported_terminal_sizes() -> None:
             return str(app.screen.query_one("#workspace-title", Static).render())
 
     for size in ((60, 20), (80, 24), (120, 30), (160, 40)):
-        assert asyncio.run(run(size)) == "◆ KAIROS  /  trader"
+        assert asyncio.run(run(size)) == "KAIROS  ·  trader"
 
 
 def test_command_screen_applies_responsive_modes_during_terminal_resize() -> None:

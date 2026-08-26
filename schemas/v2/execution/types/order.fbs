@@ -37,7 +37,14 @@ enum DeliveryCertainty:ubyte {
   NOT_SENT = 1,
   INDETERMINATE = 2,
   CONFIRMED = 3,
-  REJECTED = 4
+  REJECTED = 4,
+  RECONCILED = 5
+}
+
+enum ExecutionCommandKind:ubyte {
+  UNSPECIFIED = 0,
+  SUBMIT = 1,
+  CANCEL = 2
 }
 
 table SelectedExecutionRoute {
@@ -52,6 +59,7 @@ table SelectedExecutionRoute {
 
 table ExecutionAttempt {
   attempt_id:string (required);
+  command:ExecutionCommandKind = UNSPECIFIED;
   selected_route:SelectedExecutionRoute (required);
   provider_connection_id:string (required);
   command_started_at_unix_nanos:ulong;

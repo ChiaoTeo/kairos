@@ -21,11 +21,12 @@ impl<'a> ::flatbuffers::Follow<'a> for ExecutionAttempt<'a> {
 
 impl<'a> ExecutionAttempt<'a> {
     pub const VT_ATTEMPT_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_SELECTED_ROUTE: ::flatbuffers::VOffsetT = 6;
-    pub const VT_PROVIDER_CONNECTION_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_COMMAND_STARTED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 10;
-    pub const VT_DELIVERY_CERTAINTY: ::flatbuffers::VOffsetT = 12;
-    pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 14;
+    pub const VT_COMMAND: ::flatbuffers::VOffsetT = 6;
+    pub const VT_SELECTED_ROUTE: ::flatbuffers::VOffsetT = 8;
+    pub const VT_PROVIDER_CONNECTION_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_COMMAND_STARTED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 12;
+    pub const VT_DELIVERY_CERTAINTY: ::flatbuffers::VOffsetT = 14;
+    pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 16;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -56,6 +57,7 @@ impl<'a> ExecutionAttempt<'a> {
             builder.add_attempt_id(x);
         }
         builder.add_delivery_certainty(args.delivery_certainty);
+        builder.add_command(args.command);
         builder.finish()
     }
 
@@ -67,6 +69,20 @@ impl<'a> ExecutionAttempt<'a> {
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(ExecutionAttempt::VT_ATTEMPT_ID, None)
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn command(&self) -> ExecutionCommandKind {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<ExecutionCommandKind>(
+                    ExecutionAttempt::VT_COMMAND,
+                    Some(ExecutionCommandKind::UNSPECIFIED),
+                )
                 .unwrap()
         }
     }
@@ -149,6 +165,7 @@ impl ::flatbuffers::Verifiable for ExecutionAttempt<'_> {
                 Self::VT_ATTEMPT_ID,
                 true,
             )?
+            .visit_field::<ExecutionCommandKind>("command", Self::VT_COMMAND, false)?
             .visit_field::<::flatbuffers::ForwardsUOffset<SelectedExecutionRoute>>(
                 "selected_route",
                 Self::VT_SELECTED_ROUTE,
@@ -180,6 +197,7 @@ impl ::flatbuffers::Verifiable for ExecutionAttempt<'_> {
 }
 pub struct ExecutionAttemptArgs<'a> {
     pub attempt_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub command: ExecutionCommandKind,
     pub selected_route: Option<::flatbuffers::WIPOffset<SelectedExecutionRoute<'a>>>,
     pub provider_connection_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub command_started_at_unix_nanos: u64,
@@ -190,7 +208,8 @@ impl<'a> Default for ExecutionAttemptArgs<'a> {
     #[inline]
     fn default() -> Self {
         ExecutionAttemptArgs {
-            attempt_id: None,             // required field
+            attempt_id: None, // required field
+            command: ExecutionCommandKind::UNSPECIFIED,
             selected_route: None,         // required field
             provider_connection_id: None, // required field
             command_started_at_unix_nanos: 0,
@@ -210,6 +229,14 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionAttemptBuilder<'a, '
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             ExecutionAttempt::VT_ATTEMPT_ID,
             attempt_id,
+        );
+    }
+    #[inline]
+    pub fn add_command(&mut self, command: ExecutionCommandKind) {
+        self.fbb_.push_slot::<ExecutionCommandKind>(
+            ExecutionAttempt::VT_COMMAND,
+            command,
+            ExecutionCommandKind::UNSPECIFIED,
         );
     }
     #[inline]
@@ -286,6 +313,7 @@ impl ::core::fmt::Debug for ExecutionAttempt<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("ExecutionAttempt");
         ds.field("attempt_id", &self.attempt_id());
+        ds.field("command", &self.command());
         ds.field("selected_route", &self.selected_route());
         ds.field("provider_connection_id", &self.provider_connection_id());
         ds.field(

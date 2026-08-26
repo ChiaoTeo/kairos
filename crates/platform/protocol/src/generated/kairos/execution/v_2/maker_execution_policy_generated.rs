@@ -20,12 +20,9 @@ impl<'a> ::flatbuffers::Follow<'a> for MakerExecutionPolicy<'a> {
 }
 
 impl<'a> MakerExecutionPolicy<'a> {
-    pub const VT_MIN_INTERVAL_NANOS: ::flatbuffers::VOffsetT = 4;
-    pub const VT_MAX_ORDERS_PER_WINDOW: ::flatbuffers::VOffsetT = 6;
-    pub const VT_WINDOW_NANOS: ::flatbuffers::VOffsetT = 8;
-    pub const VT_MAX_INVENTORY_ABS: ::flatbuffers::VOffsetT = 10;
-    pub const VT_TARGET_INVENTORY: ::flatbuffers::VOffsetT = 12;
-    pub const VT_MAX_QUOTE_AGE_NANOS: ::flatbuffers::VOffsetT = 14;
+    pub const VT_MAX_INVENTORY_ABS: ::flatbuffers::VOffsetT = 4;
+    pub const VT_TARGET_INVENTORY: ::flatbuffers::VOffsetT = 6;
+    pub const VT_MAX_QUOTE_AGE_NANOS: ::flatbuffers::VOffsetT = 8;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -45,54 +42,15 @@ impl<'a> MakerExecutionPolicy<'a> {
         if let Some(x) = args.max_quote_age_nanos {
             builder.add_max_quote_age_nanos(x);
         }
-        if let Some(x) = args.window_nanos {
-            builder.add_window_nanos(x);
-        }
-        if let Some(x) = args.min_interval_nanos {
-            builder.add_min_interval_nanos(x);
-        }
         if let Some(x) = args.target_inventory {
             builder.add_target_inventory(x);
         }
         if let Some(x) = args.max_inventory_abs {
             builder.add_max_inventory_abs(x);
         }
-        if let Some(x) = args.max_orders_per_window {
-            builder.add_max_orders_per_window(x);
-        }
         builder.finish()
     }
 
-    #[inline]
-    pub fn min_interval_nanos(&self) -> Option<u64> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<u64>(MakerExecutionPolicy::VT_MIN_INTERVAL_NANOS, None)
-        }
-    }
-    #[inline]
-    pub fn max_orders_per_window(&self) -> Option<u32> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<u32>(MakerExecutionPolicy::VT_MAX_ORDERS_PER_WINDOW, None)
-        }
-    }
-    #[inline]
-    pub fn window_nanos(&self) -> Option<u64> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<u64>(MakerExecutionPolicy::VT_WINDOW_NANOS, None)
-        }
-    }
     #[inline]
     pub fn max_inventory_abs(&self) -> Option<&'a super::super::common::v_2::Decimal64> {
         // Safety:
@@ -136,13 +94,6 @@ impl ::flatbuffers::Verifiable for MakerExecutionPolicy<'_> {
         pos: usize,
     ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
         v.visit_table(pos)?
-            .visit_field::<u64>("min_interval_nanos", Self::VT_MIN_INTERVAL_NANOS, false)?
-            .visit_field::<u32>(
-                "max_orders_per_window",
-                Self::VT_MAX_ORDERS_PER_WINDOW,
-                false,
-            )?
-            .visit_field::<u64>("window_nanos", Self::VT_WINDOW_NANOS, false)?
             .visit_field::<super::super::common::v_2::Decimal64>(
                 "max_inventory_abs",
                 Self::VT_MAX_INVENTORY_ABS,
@@ -159,9 +110,6 @@ impl ::flatbuffers::Verifiable for MakerExecutionPolicy<'_> {
     }
 }
 pub struct MakerExecutionPolicyArgs<'a> {
-    pub min_interval_nanos: Option<u64>,
-    pub max_orders_per_window: Option<u32>,
-    pub window_nanos: Option<u64>,
     pub max_inventory_abs: Option<&'a super::super::common::v_2::Decimal64>,
     pub target_inventory: Option<&'a super::super::common::v_2::Decimal64>,
     pub max_quote_age_nanos: Option<u64>,
@@ -170,9 +118,6 @@ impl<'a> Default for MakerExecutionPolicyArgs<'a> {
     #[inline]
     fn default() -> Self {
         MakerExecutionPolicyArgs {
-            min_interval_nanos: None,
-            max_orders_per_window: None,
-            window_nanos: None,
             max_inventory_abs: None,
             target_inventory: None,
             max_quote_age_nanos: None,
@@ -185,25 +130,6 @@ pub struct MakerExecutionPolicyBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator +
     start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
 }
 impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MakerExecutionPolicyBuilder<'a, 'b, A> {
-    #[inline]
-    pub fn add_min_interval_nanos(&mut self, min_interval_nanos: u64) {
-        self.fbb_.push_slot_always::<u64>(
-            MakerExecutionPolicy::VT_MIN_INTERVAL_NANOS,
-            min_interval_nanos,
-        );
-    }
-    #[inline]
-    pub fn add_max_orders_per_window(&mut self, max_orders_per_window: u32) {
-        self.fbb_.push_slot_always::<u32>(
-            MakerExecutionPolicy::VT_MAX_ORDERS_PER_WINDOW,
-            max_orders_per_window,
-        );
-    }
-    #[inline]
-    pub fn add_window_nanos(&mut self, window_nanos: u64) {
-        self.fbb_
-            .push_slot_always::<u64>(MakerExecutionPolicy::VT_WINDOW_NANOS, window_nanos);
-    }
     #[inline]
     pub fn add_max_inventory_abs(
         &mut self,
@@ -253,9 +179,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MakerExecutionPolicyBuilder<'
 impl ::core::fmt::Debug for MakerExecutionPolicy<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("MakerExecutionPolicy");
-        ds.field("min_interval_nanos", &self.min_interval_nanos());
-        ds.field("max_orders_per_window", &self.max_orders_per_window());
-        ds.field("window_nanos", &self.window_nanos());
         ds.field("max_inventory_abs", &self.max_inventory_abs());
         ds.field("target_inventory", &self.target_inventory());
         ds.field("max_quote_age_nanos", &self.max_quote_age_nanos());

@@ -224,7 +224,7 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
             screen.submit("1")
             screen.submit("1")
             await pilot.pause(0.1)
-            screen.submit("15")
+            screen.submit("11")
             screen.submit("order-1")
             screen.submit("")
             assert [action for action, _ in calls] == ["status"]

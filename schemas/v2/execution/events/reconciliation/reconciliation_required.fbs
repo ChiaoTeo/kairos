@@ -1,7 +1,0 @@
-include "../../../common/metadata.fbs";
-include "../../types/reconciliation.fbs";
-
-namespace kairos.execution.v2;
-table ReconciliationRequired { metadata:kairos.common.v2.EventMetadata (required); reconciliation_id:string (required); reason:ReconciliationReason = UNSPECIFIED; intent_id:string; plan_id:string; leg_id:string; order_id:string; account_id:string; details:string; }
-root_type ReconciliationRequired;
-file_identifier "EXV2";

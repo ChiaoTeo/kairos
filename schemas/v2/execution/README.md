@@ -6,8 +6,8 @@ reserved for the Execution event stream and active mmap views.
 
 The command response acknowledges admission or rejection only. Exchange
 acknowledgements, cancellations, expirations, and fills are immutable facts on
-the event stream. `ActiveIntentsView` and `ActiveOrdersView` retain only
-non-terminal state; terminal history belongs to query/audit storage.
+the event stream. `CurrentExecutionView` is the single operational mmap view;
+terminal history belongs to query/audit storage.
 
 Strategy-originated intents carry the optional migration field
 `strategy_decision_id`, which Execution preserves as an opaque and immutable

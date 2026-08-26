@@ -26,6 +26,38 @@ impl ExecutionOrderStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum OrderReconciliationCause {
+    DeliveryIndeterminate,
+    AuthoritativeFactConflict,
+}
+
+/// Ordering evidence attached to a normalized private execution fact.
+/// Sequence is scoped by the physical connection channel and its reconnect
+/// epoch; it is not treated as a venue-global order sequence.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OrderFactCursor {
+    pub connection_id: String,
+    pub channel_id: String,
+    pub channel_epoch: u64,
+    pub participant_sequence: Option<Sequence>,
+}
+
+impl OrderFactCursor {
+    pub fn regresses(&self, previous: &Self) -> bool {
+        if self.connection_id != previous.connection_id || self.channel_id != previous.channel_id {
+            return false;
+        }
+        if self.channel_epoch != previous.channel_epoch {
+            return self.channel_epoch < previous.channel_epoch;
+        }
+        match (previous.participant_sequence, self.participant_sequence) {
+            (Some(previous), Some(incoming)) => incoming < previous,
+            _ => false,
+        }
+    }
+}
+
 impl From<ExecutionOrderStatus> for kairos_primitives::integration::OrderStatus {
     fn from(status: ExecutionOrderStatus) -> Self {
         match status {
@@ -71,6 +103,10 @@ pub struct ExecutionOrder {
     pub remote_order_id: Option<RemoteOrderId>,
     pub filled_quantity: Quantity,
     pub status: ExecutionOrderStatus,
+    #[serde(default)]
+    pub reconciliation_cause: Option<OrderReconciliationCause>,
+    #[serde(default)]
+    pub last_order_fact_cursor: Option<OrderFactCursor>,
     pub submitted_at_unix_nanos: UnixNanos,
     pub updated_at_unix_nanos: UnixNanos,
     pub reason: String,
@@ -109,6 +145,8 @@ impl ExecutionOrder {
             remote_order_id: None,
             filled_quantity: Quantity::ZERO,
             status: ExecutionOrderStatus::Pending,
+            reconciliation_cause: None,
+            last_order_fact_cursor: None,
             submitted_at_unix_nanos: UnixNanos::new(at_unix_nanos),
             updated_at_unix_nanos: UnixNanos::new(at_unix_nanos),
             reason: String::new(),

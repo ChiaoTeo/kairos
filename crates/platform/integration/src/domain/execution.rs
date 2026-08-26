@@ -78,6 +78,10 @@ impl From<OrderEntryStatus> for OrderStatus {
 pub struct OrderEntryRequest {
     pub order_id: OrderId,
     pub intent_id: Option<IntentId>,
+    /// Business time admitted by the owning Execution process. Providers may
+    /// ignore it, while deterministic/paper venues must preserve it in their
+    /// acknowledgement facts.
+    pub submitted_at_unix_nanos: UnixNanos,
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,
@@ -216,7 +220,8 @@ pub struct ExternalOrder {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalExecutionEvent {
-    pub order_id: OrderId,
+    pub remote_order_id: RemoteOrderId,
+    pub client_order_id: Option<ClientOrderId>,
     pub symbol: Symbol,
     pub status: OrderStatus,
     pub side: Option<OrderSide>,

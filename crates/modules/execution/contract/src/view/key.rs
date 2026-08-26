@@ -4,15 +4,11 @@ use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ExecutionViewKind {
-    ActiveOrders,
-    ActiveIntents,
     CurrentExecution,
 }
 impl ExecutionViewKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::ActiveOrders => "active-orders",
-            Self::ActiveIntents => "active-intents",
             Self::CurrentExecution => "current-execution",
         }
     }
@@ -75,6 +71,20 @@ impl ExecutionViewKey {
             .join("execution")
             .join("views")
             .join(component(&self.workspace_id))
+            .join(format!(
+                "launch={}",
+                self.launch_id
+                    .as_deref()
+                    .map(component)
+                    .unwrap_or_else(|| "_".to_owned())
+            ))
+            .join(format!(
+                "instance={}",
+                self.instance_id
+                    .as_deref()
+                    .map(component)
+                    .unwrap_or_else(|| "_".to_owned())
+            ))
             .join(self.kind.as_str())
             .join("current.snapshot")
     }

@@ -435,13 +435,16 @@ and never selects the first allocation as a reservation summary.
   execution options, and optional hedge policy
 - `IntentAccepted`, `IntentRejected`, `PlanCreated`, `OrderSubmitted`,
   `OrderAccepted`, `OrderRejected`, `OrderCanceled`, `OrderExpired`,
-  `FillRecorded`, and `ReconciliationRequired` facts
-- separate bounded current views for active intents/plans and active orders;
-  terminal history is queried rather than retained in mmap
+  and `FillRecorded` facts; reconciliation is expressed by the affected
+  Intent/Order lifecycle rather than a second standalone event
+- one bounded `CurrentExecution` mmap view for operational Intents, AlgorithmRuns, Orders,
+  commitments, reservations, unresolved remote facts, and explicitly truncated recent diagnostics
+- bounded durable Order audit queries use the Execution JSON-RPC contract rather than mmap
 
 Execution facts preserve `intent_id`, `plan_id`, `leg_id`, `order_id`, and
-`fill_id` correlation where applicable. A fill ledger is a query/history
-contract until a demonstrated mmap consumer requires a current view.
+`fill_id` correlation where applicable. The full durable audit remains the
+history authority; `CurrentExecution` carries only its declared bounded recent
+fill and lifecycle-event window.
 
 ### System
 

@@ -6,6 +6,46 @@ from typing import Sequence
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionBenchmark:
+    """Explicit market observation used to evaluate one execution leg."""
+
+    instrument_id: str
+    market_id: str
+    price: Decimal
+    observed_at_unix_nanos: int
+    leg_id: str | None = None
+    kind: str = "arrival"
+
+    def __post_init__(self) -> None:
+        if self.kind != "arrival":
+            raise ValueError("execution benchmark kind must be arrival")
+        if not self.instrument_id.strip() or not self.market_id.strip():
+            raise ValueError("execution benchmark instrument_id and market_id are required")
+        if self.leg_id is not None and not self.leg_id.strip():
+            raise ValueError("execution benchmark leg_id cannot be blank")
+        if self.price <= 0:
+            raise ValueError("execution benchmark price must be positive")
+        if self.observed_at_unix_nanos < 0:
+            raise ValueError("execution benchmark observed_at_unix_nanos cannot be negative")
+
+
+def _normalize_execution_benchmarks(
+    values: Sequence[ExecutionBenchmark],
+) -> tuple[ExecutionBenchmark, ...]:
+    benchmarks = tuple(values)
+    if any(not isinstance(value, ExecutionBenchmark) for value in benchmarks):
+        raise TypeError("execution_benchmarks must contain ExecutionBenchmark values")
+    explicit_leg_ids = [
+        benchmark.leg_id
+        for benchmark in benchmarks
+        if benchmark.leg_id is not None
+    ]
+    if len(set(explicit_leg_ids)) != len(explicit_leg_ids):
+        raise ValueError("execution benchmark leg_id values must be unique")
+    return benchmarks
+
+
+@dataclass(frozen=True, slots=True)
 class TargetPositionRequest:
     """A strategy target translated into an Execution-owned Intent."""
 
@@ -25,10 +65,13 @@ class TargetPositionRequest:
     split: "SplitOrderPolicy | None" = None
     maker: "MakerExecutionPolicy | None" = None
     execution_route_id: str | None = None
+    execution_benchmarks: tuple[ExecutionBenchmark, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.algorithm, MakerTakerHedgeAlgorithm):
             raise ValueError("maker-taker hedge requires a pair arbitrage Intent")
+        if isinstance(self.algorithm, PassiveLimitAlgorithm):
+            raise ValueError("passive-limit requires a quote provisioning Intent")
         if isinstance(self.algorithm, TwapAlgorithm) and self.split is not None:
             raise ValueError("TWAP cannot be combined with split order policy")
         if not self.instrument_id.strip():
@@ -57,6 +100,11 @@ class TargetPositionRequest:
             and self.source_event_time_unix_nanos < 0
         ):
             raise ValueError("source_event_time_unix_nanos cannot be negative")
+        object.__setattr__(
+            self,
+            "execution_benchmarks",
+            _normalize_execution_benchmarks(self.execution_benchmarks),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,10 +146,13 @@ class PairArbitrageRequest:
     min_edge_bps: int | None = None
     max_slippage_bps: int | None = None
     estimated_fee_bps: int | None = None
+    execution_benchmarks: tuple[ExecutionBenchmark, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.algorithm, TwapAlgorithm):
             raise ValueError("TWAP requires a single-leg Intent")
+        if isinstance(self.algorithm, PassiveLimitAlgorithm):
+            raise ValueError("passive-limit requires a quote provisioning Intent")
         if self.intent_id is not None and not self.intent_id.strip():
             raise ValueError("intent_id cannot be blank")
         if (
@@ -109,6 +160,11 @@ class PairArbitrageRequest:
             and not self.strategy_decision_id.strip()
         ):
             raise ValueError("strategy_decision_id cannot be blank")
+        object.__setattr__(
+            self,
+            "execution_benchmarks",
+            _normalize_execution_benchmarks(self.execution_benchmarks),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +212,7 @@ class OptionSpreadRequest:
     maximum_quote_age_nanos: int = 300_000_000_000
     completion_policy: str = "AllOrNothing"
     failure_policy: str = "CancelRemaining"
+    execution_benchmarks: tuple[ExecutionBenchmark, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.algorithm, ImmediateAlgorithm):
@@ -195,6 +252,11 @@ class OptionSpreadRequest:
             raise ValueError("first option spread version requires AllOrNothing")
         if self.failure_policy != "CancelRemaining":
             raise ValueError("first option spread version requires CancelRemaining")
+        object.__setattr__(
+            self,
+            "execution_benchmarks",
+            _normalize_execution_benchmarks(self.execution_benchmarks),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,22 +278,13 @@ class SplitOrderPolicy:
 
 @dataclass(frozen=True, slots=True)
 class MakerExecutionPolicy:
-    """Execution-side cadence and inventory guardrails for maker quotes."""
+    """Admission-only inventory and quote-freshness maker guardrails."""
 
-    min_interval_millis: int | None = None
-    max_orders_per_window: int | None = None
-    window_millis: int | None = None
     max_inventory_abs: Decimal | None = None
     target_inventory: Decimal | None = None
     max_quote_age_millis: int | None = None
 
     def __post_init__(self) -> None:
-        if self.min_interval_millis is not None and self.min_interval_millis < 0:
-            raise ValueError("min_interval_millis cannot be negative")
-        if self.max_orders_per_window is not None and self.max_orders_per_window <= 0:
-            raise ValueError("max_orders_per_window must be positive")
-        if self.window_millis is not None and self.window_millis <= 0:
-            raise ValueError("window_millis must be positive")
         if self.max_inventory_abs is not None and self.max_inventory_abs < 0:
             raise ValueError("max_inventory_abs cannot be negative")
         if self.max_quote_age_millis is not None and self.max_quote_age_millis <= 0:
@@ -304,11 +357,28 @@ class TwapAlgorithm:
 
 
 @dataclass(frozen=True, slots=True)
+class PassiveLimitAlgorithm:
+    reprice_interval_nanos: int
+    max_quote_age_nanos: int
+
+    def __post_init__(self) -> None:
+        if self.reprice_interval_nanos <= 0:
+            raise ValueError("passive-limit reprice_interval_nanos must be positive")
+        if self.max_quote_age_nanos <= 0:
+            raise ValueError("passive-limit max_quote_age_nanos must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class MakerTakerHedgeAlgorithm:
     hedge: HedgePolicy
 
 
-ExecutionAlgorithmPolicy = ImmediateAlgorithm | TwapAlgorithm | MakerTakerHedgeAlgorithm
+ExecutionAlgorithmPolicy = (
+    ImmediateAlgorithm
+    | TwapAlgorithm
+    | PassiveLimitAlgorithm
+    | MakerTakerHedgeAlgorithm
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,11 +399,12 @@ class QuoteProvisioningRequest:
     intent_id: str | None = None
     strategy_decision_id: str | None = None
     execution_route_id: str | None = None
+    execution_benchmarks: tuple[ExecutionBenchmark, ...] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.algorithm, ImmediateAlgorithm):
+        if not isinstance(self.algorithm, PassiveLimitAlgorithm):
             raise ValueError(
-                "quote provisioning currently requires Immediate algorithm"
+                "quote provisioning requires PassiveLimit algorithm"
             )
         if (
             not self.instrument_id.strip()
@@ -357,6 +428,11 @@ class QuoteProvisioningRequest:
             and not self.strategy_decision_id.strip()
         ):
             raise ValueError("strategy_decision_id cannot be blank")
+        object.__setattr__(
+            self,
+            "execution_benchmarks",
+            _normalize_execution_benchmarks(self.execution_benchmarks),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,6 +487,7 @@ class PortfolioRebalanceRequest:
     strategy_decision_id: str | None = None
     completion_policy: str = "BestEffort"
     failure_policy: str = "ContinueOtherLegs"
+    execution_benchmarks: tuple[ExecutionBenchmark, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.algorithm, ImmediateAlgorithm):
@@ -425,3 +502,8 @@ class PortfolioRebalanceRequest:
             and not self.strategy_decision_id.strip()
         ):
             raise ValueError("strategy_decision_id cannot be blank")
+        object.__setattr__(
+            self,
+            "execution_benchmarks",
+            _normalize_execution_benchmarks(self.execution_benchmarks),
+        )

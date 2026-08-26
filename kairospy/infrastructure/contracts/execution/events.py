@@ -20,7 +20,6 @@ _EVENT_ROOTS: dict[bytes, str] = {
     b"EOC2": "OrderCanceled",
     b"EOX2": "OrderExpired",
     b"EFV2": "FillRecorded",
-    b"EXV2": "ReconciliationRequired",
 }
 
 

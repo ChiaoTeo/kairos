@@ -61,12 +61,6 @@ pub struct ExpireIntent {
     pub reason: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ReplaceOrder {
-    pub order_id: OrderId,
-    pub replacement: SubmitOrder,
-}
-
 /// Replace the two live legs of a QuoteProvisioning intent as one
 /// Execution-owned operation.  Strategies provide a fresh quote; Execution
 /// owns the cancel/re-submit sequence and keeps the old orders in the same
@@ -77,6 +71,9 @@ pub struct RefreshQuoteIntent {
     pub bid_price: Price,
     pub ask_price: Price,
     pub quote_observed_at: UnixNanos,
+    /// Explicit business time at which Execution evaluates freshness and
+    /// maker refresh cadence. This is not inferred from the process wall clock.
+    pub business_time_unix_nanos: UnixNanos,
     pub reason: String,
 }
 
@@ -105,10 +102,24 @@ pub struct ExecutionFillReport {
     pub reported_broker_id: Option<kairos_primitives::account::BrokerId>,
     #[serde(default)]
     pub execution_channel: Option<kairos_primitives::execution::ExecutionChannelCode>,
-    #[serde(default, alias = "provider_symbol")]
+    #[serde(default)]
     pub order_entry_symbol: Option<kairos_primitives::execution::OrderEntrySymbol>,
     #[serde(default)]
     pub remote_order_id: Option<RemoteOrderId>,
+    #[serde(default)]
+    pub source_cursor: Option<crate::domain::OrderFactCursor>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IntentExecutionBenchmark {
+    pub kind: ExecutionBenchmarkKind,
+    /// Omit only when the normalized plan has exactly one leg.
+    #[serde(default)]
+    pub leg_id: Option<LegId>,
+    pub instrument_id: InstrumentId,
+    pub market_id: MarketId,
+    pub price: Price,
+    pub observed_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -141,6 +152,8 @@ pub struct ExecuteStrategyIntent {
     pub completion_policy: CompletionPolicy,
     pub failure_policy: FailurePolicy,
     pub legs: Vec<IntentLegRequest>,
+    #[serde(default)]
+    pub execution_benchmarks: Vec<IntentExecutionBenchmark>,
     pub deadline_unix_nanos: Option<UnixNanos>,
     pub min_edge_bps: Option<u32>,
     pub max_slippage_bps: Option<u32>,
@@ -192,6 +205,7 @@ impl ExecuteStrategyIntent {
             completion_policy: CompletionPolicy::default(),
             failure_policy: FailurePolicy::default(),
             legs: Vec::new(),
+            execution_benchmarks: Vec::new(),
             deadline_unix_nanos: None,
             min_edge_bps: None,
             max_slippage_bps: None,

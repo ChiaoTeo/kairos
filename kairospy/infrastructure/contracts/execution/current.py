@@ -19,7 +19,7 @@ class ExecutionCurrentViews:
         self._retries = retries
 
     def orders(self) -> tuple[dict[str, object], ...]:
-        value = self._read(ExecutionViewKind.ACTIVE_ORDERS)
+        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
         return tuple(
             _order(value.Orders(index)) for index in range(value.OrdersLength())
         )
@@ -30,14 +30,14 @@ class ExecutionCurrentViews:
         )
 
     def commitments(self) -> tuple[dict[str, object], ...]:
-        value = self._read(ExecutionViewKind.ACTIVE_ORDERS)
+        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
         return tuple(
             _commitment(value.Commitments(index))
             for index in range(value.CommitmentsLength())
         )
 
     def risk_reservations(self) -> tuple[dict[str, object], ...]:
-        value = self._read(ExecutionViewKind.ACTIVE_ORDERS)
+        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
         return tuple(
             _risk_reservation(value.RiskReservations(index))
             for index in range(value.RiskReservationsLength())
@@ -61,7 +61,7 @@ class ExecutionCurrentViews:
         )
 
     def intents(self) -> tuple[dict[str, object], ...]:
-        value = self._read(ExecutionViewKind.ACTIVE_INTENTS)
+        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
         return tuple(
             _intent(value.Intents(index)) for index in range(value.IntentsLength())
         )

@@ -10,6 +10,10 @@ Scripts are grouped by the kind of repository operation they perform:
 | [`build/`](build/) | Rust binary builds and observability benchmarks |
 | [`maintenance/`](maintenance/) | Explicit repair and local development setup tasks |
 
+Execution venue transaction records are checked by
+`check/check_execution_venue_certification.py`; it binds every `T` mark in the maintained matrix to a
+complete, redacted, content-addressed record under `docs/integrations/execution-certifications/`.
+
 Run these commands from the repository root. The paths are also used by CI
 and the relevant tests, so moving a script requires updating its callers.
 

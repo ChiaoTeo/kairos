@@ -63,9 +63,9 @@ class KairosWorkbenchApp(App[int]):
         self.observe_refresh_seconds = observe_refresh_seconds
 
     def run(self, **kwargs: Any) -> int | None:
-        """Run without terminal mouse capture so native drag selection works."""
+        """Run with mouse reporting so Activity rows can receive focus and selection."""
 
-        kwargs.setdefault("mouse", False)
+        kwargs.setdefault("mouse", True)
         return super().run(**kwargs)
 
     def on_mount(self) -> None:
@@ -162,26 +162,53 @@ class KairosWorkbenchApp(App[int]):
             page = "\n\n".join(
                 log.plain_text for log in screen.query(ActivityStream) if log.plain_text
             )
-        page = redact_text(page).strip()
+        self.copy_workbench_text(
+            page,
+            label="当前页面",
+            transcript_event="page_copied",
+            history_only=history_only,
+        )
+
+    def copy_workbench_text(
+        self,
+        value: str,
+        *,
+        label: str,
+        transcript_event: str = "activity_copied",
+        history_only: bool | None = None,
+    ) -> bool:
+        """Copy one redacted Workbench payload with a native macOS fallback."""
+
+        page = redact_text(value).strip()
         if not page:
-            self.notify("当前页面没有可复制的结果", title="未复制", severity="warning")
-            return
+            self.notify("当前没有可复制的结果", title="未复制", severity="warning")
+            return False
         self.copy_to_clipboard(page)
         if sys.platform == "darwin" and not self.is_headless:
-            subprocess.run(
-                ["pbcopy"],
-                input=page,
-                text=True,
-                check=False,
-                timeout=2,
-            )
+            try:
+                subprocess.run(
+                    ["/usr/bin/pbcopy"],
+                    input=page,
+                    text=True,
+                    check=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                self.notify(
+                    "macOS 系统剪贴板写入失败，请改用 /copy 命令后重试",
+                    title="复制失败",
+                    severity="error",
+                )
+                return False
         self.transcript.record(
-            "page_copied",
+            transcript_event,
             screen=type(self.screen).__name__,
-            history_only=history_only,
+            label=label,
+            **({"history_only": history_only} if history_only is not None else {}),
             characters=len(page),
         )
         self.notify(
-            f"已复制当前页面（{len(page)} 字符），可直接粘贴给 Agent",
+            f"已复制{label}（{len(page)} 字符），可直接粘贴给 Agent",
             title="复制成功",
         )
+        return True

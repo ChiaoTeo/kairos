@@ -10,5 +10,4 @@ pub enum ExecutionEvent<'a> {
     OrderCanceled(fb::OrderCanceled<'a>),
     OrderExpired(fb::OrderExpired<'a>),
     FillRecorded(fb::FillRecorded<'a>),
-    ReconciliationRequired(fb::ReconciliationRequired<'a>),
 }

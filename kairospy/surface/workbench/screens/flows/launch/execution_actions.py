@@ -17,15 +17,11 @@ EXECUTION_ACTIONS = tuple(
             ("status", "服务状态", "读取 Execution 健康状态"),
             ("snapshot", "运行时快照", "读取当前执行状态"),
             ("routes", "执行路由", "查看 route 和账户绑定"),
-            ("orders", "全部订单", "查看运行实例订单"),
-            ("open-orders", "未完成订单", "查看活动订单"),
-            ("history", "历史订单", "查看历史订单"),
-            ("fills", "成交记录", "查看成交"),
-            ("events", "生命周期事件", "查看订单事件"),
-            ("audit", "审计记录", "查看审计事实"),
-            ("inspect", "检查订单", "按 Order ID 查看"),
-            ("trace", "追踪订单", "追踪订单生命周期"),
-            ("journal", "订单 Journal", "查看订单 journal"),
+            ("active-orders", "活动订单", "查看仍在执行或待协调的订单"),
+            ("recent-fills", "近期成交", "查看有界的近期成交诊断"),
+            ("recent-order-events", "近期订单事件", "查看有界的近期生命周期诊断"),
+            ("audit", "审计记录", "查询持久化订单审计事实"),
+            ("active-order", "活动订单明细", "按 Order ID 查看当前活动订单"),
             ("reconcile", "请求对账", "触发 Execution 对账"),
             ("submit", "提交订单", "向当前 Execution Server 提交"),
             ("cancel", "撤销订单", "撤销当前实例订单"),
@@ -104,7 +100,7 @@ class ExecutionPromptState:
         return str(self.launch.get("mode") or "")
 
     def _steps(self) -> tuple[tuple[str, str, str], ...]:
-        if self.action in {"inspect", "trace", "journal"}:
+        if self.action == "active-order":
             return (("order-id", "Order ID", ""),)
         if self.action == "cancel":
             return (
@@ -150,7 +146,7 @@ def execute(state: Any, prompt: ExecutionPromptState) -> Any:
         prompt.action,
     ]
     values = prompt.values
-    if prompt.action in {"inspect", "trace", "journal", "cancel", "replace"}:
+    if prompt.action in {"active-order", "cancel", "replace"}:
         arguments.extend(("--order-id", values["order-id"]))
     if prompt.action == "cancel":
         arguments.extend(("--reason", values["reason"]))

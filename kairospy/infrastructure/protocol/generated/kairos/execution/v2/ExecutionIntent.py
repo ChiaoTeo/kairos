@@ -182,8 +182,33 @@ class ExecutionIntent(object):
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # ExecutionIntent
+    def ExecutionBenchmarks(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.execution.v2.ExecutionBenchmarkObservation import ExecutionBenchmarkObservation
+            obj = ExecutionBenchmarkObservation()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # ExecutionIntent
+    def ExecutionBenchmarksLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # ExecutionIntent
+    def ExecutionBenchmarksIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        return o == 0
+
 def ExecutionIntentStart(builder):
-    builder.StartObject(17)
+    builder.StartObject(18)
 
 def Start(builder):
     ExecutionIntentStart(builder)
@@ -301,6 +326,18 @@ def ExecutionIntentAddStrategyDecisionId(builder, strategyDecisionId):
 
 def AddStrategyDecisionId(builder, strategyDecisionId):
     ExecutionIntentAddStrategyDecisionId(builder, strategyDecisionId)
+
+def ExecutionIntentAddExecutionBenchmarks(builder, executionBenchmarks):
+    builder.PrependUOffsetTRelativeSlot(17, flatbuffers.number_types.UOffsetTFlags.py_type(executionBenchmarks), 0)
+
+def AddExecutionBenchmarks(builder, executionBenchmarks):
+    ExecutionIntentAddExecutionBenchmarks(builder, executionBenchmarks)
+
+def ExecutionIntentStartExecutionBenchmarksVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartExecutionBenchmarksVector(builder, numElems):
+    return ExecutionIntentStartExecutionBenchmarksVector(builder, numElems)
 
 def ExecutionIntentEnd(builder):
     return builder.EndObject()

@@ -6,66 +6,46 @@ use super::*;
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MIN_RECONCILIATION_REASON: u8 = 0;
+pub const ENUM_MIN_EXECUTION_COMMAND_KIND: u8 = 0;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MAX_RECONCILIATION_REASON: u8 = 6;
+pub const ENUM_MAX_EXECUTION_COMMAND_KIND: u8 = 2;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_RECONCILIATION_REASON: [ReconciliationReason; 7] = [
-    ReconciliationReason::UNSPECIFIED,
-    ReconciliationReason::UNKNOWN_REMOTE_ORDER,
-    ReconciliationReason::ORDER_STATE_DIVERGED,
-    ReconciliationReason::FILL_STATE_DIVERGED,
-    ReconciliationReason::ACCOUNT_STATE_DIVERGED,
-    ReconciliationReason::COMPENSATION_EXHAUSTED,
-    ReconciliationReason::EVENT_GAP,
+pub const ENUM_VALUES_EXECUTION_COMMAND_KIND: [ExecutionCommandKind; 3] = [
+    ExecutionCommandKind::UNSPECIFIED,
+    ExecutionCommandKind::SUBMIT,
+    ExecutionCommandKind::CANCEL,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
-pub struct ReconciliationReason(pub u8);
+pub struct ExecutionCommandKind(pub u8);
 #[allow(non_upper_case_globals)]
-impl ReconciliationReason {
+impl ExecutionCommandKind {
     pub const UNSPECIFIED: Self = Self(0);
-    pub const UNKNOWN_REMOTE_ORDER: Self = Self(1);
-    pub const ORDER_STATE_DIVERGED: Self = Self(2);
-    pub const FILL_STATE_DIVERGED: Self = Self(3);
-    pub const ACCOUNT_STATE_DIVERGED: Self = Self(4);
-    pub const COMPENSATION_EXHAUSTED: Self = Self(5);
-    pub const EVENT_GAP: Self = Self(6);
+    pub const SUBMIT: Self = Self(1);
+    pub const CANCEL: Self = Self(2);
 
     pub const ENUM_MIN: u8 = 0;
-    pub const ENUM_MAX: u8 = 6;
-    pub const ENUM_VALUES: &'static [Self] = &[
-        Self::UNSPECIFIED,
-        Self::UNKNOWN_REMOTE_ORDER,
-        Self::ORDER_STATE_DIVERGED,
-        Self::FILL_STATE_DIVERGED,
-        Self::ACCOUNT_STATE_DIVERGED,
-        Self::COMPENSATION_EXHAUSTED,
-        Self::EVENT_GAP,
-    ];
+    pub const ENUM_MAX: u8 = 2;
+    pub const ENUM_VALUES: &'static [Self] = &[Self::UNSPECIFIED, Self::SUBMIT, Self::CANCEL];
     /// Returns the variant's name or "" if unknown.
     pub fn variant_name(self) -> Option<&'static str> {
         match self {
             Self::UNSPECIFIED => Some("UNSPECIFIED"),
-            Self::UNKNOWN_REMOTE_ORDER => Some("UNKNOWN_REMOTE_ORDER"),
-            Self::ORDER_STATE_DIVERGED => Some("ORDER_STATE_DIVERGED"),
-            Self::FILL_STATE_DIVERGED => Some("FILL_STATE_DIVERGED"),
-            Self::ACCOUNT_STATE_DIVERGED => Some("ACCOUNT_STATE_DIVERGED"),
-            Self::COMPENSATION_EXHAUSTED => Some("COMPENSATION_EXHAUSTED"),
-            Self::EVENT_GAP => Some("EVENT_GAP"),
+            Self::SUBMIT => Some("SUBMIT"),
+            Self::CANCEL => Some("CANCEL"),
             _ => None,
         }
     }
 }
-impl ::core::fmt::Debug for ReconciliationReason {
+impl ::core::fmt::Debug for ExecutionCommandKind {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         if let Some(name) = self.variant_name() {
             f.write_str(name)
@@ -74,7 +54,7 @@ impl ::core::fmt::Debug for ReconciliationReason {
         }
     }
 }
-impl<'a> ::flatbuffers::Follow<'a> for ReconciliationReason {
+impl<'a> ::flatbuffers::Follow<'a> for ExecutionCommandKind {
     type Inner = Self;
     #[inline]
     unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
@@ -83,15 +63,15 @@ impl<'a> ::flatbuffers::Follow<'a> for ReconciliationReason {
     }
 }
 
-impl ::flatbuffers::Push for ReconciliationReason {
-    type Output = ReconciliationReason;
+impl ::flatbuffers::Push for ExecutionCommandKind {
+    type Output = ExecutionCommandKind;
     #[inline]
     unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
         unsafe { ::flatbuffers::emplace_scalar::<u8>(dst, self.0) };
     }
 }
 
-impl ::flatbuffers::EndianScalar for ReconciliationReason {
+impl ::flatbuffers::EndianScalar for ExecutionCommandKind {
     type Scalar = u8;
     #[inline]
     fn to_little_endian(self) -> u8 {
@@ -105,7 +85,7 @@ impl ::flatbuffers::EndianScalar for ReconciliationReason {
     }
 }
 
-impl<'a> ::flatbuffers::Verifiable for ReconciliationReason {
+impl<'a> ::flatbuffers::Verifiable for ExecutionCommandKind {
     #[inline]
     fn run_verifier(
         v: &mut ::flatbuffers::Verifier,
@@ -115,4 +95,4 @@ impl<'a> ::flatbuffers::Verifiable for ReconciliationReason {
     }
 }
 
-impl ::flatbuffers::SimpleToVerifyInSlice for ReconciliationReason {}
+impl ::flatbuffers::SimpleToVerifyInSlice for ExecutionCommandKind {}

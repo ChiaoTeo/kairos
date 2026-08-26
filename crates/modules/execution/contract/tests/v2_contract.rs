@@ -1,8 +1,10 @@
 use kairos_execution_contract::event::decode_event;
 use kairos_execution_contract::{
-    CompletionPolicy, ExecutionAlgorithmPolicyRequest, ExecutionIntentRequest,
-    ExecutionOrderOptionsRequest, ExecutionRouteCandidateResponse, ExecutionViewKey,
-    ExecutionViewKind, FailurePolicy, IntentType, SplitOrderPolicyRequest, execution_view_path,
+    CompletionPolicy, ExecutionAlgorithmPolicyRequest, ExecutionHealthResponse,
+    ExecutionIntentRequest, ExecutionOrderAuditEventResponse, ExecutionOrderAuditQuery,
+    ExecutionOrderAuditResponse, ExecutionOrderLifecycle, ExecutionOrderOptionsRequest,
+    ExecutionRouteCandidateResponse, ExecutionViewKey, ExecutionViewKind, FailurePolicy,
+    IntentType, SplitOrderPolicyRequest, execution_view_path,
 };
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::Quantity;
@@ -13,49 +15,42 @@ use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::runtime::{InstanceId, LaunchId, StrategyId};
 
 #[test]
-fn active_view_resources_are_partitioned_by_workspace_and_kind() {
-    let orders = ExecutionViewKey::new(
+fn current_view_resources_are_partitioned_by_runtime_identity() {
+    let first = ExecutionViewKey::new(
         "workspace:fixture",
-        ExecutionViewKind::ActiveOrders,
+        ExecutionViewKind::CurrentExecution,
         Some("launch:one"),
         Some("instance:one"),
     )
     .unwrap();
-    let intents = ExecutionViewKey::new(
+    let second = ExecutionViewKey::new(
         "workspace:fixture",
-        ExecutionViewKind::ActiveIntents,
+        ExecutionViewKind::CurrentExecution,
         Some("launch:one"),
-        Some("instance:one"),
+        Some("instance:two"),
     )
     .unwrap();
     assert_ne!(
-        execution_view_path("/runtime", &orders).unwrap(),
-        execution_view_path("/runtime", &intents).unwrap()
+        execution_view_path("/runtime", &first).unwrap(),
+        execution_view_path("/runtime", &second).unwrap()
     );
-    assert!(
-        execution_view_path("/runtime", &orders)
-            .unwrap()
-            .ends_with("active-orders/current.snapshot")
-    );
-    assert!(
-        execution_view_path("/runtime", &intents)
-            .unwrap()
-            .ends_with("active-intents/current.snapshot")
-    );
+    assert!(execution_view_path("/runtime", &first).unwrap().ends_with(
+        "launch=launch%3Aone/instance=instance%3Aone/current-execution/current.snapshot"
+    ));
 }
 
 #[test]
 fn canonical_view_key_contains_runtime_identity() {
     let key = ExecutionViewKey::new(
         "workspace:fixture",
-        ExecutionViewKind::ActiveOrders,
+        ExecutionViewKind::CurrentExecution,
         Some("launch:one"),
         Some("instance:one"),
     )
     .unwrap();
     assert_eq!(
         key.canonical_key(),
-        "workspace=workspace:fixture;launch=launch:one;instance=instance:one;view=active-orders"
+        "workspace=workspace:fixture;launch=launch:one;instance=instance:one;view=current-execution"
     );
 }
 
@@ -64,7 +59,7 @@ fn empty_workspace_identity_is_rejected() {
     assert!(
         ExecutionViewKey::new(
             " ",
-            ExecutionViewKind::ActiveOrders,
+            ExecutionViewKind::CurrentExecution,
             None::<String>,
             None::<String>,
         )
@@ -74,16 +69,73 @@ fn empty_workspace_identity_is_rejected() {
 
 #[test]
 fn unknown_execution_event_identifier_is_rejected() {
-    let mut bytes = vec![0_u8; 8];
-    bytes[4..8].copy_from_slice(b"NOPE");
-    let error = match decode_event(&bytes) {
-        Ok(_) => panic!("unknown root must be rejected"),
-        Err(error) => error,
+    for identifier in [b"NOPE", b"EXV2"] {
+        let mut bytes = vec![0_u8; 8];
+        bytes[4..8].copy_from_slice(identifier);
+        let error = match decode_event(&bytes) {
+            Ok(_) => panic!("unknown or removed root must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("unknown Execution v2 event identifier")
+        );
+    }
+}
+
+#[test]
+fn health_contract_exposes_business_recovery_blockers() {
+    let health = ExecutionHealthResponse {
+        status: "degraded".into(),
+        writer_recovery_ready: true,
+        risk_recovery_ready: false,
+        risk_recovery_error: Some("risk watermark is stale".into()),
+        reconciliation_required_orders: 2,
+        reconciliation_required_intents: 1,
+        unresolved_remote_orders: 3,
+        indeterminate_algorithm_actions: 1,
+        outbox_backlog: 4,
+        oldest_outbox_event_age_ms: Some(25),
+        outbox_error: None,
+        routes: Vec::new(),
     };
-    assert!(
-        error
-            .to_string()
-            .contains("unknown Execution v2 event identifier")
+
+    let encoded = serde_json::to_value(&health).unwrap();
+    assert_eq!(encoded["reconciliation_required_orders"], 2);
+    assert_eq!(encoded["unresolved_remote_orders"], 3);
+    assert_eq!(encoded["risk_recovery_ready"], false);
+    assert_eq!(
+        serde_json::from_value::<ExecutionHealthResponse>(encoded).unwrap(),
+        health
+    );
+}
+
+#[test]
+fn order_audit_contract_is_typed_and_bounded_by_the_request_surface() {
+    let default_query: ExecutionOrderAuditQuery = serde_json::from_value(serde_json::json!({}))
+        .expect("optional audit filters have a bounded default");
+    assert_eq!(default_query.limit, 1_000);
+
+    let response = ExecutionOrderAuditResponse {
+        events: vec![ExecutionOrderAuditEventResponse {
+            sequence: 7.into(),
+            order_id: kairos_primitives::execution::OrderId::new("order-7").unwrap(),
+            lifecycle: ExecutionOrderLifecycle::PartiallyFilled,
+            remote_order_id: Some(
+                kairos_primitives::integration::RemoteOrderId::new("remote-7").unwrap(),
+            ),
+            occurred_at_unix_nanos: 42.into(),
+            reason: "cumulative fill observed".into(),
+            attempt: None,
+        }],
+    };
+    let encoded = serde_json::to_value(&response).unwrap();
+    assert_eq!(encoded["events"][0]["lifecycle"], "partially_filled");
+    assert_eq!(encoded["events"][0]["order_id"], "order-7");
+    assert_eq!(
+        serde_json::from_value::<ExecutionOrderAuditResponse>(encoded).unwrap(),
+        response
     );
 }
 
@@ -115,7 +167,7 @@ fn route_contract_uses_order_entry_symbol_in_json_shape() {
 }
 
 #[test]
-fn route_contract_accepts_legacy_provider_symbol_json() {
+fn route_contract_rejects_removed_provider_symbol_alias() {
     let raw = serde_json::json!({
         "route_id": "route:okx:swap",
         "account_id": "main",
@@ -130,9 +182,7 @@ fn route_contract_accepts_legacy_provider_symbol_json() {
         "ready": true
     });
 
-    let route = serde_json::from_value::<ExecutionRouteCandidateResponse>(raw).unwrap();
-
-    assert_eq!(route.order_entry_symbol.as_str(), "BTC-USDT-SWAP");
+    assert!(serde_json::from_value::<ExecutionRouteCandidateResponse>(raw).is_err());
 }
 
 #[test]
@@ -203,6 +253,7 @@ fn intent_algorithm_has_one_explicit_tagged_api() {
         completion_policy: CompletionPolicy::AllLegsSatisfied,
         failure_policy: FailurePolicy::CancelRemaining,
         legs: Vec::new(),
+        execution_benchmarks: Vec::new(),
         deadline_unix_nanos: None,
         min_edge_bps: None,
         max_slippage_bps: None,

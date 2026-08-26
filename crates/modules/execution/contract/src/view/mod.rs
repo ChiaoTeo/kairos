@@ -1,13 +1,9 @@
-mod active_intents;
-mod active_orders;
 mod current_execution;
 mod key;
 mod metadata;
 
 use std::path::{Path, PathBuf};
 
-pub use active_intents::ActiveIntentsView;
-pub use active_orders::ActiveOrdersView;
 pub use current_execution::CurrentExecutionView;
 use kairos_transport::{
     ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
@@ -40,12 +36,6 @@ impl ViewFrame {
     }
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
-    }
-    pub fn active_orders(&self) -> ContractResult<ActiveOrdersView<'_>> {
-        active_orders::decode(self.bytes())
-    }
-    pub fn active_intents(&self) -> ContractResult<ActiveIntentsView<'_>> {
-        active_intents::decode(self.bytes())
     }
     pub fn current_execution(&self) -> ContractResult<CurrentExecutionView<'_>> {
         current_execution::decode(self.bytes())
@@ -136,7 +126,7 @@ mod tests {
     fn reader_and_publisher_resolve_the_same_safe_path() {
         let key = ExecutionViewKey::new(
             "workspace/../一",
-            ExecutionViewKind::ActiveOrders,
+            ExecutionViewKind::CurrentExecution,
             Some("launch"),
             Some("instance"),
         )
@@ -154,7 +144,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let key = ExecutionViewKey::new(
             "workspace",
-            ExecutionViewKind::ActiveOrders,
+            ExecutionViewKind::CurrentExecution,
             Some("launch"),
             Some("instance"),
         )

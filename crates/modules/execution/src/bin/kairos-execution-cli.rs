@@ -9,9 +9,9 @@ use kairos_execution::composition::compose_standalone_execution;
 use kairos_execution::{ConnectedExecutionApplication, ConnectedExecutionOutput};
 use kairos_execution_contract::{
     CancelOrderRequest, CommandEnvelope, CompletionPolicy, ExecutionAlgorithmPolicyRequest,
-    ExecutionIntentRequest, ExecutionOrderOptionsRequest, ExecutionRoutesQuery, FailurePolicy,
-    IntentLegRequest, IntentType, ReconcileExecutionRequest, ReplaceOrderRequest,
-    SubmitIntentRequest,
+    ExecutionIntentRequest, ExecutionOrderAuditQuery, ExecutionOrderLifecycle,
+    ExecutionOrderOptionsRequest, ExecutionRoutesQuery, FailurePolicy, IntentLegRequest,
+    IntentType, ReconcileExecutionRequest, ReplaceOrderRequest, SubmitIntentRequest,
 };
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::execution::{ExecutionRouteId, IntentId, OrderId};
@@ -111,7 +111,7 @@ fn connected_result<'a>(
 struct Cli {
     #[arg(long)]
     workspace: String,
-    #[arg(long, alias = "format", global = true, value_parser = OutputFormat::from_str)]
+    #[arg(long, global = true, value_parser = OutputFormat::from_str)]
     output: Option<OutputFormat>,
     #[command(subcommand)]
     command: Command,
@@ -122,17 +122,11 @@ impl ConnectedCommand {
         matches!(
             self,
             Self::Snapshot
-                | Self::Orders { .. }
-                | Self::OpenOrders { .. }
-                | Self::History { .. }
+                | Self::ActiveOrders { .. }
                 | Self::UnknownRemoteOrders
-                | Self::Status { .. }
-                | Self::Inspect { .. }
-                | Self::Events { .. }
-                | Self::Trace { .. }
-                | Self::Audit { .. }
-                | Self::Journal { .. }
-                | Self::Fills { .. }
+                | Self::ActiveOrder { .. }
+                | Self::RecentOrderEvents { .. }
+                | Self::RecentFills { .. }
         )
     }
 }
@@ -170,40 +164,20 @@ fn execute_connected_query(
 ) -> Result<ConnectedExecutionOutput, Box<dyn std::error::Error>> {
     let value = match command {
         ConnectedCommand::Snapshot => ConnectedExecutionOutput::Snapshot(application.snapshot()?),
-        ConnectedCommand::Orders { account_id } => {
-            ConnectedExecutionOutput::Orders(application.orders(account_id.as_deref())?)
-        },
-        ConnectedCommand::OpenOrders { account_id } => {
-            ConnectedExecutionOutput::Orders(application.open_orders(account_id.as_deref())?)
-        },
-        ConnectedCommand::History { account_id } => {
-            ConnectedExecutionOutput::Orders(application.history(account_id.as_deref())?)
+        ConnectedCommand::ActiveOrders { account_id } => {
+            ConnectedExecutionOutput::Orders(application.active_orders(account_id.as_deref())?)
         },
         ConnectedCommand::UnknownRemoteOrders => {
             ConnectedExecutionOutput::UnknownRemoteOrders(application.unknown_remote_orders()?)
         },
-        ConnectedCommand::Status { order_id } | ConnectedCommand::Inspect { order_id } => {
-            ConnectedExecutionOutput::Order(application.order_status(&order_id)?)
+        ConnectedCommand::ActiveOrder { order_id } => {
+            ConnectedExecutionOutput::Order(application.active_order(&order_id)?)
         },
-        ConnectedCommand::Events { order_id } => {
-            ConnectedExecutionOutput::Events(application.events(order_id.as_deref())?)
+        ConnectedCommand::RecentOrderEvents { order_id } => {
+            ConnectedExecutionOutput::Events(application.recent_order_events(order_id.as_deref())?)
         },
-        ConnectedCommand::Trace { order_id } | ConnectedCommand::Journal { order_id } => {
-            ConnectedExecutionOutput::Events(application.trace(&order_id)?)
-        },
-        ConnectedCommand::Audit {
-            order_id,
-            remote_order_id,
-            status,
-            limit,
-        } => ConnectedExecutionOutput::Events(application.audit(
-            order_id.as_deref(),
-            remote_order_id.as_deref(),
-            status.as_deref(),
-            limit,
-        )?),
-        ConnectedCommand::Fills { order_id } => {
-            ConnectedExecutionOutput::Fills(application.fills(order_id.as_deref())?)
+        ConnectedCommand::RecentFills { order_id } => {
+            ConnectedExecutionOutput::Fills(application.recent_fills(order_id.as_deref())?)
         },
         _ => unreachable!("control command routed to current-view query"),
     };
@@ -282,6 +256,30 @@ async fn execute_control_command(
                     instrument_id: instrument_id.map(InstrumentId::new).transpose()?,
                     market_id: market_id.map(MarketId::new).transpose()?,
                     broker_id: None,
+                })
+                .await?,
+        ),
+        ConnectedCommand::Audit {
+            order_id,
+            remote_order_id,
+            lifecycle,
+            since_unix_nanos,
+            until_unix_nanos,
+            limit,
+        } => ConnectedExecutionOutput::Audit(
+            application
+                .order_audit(ExecutionOrderAuditQuery {
+                    order_id: order_id.map(OrderId::new).transpose()?,
+                    remote_order_id: remote_order_id
+                        .map(kairos_primitives::integration::RemoteOrderId::new)
+                        .transpose()?,
+                    lifecycle: lifecycle
+                        .as_deref()
+                        .map(parse_execution_lifecycle)
+                        .transpose()?,
+                    since_unix_nanos: since_unix_nanos.map(Into::into),
+                    until_unix_nanos: until_unix_nanos.map(Into::into),
+                    limit,
                 })
                 .await?,
         ),
@@ -465,15 +463,7 @@ enum ConnectedCommand {
         #[arg(long)]
         market_id: Option<String>,
     },
-    Orders {
-        #[arg(long)]
-        account_id: Option<String>,
-    },
-    OpenOrders {
-        #[arg(long)]
-        account_id: Option<String>,
-    },
-    History {
+    ActiveOrders {
         #[arg(long)]
         account_id: Option<String>,
     },
@@ -482,21 +472,13 @@ enum ConnectedCommand {
         order_id: Option<String>,
     },
     UnknownRemoteOrders,
-    Status {
+    ActiveOrder {
         #[arg(long)]
         order_id: String,
     },
-    Inspect {
-        #[arg(long)]
-        order_id: String,
-    },
-    Events {
+    RecentOrderEvents {
         #[arg(long)]
         order_id: Option<String>,
-    },
-    Trace {
-        #[arg(long)]
-        order_id: String,
     },
     Audit {
         #[arg(long)]
@@ -504,15 +486,15 @@ enum ConnectedCommand {
         #[arg(long)]
         remote_order_id: Option<String>,
         #[arg(long)]
-        status: Option<String>,
+        lifecycle: Option<String>,
         #[arg(long)]
-        limit: Option<u32>,
-    },
-    Journal {
+        since_unix_nanos: Option<u64>,
         #[arg(long)]
-        order_id: String,
+        until_unix_nanos: Option<u64>,
+        #[arg(long, default_value_t = 1000)]
+        limit: u32,
     },
-    Fills {
+    RecentFills {
         #[arg(long)]
         order_id: Option<String>,
     },
@@ -706,6 +688,7 @@ fn submit_intent_request(
             completion_policy: CompletionPolicy::AllLegsSatisfied,
             failure_policy: FailurePolicy::CancelRemaining,
             legs: vec![leg],
+            execution_benchmarks: Vec::new(),
             deadline_unix_nanos: None,
             min_edge_bps: None,
             max_slippage_bps: None,
@@ -747,6 +730,25 @@ fn parse_order_type(value: &str) -> Result<OrderType, Box<dyn std::error::Error>
         "market" => Ok(OrderType::Market),
         "limit" => Ok(OrderType::Limit),
         _ => Err(format!("unsupported order type: {value}").into()),
+    }
+}
+
+fn parse_execution_lifecycle(
+    value: &str,
+) -> Result<ExecutionOrderLifecycle, Box<dyn std::error::Error>> {
+    match value.to_ascii_lowercase().replace(['-', '_'], "").as_str() {
+        "pending" => Ok(ExecutionOrderLifecycle::Pending),
+        "submitting" => Ok(ExecutionOrderLifecycle::Submitting),
+        "accepted" => Ok(ExecutionOrderLifecycle::Accepted),
+        "partiallyfilled" => Ok(ExecutionOrderLifecycle::PartiallyFilled),
+        "filled" => Ok(ExecutionOrderLifecycle::Filled),
+        "cancelrequested" => Ok(ExecutionOrderLifecycle::CancelRequested),
+        "canceled" => Ok(ExecutionOrderLifecycle::Canceled),
+        "rejected" => Ok(ExecutionOrderLifecycle::Rejected),
+        "expired" => Ok(ExecutionOrderLifecycle::Expired),
+        "unknown" => Ok(ExecutionOrderLifecycle::Unknown),
+        "failed" => Ok(ExecutionOrderLifecycle::Failed),
+        _ => Err(format!("unsupported Execution order lifecycle: {value}").into()),
     }
 }
 

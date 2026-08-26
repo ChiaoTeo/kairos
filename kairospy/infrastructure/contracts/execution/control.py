@@ -20,6 +20,9 @@ class ExecutionControlClient:
     def routes(self, query: Mapping[str, object] | None = None) -> Mapping[str, Any]:
         return self.call("execution_routes", [dict(query or {})])
 
+    def order_audit(self, query: Mapping[str, object]) -> Mapping[str, Any]:
+        return self.call("execution_order_audit", [dict(query)])
+
     def submit_intent(self, request: Mapping[str, object]) -> Mapping[str, Any]:
         return self.call("execution_submit_intent", [request])
 

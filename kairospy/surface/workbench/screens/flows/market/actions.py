@@ -473,24 +473,25 @@ def observation_renderable(value: Any) -> RenderableType:
     if fields is None:
         return Pretty(dict(value), expand_all=True)
     if data_type == "quote":
-        rows.add_column(style="dim", no_wrap=True)
-        rows.add_column(style="bold green", justify="right")
-        rows.add_column(style="dim", no_wrap=True)
-        rows.add_column(style="bold red", justify="right")
+        rows.add_column(min_width=12, no_wrap=True)
+        rows.add_column(min_width=12, no_wrap=True)
         rows.add_row(
-            "买价",
-            str(value.get("bid_price") or "—"),
-            "卖价",
-            str(value.get("ask_price") or "—"),
+            Text("买盘 BID", style="dim green"),
+            Text("卖盘 ASK", style="dim red"),
         )
         rows.add_row(
-            "买量",
-            str(value.get("bid_quantity") or "—"),
-            "卖量",
-            str(value.get("ask_quantity") or "—"),
+            Text(str(value.get("bid_price") or "—"), style="bold green"),
+            Text(str(value.get("ask_price") or "—"), style="bold red"),
+        )
+        rows.add_row(
+            Text(f"数量  {value.get('bid_quantity') or '—'}", style="dim"),
+            Text(f"数量  {value.get('ask_quantity') or '—'}", style="dim"),
         )
         if value.get("last_price") is not None:
-            rows.add_row("最新", str(value["last_price"]), "", "")
+            rows.add_row(
+                Text(f"最新  {value['last_price']}", style="bold"),
+                Text(""),
+            )
     else:
         rows.add_column(style="dim", no_wrap=True)
         rows.add_column(style="bold")
@@ -593,7 +594,10 @@ def _observation_metadata(value: Mapping[str, Any], provider: str) -> Renderable
         except (TypeError, ValueError):
             pass
         else:
-            details.add_row("数据年龄", _format_age(age_seconds))
+            age = Text(_format_age(age_seconds))
+            if age_seconds >= 30:
+                age.append("  ⚠ 较旧", style="bold yellow")
+            details.add_row("数据年龄", age)
     return details
 
 

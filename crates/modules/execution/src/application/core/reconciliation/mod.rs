@@ -99,6 +99,15 @@ impl ExecutionApplication {
 
         let mut changed = 0;
         for remote_order in remote {
+            let occurred_at = match remote_order.occurred_at_unix_nanos {
+                Some(value) => value.get(),
+                None => self.require_business_time("remote order reconciliation")?,
+            };
+            let business_time = self
+                .business_time_unix_nanos()
+                .map(|current| current.max(occurred_at))
+                .unwrap_or(occurred_at);
+            self.advance_time(business_time)?;
             let local = self
                 .actor
                 .order_map()
@@ -115,8 +124,8 @@ impl ExecutionApplication {
                 .cloned();
             let Some(local) = local else {
                 self.record_unknown_remote_order(&RemoteOrderUpdate {
-                    order_id: OrderId::new(remote_order.remote_order_id.to_string())
-                        .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+                    remote_order_id: remote_order.remote_order_id,
+                    client_order_id: remote_order.client_order_id,
                     symbol: remote_order.symbol,
                     status: remote_order.status,
                     fill_quantity: Some(remote_order.filled_quantity),
@@ -124,9 +133,8 @@ impl ExecutionApplication {
                     execution_id: None,
                     fee_currency: None,
                     fee_amount: None,
-                    occurred_at_unix_nanos: remote_order
-                        .occurred_at_unix_nanos
-                        .unwrap_or_else(|| now_nanos().into()),
+                    source_cursor: None,
+                    occurred_at_unix_nanos: occurred_at.into(),
                     reason: "remote query found an order without a local journal entry".into(),
                 })?;
                 changed += 1;
@@ -190,6 +198,7 @@ impl ExecutionApplication {
                                 .as_ref()
                                 .map(|route| route.order_entry_symbol.clone()),
                             remote_order_id: Some(remote_order.remote_order_id.clone()),
+                            source_cursor: None,
                         });
                         match fill_result {
                             Ok(_) => changed += 1,
@@ -222,21 +231,33 @@ impl ExecutionApplication {
                 .get(&local.order_id)
                 .cloned()
                 .ok_or_else(|| ExecutionError::Invalid("reconciled order disappeared".into()))?;
+            if terminal_status_conflict(local.status, reconciled_status) {
+                if local.filled_quantity == local.quantity && remote_filled == local.quantity {
+                    reconciled_status = ExecutionOrderStatus::Filled;
+                    reconciliation_reason = format!(
+                        "remote terminal status {:?} normalized to Filled from matching complete cumulative quantity",
+                        remote_order.status
+                    );
+                } else {
+                    reconciled_status = ExecutionOrderStatus::Unknown;
+                    reconciliation_reason = format!(
+                        "remote terminal status {:?} conflicts with durable {:?}; manual reconciliation required",
+                        remote_order.status, local.status
+                    );
+                }
+            }
             if local.status != reconciled_status
                 || local.remote_order_id.as_deref() != Some(remote_order.remote_order_id.as_str())
             {
-                let occurred_at = remote_order
-                    .occurred_at_unix_nanos
-                    .unwrap_or_else(|| now_nanos().into())
-                    .get();
                 let (_, event) = self
                     .actor
                     .reconcile_order(
                         local.order_id.as_str(),
                         remote_order.remote_order_id.as_str(),
                         reconciled_status,
-                        occurred_at,
+                        business_time,
                         reconciliation_reason,
+                        None,
                     )
                     .map_err(ExecutionError::Invalid)?;
                 let reconciled = self
@@ -246,7 +267,7 @@ impl ExecutionApplication {
                     .ok_or_else(|| {
                         ExecutionError::Invalid("reconciled order disappeared".into())
                     })?;
-                self.update_commitment_from_order(&reconciled, occurred_at)?;
+                self.update_commitment_from_order(&reconciled, business_time)?;
                 let risk_effect = match reconciled.status {
                     ExecutionOrderStatus::Filled => Some(RiskReservationSagaStatus::ConsumePending),
                     status if status.terminal() => Some(RiskReservationSagaStatus::ReleasePending),
@@ -256,16 +277,16 @@ impl ExecutionApplication {
                     self.actor.set_risk_reservation_status(
                         reconciled.order_id.as_str(),
                         status,
-                        occurred_at,
+                        business_time,
                     );
                 }
                 self.commit(event)?;
                 match risk_effect {
                     Some(RiskReservationSagaStatus::ConsumePending) => {
-                        self.complete_risk_consume(reconciled.order_id.as_str(), occurred_at)?
+                        self.complete_risk_consume(reconciled.order_id.as_str(), business_time)?
                     },
                     Some(RiskReservationSagaStatus::ReleasePending) => {
-                        self.complete_risk_release(reconciled.order_id.as_str(), occurred_at)?
+                        self.complete_risk_release(reconciled.order_id.as_str(), business_time)?
                     },
                     _ => {},
                 }
@@ -285,6 +306,11 @@ impl ExecutionApplication {
 
     pub fn has_order_query(&self) -> bool {
         self.order_query.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_order_query(&mut self, query: Box<dyn BlockingOrderQuery>) {
+        self.order_query = Some(query);
     }
 
     /// Apply one normalized exchange fact received from the private order stream.
@@ -309,19 +335,65 @@ impl ExecutionApplication {
         event: RemoteOrderUpdate,
         compensate: bool,
     ) -> Result<ExecutionOrder, ExecutionError> {
-        info!(event = "remote_execution_event_received", component = "execution", remote_order_id = %event.order_id, status = ?event.status, "remote execution event received");
-        self.actor
-            .observe_remote_time(event.occurred_at_unix_nanos.get());
+        info!(event = "remote_execution_event_received", component = "execution", remote_order_id = %event.remote_order_id, client_order_id = ?event.client_order_id, status = ?event.status, "remote execution event received");
+        let event_time = event.occurred_at_unix_nanos.get();
+        let business_time = self
+            .business_time_unix_nanos()
+            .map(|current| current.max(event_time))
+            .unwrap_or(event_time);
+        self.advance_time(business_time)?;
+        self.actor.observe_remote_time(event_time);
         let local = self
             .actor
-            .find_remote_order(event.order_id.as_str())
+            .find_remote_order(
+                event.remote_order_id.as_str(),
+                event.client_order_id.as_deref(),
+            )
             .ok_or_else(|| {
                 let _ = self.record_unknown_remote_order(&event);
                 ExecutionError::Invalid(format!(
                     "remote execution references unknown order: {}",
-                    event.order_id
+                    event.remote_order_id
                 ))
             })?;
+        if local
+            .remote_order_id
+            .as_ref()
+            .is_some_and(|current| current != &event.remote_order_id)
+        {
+            return Err(ExecutionError::Invalid(
+                "remote execution fact conflicts with durable remote order identity".into(),
+            ));
+        }
+        if regresses_order_fact_cursor(
+            local.last_order_fact_cursor.as_ref(),
+            event.source_cursor.as_ref(),
+        ) {
+            return Ok(local);
+        }
+        if local.reconciliation_cause
+            == Some(crate::domain::OrderReconciliationCause::AuthoritativeFactConflict)
+        {
+            return self.observe_noop_order_fact_cursor(local, event.source_cursor);
+        }
+        if terminal_status_conflict(local.status, event.status) {
+            return self.mark_authoritative_order_conflict(
+                local.order_id.as_str(),
+                Some(event.remote_order_id.as_str()),
+                local.status,
+                event.status,
+                event_time,
+                business_time,
+                event.source_cursor.clone(),
+                "private execution event",
+            );
+        }
+        if event.fill_quantity.is_none()
+            && event.fill_price.is_none()
+            && non_advancing_order_fact(local.status, event.status)
+        {
+            return self.observe_noop_order_fact_cursor(local, event.source_cursor);
+        }
         if let (Some(quantity), Some(price)) = (&event.fill_quantity, &event.fill_price) {
             let quantity = parse_decimal(&quantity.to_string())?;
             let price = parse_decimal(&price.to_string())?;
@@ -339,7 +411,7 @@ impl ExecutionApplication {
             let fill_id = event.execution_id.clone().unwrap_or(
                 FillId::new(format!(
                     "remote:{}:{}",
-                    event.order_id, event.occurred_at_unix_nanos
+                    event.remote_order_id, event.occurred_at_unix_nanos
                 ))
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
             );
@@ -366,10 +438,8 @@ impl ExecutionApplication {
                     .selected_route
                     .as_ref()
                     .map(|route| route.order_entry_symbol.clone()),
-                remote_order_id: Some(
-                    RemoteOrderId::new(event.order_id.to_string())
-                        .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-                ),
+                remote_order_id: Some(event.remote_order_id.clone()),
+                source_cursor: event.source_cursor.clone(),
             };
             let fill = if compensate {
                 self.record_fill(report)?
@@ -378,18 +448,18 @@ impl ExecutionApplication {
             };
             return Ok(fill);
         }
-        let occurred_at = event.occurred_at_unix_nanos.get();
         let (next, persisted_event) = self
             .actor
             .reconcile_order(
                 local.order_id.as_str(),
-                event.order_id.as_str(),
+                event.remote_order_id.as_str(),
                 event.status,
-                occurred_at,
+                business_time,
                 event.reason,
+                event.source_cursor.clone(),
             )
             .map_err(ExecutionError::Invalid)?;
-        self.update_commitment_from_order(&next, occurred_at)?;
+        self.update_commitment_from_order(&next, business_time)?;
         let risk_effect = match next.status {
             ExecutionOrderStatus::Filled => Some(RiskReservationSagaStatus::ConsumePending),
             status if status.terminal() => Some(RiskReservationSagaStatus::ReleasePending),
@@ -397,26 +467,47 @@ impl ExecutionApplication {
         };
         if let Some(status) = risk_effect {
             self.actor
-                .set_risk_reservation_status(next.order_id.as_str(), status, occurred_at);
+                .set_risk_reservation_status(next.order_id.as_str(), status, business_time);
         }
         self.commit(persisted_event)?;
         match risk_effect {
             Some(RiskReservationSagaStatus::ConsumePending) => {
-                self.complete_risk_consume(next.order_id.as_str(), occurred_at)?
+                self.complete_risk_consume(next.order_id.as_str(), business_time)?
             },
             Some(RiskReservationSagaStatus::ReleasePending) => {
-                self.complete_risk_release(next.order_id.as_str(), occurred_at)?
+                self.complete_risk_release(next.order_id.as_str(), business_time)?
             },
             _ => {},
         }
         if let Some(intent_id) = next.intent_id.as_deref() {
             self.refresh_intent(intent_id)?;
             if compensate {
-                self.maybe_submit_compensating_hedge(intent_id, occurred_at)?;
+                self.maybe_submit_compensating_hedge(intent_id, business_time)?;
             }
         }
         info!(event = "remote_execution_event_reconciled", component = "execution", order_id = %next.order_id, status = ?next.status, "remote execution event reconciled");
         Ok(next)
+    }
+
+    fn observe_noop_order_fact_cursor(
+        &mut self,
+        local: ExecutionOrder,
+        cursor: Option<crate::domain::OrderFactCursor>,
+    ) -> Result<ExecutionOrder, ExecutionError> {
+        let Some(cursor) = cursor else {
+            return Ok(local);
+        };
+        if self
+            .actor
+            .observe_order_fact_cursor(local.order_id.as_str(), cursor)
+            .map_err(ExecutionError::Invalid)?
+        {
+            self.persist_snapshot()?;
+        }
+        self.actor
+            .order(local.order_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("cursor order disappeared".into()))
     }
 
     pub(crate) fn accept_remote_event_identity(&mut self, event_id: &str) -> bool {
@@ -435,8 +526,9 @@ impl ExecutionApplication {
         resolution: UnknownRemoteOrderResolution,
         reason: impl Into<String>,
     ) -> Result<(), ExecutionError> {
+        let business_time = self.require_business_time("unknown remote order resolution")?;
         self.actor
-            .resolve_unknown_remote_order(remote_order_id, resolution, reason.into(), now_nanos())
+            .resolve_unknown_remote_order(remote_order_id, resolution, reason.into(), business_time)
             .map_err(ExecutionError::Invalid)?;
         self.persist_snapshot()
     }
@@ -481,6 +573,7 @@ impl ExecutionApplication {
                     .as_ref()
                     .map(|route| route.order_entry_symbol.clone()),
                 remote_order_id: Some(unknown.remote_order_id.clone()),
+                source_cursor: unknown.source_cursor.clone(),
             });
         }
         self.persist_snapshot()?;

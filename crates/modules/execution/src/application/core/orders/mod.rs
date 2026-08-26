@@ -4,6 +4,18 @@ pub(crate) mod admission;
 
 use super::*;
 
+pub(crate) fn replacement_remaining_quantity(
+    requested_total: Quantity,
+    filled_quantity: Quantity,
+) -> Result<Quantity, String> {
+    if requested_total <= filled_quantity {
+        return Err("replacement total quantity must exceed the original filled quantity".into());
+    }
+    requested_total
+        .checked_sub(filled_quantity)
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) struct PreparedCancellation {
     pub(crate) order: ExecutionOrder,
     pub(crate) provider_request: OrderEntryRequest,
@@ -12,16 +24,17 @@ pub(crate) struct PreparedCancellation {
     pub(crate) reason: String,
 }
 
-pub(crate) struct PreparedQuoteRefresh {
-    pub(crate) request: RefreshQuoteIntent,
-    pub(crate) version: u64,
-    pub(crate) prepared_at_unix_nanos: u64,
-    pub(crate) cancellations: Vec<CancelOrder>,
-    pub(crate) submissions: Vec<(LegId, SubmitOrder)>,
-}
+pub(crate) type PreparedQuoteRefresh = QuoteRefreshTransaction;
 
 impl ExecutionApplication {
     pub fn preview_submit(&self, request: &SubmitOrder) -> Result<ExecutionOrder, ExecutionError> {
+        let business_time = request
+            .submitted_at_unix_nanos
+            .map(UnixNanos::get)
+            .or_else(|| self.business_time_unix_nanos())
+            .ok_or_else(|| {
+                ExecutionError::Invalid("order preview requires explicit business time".into())
+            })?;
         let mut order = ExecutionOrder::new(
             request.order_id.to_string(),
             request.account_id.to_string(),
@@ -30,7 +43,7 @@ impl ExecutionApplication {
             request.side,
             request.order_type,
             request.quantity,
-            now_nanos(),
+            business_time,
         )
         .map_err(ExecutionError::Invalid)?;
         order.intent_id = request.intent_id.clone();
@@ -61,15 +74,31 @@ impl ExecutionApplication {
         compensate: bool,
     ) -> Result<ExecutionOrder, ExecutionError> {
         info!(event = "fill_received", component = "execution", fill_id = %request.fill_id, order_id = %request.order_id, "execution fill received");
-        let now = request
+        let occurred_at = request
             .occurred_at_unix_nanos
-            .unwrap_or_else(|| now_nanos().into());
+            .or_else(|| self.business_time_unix_nanos().map(UnixNanos::new))
+            .ok_or_else(|| {
+                ExecutionError::Invalid("fill recording requires explicit business time".into())
+            })?;
+        let business_time = self
+            .business_time_unix_nanos()
+            .map(|current| current.max(occurred_at.get()))
+            .unwrap_or_else(|| occurred_at.get());
+        self.advance_time(business_time)?;
         let transition = self
             .actor
-            .record_fill(&request, now.get())
+            .record_fill(&request, occurred_at.get(), business_time)
             .map_err(ExecutionError::Invalid)?;
         let (next, fill, event) = match transition {
-            crate::services::actor::FillTransition::Duplicate(order) => return Ok(order),
+            crate::services::actor::FillTransition::Duplicate {
+                order,
+                cursor_changed,
+            } => {
+                if cursor_changed {
+                    self.persist_snapshot()?;
+                }
+                return Ok(order);
+            },
             crate::services::actor::FillTransition::Conflict(existing) => {
                 if let Some(intent_id) = existing.intent_id.as_deref() {
                     if let Some(state) = self.actor.intent(intent_id).cloned() {
@@ -81,7 +110,7 @@ impl ExecutionApplication {
                             status: IntentStatus::ReconciliationRequired,
                             order_ids: Vec::new(),
                             completed_quantity: state.completed_quantity,
-                            occurred_at_unix_nanos: now_nanos().into(),
+                            occurred_at_unix_nanos: business_time.into(),
                             reason: format!("conflicting duplicate fill: {}", request.fill_id),
                             dependency_watermarks: state.dependency_watermarks,
                         })?;
@@ -97,12 +126,12 @@ impl ExecutionApplication {
             self.actor.set_commitment_status(
                 next.order_id.as_str(),
                 CommitmentStatus::Released,
-                fill.occurred_at_unix_nanos.get(),
+                business_time,
             );
             self.actor.set_risk_reservation_status(
                 next.order_id.as_str(),
                 RiskReservationSagaStatus::ConsumePending,
-                fill.occurred_at_unix_nanos.get(),
+                business_time,
             );
         } else if next.status == ExecutionOrderStatus::PartiallyFilled {
             let remaining = next
@@ -110,36 +139,28 @@ impl ExecutionApplication {
                 .checked_sub(next.filled_quantity)
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
             self.actor
-                .resize_commitment(
-                    next.order_id.as_str(),
-                    remaining,
-                    fill.occurred_at_unix_nanos.get(),
-                )
+                .resize_commitment(next.order_id.as_str(), remaining, business_time)
                 .map_err(ExecutionError::Invalid)?;
             self.actor.set_risk_reservation_status(
                 next.order_id.as_str(),
                 RiskReservationSagaStatus::ResizePending,
-                fill.occurred_at_unix_nanos.get(),
+                business_time,
             );
         }
         self.commit(event)?;
         if next.status == ExecutionOrderStatus::Filled {
-            self.complete_risk_consume(next.order_id.as_str(), fill.occurred_at_unix_nanos.get())?;
+            self.complete_risk_consume(next.order_id.as_str(), business_time)?;
         } else if next.status == ExecutionOrderStatus::PartiallyFilled {
             let remaining = next
                 .quantity
                 .checked_sub(next.filled_quantity)
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
-            self.complete_risk_resize(
-                next.order_id.as_str(),
-                remaining,
-                fill.occurred_at_unix_nanos.get(),
-            )?;
+            self.complete_risk_resize(next.order_id.as_str(), remaining, business_time)?;
         }
         if let Some(intent_id) = next.intent_id.as_deref() {
             self.refresh_intent(intent_id)?;
             if compensate {
-                self.maybe_submit_compensating_hedge(intent_id, fill.occurred_at_unix_nanos.get())?;
+                self.maybe_submit_compensating_hedge(intent_id, business_time)?;
             }
         }
         info!(event = "fill_applied", component = "execution", fill_id = %fill.fill_id, order_id = %next.order_id, status = ?next.status, filled_quantity = next.filled_quantity.mantissa(), "execution fill applied");
@@ -174,7 +195,10 @@ impl ExecutionApplication {
         let now = request
             .submitted_at_unix_nanos
             .map(UnixNanos::get)
-            .unwrap_or_else(now_nanos);
+            .or_else(|| self.business_time_unix_nanos())
+            .ok_or_else(|| {
+                ExecutionError::Invalid("order submission requires explicit business time".into())
+            })?;
         if self.actor.contains_order(request.order_id.as_str()) {
             return Err(ExecutionError::Invalid("order_id already exists".into()));
         }
@@ -209,6 +233,7 @@ impl ExecutionApplication {
             .map(parse_time_in_force)
             .transpose()
             .map_err(ExecutionError::Invalid)?;
+        self.advance_time(now)?;
         let commitment_observation = self
             .order_admission
             .as_mut()
@@ -351,6 +376,53 @@ impl ExecutionApplication {
         order_id: &str,
         event: OrderEntryEvent,
     ) -> Result<ExecutionOrder, ExecutionError> {
+        if let Some(current) = self.actor.order_map().get(order_id) {
+            if current.remote_order_id.is_some()
+                && event.remote_order_id.is_some()
+                && current.remote_order_id != event.remote_order_id
+            {
+                return Err(ExecutionError::Invalid(
+                    "provider event remote order identity conflicts with durable order identity"
+                        .into(),
+                ));
+            }
+            let incoming_status = connection_order_status(event.status);
+            if current.reconciliation_cause
+                == Some(crate::domain::OrderReconciliationCause::AuthoritativeFactConflict)
+            {
+                return Ok(current.clone());
+            }
+            if terminal_status_conflict(current.status, incoming_status) {
+                let current_status = current.status;
+                let event_time = event.occurred_at_unix_nanos.get();
+                let business_time = self
+                    .business_time_unix_nanos()
+                    .map(|value| value.max(event_time))
+                    .unwrap_or(event_time);
+                self.advance_time(business_time)?;
+                return self.mark_authoritative_order_conflict(
+                    order_id,
+                    event.remote_order_id.as_deref(),
+                    current_status,
+                    incoming_status,
+                    event_time,
+                    business_time,
+                    None,
+                    "order-entry event",
+                );
+            }
+            if non_advancing_order_fact(current.status, incoming_status) {
+                return Ok(current.clone());
+            }
+        }
+        let event_time = event.occurred_at_unix_nanos.get();
+        let business_time = self
+            .business_time_unix_nanos()
+            .map(|current| current.max(event_time))
+            .unwrap_or(event_time);
+        self.advance_time(business_time)?;
+        let mut event = event;
+        event.occurred_at_unix_nanos = business_time.into();
         let (order, persisted_event) = self
             .actor
             .apply_order_entry_event(order_id, event)
@@ -389,6 +461,48 @@ impl ExecutionApplication {
             self.refresh_intent(intent_id)?;
         }
         info!(event = "order_submitted", component = "execution", order_id = %order.order_id, remote_order_id = ?order.remote_order_id, status = ?order.status, "order submission completed");
+        Ok(order)
+    }
+
+    pub(super) fn mark_authoritative_order_conflict(
+        &mut self,
+        order_id: &str,
+        remote_order_id: Option<&str>,
+        current_status: ExecutionOrderStatus,
+        incoming_status: ExecutionOrderStatus,
+        evidence_time: u64,
+        applied_at: u64,
+        source_cursor: Option<crate::domain::OrderFactCursor>,
+        source: &str,
+    ) -> Result<ExecutionOrder, ExecutionError> {
+        let reason = format!(
+            "authoritative order fact conflict requires reconciliation: source={source}, current={current_status:?}, incoming={incoming_status:?}, evidence_time={evidence_time}"
+        );
+        let (order, event) = self
+            .actor
+            .mark_authoritative_fact_conflict(
+                order_id,
+                remote_order_id,
+                applied_at,
+                reason,
+                source_cursor,
+            )
+            .map_err(ExecutionError::Invalid)?;
+        self.actor
+            .set_commitment_status(order_id, CommitmentStatus::Uncertain, applied_at);
+        self.actor.set_risk_reservation_status(
+            order_id,
+            RiskReservationSagaStatus::Uncertain,
+            applied_at,
+        );
+        self.commit(event)?;
+        if let Some(intent_id) = order
+            .intent_id
+            .as_deref()
+            .filter(|id| self.actor.contains_intent(id))
+        {
+            self.refresh_intent(intent_id)?;
+        }
         Ok(order)
     }
 
@@ -536,7 +650,7 @@ impl ExecutionApplication {
         reason: impl Into<String>,
     ) -> Result<(), ExecutionError> {
         let reason = reason.into();
-        let now = now_nanos();
+        let now = self.require_business_time("not-sent order transition")?;
         let Some((order, event)) = self.actor.mark_delivery_status(
             order_id,
             ExecutionOrderStatus::Failed,
@@ -578,8 +692,9 @@ impl ExecutionApplication {
     }
 
     pub(crate) fn begin_order_dispatch(&mut self, order_id: &str) -> Result<(), ExecutionError> {
+        let business_time = self.require_business_time("order dispatch")?;
         self.actor
-            .mark_attempt_dispatched(order_id, now_nanos())
+            .mark_attempt_dispatched(order_id, business_time)
             .ok_or_else(|| ExecutionError::Invalid("execution attempt is missing".into()))?;
         // Persist indeterminate delivery before the provider command can
         // possibly leave the process. A crash after this point reconciles the
@@ -616,7 +731,7 @@ impl ExecutionApplication {
                 status: OrderEntryStatus::Rejected,
                 remote_order_id: None,
                 filled_quantity: None,
-                occurred_at_unix_nanos: now_nanos().into(),
+                occurred_at_unix_nanos: self.require_business_time("order rejection")?.into(),
                 reason: rejection.message,
             },
             Ok(CommandOutcome::Indeterminate(command)) => {
@@ -642,7 +757,7 @@ impl ExecutionApplication {
         order_id: &str,
         reason: String,
     ) -> Result<(), ExecutionError> {
-        let now = now_nanos();
+        let now = self.require_business_time("indeterminate order transition")?;
         let Some((order, event)) =
             self.actor
                 .mark_delivery_status(order_id, ExecutionOrderStatus::Unknown, reason, now)
@@ -660,18 +775,33 @@ impl ExecutionApplication {
 
     pub fn cancel(&mut self, request: CancelOrder) -> Result<ExecutionOrder, ExecutionError> {
         let prepared = self.prepare_cancellation(request)?;
+        if self.order_entry.is_none() {
+            return Err(ExecutionError::Gateway(
+                "order entry connection is not configured".into(),
+            ));
+        }
+        self.begin_cancel_dispatch(prepared.order.order_id.as_str())?;
         let outcome = self
             .order_entry
             .as_mut()
-            .ok_or_else(|| {
-                ExecutionError::Gateway("order entry connection is not configured".into())
-            })?
+            .expect("order-entry presence checked above")
             .cancel_order(
                 &prepared.provider_request,
                 &prepared.remote_order_id,
                 prepared.at_unix_nanos,
             );
         self.complete_cancellation(prepared, outcome)
+    }
+
+    pub(crate) fn begin_cancel_dispatch(&mut self, order_id: &str) -> Result<(), ExecutionError> {
+        let now = self.require_business_time("order cancellation")?;
+        let (_, event) = self
+            .actor
+            .begin_cancel_attempt(order_id, now)
+            .map_err(ExecutionError::Invalid)?;
+        // Persist an indeterminate cancel attempt before the command can leave
+        // the process. A crash after this point must reconcile, not resend.
+        self.commit(event)
     }
 
     pub(crate) fn prepare_cancellation(
@@ -708,7 +838,7 @@ impl ExecutionApplication {
             remote_order_id,
             order,
             provider_request: connection_request,
-            at_unix_nanos: now_nanos(),
+            at_unix_nanos: self.require_business_time("order cancellation")?,
             reason: request.reason,
         })
     }
@@ -731,9 +861,10 @@ impl ExecutionApplication {
                         .remote_order_id
                         .as_ref()
                         .is_some_and(|remote| remote.as_str() == remote_order_id);
-                if !identity_matches {
+                let cancellation_confirmed = event.status == OrderEntryStatus::Canceled;
+                if !identity_matches || !cancellation_confirmed {
                     let reason =
-                        "provider cancellation acknowledgement identity is missing or mismatched"
+                        "provider cancellation acknowledgement must identify the order and explicitly confirm canceled status"
                             .to_string();
                     self.mark_unknown_after_gateway_error(&order.order_id, reason.clone())?;
                     return Err(ExecutionError::Indeterminate(reason));
@@ -742,6 +873,15 @@ impl ExecutionApplication {
             },
             Ok(CommandOutcome::Rejected(rejection)) => {
                 warn!(event = "order_cancel_rejected", component = "execution", order_id = %order.order_id, error = %rejection.message, "provider rejected order cancellation");
+                let (_, event) = self
+                    .actor
+                    .resolve_cancel_attempt(
+                        order.order_id.as_str(),
+                        crate::domain::DeliveryCertainty::Rejected,
+                        self.require_business_time("cancel rejection")?,
+                    )
+                    .map_err(ExecutionError::Invalid)?;
+                self.commit(event)?;
                 return Err(ExecutionError::ProviderRejected(rejection.message));
             },
             Ok(CommandOutcome::Indeterminate(command)) => {
@@ -754,13 +894,34 @@ impl ExecutionApplication {
                 // No cancel command reached the provider. The original order
                 // remains in its current state and does not require recovery
                 // solely because a local/pre-delivery cancel attempt failed.
+                let (_, event) = self
+                    .actor
+                    .resolve_cancel_attempt(
+                        order.order_id.as_str(),
+                        crate::domain::DeliveryCertainty::NotSent,
+                        self.require_business_time("cancel failure")?,
+                    )
+                    .map_err(ExecutionError::Invalid)?;
+                self.commit(event)?;
                 return Err(ExecutionError::Gateway(error.to_string()));
             },
         };
-        let now = now_nanos();
+        let event_time = event.occurred_at_unix_nanos.get();
+        let now = self
+            .business_time_unix_nanos()
+            .map(|current| current.max(event_time))
+            .unwrap_or(event_time);
+        self.advance_time(now)?;
         let (provider_order, _) = self
             .actor
             .apply_order_entry_event(order.order_id.as_str(), event)
+            .map_err(ExecutionError::Invalid)?;
+        self.actor
+            .resolve_cancel_attempt(
+                provider_order.order_id.as_str(),
+                crate::domain::DeliveryCertainty::Confirmed,
+                now,
+            )
             .map_err(ExecutionError::Invalid)?;
         let (next, persisted_event) = self
             .actor
@@ -797,32 +958,6 @@ impl ExecutionApplication {
         Ok(next)
     }
 
-    pub fn replace(&mut self, request: ReplaceOrder) -> Result<ExecutionOrder, ExecutionError> {
-        info!(event = "order_replace_started", component = "execution", order_id = %request.order_id, replacement_order_id = %request.replacement.order_id, "order replacement started");
-        let current = self
-            .actor
-            .order_map()
-            .get(request.order_id.as_str())
-            .cloned()
-            .ok_or_else(|| ExecutionError::Invalid("unknown order".into()))?;
-        if !current.status.terminal() {
-            self.cancel(CancelOrder {
-                order_id: request.order_id,
-                reason: "replaced".into(),
-            })?;
-        }
-        let result = self.submit(request.replacement);
-        match &result {
-            Ok(order) => {
-                info!(event = "order_replaced", component = "execution", order_id = %order.order_id, status = ?order.status, "order replacement completed")
-            },
-            Err(error) => {
-                warn!(event = "order_replace_failed", component = "execution", error = %error, "order replacement failed")
-            },
-        }
-        result
-    }
-
     /// Refresh both sides of a persistent maker quote.  A refresh is a
     /// lifecycle operation, not a second order owner: old orders remain in
     /// the plan as canceled/fill history and the replacement orders are
@@ -831,209 +966,27 @@ impl ExecutionApplication {
         &mut self,
         request: RefreshQuoteIntent,
     ) -> Result<IntentState, ExecutionError> {
-        let state = self
-            .actor
-            .intent(request.intent_id.as_str())
-            .cloned()
-            .ok_or_else(|| ExecutionError::Invalid("unknown intent".into()))?;
-        if state.intent.intent_type != IntentType::QuoteProvisioning {
-            return Err(ExecutionError::Invalid(
-                "quote refresh requires a QuoteProvisioning intent".into(),
-            ));
-        }
-        if request.bid_price.mantissa() <= 0 || request.ask_price.mantissa() <= 0 {
-            return Err(ExecutionError::Invalid(
-                "quote refresh prices must be positive".into(),
-            ));
-        }
-        if request.bid_price >= request.ask_price {
-            return Err(ExecutionError::Invalid(
-                "quote refresh requires bid below ask".into(),
-            ));
-        }
-        let now = now_nanos();
-        if request.quote_observed_at.get() > now {
-            return Err(ExecutionError::Invalid(
-                "quote observation cannot be in the future".into(),
-            ));
-        }
-        let max_age = state
-            .intent
-            .legs
-            .iter()
-            .filter_map(|leg| leg.options.maker.as_ref())
-            .chain(state.intent.order_options.maker.as_ref())
-            .filter_map(|policy| policy.max_quote_age)
-            .min();
-        if let Some(max_age) = max_age {
-            let age = now.saturating_sub(request.quote_observed_at.get());
-            if age > max_age.get() {
-                return Err(ExecutionError::Invalid(format!(
-                    "quote is stale: age={}ms exceeds {}ms",
-                    age / 1_000_000,
-                    max_age.get() / 1_000_000
-                )));
+        let prepared = self.prepare_quote_refresh(request)?;
+        for cancellation in prepared.cancellations.clone() {
+            if let Err(error) = self.cancel(cancellation) {
+                self.fail_prepared_quote_refresh(&prepared, &error)?;
+                return Err(error);
             }
         }
-        if let Some(last) = state.last_quote_refresh_unix_nanos {
-            let min_interval = state
-                .intent
-                .legs
-                .iter()
-                .filter_map(|leg| leg.options.maker.as_ref())
-                .chain(state.intent.order_options.maker.as_ref())
-                .filter_map(|policy| policy.min_interval)
-                .max()
-                .unwrap_or(DurationNanos::new(0));
-            if now.saturating_sub(last.get()) < min_interval.get() {
-                return Err(ExecutionError::Invalid(
-                    "quote refresh violates maker minimum interval".into(),
-                ));
-            }
+        let prepared = self.authorize_prepared_quote_refresh(prepared)?;
+        self.activate_prepared_quote_refresh(&prepared)?;
+        if let Err(error) = self.advance_due_intent_orders(
+            prepared.replacement_dispatch_time().get(),
+            prepared.submissions.len(),
+        ) {
+            self.fail_prepared_quote_refresh(&prepared, &error)?;
+            return Err(error);
         }
-        let plan = state
-            .plan
-            .clone()
-            .ok_or_else(|| ExecutionError::Invalid("quote intent has no execution plan".into()))?;
-        let version = state.quote_version.saturating_add(1);
-        let mut templates = Vec::new();
-        for leg in &plan.legs {
-            let template = leg
-                .order_ids
-                .iter()
-                .rev()
-                .filter_map(|order_id| self.actor.order_map().get(order_id.as_str()))
-                .find(|order| !order.status.terminal())
-                .or_else(|| {
-                    leg.order_ids
-                        .iter()
-                        .rev()
-                        .filter_map(|order_id| self.actor.order_map().get(order_id.as_str()))
-                        .next()
-                })
-                .cloned()
-                .ok_or_else(|| {
-                    ExecutionError::Invalid(format!(
-                        "quote leg has no order template: {}",
-                        leg.leg_id
-                    ))
-                })?;
-            templates.push((leg.leg_id.clone(), template));
-        }
-        for (_, template) in &templates {
-            if !template.status.terminal() {
-                self.cancel(CancelOrder {
-                    order_id: template.order_id.clone(),
-                    reason: "maker quote refresh".into(),
-                })?;
-            }
-        }
-        let mut new_order_ids: Vec<OrderId> = Vec::new();
-        for (leg_id, template) in templates {
-            let options = template_options(&state.intent, &leg_id);
-            let mut replacement = SubmitOrder {
-                order_id: OrderId::new(format!(
-                    "{}:quote:{}:{}",
-                    request.intent_id, version, leg_id
-                ))
-                .expect("validated quote order ID"),
-                intent_id: Some(request.intent_id.clone()),
-                strategy_id: Some(typed_strategy_id(state.intent.strategy_id.clone())),
-                account_id: template.account_id.clone(),
-                segment_key: template.segment_key.clone(),
-                instrument_id: template.instrument_id.clone(),
-                market_id: template.market_id.clone(),
-                execution_route_id: template.execution_route_id.clone(),
-                side: template.side,
-                order_type: OrderType::Limit,
-                quantity: Quantity::new(
-                    plan.legs
-                        .iter()
-                        .find(|leg| leg.leg_id == leg_id)
-                        .map(|leg| leg.target_quantity.mantissa())
-                        .unwrap_or(template.quantity.mantissa()),
-                    template.quantity.scale(),
-                )
-                .expect("validated quote quantity"),
-                limit_price: Some(
-                    Price::new(
-                        if template.side == OrderSide::Buy {
-                            request.bid_price.mantissa()
-                        } else {
-                            request.ask_price.mantissa()
-                        },
-                        if template.side == OrderSide::Buy {
-                            request.bid_price.scale()
-                        } else {
-                            request.ask_price.scale()
-                        },
-                    )
-                    .expect("validated quote price"),
-                ),
-                options,
-                submitted_at_unix_nanos: Some(request.quote_observed_at),
-            };
-            replacement.options.post_only = Some(true);
-            let order = match self.submit(replacement) {
-                Ok(order) => order,
-                Err(error) => {
-                    let current = self
-                        .actor
-                        .intent(request.intent_id.as_str())
-                        .cloned()
-                        .ok_or_else(|| {
-                            ExecutionError::Invalid("quote intent disappeared".into())
-                        })?;
-                    self.commit_intent(IntentEvent {
-                        intent_id: request.intent_id.clone(),
-                        strategy_decision_id: None,
-                        event_sequence: 0.into(),
-                        previous_status: None,
-                        status: IntentStatus::ReconciliationRequired,
-                        order_ids: Vec::new(),
-                        completed_quantity: current.completed_quantity,
-                        occurred_at_unix_nanos: now.into(),
-                        reason: format!("maker quote refresh failed: {error}"),
-                        dependency_watermarks: current.dependency_watermarks,
-                    })?;
-                    return Err(error);
-                },
-            };
-            self.attach_plan_order(request.intent_id.as_str(), &leg_id, &order.order_id)?;
-            new_order_ids.push(order.order_id);
-        }
-        self.actor
-            .update_quote_refresh(request.intent_id.as_str(), version, now);
-        let current = self
-            .actor
-            .intent(request.intent_id.as_str())
-            .cloned()
-            .ok_or_else(|| ExecutionError::Invalid("quote intent disappeared".into()))?;
-        self.commit_intent(IntentEvent {
-            intent_id: request.intent_id,
-            strategy_decision_id: None,
-            event_sequence: 0.into(),
-            previous_status: None,
-            status: IntentStatus::Executing,
-            order_ids: new_order_ids,
-            completed_quantity: current.completed_quantity,
-            occurred_at_unix_nanos: now.into(),
-            reason: if request.reason.trim().is_empty() {
-                "maker quote refreshed".into()
-            } else {
-                request.reason
-            },
-            dependency_watermarks: current.dependency_watermarks.clone(),
-        })?;
-        self.persist_snapshot()?;
-        self.actor
-            .intent(current.intent.intent_id.as_str())
-            .cloned()
-            .ok_or_else(|| ExecutionError::Invalid("quote intent disappeared".into()))
+        self.complete_prepared_quote_refresh(prepared)
     }
 
     pub(crate) fn prepare_quote_refresh(
-        &self,
+        &mut self,
         request: RefreshQuoteIntent,
     ) -> Result<PreparedQuoteRefresh, ExecutionError> {
         let state = self
@@ -1046,6 +999,34 @@ impl ExecutionApplication {
                 "quote refresh requires a QuoteProvisioning intent".into(),
             ));
         }
+        let ExecutionAlgorithmPolicy::PassiveLimit(passive_policy) = &state.intent.algorithm else {
+            return Err(ExecutionError::Invalid(
+                "quote refresh requires the passive-limit algorithm".into(),
+            ));
+        };
+        if let Some(mut pending) = state.pending_quote_refresh.clone() {
+            if pending.request != request {
+                return Err(ExecutionError::Invalid(
+                    "a different passive-limit quote refresh is already pending reconciliation"
+                        .into(),
+                ));
+            }
+            pending.cancellations.retain(|cancellation| {
+                self.actor
+                    .order_map()
+                    .get(cancellation.order_id.as_str())
+                    .is_some_and(|order| !order.status.terminal())
+            });
+            return Ok(pending);
+        }
+        if self
+            .business_time_unix_nanos()
+            .is_some_and(|current| request.business_time_unix_nanos.get() < current)
+        {
+            return Err(ExecutionError::Invalid(
+                "execution business time cannot move backwards".into(),
+            ));
+        }
         if request.bid_price.mantissa() <= 0 || request.ask_price.mantissa() <= 0 {
             return Err(ExecutionError::Invalid(
                 "quote refresh prices must be positive".into(),
@@ -1056,46 +1037,28 @@ impl ExecutionApplication {
                 "quote refresh requires bid below ask".into(),
             ));
         }
-        let now = now_nanos();
+        let now = request.business_time_unix_nanos.get();
         if request.quote_observed_at.get() > now {
             return Err(ExecutionError::Invalid(
                 "quote observation cannot be in the future".into(),
             ));
         }
-        let max_age = state
-            .intent
-            .legs
-            .iter()
-            .filter_map(|leg| leg.options.maker.as_ref())
-            .chain(state.intent.order_options.maker.as_ref())
-            .filter_map(|policy| policy.max_quote_age)
-            .min();
-        if let Some(max_age) = max_age {
-            let age = now.saturating_sub(request.quote_observed_at.get());
-            if age > max_age.get() {
-                return Err(ExecutionError::Invalid(format!(
-                    "quote is stale: age={}ms exceeds {}ms",
-                    age / 1_000_000,
-                    max_age.get() / 1_000_000
-                )));
-            }
+        let age = now.saturating_sub(request.quote_observed_at.get());
+        if age > passive_policy.max_quote_age.get() {
+            return Err(ExecutionError::Invalid(format!(
+                "quote is stale: age={}ms exceeds {}ms",
+                age / 1_000_000,
+                passive_policy.max_quote_age.get() / 1_000_000
+            )));
         }
         if let Some(last) = state.last_quote_refresh_unix_nanos {
-            let min_interval = state
-                .intent
-                .legs
-                .iter()
-                .filter_map(|leg| leg.options.maker.as_ref())
-                .chain(state.intent.order_options.maker.as_ref())
-                .filter_map(|policy| policy.min_interval)
-                .max()
-                .unwrap_or(DurationNanos::new(0));
-            if now.saturating_sub(last.get()) < min_interval.get() {
+            if now.saturating_sub(last.get()) < passive_policy.reprice_interval.get() {
                 return Err(ExecutionError::Invalid(
-                    "quote refresh violates maker minimum interval".into(),
+                    "quote refresh violates passive-limit reprice interval".into(),
                 ));
             }
         }
+        self.advance_time(now)?;
         let plan = state
             .plan
             .clone()
@@ -1167,19 +1130,147 @@ impl ExecutionApplication {
                         request.ask_price
                     }),
                     options,
-                    submitted_at_unix_nanos: Some(request.quote_observed_at),
+                    submitted_at_unix_nanos: Some(request.business_time_unix_nanos),
                 };
                 replacement.options.post_only = Some(true);
                 (leg_id, replacement)
             })
             .collect();
-        Ok(PreparedQuoteRefresh {
+        let prepared = PreparedQuoteRefresh {
             request,
             version,
-            prepared_at_unix_nanos: now,
+            prepared_at_unix_nanos: now.into(),
+            phase: QuoteRefreshPhase::Canceling,
+            replacement_authorized_at_unix_nanos: None,
             cancellations,
             submissions,
-        })
+        };
+        self.actor
+            .set_pending_quote_refresh(prepared.request.intent_id.as_str(), prepared.clone())
+            .map_err(ExecutionError::Invalid)?;
+        // Persist the exact transaction and cancel targets before the first
+        // cancel can leave the process. Replacement quantity is deliberately
+        // not authorized until every cancel has a determinate outcome.
+        self.persist_snapshot()?;
+        Ok(prepared)
+    }
+
+    pub(crate) fn authorize_prepared_quote_refresh(
+        &mut self,
+        mut prepared: PreparedQuoteRefresh,
+    ) -> Result<PreparedQuoteRefresh, ExecutionError> {
+        if prepared.phase == QuoteRefreshPhase::ReplacementAuthorized {
+            return Ok(prepared);
+        }
+        for cancellation in &prepared.cancellations {
+            let order = self
+                .actor
+                .order_map()
+                .get(cancellation.order_id.as_str())
+                .ok_or_else(|| ExecutionError::Invalid("quote cancel target disappeared".into()))?;
+            if !order.status.terminal()
+                || order.reconciliation_cause.is_some()
+                || order.status == ExecutionOrderStatus::Unknown
+            {
+                return Err(ExecutionError::Indeterminate(format!(
+                    "quote replacement is blocked until cancel reconciliation completes: {}",
+                    order.order_id
+                )));
+            }
+        }
+        let run = self
+            .actor
+            .algorithm_run(prepared.request.intent_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("quote intent has no algorithm run".into()))?;
+        let decision_time = self
+            .business_time_unix_nanos()
+            .map(UnixNanos::new)
+            .unwrap_or(prepared.prepared_at_unix_nanos)
+            .max(prepared.prepared_at_unix_nanos);
+        prepared.submissions.retain_mut(|(leg_id, submission)| {
+            let leg = run
+                .legs
+                .iter()
+                .find(|leg| &leg.leg_id == leg_id)
+                .expect("prepared quote leg belongs to the algorithm run");
+            if leg.filled_quantity >= leg.target_quantity {
+                return false;
+            }
+            submission.quantity = leg
+                .target_quantity
+                .checked_sub(leg.filled_quantity)
+                .expect("filled quantity is below target");
+            true
+        });
+        let decision = decide_passive_limit(
+            &run,
+            AlgorithmInput {
+                business_time: decision_time,
+                ready_children: prepared
+                    .submissions
+                    .iter()
+                    .map(|(leg_id, request)| AlgorithmChildCandidate {
+                        order_id: request.order_id.clone(),
+                        leg_id: leg_id.clone(),
+                        quantity: request.quantity,
+                        execution_style: AlgorithmExecutionStyle::PassiveLimit,
+                        execution_route_id: request.execution_route_id.clone(),
+                    })
+                    .collect(),
+            },
+        )
+        .map_err(ExecutionError::Invalid)?;
+        let actions = self
+            .actor
+            .apply_algorithm_decision(prepared.request.intent_id.as_str(), decision)
+            .map_err(ExecutionError::Invalid)?;
+        if actions.len() != prepared.submissions.len() {
+            return Err(ExecutionError::Invalid(
+                "passive-limit algorithm did not authorize every replacement leg".into(),
+            ));
+        }
+        for (_, submission) in &prepared.submissions {
+            self.actor
+                .schedule_pending_order(
+                    prepared.request.intent_id.as_str(),
+                    submission.clone(),
+                    UnixNanos::new(u64::MAX),
+                )
+                .map_err(ExecutionError::Invalid)?;
+        }
+        prepared.phase = QuoteRefreshPhase::ReplacementAuthorized;
+        prepared.replacement_authorized_at_unix_nanos = Some(decision_time);
+        self.actor
+            .set_pending_quote_refresh(prepared.request.intent_id.as_str(), prepared.clone())
+            .map_err(ExecutionError::Invalid)?;
+        // The decision, action identities, and exact post-cancel remaining
+        // quantities are durable before any replacement can leave the process.
+        self.persist_snapshot()?;
+        Ok(prepared)
+    }
+
+    pub(crate) fn activate_prepared_quote_refresh(
+        &mut self,
+        prepared: &PreparedQuoteRefresh,
+    ) -> Result<(), ExecutionError> {
+        for (_, submission) in &prepared.submissions {
+            if self
+                .actor
+                .order_map()
+                .contains_key(submission.order_id.as_str())
+            {
+                continue;
+            }
+            self.actor
+                .schedule_pending_order(
+                    prepared.request.intent_id.as_str(),
+                    submission.clone(),
+                    prepared.replacement_dispatch_time(),
+                )
+                .map_err(ExecutionError::Invalid)?;
+        }
+        self.persist_snapshot()
     }
 
     pub(crate) fn fail_prepared_quote_refresh(
@@ -1200,7 +1291,10 @@ impl ExecutionApplication {
             status: IntentStatus::ReconciliationRequired,
             order_ids: Vec::new(),
             completed_quantity: current.completed_quantity,
-            occurred_at_unix_nanos: prepared.prepared_at_unix_nanos.into(),
+            occurred_at_unix_nanos: self
+                .business_time_unix_nanos()
+                .map(UnixNanos::new)
+                .unwrap_or(prepared.prepared_at_unix_nanos),
             reason: format!("maker quote refresh failed: {error}"),
             dependency_watermarks: current.dependency_watermarks,
         })
@@ -1209,22 +1303,28 @@ impl ExecutionApplication {
     pub(crate) fn complete_prepared_quote_refresh(
         &mut self,
         prepared: PreparedQuoteRefresh,
-        orders: Vec<(LegId, ExecutionOrder)>,
     ) -> Result<IntentState, ExecutionError> {
-        let mut order_ids = Vec::with_capacity(orders.len());
-        for (leg_id, order) in orders {
-            self.attach_plan_order(
-                prepared.request.intent_id.as_str(),
-                &leg_id,
-                &order.order_id,
-            )?;
-            order_ids.push(order.order_id);
+        let dispatch_time = prepared.replacement_dispatch_time();
+        let order_ids = prepared
+            .submissions
+            .iter()
+            .map(|(_, submission)| submission.order_id.clone())
+            .collect::<Vec<_>>();
+        if order_ids
+            .iter()
+            .any(|order_id| !self.actor.order_map().contains_key(order_id.as_str()))
+        {
+            return Err(ExecutionError::Invalid(
+                "passive-limit refresh completed without every replacement order".into(),
+            ));
         }
         self.actor.update_quote_refresh(
             prepared.request.intent_id.as_str(),
             prepared.version,
-            prepared.prepared_at_unix_nanos,
+            dispatch_time.get(),
         );
+        self.actor
+            .clear_pending_quote_refresh(prepared.request.intent_id.as_str());
         let current = self
             .actor
             .intent(prepared.request.intent_id.as_str())
@@ -1238,7 +1338,7 @@ impl ExecutionApplication {
             status: IntentStatus::Executing,
             order_ids,
             completed_quantity: current.completed_quantity,
-            occurred_at_unix_nanos: prepared.prepared_at_unix_nanos.into(),
+            occurred_at_unix_nanos: dispatch_time,
             reason: if prepared.request.reason.trim().is_empty() {
                 "maker quote refreshed".into()
             } else {
@@ -1258,7 +1358,12 @@ impl ExecutionApplication {
     /// current market state is advisory; every replacement still goes through the
     /// normal order validation, reservation and lifecycle path.
     pub fn refresh_maker_quotes(&mut self) -> Result<usize, ExecutionError> {
-        let requests = self.maker_quote_refresh_requests()?;
+        let business_time_unix_nanos = self.business_time_unix_nanos().ok_or_else(|| {
+            ExecutionError::Invalid(
+                "maker quote refresh requires explicit execution business time".into(),
+            )
+        })?;
+        let requests = self.maker_quote_refresh_requests(business_time_unix_nanos)?;
         let mut refreshed = 0;
         for request in requests {
             match self.refresh_quote_intent(request) {
@@ -1276,6 +1381,7 @@ impl ExecutionApplication {
 
     pub(crate) fn maker_quote_refresh_requests(
         &mut self,
+        business_time_unix_nanos: u64,
     ) -> Result<Vec<RefreshQuoteIntent>, ExecutionError> {
         let targets = self
             .actor
@@ -1352,6 +1458,7 @@ impl ExecutionApplication {
                 bid_price: bid,
                 ask_price: ask,
                 quote_observed_at: quote.observed_at_unix_nanos,
+                business_time_unix_nanos: business_time_unix_nanos.into(),
                 reason: "market quote changed".into(),
             });
         }
@@ -1525,4 +1632,16 @@ fn used_order_options(options: &ExecutionOrderOptions) -> Vec<&'static str> {
         used.push("tokenize");
     }
     used
+}
+
+fn connection_order_status(status: OrderEntryStatus) -> ExecutionOrderStatus {
+    match status {
+        OrderEntryStatus::Accepted => ExecutionOrderStatus::Accepted,
+        OrderEntryStatus::PartiallyFilled => ExecutionOrderStatus::PartiallyFilled,
+        OrderEntryStatus::Filled => ExecutionOrderStatus::Filled,
+        OrderEntryStatus::Canceled => ExecutionOrderStatus::Canceled,
+        OrderEntryStatus::Rejected => ExecutionOrderStatus::Rejected,
+        OrderEntryStatus::Expired => ExecutionOrderStatus::Expired,
+        OrderEntryStatus::Unknown => ExecutionOrderStatus::Unknown,
+    }
 }

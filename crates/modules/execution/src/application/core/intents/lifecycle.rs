@@ -46,6 +46,7 @@ impl ExecutionApplication {
         now_unix_nanos: u64,
         limit: usize,
     ) -> Result<usize, ExecutionError> {
+        self.advance_time(now_unix_nanos)?;
         let due = self.prepare_due_algorithm_runs(now_unix_nanos, limit)?;
         if !due.is_empty() {
             self.advance_due_intent_orders(now_unix_nanos, usize::MAX)?;
@@ -82,6 +83,7 @@ impl ExecutionApplication {
         now_unix_nanos: u64,
         limit: usize,
     ) -> Result<usize, ExecutionError> {
+        self.advance_time(now_unix_nanos)?;
         let mut submitted = 0;
         while submitted < limit {
             let Some(due) = self.take_due_intent_order(now_unix_nanos)? else {
@@ -146,9 +148,14 @@ impl ExecutionApplication {
                     .min_by_key(|(due, _, _)| *due)
             })
             .min_by_key(|(due, _, _)| *due);
-        let Some((_, intent_id, request)) = next else {
+        let Some((_, intent_id, mut request)) = next else {
             return Ok(None);
         };
+        // A planned template may have been admitted long before this action
+        // became due. Each concrete dispatch is stamped with the current
+        // durable decision time so delayed TWAP/hedge work cannot replay the
+        // template's older admission timestamp into the Actor clock.
+        request.submitted_at_unix_nanos = Some(now_unix_nanos.into());
         let leg_id = self
             .actor
             .algorithm_run(intent_id.as_str())
@@ -212,6 +219,7 @@ impl ExecutionApplication {
         let execution_style = match &run.spec {
             ExecutionAlgorithmSpec::Immediate => AlgorithmExecutionStyle::Immediate,
             ExecutionAlgorithmSpec::Twap(_) => AlgorithmExecutionStyle::TwapSlice,
+            ExecutionAlgorithmSpec::PassiveLimit(_) => AlgorithmExecutionStyle::PassiveLimit,
             ExecutionAlgorithmSpec::MakerTakerHedge(_) => AlgorithmExecutionStyle::MakerPostOnly,
         };
         let input = AlgorithmInput {
@@ -228,6 +236,7 @@ impl ExecutionApplication {
         let decision = match &run.spec {
             ExecutionAlgorithmSpec::Immediate => decide_immediate(&run, input),
             ExecutionAlgorithmSpec::Twap(_) => decide_twap(&run, input),
+            ExecutionAlgorithmSpec::PassiveLimit(_) => decide_passive_limit(&run, input),
             ExecutionAlgorithmSpec::MakerTakerHedge(_) => decide_maker_taker_hedge(&run, input),
         }
         .map_err(ExecutionError::Invalid)?;
@@ -421,6 +430,7 @@ impl ExecutionApplication {
     }
 
     pub fn cancel_intent(&mut self, request: CancelIntent) -> Result<IntentState, ExecutionError> {
+        let business_time = self.require_business_time("intent cancellation")?;
         let state = self
             .actor
             .intent(request.intent_id.as_str())
@@ -446,7 +456,7 @@ impl ExecutionApplication {
             status: IntentStatus::CancelRequested,
             order_ids: state.order_ids.clone(),
             completed_quantity: state.completed_quantity,
-            occurred_at_unix_nanos: now_nanos().into(),
+            occurred_at_unix_nanos: business_time.into(),
             reason: if request.reason.trim().is_empty() {
                 "intent cancellation requested".into()
             } else {
@@ -497,7 +507,7 @@ impl ExecutionApplication {
                 status: IntentStatus::Canceled,
                 order_ids: Vec::new(),
                 completed_quantity: current.completed_quantity,
-                occurred_at_unix_nanos: now_nanos().into(),
+                occurred_at_unix_nanos: business_time.into(),
                 reason: "all pending and active child orders canceled".into(),
                 dependency_watermarks: current.dependency_watermarks,
             })?;
@@ -520,6 +530,7 @@ impl ExecutionApplication {
         &mut self,
         request: &ExpireIntent,
     ) -> Result<Vec<CancelOrder>, ExecutionError> {
+        let business_time = self.require_business_time("intent expiration")?;
         let state = self
             .actor
             .intent(request.intent_id.as_str())
@@ -545,7 +556,7 @@ impl ExecutionApplication {
             status: IntentStatus::Expired,
             order_ids: state.order_ids.clone(),
             completed_quantity: state.completed_quantity,
-            occurred_at_unix_nanos: now_nanos().into(),
+            occurred_at_unix_nanos: business_time.into(),
             reason: if request.reason.trim().is_empty() {
                 "intent expired".into()
             } else {
@@ -573,6 +584,7 @@ impl ExecutionApplication {
         &mut self,
         request: &ExpireIntent,
     ) -> Result<IntentState, ExecutionError> {
+        let business_time = self.require_business_time("intent expiration completion")?;
         // Child cancellation refreshes the parent intent. Re-assert the
         // deadline outcome after those child lifecycle events so expiration
         // remains the authoritative terminal reason.
@@ -588,7 +600,7 @@ impl ExecutionApplication {
                 .intent(request.intent_id.as_str())
                 .map(|value| value.completed_quantity)
                 .unwrap_or_default(),
-            occurred_at_unix_nanos: now_nanos().into(),
+            occurred_at_unix_nanos: business_time.into(),
             reason: "intent expired after child cancellation".into(),
             dependency_watermarks: self
                 .actor
@@ -627,6 +639,7 @@ impl ExecutionApplication {
     }
 
     pub fn expire_due_intents(&mut self, now_unix_nanos: u64) -> Result<usize, ExecutionError> {
+        self.advance_time(now_unix_nanos)?;
         let due = self.due_intent_expirations(now_unix_nanos);
         let count = due.len();
         for request in due {
@@ -699,12 +712,15 @@ impl ExecutionApplication {
         self.refresh_plan_progress(intent_id, &orders)?;
         let algorithm_changed = self
             .actor
-            .synchronize_algorithm_run(intent_id, &orders, !state.pending_orders.is_empty())
+            .synchronize_algorithm_run(
+                intent_id,
+                &orders,
+                !state.pending_orders.is_empty() || state.pending_quote_refresh.is_some(),
+            )
             .map_err(ExecutionError::Invalid)?;
-        let has_pending = self
-            .actor
-            .intent(intent_id)
-            .is_some_and(|value| !value.pending_orders.is_empty());
+        let has_pending = self.actor.intent(intent_id).is_some_and(|value| {
+            !value.pending_orders.is_empty() || value.pending_quote_refresh.is_some()
+        });
         let all_filled = orders
             .iter()
             .all(|order| order.status == ExecutionOrderStatus::Filled);
@@ -818,6 +834,7 @@ impl ExecutionApplication {
             }
             return Ok(());
         }
+        let business_time = self.require_business_time("intent lifecycle refresh")?;
         self.commit_intent(IntentEvent {
             intent_id: typed_intent_id(intent_id),
             strategy_decision_id: None,
@@ -826,7 +843,7 @@ impl ExecutionApplication {
             status,
             order_ids: state.order_ids,
             completed_quantity: completed,
-            occurred_at_unix_nanos: now_nanos().into(),
+            occurred_at_unix_nanos: business_time.into(),
             reason: match status {
                 IntentStatus::Satisfied => "all child orders filled".into(),
                 IntentStatus::PartiallyFilled => "child orders partially filled".into(),

@@ -94,6 +94,26 @@ fn execution_does_not_reintroduce_cross_execution_channel_aliases() {
 }
 
 #[test]
+fn execution_public_models_have_no_serde_compatibility_aliases() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for source_root in [root.join("src"), root.join("contract/src")] {
+        for path in rust_files(&source_root) {
+            let source = fs::read_to_string(&path).expect("read Execution source");
+            assert!(
+                !source.contains("serde(alias"),
+                "Execution compatibility alias leaked through {}",
+                path.display()
+            );
+            assert!(
+                !source.contains("alias ="),
+                "Execution compatibility alias leaked through {}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn execution_does_not_own_treasury_money_operations_without_a_business_caller() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut production = String::new();
@@ -234,6 +254,7 @@ fn execution_connected_facade_reads_mmap_and_routes_from_control() {
     assert!(server.contains("install_execution_connection("));
     assert!(server.contains("execution_client("));
     assert!(server.contains("ExecutionControlRpcClient::routes"));
+    assert!(server.contains("ExecutionControlRpcClient::order_audit"));
     assert!(!server.contains("ExecutionConnection::control_only"));
     assert!(!server.contains("ExecutionClient::connect"));
     assert!(!server.contains("ExecutionViewReader::open"));
@@ -246,6 +267,22 @@ fn execution_connected_facade_reads_mmap_and_routes_from_control() {
     assert!(!cli.contains("Command::RemoteHistory"));
     assert!(!cli.contains("Command::RemoteInspect"));
     assert!(!cli.contains("Command::StreamNext"));
+    for removed in [
+        "Self::Orders",
+        "Self::OpenOrders",
+        "Self::History",
+        "Self::Status",
+        "Self::Inspect",
+        "Self::Events",
+        "Self::Trace",
+        "Self::Journal",
+        "Self::Fills",
+    ] {
+        assert!(
+            !cli.contains(removed),
+            "removed connected path remains: {removed}"
+        );
+    }
 
     let schema = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -267,6 +304,39 @@ fn execution_connected_facade_reads_mmap_and_routes_from_control() {
             "missing current view field: {required}"
         );
     }
+}
+
+#[test]
+fn execution_has_one_instance_partitioned_current_view_without_compatibility_roots() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let contract =
+        fs::read_to_string(root.join("contract/src/view/key.rs")).expect("read Execution view key");
+    let launch = fs::read_to_string(root.join("src/composition/launch.rs"))
+        .expect("read Execution composition");
+    let publisher = fs::read_to_string(root.join("src/application/conflux.rs"))
+        .expect("read Execution publisher");
+    let schemas = root.join("../../../schemas/v2/execution/views");
+
+    assert!(contract.contains("CurrentExecution"));
+    assert!(contract.contains("launch="));
+    assert!(contract.contains("instance="));
+    assert!(!contract.contains("ActiveOrders"));
+    assert!(!contract.contains("ActiveIntents"));
+    assert_eq!(
+        launch
+            .matches("ExecutionViewKind::CurrentExecution")
+            .count(),
+        1
+    );
+    assert_eq!(
+        publisher
+            .matches("ExecutionViewKind::CurrentExecution")
+            .count(),
+        2
+    );
+    assert!(!schemas.join("active_orders.fbs").exists());
+    assert!(!schemas.join("active_intents.fbs").exists());
+    assert!(schemas.join("current_execution.fbs").is_file());
 }
 
 #[test]

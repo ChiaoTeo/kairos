@@ -3,6 +3,35 @@ use super::*;
 #[derive(Default)]
 pub struct SimulatedOrderEntry;
 
+/// Explicit provider environment selected for one Execution route.
+///
+/// It is deliberately not inferred from endpoint text: REST and private
+/// streams can use unrelated hostnames, so guessing can cross the test/live
+/// safety boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionVenueEnvironment {
+    Live,
+    Testnet,
+    Demo,
+    Paper,
+}
+
+impl ExecutionVenueEnvironment {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Testnet => "testnet",
+            Self::Demo => "demo",
+            Self::Paper => "paper",
+        }
+    }
+
+    pub const fn is_external_non_live(self) -> bool {
+        matches!(self, Self::Testnet | Self::Demo)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExecutionConnectionOptions {
     /// Business route identity. It is never sent to Integration or a provider.
@@ -21,6 +50,7 @@ pub struct ExecutionConnectionOptions {
     /// Execution channel. For OKX this remains independent from the
     /// order/account trading mode below.
     pub execution_channel: String,
+    pub environment: ExecutionVenueEnvironment,
     pub trading_mode: Option<String>,
     pub api_key: SecretString,
     pub secret: SecretString,

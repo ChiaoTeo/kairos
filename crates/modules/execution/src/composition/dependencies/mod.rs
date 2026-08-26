@@ -40,7 +40,7 @@ pub fn configure_execution_dependencies(
     application.attach_intent_planner(QueuedExecutionIntentPlanner::start(
         intent_planner,
         capacity,
-    )?);
+    )?)?;
     application.attach_order_admission(ExecutionOrderAdmissionService::live(
         QueuedExecutionOrderAdmission::start(order_admission, capacity)?,
     ));

@@ -21,7 +21,7 @@ pub struct ExecutionFill {
     pub reported_broker_id: Option<BrokerId>,
     #[serde(default)]
     pub execution_channel: Option<kairos_primitives::execution::ExecutionChannelCode>,
-    #[serde(default, alias = "provider_symbol")]
+    #[serde(default)]
     pub order_entry_symbol: Option<kairos_primitives::execution::OrderEntrySymbol>,
     #[serde(default)]
     pub remote_order_id: Option<RemoteOrderId>,
@@ -32,5 +32,7 @@ pub struct ExecutionFill {
     /// Currency in which the provider charged the fee.
     #[serde(default)]
     pub fee_currency: Option<Currency>,
+    #[serde(default)]
+    pub source_cursor: Option<OrderFactCursor>,
     pub occurred_at_unix_nanos: UnixNanos,
 }

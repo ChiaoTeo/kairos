@@ -90,8 +90,33 @@ class CurrentExecutionView(object):
         return o == 0
 
     # CurrentExecutionView
-    def Fills(self, j):
+    def AlgorithmRuns(self, j):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.execution.v2.AlgorithmRunState import AlgorithmRunState
+            obj = AlgorithmRunState()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # CurrentExecutionView
+    def AlgorithmRunsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # CurrentExecutionView
+    def AlgorithmRunsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        return o == 0
+
+    # CurrentExecutionView
+    def Fills(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -104,19 +129,19 @@ class CurrentExecutionView(object):
 
     # CurrentExecutionView
     def FillsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # CurrentExecutionView
     def FillsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         return o == 0
 
     # CurrentExecutionView
     def OrderEvents(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -129,19 +154,19 @@ class CurrentExecutionView(object):
 
     # CurrentExecutionView
     def OrderEventsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # CurrentExecutionView
     def OrderEventsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         return o == 0
 
     # CurrentExecutionView
     def IntentEvents(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -154,19 +179,19 @@ class CurrentExecutionView(object):
 
     # CurrentExecutionView
     def IntentEventsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # CurrentExecutionView
     def IntentEventsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         return o == 0
 
     # CurrentExecutionView
     def UnknownRemoteOrders(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -179,19 +204,19 @@ class CurrentExecutionView(object):
 
     # CurrentExecutionView
     def UnknownRemoteOrdersLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # CurrentExecutionView
     def UnknownRemoteOrdersIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         return o == 0
 
     # CurrentExecutionView
     def Commitments(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -204,19 +229,19 @@ class CurrentExecutionView(object):
 
     # CurrentExecutionView
     def CommitmentsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # CurrentExecutionView
     def CommitmentsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         return o == 0
 
     # CurrentExecutionView
     def RiskReservations(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -229,46 +254,46 @@ class CurrentExecutionView(object):
 
     # CurrentExecutionView
     def RiskReservationsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # CurrentExecutionView
     def RiskReservationsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         return o == 0
 
     # CurrentExecutionView
     def ExchangeEventWatermarkUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # CurrentExecutionView
     def FillHistoryTruncated(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
-        if o != 0:
-            return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
-        return False
-
-    # CurrentExecutionView
-    def OrderEventHistoryTruncated(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return False
 
     # CurrentExecutionView
-    def IntentEventHistoryTruncated(self):
+    def OrderEventHistoryTruncated(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return False
 
+    # CurrentExecutionView
+    def IntentEventHistoryTruncated(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        if o != 0:
+            return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
+        return False
+
 def CurrentExecutionViewStart(builder):
-    builder.StartObject(13)
+    builder.StartObject(14)
 
 def Start(builder):
     CurrentExecutionViewStart(builder)
@@ -303,8 +328,20 @@ def CurrentExecutionViewStartIntentsVector(builder, numElems):
 def StartIntentsVector(builder, numElems):
     return CurrentExecutionViewStartIntentsVector(builder, numElems)
 
+def CurrentExecutionViewAddAlgorithmRuns(builder, algorithmRuns):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(algorithmRuns), 0)
+
+def AddAlgorithmRuns(builder, algorithmRuns):
+    CurrentExecutionViewAddAlgorithmRuns(builder, algorithmRuns)
+
+def CurrentExecutionViewStartAlgorithmRunsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartAlgorithmRunsVector(builder, numElems):
+    return CurrentExecutionViewStartAlgorithmRunsVector(builder, numElems)
+
 def CurrentExecutionViewAddFills(builder, fills):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(fills), 0)
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(fills), 0)
 
 def AddFills(builder, fills):
     CurrentExecutionViewAddFills(builder, fills)
@@ -316,7 +353,7 @@ def StartFillsVector(builder, numElems):
     return CurrentExecutionViewStartFillsVector(builder, numElems)
 
 def CurrentExecutionViewAddOrderEvents(builder, orderEvents):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(orderEvents), 0)
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(orderEvents), 0)
 
 def AddOrderEvents(builder, orderEvents):
     CurrentExecutionViewAddOrderEvents(builder, orderEvents)
@@ -328,7 +365,7 @@ def StartOrderEventsVector(builder, numElems):
     return CurrentExecutionViewStartOrderEventsVector(builder, numElems)
 
 def CurrentExecutionViewAddIntentEvents(builder, intentEvents):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(intentEvents), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(intentEvents), 0)
 
 def AddIntentEvents(builder, intentEvents):
     CurrentExecutionViewAddIntentEvents(builder, intentEvents)
@@ -340,7 +377,7 @@ def StartIntentEventsVector(builder, numElems):
     return CurrentExecutionViewStartIntentEventsVector(builder, numElems)
 
 def CurrentExecutionViewAddUnknownRemoteOrders(builder, unknownRemoteOrders):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(unknownRemoteOrders), 0)
+    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(unknownRemoteOrders), 0)
 
 def AddUnknownRemoteOrders(builder, unknownRemoteOrders):
     CurrentExecutionViewAddUnknownRemoteOrders(builder, unknownRemoteOrders)
@@ -352,7 +389,7 @@ def StartUnknownRemoteOrdersVector(builder, numElems):
     return CurrentExecutionViewStartUnknownRemoteOrdersVector(builder, numElems)
 
 def CurrentExecutionViewAddCommitments(builder, commitments):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(commitments), 0)
+    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(commitments), 0)
 
 def AddCommitments(builder, commitments):
     CurrentExecutionViewAddCommitments(builder, commitments)
@@ -364,7 +401,7 @@ def StartCommitmentsVector(builder, numElems):
     return CurrentExecutionViewStartCommitmentsVector(builder, numElems)
 
 def CurrentExecutionViewAddRiskReservations(builder, riskReservations):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(riskReservations), 0)
+    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(riskReservations), 0)
 
 def AddRiskReservations(builder, riskReservations):
     CurrentExecutionViewAddRiskReservations(builder, riskReservations)
@@ -376,25 +413,25 @@ def StartRiskReservationsVector(builder, numElems):
     return CurrentExecutionViewStartRiskReservationsVector(builder, numElems)
 
 def CurrentExecutionViewAddExchangeEventWatermarkUnixNanos(builder, exchangeEventWatermarkUnixNanos):
-    builder.PrependUint64Slot(9, exchangeEventWatermarkUnixNanos, 0)
+    builder.PrependUint64Slot(10, exchangeEventWatermarkUnixNanos, 0)
 
 def AddExchangeEventWatermarkUnixNanos(builder, exchangeEventWatermarkUnixNanos):
     CurrentExecutionViewAddExchangeEventWatermarkUnixNanos(builder, exchangeEventWatermarkUnixNanos)
 
 def CurrentExecutionViewAddFillHistoryTruncated(builder, fillHistoryTruncated):
-    builder.PrependBoolSlot(10, fillHistoryTruncated, 0)
+    builder.PrependBoolSlot(11, fillHistoryTruncated, 0)
 
 def AddFillHistoryTruncated(builder, fillHistoryTruncated):
     CurrentExecutionViewAddFillHistoryTruncated(builder, fillHistoryTruncated)
 
 def CurrentExecutionViewAddOrderEventHistoryTruncated(builder, orderEventHistoryTruncated):
-    builder.PrependBoolSlot(11, orderEventHistoryTruncated, 0)
+    builder.PrependBoolSlot(12, orderEventHistoryTruncated, 0)
 
 def AddOrderEventHistoryTruncated(builder, orderEventHistoryTruncated):
     CurrentExecutionViewAddOrderEventHistoryTruncated(builder, orderEventHistoryTruncated)
 
 def CurrentExecutionViewAddIntentEventHistoryTruncated(builder, intentEventHistoryTruncated):
-    builder.PrependBoolSlot(12, intentEventHistoryTruncated, 0)
+    builder.PrependBoolSlot(13, intentEventHistoryTruncated, 0)
 
 def AddIntentEventHistoryTruncated(builder, intentEventHistoryTruncated):
     CurrentExecutionViewAddIntentEventHistoryTruncated(builder, intentEventHistoryTruncated)

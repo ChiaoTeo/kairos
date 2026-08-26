@@ -2,7 +2,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_primitives::execution::{FillId, OrderId};
+use kairos_primitives::execution::{ClientOrderId, FillId};
+use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{Currency, Symbol};
 use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
@@ -67,10 +68,10 @@ pub(crate) fn parse_execution_events(
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
             };
-            let local_order_id = text("clOrdId")
-                .or_else(|| text("ordId"))
-                .ok_or_else(|| "OKX execution event order identity is missing".to_string())?;
-            let provider_order_id = text("ordId").unwrap_or("unknown");
+            let provider_order_id = text("ordId").ok_or_else(|| {
+                "OKX execution event remote order identity is missing".to_string()
+            })?;
+            let client_order_id = text("clOrdId").map(ClientOrderId::new).transpose()?;
             let symbol = text("instId")
                 .ok_or_else(|| "OKX execution event instrument is missing".to_string())?;
             let state = text("state").unwrap_or("unknown");
@@ -106,7 +107,8 @@ pub(crate) fn parse_execution_events(
                 observed_at_unix_nanos,
                 received_at_unix_nanos,
                 payload: ExternalExecutionEvent {
-                    order_id: OrderId::new(local_order_id)?,
+                    remote_order_id: RemoteOrderId::new(provider_order_id)?,
+                    client_order_id,
                     symbol: Symbol::new(symbol)?,
                     status: normalize_order_status(state),
                     side: Some(if text("side") == Some("sell") {
@@ -471,7 +473,8 @@ mod tests {
         assert_eq!(events.len(), 1);
         let event = &events[0];
         assert_eq!(event.channel_epoch, 4);
-        assert_eq!(event.payload.order_id, "local-1");
+        assert_eq!(event.payload.remote_order_id, "88");
+        assert_eq!(event.payload.client_order_id.as_deref(), Some("local-1"));
         assert_eq!(event.payload.symbol, "BTC-USDT-SWAP");
         assert_eq!(event.payload.status, OrderStatus::PartiallyFilled);
         assert_eq!(event.payload.side, Some(OrderSide::Buy));

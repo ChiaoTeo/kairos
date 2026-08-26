@@ -1,3 +1,6 @@
+use kairos_primitives::decimal::{Money, Quantity};
+use kairos_primitives::time::UnixNanos;
+
 use super::*;
 
 pub(super) fn encode_dependency_evidence<'a>(
@@ -57,57 +60,28 @@ pub(super) fn encode_dependency_evidence<'a>(
     builder.create_vector(&values)
 }
 
-pub(crate) fn encode_active_orders(
-    actor_id: &str,
-    identity: &InstanceIdentity,
-    generation: u64,
-    key: &ExecutionViewKey,
-    snapshot: &ExecutionCurrentView,
-) -> Result<Vec<u8>, String> {
-    let mut builder = FlatBufferBuilder::new();
-    let context = EncodeContext::view(
-        actor_id,
-        actor_id,
-        identity.clone(),
-        generation,
-        key.canonical_key(),
-    )?;
-    let metadata = view_metadata(
-        &mut builder,
-        &context,
-        key,
-        0,
-        snapshot.event_sequence.get(),
-    );
-    let order_offsets = snapshot
-        .orders
-        .iter()
-        .map(|order| encode_order_state(&mut builder, order))
-        .collect::<Result<Vec<_>, _>>()?;
-    let orders = builder.create_vector(&order_offsets);
-    let commitment_offsets = snapshot
-        .commitments
-        .iter()
-        .map(|commitment| encode_commitment_state(&mut builder, commitment))
-        .collect::<Result<Vec<_>, _>>()?;
-    let commitments = builder.create_vector(&commitment_offsets);
-    let reservation_offsets = snapshot
-        .risk_reservations
-        .iter()
-        .map(|reservation| encode_risk_reservation_state(&mut builder, reservation))
-        .collect::<Result<Vec<_>, _>>()?;
-    let risk_reservations = builder.create_vector(&reservation_offsets);
-    let root = fb::ActiveOrdersView::create(
-        &mut builder,
-        &fb::ActiveOrdersViewArgs {
-            metadata: Some(metadata),
-            orders: Some(orders),
-            commitments: Some(commitments),
-            risk_reservations: Some(risk_reservations),
-        },
-    );
-    fb::finish_active_orders_view_buffer(&mut builder, root);
-    Ok(builder.finished_data().to_vec())
+pub(super) fn active_order_status(status: ExecutionOrderStatus) -> bool {
+    matches!(
+        status,
+        ExecutionOrderStatus::Pending
+            | ExecutionOrderStatus::Submitting
+            | ExecutionOrderStatus::Accepted
+            | ExecutionOrderStatus::PartiallyFilled
+            | ExecutionOrderStatus::CancelRequested
+            | ExecutionOrderStatus::Unknown
+    )
+}
+
+pub(super) fn active_risk_reservation_status(status: RiskReservationSagaStatus) -> bool {
+    matches!(
+        status,
+        RiskReservationSagaStatus::AuthorizePending
+            | RiskReservationSagaStatus::Active
+            | RiskReservationSagaStatus::ResizePending
+            | RiskReservationSagaStatus::ReleasePending
+            | RiskReservationSagaStatus::ConsumePending
+            | RiskReservationSagaStatus::Uncertain
+    )
 }
 
 pub(crate) fn encode_current_execution(
@@ -133,18 +107,33 @@ pub(crate) fn encode_current_execution(
         snapshot.exchange_event_watermark_unix_nanos.get(),
         snapshot.event_sequence.get(),
     );
+    let active_intent_ids = snapshot
+        .intents
+        .iter()
+        .filter(|intent| active_intent_status(intent.status))
+        .map(|intent| intent.intent.intent_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
     let offsets = snapshot
         .orders
         .iter()
+        .filter(|order| active_order_status(order.status))
         .map(|value| encode_order_state(&mut builder, value))
         .collect::<Result<Vec<_>, _>>()?;
     let orders = builder.create_vector(&offsets);
     let offsets = snapshot
         .intents
         .iter()
+        .filter(|intent| active_intent_ids.contains(&intent.intent.intent_id))
         .map(|value| encode_intent_state(&mut builder, value))
         .collect::<Result<Vec<_>, _>>()?;
     let intents = builder.create_vector(&offsets);
+    let offsets = snapshot
+        .algorithm_runs
+        .iter()
+        .filter(|run| active_intent_ids.contains(&run.intent_id))
+        .map(|value| encode_algorithm_run_state(&mut builder, value))
+        .collect::<Result<Vec<_>, _>>()?;
+    let algorithm_runs = builder.create_vector(&offsets);
     let fill_start = snapshot.fills.len().saturating_sub(HISTORY_LIMIT);
     let offsets = snapshot.fills[fill_start..]
         .iter()
@@ -166,18 +155,27 @@ pub(crate) fn encode_current_execution(
     let offsets = snapshot
         .unknown_remote_orders
         .iter()
+        .filter(|value| {
+            matches!(
+                value.resolution,
+                crate::application::UnknownRemoteOrderResolution::Pending
+                    | crate::application::UnknownRemoteOrderResolution::ManualReview
+            )
+        })
         .map(|value| encode_unknown_remote_order(&mut builder, value))
         .collect::<Vec<_>>();
     let unknown_remote_orders = builder.create_vector(&offsets);
     let offsets = snapshot
         .commitments
         .iter()
+        .filter(|commitment| commitment.status.consumes_capacity())
         .map(|value| encode_commitment_state(&mut builder, value))
         .collect::<Result<Vec<_>, _>>()?;
     let commitments = builder.create_vector(&offsets);
     let offsets = snapshot
         .risk_reservations
         .iter()
+        .filter(|reservation| active_risk_reservation_status(reservation.status))
         .map(|value| encode_risk_reservation_state(&mut builder, value))
         .collect::<Result<Vec<_>, _>>()?;
     let risk_reservations = builder.create_vector(&offsets);
@@ -187,6 +185,7 @@ pub(crate) fn encode_current_execution(
             metadata: Some(metadata),
             orders: Some(orders),
             intents: Some(intents),
+            algorithm_runs: Some(algorithm_runs),
             fills: Some(fills),
             order_events: Some(order_events),
             intent_events: Some(intent_events),
@@ -672,6 +671,10 @@ fn encode_attempt<'a>(
         builder,
         &fb::ExecutionAttemptArgs {
             attempt_id: Some(attempt_id),
+            command: match attempt.command {
+                crate::domain::ExecutionCommandKind::Submit => fb::ExecutionCommandKind::SUBMIT,
+                crate::domain::ExecutionCommandKind::Cancel => fb::ExecutionCommandKind::CANCEL,
+            },
             selected_route: Some(selected_route),
             provider_connection_id: Some(provider_connection_id),
             command_started_at_unix_nanos: attempt.command_started_at_unix_nanos.get(),
@@ -682,6 +685,7 @@ fn encode_attempt<'a>(
                 },
                 crate::domain::DeliveryCertainty::Confirmed => fb::DeliveryCertainty::CONFIRMED,
                 crate::domain::DeliveryCertainty::Rejected => fb::DeliveryCertainty::REJECTED,
+                crate::domain::DeliveryCertainty::Reconciled => fb::DeliveryCertainty::RECONCILED,
             },
             remote_order_id,
         },
@@ -835,43 +839,214 @@ pub(super) fn decimal(
     kairos_protocol::generated::kairos::common::v_2::Decimal64::new(value.mantissa(), value.scale())
 }
 
-pub(crate) fn encode_active_intents(
-    actor_id: &str,
-    identity: &InstanceIdentity,
-    generation: u64,
-    key: &ExecutionViewKey,
-    snapshot: &ExecutionCurrentView,
-) -> Result<Vec<u8>, String> {
-    let mut builder = FlatBufferBuilder::new();
-    let context = EncodeContext::view(
-        actor_id,
-        actor_id,
-        identity.clone(),
-        generation,
-        key.canonical_key(),
-    )?;
-    let metadata = view_metadata(
-        &mut builder,
-        &context,
-        key,
-        0,
-        snapshot.event_sequence.get(),
-    );
-    let intent_offsets = snapshot
-        .intents
-        .iter()
-        .map(|intent| encode_intent_state(&mut builder, intent))
-        .collect::<Result<Vec<_>, _>>()?;
-    let intents = builder.create_vector(&intent_offsets);
-    let root = fb::ActiveIntentsView::create(
-        &mut builder,
-        &fb::ActiveIntentsViewArgs {
-            metadata: Some(metadata),
-            intents: Some(intents),
+fn encode_algorithm_run_state<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    run: &crate::domain::AlgorithmRun,
+) -> Result<flatbuffers::WIPOffset<fb::AlgorithmRunState<'a>>, String> {
+    let mut leg_offsets = Vec::with_capacity(run.legs.len());
+    for leg in &run.legs {
+        let quality = run
+            .quality
+            .legs
+            .iter()
+            .find(|quality| quality.leg_id == leg.leg_id);
+        let mut fee_offsets = Vec::new();
+        if let Some(quality) = quality {
+            for fee in &quality.fee_totals {
+                let currency = builder.create_string(fee.currency.as_str());
+                let amount = decimal(fee.amount);
+                fee_offsets.push(fb::ExecutionFeeTotal::create(
+                    builder,
+                    &fb::ExecutionFeeTotalArgs {
+                        currency: Some(currency),
+                        amount: Some(&amount),
+                    },
+                ));
+            }
+        }
+        let fee_totals = builder.create_vector(&fee_offsets);
+        let quality_filled = decimal(
+            quality
+                .map(|quality| quality.filled_quantity)
+                .unwrap_or(Quantity::ZERO),
+        );
+        let gross_notional = decimal(
+            quality
+                .map(|quality| quality.gross_notional)
+                .unwrap_or(Money::ZERO),
+        );
+        let average_fill_price = quality
+            .and_then(|quality| quality.average_fill_price)
+            .map(decimal);
+        let benchmark_offset = leg.benchmark.as_ref().map(|benchmark| {
+            let derived = quality.and_then(|quality| quality.benchmark.as_ref());
+            let instrument_id = builder.create_string(benchmark.instrument_id.as_str());
+            let market_id = builder.create_string(benchmark.market_id.as_str());
+            let price = decimal(benchmark.price);
+            let benchmark_notional = decimal(
+                derived
+                    .map(|benchmark| benchmark.benchmark_notional)
+                    .unwrap_or(Money::ZERO),
+            );
+            let implementation_shortfall = derived
+                .and_then(|benchmark| benchmark.implementation_shortfall)
+                .map(decimal);
+            fb::AlgorithmLegBenchmarkQuality::create(
+                builder,
+                &fb::AlgorithmLegBenchmarkQualityArgs {
+                    kind: match benchmark.kind {
+                        crate::domain::ExecutionBenchmarkKind::Arrival => {
+                            fb::ExecutionBenchmarkKind::ARRIVAL
+                        },
+                    },
+                    instrument_id: Some(instrument_id),
+                    market_id: Some(market_id),
+                    price: Some(&price),
+                    observed_at_unix_nanos: benchmark.observed_at_unix_nanos.get(),
+                    benchmark_notional: Some(&benchmark_notional),
+                    implementation_shortfall: implementation_shortfall.as_ref(),
+                },
+            )
+        });
+        let quality_offset = fb::AlgorithmLegExecutionQuality::create(
+            builder,
+            &fb::AlgorithmLegExecutionQualityArgs {
+                order_count: quality.map(|quality| quality.order_count).unwrap_or(0),
+                fill_count: quality.map(|quality| quality.fill_count).unwrap_or(0),
+                cancel_attempt_count: quality
+                    .map(|quality| quality.cancel_attempt_count)
+                    .unwrap_or(0),
+                filled_quantity: Some(&quality_filled),
+                gross_notional: Some(&gross_notional),
+                average_fill_price: average_fill_price.as_ref(),
+                first_order_submitted_at_unix_nanos: quality
+                    .and_then(|quality| quality.first_order_submitted_at)
+                    .map(UnixNanos::get),
+                first_fill_at_unix_nanos: quality
+                    .and_then(|quality| quality.first_fill_at)
+                    .map(UnixNanos::get),
+                last_fill_at_unix_nanos: quality
+                    .and_then(|quality| quality.last_fill_at)
+                    .map(UnixNanos::get),
+                time_to_first_fill_nanos: quality
+                    .and_then(|quality| quality.time_to_first_fill)
+                    .map(kairos_primitives::time::DurationNanos::get),
+                time_to_last_fill_nanos: quality
+                    .and_then(|quality| quality.time_to_last_fill)
+                    .map(kairos_primitives::time::DurationNanos::get),
+                fee_totals: Some(fee_totals),
+                benchmark: benchmark_offset,
+            },
+        );
+        let leg_id = builder.create_string(leg.leg_id.as_str());
+        let target_quantity = decimal(leg.target_quantity);
+        let committed_quantity = decimal(leg.committed_quantity);
+        let filled_quantity = decimal(leg.filled_quantity);
+        leg_offsets.push(fb::AlgorithmLegState::create(
+            builder,
+            &fb::AlgorithmLegStateArgs {
+                leg_id: Some(leg_id),
+                role: match leg.role {
+                    crate::domain::AlgorithmLegRole::Immediate => fb::AlgorithmLegRole::IMMEDIATE,
+                    crate::domain::AlgorithmLegRole::Twap => fb::AlgorithmLegRole::TWAP,
+                    crate::domain::AlgorithmLegRole::PassiveLimit => {
+                        fb::AlgorithmLegRole::PASSIVE_LIMIT
+                    },
+                    crate::domain::AlgorithmLegRole::LeaderMaker => {
+                        fb::AlgorithmLegRole::LEADER_MAKER
+                    },
+                    crate::domain::AlgorithmLegRole::HedgeTaker => {
+                        fb::AlgorithmLegRole::HEDGE_TAKER
+                    },
+                    crate::domain::AlgorithmLegRole::Unwind => fb::AlgorithmLegRole::UNWIND,
+                },
+                lifecycle: match leg.lifecycle {
+                    crate::domain::AlgorithmLegLifecycle::Dormant => {
+                        fb::AlgorithmLegLifecycle::DORMANT
+                    },
+                    crate::domain::AlgorithmLegLifecycle::Ready => fb::AlgorithmLegLifecycle::READY,
+                    crate::domain::AlgorithmLegLifecycle::Active => {
+                        fb::AlgorithmLegLifecycle::ACTIVE
+                    },
+                    crate::domain::AlgorithmLegLifecycle::Completed => {
+                        fb::AlgorithmLegLifecycle::COMPLETED
+                    },
+                    crate::domain::AlgorithmLegLifecycle::Failed => {
+                        fb::AlgorithmLegLifecycle::FAILED
+                    },
+                    crate::domain::AlgorithmLegLifecycle::ReconciliationRequired => {
+                        fb::AlgorithmLegLifecycle::RECONCILIATION_REQUIRED
+                    },
+                },
+                target_quantity: Some(&target_quantity),
+                committed_quantity: Some(&committed_quantity),
+                filled_quantity: Some(&filled_quantity),
+                quality: Some(quality_offset),
+            },
+        ));
+    }
+    let legs = builder.create_vector(&leg_offsets);
+    let algorithm_run_id = builder.create_string(run.algorithm_run_id.as_str());
+    let intent_id = builder.create_string(run.intent_id.as_str());
+    let algorithm_kind = builder.create_string(match run.spec {
+        crate::domain::ExecutionAlgorithmSpec::Immediate => "immediate",
+        crate::domain::ExecutionAlgorithmSpec::Twap(_) => "twap",
+        crate::domain::ExecutionAlgorithmSpec::PassiveLimit(_) => "passive_limit",
+        crate::domain::ExecutionAlgorithmSpec::MakerTakerHedge(_) => "maker_taker_hedge",
+    });
+    Ok(fb::AlgorithmRunState::create(
+        builder,
+        &fb::AlgorithmRunStateArgs {
+            algorithm_run_id: Some(algorithm_run_id),
+            algorithm_version: run.algorithm_version,
+            intent_id: Some(intent_id),
+            algorithm_kind: Some(algorithm_kind),
+            lifecycle: match run.status {
+                crate::domain::AlgorithmRunStatus::Planned => fb::AlgorithmRunLifecycle::PLANNED,
+                crate::domain::AlgorithmRunStatus::Running => fb::AlgorithmRunLifecycle::RUNNING,
+                crate::domain::AlgorithmRunStatus::Waiting => fb::AlgorithmRunLifecycle::WAITING,
+                crate::domain::AlgorithmRunStatus::Completed => {
+                    fb::AlgorithmRunLifecycle::COMPLETED
+                },
+                crate::domain::AlgorithmRunStatus::Unwound => fb::AlgorithmRunLifecycle::UNWOUND,
+                crate::domain::AlgorithmRunStatus::Failed => fb::AlgorithmRunLifecycle::FAILED,
+                crate::domain::AlgorithmRunStatus::ReconciliationRequired => {
+                    fb::AlgorithmRunLifecycle::RECONCILIATION_REQUIRED
+                },
+            },
+            decision_sequence: run.decision_sequence,
+            last_decision_at_unix_nanos: run.last_decision_at.map(UnixNanos::get),
+            next_wake_at_unix_nanos: run.next_wake_at.map(UnixNanos::get),
+            action_count: u64::try_from(run.actions.len())
+                .map_err(|_| "algorithm action count overflow".to_string())?,
+            pending_action_count: u64::try_from(run.pending_actions().count())
+                .map_err(|_| "algorithm pending action count overflow".to_string())?,
+            indeterminate_action_count: u64::try_from(
+                run.actions
+                    .iter()
+                    .filter(|action| {
+                        action.status == crate::domain::AlgorithmActionStatus::Indeterminate
+                    })
+                    .count(),
+            )
+            .map_err(|_| "algorithm indeterminate action count overflow".to_string())?,
+            legs: Some(legs),
         },
-    );
-    fb::finish_active_intents_view_buffer(&mut builder, root);
-    Ok(builder.finished_data().to_vec())
+    ))
+}
+
+pub(super) fn active_intent_status(status: crate::application::IntentStatus) -> bool {
+    matches!(
+        status,
+        crate::application::IntentStatus::Accepted
+            | crate::application::IntentStatus::Planning
+            | crate::application::IntentStatus::Planned
+            | crate::application::IntentStatus::Executing
+            | crate::application::IntentStatus::PartiallyFilled
+            | crate::application::IntentStatus::CancelRequested
+            | crate::application::IntentStatus::Compensating
+            | crate::application::IntentStatus::ReconciliationRequired
+    )
 }
 
 pub(super) fn encode_intent_state<'a>(
@@ -921,6 +1096,35 @@ pub(super) fn encode_execution_intent<'a>(
         .map(|leg| encode_intent_leg(builder, leg))
         .collect::<Result<Vec<_>, _>>()?;
     let legs = builder.create_vector(&leg_offsets);
+    let benchmark_offsets = intent
+        .execution_benchmarks
+        .iter()
+        .map(|benchmark| {
+            let leg_id = benchmark
+                .leg_id
+                .as_ref()
+                .map(|leg_id| builder.create_string(leg_id.as_str()));
+            let instrument_id = builder.create_string(benchmark.instrument_id.as_str());
+            let market_id = builder.create_string(benchmark.market_id.as_str());
+            let price = decimal(benchmark.price);
+            fb::ExecutionBenchmarkObservation::create(
+                builder,
+                &fb::ExecutionBenchmarkObservationArgs {
+                    kind: match benchmark.kind {
+                        crate::domain::ExecutionBenchmarkKind::Arrival => {
+                            fb::ExecutionBenchmarkKind::ARRIVAL
+                        },
+                    },
+                    leg_id,
+                    instrument_id: Some(instrument_id),
+                    market_id: Some(market_id),
+                    price: Some(&price),
+                    observed_at_unix_nanos: benchmark.observed_at_unix_nanos.get(),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let execution_benchmarks = builder.create_vector(&benchmark_offsets);
     let evidence = builder.create_vector::<flatbuffers::WIPOffset<
         kairos_protocol::generated::kairos::common::v_2::EvidenceRef,
     >>(&[]);
@@ -942,6 +1146,19 @@ pub(super) fn encode_execution_intent<'a>(
                 },
             );
             (fb::ExecutionAlgorithm::TwapPolicy, value.as_union_value())
+        },
+        crate::domain::ExecutionAlgorithmPolicy::PassiveLimit(policy) => {
+            let value = fb::PassiveLimitPolicy::create(
+                builder,
+                &fb::PassiveLimitPolicyArgs {
+                    reprice_interval_nanos: policy.reprice_interval.get(),
+                    max_quote_age_nanos: policy.max_quote_age.get(),
+                },
+            );
+            (
+                fb::ExecutionAlgorithm::PassiveLimitPolicy,
+                value.as_union_value(),
+            )
         },
         crate::domain::ExecutionAlgorithmPolicy::MakerTakerHedge(policy) => {
             let leader_leg_id = builder.create_string(policy.leader_leg_id.as_str());
@@ -997,6 +1214,7 @@ pub(super) fn encode_execution_intent<'a>(
             evidence: Some(evidence),
             reason,
             strategy_decision_id,
+            execution_benchmarks: Some(execution_benchmarks),
         },
     ))
 }

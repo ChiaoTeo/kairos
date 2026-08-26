@@ -11,17 +11,18 @@ pub const ENUM_MIN_EXECUTION_ALGORITHM: u8 = 0;
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MAX_EXECUTION_ALGORITHM: u8 = 3;
+pub const ENUM_MAX_EXECUTION_ALGORITHM: u8 = 4;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_EXECUTION_ALGORITHM: [ExecutionAlgorithm; 4] = [
+pub const ENUM_VALUES_EXECUTION_ALGORITHM: [ExecutionAlgorithm; 5] = [
     ExecutionAlgorithm::NONE,
     ExecutionAlgorithm::ImmediateAlgorithm,
     ExecutionAlgorithm::TwapPolicy,
     ExecutionAlgorithm::HedgePolicy,
+    ExecutionAlgorithm::PassiveLimitPolicy,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -33,14 +34,16 @@ impl ExecutionAlgorithm {
     pub const ImmediateAlgorithm: Self = Self(1);
     pub const TwapPolicy: Self = Self(2);
     pub const HedgePolicy: Self = Self(3);
+    pub const PassiveLimitPolicy: Self = Self(4);
 
     pub const ENUM_MIN: u8 = 0;
-    pub const ENUM_MAX: u8 = 3;
+    pub const ENUM_MAX: u8 = 4;
     pub const ENUM_VALUES: &'static [Self] = &[
         Self::NONE,
         Self::ImmediateAlgorithm,
         Self::TwapPolicy,
         Self::HedgePolicy,
+        Self::PassiveLimitPolicy,
     ];
     /// Returns the variant's name or "" if unknown.
     pub fn variant_name(self) -> Option<&'static str> {
@@ -49,6 +52,7 @@ impl ExecutionAlgorithm {
             Self::ImmediateAlgorithm => Some("ImmediateAlgorithm"),
             Self::TwapPolicy => Some("TwapPolicy"),
             Self::HedgePolicy => Some("HedgePolicy"),
+            Self::PassiveLimitPolicy => Some("PassiveLimitPolicy"),
             _ => None,
         }
     }

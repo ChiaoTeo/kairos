@@ -25,29 +25,8 @@ class MakerExecutionPolicy(object):
         self._tab = flatbuffers.table.Table(buf, pos)
 
     # MakerExecutionPolicy
-    def MinIntervalNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(4))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
-        return None
-
-    # MakerExecutionPolicy
-    def MaxOrdersPerWindow(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
-        return None
-
-    # MakerExecutionPolicy
-    def WindowNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
-        return None
-
-    # MakerExecutionPolicy
     def MaxInventoryAbs(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(4))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -58,7 +37,7 @@ class MakerExecutionPolicy(object):
 
     # MakerExecutionPolicy
     def TargetInventory(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -69,49 +48,31 @@ class MakerExecutionPolicy(object):
 
     # MakerExecutionPolicy
     def MaxQuoteAgeNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return None
 
 def MakerExecutionPolicyStart(builder):
-    builder.StartObject(6)
+    builder.StartObject(3)
 
 def Start(builder):
     MakerExecutionPolicyStart(builder)
 
-def MakerExecutionPolicyAddMinIntervalNanos(builder, minIntervalNanos):
-    builder.PrependUint64Slot(0, minIntervalNanos, None)
-
-def AddMinIntervalNanos(builder, minIntervalNanos):
-    MakerExecutionPolicyAddMinIntervalNanos(builder, minIntervalNanos)
-
-def MakerExecutionPolicyAddMaxOrdersPerWindow(builder, maxOrdersPerWindow):
-    builder.PrependUint32Slot(1, maxOrdersPerWindow, None)
-
-def AddMaxOrdersPerWindow(builder, maxOrdersPerWindow):
-    MakerExecutionPolicyAddMaxOrdersPerWindow(builder, maxOrdersPerWindow)
-
-def MakerExecutionPolicyAddWindowNanos(builder, windowNanos):
-    builder.PrependUint64Slot(2, windowNanos, None)
-
-def AddWindowNanos(builder, windowNanos):
-    MakerExecutionPolicyAddWindowNanos(builder, windowNanos)
-
 def MakerExecutionPolicyAddMaxInventoryAbs(builder, maxInventoryAbs):
-    builder.PrependStructSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(maxInventoryAbs), 0)
+    builder.PrependStructSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(maxInventoryAbs), 0)
 
 def AddMaxInventoryAbs(builder, maxInventoryAbs):
     MakerExecutionPolicyAddMaxInventoryAbs(builder, maxInventoryAbs)
 
 def MakerExecutionPolicyAddTargetInventory(builder, targetInventory):
-    builder.PrependStructSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(targetInventory), 0)
+    builder.PrependStructSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(targetInventory), 0)
 
 def AddTargetInventory(builder, targetInventory):
     MakerExecutionPolicyAddTargetInventory(builder, targetInventory)
 
 def MakerExecutionPolicyAddMaxQuoteAgeNanos(builder, maxQuoteAgeNanos):
-    builder.PrependUint64Slot(5, maxQuoteAgeNanos, None)
+    builder.PrependUint64Slot(2, maxQuoteAgeNanos, None)
 
 def AddMaxQuoteAgeNanos(builder, maxQuoteAgeNanos):
     MakerExecutionPolicyAddMaxQuoteAgeNanos(builder, maxQuoteAgeNanos)

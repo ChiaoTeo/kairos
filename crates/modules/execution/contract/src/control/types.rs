@@ -4,10 +4,11 @@ use kairos_primitives::execution::{
     ExecutionChannelCode, ExecutionRouteId, FillId, IntentId, LegId, OrderEntrySymbol, OrderId,
     OrderOptionCode, OrderSide, OrderType,
 };
+use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
 use kairos_primitives::risk::DecisionId;
 use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId, WorkspaceId};
-use kairos_primitives::time::{DurationNanos, UnixNanos};
+use kairos_primitives::time::{DurationNanos, Sequence, UnixNanos};
 use kairos_protocol::control::jsonrpc::{RpcResult, conflux_rpc};
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,11 @@ pub trait ExecutionControlRpc {
         &self,
         query: kairos_execution_contract::ExecutionRoutesQuery,
     ) -> RpcResult<kairos_execution_contract::ExecutionRoutesResponse>;
+
+    async fn order_audit(
+        &self,
+        query: kairos_execution_contract::ExecutionOrderAuditQuery,
+    ) -> RpcResult<kairos_execution_contract::ExecutionOrderAuditResponse>;
 
     async fn submit_intent(
         &self,
@@ -57,6 +63,99 @@ pub trait ExecutionControlRpc {
         request: kairos_execution_contract::ExecutionBacktestMarketRequest,
     ) -> RpcResult<kairos_execution_contract::ExecutionBacktestMarketResponse>;
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionOrderLifecycle {
+    Pending,
+    Submitting,
+    Accepted,
+    PartiallyFilled,
+    Filled,
+    CancelRequested,
+    Canceled,
+    Rejected,
+    Expired,
+    Unknown,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionDeliveryCertainty {
+    NotSent,
+    Indeterminate,
+    Confirmed,
+    Rejected,
+    Reconciled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionAttemptCommand {
+    Submit,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionRouteSelection {
+    Explicit,
+    UniqueCandidate,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionAttemptEvidenceResponse {
+    pub attempt_id: String,
+    pub command: ExecutionAttemptCommand,
+    pub route_id: ExecutionRouteId,
+    pub broker_id: BrokerId,
+    pub execution_channel: ExecutionChannelCode,
+    pub order_entry_symbol: OrderEntrySymbol,
+    pub destination_market_id: Option<MarketId>,
+    pub route_selected_at_unix_nanos: UnixNanos,
+    pub route_selection: ExecutionRouteSelection,
+    pub provider_connection_id: String,
+    pub command_started_at_unix_nanos: UnixNanos,
+    pub delivery_certainty: ExecutionDeliveryCertainty,
+    pub remote_order_id: Option<RemoteOrderId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionOrderAuditQuery {
+    #[serde(default)]
+    pub order_id: Option<OrderId>,
+    #[serde(default)]
+    pub remote_order_id: Option<RemoteOrderId>,
+    #[serde(default)]
+    pub lifecycle: Option<ExecutionOrderLifecycle>,
+    #[serde(default)]
+    pub since_unix_nanos: Option<UnixNanos>,
+    #[serde(default)]
+    pub until_unix_nanos: Option<UnixNanos>,
+    #[serde(default = "default_order_audit_limit")]
+    pub limit: u32,
+}
+
+const fn default_order_audit_limit() -> u32 {
+    1_000
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionOrderAuditEventResponse {
+    pub sequence: Sequence,
+    pub order_id: OrderId,
+    pub lifecycle: ExecutionOrderLifecycle,
+    pub remote_order_id: Option<RemoteOrderId>,
+    pub occurred_at_unix_nanos: UnixNanos,
+    pub reason: String,
+    pub attempt: Option<ExecutionAttemptEvidenceResponse>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionOrderAuditResponse {
+    pub events: Vec<ExecutionOrderAuditEventResponse>,
+}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionControlResponse {
     pub status: Option<String>,
@@ -81,7 +180,6 @@ pub struct ExecutionRouteCandidateResponse {
     pub market_id: Option<MarketId>,
     pub broker_id: BrokerId,
     pub execution_channel: ExecutionChannelCode,
-    #[serde(alias = "provider_symbol")]
     pub order_entry_symbol: OrderEntrySymbol,
     pub supported_order_types: Vec<OrderType>,
     pub supported_options: Vec<OrderOptionCode>,
@@ -158,10 +256,15 @@ pub struct TwapPolicyRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PassiveLimitPolicyRequest {
+    pub reprice_interval: DurationNanos,
+    pub max_quote_age: DurationNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MakerExecutionPolicyRequest {
-    pub min_interval: Option<DurationNanos>,
-    pub max_orders_per_window: Option<u32>,
-    pub window: Option<DurationNanos>,
     pub max_inventory_abs: Option<SignedQuantity>,
     pub target_inventory: Option<SignedQuantity>,
     pub max_quote_age: Option<DurationNanos>,
@@ -196,6 +299,24 @@ pub struct IntentLegRequest {
     pub options: ExecutionOrderOptionsRequest,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBenchmarkKind {
+    Arrival,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionBenchmarkRequest {
+    pub kind: ExecutionBenchmarkKind,
+    #[serde(default)]
+    pub leg_id: Option<LegId>,
+    pub instrument_id: InstrumentId,
+    pub market_id: MarketId,
+    pub price: Price,
+    pub observed_at_unix_nanos: UnixNanos,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HedgePolicyRequest {
     pub leader_leg_id: LegId,
@@ -220,6 +341,7 @@ pub struct HedgePolicyRequest {
 pub enum ExecutionAlgorithmPolicyRequest {
     Immediate,
     Twap(TwapPolicyRequest),
+    PassiveLimit(PassiveLimitPolicyRequest),
     MakerTakerHedge(HedgePolicyRequest),
 }
 
@@ -247,6 +369,8 @@ pub struct ExecutionIntentRequest {
     pub completion_policy: CompletionPolicy,
     pub failure_policy: FailurePolicy,
     pub legs: Vec<IntentLegRequest>,
+    #[serde(default)]
+    pub execution_benchmarks: Vec<ExecutionBenchmarkRequest>,
     pub deadline_unix_nanos: Option<UnixNanos>,
     pub min_edge_bps: Option<u32>,
     pub max_slippage_bps: Option<u32>,
@@ -517,6 +641,12 @@ pub struct ExecutionRouteHealth {
 pub struct ExecutionHealthResponse {
     pub status: String,
     pub writer_recovery_ready: bool,
+    pub risk_recovery_ready: bool,
+    pub risk_recovery_error: Option<String>,
+    pub reconciliation_required_orders: u64,
+    pub reconciliation_required_intents: u64,
+    pub unresolved_remote_orders: u64,
+    pub indeterminate_algorithm_actions: u64,
     pub outbox_backlog: u64,
     pub oldest_outbox_event_age_ms: Option<u64>,
     pub outbox_error: Option<String>,

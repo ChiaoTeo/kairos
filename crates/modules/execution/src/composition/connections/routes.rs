@@ -11,6 +11,7 @@ pub(crate) fn install_execution_connections(
     let mut plans = Vec::new();
     let mut descriptors = Vec::new();
     for option in options {
+        validate_route_environment(option)?;
         if matches!(
             option.broker_id.trim().to_ascii_lowercase().as_str(),
             "simulated" | "paper"
@@ -71,12 +72,12 @@ fn binance_route(
             .map_err(|error| error.to_string())
     };
     let rest = || kairos_conflux::BinanceRestConfig {
-        environment: environment(option),
+        environment: option.environment.as_str().into(),
         endpoint: option.base_url.clone(),
         credential: Some(binance_credential(option)),
     };
     let user = || kairos_conflux::BinanceUserWebSocketConfig {
-        environment: environment(option),
+        environment: option.environment.as_str().into(),
         rest_endpoint: option.base_url.clone(),
         websocket_endpoint: option.websocket_url.clone(),
         credential: binance_credential(option),
@@ -172,7 +173,7 @@ fn okx_route(
     let credential = okx_credential(option);
     let rest_config = |_suffix: &str| kairos_conflux::OkxPrivateRestConfig {
         connection: kairos_conflux::OkxRestConfig {
-            environment: environment(option),
+            environment: option.environment.as_str().into(),
             endpoint: option.base_url.clone(),
         },
         credential: credential.clone(),
@@ -211,7 +212,7 @@ fn okx_route(
             stream_key.clone(),
             kairos_conflux::OkxPrivateWebSocketConfig {
                 connection: kairos_conflux::OkxWebSocketConfig {
-                    environment: environment(option),
+                    environment: option.environment.as_str().into(),
                     endpoint: option.websocket_url.clone(),
                     event_capacity: option.order_event_queue_capacity.max(1),
                 },
@@ -249,7 +250,7 @@ fn ibkr_route(
         ));
     }
     let order_config = || kairos_conflux::IbkrOrderConfig {
-        environment: environment(option),
+        environment: option.environment.as_str().into(),
         host: option.host.clone(),
         port: option.port,
         client_id: option.client_id,
@@ -296,7 +297,7 @@ fn ibkr_route(
         .create_with_options(
             stream_key.clone(),
             kairos_conflux::IbkrExecutionStreamConfig {
-                environment: environment(option),
+                environment: option.environment.as_str().into(),
                 host: option.host.clone(),
                 port: option.port,
                 client_id: option.client_id.saturating_add(1),
@@ -346,12 +347,41 @@ fn okx_credential(option: &ExecutionConnectionOptions) -> kairos_conflux::OkxCre
     }
 }
 
-fn environment(option: &ExecutionConnectionOptions) -> String {
-    let endpoint = option.base_url.to_ascii_lowercase();
-    if endpoint.contains("test") || endpoint.contains("demo") {
-        "test".into()
-    } else {
-        "live".into()
+fn validate_route_environment(option: &ExecutionConnectionOptions) -> Result<(), String> {
+    let provider = option.broker_id.trim().to_ascii_lowercase();
+    let environment = option.environment;
+    match provider.as_str() {
+        "simulated" | "paper" if environment == ExecutionVenueEnvironment::Paper => Ok(()),
+        "simulated" | "paper" => {
+            Err("simulated Execution routes require environment=paper".into())
+        },
+        "binance"
+            if matches!(
+                environment,
+                ExecutionVenueEnvironment::Live | ExecutionVenueEnvironment::Testnet
+            ) =>
+        {
+            Ok(())
+        },
+        "binance" => Err("Binance Execution routes require environment=live or testnet".into()),
+        "okx" | "okex" if environment == ExecutionVenueEnvironment::Live => Ok(()),
+        "okx" | "okex" if environment == ExecutionVenueEnvironment::Demo => Err(
+            "OKX demo Execution is unavailable until simulated-trading authentication is implemented"
+                .into(),
+        ),
+        "okx" | "okex" => {
+            Err("OKX Execution routes require environment=live or demo".into())
+        },
+        "ibkr"
+            if matches!(
+                environment,
+                ExecutionVenueEnvironment::Live | ExecutionVenueEnvironment::Paper
+            ) =>
+        {
+            Ok(())
+        },
+        "ibkr" => Err("IBKR Execution routes require environment=live or paper".into()),
+        _ => Ok(()),
     }
 }
 

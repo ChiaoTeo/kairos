@@ -123,7 +123,7 @@ def test_live_execution_requires_explicit_side_effect_and_notional_bound(
         "[execution]\nenabled = true\n"
         'routes = [{ route_id = "main-spot", account_id = "main", '
         'segment_key = "spot", broker_id = "binance", '
-        'execution_channel = "spot" }]\n\n'
+        'execution_channel = "spot", environment = "live" }]\n\n'
         '[accounts.main]\nref = "main"\nsegments = ["spot"]\ntrade = true\n\n'
         '[risk]\nprofile = "production-default"\n\n'
         "[live.safety]\ntrading_enabled = false\nrequire_limit_orders = true\n",
@@ -198,7 +198,8 @@ def test_live_trade_route_requires_explicit_order_trade_binding(
         '[accounts.main]\nref = "main"\ntrade = true\n\n'
         "[execution]\nenabled = true\n"
         'routes = [{ route_id = "main-spot", account_id = "main", '
-        'segment_key = "spot", broker_id = "binance", execution_channel = "spot" }]\n\n'
+        'segment_key = "spot", broker_id = "binance", execution_channel = "spot", '
+        'environment = "live" }]\n\n'
         '[risk]\nprofile = "production-default"\n\n'
         "[live.safety]\ntrading_enabled = true\nrequire_limit_orders = true\n"
         'max_order_notional = "100"\n',
@@ -226,6 +227,17 @@ def test_live_trade_route_requires_explicit_order_trade_binding(
         launch_configuration._workspace_account_issues(config, workspace.paths.root)
         == ()
     )
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'environment = "live"', 'environment = "testnet"'
+        ),
+        encoding="utf-8",
+    )
+    mismatched = LaunchConfigurationApplication().load(path)
+    assert launch_configuration._workspace_account_issues(
+        mismatched, workspace.paths.root
+    ) == ("Execution route environment does not match Account: main (testnet != live)",)
 
 
 def test_launch_rejects_an_unverified_arbitrary_workspace_data_profile(
@@ -538,6 +550,7 @@ def test_launch_draft_materializes_one_explicit_execution_route_per_account() ->
             "segment_key": "spot",
             "broker_id": "simulated",
             "execution_channel": "spot",
+            "environment": "paper",
         },
         {
             "route_id": "hedge-spot",
@@ -545,6 +558,7 @@ def test_launch_draft_materializes_one_explicit_execution_route_per_account() ->
             "segment_key": "spot",
             "broker_id": "simulated",
             "execution_channel": "spot",
+            "environment": "paper",
         },
     ]
 
@@ -569,6 +583,7 @@ def test_live_launch_draft_materializes_risk_and_execution_selection() -> None:
         "segment_key": "equity",
         "broker_id": "ibkr",
         "execution_channel": "equity",
+        "environment": "live",
     }
 
 
@@ -1124,25 +1139,37 @@ def test_execution_routes_are_validated_without_inline_secrets(tmp_path: Path) -
 [execution]
 
 [[execution.routes]]
-route_id = "binance-spot"
+route_id = "ibkr-primary"
 account_id = "paper-account"
-segment_key = "spot"
-broker_id = "binance"
-execution_channel = "spot"
-credential_id = "binance-main"
+segment_key = "equity"
+broker_id = "ibkr"
+execution_channel = "equity"
+environment = "paper"
+credential_id = "ibkr-primary"
 
 [[execution.routes]]
-route_id = "okx-swap"
+route_id = "ibkr-secondary"
 account_id = "paper-account"
-segment_key = "swap"
-broker_id = "okx"
-execution_channel = "swap"
-credential_id = "okx-main"
+segment_key = "equity"
+broker_id = "ibkr"
+execution_channel = "equity"
+environment = "paper"
+credential_id = "ibkr-secondary"
 """,
         encoding="utf-8",
     )
     report = LaunchConfigurationApplication().validate(config)
     assert report["valid"] is True
+
+    explicit = config.read_text(encoding="utf-8")
+    config.write_text(
+        explicit.replace('environment = "paper"\n', "", 1),
+        encoding="utf-8",
+    )
+    report = LaunchConfigurationApplication().validate(config)
+    assert report["valid"] is False
+    assert "execution.routes[0].environment is required" in report["issues"]
+    config.write_text(explicit, encoding="utf-8")
 
     foreign_account = config.read_text(encoding="utf-8").replace(
         'account_id = "paper-account"', 'account_id = "outside"', 1
@@ -1160,7 +1187,7 @@ credential_id = "okx-main"
     )
 
     forbidden = config.read_text(encoding="utf-8").replace(
-        'credential_id = "okx-main"', 'api_key = "must-not-be-here"'
+        'credential_id = "ibkr-secondary"', 'api_key = "must-not-be-here"'
     )
     config.write_text(forbidden, encoding="utf-8")
     report = LaunchConfigurationApplication().validate(config)

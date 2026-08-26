@@ -2,6 +2,31 @@
 
 use super::*;
 
+/// Read-only operational blockers derived from ExecutionActor truth.
+///
+/// Counts deliberately describe distinct recovery surfaces rather than a
+/// synthetic total: one uncertain order can also make its owning Intent and
+/// AlgorithmRun require reconciliation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ExecutionOperationalHealth {
+    pub risk_recovery_ready: bool,
+    pub risk_recovery_error: Option<String>,
+    pub reconciliation_required_orders: u64,
+    pub reconciliation_required_intents: u64,
+    pub unresolved_remote_orders: u64,
+    pub indeterminate_algorithm_actions: u64,
+}
+
+impl ExecutionOperationalHealth {
+    pub(crate) fn ready(&self) -> bool {
+        self.risk_recovery_ready
+            && self.reconciliation_required_orders == 0
+            && self.reconciliation_required_intents == 0
+            && self.unresolved_remote_orders == 0
+            && self.indeterminate_algorithm_actions == 0
+    }
+}
+
 /// A exchange order observed through a private stream or remote query that could
 /// not be associated with a locally submitted order.  It is deliberately
 /// persisted instead of being discarded or treated as a transient gateway
@@ -16,6 +41,8 @@ pub struct UnknownRemoteOrder {
     pub fill_price: Option<Price>,
     pub fee_currency: Option<Currency>,
     pub fee_amount: Option<Money>,
+    #[serde(default)]
+    pub source_cursor: Option<crate::domain::OrderFactCursor>,
     pub first_seen_at_unix_nanos: UnixNanos,
     pub last_seen_at_unix_nanos: UnixNanos,
     pub resolution: UnknownRemoteOrderResolution,
@@ -173,6 +200,36 @@ pub enum IntentStatus {
     ReconciliationRequired,
 }
 
+/// Durable quote-refresh transaction owned by the ExecutionActor.  It keeps
+/// the exact replacement decision reconstructable while cancel and submit
+/// commands cross an unreliable provider boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum QuoteRefreshPhase {
+    #[default]
+    Canceling,
+    ReplacementAuthorized,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct QuoteRefreshTransaction {
+    pub request: RefreshQuoteIntent,
+    pub version: u64,
+    pub prepared_at_unix_nanos: UnixNanos,
+    #[serde(default)]
+    pub phase: QuoteRefreshPhase,
+    #[serde(default)]
+    pub replacement_authorized_at_unix_nanos: Option<UnixNanos>,
+    pub cancellations: Vec<CancelOrder>,
+    pub submissions: Vec<(LegId, SubmitOrder)>,
+}
+
+impl QuoteRefreshTransaction {
+    pub fn replacement_dispatch_time(&self) -> UnixNanos {
+        self.replacement_authorized_at_unix_nanos
+            .unwrap_or(self.prepared_at_unix_nanos)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IntentState {
     pub intent: ExecuteStrategyIntent,
@@ -198,6 +255,8 @@ pub struct IntentState {
     pub quote_version: u64,
     #[serde(default)]
     pub last_quote_refresh_unix_nanos: Option<UnixNanos>,
+    #[serde(default)]
+    pub pending_quote_refresh: Option<QuoteRefreshTransaction>,
     #[serde(default)]
     pub compensation_attempts: u32,
 }

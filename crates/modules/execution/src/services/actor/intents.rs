@@ -97,6 +97,27 @@ impl ExecutionActor {
         }
     }
 
+    pub(crate) fn set_pending_quote_refresh(
+        &mut self,
+        intent_id: &str,
+        transaction: QuoteRefreshTransaction,
+    ) -> Result<(), String> {
+        let state = self
+            .intents
+            .get_mut(intent_id)
+            .ok_or_else(|| "quote refresh owner intent is missing".to_string())?;
+        state.pending_quote_refresh = Some(transaction);
+        self.generation = self.generation.saturating_add(1);
+        Ok(())
+    }
+
+    pub(crate) fn clear_pending_quote_refresh(&mut self, intent_id: &str) {
+        if let Some(state) = self.intents.get_mut(intent_id) {
+            state.pending_quote_refresh = None;
+            self.generation = self.generation.saturating_add(1);
+        }
+    }
+
     pub(crate) fn attach_intent_plan_order(
         &mut self,
         intent_id: &str,

@@ -1,4 +1,4 @@
-use super::IntentAdmissionAuditRecord;
+use super::{ExecutionAuditEvent, ExecutionAuditQuery, IntentAdmissionAuditRecord};
 use crate::application::{ExecutionEvent, IntentEvent};
 
 pub struct MemoryExecutionAudit {
@@ -47,6 +47,44 @@ impl MemoryExecutionAudit {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn query(&self, query: &ExecutionAuditQuery) -> Vec<ExecutionAuditEvent> {
+        let mut events = self
+            .order_events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| ExecutionAuditEvent {
+                sequence: (index as u64 + 1).into(),
+                order_id: event.order_id.clone(),
+                status: event.status,
+                remote_order_id: event.remote_order_id.clone(),
+                occurred_at_unix_nanos: event.occurred_at_unix_nanos,
+                reason: event.reason.clone(),
+                attempt: event.attempt.clone(),
+            })
+            .filter(|event| {
+                query
+                    .order_id
+                    .as_ref()
+                    .is_none_or(|value| value == &event.order_id)
+                    && query
+                        .remote_order_id
+                        .as_ref()
+                        .is_none_or(|value| event.remote_order_id.as_ref() == Some(value))
+                    && query.status.as_ref().is_none_or(|value| {
+                        format!("{:?}", event.status).eq_ignore_ascii_case(value)
+                    })
+                    && query
+                        .since_unix_nanos
+                        .is_none_or(|value| event.occurred_at_unix_nanos >= value)
+                    && query
+                        .until_unix_nanos
+                        .is_none_or(|value| event.occurred_at_unix_nanos <= value)
+            })
+            .collect::<Vec<_>>();
+        events.truncate(query.limit.unwrap_or(10_000) as usize);
+        events
     }
 }
 

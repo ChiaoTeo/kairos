@@ -17,7 +17,13 @@ from .interaction_region import (
     interaction_copy_text,
 )
 from .workspace_header import WorkspaceHeader
-from .workbench_log import ActivityStream, renderable_plain_text
+from .workbench_log import (
+    ActivityCopyRequested,
+    ActivityFocusExitRequested,
+    ActivitySelectionChanged,
+    ActivityStream,
+    renderable_plain_text,
+)
 
 __all__ = [
     "ActionItem",
@@ -36,6 +42,9 @@ __all__ = [
     "interaction_copy_text",
     "RunningInteraction",
     "ActivityStream",
+    "ActivityCopyRequested",
+    "ActivityFocusExitRequested",
+    "ActivitySelectionChanged",
     "WorkspaceHeader",
     "renderable_plain_text",
 ]

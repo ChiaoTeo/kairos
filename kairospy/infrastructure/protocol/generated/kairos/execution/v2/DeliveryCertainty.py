@@ -8,3 +8,4 @@ class DeliveryCertainty(object):
     INDETERMINATE = 2
     CONFIRMED = 3
     REJECTED = 4
+    RECONCILED = 5

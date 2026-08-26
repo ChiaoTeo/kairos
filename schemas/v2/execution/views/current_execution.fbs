@@ -2,6 +2,7 @@ include "../../common/metadata.fbs";
 include "../types/order.fbs";
 include "../types/plan.fbs";
 include "../types/fill.fbs";
+include "../types/algorithm_run.fbs";
 
 namespace kairos.execution.v2;
 
@@ -49,6 +50,7 @@ table CurrentExecutionView {
   metadata:kairos.common.v2.ViewMetadata (required);
   orders:[OrderState] (required);
   intents:[IntentState] (required);
+  algorithm_runs:[AlgorithmRunState] (required);
   fills:[Fill] (required);
   order_events:[OrderLifecycleEventState] (required);
   intent_events:[IntentLifecycleEventState] (required);
