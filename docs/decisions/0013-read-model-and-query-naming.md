@@ -5,6 +5,10 @@
 - Scope: Business contracts, current views, catalogs, dependency state, SDK, CLI, persistence
 - Supersedes: Generic terminology in Decisions 0003, 0007, 0008, and 0011
 
+Decision 0034 later replaces mmap snapshot publication as the default current-view mechanism with an
+indexed LMDB store. This Decision's semantic names remain valid; references to mmap below describe the
+mechanism in use when the naming decision was accepted.
+
 ## Context
 
 The repository used one generic term for unrelated things: request queries,

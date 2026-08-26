@@ -1,8 +1,12 @@
 # Decision 0033: Single Execution current view and durable audit query
 
-- Status: Accepted
+- Status: Superseded by [Decision 0034](0034-unified-current-view-storage.md)
 - Date: 2026-08-26
 - Supersedes: [Decision 0031](0031-execution-delivery-surfaces.md) mmap and history-query shape
+
+Decision 0034 supersedes this Decision's single aggregate mmap shape. Its durable audit-query boundary,
+one-ExecutionActor topology, instance-safe resource identity, and removal of compatibility aliases
+remain valid.
 
 ## Context
 

@@ -58,23 +58,23 @@ provide a second current Order, Intent, or AlgorithmRun listing API. Aeron `exec
 Order, and Fill changes. Reconciliation is expressed by the affected Intent or Order lifecycle rather
 than a standalone compatibility event.
 
-mmap carries one replaceable `CurrentExecution` view of the Actor generation. It contains only orders and
-Intents that remain operational—including reconciliation-required state—their AlgorithmRuns,
-capacity-consuming commitments, active or uncertain Risk reservations, unresolved remote orders, and
-explicitly truncated recent Fill and lifecycle diagnostics. The removed `ActiveOrders` and
-`ActiveIntents` roots are not retained as compatibility views. The durable audit remains the history
-authority. Venue open/history/detail queries are private reconciliation inputs and cannot bypass
-ExecutionActor to become a public state path.
+The accepted current-view target is one Execution LMDB environment with independently keyed `orders`,
+`intents`, `algorithm_runs`, `commitments`, `risk_reservations`, and `unknown_remote_orders` named
+databases. One Actor transition updates every affected family and its applied event sequence in one
+transaction. The current KSS `CurrentExecution` aggregate is a migration-only implementation and is
+removed, together with its reader and schema root, when the indexed store activates. It is not retained
+as a fallback. The durable audit remains the history authority. Venue open/history/detail queries are
+private reconciliation inputs and cannot bypass ExecutionActor to become a public state path.
 
-One launch instance composes one ExecutionActor and one `CurrentExecution` key, but the view
-contains arrays and the Actor may execute many Intents concurrently. Each Intent owns its AlgorithmRun,
-legs, and child Orders. Multiple Execution actors or executor shards in one launch instance are not a
-supported topology.
+One launch instance composes one ExecutionActor and one owner-scoped current-view environment. The
+Actor may execute many Intents concurrently; each Intent owns its AlgorithmRun, legs, and child Orders.
+Multiple Execution actors or executor shards in one launch instance are not a supported topology.
 
-Connected current-state commands are named `active-orders` and `active-order`. The bounded diagnostic
-windows are `recent-order-events` and `recent-fills`; complete Order lifecycle evidence uses the
-persistent `audit` query. Removed `orders/open-orders/history/status/inspect/events/trace/journal/fills`
-connected names are not aliases.
+Connected current-state commands are named `active-orders`, `active-order`, and
+`unknown-remote-orders`; complete Order lifecycle evidence uses the persistent `audit` query. The LMDB
+current view does not retain recent event/fill history. The migration removes the KSS-only
+`snapshot/recent-order-events/recent-fills` reads rather than forwarding them to another path. Removed
+names are not aliases.
 
 The bounded `health` query is operational status rather than a second state listing. In addition to
 required-route, writer-takeover, and outbox publication health, it derives Risk recovery readiness,

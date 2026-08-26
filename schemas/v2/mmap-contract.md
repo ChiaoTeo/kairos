@@ -1,9 +1,16 @@
-# V2 mmap current-view contract
+# Legacy V2 KSS mmap current-view contract
 
-Status: target external mmap contract for v2 current views.
+Status: legacy implementation contract, superseded as a target by
+[Decision 0034](../../docs/decisions/0034-unified-current-view-storage.md) and
+[`current-view-storage.md`](../../docs/architecture/current-view-storage.md).
+
+This document remains accurate for KSS1 resources that current code has not yet migrated. New owners
+and new current entity families must not adopt KSS1. Each existing owner removes its KSS publisher,
+reader, aggregate FlatBuffers root, and CLI decoding in the same change that activates its indexed
+LMDB current view. There is no production dual publication or fallback reader.
 
 This document defines the physical resources exposed by each business owner.
-The FlatBuffers roots define bytes inside a slot; this document defines which
+For those legacy resources, FlatBuffers roots define bytes inside a slot; this document defines which
 files exist, how readers discover them, their key/cardinality, and how they are
 created, replaced, read, and retired.
 

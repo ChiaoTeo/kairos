@@ -26,14 +26,14 @@
 
 ## 先区分读取语义，再选择机制
 
-RPC、mmap 和数据库是读取机制，不是三种业务数据类型。同一业务事实可以在 owner
-进程内直接读取，再发布为 mmap 当前视图；不能因此同时把它叫“直接查询数据”和
-“mmap 数据”。应先确定读取语义，再选择机制。
+RPC、Aeron 和 indexed current-view storage 是交付机制，不是三种业务数据类型。同一业务
+事实可以在 owner 进程内直接读取，再发布为 LMDB current view；不能因此同时把它叫
+“直接查询数据”和“LMDB 数据”。应先确定读取语义，再选择机制。
 
 | 读取语义 | 默认机制 | 适用条件 | 不适用条件 |
 | --- | --- | --- | --- |
 | 命令、健康、状态、路由、即时能力判断 | JSON-RPC request/control | owner 必须在线参与；结果有界；调用方需要明确成功或失败 | 大型当前状态镜像、高频轮询、完整历史 |
-| 运行中的最新业务状态 | mmap `CurrentView` / `LatestView` | 高频、同机、预定义 key、可接受最后发布状态 | 任意过滤、服务端分页、跨机、无限历史 |
+| 运行中的最新业务状态 | LMDB `CurrentView` / `LatestView` | 同机、稳定业务 key、单实体或有界范围读取 | 任意复杂过滤、跨机、无限历史 |
 | Reference 目录与生命周期检索 | SQLite-backed `Catalog` / `HistoryQuery` | 持久、可过滤、分页、事务内一致读取 | 复制每个运行模块的私有数据库供外部读取 |
 | 同一 main package 内部读取 | Application 方法 | 调用者属于 owner 包；无需跨进程 | 其他业务包绕过 contract 调用 owner application |
 | 增量事实 | Aeron event stream | 持续消费、顺序和重放语义 | 替代当前状态查询或任意历史查询 |
@@ -41,26 +41,28 @@ RPC、mmap 和数据库是读取机制，不是三种业务数据类型。同一
 选择顺序如下：
 
 1. 需要 owner 在线进行授权、计算或控制吗？使用请求式 `Query` 或 command。
-2. 读取的是按确定 key 发布的最新完整状态吗？使用 mmap `CurrentView`。
+2. 读取的是按稳定业务 key 发布的最新完整状态吗？使用 LMDB `CurrentView`。
 3. 需要过滤、分页、关联读取或完整历史吗？使用 owner contract 提供的持久查询。
 4. 调用者是否与 owner 位于同一个 main Cargo package？是则直接进入 Application；否则
    必须进入 owner contract。
 
 ### 当前模块的机制边界
 
-| 模块 | Request/control | mmap 当前视图 | 持久查询 | 事件流 |
+| 模块 | Request/control | indexed 当前视图目标 | 持久查询 | 事件流 |
 | --- | --- | --- | --- | --- |
-| Account | health、refresh、reconcile、simulation control | account current、observed orders | 无公共数据库查询 | Account events |
-| Market | health、data routes、subscription control | quote、trade、bar、book、freshness、Greeks 等 | 历史数据集由明确的数据读取边界负责，不开放 Actor 存储 | Market events |
-| Execution | health、routes、intent/order control、reconcile | active orders、active intents、current execution | 完整 audit/history 尚需明确持久查询；mmap 只能提供保留窗口 | Execution events |
-| Risk | health、authorization、reservation/circuit control | latest | 无公共数据库查询 | Risk events |
-| Capital | health、availability query、funding control | current | 无公共数据库查询 | Capital events |
+| Account | health、refresh、reconcile、simulation control | account、segment、balance、position、observed-order families | 无公共数据库查询 | Account events |
+| Market | health、data routes、subscription control | keyed latest observations/books/freshness plus indexed retained bars | 历史数据集由明确的数据读取边界负责，不开放 Actor 存储 | Market events |
+| Execution | health、routes、intent/order control、reconcile | keyed orders、intents、runs、commitments、reservations、unknown remotes | typed durable `order_audit` query | Execution events |
+| Risk | health、authorization、reservation/circuit control | keyed policies、usage、reservations、circuits | 无公共数据库查询 | Risk events |
+| Capital | health、availability query、funding control | keyed objectives、demands、routes、plans、reservations、operations、alerts | 无公共数据库查询 | Capital events |
 | Reference | health、source control、refresh、mutation | 无；SQLite 是唯一当前事实读取面 | catalog、market/instrument 查询、lifecycle history | Reference events |
 
-Reference 不发布第二份 mmap 目录是有意的架构选择，见
+Reference 不发布第二份 current-view store 是有意的架构选择，见
 [`reference/tests/architecture.rs`](../../crates/modules/reference/tests/architecture.rs)。其他
 模块也不得因为 Reference 暴露 contract-owned SQLite reader，就把自己的私有持久表变成
-跨业务 API。
+跨业务 API。Current view 的物理存储与迁移规则见
+[`current-view-storage.md`](current-view-storage.md)。当前 KSS snapshot 实现是待硬迁移的遗留
+机制，不是可与 LMDB 并存的第二路径。
 
 ## 全仓库命名盘点
 
@@ -122,11 +124,10 @@ snapshot 类型能消除这种无效状态，比只改名字更重要。
 connected mmap 读取见
 [`application/connected.rs`](../../crates/modules/execution/src/application/connected.rs)。
 
-`history`、`events`、`trace` 和 `audit` 当前从 `CurrentExecutionView` 的保留内容中过滤，而
-schema 已声明 `fill_history_truncated`、`order_event_history_truncated` 和
-`intent_event_history_truncated`。因此这些入口不能承诺完整历史：短期应在输出和名称中明确
-`retained` / `recent` 及截断标志；需要完整审计时应新增 Execution-owned 持久
-`AuditQuery`，不能扩大 mmap 为无限历史。
+Execution 已提供 owner-owned durable `order_audit` query。当前 KSS
+`CurrentExecutionView` 仍携带的截断 fill/event windows 只是迁移遗留；Decision 0034 的硬
+迁移删除这些字段和 `recent-*` 读取，不把它们复制进 LMDB，也不扩大 current storage 为
+无限历史。
 
 ### Market：Application 入口、订单簿命令和 mmap reader 被混称
 
@@ -350,7 +351,7 @@ reference.catalog().for_execution()?;
 
 1. 生产 Rust/Python 公共 API 不再暴露无限定的 `Projection` 类型或方法。
 2. `projection.rs` 不再作为 current-view reader、Application 入口或 DTO 收纳文件。
-3. 每个跨进程读取入口都能明确回答：这是 request query、mmap current view、SQLite
+3. 每个跨进程读取入口都能明确回答：这是 request query、indexed current view、SQLite
    catalog/history query，还是 event stream。
 4. `rg -i 'projection|projected'` 的剩余结果仅包括本说明、精确的数据列投影，以及与“项目”
    含义相关的 `project_*` 标识。

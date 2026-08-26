@@ -17,11 +17,13 @@ Concrete roots are indexed in [`registry.md`](./registry.md). A root is active
 only when it has an admitted owner, publisher or caller, consumer, transport
 profile, and Rust/Python mapping tests.
 Control surfaces are owned by each module's Rust `#[conflux_rpc]` contract
-trait and exposed over workspace Unix JSON-RPC. FlatBuffers roots remain the
-stream and current-view payload contracts. Command is therefore a semantic
-operation, not a common FlatBuffers wire shape.
-The per-owner mmap files, resource discovery, sharding, capacity, publication,
-and file-epoch rules are defined in [`mmap-contract.md`](./mmap-contract.md).
+trait and exposed over workspace Unix JSON-RPC. FlatBuffers roots remain event
+payload contracts and may encode one entity value in the indexed current-view
+store. Command is therefore a semantic operation, not a common FlatBuffers
+wire shape. The target current-view storage contract is defined in
+[`current-view-storage.md`](../../docs/architecture/current-view-storage.md).
+Existing KSS1 aggregate snapshot resources remain documented as a legacy
+implementation in [`mmap-contract.md`](./mmap-contract.md) until each owner hard-migrates.
 
 ## 1. Goals and non-goals
 
@@ -160,7 +162,7 @@ or consumers. They are not created merely to mirror every domain collection.
 
 A query result is a bounded response to an explicit request. History, fills,
 audit records, and large filtered collections normally belong here or in a
-dataset contract rather than in mmap current views.
+dataset contract rather than in current views.
 
 Queries may use bounded safe retries. Pagination cursors are query-owned opaque
 values and are unrelated to event sequences or snapshot generations.
@@ -437,14 +439,14 @@ and never selects the first allocation as a reservation summary.
   `OrderAccepted`, `OrderRejected`, `OrderCanceled`, `OrderExpired`,
   and `FillRecorded` facts; reconciliation is expressed by the affected
   Intent/Order lifecycle rather than a second standalone event
-- one bounded `CurrentExecution` mmap view for operational Intents, AlgorithmRuns, Orders,
-  commitments, reservations, unresolved remote facts, and explicitly truncated recent diagnostics
-- bounded durable Order audit queries use the Execution JSON-RPC contract rather than mmap
+- indexed LMDB entity families for operational Intents, AlgorithmRuns, Orders, commitments,
+  reservations, and unresolved remote facts; the legacy aggregate `CurrentExecution` KSS root is
+  removed when Execution activates the indexed store
+- bounded durable Order audit queries use the Execution JSON-RPC contract rather than current storage
 
 Execution facts preserve `intent_id`, `plan_id`, `leg_id`, `order_id`, and
 `fill_id` correlation where applicable. The full durable audit remains the
-history authority; `CurrentExecution` carries only its declared bounded recent
-fill and lifecycle-event window.
+history authority; current storage never retains a recent lifecycle window as a substitute for audit.
 
 ### System
 

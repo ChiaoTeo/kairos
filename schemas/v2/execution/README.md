@@ -2,12 +2,15 @@
 
 Execution commands are defined by the Execution Rust JSON-RPC contract trait
 and are sent over the Execution workspace Unix control socket. FlatBuffers is
-reserved for the Execution event stream and active mmap views.
+used for the Execution event stream and may encode one entity value in the
+indexed current-view store.
 
 The command response acknowledges admission or rejection only. Exchange
 acknowledgements, cancellations, expirations, and fills are immutable facts on
-the event stream. `CurrentExecutionView` is the single operational mmap view;
-terminal history belongs to query/audit storage.
+the event stream. The target current view is an owner-scoped LMDB environment
+with keyed entity families; terminal history belongs to query/audit storage.
+`CurrentExecutionView` is the legacy KSS aggregate and is removed when that
+hard migration lands, without dual publication or fallback decoding.
 
 Strategy-originated intents carry the optional migration field
 `strategy_decision_id`, which Execution preserves as an opaque and immutable
@@ -36,7 +39,8 @@ v2/
     order/
     fill/
     reconciliation/
-  views/
+  views/              # legacy KSS roots until owner migration
+  current/            # admitted per-entity LMDB value roots after migration
   types/
     intent.fbs
     plan.fbs

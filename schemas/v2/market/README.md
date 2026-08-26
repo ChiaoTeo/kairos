@@ -4,7 +4,8 @@ Market v2 has three distinct contract families:
 
 ```text
 events/  immutable business facts and lifecycle facts published on the stream
-views/   bounded latest-state images published through KSS1 mmap resources
+views/   legacy KSS1 latest-state roots until Market's hard migration
+current/ per-entity LMDB value roots admitted during that migration
 types/   semantic value groups shared by multiple roots within the same wire family
 ```
 
@@ -25,7 +26,11 @@ consolidated observations use `instrument_id` plus an optional network.
 
 Runtime adoption is evidenced by the owning module's contract, publication and
 architecture tests. Generated bindings alone do not mean that the running
-Market process publishes v2.
+Market process publishes v2. The target storage is specified by
+[`current-view-storage.md`](../../../docs/architecture/current-view-storage.md): latest observations
+are keyed LMDB entities, while completed bars are individual sequence-keyed values plus bounded-window
+metadata. Existing KSS roots remain the current implementation until the owner hard cut; they are not a
+second final path.
 
 ## Market v2 surface
 

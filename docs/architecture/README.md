@@ -9,6 +9,7 @@ README；跨进程字段和编码规则应放在 `schemas/`。
 - [Cargo 依赖管理规范](cargo-dependency-management.md)
 - [Conflux JSON-RPC control boundary](conflux-jsonrpc-control.md)
 - [查询、当前视图与派生数据命名](read-model-and-query-naming.md)
+- [Current-view storage architecture](current-view-storage.md)
 - [AI 模型资源架构](ai-model-resources.md)
 
 已经作出的重要架构选择及其理由记录在

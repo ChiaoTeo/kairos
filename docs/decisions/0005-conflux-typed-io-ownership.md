@@ -1,7 +1,8 @@
 # Decision 0005：Conflux 纳管 typed Stream、View 与 Control 的运行时
 
 - Status: Accepted, control transport superseded by
-  [Conflux JSON-RPC control boundary](../architecture/conflux-jsonrpc-control.md)
+  [Conflux JSON-RPC control boundary](../architecture/conflux-jsonrpc-control.md); KSS view mechanics
+  superseded by [Decision 0034](0034-unified-current-view-storage.md)
 - Scope: Conflux 驱动的业务进程及其进程边界资源
 
 ## Context

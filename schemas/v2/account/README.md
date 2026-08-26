@@ -4,8 +4,9 @@ Account v2 has three distinct contract families:
 
 ```text
 events/  immutable Account-owned state transitions published on the stream
-views/   bounded current-state images published through KSS1 mmap resources
-types/   semantic value groups shared by Account event and view roots
+views/   legacy KSS1 current-state roots until Account's hard migration
+current/ per-entity LMDB value roots admitted during that migration
+types/   semantic value groups shared by Account event and current-value roots
 ```
 
 `AccountFactProvenance` is an Account type because it explains an accepted
@@ -19,6 +20,10 @@ remain outside this business wire contract. Account runtime/resource isolation
 is defined by [`isolation.md`](./isolation.md). Runtime adoption is evidenced
 by the owning module's contract, publication and architecture tests; generated
 bindings alone do not prove that the running Account process publishes v2.
+The target indexed layout separates account status, segments, balances, collateral, positions,
+valuations, and observed orders by stable business key. `AccountCurrentView` and
+`ObservedOrdersCurrentView` remain implementation-status roots only until the hard migration; no
+fallback decoder remains afterward.
 
 ## Account v2 surface
 

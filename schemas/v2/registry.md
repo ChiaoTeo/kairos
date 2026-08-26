@@ -5,13 +5,16 @@ validation, but no root is published or supported until its implementation,
 cross-language fixtures, and migration exit criteria are complete. Reserved
 identifiers must not be reused.
 
-Current-view entries use the external resource topology and lifecycle defined
-in [`mmap-contract.md`](./mmap-contract.md); a FlatBuffers root alone is not a
-complete mmap contract.
+Existing current-view entries below inventory legacy KSS roots and use the
+physical lifecycle in [`mmap-contract.md`](./mmap-contract.md). They are not
+the target storage shape. Decision 0034 migrates owners to named LMDB databases
+whose keys and per-entity value roots are admitted separately; new entries are
+added only with a real publisher, reader, and certification evidence.
 
 Control contracts are intentionally not FlatBuffers roots. Each long-running
 module owns a Rust `#[conflux_rpc]` trait exposed over workspace Unix
-JSON-RPC. FlatBuffers is reserved for business events and mmap views.
+JSON-RPC. FlatBuffers is used for business events and admitted per-entity
+current values; storage mechanics are defined by the current-view architecture.
 
 | Status | Owner | Shape | Semantic root | File identifier | Publisher/caller | Consumer | Transport/profile |
 | --- | --- | --- | --- | --- | --- | --- | --- |

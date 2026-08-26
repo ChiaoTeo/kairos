@@ -1,8 +1,9 @@
 # Capital v2 contracts
 
 Capital commands and synchronous queries use the explicit JSON control
-boundary. Retained state is published as the `CapitalCurrentView` FlatBuffers
-mmap current view. Durable business transitions are published as typed
+boundary. The target current view stores independently keyed Capital entities in one owner-scoped LMDB
+environment. `CapitalCurrentView` is the legacy KSS aggregate until Capital's hard migration; it is
+removed rather than retained as a fallback. Durable business transitions are published as typed
 FlatBuffers events on the Capital event stream (`1701`).
 
 The current view exposes policies, objectives, demand observations, source
