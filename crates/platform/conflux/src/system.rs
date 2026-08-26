@@ -63,9 +63,7 @@ use kairos_integration::participants::okx::public::{
 use kairos_market_contract::{MarketClient, MarketEventStream};
 use kairos_reference_contract::{ReferenceClient, ReferenceEventStream};
 use kairos_risk_contract::{RiskClient, RiskEventStream};
-use kairos_transport::{
-    AeronBytePublisher, AtomicFileSnapshotStorage, SharedSnapshotReader, SharedSnapshotWriter,
-};
+use kairos_transport::AeronBytePublisher;
 use thiserror::Error;
 use tokio::time::Instant;
 
@@ -606,12 +604,10 @@ pub struct ConfluxSystem {
     pub risk_event_streams: NamedResources<String, RiskEventStream>,
 
     /// Process-owned transport resources. These collections manage concrete
-    /// Aeron and mmap handles without pretending that their byte APIs are a
+    /// Aeron and indexed-view handles without pretending that their byte APIs are a
     /// business Contract. Contract codecs remain owned by each module.
     aeron_publishers: NamedResources<String, AeronBytePublisher>,
-    pub mmap_readers: NamedResources<String, SharedSnapshotReader>,
-    pub(crate) mmap_writers: NamedResources<String, SharedSnapshotWriter>,
-    file_writers: NamedResources<String, AtomicFileSnapshotStorage>,
+    indexed_writers: NamedResources<String, kairos_indexed_view::IndexedViewWriter>,
 
     pub(crate) binance_spot_rest_connections: ManagedConnections<String, BinanceSpotRestConnection>,
     pub(crate) binance_capital_rest_connections:
@@ -709,9 +705,7 @@ impl ConfluxSystem {
             reference_event_streams: NamedResources::new(),
             risk_event_streams: NamedResources::new(),
             aeron_publishers: NamedResources::new(),
-            mmap_readers: NamedResources::new(),
-            mmap_writers: NamedResources::new(),
-            file_writers: NamedResources::new(),
+            indexed_writers: NamedResources::new(),
             binance_spot_rest_connections: ManagedConnections::new(),
             binance_capital_rest_connections: ManagedConnections::new(),
             binance_subaccount_capital_rest_connections: ManagedConnections::new(),
@@ -958,17 +952,12 @@ impl ConfluxSystem {
     /// Borrows the process-owned output pipes. Callers can declare and publish
     /// through these capabilities but cannot take ownership of a transport.
     pub fn outputs(&mut self) -> crate::OutputCollections<'_> {
-        crate::OutputCollections::new(
-            &mut self.aeron_publishers,
-            &mut self.mmap_writers,
-            &mut self.file_writers,
-        )
+        crate::OutputCollections::new(&mut self.aeron_publishers, &mut self.indexed_writers)
     }
 
     pub(crate) fn stop_outputs(&mut self) {
         self.aeron_publishers.clear();
-        self.mmap_writers.clear();
-        self.file_writers.clear();
+        self.indexed_writers.clear();
     }
 
     pub fn install_account_contract(
@@ -2259,7 +2248,6 @@ impl Default for ConfluxSystem {
 mod tests {
     use kairos_primitives::integration::ParticipantSymbol;
     use kairos_primitives::time::UnixNanos;
-    use kairos_transport::SnapshotEnvelopeMetadata;
 
     use super::*;
 
@@ -2475,53 +2463,6 @@ mod tests {
             Some(ConnectionDriverOutput::System(SystemEvent::SourceReady { source }))
                 if source == "a-second"
         ));
-    }
-
-    #[test]
-    fn mmap_reader_and_writer_are_named_managed_resources() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("risk.latest.mmap");
-        let mut system = ConfluxSystem::new();
-        let key = "risk-latest".to_owned();
-        let writer = SharedSnapshotWriter::create(&path, 1_024).unwrap();
-        system
-            .mmap_writers
-            .ensure_with(key.clone(), 1, || writer)
-            .unwrap();
-        let writer = system.mmap_writers.get_mut(&key).unwrap();
-        writer
-            .resource_mut()
-            .publish_with_metadata(
-                SnapshotEnvelopeMetadata {
-                    resource_epoch: 1,
-                    producer_incarnation: 1,
-                    generation: 1,
-                    applied_event_sequence: 7,
-                    published_at_unix_nanos: 10,
-                },
-                b"risk-view",
-            )
-            .unwrap();
-        writer.set_state(crate::ResourceState::Ready);
-
-        let reader = SharedSnapshotReader::open(&path).unwrap();
-        system
-            .mmap_readers
-            .ensure_with(key.clone(), 1, || reader)
-            .unwrap();
-        let frame = system
-            .mmap_readers
-            .get(&key)
-            .unwrap()
-            .resource()
-            .read_payload()
-            .unwrap();
-        assert_eq!(frame.payload, b"risk-view");
-        assert_eq!(frame.applied_event_sequence, 7);
-        assert_eq!(
-            system.mmap_writers.get(&key).unwrap().state(),
-            crate::ResourceState::Ready
-        );
     }
 
     #[test]

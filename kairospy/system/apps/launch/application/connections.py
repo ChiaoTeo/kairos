@@ -32,6 +32,9 @@ class InstanceConnections:
     risk: ComponentConnection | None
     execution: ComponentConnection | None
     capital: ComponentConnection | None
+    workspace_id: str | None = None
+    launch_id: str | None = None
+    instance_id: str | None = None
 
 
 def resolve_instance_connections(instance: InstanceWorkspace) -> InstanceConnections:
@@ -63,6 +66,9 @@ def resolve_instance_connections(instance: InstanceWorkspace) -> InstanceConnect
         risk=_optional_connection(components.get("risk"), "risk"),
         execution=_optional_connection(components.get("execution"), "execution"),
         capital=_optional_connection(components.get("capital"), "capital"),
+        workspace_id=instance.workspace.workspace_id,
+        launch_id=instance.launch_id,
+        instance_id=instance.instance_id,
     )
 
 

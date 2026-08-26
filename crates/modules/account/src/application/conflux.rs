@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use kairos_conflux::{
     AccountQuery, ConfluxActor, ConfluxEvent, Context, EarnPositionsRequest, EarnProductFamily,
     EarnProductQuery, ExternalAccountEvent, ExternalAccountEventEnvelope, ExternalParticipantEvent,
-    SnapshotEnvelopeMetadata, SystemEvent, TypedConnectionCollection,
+    IndexedMutation, SystemEvent, TypedConnectionCollection,
 };
 use kairos_primitives::account::SegmentKey;
 use kairos_primitives::runtime::InstanceIdentity;
@@ -21,8 +21,7 @@ use crate::services::integration::{
     AccountInstrumentResolver, external_segment, map_earn_positions, map_event, map_snapshot,
 };
 use crate::services::publication::{
-    encode_account_current_view, encode_business_change, encode_observed_orders_current_view,
-    now_unix_nanos,
+    encode_business_change, encode_indexed_current, now_unix_nanos,
 };
 use crate::services::refresh::RefreshFetch;
 use crate::services::synchronization::{RETAINED_EVENT_IDS, SegmentSyncState};
@@ -36,7 +35,7 @@ pub(super) struct AccountConfluxState {
     segments: BTreeMap<SegmentKey, SegmentSyncState>,
     identity: InstanceIdentity,
     producer_incarnation: u64,
-    published_generation: Option<u64>,
+    published_indexed_values: BTreeMap<(String, Vec<u8>), Vec<u8>>,
 }
 
 impl Default for AccountConfluxState {
@@ -48,7 +47,7 @@ impl Default for AccountConfluxState {
             segments: BTreeMap::new(),
             identity: InstanceIdentity::default(),
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
-            published_generation: None,
+            published_indexed_values: BTreeMap::new(),
         }
     }
 }
@@ -84,6 +83,10 @@ impl AccountApplication {
 
     pub fn configure_publication_identity(&mut self, identity: InstanceIdentity) {
         self.conflux.identity = identity;
+    }
+
+    pub fn conflux_producer_incarnation(&self) -> u64 {
+        self.conflux.producer_incarnation
     }
 }
 
@@ -145,7 +148,7 @@ impl ConfluxActor for AccountApplication {
         for state in self.conflux.segments.values_mut() {
             state.lifecycle = crate::services::synchronization::SegmentSyncLifecycle::Stopped;
         }
-        self.conflux.published_generation = None;
+        self.conflux.published_indexed_values.clear();
         self.publish(context)
     }
 }
@@ -614,8 +617,6 @@ impl AccountApplication {
     }
 
     fn publish(&mut self, context: &mut Context<'_, Self>) -> Result<(), AccountError> {
-        const CURRENT: &str = "account-current";
-        const OBSERVED_ORDERS: &str = "account-observed-orders";
         const EVENTS: &str = "account-events";
 
         while let Some(event) = self.pending_business_event().cloned() {
@@ -643,38 +644,45 @@ impl AccountApplication {
 
         let mut view = (*self.current_view_shared()).clone();
         self.enrich_current_view(&mut view);
-        if self.conflux.published_generation == Some(view.generation.get()) {
-            return Ok(());
+        let next = encode_indexed_current(&view).map_err(AccountError::Publication)?;
+        let mut mutations = Vec::new();
+        for ((database, key), _) in self
+            .conflux
+            .published_indexed_values
+            .iter()
+            .filter(|(key, _)| !next.contains_key(*key))
+        {
+            mutations.push(IndexedMutation::Delete {
+                database: database.clone(),
+                key: key.clone(),
+            });
         }
-        let metadata = SnapshotEnvelopeMetadata {
-            resource_epoch: 1,
-            producer_incarnation: self.conflux.producer_incarnation,
-            generation: view.generation.get(),
-            applied_event_sequence: view.event_sequence.get(),
-            published_at_unix_nanos: now_unix_nanos(),
-        };
-        let current_key = CURRENT.to_owned();
-        let bytes = encode_account_current_view(self.actor_id(), &self.conflux.identity, &view)
-            .map_err(AccountError::Publication)?;
-        if context.outputs().mmap.contains(&current_key) {
-            context
-                .outputs()
-                .mmap
-                .publish(&current_key, metadata, &bytes)
-                .map_err(|error| AccountError::Publication(error.to_string()))?;
+        for ((database, key), value) in &next {
+            if self
+                .conflux
+                .published_indexed_values
+                .get(&(database.clone(), key.clone()))
+                == Some(value)
+            {
+                continue;
+            }
+            mutations.push(IndexedMutation::Put {
+                database: database.clone(),
+                key: key.clone(),
+                value: value.clone(),
+            });
         }
-        let orders_key = OBSERVED_ORDERS.to_owned();
-        let bytes =
-            encode_observed_orders_current_view(self.actor_id(), &self.conflux.identity, &view)
-                .map_err(AccountError::Publication)?;
-        if context.outputs().mmap.contains(&orders_key) {
-            context
-                .outputs()
-                .mmap
-                .publish(&orders_key, metadata, &bytes)
-                .map_err(|error| AccountError::Publication(error.to_string()))?;
-        }
-        self.conflux.published_generation = Some(view.generation.get());
+        context
+            .outputs()
+            .indexed
+            .apply(
+                "account-current",
+                &mutations,
+                view.event_sequence.get(),
+                now_unix_nanos(),
+            )
+            .map_err(|error| AccountError::Publication(error.to_string()))?;
+        self.conflux.published_indexed_values = next;
         Ok(())
     }
 

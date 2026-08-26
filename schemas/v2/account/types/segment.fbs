@@ -1,8 +1,4 @@
 include "common.fbs";
-include "balance.fbs";
-include "position.fbs";
-include "valuation.fbs";
-include "earn_holding.fbs";
 
 namespace kairos.account.v2;
 
@@ -26,11 +22,6 @@ table AccountSegmentState {
   recovery_buffer_depth:ulong;
   observed_at_unix_nanos:ulong;
   state_generation:ulong;
-  valuation:AccountValuation;
-  balances:[Balance] (required);
-  collateral:[Balance] (required);
-  positions:[Position] (required);
-  earn_holdings:[EarnHolding] (required);
   earn_watermark_unix_nanos:ulong;
   margin_mode:MarginMode = UNSPECIFIED;
   position_mode:PositionMode = UNSPECIFIED;

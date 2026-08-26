@@ -1,7 +1,0 @@
-include "../../common/metadata.fbs";
-include "../types/open_interest.fbs";
-namespace kairos.market.v2;
-table LatestOpenInterest { value:OpenInterest (required); source_event_id:string (required); }
-table OpenInterestLatestView { metadata:kairos.common.v2.ViewMetadata (required); open_interest:LatestOpenInterest (required); }
-root_type OpenInterestLatestView;
-file_identifier "MLI2";

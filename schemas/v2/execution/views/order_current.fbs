@@ -1,0 +1,10 @@
+include "../types/order.fbs";
+
+namespace kairos.execution.v2;
+
+table ExecutionOrderCurrent {
+  state:OrderState (required);
+}
+
+root_type ExecutionOrderCurrent;
+file_identifier "EOR3";

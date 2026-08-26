@@ -2,13 +2,14 @@
 
 - Status: Superseded by [Decision 0033](0033-single-execution-current-view-and-audit-query.md)
 - Date: 2026-08-26
-- Scope: JSON-RPC control/query, Aeron business events, mmap current views, venue reconciliation query
+- Scope: JSON-RPC control/query, Aeron business events, current views, venue reconciliation query
 
 ## Context
 
 Execution exposes control, change notification, current state, durable audit, and provider recovery. If
-the same current truth is independently served by JSON-RPC, Aeron payloads, provider queries, and mmap,
-consumers can observe conflicting owners and compatibility paths. The initial active mmap encoders also
+the same current truth is independently served by JSON-RPC, Aeron payloads, provider queries, and a
+snapshot transport,
+consumers can observe conflicting owners and compatibility paths. The initial active-view encoders also
 published terminal history despite their names, while a draft standalone `ReconciliationRequired` event
 had decoders but no producer.
 
@@ -22,7 +23,8 @@ Each process surface has one purpose:
 - Aeron `execution-events` carries ordered immutable business changes: Intent admission/lifecycle and
   its Plan, Order lifecycle, and Fill facts. Reconciliation is the affected Intent/Order lifecycle; the
   unused draft `EXV2 ReconciliationRequired` root and its compatibility decoders are removed.
-- mmap carries replaceable current views with generation and applied-event-sequence metadata.
+- The then-current snapshot transport carried replaceable current views with generation and
+  applied-event-sequence metadata; Decision 0034 later replaced this storage shape with indexed LMDB.
   `ActiveOrders` contains only orders that may still change, capacity-consuming commitments, and active
   or uncertain Risk reservation sagas. `ActiveIntents` contains only operational Intents, including
   reconciliation-required Intents, and their AlgorithmRuns. `CurrentExecution` is the bounded operational
@@ -37,9 +39,9 @@ publishes encodings of the same Actor generation; no publisher or query result o
 
 ## Consequences
 
-- Consumers bootstrap from an mmap view and continue from Aeron sequence without querying a second state
+- Consumers bootstrap from a current view and continue from Aeron sequence without querying a second state
   facade.
-- Terminal history cannot accumulate in an `Active*` mmap view; the durable audit remains authoritative.
+- Terminal history cannot accumulate in an `Active*` current view; the durable audit remains authoritative.
 - Algorithm benchmark input is visible in Intent events, while continuously derived quality is a current
   view fact reconstructed from Fill events rather than a noisy second metric event stream.
 - Adding a new surface requires a distinct current caller and semantics, not compatibility with an old
@@ -51,5 +53,5 @@ publishes encodings of the same Actor generation; no publisher or query result o
 - Publication ordering: `crates/modules/execution/src/application/conflux.rs`
 - Event change set and encoding: `crates/modules/execution/src/application/model/event.rs` and
   `crates/modules/execution/src/services/publication/events.rs`
-- mmap view encoders: `crates/modules/execution/src/services/publication/encoding.rs`
+- Current-view encoders: `crates/modules/execution/src/services/publication/encoding.rs`
 - Private venue reconciliation: `crates/modules/execution/src/application/core/reconciliation/mod.rs`

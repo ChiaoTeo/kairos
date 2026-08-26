@@ -3,17 +3,14 @@ name = "kairos-transport"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Aeron and shared-memory transport adapters for Kairos"
+description = "Aeron transport adapters for Kairos"
 
 [dependencies]
 # Keep the Rust client and the Aeron C ABI in one release train. The bundled
 # precompiled C client avoids requiring a local CMake/Java toolchain and uses
 # the same CnC layout as the current Media Driver.
 clap.workspace = true
-crc32fast.workspace = true
-fs2.workspace = true
 kairos-workspace = { workspace = true, features = ["otel"] }
-memmap2.workspace = true
 rusteron-client.workspace = true
 rusteron-media-driver.workspace = true
 thiserror.workspace = true

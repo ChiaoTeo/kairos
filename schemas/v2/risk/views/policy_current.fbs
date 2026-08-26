@@ -1,0 +1,11 @@
+include "../types/policy.fbs";
+
+namespace kairos.risk.v2;
+
+table RiskPolicyCurrent {
+  actor_id:string (required);
+  policy:RiskPolicy (required);
+}
+
+root_type RiskPolicyCurrent;
+file_identifier "RPO3";

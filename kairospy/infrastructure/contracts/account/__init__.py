@@ -7,14 +7,10 @@ _EXPORTS = {
     "AccountContractClient": (".control", "AccountContractClient"),
     "AccountCurrentViewReader": (".view", "AccountCurrentViewReader"),
     "AccountObservedOrdersViewReader": (".view", "AccountObservedOrdersViewReader"),
-    "AccountViewFrame": (".view", "AccountViewFrame"),
-    "AccountViewKey": (".view", "AccountViewKey"),
-    "AccountViewKind": (".view", "AccountViewKind"),
-    "AccountViewReader": (".view", "AccountViewReader"),
-    "account_view_path": (".view", "account_view_path"),
+    "AccountIndexedViewReader": (".view", "AccountIndexedViewReader"),
+    "account_indexed_environment_path": (".view", "account_indexed_environment_path"),
     "backtest_mark_to_market_request": (".runtime", "backtest_mark_to_market_request"),
     "decode_event": (".events", "decode_event"),
-    "decode_view": (".view", "decode_view"),
 }
 
 

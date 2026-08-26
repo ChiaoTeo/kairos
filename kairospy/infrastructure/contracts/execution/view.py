@@ -1,99 +1,88 @@
-"""Execution v2 current mmap view."""
+"""Execution owner-scoped LMDB indexed current-view contract."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 import sys
 from typing import Any
 
 from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
-from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
+from kairospy.infrastructure.transport.indexed_view import (
+    IndexedViewMetadata,
+    IndexedViewReader,
+    IndexedViewSchema,
+)
 
 sys.modules.setdefault("kairos", _generated_kairos)
 
+ORDERS_DATABASE = "orders"
+INTENTS_DATABASE = "intents"
+ALGORITHM_RUNS_DATABASE = "algorithm_runs"
+COMMITMENTS_DATABASE = "commitments"
+RISK_RESERVATIONS_DATABASE = "risk_reservations"
+UNKNOWN_REMOTE_ORDERS_DATABASE = "unknown_remote_orders"
+EXECUTION_RESOURCE_EPOCH = 1
+EXECUTION_MAP_SIZE = 128 * 1024 * 1024
+_ENTITY_KEY_VERSION = 1
+_ENTITY_PREFIX = bytes((_ENTITY_KEY_VERSION,))
 
-class ExecutionViewKind(str, Enum):
-    CURRENT_EXECUTION = "current-execution"
+EXECUTION_INDEXED_SCHEMAS = (
+    IndexedViewSchema(ORDERS_DATABASE, 1, "EOR3", 1),
+    IndexedViewSchema(INTENTS_DATABASE, 1, "EIN3", 1),
+    IndexedViewSchema(ALGORITHM_RUNS_DATABASE, 1, "EAR3", 1),
+    IndexedViewSchema(COMMITMENTS_DATABASE, 1, "ECO3", 1),
+    IndexedViewSchema(RISK_RESERVATIONS_DATABASE, 1, "ERR3", 1),
+    IndexedViewSchema(UNKNOWN_REMOTE_ORDERS_DATABASE, 1, "EUR3", 1),
+)
 
-
-@dataclass(frozen=True, slots=True)
-class ExecutionViewKey:
-    workspace_id: str
-    kind: ExecutionViewKind
-    launch_id: str | None = None
-    instance_id: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.workspace_id.strip():
-            raise ValueError("view workspace identity is incomplete")
-
-    def canonical_key(self) -> str:
-        return (
-            f"workspace={self.workspace_id};launch={self.launch_id or ''};"
-            f"instance={self.instance_id or ''};view={self.kind.value}"
-        )
-
-    def resource_path(self, root: str | Path) -> Path:
-        return (
-            Path(root)
-            / "execution"
-            / "views"
-            / _component(self.workspace_id)
-            / f"launch={_component(self.launch_id) if self.launch_id else '_'}"
-            / f"instance={_component(self.instance_id) if self.instance_id else '_'}"
-            / self.kind.value
-            / "current.snapshot"
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionViewFrame:
-    key: ExecutionViewKey
-    generation: int
-    payload: bytes
-    value: Any
-
-
-_VIEW_ROOTS: dict[ExecutionViewKind, tuple[bytes, str]] = {
-    ExecutionViewKind.CURRENT_EXECUTION: (b"ECV2", "CurrentExecutionView"),
+_ROOTS: dict[str, tuple[bytes, str]] = {
+    ORDERS_DATABASE: (b"EOR3", "ExecutionOrderCurrent"),
+    INTENTS_DATABASE: (b"EIN3", "ExecutionIntentCurrent"),
+    ALGORITHM_RUNS_DATABASE: (b"EAR3", "ExecutionAlgorithmRunCurrent"),
+    COMMITMENTS_DATABASE: (b"ECO3", "ExecutionCommitmentCurrent"),
+    RISK_RESERVATIONS_DATABASE: (b"ERR3", "ExecutionRiskReservationCurrent"),
+    UNKNOWN_REMOTE_ORDERS_DATABASE: (b"EUR3", "ExecutionUnknownRemoteOrderCurrent"),
 }
 
 
-class ExecutionViewReader:
-    def __init__(
-        self, root: str | Path, key: ExecutionViewKey, *, retries: int = 8
-    ) -> None:
-        self.root = Path(root)
-        self.key = key
-        self._reader = SharedSnapshotReader(
-            key.resource_path(self.root), retries=retries
+def execution_indexed_environment_path(root: str | Path) -> Path:
+    return (
+        Path(root)
+        / "views"
+        / "v3"
+        / "Execution"
+        / "execution-main"
+        / "epoch-1"
+        / "current.lmdb"
+    )
+
+
+def indexed_entity_key(value: str) -> bytes:
+    encoded = value.encode()
+    if not value or value.strip() != value or b"\0" in encoded:
+        raise ValueError(
+            "indexed current-view identity must be non-empty and trimmed"
         )
-
-    def read(self) -> ExecutionViewFrame:
-        snapshot = self._reader.read()
-        value = decode_view(snapshot.payload, self.key.kind)
-        metadata = value.Metadata()
-        if metadata is None:
-            raise ValueError("Execution v2 view metadata is missing")
-        if _text(metadata.ViewKey()) != self.key.canonical_key():
-            raise ValueError("Execution view key identity mismatch")
-        if int(metadata.ResourceEpoch()) != 1:
-            raise ValueError("unsupported Execution view resource epoch")
-        if int(metadata.Generation()) != snapshot.generation:
-            raise ValueError("Execution envelope and payload generation differ")
-        if int(metadata.AppliedRevision() or 0) != snapshot.applied_event_sequence:
-            raise ValueError("Execution envelope and payload event sequence differ")
-        return ExecutionViewFrame(
-            self.key, snapshot.generation, snapshot.payload, value
-        )
+    if len(encoded) > 0xFFFF:
+        raise ValueError("indexed current-view identity is too long")
+    return bytes((_ENTITY_KEY_VERSION,)) + len(encoded).to_bytes(2, "big") + encoded
 
 
-def decode_view(payload: bytes, kind: ExecutionViewKind) -> Any:
-    identifier, root_name = _VIEW_ROOTS[kind]
+def indexed_entity_identity(key: bytes) -> str:
+    if len(key) < 3 or key[0] != _ENTITY_KEY_VERSION:
+        raise ValueError("invalid Execution indexed entity key version")
+    length = int.from_bytes(key[1:3], "big")
+    if len(key) != length + 3:
+        raise ValueError("invalid Execution indexed entity key length")
+    return key[3:].decode()
+
+
+def decode_indexed_value(payload: bytes, database: str) -> Any:
+    identifier, root_name = _ROOTS[database]
     if len(payload) < 8 or payload[4:8] != identifier:
-        raise ValueError(f"invalid Execution {kind.value} view identifier")
+        raise ValueError(
+            f"invalid Execution indexed value identifier for database {database}"
+        )
     module = __import__(
         f"kairospy.infrastructure.protocol.generated.kairos.execution.v2.{root_name}",
         fromlist=[root_name],
@@ -101,23 +90,103 @@ def decode_view(payload: bytes, kind: ExecutionViewKind) -> Any:
     return getattr(module, root_name).GetRootAs(payload, 0)
 
 
-def _component(value: str) -> str:
-    return "".join(
-        chr(byte)
-        if (byte < 128 and chr(byte).isalnum()) or byte in b"-_."
-        else f"%{byte:02X}"
-        for byte in value.encode()
-    )
+class ExecutionIndexedViewReader:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        workspace_id: str,
+        launch_id: str | None,
+        instance_id: str | None,
+    ) -> None:
+        self._reader = IndexedViewReader(
+            execution_indexed_environment_path(root),
+            map_size=EXECUTION_MAP_SIZE,
+            workspace_id=workspace_id,
+            launch_id=launch_id,
+            instance_id=instance_id,
+            owner="Execution",
+            publisher_resource_id="execution-main",
+            resource_epoch=EXECUTION_RESOURCE_EPOCH,
+            schemas=EXECUTION_INDEXED_SCHEMAS,
+        )
+
+    def metadata(self) -> IndexedViewMetadata:
+        return self._reader.metadata()
+
+    def ensure_ready(self) -> IndexedViewMetadata:
+        metadata = self.metadata()
+        if metadata.rebuild_state != "ready":
+            raise RuntimeError("Execution indexed current view is not ready")
+        return metadata
+
+    def get(self, database: str, identity: str) -> Any | None:
+        self.ensure_ready()
+        key = indexed_entity_key(identity)
+        payload = self._reader.get(database, key)
+        if payload is None:
+            return None
+        value = decode_indexed_value(payload, database)
+        _validate_identity(database, identity, value)
+        return value
+
+    def values(self, database: str) -> tuple[Any, ...]:
+        self.ensure_ready()
+        rows = self._reader.prefix(database, _ENTITY_PREFIX, limit=sys.maxsize)
+        values: list[Any] = []
+        for key, payload in rows:
+            identity = indexed_entity_identity(key)
+            value = decode_indexed_value(payload, database)
+            _validate_identity(database, identity, value)
+            values.append(value)
+        return tuple(values)
+
+    def close(self) -> None:
+        self._reader.close()
 
 
-def _text(value: bytes | None) -> str | None:
-    return None if value is None else value.decode()
+def _validate_identity(database: str, expected: str, value: Any) -> None:
+    state = value.State()
+    if state is None:
+        raise ValueError(f"Execution indexed value in {database} has no state")
+    if database == ORDERS_DATABASE or database == COMMITMENTS_DATABASE:
+        actual = _required_text(state.OrderId(), "order_id")
+    elif database == INTENTS_DATABASE:
+        intent = state.Intent()
+        if intent is None:
+            raise ValueError("Execution indexed intent has no intent payload")
+        actual = _required_text(intent.IntentId(), "intent_id")
+    elif database == ALGORITHM_RUNS_DATABASE:
+        actual = _required_text(state.AlgorithmRunId(), "algorithm_run_id")
+    elif database == RISK_RESERVATIONS_DATABASE:
+        actual = _required_text(state.ReservationId(), "reservation_id")
+    else:
+        actual = _required_text(state.RemoteOrderId(), "remote_order_id")
+    if actual != expected:
+        raise ValueError(
+            f"Execution indexed key/value identity mismatch: key={expected}, value={actual}"
+        )
+
+
+def _required_text(value: bytes | None, field: str) -> str:
+    if value is None:
+        raise ValueError(f"Execution indexed value is missing {field}")
+    return value.decode()
 
 
 __all__ = [
-    "ExecutionViewFrame",
-    "ExecutionViewKey",
-    "ExecutionViewKind",
-    "ExecutionViewReader",
-    "decode_view",
+    "ALGORITHM_RUNS_DATABASE",
+    "COMMITMENTS_DATABASE",
+    "EXECUTION_INDEXED_SCHEMAS",
+    "EXECUTION_MAP_SIZE",
+    "EXECUTION_RESOURCE_EPOCH",
+    "ExecutionIndexedViewReader",
+    "INTENTS_DATABASE",
+    "ORDERS_DATABASE",
+    "RISK_RESERVATIONS_DATABASE",
+    "UNKNOWN_REMOTE_ORDERS_DATABASE",
+    "decode_indexed_value",
+    "execution_indexed_environment_path",
+    "indexed_entity_identity",
+    "indexed_entity_key",
 ]

@@ -4,8 +4,7 @@ Account v2 has three distinct contract families:
 
 ```text
 events/  immutable Account-owned state transitions published on the stream
-views/   legacy KSS1 current-state roots until Account's hard migration
-current/ per-entity LMDB value roots admitted during that migration
+views/   per-entity LMDB current-value roots
 types/   semantic value groups shared by Account event and current-value roots
 ```
 
@@ -20,10 +19,9 @@ remain outside this business wire contract. Account runtime/resource isolation
 is defined by [`isolation.md`](./isolation.md). Runtime adoption is evidenced
 by the owning module's contract, publication and architecture tests; generated
 bindings alone do not prove that the running Account process publishes v2.
-The target indexed layout separates account status, segments, balances, collateral, positions,
-valuations, and observed orders by stable business key. `AccountCurrentView` and
-`ObservedOrdersCurrentView` remain implementation-status roots only until the hard migration; no
-fallback decoder remains afterward.
+The indexed layout separates segments, balances, collateral, positions, valuations, earn holdings,
+and observed orders by stable business key. The former aggregate roots and fallback decoders have
+been removed.
 
 ## Account v2 surface
 
@@ -35,10 +33,7 @@ Events:
 - `AccountStatusChanged`
 - `ObservedOrderUpserted` / `ObservedOrderRemoved`
 
-Current views:
-
-- `AccountCurrentView`
-- `ObservedOrdersCurrentView`
+Current values are the seven `*Current` entity roots registered for the named LMDB databases.
 
 Semantic types:
 
@@ -73,12 +68,10 @@ provider fact
   -> normalized Account change
       -> one Account event root
   -> merged Actor state
-      -> AccountCurrentView / ObservedOrdersCurrentView
+      -> owner-scoped indexed entity values
 ```
 
-Provider partial updates are never published as a partial aggregate view. The
-Actor merges them first. `AccountCurrentView` is complete only when
-`ViewMetadata.completeness` is `COMPLETE`.
+Provider partial updates are merged by the Actor before one atomic indexed diff is committed.
 
 `ObservedOrder` is a provider observation of what is currently visible. It is
 not an Execution order lifecycle and does not contain terminal order history

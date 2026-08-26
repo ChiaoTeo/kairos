@@ -5,12 +5,12 @@ from typing import Any
 
 _EXPORTS = {
     "MarketControlClient": (".control", "MarketControlClient"),
-    "MarketViewFrame": (".view", "MarketViewFrame"),
+    "MarketIndexedFrame": (".view", "MarketIndexedFrame"),
+    "MarketIndexedViewQueries": (".view", "MarketIndexedViewQueries"),
     "MarketViewKey": (".view", "MarketViewKey"),
     "MarketViewKind": (".view", "MarketViewKind"),
-    "MarketViewReader": (".view", "MarketViewReader"),
+    "market_indexed_environment_path": (".view", "market_indexed_environment_path"),
     "decode_event": (".events", "decode_event"),
-    "decode_view": (".view", "decode_view"),
 }
 
 

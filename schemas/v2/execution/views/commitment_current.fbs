@@ -1,0 +1,10 @@
+include "../types/order.fbs";
+
+namespace kairos.execution.v2;
+
+table ExecutionCommitmentCurrent {
+  state:OrderCommitmentState (required);
+}
+
+root_type ExecutionCommitmentCurrent;
+file_identifier "ECO3";

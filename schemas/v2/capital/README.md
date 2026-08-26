@@ -1,8 +1,9 @@
 # Capital v2 contracts
 
 Capital commands and synchronous queries use the explicit JSON control
-boundary. The target current view stores independently keyed Capital entities in one owner-scoped LMDB
-environment. `CapitalCurrentView` is the legacy KSS aggregate until Capital's hard migration; it is
+boundary. The current view stores independently keyed Capital entities in one owner-scoped LMDB
+environment. Every named database has one dedicated FlatBuffers current-value root with one required
+business value; no generic optional-field entity envelope exists. The former aggregate root was
 removed rather than retained as a fallback. Durable business transitions are published as typed
 FlatBuffers events on the Capital event stream (`1701`).
 

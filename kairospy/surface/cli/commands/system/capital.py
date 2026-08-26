@@ -58,7 +58,7 @@ def system_component_capital_availabilities(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Capital availability facts from the workspace component mmap."""
+    """Read Capital availability facts from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _workspace_capital_client(owner).current_availabilities(capital_group_id),
@@ -72,7 +72,7 @@ def system_component_capital_objectives(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Capital funding objectives from the workspace component mmap."""
+    """Read Capital funding objectives from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _workspace_capital_client(owner).current_objectives(capital_group_id),
@@ -86,7 +86,7 @@ def system_component_capital_demands(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Capital demands from the workspace component mmap."""
+    """Read Capital demands from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _workspace_capital_client(owner).current_demands(capital_group_id),
@@ -100,7 +100,7 @@ def system_component_capital_plans(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Capital plans from the workspace component mmap."""
+    """Read Capital plans from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _workspace_capital_client(owner).current_plans(capital_group_id),
@@ -114,7 +114,7 @@ def system_component_capital_routes(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Capital routes from the workspace component mmap."""
+    """Read Capital routes from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _workspace_capital_client(owner).current_routes(capital_group_id),
@@ -128,7 +128,7 @@ def system_component_capital_reservations(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Capital reservations from the workspace component mmap."""
+    """Read Capital reservations from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _workspace_capital_client(owner).current_reservations(capital_group_id),
@@ -142,7 +142,7 @@ def system_component_capital_operations(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Capital operations from the workspace component mmap."""
+    """Read Capital operations from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(
         _workspace_capital_client(owner).current_operations(capital_group_id),
@@ -156,7 +156,7 @@ def system_component_capital_alerts(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Capital recovery alerts from the workspace component mmap."""
+    """Read Capital recovery alerts from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(_workspace_capital_client(owner).current_alerts(capital_group_id), output)
 

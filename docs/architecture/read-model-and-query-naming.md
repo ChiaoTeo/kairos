@@ -61,8 +61,8 @@ Reference 不发布第二份 current-view store 是有意的架构选择，见
 [`reference/tests/architecture.rs`](../../crates/modules/reference/tests/architecture.rs)。其他
 模块也不得因为 Reference 暴露 contract-owned SQLite reader，就把自己的私有持久表变成
 跨业务 API。Current view 的物理存储与迁移规则见
-[`current-view-storage.md`](current-view-storage.md)。当前 KSS snapshot 实现是待硬迁移的遗留
-机制，不是可与 LMDB 并存的第二路径。
+[`current-view-storage.md`](current-view-storage.md)。生产 current view 只有 owner-scoped LMDB
+indexed 路径，不存在第二套 snapshot transport、fallback 或兼容入口。
 
 ## 全仓库命名盘点
 
@@ -101,35 +101,34 @@ Reference 是当前最集中的误用点。
 `Default` 把无关集合留空。调用方无法区分“消费者不需要该集合”和“数据实际为空”。窄
 snapshot 类型能消除这种无效状态，比只改名字更重要。
 
-### Execution：当前 mmap 读取和依赖缓存被混称
+### Execution：当前 indexed-view 读取和依赖缓存被混称
 
 | 当前名称或位置 | 实际职责 | 目标名称或处理 |
 | --- | --- | --- |
 | `services/dependencies/projection/mod.rs` | 后台轮询 Account/Market/Risk，并保存 Reference snapshot；检查 ready/stale | `services/dependencies/state/mod.rs` 或 `current.rs` |
 | `AccountProjection` | Execution 私有的 Account 依赖状态 | `AccountDependencyState` |
-| `ProjectedBalance`、`ProjectedPosition` | 从 Account mmap 解码后供 admission 使用的窄事实 | `AvailableBalance` / `AccountBalanceFact`、`AccountPositionFact` |
-| `MarketProjection` | quote mmap 的 generation 和刷新时间 | `MarketDependencyState` |
+| `ProjectedBalance`、`ProjectedPosition` | 从 Account indexed current view 解码后供 admission 使用的窄事实 | `AvailableBalance` / `AccountBalanceFact`、`AccountPositionFact` |
+| `MarketProjection` | quote indexed view 的 event sequence 和提交时间 | `MarketDependencyState` |
 | `ReferenceProjection` | Reference markets、水位和刷新时间 | `ReferenceDependencyState` |
 | `RiskProjection` | Risk health | `RiskDependencyState` |
 | `DependencyProjection` | 四类依赖状态的容器 | `DependencyState` |
 | `DependencyProjectionRuntime` | 拥有刷新线程和共享依赖状态的服务 | `DependencyStateRuntime` 或更具体的 `DependencyRefreshRuntime` |
-| `read_account_projection()` | 读取并校验 Account current/observed-orders mmap | `read_account_dependency_state()` |
+| `read_account_projection()` | 读取并校验 Account indexed current families | `read_account_dependency_state()` |
 | `project_reference_snapshot()` | 把 Reference snapshot 变成 Execution 私有依赖状态 | `reference_dependency_state()` 或 `ReferenceDependencyState::from_snapshot()` |
-| `current_projection()` in connected facade | 读取 `current_execution` mmap 并映射 CLI result | `read_current()` / `read_current_snapshot()` |
+| `read_orders()` in connected facade | 从 Execution indexed current view 映射 CLI result | 保持 owner-owned typed current-view read |
 | `with_backtest_*_without_projection` | backtest 是否允许缺少依赖事实 | `allow_backtest_without_reference_state`、`allow_backtest_without_account_state` |
 | “bounded worker projection” in Risk adapter | 后台 worker 持有的 Risk 依赖状态 | `bounded worker state` |
 
 当前依赖实现见
 [`services/dependencies/state/mod.rs`](../../crates/modules/execution/src/services/dependencies/state/mod.rs)，
-connected mmap 读取见
+connected indexed current-view 读取见
 [`application/connected.rs`](../../crates/modules/execution/src/application/connected.rs)。
 
-Execution 已提供 owner-owned durable `order_audit` query。当前 KSS
-`CurrentExecutionView` 仍携带的截断 fill/event windows 只是迁移遗留；Decision 0034 的硬
-迁移删除这些字段和 `recent-*` 读取，不把它们复制进 LMDB，也不扩大 current storage 为
-无限历史。
+Execution 已提供 owner-owned durable `order_audit` query，并已硬切到 indexed current
+view。旧聚合快照的截断 fill/event windows 与 `recent-*` 读取已经删除，没有复制进 LMDB；
+current storage 不承担无限历史。
 
-### Market：Application 入口、订单簿命令和 mmap reader 被混称
+### Market：Application 入口、订单簿命令和 indexed reader 被混称
 
 | 当前名称或位置 | 实际职责 | 目标名称或处理 |
 | --- | --- | --- |
@@ -137,7 +136,7 @@ Execution 已提供 owner-owned durable `order_audit` query。当前 KSS
 | `application/observations/order_book/projection.rs` | 单个 `ingest_orderbook_snapshot` command | 并入 `order_book/mod.rs` 或改 `snapshot.rs`；它不是投影 |
 | “current projection use cases” | observation ingestion 和当前状态读取 | `observation ingestion and current-view reads` |
 | Market observation key 的 “current market-data projection” | 一份带 scope/provider/kind 的当前视图资源 | `current market-data view` |
-| Python `MarketProjection` | 按 `MarketViewKey` 打开和解码 mmap | `MarketViewAccess` 或 `MarketViewReader` |
+| Python `MarketProjection` | 按 `MarketViewKey` 打开和解码 indexed entity | `MarketViewAccess` / `MarketIndexedViewQueries` |
 | composition 的 `current projection` | Strategy 侧 Market current-view access | `current views` |
 | `projected_markets` | Reference catalog 解析出的 Market runtime routes 数量 | `resolved_markets` |
 | “stable projection” | Actor 已确认的 provider/source current state | 按实际对象称 `current view`、`route state` 或 `source state` |
@@ -149,16 +148,16 @@ Rust 的两个同名文件职责可见
 Python Market contract adapter 位于
 [`infrastructure/contracts/market/source.py`](../../kairospy/infrastructure/contracts/market/source.py)。
 
-### Account：segment view 和 mmap reader 被混称
+### Account：segment view 和 indexed reader 被混称
 
 | 当前名称或位置 | 实际职责 | 目标名称或处理 |
 | --- | --- | --- |
 | `AccountActor::projection(segment_key)` | 从 Actor 当前状态生成一个 `AccountSegmentView` | `segment_view()` |
 | runtime 局部变量 `projection` | 用于 paper settlement / mark-to-market 的 segment view | `segment_view` |
-| Python `AccountCurrentProjection` | 读取、校验、解码 Account current mmap，并返回 `AccountSnapshot` | `AccountCurrentViewReader` 或 `AccountCurrentSnapshots` |
-| Python `AccountObservedOrdersProjection` | 读取 observed-orders mmap | `AccountObservedOrdersViewReader` |
-| Python `AccountApplication._projections` | 每个 AccountId 对应的 mmap current-view reader | `_current_views` |
-| `current_projection()`、`observed_orders_projection()` | System client 构造 mmap reader | `account_current()` / `current_view()`、`observed_orders()` |
+| Python `AccountCurrentProjection` | 读取、校验、解码 Account indexed current families，并返回 `AccountSnapshot` | `AccountCurrentViewReader` 或 `AccountCurrentSnapshots` |
+| Python `AccountObservedOrdersProjection` | 读取 indexed `observed_orders` family | `AccountObservedOrdersViewReader` |
+| Python `AccountApplication._projections` | 每个 AccountId 对应的 indexed current-view reader | `_current_views` |
+| `current_projection()`、`observed_orders_projection()` | System client 构造 indexed reader | `account_current()` / `current_view()`、`observed_orders()` |
 | “private-stream projections migrate” | provider private stream 产生的 Account 当前事实 | `private-stream ingestion` / `account current state` |
 
 Actor 已经公开准确的 `current_view()`，因此 `projection()` 没有提供额外含义，见
@@ -170,9 +169,9 @@ Actor 已经公开准确的 `current_view()`，因此 `projection()` 没有提�
 
 | 当前名称或位置 | 实际职责 | 目标名称或处理 |
 | --- | --- | --- |
-| Python `RiskProjection` | mmap `RiskLatestView` reader 上的查询便利方法 | `RiskLatestViewQueries` 或 `RiskLatest` |
-| `latest_projection()` | 创建 Risk latest-view reader | `latest()` / `latest_view()` |
-| Python `CapitalProjection` | mmap `CapitalCurrentView` reader 上的查询便利方法 | `CapitalCurrentViewQueries` 或 `CapitalCurrent` |
+| Python `RiskProjection` | indexed Risk databases 上的查询便利方法 | `RiskIndexedViewQueries` |
+| `latest_projection()` | 创建 Risk indexed reader | `current_view()` |
+| Python `CapitalProjection` | indexed Capital databases 上的查询便利方法 | `CapitalIndexedViewQueries` |
 | `current_projection()` | 创建 Capital current-view reader | `current()` / `current_view()` |
 | Rust Capital contract `projection.rs` | `CapitalCurrentView` 及其组成的 contract-owned current models | `current.rs` 或 `current_view.rs` |
 | application 字段 `_projection` | current-view query object | `_current_view` / `_current_queries` |
@@ -186,10 +185,10 @@ Actor 已经公开准确的 `current_view()`，因此 `projection()` 没有提�
 
 | 当前名称或位置 | 实际职责 | 目标名称或处理 |
 | --- | --- | --- |
-| `infrastructure/contracts/execution/projection.py`、`ExecutionProjection` | 打开多个 Execution mmap view 并提供 current/diagnostic 查询 | 文件改 `current.py`；类型改 `ExecutionCurrentViews` 或 `ExecutionViewQueries` |
+| `infrastructure/contracts/execution/projection.py`、`ExecutionProjection` | 打开 Execution current view 并提供 current/diagnostic 查询 | 文件改 `current.py`；类型改 `ExecutionCurrentViews` 或 `ExecutionViewQueries` |
 | `ExecutionApplication._projection` | Execution current-view query dependency | `_current_views` |
 | Strategy `Projection` 测试 fake | current-view query fake | 跟随具体依赖改为 `CurrentViews` / `ExecutionQueries` |
-| `StaleProjectionError` | SDK 中未绑定具体资源的空异常类型 | 若用于 mmap freshness，改 `StaleCurrentViewError`；若无调用方则删除 |
+| `StaleProjectionError` | SDK 中未绑定具体资源的空异常类型 | 若用于 current-view freshness，改 `StaleCurrentViewError`；若无调用方则删除 |
 | `StrategyLaunchConfig` 注释中的 “typed projection” | 已经命名准确的规范化 launch 输入 | 注释改为 `typed normalized launch inputs`；类型无需改 |
 | Portfolio package 注释中的 “record and projection” | Portfolio application、events 和 snapshots | 改为 `state and current snapshots` |
 | `OptionGreeksProjectionRequest/Result` | 用 Black-Scholes 对当前观测做确定性计算 | `OptionGreeksCalculationRequest/Result` |
@@ -222,12 +221,12 @@ Greeks 计算没有把权威事件流投成读模型，也不是未来价格预�
 | 当前位置 | 当前混称 | 处理原则 |
 | --- | --- | --- |
 | `schemas/README.md` | 把 publication 文件统称为 `projection/` delivery shape，但当前 v2 已按 `views/` 组织 | 改为 event、view、type、control 四种实际 contract shape |
-| `schemas/v2/capital/README.md`、`schemas/v2/system/README.md` | mmap projection、operational projection | 分别改为 `CapitalCurrentView`、`System current view` |
+| `schemas/v2/capital/README.md`、`schemas/v2/system/README.md` | storage projection、operational projection | 分别改为 `CapitalCurrentView`、`System current view` |
 | `schemas/v2/registry.md` | “Market Reference projection” consumer | 改为 Market 的 `Reference catalog consumer` / `market-universe resolution` |
 | `schemas/v2/README.md` | compatibility projection | 改为 compatibility view/adapter；这里表达的是禁止兼容外壳，不是读模型 |
 | `scripts/check/check_cli_boundary.py` | contract/projection command、projection method token | 随公共 API 改成 control/current-view/catalog 分类，并分别检查 |
 | `scripts/maintenance/repair_reference_symbol_identity.py` | current projection rows | 改为 current catalog rows |
-| `docs/architecture/cli-boundary.md` | 用 `projection` 同时表示 mmap、Reference SQLite、runtime state 和 connected API | 按命令实际来源逐项改为 `current view`、`catalog query`、`runtime state` 或 `contract query` |
+| `docs/architecture/cli-boundary.md` | 用 `projection` 同时表示 current storage、Reference SQLite、runtime state 和 connected API | 按命令实际来源逐项改为 `current view`、`catalog query`、`runtime state` 或 `contract query` |
 | `docs/architecture/capital-management.md` | current projection、alerts projected | `CapitalCurrentView`、`alerts are emitted/published` |
 | `docs/architecture/portfolio-management.md` | record、state、persistence 和 evidence 都称 projection | 使用 `Portfolio state`、`PortfolioSnapshot`、`valuation evidence`、`persistence` |
 | `docs/guides/operations.md` | Reference SQLite projection、Execution projection、projection schema | `Reference catalog`、`Execution current view`、`view schemas` |
@@ -247,7 +246,7 @@ Decision 0003、0007、0008、0011 曾使用旧术语，其中有些还引用了
 
 [`DatasetAnalyticalView`](../../kairospy/research/apps/data/application/readers.py) 中的 “bounded column
 projection” 表示从 tabular dataset 选择列，是关系代数/数据帧里的精确局部术语。它不会被
-当成进程 contract、mmap reader 或状态所有者，可以保留。
+当成进程 contract、indexed reader 或状态所有者，可以保留。
 
 如果未来确实引入由事件历史重建并独立维护的 materialized read model，也应直接按用途命名，
 例如 `OrderAuditIndex` 或 `ReferenceSearchIndex`。实现说明可以称它“由事件派生”，但公共类型
@@ -260,7 +259,7 @@ projection” 表示从 tabular dataset 选择列，是关系代数/数据帧里
 ```text
 contract/src/
   control/    commands、health 和有界 request/query
-  view/       mmap CurrentView / LatestView 的 key、reader、publisher、codec
+  view/       indexed current view 的 key、reader、schema 和校验
   catalog/    仅在确有持久目录查询时存在；当前主要是 Reference
   event/      增量 business events
 ```
@@ -304,7 +303,7 @@ reference.catalog().for_execution()?;
 这是最高优先级，因为错误名称已经进入跨业务 contract，并且当前大 snapshot 可以表达
 “字段因裁剪为空”和“权威数据为空”两种无法区分的状态。
 
-### 第二阶段：统一 mmap reader 语言
+### 第二阶段：统一 indexed reader 语言
 
 1. Rust connected facade 将 `current_projection()` 改为 `read_current()`。
 2. Python Account、Market、Execution、Risk、Capital 类型改为 `*ViewReader`、
@@ -338,10 +337,10 @@ reference.catalog().for_execution()?;
 ## 迁移约束与验收
 
 - 改名不能改变业务 owner：跨模块读取仍必须经过 owner contract。
-- mmap reader 必须继续验证 key/identity、generation、applied revision、completeness 和
+- indexed reader 必须继续验证 key/identity、applied revision、rebuild state 和
   freshness；改名不能弱化一致性检查。
 - Reference 多表结果必须在同一个 SQLite read transaction 中取得同一 watermark。
-- `CurrentView` 必须有界。完整 history/audit 不能因为调用方能从 mmap 看到部分记录就宣称
+- `CurrentView` 必须有界。完整 history/audit 不能因为调用方能从 current view 看到部分记录就宣称
   已经实现。
 - 数据库表、日志事件、journal discriminator 和现有 fixture 必须一次性迁移，不保留双写或兼容别名。
 - 先迁移公共 contract 和生产调用方，再更新测试名称；不能让测试兼容 facade 永久保留旧

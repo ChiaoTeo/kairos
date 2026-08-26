@@ -312,7 +312,7 @@ pub struct CapitalAlert {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CapitalCurrentView {
+pub struct CapitalCurrentRecords {
     pub capital_group_id: CapitalGroupId,
     pub strategy_id: StrategyId,
     pub environment: String,

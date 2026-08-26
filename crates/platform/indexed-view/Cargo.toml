@@ -1,0 +1,13 @@
+[package]
+name = "kairos-indexed-view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Concrete LMDB-backed indexed current-view storage for Kairos"
+
+[dependencies]
+heed.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

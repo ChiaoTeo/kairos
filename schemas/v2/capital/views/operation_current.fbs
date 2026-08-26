@@ -1,0 +1,5 @@
+include "../types/state.fbs";
+namespace kairos.capital.v2;
+table CapitalOperationCurrent { capital_group_id:string (required); value:CapitalOperation (required); }
+root_type CapitalOperationCurrent;
+file_identifier "COP3";

@@ -1,10 +1,11 @@
-//! Risk reservation command adapter and typed mmap reconciliation.
+//! Risk reservation command adapter and typed indexed-view reconciliation.
 
 use kairos_primitives::decimal::Money;
 use kairos_primitives::risk::ReservationId;
-use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
+use kairos_primitives::runtime::{
+    ActorId, IdempotencyKey, InstanceIdentity, RequestId, StrategyId,
+};
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
-use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
 use kairos_protocol::generated::kairos::risk::v_2::ReservationStatus as RiskViewReservationStatus;
 use kairos_risk_contract::{
     Amount, AuthorizeRequest, ConsumeReservationRequest, ReleaseReservationRequest,
@@ -22,6 +23,7 @@ use crate::domain::{RiskReservationEvidence, RiskReservationSagaStatus};
 pub struct SocketExecutionRiskReservations {
     risk: RiskClient,
     risk_actor_id: String,
+    identity: InstanceIdentity,
     reservation_ttl_nanos: u64,
     skip_authorization: bool,
 }
@@ -30,12 +32,14 @@ impl SocketExecutionRiskReservations {
     pub(crate) fn new(
         risk: RiskClient,
         risk_actor_id: String,
+        identity: InstanceIdentity,
         reservation_ttl_nanos: u64,
         skip_authorization: bool,
     ) -> Self {
         Self {
             risk,
             risk_actor_id,
+            identity,
             reservation_ttl_nanos,
             skip_authorization,
         }
@@ -277,7 +281,7 @@ impl SocketExecutionRiskReservations {
         &mut self,
         evidence: &RiskReservationEvidence,
     ) -> Result<Option<RiskReservationEvidence>, String> {
-        read_reservation(&self.risk, &self.risk_actor_id, evidence)
+        read_reservation(&self.risk, &self.risk_actor_id, &self.identity, evidence)
     }
 
     pub(super) fn resize(
@@ -403,29 +407,32 @@ fn evidence(
 fn read_reservation(
     client: &RiskClient,
     actor_id: &str,
+    identity: &InstanceIdentity,
     evidence: &RiskReservationEvidence,
 ) -> Result<Option<RiskReservationEvidence>, String> {
-    let frame = client
-        .latest(actor_id.to_owned())
-        .and_then(|latest| latest.read())
-        .map_err(|error| format!("read Risk mmap view: {error}"))?;
-    let decoded = frame
-        .view()
-        .map_err(|error| format!("decode Risk mmap view: {error}"))?;
-    let metadata = decoded.metadata();
-    if metadata.completeness() != ViewCompleteness::COMPLETE {
-        return Err("Risk mmap view is incomplete".into());
+    let actor_id = ActorId::new(actor_id).map_err(|error| error.to_string())?;
+    let snapshot = client
+        .indexed_current(identity, actor_id)
+        .and_then(|view| view.snapshot())
+        .map_err(|error| format!("read Risk indexed view: {error}"))?;
+    let values = snapshot.reservations();
+    let mut matched = None;
+    for value in &values {
+        let current = value
+            .reservation()
+            .map_err(|error| format!("decode Risk indexed reservation: {error}"))?;
+        let reservation = current.reservation();
+        if evidence.reservation_id == reservation.reservation_id()
+            || evidence.idempotency_key.as_str() == reservation.idempotency_key()
+        {
+            matched = Some(reservation);
+            break;
+        }
     }
-    if frame.generation() != metadata.generation() {
-        return Err("Risk mmap generation does not match its envelope".into());
-    }
-    let Some(reservation) = decoded.state().active_reservations().iter().find(|value| {
-        evidence.reservation_id == value.reservation_id()
-            || evidence.idempotency_key.as_str() == value.idempotency_key()
-    }) else {
+    let Some(reservation) = matched else {
         return Ok(None);
     };
-    if reservation.account_id() != evidence.account_id.as_str() {
+    if reservation.account_id() != Some(evidence.account_id.as_str()) {
         return Err("Risk reservation account identity mismatch".into());
     }
     let status = match reservation.status() {
@@ -435,15 +442,7 @@ fn read_reservation(
         RiskViewReservationStatus::EXPIRED => RiskReservationSagaStatus::Expired,
         _ => return Err("Risk reservation has an unspecified lifecycle".into()),
     };
-    let amount = reservation
-        .requested_usages()
-        .iter()
-        .next()
-        .map(|usage| usage.amount())
-        .map(|value| Money::new(value.mantissa(), value.scale()))
-        .transpose()
-        .map_err(|error| error.to_string())?
-        .unwrap_or(evidence.amount);
+    let amount = evidence.amount;
     Ok(Some(RiskReservationEvidence {
         order_id: evidence.order_id.clone(),
         reservation_id: ReservationId::new(reservation.reservation_id())
@@ -453,8 +452,8 @@ fn read_reservation(
         account_id: evidence.account_id.clone(),
         amount,
         status,
-        risk_generation: frame.generation().into(),
-        risk_event_sequence: frame.envelope_metadata().applied_event_sequence.into(),
+        risk_generation: snapshot.metadata().applied_event_sequence.into(),
+        risk_event_sequence: snapshot.metadata().applied_event_sequence.into(),
         policy_version: reservation.policy_version().into(),
         expires_at_unix_nanos: reservation.expires_at_unix_nanos().into(),
         updated_at_unix_nanos: reservation.updated_at_unix_nanos().into(),

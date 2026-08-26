@@ -1,0 +1,5 @@
+include "../types/state.fbs";
+namespace kairos.capital.v2;
+table CapitalPolicyCurrent { capital_group_id:string (required); value:CapitalPolicy (required); }
+root_type CapitalPolicyCurrent;
+file_identifier "CPC3";

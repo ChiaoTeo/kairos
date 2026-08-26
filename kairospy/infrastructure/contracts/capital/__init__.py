@@ -5,10 +5,8 @@ from typing import Any
 
 _EXPORTS = {
     "CapitalContractClient": (".client", "CapitalContractClient"),
-    "CapitalCurrentViewQueries": (".view", "CapitalCurrentViewQueries"),
-    "CapitalViewFrame": (".view", "CapitalViewFrame"),
-    "CapitalViewKey": (".view", "CapitalViewKey"),
-    "CapitalViewReader": (".view", "CapitalViewReader"),
+    "CapitalIndexedViewQueries": (".view", "CapitalIndexedViewQueries"),
+    "capital_indexed_environment_path": (".view", "capital_indexed_environment_path"),
     "decode_event": (".events", "decode_event"),
 }
 

@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &connected.launch_id,
                 &connected.instance_id,
             )?;
-            if connected.command.is_mmap_query() {
+            if connected.command.is_current_view_query() {
                 let application = connected_execution_app(&instance, workspace.id(), true)?;
                 print_json(connected_result(
                     execute_connected_query(&application, connected.command)?,
@@ -118,15 +118,10 @@ struct Cli {
 }
 
 impl ConnectedCommand {
-    fn is_mmap_query(&self) -> bool {
+    fn is_current_view_query(&self) -> bool {
         matches!(
             self,
-            Self::Snapshot
-                | Self::ActiveOrders { .. }
-                | Self::UnknownRemoteOrders
-                | Self::ActiveOrder { .. }
-                | Self::RecentOrderEvents { .. }
-                | Self::RecentFills { .. }
+            Self::ActiveOrders { .. } | Self::UnknownRemoteOrders | Self::ActiveOrder { .. }
         )
     }
 }
@@ -140,22 +135,9 @@ fn connected_execution_app(
         InstanceIdentity::new(workspace_id, instance.launch_id(), instance.instance_id())?;
     let socket = instance.socket("execution")?;
     if require_views {
-        return ConnectedExecutionApplication::connect(
-            socket,
-            instance.snapshot(&[])?,
-            identity,
-            workspace_id.to_string(),
-            instance.launch_id().to_string(),
-            instance.instance_id().to_string(),
-        );
+        return ConnectedExecutionApplication::connect(socket, instance.snapshot(&[])?, identity);
     }
-    ConnectedExecutionApplication::connect_control(
-        socket,
-        identity,
-        workspace_id.to_string(),
-        instance.launch_id().to_string(),
-        instance.instance_id().to_string(),
-    )
+    ConnectedExecutionApplication::connect_control(socket, identity)
 }
 
 fn execute_connected_query(
@@ -163,7 +145,6 @@ fn execute_connected_query(
     command: ConnectedCommand,
 ) -> Result<ConnectedExecutionOutput, Box<dyn std::error::Error>> {
     let value = match command {
-        ConnectedCommand::Snapshot => ConnectedExecutionOutput::Snapshot(application.snapshot()?),
         ConnectedCommand::ActiveOrders { account_id } => {
             ConnectedExecutionOutput::Orders(application.active_orders(account_id.as_deref())?)
         },
@@ -172,12 +153,6 @@ fn execute_connected_query(
         },
         ConnectedCommand::ActiveOrder { order_id } => {
             ConnectedExecutionOutput::Order(application.active_order(&order_id)?)
-        },
-        ConnectedCommand::RecentOrderEvents { order_id } => {
-            ConnectedExecutionOutput::Events(application.recent_order_events(order_id.as_deref())?)
-        },
-        ConnectedCommand::RecentFills { order_id } => {
-            ConnectedExecutionOutput::Fills(application.recent_fills(order_id.as_deref())?)
         },
         _ => unreachable!("control command routed to current-view query"),
     };
@@ -336,7 +311,7 @@ async fn execute_control_command(
                 )
                 .await?,
         ),
-        _ => unreachable!("query command routed to typed mmap"),
+        _ => unreachable!("query command routed to typed indexed current view"),
     };
     Ok(value)
 }
@@ -451,7 +426,6 @@ struct StandaloneSubmitArgs {
 
 #[derive(Clone, Debug, Subcommand)]
 enum ConnectedCommand {
-    Snapshot,
     /// List current Execution-owned order submission route candidates.
     Routes {
         #[arg(long)]
@@ -476,10 +450,6 @@ enum ConnectedCommand {
         #[arg(long)]
         order_id: String,
     },
-    RecentOrderEvents {
-        #[arg(long)]
-        order_id: Option<String>,
-    },
     Audit {
         #[arg(long)]
         order_id: Option<String>,
@@ -493,10 +463,6 @@ enum ConnectedCommand {
         until_unix_nanos: Option<u64>,
         #[arg(long, default_value_t = 1000)]
         limit: u32,
-    },
-    RecentFills {
-        #[arg(long)]
-        order_id: Option<String>,
     },
     Submit(SubmitArgs),
     Cancel {
@@ -832,7 +798,7 @@ mod cli_tests {
             "demo",
             "--instance-id",
             "run-1",
-            "snapshot",
+            "active-orders",
         ]);
         assert!(
             parsed.is_ok(),
@@ -848,11 +814,14 @@ mod cli_tests {
             "demo",
             "--instance-id",
             "run-1",
-            "snapshot",
+            "active-orders",
         ]);
         assert!(parsed.is_err(), "connected identity must include mode");
 
         for removed_alias in [
+            "snapshot",
+            "recent-order-events",
+            "recent-fills",
             "list",
             "open",
             "closed",

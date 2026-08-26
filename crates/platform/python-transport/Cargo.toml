@@ -10,5 +10,6 @@ name = "_native_transport"
 crate-type = ["cdylib"]
 
 [dependencies]
+kairos-indexed-view.workspace = true
 kairos-transport.workspace = true
 pyo3.workspace = true

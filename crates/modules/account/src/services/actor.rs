@@ -324,7 +324,7 @@ impl AccountActor {
 
     /// Derive the explicit business facts produced by a completed Actor
     /// transition. The caller invokes this before publication and after
-    /// persistence succeeds; no mmap payload participates in this operation.
+    /// persistence succeeds; no current-view payload participates in this operation.
     pub(crate) fn business_events_since(&self, previous: &Self) -> Vec<AccountBusinessEvent> {
         let first_sequence = previous.event_sequence.get().saturating_add(1);
         let last_sequence = self.event_sequence.get();

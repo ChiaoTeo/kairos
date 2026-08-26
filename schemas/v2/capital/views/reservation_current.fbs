@@ -1,0 +1,5 @@
+include "../types/state.fbs";
+namespace kairos.capital.v2;
+table CapitalReservationCurrent { capital_group_id:string (required); value:CapitalReservation (required); }
+root_type CapitalReservationCurrent;
+file_identifier "CRS3";

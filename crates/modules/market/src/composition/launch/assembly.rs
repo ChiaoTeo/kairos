@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kairos_conflux::AeronOutputDeclaration;
+use kairos_conflux::{AeronOutputDeclaration, IndexedEnvironmentOptions, IndexedOutputDeclaration};
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_workspace::Workspace;
 
@@ -14,7 +14,6 @@ use crate::composition::history::{HistoryCollectionSpec, spawn_jsonl_history};
 use crate::services::source::load_replay_checkpoint;
 use crate::{MarketApplication, ResolvedMarket, SubscriptionId};
 
-const VIEW_SLOT_SIZE: usize = 4_194_304;
 const MAX_DYNAMIC_MEMBERS: usize = 10_000;
 
 fn collection_market_descriptor(
@@ -401,8 +400,27 @@ pub async fn build_market_host(
             reference_universe_sync,
         )
         .map_err(MarketStartupError::new)?;
-    application
-        .configure_view_publication(view_root, VIEW_SLOT_SIZE)
+    let (indexed_identity, producer_incarnation) = application.indexed_publication_identity();
+    let indexed_path =
+        kairos_market_contract::market_indexed_environment_path(&view_root, indexed_identity)
+            .map_err(MarketStartupError::new)?;
+    let declaration_identity =
+        kairos_market_contract::market_indexed_identity(indexed_identity, producer_incarnation);
+    system
+        .outputs()
+        .indexed
+        .declare(
+            "market-current",
+            IndexedOutputDeclaration {
+                options: IndexedEnvironmentOptions::new(
+                    indexed_path,
+                    kairos_market_contract::MARKET_MAP_SIZE,
+                )
+                .map_err(MarketStartupError::new)?,
+                identity: declaration_identity,
+                revision: 1,
+            },
+        )
         .map_err(MarketStartupError::new)?;
     let event_endpoint = kairos_market_contract::AeronEndpoint::new(
         request.aeron_dir,

@@ -58,12 +58,11 @@ provide a second current Order, Intent, or AlgorithmRun listing API. Aeron `exec
 Order, and Fill changes. Reconciliation is expressed by the affected Intent or Order lifecycle rather
 than a standalone compatibility event.
 
-The accepted current-view target is one Execution LMDB environment with independently keyed `orders`,
+The current-view implementation is one Execution LMDB environment with independently keyed `orders`,
 `intents`, `algorithm_runs`, `commitments`, `risk_reservations`, and `unknown_remote_orders` named
 databases. One Actor transition updates every affected family and its applied event sequence in one
-transaction. The current KSS `CurrentExecution` aggregate is a migration-only implementation and is
-removed, together with its reader and schema root, when the indexed store activates. It is not retained
-as a fallback. The durable audit remains the history authority. Venue open/history/detail queries are
+transaction. There is no aggregate snapshot reader, schema root, or fallback. The durable audit remains
+the history authority. Venue open/history/detail queries are
 private reconciliation inputs and cannot bypass ExecutionActor to become a public state path.
 
 One launch instance composes one ExecutionActor and one owner-scoped current-view environment. The
@@ -72,8 +71,8 @@ Multiple Execution actors or executor shards in one launch instance are not a su
 
 Connected current-state commands are named `active-orders`, `active-order`, and
 `unknown-remote-orders`; complete Order lifecycle evidence uses the persistent `audit` query. The LMDB
-current view does not retain recent event/fill history. The migration removes the KSS-only
-`snapshot/recent-order-events/recent-fills` reads rather than forwarding them to another path. Removed
+current view does not retain recent event/fill history. The removed
+`snapshot/recent-order-events/recent-fills` reads are not forwarded to another path. Removed
 names are not aliases.
 
 The bounded `health` query is operational status rather than a second state listing. In addition to

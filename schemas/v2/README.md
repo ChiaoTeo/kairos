@@ -22,8 +22,8 @@ payload contracts and may encode one entity value in the indexed current-view
 store. Command is therefore a semantic operation, not a common FlatBuffers
 wire shape. The target current-view storage contract is defined in
 [`current-view-storage.md`](../../docs/architecture/current-view-storage.md).
-Existing KSS1 aggregate snapshot resources remain documented as a legacy
-implementation in [`mmap-contract.md`](./mmap-contract.md) until each owner hard-migrates.
+Current views use the owner-scoped LMDB indexed-view contract described in
+[`docs/architecture/current-view-storage.md`](../../docs/architecture/current-view-storage.md).
 
 ## 1. Goals and non-goals
 
@@ -42,7 +42,7 @@ V2 does not attempt to:
 - serialize each module's complete domain or Actor state;
 - make FlatBuffers generated types into application models;
 - create a global event union, global schema version, or global state owner;
-- replace Reference point-in-time queries or historical datasets with mmap;
+- replace Reference point-in-time queries or historical datasets with a current view;
 - provide transparent event recovery through a current-state snapshot;
 - preserve unused roots merely because generated code already exists.
 
@@ -208,33 +208,23 @@ Changing partition rules is a contract migration, not a transport setting.
 
 ## 6. Common current-view metadata
 
-Every current-view root contains required `ViewMetadata`:
+Every owner-scoped LMDB environment contains a reserved metadata database. Metadata is committed in
+the same write transaction as the affected entity families:
 
 | Field | Requirement | Meaning |
 | --- | --- | --- |
-| `snapshot_id` | required | Unique identity for this publication |
-| `resource_id` | required | Stable logical mmap resource identity from the typed runtime resource key |
-| `resource_epoch` | required, greater than zero | Immutable file/capacity/schema epoch for this resource |
-| `view_key` | required | Canonical key naming the access pattern and scope |
-| `owner_id` | required | Business Actor that owns the state |
-| `workspace_id` | required | Workspace isolation boundary |
-| `launch_id` | present when launch-scoped | Launch isolation |
-| `instance_id` | present when instance-scoped | Instance isolation |
-| `generation` | required, greater than zero | Monotonic publication generation for this `view_key` |
-| `as_of_unix_nanos` | required, greater than zero | Business cut represented by the image |
-| `published_at_unix_nanos` | required, greater than zero | Publication time |
-| `completeness` | required enum, not `UNSPECIFIED` | Whether the declared view population is complete or intentionally partial |
+| `identity` | required | Exact workspace, launch, instance, owner, and publisher-resource identity |
+| `format_version` | required | Platform indexed-view storage format |
+| `schema_set` | required | Exact named-database key/value schemas and versions |
+| `resource_epoch` | required, greater than zero | Incompatible environment replacement epoch |
+| `producer_incarnation` | required, greater than zero | Writer-process incarnation used for fencing and diagnosis |
+| `applied_event_sequence` | required | Highest owner event sequence reflected by this transaction |
+| `committed_at_unix_nanos` | required | Publication commit time |
+| `rebuild_state` | required | `building`, `ready`, or bounded `failed` diagnostic state |
 
-There is no generic `version` field. Contract version belongs to the root/file
-identifier; publication ordering belongs to `generation`.
-
-An optional owner-specific `applied_revision` may record audit evidence such as
-a catalog revision or journal checkpoint. It does not become an event cursor
-unless a separate retained event contract explicitly defines that mapping.
-
-Counts are omitted when they merely repeat a vector length. A total count is
-allowed only when the payload is intentionally partial or paginated and the
-difference has business meaning.
+There is no aggregate snapshot generation or per-value transport envelope. Contract version belongs
+to each FlatBuffers value root/file identifier; business ordering belongs to owner event sequences and
+entity-specific fields.
 
 ## 7. Time semantics
 
@@ -377,14 +367,12 @@ another real caller is demonstrated.
   bootstrap reader requires them
 
 Order-book roots are admitted as a complete snapshot/delta/resync slice:
-`OrderBookSnapshotReceived`, `OrderBookDeltaReceived`,
-`OrderBookResyncRequired`, and `OrderBookLatestView`. The latest view is
-usable only when its `synchronized` value is true. `MarketFreshnessLatestView`
-is also admitted because Execution and Strategy need an owner-provided
-freshness decision. Rate, ticker, mark/index price, funding, open interest,
-instrument status, and warm-up history are not automatically admitted merely because a provider exposes them. Subscription lifecycle is represented by the synchronous Market
-JSON-RPC control response; it is not a Market data event, and a subscription
-mmap view remains deferred.
+`OrderBookSnapshotReceived`, `OrderBookDeltaReceived`, and
+`OrderBookResyncRequired`. The keyed `MarketOrderBookCurrent` value is
+usable only when its `synchronized` value is true. The same entity root carries
+Market-owned freshness and the other admitted latest observation families.
+Subscription lifecycle is represented by the synchronous Market JSON-RPC
+control response; it is not a Market data event or current view.
 
 Market observation roots require canonical `market_id`, `instrument_id`,
 `source_id`, source observation time, and the values specific to that fact.
@@ -419,8 +407,8 @@ change was caused by execution.
   atomic decision/reservation result synchronously
 - `RiskDecisionMade`, explicit reservation transition facts, and explicit
   circuit transition facts
-- `RiskLatestView` containing policy version, structured policy scopes,
-  limits, allocations, reservations, and circuits
+- indexed Risk current values containing policy version, structured policy
+  scopes, limits, allocations, reservations, and circuits
 
 The wire representation preserves every allocation and scope. It never derives
 an `owner_id` by choosing one field, never relabels `policy_id` as `budget_id`,
@@ -440,8 +428,7 @@ and never selects the first allocation as a reservation summary.
   and `FillRecorded` facts; reconciliation is expressed by the affected
   Intent/Order lifecycle rather than a second standalone event
 - indexed LMDB entity families for operational Intents, AlgorithmRuns, Orders, commitments,
-  reservations, and unresolved remote facts; the legacy aggregate `CurrentExecution` KSS root is
-  removed when Execution activates the indexed store
+  reservations, and unresolved remote facts; there is no aggregate Execution snapshot path
 - bounded durable Order audit queries use the Execution JSON-RPC contract rather than current storage
 
 Execution facts preserve `intent_id`, `plan_id`, `leg_id`, `order_id`, and
@@ -556,7 +543,7 @@ do not receive identifiers or generated code.
 The following are selected per admitted root from measured caller needs, not
 standardized speculatively:
 
-- one mmap file per logical key versus a bounded keyed collection;
+- exact keyed-family cardinality and retention for future admitted views;
 - Market retained replay versus ephemeral fail-closed delivery;
 - whether a concrete view needs partial pagination or a dataset API;
 - Decimal64 replacement for a demonstrated out-of-range field;

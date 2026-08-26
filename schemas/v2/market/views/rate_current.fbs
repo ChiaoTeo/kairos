@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/rate.fbs";
+
+namespace kairos.market.v2;
+
+table MarketRateCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:Rate (required);
+}
+
+root_type MarketRateCurrent;
+file_identifier "MRC3";

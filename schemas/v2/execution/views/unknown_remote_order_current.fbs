@@ -1,0 +1,10 @@
+include "../types/unknown_remote_order.fbs";
+
+namespace kairos.execution.v2;
+
+table ExecutionUnknownRemoteOrderCurrent {
+  state:UnknownRemoteOrderState (required);
+}
+
+root_type ExecutionUnknownRemoteOrderCurrent;
+file_identifier "EUR3";

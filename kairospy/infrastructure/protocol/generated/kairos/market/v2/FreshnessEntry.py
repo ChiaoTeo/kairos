@@ -20,10 +20,6 @@ class FreshnessEntry(object):
     def GetRootAsFreshnessEntry(cls, buf, offset=0):
         """This method is deprecated. Please switch to GetRootAs."""
         return cls.GetRootAs(buf, offset)
-    @classmethod
-    def FreshnessEntryBufferHasIdentifier(cls, buf, offset, size_prefixed=False):
-        return flatbuffers.util.BufferHasIdentifier(buf, offset, b"\x4D\x4C\x46\x32", size_prefixed=size_prefixed)
-
     # FreshnessEntry
     def Init(self, buf, pos):
         self._tab = flatbuffers.table.Table(buf, pos)

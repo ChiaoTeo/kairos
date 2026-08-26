@@ -4,6 +4,7 @@ members = [
     "crates/primitives",
     "crates/platform/credentials",
     "crates/platform/integration",
+    "crates/platform/indexed-view",
     "crates/platform/conflux",
     "crates/platform/network",
     "crates/platform/protocol",
@@ -36,13 +37,12 @@ axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive", "env"] }
-crc32fast = "1"
 criterion = "0.8"
 ethers = { version = "2.0.14", default-features = false }
 flatbuffers = "25.12.19"
-fs2 = "0.4"
 futures-core = "0.3"
 futures-util = "0.3"
+heed = "0.22.1"
 hex = "0.4"
 hmac = "0.12"
 http-body-util = "0.1"
@@ -65,6 +65,7 @@ kairos-credentials = { path = "crates/platform/credentials" }
 kairos-execution = { path = "crates/modules/execution" }
 kairos-execution-contract = { path = "crates/modules/execution/contract" }
 kairos-integration = { path = "crates/platform/integration" }
+kairos-indexed-view = { path = "crates/platform/indexed-view" }
 kairos-market = { path = "crates/modules/market" }
 kairos-market-contract = { path = "crates/modules/market/contract" }
 kairos-network = { path = "crates/platform/network" }
@@ -79,7 +80,6 @@ kairos-risk-contract = { path = "crates/modules/risk/contract" }
 kairos-transport = { path = "crates/platform/transport" }
 kairos-workspace = { path = "crates/platform/workspace" }
 libc = "0.2"
-memmap2 = "0.9"
 opentelemetry = { version = "0.31", default-features = false, features = [
     "trace",
     "metrics",

@@ -1,12 +1,14 @@
-use kairos_risk_contract::{DecodedRiskEvent, RiskViewKey, risk_view_path};
+use kairos_primitives::runtime::{ActorId, InstanceIdentity};
+use kairos_risk_contract::{DecodedRiskEvent, risk_indexed_environment_path};
 
 #[test]
-fn risk_latest_view_is_partitioned_by_actor() {
-    let key = RiskViewKey::latest("risk:instance-1");
+fn risk_indexed_view_is_partitioned_by_actor_and_instance() {
+    let identity = InstanceIdentity::new("workspace", "launch", "instance-1").unwrap();
+    let actor_id = ActorId::new("risk:instance-1").unwrap();
     assert!(
-        risk_view_path("/runtime", &key)
+        risk_indexed_environment_path("/runtime", &identity, &actor_id)
             .unwrap()
-            .ends_with("risk/risk%3Ainstance-1/latest/current.snapshot")
+            .ends_with("Risk/risk-risk%3Ainstance-1/epoch-1/current.lmdb")
     );
 }
 

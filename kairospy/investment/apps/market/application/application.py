@@ -89,7 +89,7 @@ class MarketApplication:
     """Concrete strategy-facing Market use cases.
 
     The Python SDK has one Market implementation: the Unix command client and
-    mmap current-view reader.  Keeping those concrete dependencies here avoids a
+    indexed current-view reader. Keeping those concrete dependencies here avoids a
     second port hierarchy inside the SDK while the Rust Market application
     remains the authoritative process boundary and state owner.
     """
@@ -122,7 +122,7 @@ class MarketApplication:
         self._subscription_request_ids: dict[str, str] = {}
 
     def check_event_source_ready(self) -> None:
-        """Validate the configured Market event source without reading mmap."""
+        """Validate the configured Market event source without reading current state."""
 
         if self._event_source_ready:
             return
@@ -398,7 +398,7 @@ class MarketApplication:
     def latest_trade(self, market: Market | MarketId) -> Trade | None:
         """Return the latest consumed trade event.
 
-        Trade is event-only in Market v2 and has no mmap current-view
+        Trade is event-only in Market v2 and has no indexed current-view
         resource. The result is therefore available after the event stream has
         delivered a trade, rather than through an aggregate snapshot read.
         """

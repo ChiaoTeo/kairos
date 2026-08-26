@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use kairos_conflux::{
     CommandOutcome, ConfluxActor, ConfluxEvent, ConnectionKey, Context, ExternalParticipantEvent,
-    IntegrationError, IntegrationEvent, OrderCommand, OrderEntryEvent, OrderEntryRequest,
-    SnapshotEnvelopeMetadata, SystemEvent,
+    IndexedMutation, IntegrationError, IntegrationEvent, OrderCommand, OrderEntryEvent,
+    OrderEntryRequest, SystemEvent,
 };
 use kairos_execution_contract::{
     AdvanceExecutionTimeRequest, AdvanceExecutionTimeResponse, CancelOrderRequest,
@@ -61,6 +61,7 @@ pub(crate) struct ExecutionConfluxState {
     pending_admissions: Vec<IntentAdmissionAuditRecord>,
     simulated_account_settlement: Option<SimulatedAccountSettlement>,
     wall_clock_business_time: bool,
+    published_indexed_values: BTreeMap<(String, Vec<u8>), Vec<u8>>,
 }
 
 impl Default for ExecutionConfluxState {
@@ -75,6 +76,7 @@ impl Default for ExecutionConfluxState {
             pending_admissions: Vec::new(),
             simulated_account_settlement: None,
             wall_clock_business_time: false,
+            published_indexed_values: BTreeMap::new(),
         }
     }
 }
@@ -105,6 +107,10 @@ impl ExecutionApplication {
     /// explicit event-time input.
     pub(crate) fn configure_wall_clock_business_time(&mut self, enabled: bool) {
         self.conflux.wall_clock_business_time = enabled;
+    }
+
+    pub(crate) fn conflux_producer_incarnation(&self) -> u64 {
+        self.conflux.producer_incarnation
     }
 
     fn register_managed_streams(
@@ -1130,36 +1136,48 @@ impl ExecutionApplication {
         context: &mut Context<'_, Self>,
         actor_id: &str,
     ) -> Result<(), ExecutionError> {
-        use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind};
         let snapshot = self.current_view();
-        let metadata = SnapshotEnvelopeMetadata {
-            resource_epoch: 1,
-            producer_incarnation: self.conflux.producer_incarnation,
-            generation: snapshot.generation.get(),
-            applied_event_sequence: snapshot.event_sequence.get(),
-            published_at_unix_nanos: now_unix_nanos(),
-        };
-        for kind in [ExecutionViewKind::CurrentExecution] {
-            let key = ExecutionViewKey::from_identity(&self.conflux.identity, kind.clone());
-            let bytes = match kind {
-                ExecutionViewKind::CurrentExecution => {
-                    crate::services::publication::encode_current_execution(
-                        actor_id,
-                        &self.conflux.identity,
-                        snapshot.generation.get(),
-                        &key,
-                        &snapshot,
-                    )
-                },
-            }
+        let next = crate::services::publication::encode_indexed_current(&snapshot)
             .map_err(ExecutionError::Gateway)?;
-            let resource_key = key.canonical_key();
-            context
-                .outputs()
-                .mmap
-                .publish(&resource_key, metadata, &bytes)
-                .map_err(|error| ExecutionError::Gateway(error.to_string()))?;
+        let mut mutations = Vec::new();
+        for ((database, key), _) in self
+            .conflux
+            .published_indexed_values
+            .iter()
+            .filter(|(key, _)| !next.contains_key(*key))
+        {
+            mutations.push(IndexedMutation::Delete {
+                database: database.clone(),
+                key: key.clone(),
+            });
         }
+        for ((database, key), value) in &next {
+            if self
+                .conflux
+                .published_indexed_values
+                .get(&(database.clone(), key.clone()))
+                == Some(value)
+            {
+                continue;
+            }
+            mutations.push(IndexedMutation::Put {
+                database: database.clone(),
+                key: key.clone(),
+                value: value.clone(),
+            });
+        }
+        context
+            .outputs()
+            .indexed
+            .apply(
+                "execution-current",
+                &mutations,
+                snapshot.event_sequence.get(),
+                now_unix_nanos(),
+            )
+            .map_err(|error| ExecutionError::Gateway(error.to_string()))?;
+        self.conflux.published_indexed_values = next;
+        let _ = actor_id;
         Ok(())
     }
 }

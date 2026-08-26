@@ -1,9 +1,4 @@
-"""Market v2 current-view contract.
-
-The payload is deliberately returned as the generated FlatBuffers object.  This
-module owns transport framing and root selection; it does not mirror protocol
-tables as Python dataclasses.
-"""
+"""Market v2 owner-scoped LMDB current-view contract."""
 
 from __future__ import annotations
 
@@ -11,10 +6,14 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, cast
 
 from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
-from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
+from kairospy.infrastructure.transport.indexed_view import (
+    IndexedViewMetadata,
+    IndexedViewReader,
+    IndexedViewSchema,
+)
 
 sys.modules.setdefault("kairos", _generated_kairos)
 
@@ -33,6 +32,38 @@ class MarketViewKind(str, Enum):
     FRESHNESS = "freshness"
 
 
+_DATABASES: dict[MarketViewKind, str] = {
+    MarketViewKind.QUOTE: "quotes",
+    MarketViewKind.BAR: "bars",
+    MarketViewKind.GREEKS: "greeks",
+    MarketViewKind.RATE: "rates",
+    MarketViewKind.TICKER_24H: "tickers_24h",
+    MarketViewKind.MARK_PRICE: "mark_prices",
+    MarketViewKind.FUNDING_RATE: "funding_rates",
+    MarketViewKind.OPEN_INTEREST: "open_interest",
+    MarketViewKind.INDEX_PRICE: "index_prices",
+    MarketViewKind.ORDER_BOOK: "order_books",
+    MarketViewKind.FRESHNESS: "freshness",
+}
+_ROOTS: dict[MarketViewKind, tuple[str, str]] = {
+    MarketViewKind.QUOTE: ("MQC3", "MarketQuoteCurrent"),
+    MarketViewKind.BAR: ("MBC3", "MarketBarCurrent"),
+    MarketViewKind.GREEKS: ("MGC3", "MarketGreeksCurrent"),
+    MarketViewKind.RATE: ("MRC3", "MarketRateCurrent"),
+    MarketViewKind.TICKER_24H: ("MTC3", "MarketTicker24hCurrent"),
+    MarketViewKind.MARK_PRICE: ("MMP3", "MarketMarkPriceCurrent"),
+    MarketViewKind.FUNDING_RATE: ("MFR3", "MarketFundingRateCurrent"),
+    MarketViewKind.OPEN_INTEREST: ("MOI3", "MarketOpenInterestCurrent"),
+    MarketViewKind.INDEX_PRICE: ("MIP3", "MarketIndexPriceCurrent"),
+    MarketViewKind.ORDER_BOOK: ("MOB3", "MarketOrderBookCurrent"),
+    MarketViewKind.FRESHNESS: ("MFS3", "MarketFreshnessCurrent"),
+}
+_SCHEMAS = tuple(
+    IndexedViewSchema(_DATABASES[kind], 1, identifier, 1)
+    for kind, (identifier, _) in _ROOTS.items()
+)
+
+
 @dataclass(frozen=True, slots=True)
 class MarketViewKey:
     scope_key: str
@@ -41,8 +72,14 @@ class MarketViewKey:
     qualifier: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.scope_key.strip() or not self.provider.strip():
-            raise ValueError("view identity is incomplete")
+        if (
+            not self.scope_key
+            or self.scope_key.strip() != self.scope_key
+            or not self.provider
+            or self.provider.strip() != self.provider
+            or (self.qualifier is not None and self.qualifier.strip() != self.qualifier)
+        ):
+            raise ValueError("Market indexed view identity is invalid")
 
     def canonical_key(self) -> str:
         return (
@@ -50,129 +87,102 @@ class MarketViewKey:
             f"view={self.kind.value};qualifier={self.qualifier or ''}"
         )
 
-    def resource_path(self, root: str | Path) -> Path:
-        return Path(root) / f"{self.resource_id()}.e1.mmap"
-
-    def resource_id(self) -> str:
-        qualifier = self.qualifier or "none"
-        return "scope-{}-{}-{}-{}".format(
-            _component(self.scope_key),
-            _component(self.provider),
-            self.kind.value,
-            _component(qualifier),
-        )
+    def encoded(self) -> bytes:
+        encoded = bytearray((1,))
+        for part in (self.scope_key, self.provider, self.qualifier or ""):
+            raw = part.encode()
+            if b"\x00" in raw or len(raw) > 65535:
+                raise ValueError("Market indexed key component is invalid")
+            encoded.extend(len(raw).to_bytes(2, "big"))
+            encoded.extend(raw)
+        return bytes(encoded)
 
 
 @dataclass(frozen=True, slots=True)
-class MarketViewFrame:
-    """KSS1 frame plus its generated v2 protocol root."""
-
+class MarketIndexedFrame:
     key: MarketViewKey
-    generation: int
+    metadata: IndexedViewMetadata
     payload: bytes
     value: Any
 
 
-_VIEW_ROOTS: dict[MarketViewKind, tuple[bytes, str, str]] = {
-    MarketViewKind.QUOTE: (b"MLQ2", "QuoteLatestView", "QuoteLatestView"),
-    MarketViewKind.BAR: (b"MBW2", "BarWindowView", "BarWindowView"),
-    MarketViewKind.GREEKS: (b"MLG2", "GreeksLatestView", "GreeksLatestView"),
-    MarketViewKind.RATE: (b"MLR2", "RateLatestView", "RateLatestView"),
-    MarketViewKind.TICKER_24H: (
-        b"MLT2",
-        "Ticker24hLatestView",
-        "Ticker24hLatestView",
-    ),
-    MarketViewKind.MARK_PRICE: (
-        b"MLM2",
-        "MarkPriceLatestView",
-        "MarkPriceLatestView",
-    ),
-    MarketViewKind.FUNDING_RATE: (
-        b"MFD2",
-        "FundingRateLatestView",
-        "FundingRateLatestView",
-    ),
-    MarketViewKind.OPEN_INTEREST: (
-        b"MLI2",
-        "OpenInterestLatestView",
-        "OpenInterestLatestView",
-    ),
-    MarketViewKind.INDEX_PRICE: (
-        b"MLP2",
-        "IndexPriceLatestView",
-        "IndexPriceLatestView",
-    ),
-    MarketViewKind.ORDER_BOOK: (
-        b"MLO2",
-        "OrderBookLatestView",
-        "OrderBookLatestView",
-    ),
-    MarketViewKind.FRESHNESS: (
-        b"MLF2",
-        "MarketFreshnessLatestView",
-        "MarketFreshnessLatestView",
-    ),
-}
+def market_indexed_environment_path(root: str | Path) -> Path:
+    return Path(root) / "views" / "v3" / "Market" / "market-main" / "epoch-1" / "current.lmdb"
 
 
-class MarketViewReader:
-    """Read one Market v2 view and return its generated protocol object."""
+class MarketIndexedViewQueries:
+    """Read exact Market entities with metadata from one LMDB transaction."""
 
     def __init__(
-        self, root: str | Path, key: MarketViewKey, *, retries: int = 8
+        self,
+        root: str | Path,
+        *,
+        workspace_id: str,
+        launch_id: str | None,
+        instance_id: str | None,
     ) -> None:
-        self.root = Path(root)
-        self.key = key
-        self._reader = SharedSnapshotReader(
-            key.resource_path(self.root), retries=retries
+        self._path = market_indexed_environment_path(root)
+        self._workspace_id = workspace_id
+        self._launch_id = launch_id
+        self._instance_id = instance_id
+        self._reader: IndexedViewReader | None = None
+
+    def _open_reader(self) -> IndexedViewReader:
+        if self._reader is None:
+            self._reader = IndexedViewReader(
+                self._path,
+                map_size=512 * 1024 * 1024,
+                workspace_id=self._workspace_id,
+                launch_id=self._launch_id,
+                instance_id=self._instance_id,
+                owner="Market",
+                publisher_resource_id="market-main",
+                resource_epoch=1,
+                schemas=_SCHEMAS,
+            )
+        return self._reader
+
+    def close(self) -> None:
+        if self._reader is not None:
+            self._reader.close()
+            self._reader = None
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def read(self, key: MarketViewKey) -> MarketIndexedFrame | None:
+        metadata, payload = self._open_reader().value_snapshot(
+            _DATABASES[key.kind], key.encoded()
         )
+        if metadata.rebuild_state != "ready":
+            raise ValueError("Market indexed current view is not ready")
+        if payload is None:
+            return None
+        value = _decode_entity(payload, key)
+        return MarketIndexedFrame(key, metadata, payload, value)
 
-    def read(self) -> MarketViewFrame:
-        snapshot = self._reader.read()
-        value = decode_view(snapshot.payload, self.key.kind)
-        metadata = value.Metadata()
-        if metadata is None:
-            raise ValueError("Market v2 view metadata is missing")
-        resource_id = _text(metadata.ResourceId())
-        view_key = _text(metadata.ViewKey())
-        if resource_id != self.key.resource_id():
-            raise ValueError(f"Market view resource identity mismatch: {resource_id!r}")
-        if view_key != self.key.canonical_key():
-            raise ValueError(f"Market view key mismatch: {view_key!r}")
-        if metadata.ResourceEpoch() != 1:
-            raise ValueError("unsupported Market view resource epoch")
-        return MarketViewFrame(
-            key=self.key,
-            generation=snapshot.generation,
-            payload=snapshot.payload,
-            value=value,
-        )
-
-
-def decode_view(payload: bytes, kind: MarketViewKind) -> Any:
-    """Decode a v2 view without copying its FlatBuffers tables."""
-
-    identifier, module_name, root_name = _VIEW_ROOTS[kind]
-    if len(payload) < 8 or payload[4:8] != identifier:
-        raise ValueError(
-            f"invalid Market {kind.value} view identifier: expected {identifier!r}"
-        )
+def _decode_entity(payload: bytes, key: MarketViewKey) -> Any:
+    identifier, root_name = _ROOTS[key.kind]
+    if len(payload) < 8 or payload[4:8] != identifier.encode():
+        raise ValueError(f"invalid {identifier} {root_name} value")
     module = __import__(
-        f"kairospy.infrastructure.protocol.generated.kairos.market.v2.{module_name}",
+        f"kairospy.infrastructure.protocol.generated.kairos.market.v2.{root_name}",
         fromlist=[root_name],
     )
-    root_type = getattr(module, root_name)
-    return root_type.GetRootAs(payload, 0)
-
-
-def _component(value: str) -> str:
-    return "".join(
-        chr(byte)
-        if (byte < 128 and chr(byte).isalnum()) or byte in b"-_."
-        else f"%{byte:02X}"
-        for byte in value.encode()
-    )
+    root_type = cast(Any, getattr(module, root_name))
+    root = cast(Any, root_type.GetRootAs(payload, 0))
+    identity = cast(Any, root.Identity())
+    if (
+        _text(identity.ScopeKey()) != key.scope_key
+        or _text(identity.Provider()) != key.provider
+        or (_text(identity.Qualifier()) or "") != (key.qualifier or "")
+    ):
+        raise ValueError("Market indexed key/value identity mismatch")
+    value = root.Value()
+    if value is None:
+        raise ValueError(f"{root_name} is missing its required value")
+    return value
 
 
 def _text(value: bytes | None) -> str | None:
@@ -180,9 +190,9 @@ def _text(value: bytes | None) -> str | None:
 
 
 __all__ = [
-    "MarketViewFrame",
+    "MarketIndexedFrame",
+    "MarketIndexedViewQueries",
     "MarketViewKey",
     "MarketViewKind",
-    "MarketViewReader",
-    "decode_view",
+    "market_indexed_environment_path",
 ]

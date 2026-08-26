@@ -176,14 +176,10 @@ FORBIDDEN_DOMAIN_PRIMITIVES = re.compile(
 )
 
 FORBIDDEN_MODULE_CONTRACT_RESOURCE_BYPASSES = {
-    "SharedSnapshotWriter::create": "module bypasses its Contract mmap publisher",
-    "SharedSnapshotReader::open": "module bypasses its Contract mmap reader",
     "AeronBytePublisher::connect": "module bypasses its Contract Aeron publisher",
     '.join("execution-views")': "module derives an ad-hoc Execution view directory",
     '.join("views")': "module derives an ad-hoc view directory",
     ".aeron_publishers": "module accesses Conflux raw Aeron publishers",
-    ".mmap_writers": "module accesses Conflux raw mmap writers",
-    ".mmap_readers": "module accesses Conflux raw mmap readers",
     'std::env::var("AERON_DIR")': "module resolves an Aeron endpoint outside composition input",
 }
 

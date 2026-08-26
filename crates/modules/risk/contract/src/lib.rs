@@ -22,18 +22,17 @@ pub use control::{
     RiskControlError, RiskControlRpcClient, RiskControlRpcServer, RiskCurrentView, RiskDecision,
     RiskEvent, RiskPolicy, TradeRiskProposal,
 };
-pub use encode::{
-    FileRiskSnapshotPublisher, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter,
-    MmapRiskSnapshotPublisher, RiskAeronEventPublisher, RiskSnapshotPublisher,
-};
+pub use encode::{FlatbuffersRiskEventWriter, RiskAeronEventPublisher, encode_indexed_current};
 pub use error::{ContractError, ContractResult};
 pub use event::{DecodedRiskEvent, RiskEventFrame, RiskEventStream};
 pub type RiskConnection = kairos_protocol::ContractClient;
 
 pub use kairos_transport::AeronEndpoint;
-use kairos_transport::SnapshotEnvelopeMetadata;
 pub use view::{
-    RiskViewKey, RiskViewKind, RiskViewPublisher, ViewFrame, ViewMetadata, risk_view_path,
+    RISK_ALLOCATIONS_DATABASE, RISK_CIRCUITS_DATABASE, RISK_LIMIT_USAGE_DATABASE, RISK_MAP_SIZE,
+    RISK_POLICIES_DATABASE, RISK_RESERVATIONS_DATABASE, RISK_RESOURCE_EPOCH, RISK_STATE_DATABASE,
+    RiskIndexedSnapshot, RiskIndexedView, RiskIndexedViewValue, risk_indexed_environment_path,
+    risk_indexed_identity, risk_indexed_key, risk_indexed_schema_set,
 };
 
 #[derive(Clone)]
@@ -56,55 +55,17 @@ impl RiskClient {
             capacity,
         )
     }
-    pub fn latest(&self, actor_id: impl Into<String>) -> ContractResult<RiskLatest> {
-        RiskLatest::open(self.require_view_root()?, RiskViewKey::latest(actor_id))
+    pub fn indexed_current(
+        &self,
+        identity: &kairos_primitives::runtime::InstanceIdentity,
+        actor_id: kairos_primitives::runtime::ActorId,
+    ) -> ContractResult<RiskIndexedView> {
+        RiskIndexedView::open(self.require_view_root()?, identity, actor_id)
     }
 
     fn require_view_root(&self) -> ContractResult<&Path> {
         self.inner
             .require_view_root()
             .map_err(|error| ContractError::Transport(error.to_string()))
-    }
-}
-
-pub struct RiskLatest {
-    reader: view::RiskViewReader,
-}
-
-impl RiskLatest {
-    fn open(root: &Path, key: RiskViewKey) -> ContractResult<Self> {
-        Ok(Self {
-            reader: view::RiskViewReader::open(root, key)?,
-        })
-    }
-
-    pub fn read(&self) -> ContractResult<RiskLatestSnapshot> {
-        Ok(RiskLatestSnapshot {
-            frame: self.reader.read()?,
-        })
-    }
-
-    pub fn key(&self) -> &RiskViewKey {
-        self.reader.key()
-    }
-}
-
-pub struct RiskLatestSnapshot {
-    frame: ViewFrame,
-}
-
-impl RiskLatestSnapshot {
-    pub fn generation(&self) -> u64 {
-        self.frame.generation()
-    }
-
-    pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
-        self.frame.envelope_metadata()
-    }
-
-    pub fn view(
-        &self,
-    ) -> ContractResult<kairos_protocol::generated::kairos::risk::v_2::RiskLatestView<'_>> {
-        self.frame.decode()
     }
 }

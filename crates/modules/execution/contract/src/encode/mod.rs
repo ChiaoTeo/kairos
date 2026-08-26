@@ -1,7 +1,7 @@
 mod metadata;
-pub use metadata::{EncodeContext, event_metadata, view_metadata};
+pub use metadata::{EncodeContext, event_metadata};
 
-use crate::{ContractResult, ExecutionViewKey};
+use crate::ContractResult;
 
 /// Business-owned implementations provide the concrete domain-to-wire mapping.
 /// The contract crate owns the roots and transport semantics, not Execution's
@@ -25,12 +25,4 @@ pub trait OrderEncoder {
 
 pub trait FillEncoder {
     fn encode_fill_recorded(&self, context: &EncodeContext) -> ContractResult<Vec<u8>>;
-}
-
-pub trait CurrentExecutionViewEncoder {
-    fn encode_current_execution(
-        &self,
-        context: &EncodeContext,
-        key: &ExecutionViewKey,
-    ) -> ContractResult<Vec<u8>>;
 }

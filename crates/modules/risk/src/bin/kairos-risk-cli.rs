@@ -5,7 +5,7 @@ use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use kairos_primitives::account::AccountId;
 use kairos_primitives::reference::ExchangeId;
 use kairos_primitives::risk::ReservationId;
-use kairos_primitives::runtime::StrategyId;
+use kairos_primitives::runtime::{InstanceIdentity, StrategyId};
 use kairos_primitives::time::UnixNanos;
 use kairos_risk::{
     CliRiskApplication, ConnectedRiskApplication, ConnectedRiskOutput, RiskCliRequestKind,
@@ -205,18 +205,23 @@ fn connected_risk_app(
     target: ConnectedTargetArgs,
     workspace: &Workspace,
 ) -> Result<ConnectedRiskApplication, Box<dyn std::error::Error>> {
+    let instance =
+        workspace.instance(&target.launch_mode, &target.launch_id, &target.instance_id)?;
     let socket = match target.socket {
         Some(socket) => socket,
-        None => workspace.process_socket("risk")?,
+        None => instance.socket("risk")?,
     };
     let connection = RiskConnection::control_only(socket);
     let connection = match target.view_root {
         Some(view_root) => connection.with_view_root(view_root),
-        None => connection.with_view_root(workspace.root().join("snapshots")),
+        None => connection.with_view_root(instance.snapshot(&[])?),
     };
-    Ok(ConnectedRiskApplication::connect(RiskClient::connect(
-        connection,
-    )?))
+    let identity =
+        InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id())?;
+    Ok(ConnectedRiskApplication::connect(
+        RiskClient::connect(connection)?,
+        identity,
+    ))
 }
 
 #[derive(Debug, Parser)]
@@ -302,6 +307,12 @@ enum ConnectedCommand {
 
 #[derive(Clone, Debug, ClapArgs)]
 struct ConnectedTargetArgs {
+    #[arg(long, default_value = "live")]
+    launch_mode: String,
+    #[arg(long)]
+    launch_id: String,
+    #[arg(long)]
+    instance_id: String,
     #[arg(long)]
     socket: Option<PathBuf>,
     #[arg(long)]

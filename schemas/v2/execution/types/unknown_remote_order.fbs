@@ -1,0 +1,18 @@
+include "order.fbs";
+
+namespace kairos.execution.v2;
+
+table UnknownRemoteOrderState {
+  remote_order_id:string (required);
+  symbol:string (required);
+  lifecycle:OrderLifecycle = UNSPECIFIED;
+  execution_id:string;
+  fill_quantity:kairos.common.v2.Decimal64;
+  fill_price:kairos.common.v2.Decimal64;
+  fee_currency:string;
+  fee_amount:kairos.common.v2.Decimal64;
+  first_seen_at_unix_nanos:ulong;
+  last_seen_at_unix_nanos:ulong;
+  resolution:string (required);
+  reason:string;
+}

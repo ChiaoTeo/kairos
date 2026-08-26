@@ -22,9 +22,8 @@ from kairospy.investment.apps.capital.application import (
 )
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.infrastructure.contracts.capital.view import (
-    CapitalViewKey,
     _recovery_alert,
-    decode_view,
+    capital_indexed_environment_path,
 )
 from kairospy.investment.apps.capital.application.mapping import map_capital_alert
 
@@ -256,20 +255,12 @@ def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
 
 
 def test_capital_view_key_matches_the_rust_resource_topology(tmp_path) -> None:
-    key = CapitalViewKey("group/../一")
+    path = capital_indexed_environment_path(tmp_path, "group/../一")
 
-    path = key.resource_path(tmp_path)
-
-    assert path.parent.name == "current"
-    assert path.name == "current.snapshot"
+    assert path.parent.name == "epoch-1"
+    assert path.name == "current.lmdb"
     assert path.is_relative_to(tmp_path)
     assert "/../" not in str(path)
-    assert key.canonical_key().startswith("capital.current/")
-
-
-def test_capital_view_decoder_fails_closed_on_another_root() -> None:
-    with pytest.raises(ValueError, match="CPV2"):
-        decode_view(b"\0\0\0\0NOPE")
 
 
 def test_capital_recovery_alert_decoder_preserves_operator_evidence() -> None:

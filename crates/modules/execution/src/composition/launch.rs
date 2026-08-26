@@ -4,10 +4,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, JsonRpcRuntimeConfig, MmapOutputDeclaration,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, IndexedEnvironmentOptions,
+    IndexedOutputDeclaration, JsonRpcRuntimeConfig,
 };
 use kairos_execution_contract::{
-    ExecutionControlRpcServer, ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
+    EXECUTION_MAP_SIZE, ExecutionControlRpcServer, execution_indexed_environment_path,
+    execution_indexed_identity,
 };
 
 use super::{
@@ -126,19 +128,19 @@ pub fn build_execution_host(
         config.aeron_channel.clone(),
         config.execution_events_stream_id,
     )?;
-    for kind in [ExecutionViewKind::CurrentExecution] {
-        let key = ExecutionViewKey::from_identity(&transport_identity, kind);
-        let resource_key = key.canonical_key();
-        let path = ExecutionViewPublisher::resolved_path(&config.view_root, &key)?;
-        system.outputs().mmap.declare(
-            resource_key,
-            MmapOutputDeclaration {
-                path,
-                slot_capacity: 4 * 1024 * 1024,
-                revision: 1,
-            },
-        )?;
-    }
+    let view_path = execution_indexed_environment_path(&config.view_root, &transport_identity)?;
+    let view_options = IndexedEnvironmentOptions::new(view_path, EXECUTION_MAP_SIZE)?;
+    system.outputs().indexed.declare(
+        "execution-current",
+        IndexedOutputDeclaration {
+            options: view_options,
+            identity: execution_indexed_identity(
+                &transport_identity,
+                application.conflux_producer_incarnation(),
+            ),
+            revision: 1,
+        },
+    )?;
     system.outputs().aeron.declare(
         "execution-events".to_owned(),
         AeronOutputDeclaration {

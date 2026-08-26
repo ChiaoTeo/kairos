@@ -237,7 +237,7 @@ class AccountSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class AccountsSnapshot:
-    """One read from every Account mmap enabled for this Strategy launch."""
+    """One read from every Account indexed view enabled for this Strategy launch."""
 
     accounts: tuple[AccountSnapshot, ...]
 

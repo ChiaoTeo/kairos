@@ -25,7 +25,7 @@ Sell shortfall is benchmark notional minus gross fill notional. Positive therefo
 execution and negative means price improvement. An unfilled leg publishes benchmark notional zero and no
 shortfall. Values remain exact decimal money facts; no rounded bps value is invented.
 
-Intent events carry the original benchmark input. Current and active-Intent mmap views carry the Actor-
+Intent events carry the original benchmark input. Current indexed Intent values carry the Actor-
 derived benchmark quality. Kairospy exposes the same closed `ExecutionBenchmark` value and exact JSON-RPC
 shape. Limit price and wall clock are never fallback benchmarks.
 

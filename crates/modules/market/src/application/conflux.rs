@@ -1,19 +1,16 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use kairos_conflux::{
     ConfluxActor, ConfluxEvent, ConnectionKey, Context, ExternalParticipantEvent, IntegrationError,
-    MarketQuoteQuery, MarketSubscriptionCommand, MmapOutputDeclaration, SnapshotEnvelopeMetadata,
-    SystemEvent,
+    MarketQuoteQuery, MarketSubscriptionCommand, SystemEvent,
 };
 use kairos_market_contract::{
     MarketCommandOutcome, MarketCommandStatus, MarketControlError, MarketDataRoute,
     MarketDataRouteState, MarketDataRoutesResponse, MarketFeedStatus, MarketHealthResponse,
     MarketHealthStatus, MarketOperation, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse,
     MarketSubscribePayload, MarketSubscriptionResponse, MarketSubscriptionState, MarketTarget,
-    MarketUnsubscribePayload, MarketViewPublisher, ProviderPreference, SubscriptionOwnerKey,
-    SubscriptionPendingReason,
+    MarketUnsubscribePayload, ProviderPreference, SubscriptionOwnerKey, SubscriptionPendingReason,
 };
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
@@ -88,7 +85,6 @@ pub(crate) struct MarketConfluxState {
     history: Option<HistoryQueue>,
     reference_universe_sync: Option<ReferenceUniverseSyncState>,
     command_results: BTreeMap<String, CachedMarketControlResult>,
-    view_publication: Option<MarketViewPublication>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,12 +106,6 @@ struct CachedMarketControlResult {
     response: CachedMarketControlResponse,
 }
 
-struct MarketViewPublication {
-    root: PathBuf,
-    slot_size: usize,
-    revision: u64,
-}
-
 impl Default for MarketConfluxState {
     fn default() -> Self {
         Self {
@@ -128,26 +118,13 @@ impl Default for MarketConfluxState {
             history: None,
             reference_universe_sync: None,
             command_results: BTreeMap::new(),
-            view_publication: None,
         }
     }
 }
 
 impl MarketApplication {
-    pub(crate) fn configure_view_publication(
-        &mut self,
-        root: PathBuf,
-        slot_size: usize,
-    ) -> Result<(), String> {
-        if slot_size == 0 {
-            return Err("Market mmap view slot size must be positive".into());
-        }
-        self.conflux.view_publication = Some(MarketViewPublication {
-            root,
-            slot_size,
-            revision: 1,
-        });
-        Ok(())
+    pub(crate) fn indexed_publication_identity(&self) -> (&InstanceIdentity, u64) {
+        (&self.conflux.identity, self.conflux.producer_incarnation)
     }
 
     pub(crate) fn configure_conflux(
@@ -880,45 +857,18 @@ impl MarketApplication {
             }
         }
         for change in &changes {
-            let Some(encoded) = encode_change_view(&actor_id, &self.conflux.identity, change)
-                .map_err(MarketError::Recovery)?
-            else {
+            let Some(encoded) = encode_change_view(change).map_err(MarketError::Recovery)? else {
                 continue;
             };
-            let publication = self.conflux.view_publication.as_ref().ok_or_else(|| {
-                MarketError::Recovery(
-                    "Market mmap view publication is not configured by Composition".into(),
-                )
-            })?;
-            let resource_key = encoded.key.canonical_key();
-            let key = encoded.key;
-            let path = MarketViewPublisher::resolved_path(&publication.root, &key)
-                .map_err(|error| MarketError::Recovery(error.to_string()))?;
+            let mutations = encoded.into_mutations().map_err(MarketError::Recovery)?;
             context
                 .outputs()
-                .mmap
-                .declare(
-                    resource_key.clone(),
-                    MmapOutputDeclaration {
-                        path,
-                        slot_capacity: publication.slot_size,
-                        revision: publication.revision,
-                    },
-                )
-                .map_err(|error| MarketError::Recovery(error.to_string()))?;
-            context
-                .outputs()
-                .mmap
-                .publish(
-                    &resource_key,
-                    SnapshotEnvelopeMetadata {
-                        resource_epoch: 1,
-                        producer_incarnation: self.conflux.producer_incarnation,
-                        generation: change.sequence.get(),
-                        applied_event_sequence: change.sequence.get(),
-                        published_at_unix_nanos: now_unix_nanos(),
-                    },
-                    &encoded.bytes,
+                .indexed
+                .apply(
+                    "market-current",
+                    &mutations,
+                    change.sequence.get(),
+                    now_unix_nanos(),
                 )
                 .map_err(|error| MarketError::Recovery(error.to_string()))?;
         }

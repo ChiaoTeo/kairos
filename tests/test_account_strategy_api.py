@@ -92,7 +92,7 @@ class _CurrentView:
         )
 
 
-def test_accounts_chain_reads_each_account_mmap_once_and_preserves_order() -> None:
+def test_accounts_chain_reads_each_account_current_view_once_and_preserves_order() -> None:
     main = _CurrentView(AccountId("main"), 7, (SPOT, CROSS_MARGIN))
     secondary = _CurrentView(AccountId("secondary"), 12, (SPOT,))
     application = AccountApplication(

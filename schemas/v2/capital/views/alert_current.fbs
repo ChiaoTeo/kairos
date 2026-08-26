@@ -1,0 +1,5 @@
+include "../types/state.fbs";
+namespace kairos.capital.v2;
+table CapitalAlertCurrent { capital_group_id:string (required); value:CapitalAlert (required); }
+root_type CapitalAlertCurrent;
+file_identifier "CAL3";

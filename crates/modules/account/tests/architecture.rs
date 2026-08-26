@@ -521,14 +521,14 @@ fn account_control_plane_does_not_duplicate_balance_or_position_views() {
     ] {
         assert!(
             !server.contains(obsolete) && !actor.contains(obsolete) && !contract.contains(obsolete),
-            "Account control plane duplicates mmap business view: {obsolete}"
+            "Account control plane duplicates indexed business view: {obsolete}"
         );
     }
     let publisher = fs::read_to_string(root.join("src/services/publication.rs"))
-        .expect("read Account mmap publisher");
-    assert!(publisher.contains("encode_balances"));
-    assert!(publisher.contains("encode_positions"));
-    assert!(publisher.contains("with_applied_revision(view.event_sequence.get())"));
+        .expect("read Account indexed publisher");
+    assert!(publisher.contains("encode_indexed_current"));
+    assert!(publisher.contains("ACCOUNT_BALANCES_DATABASE"));
+    assert!(publisher.contains("ACCOUNT_POSITIONS_DATABASE"));
 }
 
 #[test]
@@ -549,10 +549,10 @@ fn account_cli_separates_standalone_direct_queries_from_launch_connected_views()
 
     assert!(connected.contains("install_account_connection("));
     assert!(connected.contains("account_client("));
-    assert!(connected.contains(".account_current("));
-    assert!(connected.contains(".observed_orders("));
+    assert!(connected.contains(".indexed_current("));
+    assert!(connected.contains("view.observed_orders()?"));
     assert!(cli.contains("Account connected mode is launch-scoped"));
-    assert!(cli.contains("command.is_mmap_query()"));
+    assert!(cli.contains("command.is_indexed_query()"));
     for forbidden in [
         "composition.application.snapshot_query(",
         "composition.application.balances_query(",

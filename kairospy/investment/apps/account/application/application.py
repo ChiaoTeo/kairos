@@ -19,7 +19,7 @@ from .models import (
 class AccountApplication:
     """Typed read-only Account access scoped to one Strategy launch.
 
-    Each configured AccountId owns a distinct current_view reader and mmap. A
+    Each configured AccountId owns a distinct indexed current-view reader. A
     reader returns every segment for that logical account in one generation.
     """
 
@@ -48,7 +48,7 @@ class AccountApplication:
 
     @property
     def accounts(self) -> tuple[AccountSnapshot, ...]:
-        """Read each enabled Account mmap once and return immutable snapshots."""
+        """Read each enabled Account indexed view once and return immutable snapshots."""
 
         return self.snapshot().accounts
 
@@ -67,7 +67,7 @@ class AccountApplication:
         )
 
     def account(self, account: AccountId | str) -> AccountSnapshot:
-        """Read one logical Account and all of its segments from its mmap."""
+        """Read one logical Account and all of its segments from its indexed view."""
 
         account_id = _account_id(account)
         try:

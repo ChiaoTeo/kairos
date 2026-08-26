@@ -1,0 +1,12 @@
+include "../types/observed_order.fbs";
+
+namespace kairos.account.v2;
+
+table AccountObservedOrderCurrent {
+  account_id:string (required);
+  segment_key:string (required);
+  order:ObservedOrder (required);
+}
+
+root_type AccountObservedOrderCurrent;
+file_identifier "AOO3";

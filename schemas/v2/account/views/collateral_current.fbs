@@ -1,0 +1,12 @@
+include "../types/balance.fbs";
+
+namespace kairos.account.v2;
+
+table AccountCollateralCurrent {
+  account_id:string (required);
+  segment_key:string (required);
+  balance:Balance (required);
+}
+
+root_type AccountCollateralCurrent;
+file_identifier "ACO3";

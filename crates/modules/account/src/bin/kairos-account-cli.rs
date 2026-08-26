@@ -1582,7 +1582,7 @@ fn provider_connection_args(args: &ConnectionArgs) -> AccountProviderConnectionA
 }
 
 impl ConnectedCommand {
-    fn is_mmap_query(&self) -> bool {
+    fn is_indexed_query(&self) -> bool {
         matches!(
             self,
             Self::Snapshot { .. }
@@ -1605,9 +1605,9 @@ async fn run_connected(
         .as_deref()
         .ok_or("--account-id is required for an Account connected command")?;
     let account_id = app.resolve_account_id(account_id)?;
-    let value = if command.is_mmap_query() {
+    let value = if command.is_indexed_query() {
         let application = connected_account_app(args, workspace, &account_id, true)?;
-        read_mmap_query(&application, &account_id, &command)?
+        read_indexed_query(&application, &account_id, &command)?
     } else {
         let application = connected_account_app(args, workspace, &account_id, false)?;
         run_runtime_control(&application, args, &command).await?
@@ -1686,7 +1686,12 @@ fn connected_account_app(
     } else {
         None
     };
-    ConnectedAccountApplication::connect(instance.socket(&socket_name)?, view_root)
+    let identity = kairos_primitives::runtime::InstanceIdentity::new(
+        workspace.id(),
+        instance.launch_id(),
+        instance.instance_id(),
+    )?;
+    ConnectedAccountApplication::connect(instance.socket(&socket_name)?, view_root, identity)
 }
 
 async fn run_runtime_control(
@@ -1735,7 +1740,7 @@ fn account_segments_request(
     Ok(AccountSegmentsRequest { segments })
 }
 
-fn read_mmap_query(
+fn read_indexed_query(
     application: &ConnectedAccountApplication,
     account_id: &str,
     command: &ConnectedCommand,
@@ -1764,7 +1769,7 @@ fn read_mmap_query(
         ConnectedCommand::Positions { segments, symbol } => ConnectedAccountOutput::Current(
             application.positions(account_id, segments, symbol.as_deref())?,
         ),
-        _ => unreachable!("runtime control command routed to mmap"),
+        _ => unreachable!("runtime control command routed to indexed current view"),
     };
     Ok(value)
 }

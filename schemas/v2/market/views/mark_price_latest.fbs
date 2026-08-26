@@ -1,7 +1,0 @@
-include "../../common/metadata.fbs";
-include "../types/mark_price.fbs";
-namespace kairos.market.v2;
-table LatestMarkPrice { value:MarkPrice (required); source_event_id:string (required); }
-table MarkPriceLatestView { metadata:kairos.common.v2.ViewMetadata (required); mark_price:LatestMarkPrice (required); }
-root_type MarkPriceLatestView;
-file_identifier "MLM2";

@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/funding_rate.fbs";
+
+namespace kairos.market.v2;
+
+table MarketFundingRateCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:FundingRate (required);
+}
+
+root_type MarketFundingRateCurrent;
+file_identifier "MFR3";

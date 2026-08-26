@@ -4,16 +4,18 @@
 //! Risk server through the module contract or read its published view. It must
 //! not be used by standalone policy/schema/dry-run commands.
 
+use kairos_primitives::runtime::{ActorId, InstanceIdentity};
 use kairos_risk_contract::{
     AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, AuthorizeRequest, CircuitState,
     CloseCircuitRequest, ConsumeReservationRequest, Health, OpenCircuitRequest,
     PublishPolicyRequest, ReleaseReservationRequest, Reservation, ResizeReservationRequest,
-    RiskClient, RiskCommandStatus, RiskControlRpcClient, RiskDecision, RiskLatestSnapshot,
+    RiskClient, RiskCommandStatus, RiskControlRpcClient, RiskDecision, RiskIndexedSnapshot,
 };
 use serde::Serialize;
 
 pub struct ConnectedRiskApplication {
     client: RiskClient,
+    identity: InstanceIdentity,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,8 +34,8 @@ pub enum ConnectedRiskOutput {
 }
 
 impl ConnectedRiskApplication {
-    pub fn connect(client: RiskClient) -> Self {
-        Self { client }
+    pub fn connect(client: RiskClient, identity: InstanceIdentity) -> Self {
+        Self { client, identity }
     }
 
     pub async fn health(&self) -> Result<Health, Box<dyn std::error::Error>> {
@@ -41,30 +43,26 @@ impl ConnectedRiskApplication {
     }
 
     pub fn latest(&self, actor_id: String) -> Result<RiskLatestResult, Box<dyn std::error::Error>> {
-        let latest = self.client.latest(actor_id.clone())?;
-        let snapshot = latest.read()?;
+        let snapshot = self.snapshot(&actor_id)?;
         latest_snapshot_json(actor_id, &snapshot)
     }
 
     pub fn limits(&self, actor_id: String) -> Result<RiskLimitsResult, Box<dyn std::error::Error>> {
-        let latest = self.client.latest(actor_id.clone())?;
-        limits_snapshot_json(actor_id, &latest.read()?)
+        limits_snapshot_json(actor_id.clone(), &self.snapshot(&actor_id)?)
     }
 
     pub fn reservations(
         &self,
         actor_id: String,
     ) -> Result<RiskReservationsResult, Box<dyn std::error::Error>> {
-        let latest = self.client.latest(actor_id.clone())?;
-        reservations_snapshot_json(actor_id, &latest.read()?)
+        reservations_snapshot_json(actor_id.clone(), &self.snapshot(&actor_id)?)
     }
 
     pub fn circuits(
         &self,
         actor_id: String,
     ) -> Result<RiskCircuitsResult, Box<dyn std::error::Error>> {
-        let latest = self.client.latest(actor_id.clone())?;
-        circuits_snapshot_json(actor_id, &latest.read()?)
+        circuits_snapshot_json(actor_id.clone(), &self.snapshot(&actor_id)?)
     }
 
     pub async fn pre_trade_check(
@@ -128,6 +126,14 @@ impl ConnectedRiskApplication {
         request: AdvanceRiskTimeRequest,
     ) -> Result<AdvanceRiskTimeResponse, Box<dyn std::error::Error>> {
         Ok(self.client.control().advance_time(request).await?)
+    }
+
+    fn snapshot(&self, actor_id: &str) -> Result<RiskIndexedSnapshot, Box<dyn std::error::Error>> {
+        let actor_id = ActorId::new(actor_id)?;
+        Ok(self
+            .client
+            .indexed_current(&self.identity, actor_id)?
+            .snapshot()?)
     }
 }
 
@@ -256,22 +262,13 @@ pub struct CircuitScopeResult {
 
 fn latest_snapshot_json(
     actor_id: String,
-    snapshot: &RiskLatestSnapshot,
+    snapshot: &RiskIndexedSnapshot,
 ) -> Result<RiskLatestResult, Box<dyn std::error::Error>> {
-    let metadata = snapshot.envelope_metadata();
-    let view = snapshot.view()?;
-    let state = view.state();
-    let limits = state.limits().iter().map(limit_result).collect::<Vec<_>>();
-    let active_reservations = state
-        .active_reservations()
-        .iter()
-        .map(reservation_result)
-        .collect::<Vec<_>>();
-    let circuits = state
-        .circuits()
-        .iter()
-        .map(circuit_result)
-        .collect::<Vec<_>>();
+    let metadata = snapshot.metadata();
+    let state = snapshot.state()?;
+    let limits = indexed_limits(snapshot)?;
+    let active_reservations = indexed_reservations(snapshot)?;
+    let circuits = indexed_circuits(snapshot)?;
     let open_circuit_count = circuits
         .iter()
         .filter(|value| value.status == "open")
@@ -279,7 +276,7 @@ fn latest_snapshot_json(
     Ok(RiskLatestResult {
         actor_id,
         kind: "latest",
-        generation: snapshot.generation(),
+        generation: state.generation(),
         policy_version: state.policy_version(),
         summary: RiskLatestSummary {
             limit_count: limits.len(),
@@ -292,62 +289,41 @@ fn latest_snapshot_json(
         envelope_metadata: EnvelopeMetadataResult {
             resource_epoch: metadata.resource_epoch,
             producer_incarnation: metadata.producer_incarnation,
-            generation: metadata.generation,
+            generation: state.generation(),
             applied_event_sequence: metadata.applied_event_sequence,
-            published_at_unix_nanos: metadata.published_at_unix_nanos,
+            published_at_unix_nanos: metadata.committed_at_unix_nanos,
         },
     })
 }
 
 fn limits_snapshot_json(
     actor_id: String,
-    snapshot: &RiskLatestSnapshot,
+    snapshot: &RiskIndexedSnapshot,
 ) -> Result<RiskLimitsResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(RiskLimitsResult {
         actor_id,
-        limits: state.limits().iter().map(limit_result).collect(),
+        limits: indexed_limits(snapshot)?,
     })
 }
 
 fn reservations_snapshot_json(
     actor_id: String,
-    snapshot: &RiskLatestSnapshot,
+    snapshot: &RiskIndexedSnapshot,
 ) -> Result<RiskReservationsResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(RiskReservationsResult {
         actor_id,
-        active_reservations: state
-            .active_reservations()
-            .iter()
-            .map(reservation_result)
-            .collect(),
+        active_reservations: indexed_reservations(snapshot)?,
     })
 }
 
 fn circuits_snapshot_json(
     actor_id: String,
-    snapshot: &RiskLatestSnapshot,
+    snapshot: &RiskIndexedSnapshot,
 ) -> Result<RiskCircuitsResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(RiskCircuitsResult {
         actor_id,
-        circuits: state.circuits().iter().map(circuit_result).collect(),
+        circuits: indexed_circuits(snapshot)?,
     })
-}
-
-fn limit_result(
-    value: kairos_protocol::generated::kairos::risk::v_2::LimitUsage<'_>,
-) -> LimitResult {
-    LimitResult {
-        policy: policy_result(value.policy()),
-        used: decimal_string(value.used()),
-        reserved: decimal_string(value.reserved()),
-        available: decimal_string(value.available()),
-    }
 }
 
 fn policy_result(
@@ -366,36 +342,94 @@ fn policy_result(
     }
 }
 
+fn indexed_limits(
+    snapshot: &RiskIndexedSnapshot,
+) -> Result<Vec<LimitResult>, Box<dyn std::error::Error>> {
+    let mut policies = snapshot
+        .policies()
+        .into_iter()
+        .map(|value| {
+            let value = value.policy()?;
+            Ok((
+                value.policy().policy_id().to_owned(),
+                policy_result(value.policy()),
+            ))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, kairos_risk_contract::ContractError>>(
+        )?;
+    snapshot
+        .limit_usage()
+        .into_iter()
+        .map(|value| {
+            let value = value.limit_usage()?;
+            let policy = policies
+                .remove(value.policy_id())
+                .ok_or_else(|| format!("Risk limit usage has no policy: {}", value.policy_id()))?;
+            Ok(LimitResult {
+                policy,
+                used: decimal_string(value.used()),
+                reserved: decimal_string(value.reserved()),
+                available: decimal_string(value.available()),
+            })
+        })
+        .collect()
+}
+
+fn indexed_reservations(
+    snapshot: &RiskIndexedSnapshot,
+) -> Result<Vec<ReservationResult>, Box<dyn std::error::Error>> {
+    let mut allocations = std::collections::BTreeMap::<String, Vec<AllocationResult>>::new();
+    for value in snapshot.allocations() {
+        let value = value.allocation()?;
+        allocations
+            .entry(value.reservation_id().to_owned())
+            .or_default()
+            .push(allocation_result(value.allocation()));
+    }
+    snapshot
+        .reservations()
+        .into_iter()
+        .map(|value| {
+            let value = value.reservation()?;
+            let reservation = value.reservation();
+            Ok(reservation_result(
+                reservation,
+                allocations
+                    .remove(reservation.reservation_id())
+                    .unwrap_or_default(),
+            ))
+        })
+        .collect()
+}
+
+fn indexed_circuits(
+    snapshot: &RiskIndexedSnapshot,
+) -> Result<Vec<CircuitResult>, Box<dyn std::error::Error>> {
+    snapshot
+        .circuits()
+        .into_iter()
+        .map(|value| Ok(circuit_result(value.circuit()?.circuit())))
+        .collect()
+}
+
 fn reservation_result(
-    value: kairos_protocol::generated::kairos::risk::v_2::Reservation<'_>,
+    value: kairos_protocol::generated::kairos::risk::v_2::RiskReservationState<'_>,
+    allocations: Vec<AllocationResult>,
 ) -> ReservationResult {
     ReservationResult {
         reservation_id: value.reservation_id().to_owned(),
         request_id: value.request_id().to_owned(),
-        account_id: value.account_id().to_owned(),
-        strategy_id: value.strategy_id().to_owned(),
-        instrument_id: value.instrument_id().to_owned(),
+        account_id: value.account_id().unwrap_or_default().to_owned(),
+        strategy_id: value.strategy_id().unwrap_or_default().to_owned(),
+        instrument_id: String::new(),
         idempotency_key: value.idempotency_key().to_owned(),
-        requested_usages: value
-            .requested_usages()
-            .iter()
-            .map(risk_usage_result)
-            .collect(),
-        allocations: value.allocations().iter().map(allocation_result).collect(),
+        requested_usages: Vec::new(),
+        allocations,
         status: enum_name(value.status().variant_name()),
         created_at_unix_nanos: value.created_at_unix_nanos(),
         updated_at_unix_nanos: value.updated_at_unix_nanos(),
         expires_at_unix_nanos: value.expires_at_unix_nanos(),
         policy_version: value.policy_version(),
-    }
-}
-
-fn risk_usage_result(
-    value: kairos_protocol::generated::kairos::risk::v_2::RiskUsage<'_>,
-) -> RiskUsageResult {
-    RiskUsageResult {
-        metric: enum_name(value.metric().variant_name()),
-        amount: decimal_string(value.amount()),
     }
 }
 

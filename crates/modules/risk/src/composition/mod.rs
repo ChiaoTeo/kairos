@@ -2,10 +2,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, JsonRpcConfluxRuntime,
-    JsonRpcRuntimeConfig, MmapOutputDeclaration,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, IndexedEnvironmentOptions,
+    IndexedOutputDeclaration, JsonRpcConfluxRuntime, JsonRpcRuntimeConfig,
 };
-use kairos_risk_contract::{RiskControlRpcServer, RiskViewKey, RiskViewPublisher};
+use kairos_primitives::runtime::ActorId;
+use kairos_risk_contract::{
+    RISK_MAP_SIZE, RiskControlRpcServer, risk_indexed_environment_path, risk_indexed_identity,
+};
 
 use crate::RiskApplication;
 use crate::application::RiskRpcService;
@@ -22,8 +25,7 @@ pub struct RiskHostConfig {
     pub health_file: Option<PathBuf>,
     pub interval: Duration,
     pub replay_clock: bool,
-    pub snapshot_path: PathBuf,
-    pub snapshot_slot_size: usize,
+    pub view_root: PathBuf,
     pub aeron_dir: Option<String>,
     pub event_channel: String,
     pub event_stream_id: i32,
@@ -43,19 +45,21 @@ pub fn build_risk_host(config: RiskHostConfig) -> Result<RiskHost, String> {
         config.event_stream_id,
     )
     .map_err(|error| error.to_string())?;
-    let view_key = RiskViewKey::latest(config.actor_id.clone());
-    let snapshot_path = RiskViewPublisher::resolved_path(&config.snapshot_path, &view_key)
+    let actor_id = ActorId::new(config.actor_id.clone()).map_err(|error| error.to_string())?;
+    let view_path = risk_indexed_environment_path(&config.view_root, &config.identity, &actor_id)
         .map_err(|error| error.to_string())?;
-    application.configure_publication_identity(config.identity);
+    application.configure_publication_identity(config.identity.clone());
+    let producer_incarnation = application.conflux_producer_incarnation();
     let mut system = ConfluxSystem::new();
     system
         .outputs()
-        .mmap
+        .indexed
         .declare(
-            "risk-latest".to_owned(),
-            MmapOutputDeclaration {
-                path: snapshot_path,
-                slot_capacity: config.snapshot_slot_size,
+            "risk-current".to_owned(),
+            IndexedOutputDeclaration {
+                options: IndexedEnvironmentOptions::new(view_path, RISK_MAP_SIZE)
+                    .map_err(|error| error.to_string())?,
+                identity: risk_indexed_identity(&config.identity, &actor_id, producer_incarnation),
                 revision: 1,
             },
         )
@@ -105,27 +109,14 @@ pub fn compose_risk_application(
     Ok(RiskApplication::new(actor))
 }
 
-/// Test/diagnostic encoder. Production publication is owned by the concrete
-/// publishers stored in `ConfluxSystem`.
-pub struct FlatbuffersRiskSnapshotWriter {
-    inner: kairos_risk_contract::FlatbuffersRiskSnapshotWriter,
-    pub last_payload: Option<Vec<u8>>,
-}
-
-impl FlatbuffersRiskSnapshotWriter {
-    pub fn new(actor_id: impl Into<String>) -> Self {
-        Self {
-            inner: kairos_risk_contract::FlatbuffersRiskSnapshotWriter::new(actor_id),
-            last_payload: None,
-        }
-    }
-
-    pub fn publish(&mut self, snapshot: &crate::RiskCurrentView) -> Result<(), String> {
-        self.inner
-            .publish(&crate::application::contract::current_view(snapshot))?;
-        self.last_payload = self.inner.last_payload.clone();
-        Ok(())
-    }
+/// Encode the package-owned current view into its indexed contract records.
+/// Kept for package integration tests and diagnostics; Conflux owns production publication.
+pub fn encode_indexed_current(
+    snapshot: &crate::RiskCurrentView,
+) -> Result<std::collections::BTreeMap<(String, Vec<u8>), Vec<u8>>, String> {
+    kairos_risk_contract::encode_indexed_current(&crate::application::contract::current_view(
+        snapshot,
+    ))
 }
 
 /// Test/diagnostic encoder. Production publication is owned by the concrete

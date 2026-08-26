@@ -22,6 +22,9 @@ pub use control::{JsonRpcConfluxRuntime, JsonRpcRuntimeConfig, JsonRpcRuntimeErr
 pub use event::{
     ConfluxEvent, ContractEvent, IntegrationEvent, ManagedConnectionIdentity, SystemEvent,
 };
+pub use kairos_indexed_view::{
+    EnvironmentOptions as IndexedEnvironmentOptions, Mutation as IndexedMutation,
+};
 pub use kairos_integration::blocking::{
     OrderCommand as BlockingOrderCommand, OrderQuery as BlockingOrderQuery,
 };
@@ -122,9 +125,8 @@ pub use kairos_transport::{
 };
 pub use lifecycle::{ProcessPhase, ShutdownMode};
 pub use output::{
-    AeronOutputDeclaration, AeronOutputs, FileOutputDeclaration, FileOutputs,
-    MmapOutputDeclaration, MmapOutputs, OutputCollections, OutputCreateError, OutputPublishError,
-    SnapshotEnvelopeMetadata,
+    AeronOutputDeclaration, AeronOutputs, IndexedOutputDeclaration, IndexedOutputs,
+    OutputCollections, OutputCreateError, OutputPublishError,
 };
 pub use process::{
     BuildError, Conflux, ConfluxConfig, ConfluxHandle, ConfluxOutcome, ConnectionControlError,

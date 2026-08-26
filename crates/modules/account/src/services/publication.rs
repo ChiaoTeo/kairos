@@ -1,8 +1,12 @@
 //! Account-owned Contract codecs.
 
+use std::collections::BTreeMap;
+
 use flatbuffers::FlatBufferBuilder;
 use kairos_account_contract::{
-    AccountViewKey, AccountViewKind, EncodeContext, event_metadata, view_metadata,
+    ACCOUNT_BALANCES_DATABASE, ACCOUNT_COLLATERAL_DATABASE, ACCOUNT_EARN_HOLDINGS_DATABASE,
+    ACCOUNT_OBSERVED_ORDERS_DATABASE, ACCOUNT_POSITIONS_DATABASE, ACCOUNT_SEGMENTS_DATABASE,
+    ACCOUNT_VALUATIONS_DATABASE, EncodeContext, account_indexed_key, event_metadata,
 };
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::account::v_2 as account_fb;
@@ -23,185 +27,206 @@ pub(crate) fn now_unix_nanos() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
-pub(crate) fn encode_account_current_view(
-    owner_actor_id: &str,
-    identity: &InstanceIdentity,
+pub(crate) fn encode_indexed_current(
     view: &AccountCurrentView,
-) -> Result<Vec<u8>, String> {
-    let account = view
+) -> Result<BTreeMap<(String, Vec<u8>), Vec<u8>>, String> {
+    let mut values = BTreeMap::new();
+    let account_id = view
         .segments
         .first()
-        .ok_or_else(|| "Account view requires one account".to_owned())?;
+        .ok_or_else(|| "Account view requires one account".to_owned())?
+        .account_id
+        .clone();
     if view
         .segments
         .iter()
-        .any(|segment| segment.account_id != account.account_id)
+        .any(|segment| segment.account_id != account_id)
     {
         return Err("Account view cannot contain multiple account ids".into());
     }
-    let runtime_id = format!("account:{}", account.account_id);
-    let key = AccountViewKey::new(
-        &runtime_id,
-        account.account_id.to_string(),
-        AccountViewKind::Current,
-    )
-    .map_err(|error| error.to_string())?;
-    let mut builder = FlatBufferBuilder::new();
-    let context = EncodeContext::view(
-        owner_actor_id,
-        owner_actor_id,
-        &runtime_id,
-        identity.clone(),
-        view.generation.get(),
-        key.canonical_key(),
-    )?
-    .with_applied_revision(view.event_sequence.get());
-    let metadata = view_metadata(
-        &mut builder,
-        &context,
-        &key,
-        view.segments
-            .iter()
-            .map(|segment| segment.observed_at_unix_nanos.get())
-            .max()
-            .unwrap_or_default(),
-    );
-    let segment_offsets = view
-        .segments
-        .iter()
-        .map(|segment| encode_segment(&mut builder, segment))
-        .collect::<Result<Vec<_>, _>>()?;
-    let segments = builder.create_vector(&segment_offsets);
-    let account_id = builder.create_string(account.account_id.as_str());
-    let root = account_fb::AccountCurrentView::create(
-        &mut builder,
-        &account_fb::AccountCurrentViewArgs {
-            metadata: Some(metadata),
-            account_id: Some(account_id),
-            segments: Some(segments),
-        },
-    );
-    account_fb::finish_account_current_view_buffer(&mut builder, root);
-    Ok(builder.finished_data().to_vec())
-}
-
-pub(crate) fn encode_observed_orders_current_view(
-    owner_actor_id: &str,
-    identity: &InstanceIdentity,
-    view: &AccountCurrentView,
-) -> Result<Vec<u8>, String> {
-    let account = view
-        .segments
-        .first()
-        .ok_or_else(|| "Account observed-orders view requires one account".to_owned())?;
-    let runtime_id = format!("account:{}", account.account_id);
-    let key = AccountViewKey::new(
-        &runtime_id,
-        account.account_id.to_string(),
-        AccountViewKind::ObservedOrders,
-    )
-    .map_err(|error| error.to_string())?;
-    let mut builder = FlatBufferBuilder::new();
-    let context = EncodeContext::view(
-        owner_actor_id,
-        owner_actor_id,
-        &runtime_id,
-        identity.clone(),
-        view.generation.get(),
-        key.canonical_key(),
-    )?
-    .with_applied_revision(view.event_sequence.get());
-    let metadata = view_metadata(
-        &mut builder,
-        &context,
-        &key,
-        account.observed_at_unix_nanos.get(),
-    );
-    let segment_offsets = view
-        .segments
-        .iter()
-        .map(|value| encode_observed_orders_segment(&mut builder, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    let segments = builder.create_vector(&segment_offsets);
-    let account_id = builder.create_string(account.account_id.as_str());
-    let root = account_fb::ObservedOrdersCurrentView::create(
-        &mut builder,
-        &account_fb::ObservedOrdersCurrentViewArgs {
-            metadata: Some(metadata),
-            account_id: Some(account_id),
-            segments: Some(segments),
-        },
-    );
-    account_fb::finish_observed_orders_current_view_buffer(&mut builder, root);
-    Ok(builder.finished_data().to_vec())
-}
-
-fn encode_observed_orders_segment<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    account: &AccountSegmentView,
-) -> Result<flatbuffers::WIPOffset<account_fb::SegmentObservedOrders<'a>>, String> {
-    let source_id = format!("account:{}", account.broker);
-    let orders = account
-        .open_orders
-        .iter()
-        .map(|order| {
-            let observation_id = builder.create_string(&order.order_id.to_string());
-            let source_id = builder.create_string(&source_id);
-            let execution_order_id = builder.create_string(&order.order_id.to_string());
-            let remote_order_id = order
-                .remote_order_id
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default();
-            let remote_order_id = builder.create_string(&remote_order_id);
-            let instrument_id = builder.create_string(order.instrument_id.as_str());
-            let market_id_value = order
-                .market_id
-                .as_ref()
-                .ok_or_else(|| {
-                    format!(
-                        "open order {} has no canonical market identity",
-                        order.order_id
-                    )
-                })?
-                .to_string();
-            let market_id = builder.create_string(&market_id_value);
-            let quantity = Decimal64::new(order.quantity.mantissa(), order.quantity.scale());
-            let filled_quantity = Decimal64::new(
-                order.filled_quantity.mantissa(),
-                order.filled_quantity.scale(),
-            );
-            Ok(account_fb::ObservedOrder::create(
-                builder,
-                &account_fb::ObservedOrderArgs {
-                    observation_id: Some(observation_id),
-                    source_id: Some(source_id),
-                    execution_order_id: Some(execution_order_id),
-                    remote_order_id: Some(remote_order_id),
-                    instrument_id: Some(instrument_id),
-                    market_id: Some(market_id),
-                    side: if order.side == kairos_primitives::execution::OrderSide::Buy {
-                        common_fb::Side::BUY
-                    } else {
-                        common_fb::Side::SELL
+    for segment in &view.segments {
+        let segment_key = segment.segment_key.as_str();
+        insert_indexed(
+            &mut values,
+            ACCOUNT_SEGMENTS_DATABASE,
+            &[segment_key],
+            |builder| {
+                let account_id = builder.create_string(account_id.as_str());
+                let state = encode_segment(builder, segment)?;
+                let root = account_fb::AccountSegmentCurrent::create(
+                    builder,
+                    &account_fb::AccountSegmentCurrentArgs {
+                        account_id: Some(account_id),
+                        state: Some(state),
                     },
-                    quantity: Some(&quantity),
-                    filled_quantity: Some(&filled_quantity),
-                    status: observed_order_status(order.status),
-                    observed_at_unix_nanos: account.observed_at_unix_nanos.get(),
+                );
+                account_fb::finish_account_segment_current_buffer(builder, root);
+                Ok(())
+            },
+        )?;
+        for balance in &segment.balances {
+            insert_indexed(
+                &mut values,
+                ACCOUNT_BALANCES_DATABASE,
+                &[segment_key, balance.asset_id.as_str()],
+                |builder| {
+                    let account_id = builder.create_string(account_id.as_str());
+                    let segment_key = builder.create_string(segment_key);
+                    let balance = encode_balance(builder, balance);
+                    let root = account_fb::AccountBalanceCurrent::create(
+                        builder,
+                        &account_fb::AccountBalanceCurrentArgs {
+                            account_id: Some(account_id),
+                            segment_key: Some(segment_key),
+                            balance: Some(balance),
+                        },
+                    );
+                    account_fb::finish_account_balance_current_buffer(builder, root);
+                    Ok(())
                 },
-            ))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let orders = builder.create_vector(&orders);
-    let segment_key = builder.create_string(account.segment_key.as_str());
-    Ok(account_fb::SegmentObservedOrders::create(
-        builder,
-        &account_fb::SegmentObservedOrdersArgs {
-            segment_key: Some(segment_key),
-            orders: Some(orders),
-        },
-    ))
+            )?;
+        }
+        for balance in &segment.collateral {
+            insert_indexed(
+                &mut values,
+                ACCOUNT_COLLATERAL_DATABASE,
+                &[segment_key, balance.asset_id.as_str()],
+                |builder| {
+                    let account_id = builder.create_string(account_id.as_str());
+                    let segment_key = builder.create_string(segment_key);
+                    let balance = encode_balance(builder, balance);
+                    let root = account_fb::AccountCollateralCurrent::create(
+                        builder,
+                        &account_fb::AccountCollateralCurrentArgs {
+                            account_id: Some(account_id),
+                            segment_key: Some(segment_key),
+                            balance: Some(balance),
+                        },
+                    );
+                    account_fb::finish_account_collateral_current_buffer(builder, root);
+                    Ok(())
+                },
+            )?;
+        }
+        for position in &segment.positions {
+            let side = position_side_key(position.position_side);
+            insert_indexed(
+                &mut values,
+                ACCOUNT_POSITIONS_DATABASE,
+                &[segment_key, position.instrument_id.as_str(), side],
+                |builder| {
+                    let account_id = builder.create_string(account_id.as_str());
+                    let segment_key = builder.create_string(segment_key);
+                    let position = encode_position(builder, position);
+                    let root = account_fb::AccountPositionCurrent::create(
+                        builder,
+                        &account_fb::AccountPositionCurrentArgs {
+                            account_id: Some(account_id),
+                            segment_key: Some(segment_key),
+                            position: Some(position),
+                        },
+                    );
+                    account_fb::finish_account_position_current_buffer(builder, root);
+                    Ok(())
+                },
+            )?;
+        }
+        if segment.equity.is_some()
+            || segment.initial_equity.is_some()
+            || segment.net_profit.is_some()
+        {
+            insert_indexed(
+                &mut values,
+                ACCOUNT_VALUATIONS_DATABASE,
+                &[segment_key],
+                |builder| {
+                    let account_id = builder.create_string(account_id.as_str());
+                    let segment_key = builder.create_string(segment_key);
+                    let valuation =
+                        encode_valuation(builder, segment)?.expect("valuation fields were checked");
+                    let root = account_fb::AccountValuationCurrent::create(
+                        builder,
+                        &account_fb::AccountValuationCurrentArgs {
+                            account_id: Some(account_id),
+                            segment_key: Some(segment_key),
+                            valuation: Some(valuation),
+                        },
+                    );
+                    account_fb::finish_account_valuation_current_buffer(builder, root);
+                    Ok(())
+                },
+            )?;
+        }
+        for holding in &segment.earn_holdings {
+            let holding_key = holding
+                .participant_position_id
+                .as_deref()
+                .unwrap_or(&holding.product_id);
+            insert_indexed(
+                &mut values,
+                ACCOUNT_EARN_HOLDINGS_DATABASE,
+                &[segment_key, holding_key],
+                |builder| {
+                    let account_id = builder.create_string(account_id.as_str());
+                    let segment_key = builder.create_string(segment_key);
+                    let holding = encode_earn_holding(builder, holding);
+                    let root = account_fb::AccountEarnHoldingCurrent::create(
+                        builder,
+                        &account_fb::AccountEarnHoldingCurrentArgs {
+                            account_id: Some(account_id),
+                            segment_key: Some(segment_key),
+                            holding: Some(holding),
+                        },
+                    );
+                    account_fb::finish_account_earn_holding_current_buffer(builder, root);
+                    Ok(())
+                },
+            )?;
+        }
+        let source_id = format!("account:{}", segment.broker);
+        for order in &segment.open_orders {
+            let order_id = order.order_id.to_string();
+            insert_indexed(
+                &mut values,
+                ACCOUNT_OBSERVED_ORDERS_DATABASE,
+                &[segment_key, &source_id, &order_id],
+                |builder| {
+                    let account_id = builder.create_string(account_id.as_str());
+                    let segment_key = builder.create_string(segment_key);
+                    let order = encode_observed_order(
+                        builder,
+                        &source_id,
+                        order,
+                        segment.observed_at_unix_nanos.get(),
+                    )?;
+                    let root = account_fb::AccountObservedOrderCurrent::create(
+                        builder,
+                        &account_fb::AccountObservedOrderCurrentArgs {
+                            account_id: Some(account_id),
+                            segment_key: Some(segment_key),
+                            order: Some(order),
+                        },
+                    );
+                    account_fb::finish_account_observed_order_current_buffer(builder, root);
+                    Ok(())
+                },
+            )?;
+        }
+    }
+    Ok(values)
+}
+
+fn insert_indexed(
+    values: &mut BTreeMap<(String, Vec<u8>), Vec<u8>>,
+    database: &str,
+    parts: &[&str],
+    encode: impl FnOnce(&mut FlatBufferBuilder<'_>) -> Result<(), String>,
+) -> Result<(), String> {
+    let key = account_indexed_key(parts).map_err(|error| error.to_string())?;
+    let mut builder = FlatBufferBuilder::new();
+    encode(&mut builder)?;
+    values.insert((database.to_owned(), key), builder.finished_data().to_vec());
+    Ok(())
 }
 
 fn encode_segment<'a>(
@@ -211,11 +236,6 @@ fn encode_segment<'a>(
     let segment_key = builder.create_string(account.segment_key.as_str());
     let environment = builder.create_string(&account.environment);
     let broker = builder.create_string(&account.broker);
-    let balances = encode_balances(builder, &account.balances);
-    let collateral = encode_balances(builder, &account.collateral);
-    let positions = encode_positions(builder, &account.positions)?;
-    let earn_holdings = encode_earn_holdings(builder, &account.earn_holdings);
-    let valuation = encode_valuation(builder, account)?;
     let last_error = account
         .last_error
         .as_deref()
@@ -249,11 +269,6 @@ fn encode_segment<'a>(
             recovery_buffer_depth: account.recovery_buffer_depth,
             observed_at_unix_nanos: account.observed_at_unix_nanos.get(),
             state_generation: account.generation.get(),
-            valuation,
-            balances: Some(balances),
-            collateral: Some(collateral),
-            positions: Some(positions),
-            earn_holdings: Some(earn_holdings),
             earn_watermark_unix_nanos: account.earn_watermark_unix_nanos.get(),
             margin_mode: account
                 .margin_mode
@@ -265,19 +280,6 @@ fn encode_segment<'a>(
                 .unwrap_or(account_fb::PositionMode::UNSPECIFIED),
         },
     ))
-}
-
-fn encode_earn_holdings<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    values: &[crate::domain::EarnHolding],
-) -> flatbuffers::WIPOffset<
-    flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<account_fb::EarnHolding<'a>>>,
-> {
-    let offsets = values
-        .iter()
-        .map(|value| encode_earn_holding(builder, value))
-        .collect::<Vec<_>>();
-    builder.create_vector(&offsets)
 }
 
 fn encode_earn_holding<'a>(
@@ -343,100 +345,6 @@ fn encode_earn_holding<'a>(
             observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
         },
     )
-}
-
-fn encode_balances<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    values: &[crate::domain::Balance],
-) -> flatbuffers::WIPOffset<
-    flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<account_fb::Balance<'a>>>,
-> {
-    let offsets = values
-        .iter()
-        .map(|value| {
-            let asset_id = builder.create_string(value.asset_id.as_str());
-            let asset_code = builder.create_string(value.asset_code.as_str());
-            let total = Decimal64::new(value.total.mantissa(), value.total.scale());
-            let available = value
-                .available
-                .map(|value| Decimal64::new(value.mantissa(), value.scale()));
-            let locked = value
-                .locked
-                .map(|value| Decimal64::new(value.mantissa(), value.scale()));
-            let borrowed = value
-                .borrowed
-                .map(|value| Decimal64::new(value.mantissa(), value.scale()));
-            let interest = value
-                .interest
-                .map(|value| Decimal64::new(value.mantissa(), value.scale()));
-            account_fb::Balance::create(
-                builder,
-                &account_fb::BalanceArgs {
-                    asset_id: Some(asset_id),
-                    asset_code: Some(asset_code),
-                    total: Some(&total),
-                    available: available.as_ref(),
-                    locked: locked.as_ref(),
-                    borrowed: borrowed.as_ref(),
-                    interest: interest.as_ref(),
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    builder.create_vector(&offsets)
-}
-
-fn encode_positions<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    values: &[crate::domain::Position],
-) -> Result<
-    flatbuffers::WIPOffset<
-        flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<account_fb::Position<'a>>>,
-    >,
-    String,
-> {
-    let offsets = values
-        .iter()
-        .map(|value| {
-            let instrument_id = builder.create_string(value.instrument_id.as_str());
-            let market_id = builder.create_string(
-                value
-                    .market_id
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .as_deref()
-                    .unwrap_or(""),
-            );
-            let quantity = Decimal64::new(value.quantity.mantissa(), value.quantity.scale());
-            let average_price = value
-                .average_price
-                .map(|value| Decimal64::new(value.mantissa(), value.scale()));
-            let mark_price = value
-                .mark_price
-                .map(|value| Decimal64::new(value.mantissa(), value.scale()));
-            let unrealized_pnl = value
-                .unrealized_pnl
-                .map(|value| Decimal64::new(value.mantissa(), value.scale()));
-            let realized_pnl = value
-                .realized_pnl
-                .map(|value| Decimal64::new(value.mantissa(), value.scale()));
-            account_fb::Position::create(
-                builder,
-                &account_fb::PositionArgs {
-                    instrument_id: Some(instrument_id),
-                    market_id: Some(market_id),
-                    position_side: encode_position_side(value.position_side),
-                    quantity: Some(&quantity),
-                    average_price: average_price.as_ref(),
-                    mark_price: mark_price.as_ref(),
-                    unrealized_pnl: unrealized_pnl.as_ref(),
-                    realized_pnl: realized_pnl.as_ref(),
-                    observed_at_unix_nanos: value.updated_at_unix_nanos.get(),
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    Ok(builder.create_vector(&offsets))
 }
 
 fn encode_valuation<'a>(
@@ -698,16 +606,28 @@ fn encode_balance<'a>(
     let asset_id = builder.create_string(value.asset_id.as_str());
     let asset_code = builder.create_string(value.asset_code.as_str());
     let total = Decimal64::new(value.total.mantissa(), value.total.scale());
+    let available = value
+        .available
+        .map(|value| Decimal64::new(value.mantissa(), value.scale()));
+    let locked = value
+        .locked
+        .map(|value| Decimal64::new(value.mantissa(), value.scale()));
+    let borrowed = value
+        .borrowed
+        .map(|value| Decimal64::new(value.mantissa(), value.scale()));
+    let interest = value
+        .interest
+        .map(|value| Decimal64::new(value.mantissa(), value.scale()));
     account_fb::Balance::create(
         builder,
         &account_fb::BalanceArgs {
             asset_id: Some(asset_id),
             asset_code: Some(asset_code),
             total: Some(&total),
-            available: None,
-            locked: None,
-            borrowed: None,
-            interest: None,
+            available: available.as_ref(),
+            locked: locked.as_ref(),
+            borrowed: borrowed.as_ref(),
+            interest: interest.as_ref(),
         },
     )
 }
@@ -759,6 +679,14 @@ fn encode_position_side(
         kairos_primitives::account::PositionSide::Net => account_fb::PositionSide::NET,
         kairos_primitives::account::PositionSide::Long => account_fb::PositionSide::LONG,
         kairos_primitives::account::PositionSide::Short => account_fb::PositionSide::SHORT,
+    }
+}
+
+fn position_side_key(value: kairos_primitives::account::PositionSide) -> &'static str {
+    match value {
+        kairos_primitives::account::PositionSide::Net => "NET",
+        kairos_primitives::account::PositionSide::Long => "LONG",
+        kairos_primitives::account::PositionSide::Short => "SHORT",
     }
 }
 

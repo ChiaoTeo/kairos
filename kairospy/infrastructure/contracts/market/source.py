@@ -10,9 +10,9 @@ from typing import Any, AsyncIterator, cast
 
 from kairospy.infrastructure.contracts.market.records import MarketEventRecord
 from kairospy.infrastructure.contracts.market import (
+    MarketIndexedViewQueries,
     MarketViewKey,
     MarketViewKind,
-    MarketViewReader,
 )
 from kairospy.infrastructure.transport.native_event import NativeEventSource
 from kairospy.infrastructure.protocol.generated_spec import (
@@ -150,14 +150,23 @@ class MarketDataView:
 
 
 class MarketViewAccess:
-    """Access Market v2 current views from Rust double-slot snapshots.
+    """Access Market v2 entities from the owner-scoped LMDB view."""
 
-    The v2 path is a publisher root. Each requested view is an independent
-    ``MarketViewKey`` resource; no aggregate snapshot is read or produced.
-    """
-
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        workspace_id: str,
+        launch_id: str | None,
+        instance_id: str | None,
+    ) -> None:
         self.path = Path(path)
+        self._queries = MarketIndexedViewQueries(
+            path,
+            workspace_id=workspace_id,
+            launch_id=launch_id,
+            instance_id=instance_id,
+        )
 
     def read_view(
         self,
@@ -172,14 +181,15 @@ class MarketViewAccess:
             if provider is None or kind is None:
                 raise ValueError("Market v2 view source and kind are required")
             key = MarketViewKey(key, provider, kind, qualifier)
-        return MarketViewReader(self.path, key).read()
+        return self._queries.read(key)
 
     def read_quote(self, market_id: str, provider: str) -> QuoteView | None:
         frame = self.read_view(
             MarketViewKey(market_id, provider, MarketViewKind.QUOTE)
         )
-        wrapper = cast(Any, frame.value.Quote())
-        return None if wrapper is None else _decode_quote(wrapper.Value())
+        if frame is None:
+            return None
+        return _decode_quote(cast(Any, frame.value))
 
     def read_bar(
         self, market_id: str, provider: str, timeframe: str
@@ -187,24 +197,17 @@ class MarketViewAccess:
         frame = self.read_view(
             MarketViewKey(market_id, provider, MarketViewKind.BAR, timeframe)
         )
-        value = cast(Any, frame.value)
-        for index in range(value.BarsLength()):
-            wrapper = cast(Any, value.Bars(index))
-            if wrapper is None:
-                continue
-            bar = wrapper.Value()
-            if bar is not None and _header_text(bar.Timeframe()) == timeframe:
-                return _decode_bar(bar)
-        return None
+        if frame is None:
+            return None
+        return _decode_bar(cast(Any, frame.value))
 
     def read_greeks(self, market_id: str, provider: str) -> GreeksView | None:
         frame = self.read_view(
             MarketViewKey(market_id, provider, MarketViewKind.GREEKS)
         )
-        wrapper = cast(Any, frame.value.Greeks())
-        return (
-            None if wrapper is None else _decode_greeks(wrapper.Value())
-        )
+        if frame is None:
+            return None
+        return _decode_greeks(cast(Any, frame.value))
 
 
 def _scope(value: object) -> ObservationScopeView:
@@ -310,15 +313,15 @@ def _decode_bar(value: object) -> BarView:
     return BarView(
         instrument_id=text("InstrumentId") or "",
         scope=_scope(value),
-        timeframe=text("Timeframe") or "",
+        timeframe=text("BarSpecId") or "",
         open=decimal("Open"),
         high=decimal("High"),
         low=decimal("Low"),
         close=decimal("Close"),
         volume=optional_decimal("Volume"),
-        event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
+        event_time_unix_nanos=getattr(value, "SourceObservedAtUnixNanos")(),
         provider=text("Provider"),
-        derivation=text("Derivation"),
+        derivation=None,
     )
 
 
@@ -343,9 +346,9 @@ def _decode_greeks(value: object) -> GreeksView:
         vega=decimal("Vega"),
         theta=decimal("Theta"),
         implied_volatility=decimal("ImpliedVolatility"),
-        event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
+        event_time_unix_nanos=getattr(value, "SourceObservedAtUnixNanos")(),
         provider=text("Provider"),
-        derivation=text("Derivation"),
+        derivation=text("DerivationId"),
     )
 
 
@@ -353,7 +356,7 @@ class UnixMarketEventStream:
     """Consume the replay Market frame stream.
 
     Production Market events use Aeron.  This adapter remains only for the
-    launch-owned replay process and never reads or recovers through mmap.
+    launch-owned replay process and never reads or recovers through a current view.
     """
 
     def __init__(

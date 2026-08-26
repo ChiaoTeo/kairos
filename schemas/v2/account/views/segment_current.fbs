@@ -1,0 +1,11 @@
+include "../types/segment.fbs";
+
+namespace kairos.account.v2;
+
+table AccountSegmentCurrent {
+  account_id:string (required);
+  state:AccountSegmentState (required);
+}
+
+root_type AccountSegmentCurrent;
+file_identifier "ASG3";

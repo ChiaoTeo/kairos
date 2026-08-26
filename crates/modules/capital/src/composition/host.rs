@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use kairos_capital_contract::{CapitalControlRpcServer, CapitalViewKey, capital_view_path};
+use kairos_capital_contract::{
+    CAPITAL_MAP_SIZE, CapitalControlRpcServer, capital_indexed_environment_path,
+    capital_indexed_identity,
+};
 use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, JsonRpcConfluxRuntime,
-    JsonRpcRuntimeConfig, MmapOutputDeclaration,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, IndexedEnvironmentOptions,
+    IndexedOutputDeclaration, JsonRpcConfluxRuntime, JsonRpcRuntimeConfig,
 };
 
 use super::CapitalIntegrationConnections;
@@ -28,10 +31,6 @@ pub struct CapitalHostConfig {
 /// Assemble the Capital Actor, its typed contract outputs, and its Conflux host.
 pub fn build_capital_host(mut config: CapitalHostConfig) -> Result<CapitalHost, String> {
     let group_id = config.runtime.application().snapshot().capital_group_id;
-    let view_key = CapitalViewKey::current(group_id.to_string());
-    let view_resource_key = view_key.canonical_key();
-    let view_path = capital_view_path(&config.conflux.snapshot_root, &view_key)
-        .map_err(|error| error.to_string())?;
     let event_endpoint = kairos_capital_contract::AeronEndpoint::from_parts(
         config.aeron_dir.as_deref(),
         config.event_channel,
@@ -43,15 +42,23 @@ pub fn build_capital_host(mut config: CapitalHostConfig) -> Result<CapitalHost, 
         .runtime
         .configure_conflux(config.conflux)
         .map_err(|error| error.to_string())?;
+    let (view_root, identity, producer_incarnation) = config
+        .runtime
+        .conflux_publication()
+        .ok_or_else(|| "Capital Conflux publication is not configured".to_owned())?;
+    let view_path = capital_indexed_environment_path(view_root, identity, &group_id)
+        .map_err(|error| error.to_string())?;
+    let indexed_identity = capital_indexed_identity(identity, &group_id, producer_incarnation);
     let mut system = config.system;
     system
         .outputs()
-        .mmap
+        .indexed
         .declare(
-            view_resource_key,
-            MmapOutputDeclaration {
-                path: view_path,
-                slot_capacity: 4 * 1024 * 1024,
+            "capital-current",
+            IndexedOutputDeclaration {
+                options: IndexedEnvironmentOptions::new(view_path, CAPITAL_MAP_SIZE)
+                    .map_err(|error| error.to_string())?,
+                identity: indexed_identity,
                 revision: 1,
             },
         )

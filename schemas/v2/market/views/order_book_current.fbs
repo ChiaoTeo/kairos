@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/order_book.fbs";
+
+namespace kairos.market.v2;
+
+table MarketOrderBookCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:OrderBookSnapshotValue (required);
+}
+
+root_type MarketOrderBookCurrent;
+file_identifier "MOB3";

@@ -1,0 +1,10 @@
+include "../types/algorithm_run.fbs";
+
+namespace kairos.execution.v2;
+
+table ExecutionAlgorithmRunCurrent {
+  state:AlgorithmRunState (required);
+}
+
+root_type ExecutionAlgorithmRunCurrent;
+file_identifier "EAR3";

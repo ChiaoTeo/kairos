@@ -128,7 +128,7 @@ pub struct RiskSnapshot {
     pub circuits: Vec<CircuitState>,
 }
 
-/// Read-only state published through mmap.
+/// Read-only state published through the owner-scoped indexed view.
 ///
 /// The applied event sequence is a state watermark, not a replay cursor.
 /// Event delivery remains owned by Aeron or an explicit journal.
@@ -176,6 +176,7 @@ pub struct RiskApplication {
     maintenance_interval: Duration,
     pub(crate) publication_identity: kairos_primitives::runtime::InstanceIdentity,
     pub(crate) producer_incarnation: u64,
+    pub(crate) published_indexed_values: std::collections::BTreeMap<(String, Vec<u8>), Vec<u8>>,
 }
 
 impl RiskApplication {
@@ -187,6 +188,7 @@ impl RiskApplication {
             maintenance_interval: Duration::from_secs(1),
             publication_identity: Default::default(),
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
+            published_indexed_values: std::collections::BTreeMap::new(),
         }
     }
 
@@ -195,6 +197,10 @@ impl RiskApplication {
         identity: kairos_primitives::runtime::InstanceIdentity,
     ) {
         self.publication_identity = identity;
+    }
+
+    pub fn conflux_producer_incarnation(&self) -> u64 {
+        self.producer_incarnation
     }
 
     pub fn set_clock_mode(&mut self, mode: RiskClockMode) {

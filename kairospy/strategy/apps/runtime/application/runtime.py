@@ -891,7 +891,7 @@ class StrategyApplication:
 
     def _refresh_dependencies(self) -> bool:
         # Readiness belongs to each concrete business Application. Strategy
-        # neither opens Aeron itself nor consults a mmap header/cursor.
+        # neither opens Aeron itself nor consults indexed-view metadata.
         self.context.account._check_event_source_ready()
         self.context.portfolio.rebuild()
         if self.context.account.account_ids:

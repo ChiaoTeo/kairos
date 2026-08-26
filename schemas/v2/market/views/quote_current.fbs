@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/quote.fbs";
+
+namespace kairos.market.v2;
+
+table MarketQuoteCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:Quote (required);
+}
+
+root_type MarketQuoteCurrent;
+file_identifier "MQC3";

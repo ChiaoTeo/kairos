@@ -1,0 +1,5 @@
+include "../types/state.fbs";
+namespace kairos.capital.v2;
+table CapitalPlanCurrent { capital_group_id:string (required); value:CapitalPlan (required); }
+root_type CapitalPlanCurrent;
+file_identifier "CPL3";

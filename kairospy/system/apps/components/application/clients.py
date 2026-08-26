@@ -1,7 +1,7 @@
 """Typed clients for already-running business processes.
 
 These clients are part of the System boundary. They expose health and control
-commands through JSON-RPC; business state is read from module-owned typed mmap
+commands through JSON-RPC; business state is read from module-owned typed indexed
 views.
 """
 
@@ -40,6 +40,9 @@ class SystemRpcClient:
     view_root: Path | None = None
     database_path: Path | None = None
     actor_id: str | None = None
+    workspace_id: str | None = None
+    launch_id: str | None = None
+    instance_id: str | None = None
     timeout: float = 3.0
 
     def __post_init__(self) -> None:
@@ -139,7 +142,13 @@ class AccountSystemClient(SystemRpcClient):
     def current_view(self, account_id: AccountId):
         from kairospy.infrastructure.contracts.account import AccountCurrentViewReader
 
-        return AccountCurrentViewReader(self.require_view_root(), account_id=account_id)
+        return AccountCurrentViewReader(
+            self.require_view_root(),
+            account_id=account_id,
+            workspace_id=self._require_workspace_id(),
+            launch_id=self.launch_id,
+            instance_id=self.instance_id,
+        )
 
     def observed_orders_view(self, account_id: AccountId):
         from kairospy.infrastructure.contracts.account import (
@@ -149,7 +158,15 @@ class AccountSystemClient(SystemRpcClient):
         return AccountObservedOrdersViewReader(
             self.require_view_root(),
             account_id=account_id,
+            workspace_id=self._require_workspace_id(),
+            launch_id=self.launch_id,
+            instance_id=self.instance_id,
         )
+
+    def _require_workspace_id(self) -> str:
+        if self.workspace_id is None:
+            raise RuntimeError("Account indexed current view requires workspace identity")
+        return self.workspace_id
 
 
 class ExecutionSystemClient(SystemRpcClient):
@@ -313,9 +330,17 @@ class RiskSystemClient(SystemRpcClient):
         }
 
     def latest_view(self, *, actor_id: str):
-        from kairospy.infrastructure.contracts.risk import RiskLatestViewQueries, RiskViewKey
+        from kairospy.infrastructure.contracts.risk import RiskIndexedViewQueries
 
-        return RiskLatestViewQueries(self.require_view_root(), RiskViewKey(actor_id=actor_id))
+        if self.workspace_id is None:
+            raise RuntimeError("Risk indexed current view requires workspace identity")
+        return RiskIndexedViewQueries(
+            self.require_view_root(),
+            actor_id=actor_id,
+            workspace_id=self.workspace_id,
+            launch_id=self.launch_id,
+            instance_id=self.instance_id,
+        )
 
 
 class CapitalSystemClient(SystemRpcClient):
@@ -377,9 +402,14 @@ class CapitalSystemClient(SystemRpcClient):
         return dict(self.control.reconcile_plan_request(dict(request)))
 
     def current_view(self, capital_group_id: str):
-        from kairospy.infrastructure.contracts.capital import CapitalCurrentViewQueries
+        from kairospy.infrastructure.contracts.capital import CapitalIndexedViewQueries
 
-        return CapitalCurrentViewQueries(self.require_view_root(), capital_group_id)
+        if self.workspace_id is None:
+            raise RuntimeError("Capital indexed current view requires workspace identity")
+        return CapitalIndexedViewQueries(
+            self.require_view_root(), capital_group_id,
+            workspace_id=self.workspace_id, launch_id=self.launch_id, instance_id=self.instance_id,
+        )
 
     def current_metadata(self, capital_group_id: str) -> dict[str, Any]:
         return self.current(capital_group_id)
@@ -531,6 +561,9 @@ class InstanceSystemClients:
                 account_id: AccountSystemClient(
                     connection.socket,
                     view_root=connection.view_root,
+                    workspace_id=connections.workspace_id,
+                    launch_id=connections.launch_id,
+                    instance_id=connections.instance_id,
                 )
                 for account_id, connection in connections.accounts.items()
             },
@@ -548,6 +581,9 @@ class InstanceSystemClients:
                 else RiskSystemClient(
                     connections.risk.socket,
                     view_root=connections.risk.view_root,
+                    workspace_id=connections.workspace_id,
+                    launch_id=connections.launch_id,
+                    instance_id=connections.instance_id,
                 )
             ),
             execution=(
@@ -564,6 +600,9 @@ class InstanceSystemClients:
                 else CapitalSystemClient(
                     connections.capital.socket,
                     view_root=connections.capital.view_root,
+                    workspace_id=connections.workspace_id,
+                    launch_id=connections.launch_id,
+                    instance_id=connections.instance_id,
                 )
             ),
             reference=(

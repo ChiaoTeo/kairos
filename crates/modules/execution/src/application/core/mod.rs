@@ -496,7 +496,7 @@ impl ExecutionApplication {
     }
 
     /// Resolve every durable in-flight Risk saga exclusively from Risk's
-    /// typed mmap current view. A missing or stale observation keeps the live
+    /// typed indexed current view. A missing or stale observation keeps the live
     /// admission barrier closed; recovery never retries an uncertain money or
     /// capacity command merely because Execution restarted.
     pub(crate) fn recover_risk_reservations(&mut self) -> Result<(), ExecutionError> {
@@ -533,7 +533,7 @@ impl ExecutionApplication {
                 })?
                 .ok_or_else(|| {
                     let error = format!(
-                        "Risk mmap has no reservation {} at or after event sequence {}",
+                        "Risk indexed view has no reservation {} at or after event sequence {}",
                         evidence.reservation_id, evidence.risk_event_sequence
                     );
                     self.risk_recovery_ready = false;
@@ -542,7 +542,7 @@ impl ExecutionApplication {
                 })?;
             if observed.risk_event_sequence < evidence.risk_event_sequence {
                 let error = format!(
-                    "Risk mmap watermark {} precedes durable Execution evidence {}",
+                    "Risk indexed-view watermark {} precedes durable Execution evidence {}",
                     observed.risk_event_sequence, evidence.risk_event_sequence
                 );
                 self.risk_recovery_ready = false;

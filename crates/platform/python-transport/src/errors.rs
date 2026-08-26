@@ -1,4 +1,4 @@
-use kairos_transport::SnapshotError;
+use kairos_indexed_view::StoreError;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -18,26 +18,6 @@ create_exception!(
 );
 create_exception!(
     _native_transport,
-    SnapshotNotInitializedError,
-    NativeTransportError
-);
-create_exception!(
-    _native_transport,
-    UnsupportedEnvelopeVersionError,
-    NativeTransportError
-);
-create_exception!(
-    _native_transport,
-    CorruptSnapshotError,
-    NativeTransportError
-);
-create_exception!(
-    _native_transport,
-    ConcurrentChangeError,
-    NativeTransportError
-);
-create_exception!(
-    _native_transport,
     ResourceChangedError,
     NativeTransportError
 );
@@ -45,6 +25,8 @@ create_exception!(_native_transport, ClosedError, NativeTransportError);
 create_exception!(_native_transport, ForkedProcessError, NativeTransportError);
 create_exception!(_native_transport, WorkerExitedError, NativeTransportError);
 create_exception!(_native_transport, QueueOverflowError, NativeTransportError);
+create_exception!(_native_transport, IndexedViewError, NativeTransportError);
+create_exception!(_native_transport, CorruptIndexedViewError, IndexedViewError);
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
@@ -64,22 +46,6 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
             py.get_type::<PayloadTooLargeError>(),
         ),
         (
-            "SnapshotNotInitializedError",
-            py.get_type::<SnapshotNotInitializedError>(),
-        ),
-        (
-            "UnsupportedEnvelopeVersionError",
-            py.get_type::<UnsupportedEnvelopeVersionError>(),
-        ),
-        (
-            "CorruptSnapshotError",
-            py.get_type::<CorruptSnapshotError>(),
-        ),
-        (
-            "ConcurrentChangeError",
-            py.get_type::<ConcurrentChangeError>(),
-        ),
-        (
             "ResourceChangedError",
             py.get_type::<ResourceChangedError>(),
         ),
@@ -87,10 +53,40 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
         ("ForkedProcessError", py.get_type::<ForkedProcessError>()),
         ("WorkerExitedError", py.get_type::<WorkerExitedError>()),
         ("QueueOverflowError", py.get_type::<QueueOverflowError>()),
+        ("IndexedViewError", py.get_type::<IndexedViewError>()),
+        (
+            "CorruptIndexedViewError",
+            py.get_type::<CorruptIndexedViewError>(),
+        ),
     ] {
         module.add(name, exception)?;
     }
     Ok(())
+}
+
+pub fn indexed_view(py: Python<'_>, error: StoreError) -> PyErr {
+    let (py_error, code) = match error {
+        StoreError::InvalidIdentity(_)
+        | StoreError::InvalidSchema(_)
+        | StoreError::InvalidPath(_)
+        | StoreError::UnknownDatabase(_) => (
+            PyErr::new::<ConfigurationError, _>(error.to_string()),
+            "indexed_view_configuration",
+        ),
+        StoreError::MetadataMismatch(_) => (
+            PyErr::new::<ResourceChangedError, _>(error.to_string()),
+            "indexed_view_metadata_mismatch",
+        ),
+        StoreError::CorruptMetadata(_) => (
+            PyErr::new::<CorruptIndexedViewError, _>(error.to_string()),
+            "corrupt_indexed_view",
+        ),
+        StoreError::Storage(_) | StoreError::Io(_) => (
+            PyErr::new::<IndexedViewError, _>(error.to_string()),
+            "indexed_view_storage",
+        ),
+    };
+    with_code(py, py_error, code)
 }
 
 pub fn closed(py: Python<'_>) -> PyErr {
@@ -107,30 +103,6 @@ pub fn forked(py: Python<'_>) -> PyErr {
         PyErr::new::<ForkedProcessError, _>("native transport object belongs to another process"),
         "forked_process",
     )
-}
-
-pub fn snapshot(py: Python<'_>, error: SnapshotError) -> PyErr {
-    let code = error.code();
-    let message = error.to_string();
-    let py_error = match error {
-        SnapshotError::Configuration(_) | SnapshotError::WriterLeaseHeld(_) => {
-            PyErr::new::<ConfigurationError, _>(message)
-        },
-        SnapshotError::NotInitialized => PyErr::new::<SnapshotNotInitializedError, _>(message),
-        SnapshotError::UnsupportedVersion(_) => {
-            PyErr::new::<UnsupportedEnvelopeVersionError, _>(message)
-        },
-        SnapshotError::Corrupt(_) | SnapshotError::ChecksumMismatch { .. } => {
-            PyErr::new::<CorruptSnapshotError, _>(message)
-        },
-        SnapshotError::PayloadTooLarge { .. } => PyErr::new::<PayloadTooLargeError, _>(message),
-        SnapshotError::ConcurrentChange => PyErr::new::<ConcurrentChangeError, _>(message),
-        SnapshotError::ResourceChanged => PyErr::new::<ResourceChangedError, _>(message),
-        SnapshotError::Io(_) | SnapshotError::CommitOverflow => {
-            PyErr::new::<NativeTransportError, _>(message)
-        },
-    };
-    with_code(py, py_error, code)
 }
 
 pub fn internal_panic(py: Python<'_>) -> PyErr {

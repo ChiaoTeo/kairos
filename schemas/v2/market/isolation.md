@@ -39,7 +39,7 @@ launch_id         = required
 instance_id       = required
 ```
 
-Its UDS socket, event stream, typed resource metadata, and mmap files are resolved
+Its UDS socket, event stream, and indexed-view environment are resolved
 under that launch-instance resource root. A command or reader with a
 different launch/instance identity is rejected.
 
@@ -61,5 +61,5 @@ different launch/instance identity is rejected.
   grant a caller access to another Market runtime.
 
 The Python entry point should receive a resolved runtime endpoint from
-composition. It should not expose socket paths, mmap paths, or source routing
+composition. It should not expose socket paths, storage paths, or source routing
 as user-level identity concepts.

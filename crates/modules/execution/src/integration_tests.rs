@@ -14,11 +14,11 @@ use kairos_conflux::{
     BlockingOrderQuery as OrderQuery, CommandOutcome, Conflux, ConfluxConfig, ConfluxEvent,
     ConfluxSystem, ConnectionDescriptor, ConnectionKey, ExternalEventEnvelope,
     ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery, ExternalParticipantEvent,
-    IndeterminateCommand, IntegrationError, IntegrationEvent, JsonRpcRuntimeConfig,
-    ManagedConnectionIdentity, MmapOutputDeclaration, OrderEntryEvent, OrderEntryRequest,
-    OrderEntryStatus, OrderStatus as ConnectionOrderStatus, OrderType as ConnectionOrderType,
-    ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
-    ShutdownMode, TimeInForce,
+    IndeterminateCommand, IndexedEnvironmentOptions, IndexedOutputDeclaration, IntegrationError,
+    IntegrationEvent, JsonRpcRuntimeConfig, ManagedConnectionIdentity, OrderEntryEvent,
+    OrderEntryRequest, OrderEntryStatus, OrderStatus as ConnectionOrderStatus,
+    OrderType as ConnectionOrderType, ParticipantInstrumentRef, ParticipantInstrumentTypeRef,
+    ParticipantKind, ParticipantRef, ShutdownMode, TimeInForce,
 };
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
@@ -38,7 +38,8 @@ use kairos_execution::{
     UnknownRemoteOrderResolution,
 };
 use kairos_execution_contract::{
-    ExecutionControlRpcServer, ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
+    EXECUTION_MAP_SIZE, ExecutionControlRpcServer, execution_indexed_environment_path,
+    execution_indexed_identity,
 };
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::{Money, Price, Quantity};
@@ -86,6 +87,27 @@ fn order_fact_cursor(epoch: u64, sequence: u64) -> OrderFactCursor {
         channel_epoch: epoch,
         participant_sequence: Some(Sequence::new(sequence)),
     }
+}
+
+fn declare_execution_indexed_output(
+    system: &mut ConfluxSystem,
+    root: &std::path::Path,
+    identity: &kairos_primitives::runtime::InstanceIdentity,
+) {
+    let path = execution_indexed_environment_path(root, identity).unwrap();
+    let options = IndexedEnvironmentOptions::new(path, EXECUTION_MAP_SIZE).unwrap();
+    system
+        .outputs()
+        .indexed
+        .declare(
+            "execution-current",
+            IndexedOutputDeclaration {
+                options,
+                identity: execution_indexed_identity(identity, 1),
+                revision: 1,
+            },
+        )
+        .unwrap();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -426,11 +448,11 @@ impl ExecutionStateStore for CrashAfterStagingUnwindStore {
     }
 }
 
-struct SharedSnapshotStore {
+struct SharedStateStore {
     snapshot: Arc<Mutex<Option<kairos_execution::application::ExecutionSnapshot>>>,
 }
 
-impl ExecutionStateStore for SharedSnapshotStore {
+impl ExecutionStateStore for SharedStateStore {
     fn load(&mut self) -> Result<Option<kairos_execution::application::ExecutionSnapshot>, String> {
         Ok(self.snapshot.lock().unwrap().clone())
     }
@@ -2256,7 +2278,7 @@ fn restart_reconciles_uncertain_risk_saga_before_live_admission() {
 }
 
 #[test]
-fn missing_risk_mmap_evidence_keeps_live_admission_closed() {
+fn missing_risk_indexed_evidence_keeps_live_admission_closed() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
     let mut first = application(&path);
@@ -2293,7 +2315,7 @@ fn missing_risk_mmap_evidence_keeps_live_admission_closed() {
         health
             .risk_recovery_error
             .as_deref()
-            .is_some_and(|error| error.contains("Risk mmap has no reservation"))
+            .is_some_and(|error| error.contains("Risk indexed view has no reservation"))
     );
     let error = restored
         .prepare_submission(submit_order(
@@ -3174,21 +3196,7 @@ async fn conflux_managed_runtime_dispatches_due_twap_through_its_venue_connectio
             },
         )
         .unwrap();
-    for kind in [ExecutionViewKind::CurrentExecution] {
-        let key = ExecutionViewKey::from_identity(&identity, kind);
-        system
-            .outputs()
-            .mmap
-            .declare(
-                key.canonical_key(),
-                MmapOutputDeclaration {
-                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
-                    slot_capacity: 1024 * 1024,
-                    revision: 1,
-                },
-            )
-            .unwrap();
-    }
+    declare_execution_indexed_output(&mut system, directory.path(), &identity);
     let (conflux, handle) = Conflux::new(application, system, ConfluxConfig::default()).unwrap();
 
     tokio::task::LocalSet::new()
@@ -3363,21 +3371,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
             },
         )
         .unwrap();
-    for kind in [ExecutionViewKind::CurrentExecution] {
-        let key = ExecutionViewKey::from_identity(&identity, kind);
-        first_system
-            .outputs()
-            .mmap
-            .declare(
-                key.canonical_key(),
-                MmapOutputDeclaration {
-                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
-                    slot_capacity: 1024 * 1024,
-                    revision: 1,
-                },
-            )
-            .unwrap();
-    }
+    declare_execution_indexed_output(&mut first_system, directory.path(), &identity);
     let (first_conflux, first_handle) =
         Conflux::new(first, first_system, ConfluxConfig::default()).unwrap();
     let first_identity = identity.clone();
@@ -3539,21 +3533,7 @@ async fn managed_twap_response_loss_reconciles_by_query_after_restart() {
             },
         )
         .unwrap();
-    for kind in [ExecutionViewKind::CurrentExecution] {
-        let key = ExecutionViewKey::from_identity(&identity, kind);
-        restored_system
-            .outputs()
-            .mmap
-            .declare(
-                key.canonical_key(),
-                MmapOutputDeclaration {
-                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
-                    slot_capacity: 1024 * 1024,
-                    revision: 1,
-                },
-            )
-            .unwrap();
-    }
+    declare_execution_indexed_output(&mut restored_system, directory.path(), &identity);
     let (restored_conflux, restored_handle) =
         Conflux::new(restored, restored_system, ConfluxConfig::default()).unwrap();
     let restored_plan = ExecutionConnectionPlan {
@@ -3676,21 +3656,7 @@ async fn conflux_private_execution_event_preserves_explicit_order_identities_acr
     .unwrap();
 
     let mut system = ConfluxSystem::new();
-    for kind in [ExecutionViewKind::CurrentExecution] {
-        let key = ExecutionViewKey::from_identity(&identity, kind);
-        system
-            .outputs()
-            .mmap
-            .declare(
-                key.canonical_key(),
-                MmapOutputDeclaration {
-                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
-                    slot_capacity: 1024 * 1024,
-                    revision: 1,
-                },
-            )
-            .unwrap();
-    }
+    declare_execution_indexed_output(&mut system, directory.path(), &identity);
     system
         .outputs()
         .aeron
@@ -4014,21 +3980,7 @@ async fn managed_binance_private_stream_reconnects_and_converges_without_duplica
             },
         )
         .unwrap();
-    for kind in [ExecutionViewKind::CurrentExecution] {
-        let key = ExecutionViewKey::from_identity(&identity, kind);
-        system
-            .outputs()
-            .mmap
-            .declare(
-                key.canonical_key(),
-                MmapOutputDeclaration {
-                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
-                    slot_capacity: 1024 * 1024,
-                    revision: 1,
-                },
-            )
-            .unwrap();
-    }
+    declare_execution_indexed_output(&mut system, directory.path(), &identity);
     system
         .outputs()
         .aeron
@@ -4143,21 +4095,7 @@ async fn kairospy_explicit_algorithm_round_trips_through_execution_json_rpc() {
         )
         .unwrap();
     let mut system = ConfluxSystem::new();
-    for kind in [ExecutionViewKind::CurrentExecution] {
-        let key = ExecutionViewKey::from_identity(&identity, kind);
-        system
-            .outputs()
-            .mmap
-            .declare(
-                key.canonical_key(),
-                MmapOutputDeclaration {
-                    path: ExecutionViewPublisher::resolved_path(directory.path(), &key).unwrap(),
-                    slot_capacity: 1024 * 1024,
-                    revision: 1,
-                },
-            )
-            .unwrap();
-    }
+    declare_execution_indexed_output(&mut system, directory.path(), &identity);
     let (conflux, handle) = Conflux::new(application, system, ConfluxConfig::default()).unwrap();
     let methods = crate::application::ExecutionRpcService::<ExecutionApplication>::new(
         handle.rpc_actor_invocation(Duration::from_secs(5)),
@@ -4941,7 +4879,7 @@ fn staged_fallback_is_resumed_after_crash_with_the_same_route_and_action() {
             submissions: 2,
             fallback_outcome: FallbackOutcome::Confirmed,
         })),
-        Some(Box::new(SharedSnapshotStore {
+        Some(Box::new(SharedStateStore {
             snapshot: Arc::clone(&shared),
         })),
     )
@@ -5492,7 +5430,7 @@ fn staged_unwind_is_resumed_after_crash_without_creating_a_second_action() {
             submissions: 2,
             unwind_indeterminate: false,
         })),
-        Some(Box::new(SharedSnapshotStore {
+        Some(Box::new(SharedStateStore {
             snapshot: Arc::clone(&shared),
         })),
     )

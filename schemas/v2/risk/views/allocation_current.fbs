@@ -1,0 +1,12 @@
+include "../types/reservation.fbs";
+
+namespace kairos.risk.v2;
+
+table RiskAllocationCurrent {
+  actor_id:string (required);
+  reservation_id:string (required);
+  allocation:Allocation (required);
+}
+
+root_type RiskAllocationCurrent;
+file_identifier "RAL3";

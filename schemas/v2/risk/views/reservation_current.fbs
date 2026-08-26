@@ -1,0 +1,24 @@
+include "../types/reservation.fbs";
+
+namespace kairos.risk.v2;
+
+table RiskReservationState {
+  reservation_id:string (required);
+  request_id:string (required);
+  account_id:string;
+  strategy_id:string;
+  idempotency_key:string (required);
+  status:ReservationStatus = UNSPECIFIED;
+  created_at_unix_nanos:ulong;
+  updated_at_unix_nanos:ulong;
+  expires_at_unix_nanos:ulong;
+  policy_version:ulong;
+}
+
+table RiskReservationCurrent {
+  actor_id:string (required);
+  reservation:RiskReservationState (required);
+}
+
+root_type RiskReservationCurrent;
+file_identifier "RRS3";

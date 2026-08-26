@@ -104,7 +104,7 @@ class ExecutionApplication:
         self._decision_application = decisions
 
     def check_event_source_ready(self) -> None:
-        """Validate the configured Execution event source without reading mmap."""
+        """Validate the configured Execution event source without reading current state."""
 
         if self._event_source_ready:
             return
@@ -115,7 +115,7 @@ class ExecutionApplication:
         self._event_source_ready = True
 
     def commitments(self) -> tuple[OrderCommitment, ...]:
-        """Read Execution-owned capacity commitments from the typed mmap view."""
+        """Read Execution-owned capacity commitments from the indexed view."""
         if self._current_views is None:
             return ()
         return tuple(
@@ -126,7 +126,7 @@ class ExecutionApplication:
         )
 
     def risk_reservations(self) -> tuple[RiskReservationSaga, ...]:
-        """Read the persisted Risk reservation saga from the typed mmap view."""
+        """Read the persisted Risk reservation saga from the indexed view."""
         if self._current_views is None:
             return ()
         return tuple(

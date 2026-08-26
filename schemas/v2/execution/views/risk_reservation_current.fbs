@@ -1,0 +1,10 @@
+include "../types/order.fbs";
+
+namespace kairos.execution.v2;
+
+table ExecutionRiskReservationCurrent {
+  state:RiskReservationSagaState (required);
+}
+
+root_type ExecutionRiskReservationCurrent;
+file_identifier "ERR3";

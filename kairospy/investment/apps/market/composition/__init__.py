@@ -49,10 +49,14 @@ def build_strategy_access(
 
     if config.scope == "shared":
         event_socket = workspace.paths.process_socket("market-events")
-        snapshot = workspace.paths.child("snapshots", "market", "market-shared")
+        snapshot = workspace.paths.child("snapshots")
+        view_launch_id = None
+        view_instance_id = None
     else:
         event_socket = instance.socket("market-events")
-        snapshot = instance.snapshot("market", "market-shared")
+        snapshot = instance.snapshot()
+        view_launch_id = identity.launch_id
+        view_instance_id = identity.instance_id
 
     commands = MarketCommandClient(
         client.control,
@@ -68,7 +72,12 @@ def build_strategy_access(
     )
     application = MarketApplication(
         commands,
-        MarketViewAccess(snapshot),
+        MarketViewAccess(
+            snapshot,
+            workspace_id=workspace.identity.workspace_id,
+            launch_id=view_launch_id,
+            instance_id=view_instance_id,
+        ),
         event_source,
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,

@@ -5,12 +5,14 @@
 //! Standalone CLI commands must use `CliMarketApplication`.
 
 use kairos_market_contract::{
-    MarketClient, MarketCommandEnvelope, MarketCommandStatus, MarketControlRpcClient,
-    MarketDataRoutesQuery, MarketDataRoutesResponse, MarketHealthResponse, MarketSubscribePayload,
-    MarketSubscriptionResponse, MarketUnsubscribePayload, SnapshotEnvelopeMetadata, ViewMetadata,
+    IndexedViewMetadata, MarketClient, MarketCommandEnvelope, MarketCommandStatus,
+    MarketControlRpcClient, MarketDataRoutesQuery, MarketDataRoutesResponse, MarketHealthResponse,
+    MarketSubscribePayload, MarketSubscriptionResponse, MarketUnsubscribePayload, MarketViewKey,
+    MarketViewKind,
 };
 use kairos_primitives::market::{ObservationKind, Provider};
 use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::runtime::InstanceIdentity;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -38,7 +40,7 @@ pub struct MarketSnapshotResult {
 #[serde(untagged)]
 pub enum MarketSnapshotValue {
     Quote(MarketQuoteResult),
-    BarWindow(MarketBarWindowResult),
+    Bar(MarketBarResult),
     Greeks(MarketGreeksResult),
     Freshness(MarketFreshnessResult),
 }
@@ -81,13 +83,6 @@ pub struct MarketQuoteResult {
     pub source_observed_at_unix_nanos: u64,
     pub received_at_unix_nanos: u64,
     pub source_event_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MarketBarWindowResult {
-    pub shard_id: u32,
-    pub shard_count: u32,
-    pub bars: Vec<MarketBarResult>,
 }
 
 #[derive(Debug, Serialize)]
@@ -195,11 +190,26 @@ impl ConnectedMarketRouteQuery {
 
 pub struct ConnectedMarketApplication {
     client: MarketClient,
+    identity: InstanceIdentity,
 }
 
 impl ConnectedMarketApplication {
-    pub fn connect(client: MarketClient) -> Self {
-        Self { client }
+    pub fn connect(client: MarketClient, identity: InstanceIdentity) -> Self {
+        Self { client, identity }
+    }
+
+    fn indexed_snapshot(
+        &self,
+        market_id: &str,
+        provider: &str,
+        kind: MarketViewKind,
+        qualifier: Option<&str>,
+    ) -> Result<kairos_market_contract::MarketIndexedSnapshot, Box<dyn std::error::Error>> {
+        let key = MarketViewKey::new(market_id, provider, kind, qualifier.map(str::to_owned))?;
+        self.client
+            .indexed_current(&self.identity)?
+            .get(&key)?
+            .ok_or_else(|| "the Market runtime has not published this indexed value".into())
     }
 
     pub async fn health(&self) -> Result<MarketHealthResponse, Box<dyn std::error::Error>> {
@@ -286,13 +296,12 @@ impl ConnectedMarketApplication {
     ) -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
         let result = (|| -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
             let snapshot =
-                self.client
-                    .quote(market_id.clone(), provider.clone(), None::<String>)?;
-            let frame = snapshot.read()?;
-            let envelope = frame.envelope_metadata();
-            let view = frame.view()?;
-            let latest = view.quote();
-            let quote = latest.value();
+                self.indexed_snapshot(&market_id, &provider, MarketViewKind::Quote, None)?;
+            let envelope = snapshot.metadata();
+            let view = snapshot.value()?;
+            let quote = view
+                .quote()
+                .ok_or("Market quote indexed value is missing quote")?;
             Ok(snapshot_result(
                 "quote",
                 &market_id,
@@ -300,7 +309,7 @@ impl ConnectedMarketApplication {
                 None,
                 snapshot.key().canonical_key(),
                 envelope,
-                view_metadata_result(view.metadata()),
+                indexed_view_metadata_result(snapshot.key(), envelope),
                 true,
                 MarketSnapshotValue::Quote(MarketQuoteResult {
                     quote_id: quote.quote_id().map(str::to_owned),
@@ -315,7 +324,7 @@ impl ConnectedMarketApplication {
                     tape: quote.tape(),
                     source_observed_at_unix_nanos: quote.source_observed_at_unix_nanos(),
                     received_at_unix_nanos: quote.received_at_unix_nanos(),
-                    source_event_id: latest.source_event_id().to_owned(),
+                    source_event_id: snapshot.source_event_id()?.unwrap_or_default().to_owned(),
                 }),
             ))
         })();
@@ -331,38 +340,33 @@ impl ConnectedMarketApplication {
         timeframe: String,
     ) -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
         let result = (|| -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
-            let snapshot = self.client.bar_window(
-                market_id.clone(),
-                provider.clone(),
-                Some(timeframe.clone()),
+            let snapshot = self.indexed_snapshot(
+                &market_id,
+                &provider,
+                MarketViewKind::Bar,
+                Some(&timeframe),
             )?;
-            let frame = snapshot.read()?;
-            let envelope = frame.envelope_metadata();
-            let view = frame.view()?;
-            let bars = view
-                .bars()
-                .iter()
-                .map(|window| {
-                    let bar = window.value();
-                    MarketBarResult {
-                        instrument_id: bar.instrument_id().to_owned(),
-                        provider: bar.provider().to_owned(),
-                        bar_spec_id: bar.bar_spec_id().to_owned(),
-                        bar_kind: enum_name(bar.kind().variant_name()),
-                        window_start_unix_nanos: bar.window_start_unix_nanos(),
-                        window_end_unix_nanos: bar.window_end_unix_nanos(),
-                        open: decimal_result(Some(bar.open())),
-                        high: decimal_result(Some(bar.high())),
-                        low: decimal_result(Some(bar.low())),
-                        close: decimal_result(Some(bar.close())),
-                        volume: decimal_result(bar.volume()),
-                        source_observed_at_unix_nanos: bar.source_observed_at_unix_nanos(),
-                        received_at_unix_nanos: bar.received_at_unix_nanos(),
-                        source_event_id: window.source_event_id().to_owned(),
-                    }
-                })
-                .collect::<Vec<_>>();
-            let present = !bars.is_empty();
+            let envelope = snapshot.metadata();
+            let view = snapshot.value()?;
+            let bar = view
+                .bar()
+                .ok_or("Market bar indexed value is missing bar")?;
+            let bar = MarketBarResult {
+                instrument_id: bar.instrument_id().to_owned(),
+                provider: bar.provider().to_owned(),
+                bar_spec_id: bar.bar_spec_id().to_owned(),
+                bar_kind: enum_name(bar.kind().variant_name()),
+                window_start_unix_nanos: bar.window_start_unix_nanos(),
+                window_end_unix_nanos: bar.window_end_unix_nanos(),
+                open: decimal_result(Some(bar.open())),
+                high: decimal_result(Some(bar.high())),
+                low: decimal_result(Some(bar.low())),
+                close: decimal_result(Some(bar.close())),
+                volume: decimal_result(bar.volume()),
+                source_observed_at_unix_nanos: bar.source_observed_at_unix_nanos(),
+                received_at_unix_nanos: bar.received_at_unix_nanos(),
+                source_event_id: snapshot.source_event_id()?.unwrap_or_default().to_owned(),
+            };
             Ok(snapshot_result(
                 "bar",
                 &market_id,
@@ -370,13 +374,9 @@ impl ConnectedMarketApplication {
                 Some(&timeframe),
                 snapshot.key().canonical_key(),
                 envelope,
-                view_metadata_result(view.metadata()),
-                present,
-                MarketSnapshotValue::BarWindow(MarketBarWindowResult {
-                    shard_id: view.shard_id(),
-                    shard_count: view.shard_count(),
-                    bars,
-                }),
+                indexed_view_metadata_result(snapshot.key(), envelope),
+                true,
+                MarketSnapshotValue::Bar(bar),
             ))
         })();
         Ok(result.unwrap_or_else(|error| {
@@ -397,13 +397,12 @@ impl ConnectedMarketApplication {
     ) -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
         let result = (|| -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
             let snapshot =
-                self.client
-                    .greeks(market_id.clone(), provider.clone(), None::<String>)?;
-            let frame = snapshot.read()?;
-            let envelope = frame.envelope_metadata();
-            let view = frame.view()?;
-            let latest = view.greeks();
-            let greeks = latest.value();
+                self.indexed_snapshot(&market_id, &provider, MarketViewKind::Greeks, None)?;
+            let envelope = snapshot.metadata();
+            let view = snapshot.value()?;
+            let greeks = view
+                .greeks()
+                .ok_or("Market greeks indexed value is missing greeks")?;
             Ok(snapshot_result(
                 "greeks",
                 &market_id,
@@ -411,7 +410,7 @@ impl ConnectedMarketApplication {
                 None,
                 snapshot.key().canonical_key(),
                 envelope,
-                view_metadata_result(view.metadata()),
+                indexed_view_metadata_result(snapshot.key(), envelope),
                 true,
                 MarketSnapshotValue::Greeks(MarketGreeksResult {
                     instrument_id: greeks.instrument_id().to_owned(),
@@ -426,7 +425,7 @@ impl ConnectedMarketApplication {
                     source_observed_at_unix_nanos: greeks.source_observed_at_unix_nanos(),
                     received_at_unix_nanos: greeks.received_at_unix_nanos(),
                     derivation_id: greeks.derivation_id().map(str::to_owned),
-                    source_event_id: latest.source_event_id().to_owned(),
+                    source_event_id: snapshot.source_event_id()?.unwrap_or_default().to_owned(),
                 }),
             ))
         })();
@@ -442,13 +441,17 @@ impl ConnectedMarketApplication {
         qualifier: Option<String>,
     ) -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
         let result = (|| -> Result<MarketSnapshotResult, Box<dyn std::error::Error>> {
-            let snapshot =
-                self.client
-                    .freshness(market_id.clone(), provider.clone(), qualifier.clone())?;
-            let frame = snapshot.read()?;
-            let envelope = frame.envelope_metadata();
-            let view = frame.view()?;
-            let entry = view.entry();
+            let snapshot = self.indexed_snapshot(
+                &market_id,
+                &provider,
+                MarketViewKind::Freshness,
+                qualifier.as_deref(),
+            )?;
+            let envelope = snapshot.metadata();
+            let view = snapshot.value()?;
+            let entry = view
+                .freshness()
+                .ok_or("Market freshness indexed value is missing freshness")?;
             let status = entry
                 .status()
                 .variant_name()
@@ -461,7 +464,7 @@ impl ConnectedMarketApplication {
                 qualifier.as_deref(),
                 snapshot.key().canonical_key(),
                 envelope,
-                view_metadata_result(view.metadata()),
+                indexed_view_metadata_result(snapshot.key(), envelope),
                 true,
                 MarketSnapshotValue::Freshness(MarketFreshnessResult {
                     provider: entry.provider().to_owned(),
@@ -492,7 +495,7 @@ fn snapshot_result(
     provider: &str,
     qualifier: Option<&str>,
     view_key: String,
-    envelope: SnapshotEnvelopeMetadata,
+    envelope: &IndexedViewMetadata,
     view_metadata: MarketViewMetadataResult,
     present: bool,
     value: MarketSnapshotValue,
@@ -505,13 +508,13 @@ fn snapshot_result(
         view_key: Some(view_key),
         status: if present { "ready" } else { "not_found" },
         present,
-        generation: Some(envelope.generation),
+        generation: Some(envelope.applied_event_sequence),
         envelope_metadata: Some(MarketEnvelopeMetadataResult {
             resource_epoch: envelope.resource_epoch,
             producer_incarnation: envelope.producer_incarnation,
-            generation: envelope.generation,
+            generation: envelope.applied_event_sequence,
             applied_event_sequence: envelope.applied_event_sequence,
-            published_at_unix_nanos: envelope.published_at_unix_nanos,
+            published_at_unix_nanos: envelope.committed_at_unix_nanos,
         }),
         view_metadata: Some(view_metadata),
         value: Some(value),
@@ -589,12 +592,15 @@ fn decimal_result(
     })
 }
 
-fn view_metadata_result(metadata: ViewMetadata<'_>) -> MarketViewMetadataResult {
+fn indexed_view_metadata_result(
+    key: &MarketViewKey,
+    metadata: &IndexedViewMetadata,
+) -> MarketViewMetadataResult {
     MarketViewMetadataResult {
-        view_key: metadata.view_key().to_owned(),
-        generation: metadata.generation(),
-        applied_revision: metadata.applied_revision(),
-        completeness: enum_name(metadata.completeness().variant_name()),
+        view_key: key.canonical_key(),
+        generation: metadata.applied_event_sequence,
+        applied_revision: Some(metadata.applied_event_sequence),
+        completeness: "complete".into(),
     }
 }
 

@@ -1,7 +1,7 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::ProtocolContext;
-use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, ViewMetadata};
+use kairos_protocol::generated::kairos::common::v_2::EventMetadata;
 
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
@@ -26,24 +26,6 @@ impl EncodeContext {
             common: ProtocolContext::event(producer_id, identity, sequence, event_id)?,
         })
     }
-
-    pub fn view(
-        producer_id: impl Into<String>,
-        owner_id: impl Into<String>,
-        identity: InstanceIdentity,
-        generation: u64,
-        resource_id: impl Into<String>,
-    ) -> Result<Self, String> {
-        Ok(Self {
-            common: ProtocolContext::view(
-                producer_id,
-                owner_id,
-                identity,
-                generation,
-                resource_id,
-            )?,
-        })
-    }
 }
 
 pub fn event_metadata<'a, A: Allocator + 'a>(
@@ -56,23 +38,5 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
         context,
         "execution.events",
         occurred_at_unix_nanos,
-    )
-}
-
-pub fn view_metadata<'a, A: Allocator + 'a>(
-    builder: &mut FlatBufferBuilder<'a, A>,
-    context: &EncodeContext,
-    key: &crate::ExecutionViewKey,
-    as_of_unix_nanos: u64,
-    applied_revision: u64,
-) -> WIPOffset<ViewMetadata<'a>> {
-    let canonical_key = key.canonical_key();
-    kairos_protocol::metadata::view_metadata(
-        builder,
-        context,
-        &format!("{canonical_key}:{}", context.generation),
-        &canonical_key,
-        as_of_unix_nanos,
-        Some(applied_revision),
     )
 }

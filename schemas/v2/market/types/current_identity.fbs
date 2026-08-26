@@ -1,0 +1,9 @@
+namespace kairos.market.v2;
+
+table MarketCurrentIdentity {
+  scope_key:string (required);
+  provider:string (required);
+  qualifier:string;
+  source_event_id:string;
+  synchronized:bool;
+}

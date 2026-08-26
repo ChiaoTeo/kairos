@@ -3,8 +3,8 @@ use kairos_execution_contract::{
     CompletionPolicy, ExecutionAlgorithmPolicyRequest, ExecutionHealthResponse,
     ExecutionIntentRequest, ExecutionOrderAuditEventResponse, ExecutionOrderAuditQuery,
     ExecutionOrderAuditResponse, ExecutionOrderLifecycle, ExecutionOrderOptionsRequest,
-    ExecutionRouteCandidateResponse, ExecutionViewKey, ExecutionViewKind, FailurePolicy,
-    IntentType, SplitOrderPolicyRequest, execution_view_path,
+    ExecutionRouteCandidateResponse, FailurePolicy, IntentType, SplitOrderPolicyRequest,
+    execution_indexed_environment_path, execution_indexed_identity,
 };
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::Quantity;
@@ -12,59 +12,28 @@ use kairos_primitives::execution::{
     ExecutionChannelCode, ExecutionRouteId, IntentId, OrderEntrySymbol, OrderOptionCode, OrderType,
 };
 use kairos_primitives::reference::{InstrumentId, MarketId};
-use kairos_primitives::runtime::{InstanceId, LaunchId, StrategyId};
+use kairos_primitives::runtime::{InstanceId, InstanceIdentity, LaunchId, StrategyId};
 
 #[test]
-fn current_view_resources_are_partitioned_by_runtime_identity() {
-    let first = ExecutionViewKey::new(
-        "workspace:fixture",
-        ExecutionViewKind::CurrentExecution,
-        Some("launch:one"),
-        Some("instance:one"),
-    )
-    .unwrap();
-    let second = ExecutionViewKey::new(
-        "workspace:fixture",
-        ExecutionViewKind::CurrentExecution,
-        Some("launch:one"),
-        Some("instance:two"),
-    )
-    .unwrap();
-    assert_ne!(
-        execution_view_path("/runtime", &first).unwrap(),
-        execution_view_path("/runtime", &second).unwrap()
-    );
-    assert!(execution_view_path("/runtime", &first).unwrap().ends_with(
-        "launch=launch%3Aone/instance=instance%3Aone/current-execution/current.snapshot"
-    ));
-}
-
-#[test]
-fn canonical_view_key_contains_runtime_identity() {
-    let key = ExecutionViewKey::new(
-        "workspace:fixture",
-        ExecutionViewKind::CurrentExecution,
-        Some("launch:one"),
-        Some("instance:one"),
-    )
-    .unwrap();
-    assert_eq!(
-        key.canonical_key(),
-        "workspace=workspace:fixture;launch=launch:one;instance=instance:one;view=current-execution"
-    );
-}
-
-#[test]
-fn empty_workspace_identity_is_rejected() {
+fn indexed_current_view_has_one_epoch_specific_owner_path() {
+    let identity =
+        InstanceIdentity::new("workspace:fixture", "launch:one", "instance:one").unwrap();
     assert!(
-        ExecutionViewKey::new(
-            " ",
-            ExecutionViewKind::CurrentExecution,
-            None::<String>,
-            None::<String>,
-        )
-        .is_err()
+        execution_indexed_environment_path("/runtime", &identity)
+            .unwrap()
+            .ends_with("views/v3/Execution/execution-main/epoch-1/current.lmdb")
     );
+}
+
+#[test]
+fn indexed_identity_contains_the_complete_runtime_identity() {
+    let runtime = InstanceIdentity::new("workspace:fixture", "launch:one", "instance:one").unwrap();
+    let identity = execution_indexed_identity(&runtime, 9);
+    assert_eq!(identity.workspace_id, "workspace:fixture");
+    assert_eq!(identity.launch_id.as_deref(), Some("launch:one"));
+    assert_eq!(identity.instance_id.as_deref(), Some("instance:one"));
+    assert_eq!(identity.owner, "Execution");
+    assert_eq!(identity.producer_incarnation, 9);
 }
 
 #[test]

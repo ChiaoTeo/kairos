@@ -1,5 +1,3 @@
-use std::path::{Path, PathBuf};
-
 use kairos_primitives::market::Provider;
 
 use crate::{ContractError, ContractResult};
@@ -7,7 +5,7 @@ use crate::{ContractError, ContractResult};
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum MarketViewKind {
     Quote,
-    BarWindow,
+    Bar,
     Greeks,
     Rate,
     Ticker24h,
@@ -23,7 +21,7 @@ impl MarketViewKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Quote => "quote",
-            Self::BarWindow => "bar",
+            Self::Bar => "bar",
             Self::Greeks => "greeks",
             Self::Rate => "rate",
             Self::Ticker24h => "ticker-24h",
@@ -76,34 +74,4 @@ impl MarketViewKey {
             self.qualifier.as_deref().unwrap_or("")
         )
     }
-
-    pub(crate) fn resource_path(&self, root: impl AsRef<Path>) -> PathBuf {
-        root.as_ref()
-            .join(format!("{}.e1.mmap", self.resource_id()))
-    }
-
-    pub fn resource_id(&self) -> String {
-        let qualifier = self.qualifier.as_deref().unwrap_or("none");
-        format!(
-            "scope-{}-{}-{}-{}",
-            component(&self.scope_key),
-            component(&self.provider),
-            self.kind.as_str(),
-            component(qualifier)
-        )
-    }
-}
-
-fn component(value: &str) -> String {
-    value
-        .as_bytes()
-        .iter()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
-                format!("{}", *byte as char)
-            } else {
-                format!("%{byte:02X}")
-            }
-        })
-        .collect()
 }

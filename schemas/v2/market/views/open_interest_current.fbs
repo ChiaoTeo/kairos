@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/open_interest.fbs";
+
+namespace kairos.market.v2;
+
+table MarketOpenInterestCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:OpenInterest (required);
+}
+
+root_type MarketOpenInterestCurrent;
+file_identifier "MOI3";

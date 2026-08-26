@@ -17,6 +17,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ROOT / "schemas"
 REGISTRY = SCHEMAS / "v2" / "registry.md"
+INDEXED_CURRENT_VALUE_IDENTIFIERS = {
+    "EOR3", "EIN3", "EAR3", "ECO3", "ERR3", "EUR3",
+    "ASG3", "ABA3", "ACO3", "APO3", "AVL3", "AEH3", "AOO3",
+    "RSM3", "RPO3", "RLU3", "RAL3", "RRS3", "RCI3",
+    "CSM3", "CFO3", "CDM3", "CPC3", "CFC3", "CAV3", "CRT3", "CPL3",
+    "CRS3", "COP3", "CAL3",
+    "MQC3", "MBC3", "MGC3", "MRC3", "MTC3", "MMP3", "MFR3",
+    "MOI3", "MIP3", "MOB3", "MFS3",
+}
 
 INCLUDE_RE = re.compile(r'^include\s+"([^"]+)";')
 NAMESPACE_RE = re.compile(r'^namespace\s+([^;]+);')
@@ -67,7 +76,12 @@ def main() -> int:
         owner = relative[0]
         if "/events/" in path.as_posix() and "../../common/metadata.fbs" not in includes and "../../../common/metadata.fbs" not in includes:
             fail(errors, f"event root does not include common metadata: {path.relative_to(ROOT)}")
-        if "/views/" in path.as_posix() and "../../common/metadata.fbs" not in includes and "../common/metadata.fbs" not in includes:
+        if (
+            "/views/" in path.as_posix()
+            and identifier not in INDEXED_CURRENT_VALUE_IDENTIFIERS
+            and "../../common/metadata.fbs" not in includes
+            and "../common/metadata.fbs" not in includes
+        ):
             fail(errors, f"view root does not include common metadata: {path.relative_to(ROOT)}")
         if owner == "system":
             for include in includes:

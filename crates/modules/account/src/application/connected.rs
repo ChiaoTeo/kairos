@@ -4,13 +4,16 @@
 //! current views or call typed Account runtime control. Standalone Account CLI
 //! commands must use `CliAccountApplication`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use kairos_account_contract::{
     AccountClient, AccountCommandStatus, AccountControlRpcClient, AccountRefreshResponse,
     AccountSegmentsRequest, SimulatedSettlement,
 };
-use kairos_protocol::generated::kairos::common::v_2::{Decimal64, ViewCompleteness};
+use kairos_primitives::account::AccountId;
+use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::generated::kairos::common::v_2::Decimal64;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -120,6 +123,7 @@ pub struct AccountEarnHoldingResult {
 
 pub struct ConnectedAccountApplication {
     client: AccountClient,
+    identity: InstanceIdentity,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,13 +139,14 @@ impl ConnectedAccountApplication {
     pub fn connect(
         socket: PathBuf,
         view_root: Option<PathBuf>,
+        identity: InstanceIdentity,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut system = kairos_conflux::ConfluxSystem::new();
         system.install_account_connection("account", socket, view_root)?;
         let client = system
             .account_client("account")
             .ok_or("managed Account client is missing: account")?;
-        Ok(Self { client })
+        Ok(Self { client, identity })
     }
 
     pub async fn apply_simulated_settlement(
@@ -210,55 +215,43 @@ impl ConnectedAccountApplication {
         symbol: Option<&str>,
         limit: Option<usize>,
     ) -> Result<AccountObservedOrdersResult, Box<dyn std::error::Error>> {
-        let frame = self
+        let account_id_value = AccountId::new(account_id)?;
+        let view = self
             .client
-            .observed_orders(format!("account:{account_id}"), account_id)?
-            .read()?;
-        let view = frame.view()?;
-        let metadata = view.metadata();
-        if view.account_id() != account_id
-            || metadata.completeness() != ViewCompleteness::COMPLETE
-            || metadata.generation() != frame.generation()
-            || metadata.applied_revision() != Some(frame.envelope_metadata().applied_event_sequence)
-        {
-            return Err(
-                "Account observed-orders mmap identity, completeness, or watermark mismatch".into(),
-            );
-        }
+            .indexed_current(&self.identity, account_id_value)?;
+        let snapshot = view.snapshot()?;
+        let metadata = snapshot.metadata();
         let mut orders = Vec::new();
-        for segment in view.segments() {
-            for order in segment.orders() {
-                if symbol.is_some_and(|needle| {
-                    !order.instrument_id().eq_ignore_ascii_case(needle)
-                        && !order.market_id().eq_ignore_ascii_case(needle)
-                }) {
-                    continue;
-                }
-                orders.push(AccountObservedOrderResult {
-                    segment_key: segment.segment_key().to_owned(),
-                    observation_id: order.observation_id().to_owned(),
-                    source_id: order.source_id().to_owned(),
-                    execution_order_id: order.execution_order_id().map(str::to_owned),
-                    remote_order_id: order.remote_order_id().map(str::to_owned),
-                    instrument_id: order.instrument_id().to_owned(),
-                    market_id: order.market_id().to_owned(),
-                    side: enum_name(order.side().variant_name()),
-                    quantity: decimal_text(order.quantity()),
-                    filled_quantity: decimal_text(order.filled_quantity()),
-                    status: enum_name(order.status().variant_name()),
-                    observed_at_unix_nanos: order.observed_at_unix_nanos(),
-                });
-                if limit.is_some_and(|limit| orders.len() >= limit) {
-                    break;
-                }
+        for value in snapshot.observed_orders() {
+            let current = value.observed_order()?;
+            let order = current.order();
+            if symbol.is_some_and(|needle| {
+                !order.instrument_id().eq_ignore_ascii_case(needle)
+                    && !order.market_id().eq_ignore_ascii_case(needle)
+            }) {
+                continue;
             }
+            orders.push(AccountObservedOrderResult {
+                segment_key: current.segment_key().to_owned(),
+                observation_id: order.observation_id().to_owned(),
+                source_id: order.source_id().to_owned(),
+                execution_order_id: order.execution_order_id().map(str::to_owned),
+                remote_order_id: order.remote_order_id().map(str::to_owned),
+                instrument_id: order.instrument_id().to_owned(),
+                market_id: order.market_id().to_owned(),
+                side: enum_name(order.side().variant_name()),
+                quantity: decimal_text(order.quantity()),
+                filled_quantity: decimal_text(order.filled_quantity()),
+                status: enum_name(order.status().variant_name()),
+                observed_at_unix_nanos: order.observed_at_unix_nanos(),
+            });
             if limit.is_some_and(|limit| orders.len() >= limit) {
                 break;
             }
         }
         Ok(AccountObservedOrdersResult {
             account_id: account_id.to_owned(),
-            generation: frame.generation(),
+            generation: metadata.applied_event_sequence,
             orders,
         })
     }
@@ -271,23 +264,16 @@ impl ConnectedAccountApplication {
         include_zero: bool,
         balance_page: Option<(usize, usize)>,
     ) -> Result<AccountCurrentResult, Box<dyn std::error::Error>> {
-        let frame = self
+        let account_id_value = AccountId::new(account_id)?;
+        let view = self
             .client
-            .account_current(format!("account:{account_id}"), account_id)?
-            .read()?;
-        let view = frame.view()?;
-        let metadata = view.metadata();
-        if view.account_id() != account_id
-            || metadata.completeness() != ViewCompleteness::COMPLETE
-            || metadata.generation() != frame.generation()
-            || metadata.applied_revision() != Some(frame.envelope_metadata().applied_event_sequence)
-        {
-            return Err(
-                "Account current mmap identity, completeness, or watermark mismatch".into(),
-            );
-        }
-        let mut segments = Vec::new();
-        for segment in view.segments() {
+            .indexed_current(&self.identity, account_id_value)?;
+        let snapshot = view.snapshot()?;
+        let metadata = snapshot.metadata();
+        let mut segments = BTreeMap::new();
+        for value in snapshot.segments() {
+            let current = value.segment()?;
+            let segment = current.state();
             if !segment_filter.is_empty()
                 && !segment_filter
                     .iter()
@@ -295,58 +281,86 @@ impl ConnectedAccountApplication {
             {
                 continue;
             }
-            let balances = segment
-                .balances()
-                .iter()
-                .filter(|balance| include_zero || balance.total().mantissa() != 0)
-                .map(|balance| AccountBalanceResult {
-                    asset_id: balance.asset_id().to_owned(),
-                    asset_code: balance.asset_code().map(str::to_owned),
-                    total: decimal_text(balance.total()),
-                    available: optional_decimal(balance.available()),
-                    locked: optional_decimal(balance.locked()),
-                    borrowed: optional_decimal(balance.borrowed()),
-                    interest: optional_decimal(balance.interest()),
-                })
-                .collect::<Vec<_>>();
-            let collateral = segment
-                .collateral()
-                .iter()
-                .filter(|balance| include_zero || balance.total().mantissa() != 0)
-                .map(|balance| AccountBalanceResult {
-                    asset_id: balance.asset_id().to_owned(),
-                    asset_code: balance.asset_code().map(str::to_owned),
-                    total: decimal_text(balance.total()),
-                    available: optional_decimal(balance.available()),
-                    locked: optional_decimal(balance.locked()),
-                    borrowed: optional_decimal(balance.borrowed()),
-                    interest: optional_decimal(balance.interest()),
-                })
-                .collect::<Vec<_>>();
-            let positions = segment
-                .positions()
-                .iter()
-                .filter(|position| {
-                    symbol_filter.is_none_or(|needle| {
-                        position.instrument_id().eq_ignore_ascii_case(needle)
-                            || position.market_id().eq_ignore_ascii_case(needle)
-                    })
-                })
-                .map(|position| AccountPositionResult {
-                    instrument_id: position.instrument_id().to_owned(),
-                    market_id: position.market_id().to_owned(),
-                    quantity: decimal_text(position.quantity()),
-                    average_price: optional_decimal(position.average_price()),
-                    mark_price: optional_decimal(position.mark_price()),
-                    unrealized_pnl: optional_decimal(position.unrealized_pnl()),
-                    realized_pnl: optional_decimal(position.realized_pnl()),
-                    observed_at_unix_nanos: position.observed_at_unix_nanos(),
-                })
-                .collect::<Vec<_>>();
-            let earn_holdings = segment
-                .earn_holdings()
-                .iter()
-                .map(|holding| AccountEarnHoldingResult {
+            segments.insert(
+                segment.segment_key().to_owned(),
+                AccountSegmentResult {
+                    segment_key: segment.segment_key().to_owned(),
+                    environment: segment.environment().to_owned(),
+                    broker: segment.broker().to_owned(),
+                    configured_account_model: enum_name(
+                        segment.configured_account_model().variant_name(),
+                    ),
+                    observed_account_model: enum_name(
+                        segment.observed_account_model().variant_name(),
+                    ),
+                    margin_mode: enum_name(segment.margin_mode().variant_name()),
+                    position_mode: enum_name(segment.position_mode().variant_name()),
+                    status: enum_name(segment.status().variant_name()),
+                    freshness: enum_name(segment.freshness().variant_name()),
+                    sync_mode: enum_name(segment.sync_mode().variant_name()),
+                    sync_lifecycle: enum_name(segment.sync_lifecycle().variant_name()),
+                    completeness: enum_name(segment.completeness().variant_name()),
+                    snapshot_watermark: segment.snapshot_watermark(),
+                    event_watermark: segment.event_watermark(),
+                    channel_epoch: segment.channel_epoch(),
+                    last_event_at_unix_nanos: segment.last_event_at_unix_nanos(),
+                    last_success_at_unix_nanos: segment.last_success_at_unix_nanos(),
+                    last_error: segment.last_error().map(str::to_owned),
+                    recovery_buffer_depth: segment.recovery_buffer_depth(),
+                    observed_at_unix_nanos: segment.observed_at_unix_nanos(),
+                    state_generation: segment.state_generation(),
+                    balances: Vec::new(),
+                    collateral: Vec::new(),
+                    positions: Vec::new(),
+                    earn_holdings: Vec::new(),
+                    earn_watermark_unix_nanos: segment.earn_watermark_unix_nanos(),
+                },
+            );
+        }
+        for value in snapshot.balances() {
+            let current = value.balance()?;
+            let balance = current.balance();
+            if include_zero || balance.total().mantissa() != 0 {
+                if let Some(segment) = segments.get_mut(current.segment_key()) {
+                    segment.balances.push(balance_result(balance));
+                }
+            }
+        }
+        for value in snapshot.collateral() {
+            let current = value.collateral()?;
+            let balance = current.balance();
+            if include_zero || balance.total().mantissa() != 0 {
+                if let Some(segment) = segments.get_mut(current.segment_key()) {
+                    segment.collateral.push(balance_result(balance));
+                }
+            }
+        }
+        for value in snapshot.positions() {
+            let current = value.position()?;
+            let position = current.position();
+            if symbol_filter.is_none_or(|needle| {
+                position.instrument_id().eq_ignore_ascii_case(needle)
+                    || position.market_id().eq_ignore_ascii_case(needle)
+            }) {
+                if let Some(segment) = segments.get_mut(current.segment_key()) {
+                    segment.positions.push(AccountPositionResult {
+                        instrument_id: position.instrument_id().to_owned(),
+                        market_id: position.market_id().to_owned(),
+                        quantity: decimal_text(position.quantity()),
+                        average_price: optional_decimal(position.average_price()),
+                        mark_price: optional_decimal(position.mark_price()),
+                        unrealized_pnl: optional_decimal(position.unrealized_pnl()),
+                        realized_pnl: optional_decimal(position.realized_pnl()),
+                        observed_at_unix_nanos: position.observed_at_unix_nanos(),
+                    });
+                }
+            }
+        }
+        for value in snapshot.earn_holdings() {
+            let current = value.earn_holding()?;
+            let holding = current.holding();
+            if let Some(segment) = segments.get_mut(current.segment_key()) {
+                segment.earn_holdings.push(AccountEarnHoldingResult {
                     holding_key: holding.holding_key().to_owned(),
                     participant_position_id: holding.participant_position_id().map(str::to_owned),
                     product_id: holding.product_id().to_owned(),
@@ -359,47 +373,23 @@ impl ConnectedAccountApplication {
                     notice_seconds: holding.notice_seconds(),
                     matures_at_unix_nanos: holding.matures_at_unix_nanos(),
                     observed_at_unix_nanos: holding.observed_at_unix_nanos(),
-                })
-                .collect::<Vec<_>>();
-            segments.push(AccountSegmentResult {
-                segment_key: segment.segment_key().to_owned(),
-                environment: segment.environment().to_owned(),
-                broker: segment.broker().to_owned(),
-                configured_account_model: enum_name(
-                    segment.configured_account_model().variant_name(),
-                ),
-                observed_account_model: enum_name(segment.observed_account_model().variant_name()),
-                margin_mode: enum_name(segment.margin_mode().variant_name()),
-                position_mode: enum_name(segment.position_mode().variant_name()),
-                status: enum_name(segment.status().variant_name()),
-                freshness: enum_name(segment.freshness().variant_name()),
-                sync_mode: enum_name(segment.sync_mode().variant_name()),
-                sync_lifecycle: enum_name(segment.sync_lifecycle().variant_name()),
-                completeness: enum_name(segment.completeness().variant_name()),
-                snapshot_watermark: segment.snapshot_watermark(),
-                event_watermark: segment.event_watermark(),
-                channel_epoch: segment.channel_epoch(),
-                last_event_at_unix_nanos: segment.last_event_at_unix_nanos(),
-                last_success_at_unix_nanos: segment.last_success_at_unix_nanos(),
-                last_error: segment.last_error().map(str::to_owned),
-                recovery_buffer_depth: segment.recovery_buffer_depth(),
-                observed_at_unix_nanos: segment.observed_at_unix_nanos(),
-                state_generation: segment.state_generation(),
-                balances,
-                collateral,
-                positions,
-                earn_holdings,
-                earn_watermark_unix_nanos: segment.earn_watermark_unix_nanos(),
-            });
+                });
+            }
         }
+        let generation = segments
+            .values()
+            .map(|segment| segment.state_generation)
+            .max()
+            .unwrap_or_default();
+        let segments = segments.into_values().collect();
         let (page, page_size) = balance_page.map_or((None, None), |(page, page_size)| {
             (Some(page), Some(page_size))
         });
         Ok(AccountCurrentResult {
             account_id: account_id.to_owned(),
-            generation: frame.generation(),
-            event_sequence: frame.envelope_metadata().applied_event_sequence,
-            producer_incarnation: frame.envelope_metadata().producer_incarnation,
+            generation,
+            event_sequence: metadata.applied_event_sequence,
+            producer_incarnation: metadata.producer_incarnation,
             segments,
             page,
             page_size,
@@ -426,6 +416,20 @@ fn decimal_text(value: &Decimal64) -> String {
 
 fn optional_decimal(value: Option<&Decimal64>) -> Option<String> {
     value.map(decimal_text)
+}
+
+fn balance_result(
+    balance: kairos_protocol::generated::kairos::account::v_2::Balance<'_>,
+) -> AccountBalanceResult {
+    AccountBalanceResult {
+        asset_id: balance.asset_id().to_owned(),
+        asset_code: balance.asset_code().map(str::to_owned),
+        total: decimal_text(balance.total()),
+        available: optional_decimal(balance.available()),
+        locked: optional_decimal(balance.locked()),
+        borrowed: optional_decimal(balance.borrowed()),
+        interest: optional_decimal(balance.interest()),
+    }
 }
 
 fn enum_name(value: Option<&str>) -> String {

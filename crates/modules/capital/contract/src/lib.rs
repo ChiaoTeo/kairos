@@ -21,7 +21,6 @@ pub use event::{
 };
 pub type CapitalConnection = kairos_protocol::ContractClient;
 pub use kairos_transport::AeronEndpoint;
-use kairos_transport::SnapshotEnvelopeMetadata;
 pub const CAPITAL_EVENTS_STREAM_ID: i32 = kairos_transport::stream_ids::CAPITAL_EVENTS;
 pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
 pub use control::{
@@ -33,16 +32,22 @@ pub use control::{
     ReconcileCapitalPlanRequest, ReconcileCapitalPlanResponse,
 };
 pub use current::{
-    CapitalAlert, CapitalAlertKind, CapitalAlertSeverity, CapitalAvailability, CapitalCurrentView,
-    CapitalDemand, CapitalDemandLifecycleStatus, CapitalEarnHolding, CapitalFacts,
-    CapitalFundingHorizon, CapitalOperation, CapitalOperationKind, CapitalOperationStatus,
-    CapitalPlan, CapitalPlanStatus, CapitalPolicy, CapitalReadiness, CapitalRecoveryAction,
-    CapitalReservation, CapitalReservationStatus, CapitalRoute, CapitalRouteKind,
-    CapitalSettlementClass, FundingObjective, FundingObjectiveLifecycleStatus, FundingPriority,
+    CapitalAlert, CapitalAlertKind, CapitalAlertSeverity, CapitalAvailability,
+    CapitalCurrentRecords, CapitalDemand, CapitalDemandLifecycleStatus, CapitalEarnHolding,
+    CapitalFacts, CapitalFundingHorizon, CapitalOperation, CapitalOperationKind,
+    CapitalOperationStatus, CapitalPlan, CapitalPlanStatus, CapitalPolicy, CapitalReadiness,
+    CapitalRecoveryAction, CapitalReservation, CapitalReservationStatus, CapitalRoute,
+    CapitalRouteKind, CapitalSettlementClass, FundingObjective, FundingObjectiveLifecycleStatus,
+    FundingPriority,
 };
 pub use view::{
-    CapitalViewFrame, CapitalViewKey, CapitalViewPublisher, FlatbuffersCapitalViewWriter,
-    MmapCapitalViewPublisher, capital_view_path,
+    CAPITAL_ALERTS_DATABASE, CAPITAL_AVAILABILITY_DATABASE, CAPITAL_DEMANDS_DATABASE,
+    CAPITAL_FACTS_DATABASE, CAPITAL_MAP_SIZE, CAPITAL_OBJECTIVES_DATABASE,
+    CAPITAL_OPERATIONS_DATABASE, CAPITAL_PLANS_DATABASE, CAPITAL_POLICIES_DATABASE,
+    CAPITAL_RESERVATIONS_DATABASE, CAPITAL_RESOURCE_EPOCH, CAPITAL_ROUTES_DATABASE,
+    CAPITAL_STATE_DATABASE, CapitalIndexedEntity, CapitalIndexedSnapshot, CapitalIndexedView,
+    capital_indexed_environment_path, capital_indexed_identity, capital_indexed_key,
+    capital_indexed_schema_set, encode_indexed_current, location_key,
 };
 
 /// Unified public entry point for the Capital contract.
@@ -69,55 +74,17 @@ impl CapitalClient {
         )
     }
 
-    pub fn current(&self, capital_group_id: impl Into<String>) -> ContractResult<CapitalCurrent> {
-        CapitalCurrent::open(
-            self.require_view_root()?,
-            CapitalViewKey::current(capital_group_id),
-        )
+    pub fn indexed_current(
+        &self,
+        identity: &kairos_primitives::runtime::InstanceIdentity,
+        capital_group_id: kairos_primitives::capital::CapitalGroupId,
+    ) -> ContractResult<CapitalIndexedView> {
+        CapitalIndexedView::open(self.require_view_root()?, identity, capital_group_id)
     }
 
     fn require_view_root(&self) -> ContractResult<&Path> {
         self.inner
             .require_view_root()
             .map_err(|error| ContractError::Transport(error.to_string()))
-    }
-}
-
-pub struct CapitalCurrent {
-    reader: view::CapitalViewReader,
-}
-
-impl CapitalCurrent {
-    fn open(root: &Path, key: CapitalViewKey) -> ContractResult<Self> {
-        Ok(Self {
-            reader: view::CapitalViewReader::open(root, key)?,
-        })
-    }
-
-    pub fn read(&self) -> ContractResult<CapitalCurrentSnapshot> {
-        Ok(CapitalCurrentSnapshot {
-            frame: self.reader.read()?,
-        })
-    }
-
-    pub fn key(&self) -> &CapitalViewKey {
-        self.reader.key()
-    }
-}
-
-pub struct CapitalCurrentSnapshot {
-    frame: CapitalViewFrame,
-}
-
-impl CapitalCurrentSnapshot {
-    pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
-        self.frame.envelope_metadata()
-    }
-
-    pub fn view(
-        &self,
-    ) -> ContractResult<kairos_protocol::generated::kairos::capital::v_2::CapitalCurrentView<'_>>
-    {
-        self.frame.decode()
     }
 }

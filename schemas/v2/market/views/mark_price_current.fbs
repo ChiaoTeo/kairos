@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/mark_price.fbs";
+
+namespace kairos.market.v2;
+
+table MarketMarkPriceCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:MarkPrice (required);
+}
+
+root_type MarketMarkPriceCurrent;
+file_identifier "MMP3";

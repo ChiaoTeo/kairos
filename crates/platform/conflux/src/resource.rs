@@ -323,7 +323,7 @@ pub struct ManagedConnections<K, C> {
 }
 
 /// One named, concrete transport resource such as a typed Aeron stream or
-/// contract-owned mmap reader/publisher. `R` is never erased.
+/// contract-owned indexed reader/publisher. `R` is never erased.
 pub struct ManagedResource<R> {
     resource: R,
     revision: u64,
@@ -432,7 +432,7 @@ where
     }
 
     /// Runs one operation against a named resource and records operational
-    /// readiness consistently for every concrete mmap/Aeron Contract type.
+    /// readiness consistently for every concrete indexed/Aeron Contract type.
     pub fn try_with<T, E>(
         &mut self,
         key: &K,

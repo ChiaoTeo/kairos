@@ -14,14 +14,11 @@ flatbuffers.workspace = true
 futures-core.workspace = true
 kairos-primitives.workspace = true
 kairos-protocol.workspace = true
+kairos-indexed-view.workspace = true
 kairos-transport.workspace = true
-kairos-workspace.workspace = true
 jsonrpsee.workspace = true
 reqwest = { workspace = true, features = ["blocking", "gzip", "rustls"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-stream.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

@@ -18,7 +18,9 @@ use kairos_market::{
 use kairos_market_contract::{MarketClient, MarketConnection};
 use kairos_primitives::market::{ObservationKind, Provider, SubscriptionId};
 use kairos_primitives::reference::{InstrumentId, InstrumentKind, MarketId};
-use kairos_primitives::runtime::{IdempotencyKey, InstanceId, RequestId, StrategyId};
+use kairos_primitives::runtime::{
+    IdempotencyKey, InstanceId, InstanceIdentity, RequestId, StrategyId,
+};
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render, render_compact_table};
 use serde::Serialize;
@@ -442,31 +444,31 @@ fn connected_market_app(
     workspace_root: Option<&PathBuf>,
     require_views: bool,
 ) -> Result<ConnectedMarketApplication, Box<dyn std::error::Error>> {
+    let workspace_root = workspace_root.ok_or(
+        "connected mode requires --workspace, --launch-id, and --instance-id to select an instance",
+    )?;
+    let workspace = Workspace::open(workspace_root)?;
+    let instance =
+        workspace.instance(&target.launch_mode, &target.launch_id, &target.instance_id)?;
     let socket = match target.socket {
         Some(socket) => socket,
-        None => {
-            let workspace_root = workspace_root.ok_or(
-                "connected mode requires --socket or --workspace to select a Market server",
-            )?;
-            Workspace::open(workspace_root)?.process_socket("market")?
-        },
+        None => instance.socket("market")?,
     };
     let connection = MarketConnection::control_only(socket);
     let connection = if require_views {
         match target.view_root {
             Some(view_root) => connection.with_view_root(view_root),
-            None => {
-                let workspace_root = workspace_root
-                    .ok_or("connected current-view reads require --view-root or --workspace")?;
-                connection.with_view_root(Workspace::open(workspace_root)?.root().join("snapshots"))
-            },
+            None => connection.with_view_root(instance.snapshot(&[])?),
         }
     } else {
         connection
     };
-    Ok(ConnectedMarketApplication::connect(MarketClient::connect(
-        connection,
-    )))
+    let identity =
+        InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id())?;
+    Ok(ConnectedMarketApplication::connect(
+        MarketClient::connect(connection),
+        identity,
+    ))
 }
 
 fn read_connected_snapshot(
@@ -636,6 +638,12 @@ enum ConnectedCommand {
 
 #[derive(Clone, Debug, Args)]
 struct ConnectedTargetArgs {
+    #[arg(long, default_value = "live")]
+    launch_mode: String,
+    #[arg(long)]
+    launch_id: String,
+    #[arg(long)]
+    instance_id: String,
     #[arg(long)]
     socket: Option<PathBuf>,
     #[arg(long)]
@@ -1115,6 +1123,10 @@ mod tests {
             "kairos-market-cli",
             "connected",
             "routes",
+            "--launch-id",
+            "launch",
+            "--instance-id",
+            "instance",
             "--socket",
             "/tmp/market.sock",
             "--market-id",
@@ -1153,6 +1165,10 @@ mod tests {
             "kairos-market-cli",
             "connected",
             "routes",
+            "--launch-id",
+            "launch",
+            "--instance-id",
+            "instance",
             "--socket",
             "/tmp/market.sock",
             "--observation-kind",

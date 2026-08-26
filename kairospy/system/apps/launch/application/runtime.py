@@ -125,6 +125,7 @@ def write_instance_manifest(
     manifest.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": 1,
+        "workspace_id": instance_workspace.workspace.workspace_id,
         "launch_id": instance_workspace.launch_id,
         "instance_id": instance_workspace.instance_id,
         "mode": instance_workspace.mode,

@@ -6,11 +6,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
-use kairos_account_contract::view::AccountViewReader;
-use kairos_account_contract::{
-    AccountControlRpcClient, AccountViewKey, AccountViewKind, SimulatedSettlement,
-};
-use kairos_conflux::SnapshotEnvelopeMetadata;
+use kairos_account_contract::{AccountControlRpcClient, AccountIndexedView, SimulatedSettlement};
+use kairos_indexed_view::MetadataSnapshot;
+use kairos_primitives::account::AccountId;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_workspace::Workspace;
 use rusteron_media_driver::{AeronDriver, AeronDriverContext, IntoCString};
 
@@ -72,11 +71,12 @@ fn start_server(workspace: &Workspace, aeron_dir: &Path) -> Server {
 
 fn wait_for_snapshot(
     path: &Path,
+    identity: &InstanceIdentity,
     server: &mut Server,
     previous_incarnation: Option<u64>,
     minimum_generation: u64,
     expected_balance: &str,
-) -> (SnapshotEnvelopeMetadata, String) {
+) -> (MetadataSnapshot, String) {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut last_error = String::new();
     while Instant::now() < deadline {
@@ -84,53 +84,37 @@ fn wait_for_snapshot(
             panic!("{error}");
         }
         let reader =
-            AccountViewKey::new("account:paper-main", "paper-main", AccountViewKind::Current)
-                .and_then(|key| AccountViewReader::open(path, key));
-        match reader.and_then(|reader| reader.read()) {
-            Ok(frame) => match frame.account_current() {
-                Ok(view)
-                    if previous_incarnation.is_none_or(|value| {
-                        value != frame.envelope_metadata().producer_incarnation
-                    }) && frame.generation() >= minimum_generation =>
-                {
-                    let balances = view.segments().get(0).balances();
-                    if !balances.is_empty() {
-                        let balance = balances.get(0).total();
+            AccountIndexedView::open(path, identity, AccountId::new("paper-main").unwrap());
+        match reader.and_then(|reader| {
+            let snapshot = reader.snapshot()?;
+            Ok((snapshot.metadata().clone(), snapshot.balances()))
+        }) {
+            Ok((metadata, balances))
+                if previous_incarnation
+                    .is_none_or(|value| value != metadata.producer_incarnation)
+                    && metadata.applied_event_sequence >= minimum_generation =>
+            {
+                match balances.first().map(|value| value.balance()) {
+                    Some(Ok(current)) => {
+                        let balance = current.balance().total();
                         let balance = format!("{}:{}", balance.mantissa(), balance.scale());
                         if balance == expected_balance {
-                            return (
-                                SnapshotEnvelopeMetadata {
-                                    resource_epoch: frame.envelope_metadata().resource_epoch,
-                                    producer_incarnation: frame
-                                        .envelope_metadata()
-                                        .producer_incarnation,
-                                    generation: frame.generation(),
-                                    applied_event_sequence: frame
-                                        .envelope_metadata()
-                                        .applied_event_sequence,
-                                    published_at_unix_nanos: frame
-                                        .envelope_metadata()
-                                        .published_at_unix_nanos,
-                                },
-                                balance,
-                            );
+                            return (metadata, balance);
                         }
                         last_error = format!(
                             "balance is {balance}, expected {expected_balance}; generation={}",
-                            frame.generation()
+                            metadata.applied_event_sequence
                         );
-                    } else {
-                        last_error = "snapshot has no balances".into();
-                    }
-                },
-                Ok(_) => {
-                    last_error = format!(
-                        "snapshot has not reached the expected incarnation/generation; incarnation={} generation={}",
-                        frame.envelope_metadata().producer_incarnation,
-                        frame.generation()
-                    )
-                },
-                Err(error) => last_error = error.to_string(),
+                    },
+                    Some(Err(error)) => last_error = error.to_string(),
+                    None => last_error = "snapshot has no balances".into(),
+                }
+            },
+            Ok((metadata, _)) => {
+                last_error = format!(
+                    "snapshot has not reached the expected incarnation/generation; incarnation={} generation={}",
+                    metadata.producer_incarnation, metadata.applied_event_sequence
+                )
             },
             Err(error) => last_error = error.to_string(),
         }
@@ -140,7 +124,7 @@ fn wait_for_snapshot(
 }
 
 #[test]
-fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation() {
+fn account_server_restart_restores_state_and_republishes_a_new_indexed_incarnation() {
     let directory = tempfile::tempdir().unwrap();
     let workspace = Workspace::init(directory.path(), "account-restart-test").unwrap();
     let aeron_dir = directory.path().join("aeron");
@@ -184,11 +168,14 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
         .instance("paper", "restart-test", "instance-1")
         .unwrap();
     let snapshot_path = instance.snapshot(&[]).unwrap();
+    let identity =
+        InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id())
+            .unwrap();
     let socket_path = instance.socket("account").unwrap();
 
     let mut first = start_server(&workspace, &aeron_dir);
     let (first_metadata, first_balance) =
-        wait_for_snapshot(&snapshot_path, &mut first, None, 1, "1000:0");
+        wait_for_snapshot(&snapshot_path, &identity, &mut first, None, 1, "1000:0");
     let mut system = kairos_conflux::ConfluxSystem::new();
     system
         .install_account_connection("account", socket_path, None)
@@ -227,9 +214,10 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
         .unwrap();
     let (persisted_metadata, persisted_balance) = wait_for_snapshot(
         &snapshot_path,
+        &identity,
         &mut first,
         None,
-        first_metadata.generation + 1,
+        first_metadata.applied_event_sequence + 1,
         "900:0",
     );
     first.stop();
@@ -237,9 +225,10 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
     let mut second = start_server(&workspace, &aeron_dir);
     let (second_metadata, second_balance) = wait_for_snapshot(
         &snapshot_path,
+        &identity,
         &mut second,
         Some(persisted_metadata.producer_incarnation),
-        persisted_metadata.generation,
+        persisted_metadata.applied_event_sequence,
         "900:0",
     );
     second.stop();
@@ -248,7 +237,7 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
         persisted_metadata.producer_incarnation,
         second_metadata.producer_incarnation
     );
-    assert!(second_metadata.generation >= persisted_metadata.generation);
+    assert!(second_metadata.applied_event_sequence >= persisted_metadata.applied_event_sequence);
     assert_eq!(first_balance, "1000:0");
     assert_eq!(persisted_balance, "900:0");
     assert_eq!(second_balance, persisted_balance);

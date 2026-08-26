@@ -12,6 +12,7 @@ kairos-account-contract.workspace = true
 kairos-capital-contract.workspace = true
 kairos-execution-contract.workspace = true
 kairos-integration.workspace = true
+kairos-indexed-view.workspace = true
 kairos-market-contract.workspace = true
 kairos-primitives.workspace = true
 kairos-protocol.workspace = true

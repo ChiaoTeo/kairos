@@ -39,6 +39,7 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0032 | [Actor-derived Execution operational health](0032-actor-derived-execution-health.md) | Accepted |
 | 0033 | [Single Execution current view and durable audit query](0033-single-execution-current-view-and-audit-query.md) | Superseded in part by 0034 |
 | 0034 | [Unified indexed current-view storage](0034-unified-current-view-storage.md) | Accepted |
+| 0035 | [Python current-view buffer-backed reads](0035-python-current-view-buffer-backed-reads.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

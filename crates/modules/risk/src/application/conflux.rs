@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 
-use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, SnapshotEnvelopeMetadata, SystemEvent};
+use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, IndexedMutation, SystemEvent};
 use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 use kairos_risk_contract::{
     AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, AuthorizeRequest, CloseCircuitRequest,
-    ConsumeReservationRequest, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, Health,
-    OpenCircuitRequest, PublishPolicyRequest, ReleaseReservationRequest, Reservation,
-    ResizeReservationRequest, RiskCommandStatus, RiskControlError, RiskDecision,
+    ConsumeReservationRequest, FlatbuffersRiskEventWriter, Health, OpenCircuitRequest,
+    PublishPolicyRequest, ReleaseReservationRequest, Reservation, ResizeReservationRequest,
+    RiskCommandStatus, RiskControlError, RiskDecision, encode_indexed_current,
 };
 
 use super::{
@@ -212,23 +212,48 @@ impl RiskRpcActor for RiskApplication {
 impl RiskApplication {
     fn publish_contract_outputs(&mut self, context: &mut Context<'_, Self>) {
         let view = super::contract::current_view(&self.current_view());
-        let mut snapshot_encoder = FlatbuffersRiskSnapshotWriter::new(view.actor_id.to_string());
-        if snapshot_encoder.publish(&view).is_ok() && context.outputs().mmap.contains("risk-latest")
-        {
-            let result = context.outputs().mmap.publish(
-                "risk-latest",
-                SnapshotEnvelopeMetadata {
-                    resource_epoch: 1,
-                    producer_incarnation: self.producer_incarnation,
-                    generation: view.generation.get(),
-                    applied_event_sequence: view.event_sequence.get(),
-                    published_at_unix_nanos: now_unix_nanos(),
-                },
-                snapshot_encoder.last_payload.as_deref().unwrap_or_default(),
-            );
-            if let Err(error) = result {
-                tracing::error!(event = "snapshot_publish_failed", component = "risk", error = %error);
-            }
+        match encode_indexed_current(&view) {
+            Ok(next) => {
+                let mut mutations = Vec::new();
+                for ((database, key), _) in self
+                    .published_indexed_values
+                    .iter()
+                    .filter(|(key, _)| !next.contains_key(*key))
+                {
+                    mutations.push(IndexedMutation::Delete {
+                        database: database.clone(),
+                        key: key.clone(),
+                    });
+                }
+                for ((database, key), value) in &next {
+                    if self
+                        .published_indexed_values
+                        .get(&(database.clone(), key.clone()))
+                        == Some(value)
+                    {
+                        continue;
+                    }
+                    mutations.push(IndexedMutation::Put {
+                        database: database.clone(),
+                        key: key.clone(),
+                        value: value.clone(),
+                    });
+                }
+                match context.outputs().indexed.apply(
+                    "risk-current",
+                    &mutations,
+                    view.event_sequence.get(),
+                    now_unix_nanos(),
+                ) {
+                    Ok(()) => self.published_indexed_values = next,
+                    Err(error) => {
+                        tracing::error!(event = "snapshot_publish_failed", component = "risk", error = %error)
+                    },
+                }
+            },
+            Err(error) => {
+                tracing::error!(event = "snapshot_encode_failed", component = "risk", error = %error)
+            },
         }
 
         while let Some(event) = self.pending_event().cloned() {

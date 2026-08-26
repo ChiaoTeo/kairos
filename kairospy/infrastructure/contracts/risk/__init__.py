@@ -7,12 +7,10 @@ from typing import Any
 _EXPORTS = {
     "RiskControlClient": (".control", "RiskControlClient"),
     "RiskContractClient": (".control", "RiskControlClient"),
-    "RiskLatestViewQueries": (".view", "RiskLatestViewQueries"),
-    "RiskViewFrame": (".view", "RiskViewFrame"),
-    "RiskViewKey": (".view", "RiskViewKey"),
-    "RiskViewReader": (".view", "RiskViewReader"),
+    "RiskIndexedViewQueries": (".view", "RiskIndexedViewQueries"),
     "decode_event": (".events", "decode_event"),
-    "decode_view": (".view", "decode_view"),
+    "risk_indexed_environment_path": (".view", "risk_indexed_environment_path"),
+    "risk_indexed_key": (".view", "risk_indexed_key"),
 }
 
 
@@ -32,10 +30,8 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "RiskControlClient",
     "RiskContractClient",
-    "RiskLatestViewQueries",
-    "RiskViewFrame",
-    "RiskViewKey",
-    "RiskViewReader",
+    "RiskIndexedViewQueries",
     "decode_event",
-    "decode_view",
+    "risk_indexed_environment_path",
+    "risk_indexed_key",
 ]

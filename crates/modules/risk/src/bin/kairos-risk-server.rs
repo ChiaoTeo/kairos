@@ -36,7 +36,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let socket = instance.socket("risk")?;
     let health = instance.health("risk")?;
     let state = instance.state(&["risk", "risk-state.json"])?;
-    let snapshot = instance.snapshot(&[])?;
+    let view_root = instance.snapshot(&[])?;
     let normalized_path = instance.normalized_config()?;
     let policies = load_risk_policies(&workspace, &normalized_path, &args.launch_mode)?;
     let host = build_risk_host(RiskHostConfig {
@@ -47,8 +47,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         health_file: Some(health),
         interval: Duration::from_millis(args.interval_ms),
         replay_clock: args.launch_mode == "backtest",
-        snapshot_path: snapshot,
-        snapshot_slot_size: 1024 * 1024,
+        view_root,
         aeron_dir: args.aeron_dir,
         event_channel: args.aeron_channel,
         event_stream_id: args.risk_events_stream_id,

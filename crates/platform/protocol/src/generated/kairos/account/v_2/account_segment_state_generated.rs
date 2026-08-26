@@ -39,14 +39,9 @@ impl<'a> AccountSegmentState<'a> {
     pub const VT_RECOVERY_BUFFER_DEPTH: ::flatbuffers::VOffsetT = 36;
     pub const VT_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 38;
     pub const VT_STATE_GENERATION: ::flatbuffers::VOffsetT = 40;
-    pub const VT_VALUATION: ::flatbuffers::VOffsetT = 42;
-    pub const VT_BALANCES: ::flatbuffers::VOffsetT = 44;
-    pub const VT_COLLATERAL: ::flatbuffers::VOffsetT = 46;
-    pub const VT_POSITIONS: ::flatbuffers::VOffsetT = 48;
-    pub const VT_EARN_HOLDINGS: ::flatbuffers::VOffsetT = 50;
-    pub const VT_EARN_WATERMARK_UNIX_NANOS: ::flatbuffers::VOffsetT = 52;
-    pub const VT_MARGIN_MODE: ::flatbuffers::VOffsetT = 54;
-    pub const VT_POSITION_MODE: ::flatbuffers::VOffsetT = 56;
+    pub const VT_EARN_WATERMARK_UNIX_NANOS: ::flatbuffers::VOffsetT = 42;
+    pub const VT_MARGIN_MODE: ::flatbuffers::VOffsetT = 44;
+    pub const VT_POSITION_MODE: ::flatbuffers::VOffsetT = 46;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -72,21 +67,6 @@ impl<'a> AccountSegmentState<'a> {
         builder.add_channel_epoch(args.channel_epoch);
         builder.add_event_watermark(args.event_watermark);
         builder.add_snapshot_watermark(args.snapshot_watermark);
-        if let Some(x) = args.earn_holdings {
-            builder.add_earn_holdings(x);
-        }
-        if let Some(x) = args.positions {
-            builder.add_positions(x);
-        }
-        if let Some(x) = args.collateral {
-            builder.add_collateral(x);
-        }
-        if let Some(x) = args.balances {
-            builder.add_balances(x);
-        }
-        if let Some(x) = args.valuation {
-            builder.add_valuation(x);
-        }
         if let Some(x) = args.last_error {
             builder.add_last_error(x);
         }
@@ -349,79 +329,6 @@ impl<'a> AccountSegmentState<'a> {
         }
     }
     #[inline]
-    pub fn valuation(&self) -> Option<AccountValuation<'a>> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<AccountValuation>>(
-                    AccountSegmentState::VT_VALUATION,
-                    None,
-                )
-        }
-    }
-    #[inline]
-    pub fn balances(
-        &self,
-    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Balance<'a>>> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<
-                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Balance>>,
-                >>(AccountSegmentState::VT_BALANCES, None)
-                .unwrap()
-        }
-    }
-    #[inline]
-    pub fn collateral(
-        &self,
-    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Balance<'a>>> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<
-                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Balance>>,
-                >>(AccountSegmentState::VT_COLLATERAL, None)
-                .unwrap()
-        }
-    }
-    #[inline]
-    pub fn positions(
-        &self,
-    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Position<'a>>> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<
-                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Position>>,
-                >>(AccountSegmentState::VT_POSITIONS, None)
-                .unwrap()
-        }
-    }
-    #[inline]
-    pub fn earn_holdings(
-        &self,
-    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<EarnHolding<'a>>> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<
-                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<EarnHolding>>,
-                >>(AccountSegmentState::VT_EARN_HOLDINGS, None)
-                .unwrap()
-        }
-    }
-    #[inline]
     pub fn earn_watermark_unix_nanos(&self) -> u64 {
         // Safety:
         // Created from valid Table for this object
@@ -524,23 +431,6 @@ impl ::flatbuffers::Verifiable for AccountSegmentState<'_> {
                 false,
             )?
             .visit_field::<u64>("state_generation", Self::VT_STATE_GENERATION, false)?
-            .visit_field::<::flatbuffers::ForwardsUOffset<AccountValuation>>(
-                "valuation",
-                Self::VT_VALUATION,
-                false,
-            )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<
-                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Balance>>,
-            >>("balances", Self::VT_BALANCES, true)?
-            .visit_field::<::flatbuffers::ForwardsUOffset<
-                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Balance>>,
-            >>("collateral", Self::VT_COLLATERAL, true)?
-            .visit_field::<::flatbuffers::ForwardsUOffset<
-                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Position>>,
-            >>("positions", Self::VT_POSITIONS, true)?
-            .visit_field::<::flatbuffers::ForwardsUOffset<
-                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<EarnHolding>>,
-            >>("earn_holdings", Self::VT_EARN_HOLDINGS, true)?
             .visit_field::<u64>(
                 "earn_watermark_unix_nanos",
                 Self::VT_EARN_WATERMARK_UNIX_NANOS,
@@ -572,27 +462,6 @@ pub struct AccountSegmentStateArgs<'a> {
     pub recovery_buffer_depth: u64,
     pub observed_at_unix_nanos: u64,
     pub state_generation: u64,
-    pub valuation: Option<::flatbuffers::WIPOffset<AccountValuation<'a>>>,
-    pub balances: Option<
-        ::flatbuffers::WIPOffset<
-            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Balance<'a>>>,
-        >,
-    >,
-    pub collateral: Option<
-        ::flatbuffers::WIPOffset<
-            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Balance<'a>>>,
-        >,
-    >,
-    pub positions: Option<
-        ::flatbuffers::WIPOffset<
-            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Position<'a>>>,
-        >,
-    >,
-    pub earn_holdings: Option<
-        ::flatbuffers::WIPOffset<
-            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<EarnHolding<'a>>>,
-        >,
-    >,
     pub earn_watermark_unix_nanos: u64,
     pub margin_mode: MarginMode,
     pub position_mode: PositionMode,
@@ -620,11 +489,6 @@ impl<'a> Default for AccountSegmentStateArgs<'a> {
             recovery_buffer_depth: 0,
             observed_at_unix_nanos: 0,
             state_generation: 0,
-            valuation: None,
-            balances: None,      // required field
-            collateral: None,    // required field
-            positions: None,     // required field
-            earn_holdings: None, // required field
             earn_watermark_unix_nanos: 0,
             margin_mode: MarginMode::UNSPECIFIED,
             position_mode: PositionMode::UNSPECIFIED,
@@ -780,62 +644,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> AccountSegmentStateBuilder<'a
         );
     }
     #[inline]
-    pub fn add_valuation(&mut self, valuation: ::flatbuffers::WIPOffset<AccountValuation<'b>>) {
-        self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<AccountValuation>>(
-                AccountSegmentState::VT_VALUATION,
-                valuation,
-            );
-    }
-    #[inline]
-    pub fn add_balances(
-        &mut self,
-        balances: ::flatbuffers::WIPOffset<
-            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<Balance<'b>>>,
-        >,
-    ) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            AccountSegmentState::VT_BALANCES,
-            balances,
-        );
-    }
-    #[inline]
-    pub fn add_collateral(
-        &mut self,
-        collateral: ::flatbuffers::WIPOffset<
-            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<Balance<'b>>>,
-        >,
-    ) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            AccountSegmentState::VT_COLLATERAL,
-            collateral,
-        );
-    }
-    #[inline]
-    pub fn add_positions(
-        &mut self,
-        positions: ::flatbuffers::WIPOffset<
-            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<Position<'b>>>,
-        >,
-    ) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            AccountSegmentState::VT_POSITIONS,
-            positions,
-        );
-    }
-    #[inline]
-    pub fn add_earn_holdings(
-        &mut self,
-        earn_holdings: ::flatbuffers::WIPOffset<
-            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<EarnHolding<'b>>>,
-        >,
-    ) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            AccountSegmentState::VT_EARN_HOLDINGS,
-            earn_holdings,
-        );
-    }
-    #[inline]
     pub fn add_earn_watermark_unix_nanos(&mut self, earn_watermark_unix_nanos: u64) {
         self.fbb_.push_slot::<u64>(
             AccountSegmentState::VT_EARN_WATERMARK_UNIX_NANOS,
@@ -878,14 +686,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> AccountSegmentStateBuilder<'a
             .required(o, AccountSegmentState::VT_ENVIRONMENT, "environment");
         self.fbb_
             .required(o, AccountSegmentState::VT_BROKER, "broker");
-        self.fbb_
-            .required(o, AccountSegmentState::VT_BALANCES, "balances");
-        self.fbb_
-            .required(o, AccountSegmentState::VT_COLLATERAL, "collateral");
-        self.fbb_
-            .required(o, AccountSegmentState::VT_POSITIONS, "positions");
-        self.fbb_
-            .required(o, AccountSegmentState::VT_EARN_HOLDINGS, "earn_holdings");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -915,11 +715,6 @@ impl ::core::fmt::Debug for AccountSegmentState<'_> {
         ds.field("recovery_buffer_depth", &self.recovery_buffer_depth());
         ds.field("observed_at_unix_nanos", &self.observed_at_unix_nanos());
         ds.field("state_generation", &self.state_generation());
-        ds.field("valuation", &self.valuation());
-        ds.field("balances", &self.balances());
-        ds.field("collateral", &self.collateral());
-        ds.field("positions", &self.positions());
-        ds.field("earn_holdings", &self.earn_holdings());
         ds.field(
             "earn_watermark_unix_nanos",
             &self.earn_watermark_unix_nanos(),

@@ -1,0 +1,5 @@
+include "../types/state.fbs";
+namespace kairos.capital.v2;
+table CapitalRouteCurrent { capital_group_id:string (required); value:CapitalRoute (required); }
+root_type CapitalRouteCurrent;
+file_identifier "CRT3";

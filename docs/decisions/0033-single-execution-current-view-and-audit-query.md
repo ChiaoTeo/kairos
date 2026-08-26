@@ -43,10 +43,10 @@ authority, not a second current-state owner.
 
 ## Consequences
 
-- Consumers cannot select overlapping mmap representations of the same current state.
+- Consumers cannot select overlapping representations of the same current state.
 - Terminal entity growth cannot exhaust the current-view slot merely because the process has run for a
   long time; active-set capacity and the explicit recent windows define its remaining bounds.
-- Cross-instance mmap writer collisions are prevented by construction and tested in the contract.
+- Cross-instance writer collisions are prevented by construction and tested in the contract.
 - Operators can distinguish a current operational snapshot from complete durable audit history.
 - This is a hard migration. Deployments must remove retired `active-orders` and `active-intents` files;
   no compatibility reader, alias, or dual-publication period exists.

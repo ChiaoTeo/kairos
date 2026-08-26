@@ -1,0 +1,12 @@
+include "../types/circuit.fbs";
+
+namespace kairos.risk.v2;
+
+table RiskCircuitCurrent {
+  actor_id:string (required);
+  circuit_key:string (required);
+  circuit:CircuitState (required);
+}
+
+root_type RiskCircuitCurrent;
+file_identifier "RCI3";

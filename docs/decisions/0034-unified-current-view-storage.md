@@ -8,8 +8,8 @@
 
 ## Context
 
-Kairos initially represented a current view as one complete FlatBuffers root in a KSS double-slot
-mmap file. That shape works for a small point value, but aggregate roots such as
+Kairos initially represented a current view as one complete FlatBuffers root in a double-slot
+snapshot file. That shape works for a small point value, but aggregate roots such as
 `CurrentExecutionView`, `AccountCurrentView`, `RiskLatestView`, and `CapitalCurrentView` combine
 independently keyed collections with different update rates and consumers. A change to one entity
 rebuilds and copies the whole root, a lookup by business ID scans a vector unless another index is
@@ -43,14 +43,14 @@ entity or one explicitly bounded metadata record; they do not contain an owner's
 One Actor transition updates every affected named database and the environment metadata in one write
 transaction.
 
-Current windows use the same indexed store in the baseline. A bar is keyed by series identity and
-sequence/time, while a small window metadata record declares its retained range and capacity. The
-writer inserts or revises individual bars and removes expired keys in the same transaction. Kairos does
-not introduce a fixed-slot ring ABI until owner-specific benchmarks prove that indexed range access is
-insufficient.
+Market current storage keeps one latest completed bar per semantic series key. Rolling windows are
+Strategy-owned state rebuilt from `BarCompleted` events; window length, warm-up, gap handling, and
+replay position are consumer policy. Historical backfill uses an explicit Market query. Kairos does
+not add shared window metadata or a fixed-slot ring ABI without a named owner/consumer and benchmark
+evidence.
 
-Small KSS/FlatBuffers snapshot resources are a legacy implementation, not the target current-state
-contract. Each owner migrates with a hard cut: its old snapshot publisher, reader, schema root, CLI
+The former aggregate snapshot resources are not part of the current-state contract. Each owner
+migrates with a hard cut: its old snapshot publisher, reader, schema root, CLI
 path, and generated bindings are removed in the same change that activates its LMDB view. There is no
 dual publication, fallback reader, alias, or compatibility API.
 
@@ -71,8 +71,8 @@ audit, catalog, and owner persistence keep their existing authority.
   the partitioning contract.
 - Long-lived read transactions, map-size exhaustion, schema mismatch, and view publication lag become
   explicit health and certification concerns.
-- Existing KSS implementations remain visible in the implementation-status inventory only until their
-  owner migration lands. They are not available as alternate production paths afterward.
+- The former snapshot implementations, aggregate roots, generated bindings, and public entry points
+  have been removed. They are not available as alternate production paths.
 
 ## Implementation requirements
 
@@ -84,8 +84,6 @@ Each module contract owns its current-view keys, value schemas, validation, type
 Python mapping. Python uses the project native transport boundary for LMDB transaction and lifetime
 safety; it does not parse live mmap pages with `ctypes`.
 
-Adoption requires the tests and measurements in
-[`docs/architecture/current-view-storage.md`](../architecture/current-view-storage.md). Execution is
-the first vertical slice. Account, Risk, Capital, and Market migrate only after the platform slice and
-cross-language gates pass.
-
+Certification uses the tests and measurements in
+[`docs/architecture/current-view-storage.md`](../architecture/current-view-storage.md). Execution,
+Account, Risk, Capital, and Market all use the indexed platform capability and cross-language reader.

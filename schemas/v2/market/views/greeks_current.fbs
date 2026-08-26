@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/greeks.fbs";
+
+namespace kairos.market.v2;
+
+table MarketGreeksCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:Greeks (required);
+}
+
+root_type MarketGreeksCurrent;
+file_identifier "MGC3";

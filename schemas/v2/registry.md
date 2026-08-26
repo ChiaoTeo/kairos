@@ -5,11 +5,9 @@ validation, but no root is published or supported until its implementation,
 cross-language fixtures, and migration exit criteria are complete. Reserved
 identifiers must not be reused.
 
-Existing current-view entries below inventory legacy KSS roots and use the
-physical lifecycle in [`mmap-contract.md`](./mmap-contract.md). They are not
-the target storage shape. Decision 0034 migrates owners to named LMDB databases
-whose keys and per-entity value roots are admitted separately; new entries are
-added only with a real publisher, reader, and certification evidence.
+Current-view entries use named LMDB databases whose keys and per-entity value
+roots are admitted separately. New entries are added only with a real
+publisher, reader, and certification evidence.
 
 Control contracts are intentionally not FlatBuffers roots. Each long-running
 module owns a Rust `#[conflux_rpc]` trait exposed over workspace Unix
@@ -41,17 +39,17 @@ current values; storage mechanics are defined by the current-view architecture.
 | DRAFT | Market | event | `OrderBookSnapshotReceived` | `MOS2` | Market Actor | OrderBook application, execution preflight | Market event stream / gap-aware |
 | DRAFT | Market | event | `OrderBookDeltaReceived` | `MOD2` | Market Actor | OrderBook application, execution preflight | Market event stream / gap-aware |
 | DRAFT | Market | event | `OrderBookResyncRequired` | `MOR2` | Market Actor | OrderBook application, operations | Market event stream / explicit recovery fact |
-| DRAFT | Market | latest view | `QuoteLatestView` | `MLQ2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | window view | `BarWindowView` | `MBW2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `GreeksLatestView` | `MLG2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `RateLatestView` | `MLR2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `Ticker24hLatestView` | `MLT2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `MarkPriceLatestView` | `MLM2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `FundingRateLatestView` | `MFD2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `OpenInterestLatestView` | `MLI2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `IndexPriceLatestView` | `MLP2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `OrderBookLatestView` | `MLO2` | Market Actor | OrderBook application, execution preflight | KSS1 mmap / one writer |
-| DRAFT | Market | latest view | `MarketFreshnessLatestView` | `MLF2` | Market Actor | Execution preflight, Strategy | KSS1 mmap / one writer |
+| DRAFT | Market | indexed quote current value | `MarketQuoteCurrent` | `MQC3` | Market Actor | Strategy, Execution | LMDB `quotes` / one writer |
+| DRAFT | Market | indexed bar current value | `MarketBarCurrent` | `MBC3` | Market Actor | Strategy | LMDB `bars`; latest completed bar per series |
+| DRAFT | Market | indexed Greeks current value | `MarketGreeksCurrent` | `MGC3` | Market Actor | Strategy | LMDB `greeks` / one writer |
+| DRAFT | Market | indexed rate current value | `MarketRateCurrent` | `MRC3` | Market Actor | Strategy | LMDB `rates` / one writer |
+| DRAFT | Market | indexed ticker current value | `MarketTicker24hCurrent` | `MTC3` | Market Actor | Strategy | LMDB `tickers_24h` / one writer |
+| DRAFT | Market | indexed mark-price current value | `MarketMarkPriceCurrent` | `MMP3` | Market Actor | Strategy | LMDB `mark_prices` / one writer |
+| DRAFT | Market | indexed funding-rate current value | `MarketFundingRateCurrent` | `MFR3` | Market Actor | Strategy | LMDB `funding_rates` / one writer |
+| DRAFT | Market | indexed open-interest current value | `MarketOpenInterestCurrent` | `MOI3` | Market Actor | Strategy | LMDB `open_interest` / one writer |
+| DRAFT | Market | indexed index-price current value | `MarketIndexPriceCurrent` | `MIP3` | Market Actor | Strategy | LMDB `index_prices` / one writer |
+| DRAFT | Market | indexed order-book current value | `MarketOrderBookCurrent` | `MOB3` | Market Actor | OrderBook, Execution | LMDB `order_books` / one writer |
+| DRAFT | Market | indexed freshness current value | `MarketFreshnessCurrent` | `MFS3` | Market Actor | Strategy, operations | LMDB `freshness` / one writer |
 | DRAFT | Account | event | `BalanceUpserted` | `ABU2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
 | DRAFT | Account | event | `BalanceRemoved` | `ABR2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
 | DRAFT | Account | event | `EarnHoldingUpserted` | `AEH2` | Account Actor | Portfolio, Capital reconciliation | Account event stream / retained target |
@@ -62,8 +60,13 @@ current values; storage mechanics are defined by the current-view architecture.
 | DRAFT | Account | event | `AccountStatusChanged` | `ASC2` | Account Actor | Strategy Account application, operations | Account event stream / retained target |
 | DRAFT | Account | event | `ObservedOrderUpserted` | `AOU2` | Account Actor | reconciliation | Account event stream / retained target |
 | DRAFT | Account | event | `ObservedOrderRemoved` | `AOR2` | Account Actor | reconciliation | Account event stream / retained target |
-| DRAFT | Account | current view | `AccountCurrentView` | `AAV2` | Account Actor | Execution preflight, Strategy Account application | KSS1 mmap / one writer |
-| DRAFT | Account | current view | `ObservedOrdersCurrentView` | `AOV2` | Account Actor | reconciliation | KSS1 mmap / one writer |
+| DRAFT | Account | indexed current value | `AccountSegmentCurrent` | `ASG3` | Account Actor | Execution preflight, Strategy, operations | LMDB `segments`; keyed by SegmentKey |
+| DRAFT | Account | indexed current value | `AccountBalanceCurrent` | `ABA3` | Account Actor | Execution, Capital, Strategy | LMDB `balances`; keyed by SegmentKey and AssetId |
+| DRAFT | Account | indexed current value | `AccountCollateralCurrent` | `ACO3` | Account Actor | Capital, Strategy | LMDB `collateral`; keyed by SegmentKey and AssetId |
+| DRAFT | Account | indexed current value | `AccountPositionCurrent` | `APO3` | Account Actor | Execution, Strategy | LMDB `positions`; keyed by SegmentKey, InstrumentId, and PositionSide |
+| DRAFT | Account | indexed current value | `AccountValuationCurrent` | `AVL3` | Account Actor | Capital, Strategy | LMDB `valuations`; keyed by SegmentKey |
+| DRAFT | Account | indexed current value | `AccountEarnHoldingCurrent` | `AEH3` | Account Actor | Capital, Strategy | LMDB `earn_holdings`; keyed by SegmentKey and holding identity |
+| DRAFT | Account | indexed current value | `AccountObservedOrderCurrent` | `AOO3` | Account Actor | Execution reconciliation, operations | LMDB `observed_orders`; keyed by SegmentKey, SourceId, and observation identity |
 | DRAFT | Risk | command | `AuthorizeAndReserve` | `RiskControlRpc` | Execution application | Risk application | Unix JSON-RPC / atomic synchronous decision |
 | DRAFT | Risk | command result | `AuthorizeAndReserveResponse` | `RiskControlRpc` | Risk Actor | Execution application | Unix JSON-RPC response |
 | DRAFT | Risk | command | `ConsumeReservation` | `RiskControlRpc` | Execution application | Risk application | Unix JSON-RPC / idempotent retry |
@@ -76,7 +79,12 @@ current values; storage mechanics are defined by the current-view architecture.
 | DRAFT | Risk | event | `ReservationExpired` | `RRX2` | Risk Actor | Execution, audit | Risk event stream / retained target |
 | DRAFT | Risk | event | `CircuitOpened` | `RKO2` | Risk Actor | Execution, operations | Risk event stream / retained target |
 | DRAFT | Risk | event | `CircuitClosed` | `RKC2` | Risk Actor | Execution, operations | Risk event stream / retained target |
-| DRAFT | Risk | latest view | `RiskLatestView` | `RXV2` | Risk Actor | Execution preflight, operations | KSS1 mmap / one writer |
+| DRAFT | Risk | indexed current value | `RiskStateCurrent` | `RSM3` | Risk Actor | Capital, operations | LMDB `state`; keyed by ActorId |
+| DRAFT | Risk | indexed current value | `RiskPolicyCurrent` | `RPO3` | Risk Actor | Capital, operations | LMDB `policies`; keyed by PolicyId |
+| DRAFT | Risk | indexed current value | `RiskLimitUsageCurrent` | `RLU3` | Risk Actor | Capital, operations | LMDB `limit_usage`; keyed by PolicyId |
+| DRAFT | Risk | indexed current value | `RiskAllocationCurrent` | `RAL3` | Risk Actor | operations | LMDB `allocations`; keyed by ReservationId, PolicyId, and Metric |
+| DRAFT | Risk | indexed current value | `RiskReservationCurrent` | `RRS3` | Risk Actor | Execution, operations | LMDB `reservations`; keyed by ReservationId |
+| DRAFT | Risk | indexed current value | `RiskCircuitCurrent` | `RCI3` | Risk Actor | Execution, operations | LMDB `circuits`; keyed by canonical CircuitScope |
 | DRAFT | Execution | command | `SubmitExecutionIntent` | `ExecutionControlRpc` | Strategy application | Execution application | Unix JSON-RPC / no unsafe retry |
 | DRAFT | Execution | command result | `CommandAccepted` | `ExecutionControlRpc` | Execution Actor | Strategy application | Unix JSON-RPC response |
 | DRAFT | Execution | command | `CancelOrder` | `ExecutionControlRpc` | Strategy application | Execution application | Unix JSON-RPC / delivery certainty required |
@@ -92,8 +100,23 @@ current values; storage mechanics are defined by the current-view architecture.
 | DRAFT | Execution | event | `OrderCanceled` | `EOC2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |
 | DRAFT | Execution | event | `OrderExpired` | `EOX2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |
 | DRAFT | Execution | event | `FillRecorded` | `EFV2` | Execution Actor | Account settlement, Strategy | Execution event stream / retained target |
-| DRAFT | Execution | current view | `CurrentExecutionView` | `ECV2` | Execution Actor | CLI, Strategy, operations, reconciliation | KSS1 mmap / one writer; operational state only |
-| DRAFT | Capital | current view | `CapitalCurrentView` | `CPV2` | Capital Actor | Portfolio, Strategy, operations, audit | KSS1 mmap / one writer |
+| DRAFT | Execution | indexed current value | `ExecutionOrderCurrent` | `EOR3` | Execution Actor | CLI, Strategy, operations, reconciliation | LMDB `orders`; keyed by OrderId |
+| DRAFT | Execution | indexed current value | `ExecutionIntentCurrent` | `EIN3` | Execution Actor | CLI, Strategy | LMDB `intents`; keyed by IntentId |
+| DRAFT | Execution | indexed current value | `ExecutionAlgorithmRunCurrent` | `EAR3` | Execution Actor | Strategy, operations | LMDB `algorithm_runs`; keyed by AlgorithmRunId |
+| DRAFT | Execution | indexed current value | `ExecutionCommitmentCurrent` | `ECO3` | Execution Actor | Account correlation, operations | LMDB `commitments`; keyed by OrderId |
+| DRAFT | Execution | indexed current value | `ExecutionRiskReservationCurrent` | `ERR3` | Execution Actor | Risk correlation, operations | LMDB `risk_reservations`; keyed by ReservationId |
+| DRAFT | Execution | indexed current value | `ExecutionUnknownRemoteOrderCurrent` | `EUR3` | Execution Actor | reconciliation, operations | LMDB `unknown_remote_orders`; keyed by remote order identity |
+| DRAFT | Capital | indexed state current value | `CapitalStateCurrent` | `CSM3` | Capital Actor | Capital contract readers | LMDB `state` / one writer |
+| DRAFT | Capital | indexed objective current value | `CapitalObjectiveCurrent` | `CFO3` | Capital Actor | Capital contract readers | LMDB `objectives` / one writer |
+| DRAFT | Capital | indexed demand current value | `CapitalDemandCurrent` | `CDM3` | Capital Actor | Capital contract readers | LMDB `demands` / one writer |
+| DRAFT | Capital | indexed policy current value | `CapitalPolicyCurrent` | `CPC3` | Capital Actor | Capital contract readers | LMDB `policies` / one writer |
+| DRAFT | Capital | indexed facts current value | `CapitalFactsCurrent` | `CFC3` | Capital Actor | Capital contract readers | LMDB `facts` / one writer |
+| DRAFT | Capital | indexed availability current value | `CapitalAvailabilityCurrent` | `CAV3` | Capital Actor | Capital contract readers | LMDB `availability` / one writer |
+| DRAFT | Capital | indexed route current value | `CapitalRouteCurrent` | `CRT3` | Capital Actor | Capital contract readers | LMDB `routes` / one writer |
+| DRAFT | Capital | indexed plan current value | `CapitalPlanCurrent` | `CPL3` | Capital Actor | Capital contract readers | LMDB `plans` / one writer |
+| DRAFT | Capital | indexed reservation current value | `CapitalReservationCurrent` | `CRS3` | Capital Actor | Capital contract readers | LMDB `reservations` / one writer |
+| DRAFT | Capital | indexed operation current value | `CapitalOperationCurrent` | `COP3` | Capital Actor | Capital contract readers | LMDB `operations` / one writer |
+| DRAFT | Capital | indexed alert current value | `CapitalAlertCurrent` | `CAL3` | Capital Actor | Capital contract readers | LMDB `alerts` / one writer |
 | DRAFT | Capital | event | `FundingObjectiveChanged` | `COV2` | Capital Actor | Strategy, audit | Capital event stream / retained target |
 | DRAFT | Capital | event | `CapitalDemandChanged` | `CDV2` | Capital Actor | Strategy, audit | Capital event stream / retained target |
 | DRAFT | Capital | event | `CapitalPolicyChanged` | `CYV2` | Capital Actor | operations, audit | Capital event stream / retained target |
@@ -103,18 +126,13 @@ current values; storage mechanics are defined by the current-view architecture.
 | DRAFT | Capital | event | `CapitalPlanAuthorized` | `CPAV` | Capital Actor | operations, audit | Capital event stream / retained target |
 | DRAFT | Capital | event | `CapitalPlanStateChanged` | `CPSV` | Capital Actor | operations, audit | Capital event stream / retained target |
 | DRAFT | Capital | event | `CapitalPlanExpired` | `CPEV` | Capital Actor | operations, audit | Capital event stream / retained target |
-| DRAFT | System | current view | `SystemHealthCurrentView` | `SHV2` | System monitor | operations | KSS1 mmap / one writer |
-| DRAFT | System | current view | `AlertsCurrentView` | `SAV2` | System monitor | operations | KSS1 mmap / one writer |
 
 ## Registry-wide bounds
 
 - Event roots contain one fact. Account transitions remain bounded atomic
   change vectors; Reference uses one entity per event root.
-- Market current-view row vectors are bounded by the configured subscription
-  universe and must fit the configured KSS1 slot. Publication fails explicitly
-  on overflow.
-- Account, Risk, Execution, and System current-view vectors are bounded by
-  workspace configuration. Each publisher records and validates its bound.
+- Indexed current values are bounded by each owner's configured population and
+  retention rules; one owner change commits as one LMDB transaction.
 - All command request vectors have explicit adapter limits; Execution intents
   initially permit at most 64 legs and Risk decisions at most 256 allocations.
 
@@ -144,7 +162,7 @@ current values; storage mechanics are defined by the current-view architecture.
 
 | Root | View key semantics | Population bound | Freshness |
 | --- | --- | --- | --- |
-| `QuoteLatestView` | one `(source_id, market_id)` quote identity | exactly one latest quote | Strategy policy compares source/receive/as-of time |
-| `BarWindowView` | configured Market bar kind/window scope | bounded completed-bar window per source + market + window definition | only completed bars; Strategy policy checks window end |
-| `GreeksLatestView` | one `(source_id, market_id)` Greeks identity | exactly one latest value | Strategy policy checks source/receive/as-of time |
-| `OrderBookLatestView` | one `(source_id, market_id, instrument_id)` order-book identity | exactly one latest book | `synchronized` must be true for execution use |
+| `MarketQuoteCurrent` in `quotes` | one `(scope_key, provider, qualifier)` quote identity | exactly one latest quote per key | Strategy policy compares source/receive/as-of time |
+| `MarketBarCurrent` in `bars` | configured Market bar series identity | exactly one latest completed bar per series | Strategy builds rolling windows from `BarCompleted` events and checks window end |
+| `MarketGreeksCurrent` in `greeks` | one `(scope_key, provider, qualifier)` Greeks identity | exactly one latest value per key | Strategy policy checks source/receive/as-of time |
+| `MarketOrderBookCurrent` in `order_books` | one `(scope_key, provider, qualifier)` order-book identity | exactly one latest book per key | `synchronized` must be true for execution use |

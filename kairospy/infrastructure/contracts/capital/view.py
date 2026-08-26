@@ -2,112 +2,109 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 import sys
 from typing import Any, cast
 
 from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
-from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
+from kairospy.infrastructure.transport.indexed_view import IndexedViewReader, IndexedViewSchema
 
 sys.modules.setdefault("kairos", _generated_kairos)
 
 
-@dataclass(frozen=True, slots=True)
-class CapitalViewKey:
-    capital_group_id: str
-
-    def __post_init__(self) -> None:
-        if not self.capital_group_id.strip():
-            raise ValueError("Capital view capital_group_id is required")
-
-    def canonical_key(self) -> str:
-        return f"capital.current/{_component(self.capital_group_id)}"
-
-    def resource_path(self, root: str | Path) -> Path:
-        return (
-            Path(root)
-            / "capital"
-            / _component(self.capital_group_id)
-            / "current"
-            / "current.snapshot"
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class CapitalViewFrame:
-    key: CapitalViewKey
-    generation: int
-    applied_event_sequence: int
-    payload: bytes
-    value: Any
-
-
-class CapitalViewReader:
-    def __init__(
-        self, root: str | Path, key: CapitalViewKey, *, retries: int = 8
-    ) -> None:
-        self.key = key
-        self._reader = SharedSnapshotReader(key.resource_path(root), retries=retries)
-
-    @property
-    def path(self) -> Path:
-        return self._reader.path
-
-    def read(self) -> CapitalViewFrame:
-        snapshot = self._reader.read()
-        value = decode_view(snapshot.payload)
-        metadata = value.Metadata()
-        state = value.State()
-        if metadata is None or state is None:
-            raise ValueError("Capital current view is incomplete")
-        if _text(metadata.ViewKey()) != self.key.canonical_key():
-            raise ValueError("Capital current view key identity mismatch")
-        if _text(state.CapitalGroupId()) != self.key.capital_group_id:
-            raise ValueError("Capital current view group identity mismatch")
-        return CapitalViewFrame(
-            key=self.key,
-            generation=snapshot.generation,
-            applied_event_sequence=snapshot.applied_event_sequence,
-            payload=snapshot.payload,
-            value=value,
-        )
+STATE_DATABASE = "state"
+OBJECTIVES_DATABASE = "objectives"
+DEMANDS_DATABASE = "demands"
+POLICIES_DATABASE = "policies"
+FACTS_DATABASE = "facts"
+AVAILABILITY_DATABASE = "availability"
+ROUTES_DATABASE = "routes"
+PLANS_DATABASE = "plans"
+RESERVATIONS_DATABASE = "reservations"
+OPERATIONS_DATABASE = "operations"
+ALERTS_DATABASE = "alerts"
+_DATABASES = (STATE_DATABASE, OBJECTIVES_DATABASE, DEMANDS_DATABASE, POLICIES_DATABASE, FACTS_DATABASE, AVAILABILITY_DATABASE, ROUTES_DATABASE, PLANS_DATABASE, RESERVATIONS_DATABASE, OPERATIONS_DATABASE, ALERTS_DATABASE)
+_ROOTS = {
+    STATE_DATABASE: ("CSM3", "CapitalStateCurrent"),
+    OBJECTIVES_DATABASE: ("CFO3", "CapitalObjectiveCurrent"),
+    DEMANDS_DATABASE: ("CDM3", "CapitalDemandCurrent"),
+    POLICIES_DATABASE: ("CPC3", "CapitalPolicyCurrent"),
+    FACTS_DATABASE: ("CFC3", "CapitalFactsCurrent"),
+    AVAILABILITY_DATABASE: ("CAV3", "CapitalAvailabilityCurrent"),
+    ROUTES_DATABASE: ("CRT3", "CapitalRouteCurrent"),
+    PLANS_DATABASE: ("CPL3", "CapitalPlanCurrent"),
+    RESERVATIONS_DATABASE: ("CRS3", "CapitalReservationCurrent"),
+    OPERATIONS_DATABASE: ("COP3", "CapitalOperationCurrent"),
+    ALERTS_DATABASE: ("CAL3", "CapitalAlertCurrent"),
+}
+_SCHEMAS = tuple(
+    IndexedViewSchema(database, 1, _ROOTS[database][0], 1)
+    for database in _DATABASES
+)
+_PREFIX = b"\x01"
 
 
-class CapitalCurrentViewQueries:
+def capital_indexed_environment_path(root: str | Path, capital_group_id: str) -> Path:
+    return Path(root) / "views" / "v3" / "Capital" / f"capital-{_component(capital_group_id)}" / "epoch-1" / "current.lmdb"
+
+
+class CapitalIndexedViewQueries:
     """Read Capital availability without using its JSON control plane."""
 
     def __init__(
-        self, root: str | Path, capital_group_id: str, *, retries: int = 8
+        self, root: str | Path, capital_group_id: str, *, workspace_id: str,
+        launch_id: str | None, instance_id: str | None,
     ) -> None:
-        self._reader = CapitalViewReader(
-            root, CapitalViewKey(capital_group_id), retries=retries
+        self.capital_group_id = capital_group_id
+        self._reader = IndexedViewReader(
+            capital_indexed_environment_path(root, capital_group_id), map_size=256 * 1024 * 1024,
+            workspace_id=workspace_id, launch_id=launch_id, instance_id=instance_id,
+            owner="Capital", publisher_resource_id=f"capital-{capital_group_id}",
+            resource_epoch=1, schemas=_SCHEMAS,
         )
 
     @property
     def path(self) -> Path:
         return self._reader.path
 
-    def read_frame(self) -> CapitalViewFrame:
-        return self._reader.read()
+    def _snapshot(self) -> tuple[Any, dict[str, tuple[Any, ...]]]:
+        snapshot = self._reader.snapshot(tuple((database, _PREFIX, sys.maxsize) for database in _DATABASES))
+        values: dict[str, tuple[Any, ...]] = {}
+        for database, rows in snapshot.rows.items():
+            identifier, root_name = _ROOTS[database]
+            decoded = []
+            for _, payload in rows:
+                if len(payload) < 8 or payload[4:8] != identifier.encode():
+                    raise ValueError(f"invalid Capital indexed value for {database}")
+                module = __import__(f"kairospy.infrastructure.protocol.generated.kairos.capital.v2.{root_name}", fromlist=[root_name])
+                root = getattr(module, root_name).GetRootAs(payload, 0)
+                if _text(root.CapitalGroupId()) != self.capital_group_id:
+                    raise ValueError("Capital indexed group identity mismatch")
+                value = root if database == STATE_DATABASE else root.Value()
+                if value is None:
+                    raise ValueError(f"{root_name} is missing its required value")
+                decoded.append(value)
+            values[database] = tuple(decoded)
+        return snapshot.metadata, values
 
     def current(self) -> dict[str, Any]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
+        metadata, values = self._snapshot()
+        if len(values[STATE_DATABASE]) != 1:
+            raise ValueError("Capital indexed snapshot must contain one state")
+        state = values[STATE_DATABASE][0]
         availabilities = tuple(
-            _availability(state.Availability(index), self._reader.key.capital_group_id)
-            for index in range(int(state.AvailabilityLength()))
+            _availability(value, self.capital_group_id)
+            for value in values[AVAILABILITY_DATABASE]
         )
         alerts = tuple(
-            _recovery_alert(state.Alerts(index))
-            for index in range(int(state.AlertsLength()))
+            _recovery_alert(value) for value in values[ALERTS_DATABASE]
         )
         return {
-            "capital_group_id": self._reader.key.capital_group_id,
+            "capital_group_id": self.capital_group_id,
             "kind": "current",
-            "generation": frame.generation,
-            "applied_event_sequence": frame.applied_event_sequence,
+            "generation": int(state.EventSequence()),
+            "applied_event_sequence": metadata.applied_event_sequence,
             "path": str(self.path),
             "strategy_id": _text(state.StrategyId()),
             "environment": _text(state.Environment()),
@@ -115,15 +112,15 @@ class CapitalCurrentViewQueries:
             "event_sequence": int(state.EventSequence()),
             "journal_sequence": int(state.JournalSequence()),
             "summary": {
-                "objective_count": int(state.ObjectivesLength()),
-                "demand_count": int(state.DemandsLength()),
-                "policy_count": int(state.PoliciesLength()),
-                "facts_count": int(state.FactsLength()),
+                "objective_count": len(values[OBJECTIVES_DATABASE]),
+                "demand_count": len(values[DEMANDS_DATABASE]),
+                "policy_count": len(values[POLICIES_DATABASE]),
+                "facts_count": len(values[FACTS_DATABASE]),
                 "availability_count": len(availabilities),
-                "route_count": int(state.RoutesLength()),
-                "plan_count": int(state.PlansLength()),
-                "reservation_count": int(state.ReservationsLength()),
-                "operation_count": int(state.OperationsLength()),
+                "route_count": len(values[ROUTES_DATABASE]),
+                "plan_count": len(values[PLANS_DATABASE]),
+                "reservation_count": len(values[RESERVATIONS_DATABASE]),
+                "operation_count": len(values[OPERATIONS_DATABASE]),
                 "alert_count": len(alerts),
                 "ready_availability_count": sum(
                     1
@@ -146,66 +143,31 @@ class CapitalCurrentViewQueries:
         }
 
     def availabilities(self) -> tuple[dict[str, Any], ...]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
         return tuple(
-            _availability(state.Availability(index), self._reader.key.capital_group_id)
-            for index in range(int(state.AvailabilityLength()))
+            _availability(value, self.capital_group_id)
+            for value in self._snapshot()[1][AVAILABILITY_DATABASE]
         )
 
     def objectives(self) -> tuple[dict[str, Any], ...]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
-        return tuple(
-            _objective(state.Objectives(index))
-            for index in range(int(state.ObjectivesLength()))
-        )
+        return tuple(_objective(value) for value in self._snapshot()[1][OBJECTIVES_DATABASE])
 
     def demands(self) -> tuple[dict[str, Any], ...]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
-        return tuple(
-            _demand(state.Demands(index))
-            for index in range(int(state.DemandsLength()))
-        )
+        return tuple(_demand(value) for value in self._snapshot()[1][DEMANDS_DATABASE])
 
     def plans(self) -> tuple[dict[str, Any], ...]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
-        return tuple(
-            _plan(state.Plans(index)) for index in range(int(state.PlansLength()))
-        )
+        return tuple(_plan(value) for value in self._snapshot()[1][PLANS_DATABASE])
 
     def routes(self) -> tuple[dict[str, Any], ...]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
-        return tuple(
-            _route(state.Routes(index)) for index in range(int(state.RoutesLength()))
-        )
+        return tuple(_route(value) for value in self._snapshot()[1][ROUTES_DATABASE])
 
     def reservations(self) -> tuple[dict[str, Any], ...]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
-        return tuple(
-            _reservation(state.Reservations(index))
-            for index in range(int(state.ReservationsLength()))
-        )
+        return tuple(_reservation(value) for value in self._snapshot()[1][RESERVATIONS_DATABASE])
 
     def operations(self) -> tuple[dict[str, Any], ...]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
-        return tuple(
-            _operation(state.Operations(index))
-            for index in range(int(state.OperationsLength()))
-        )
+        return tuple(_operation(value) for value in self._snapshot()[1][OPERATIONS_DATABASE])
 
     def alerts(self) -> tuple[dict[str, Any], ...]:
-        frame = self.read_frame()
-        state = cast(Any, frame.value.State())
-        return tuple(
-            _recovery_alert(state.Alerts(index))
-            for index in range(int(state.AlertsLength()))
-        )
+        return tuple(_recovery_alert(value) for value in self._snapshot()[1][ALERTS_DATABASE])
 
     def availability(
         self,
@@ -213,7 +175,7 @@ class CapitalCurrentViewQueries:
         capital_group_id: str | None,
         location: object | None,
     ) -> dict[str, Any]:
-        if capital_group_id != self._reader.key.capital_group_id:
+        if capital_group_id != self.capital_group_id:
             raise ValueError("Capital current view belongs to another capital group")
         values = self.availabilities()
         if location is None:
@@ -227,16 +189,6 @@ class CapitalCurrentViewQueries:
             if value["location"] == expected_location:
                 return value
         raise LookupError("Capital location has not been evaluated")
-
-
-def decode_view(payload: bytes) -> Any:
-    from kairospy.infrastructure.protocol.generated.kairos.capital.v2.CapitalCurrentView import (
-        CapitalCurrentView,
-    )
-
-    if not CapitalCurrentView.CapitalCurrentViewBufferHasIdentifier(payload, 0):
-        raise ValueError("invalid Capital current view identifier: expected b'CPV2'")
-    return CapitalCurrentView.GetRootAs(payload, 0)
 
 
 def _availability(value: object | None, capital_group_id: str) -> dict[str, Any]:
@@ -662,9 +614,6 @@ def _component(value: str) -> str:
 
 
 __all__ = [
-    "CapitalCurrentViewQueries",
-    "CapitalViewFrame",
-    "CapitalViewKey",
-    "CapitalViewReader",
-    "decode_view",
+    "CapitalIndexedViewQueries",
+    "capital_indexed_environment_path",
 ]

@@ -55,7 +55,7 @@ def system_component_risk_limits(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Risk limit usage resources from the workspace component mmap."""
+    """Read Risk limit usage resources from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(_workspace_risk_client(owner).latest_limits(actor_id=actor_id), output)
 
@@ -66,7 +66,7 @@ def system_component_risk_reservations(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Risk active reservations from the workspace component mmap."""
+    """Read Risk active reservations from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(_workspace_risk_client(owner).latest_reservations(actor_id=actor_id), output)
 
@@ -77,7 +77,7 @@ def system_component_risk_circuits(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read Risk circuit states from the workspace component mmap."""
+    """Read Risk circuit states from the workspace indexed view."""
     owner = WorkspaceApplication().open(workspace)
     _emit(_workspace_risk_client(owner).latest_circuits(actor_id=actor_id), output)
 

@@ -1,0 +1,10 @@
+include "../types/plan.fbs";
+
+namespace kairos.execution.v2;
+
+table ExecutionIntentCurrent {
+  state:IntentState (required);
+}
+
+root_type ExecutionIntentCurrent;
+file_identifier "EIN3";

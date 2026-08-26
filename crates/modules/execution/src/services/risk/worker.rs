@@ -103,7 +103,7 @@ impl RiskBackend {
     }
 }
 
-/// Bounded worker boundary for all Risk command and mmap recovery I/O.
+/// Bounded worker boundary for all Risk command and indexed recovery I/O.
 pub struct QueuedExecutionRiskReservations {
     sender: std::sync::mpsc::SyncSender<RiskRequest>,
     stop: Arc<AtomicBool>,

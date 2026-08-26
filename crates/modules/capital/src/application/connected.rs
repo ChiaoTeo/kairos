@@ -5,15 +5,22 @@
 //! view. Standalone CLI commands must use `CliCapitalApplication`.
 
 use kairos_capital_contract::{
-    CancelFundingObjectiveRequest, CapitalAvailabilityResponse, CapitalClient,
-    CapitalControlResponse, CapitalControlRpcClient, CapitalCurrentSnapshot, CapitalDemandResponse,
-    CapitalHealthResponse, ObserveCapitalDemandRequest, PublishFundingObjectiveRequest,
-    QueryCapitalAvailabilityRequest, ReconcileCapitalPlanRequest, ReconcileCapitalPlanResponse,
+    CAPITAL_ALERTS_DATABASE, CAPITAL_AVAILABILITY_DATABASE, CAPITAL_DEMANDS_DATABASE,
+    CAPITAL_FACTS_DATABASE, CAPITAL_OBJECTIVES_DATABASE, CAPITAL_OPERATIONS_DATABASE,
+    CAPITAL_PLANS_DATABASE, CAPITAL_POLICIES_DATABASE, CAPITAL_RESERVATIONS_DATABASE,
+    CAPITAL_ROUTES_DATABASE, CancelFundingObjectiveRequest, CapitalAvailabilityResponse,
+    CapitalClient, CapitalControlResponse, CapitalControlRpcClient, CapitalDemandResponse,
+    CapitalHealthResponse, CapitalIndexedSnapshot, ObserveCapitalDemandRequest,
+    PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest, ReconcileCapitalPlanRequest,
+    ReconcileCapitalPlanResponse,
 };
+use kairos_primitives::capital::CapitalGroupId;
+use kairos_primitives::runtime::InstanceIdentity;
 use serde::Serialize;
 
 pub struct ConnectedCapitalApplication {
     client: CapitalClient,
+    identity: InstanceIdentity,
 }
 
 #[derive(Debug, Serialize)]
@@ -263,8 +270,8 @@ pub struct CapitalAlertResult {
 }
 
 impl ConnectedCapitalApplication {
-    pub fn connect(client: CapitalClient) -> Self {
-        Self { client }
+    pub fn connect(client: CapitalClient, identity: InstanceIdentity) -> Self {
+        Self { client, identity }
     }
 
     pub async fn health(&self) -> Result<CapitalHealthResponse, Box<dyn std::error::Error>> {
@@ -275,72 +282,63 @@ impl ConnectedCapitalApplication {
         &self,
         capital_group_id: String,
     ) -> Result<CapitalCurrentResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id)?;
-        current_snapshot_result(&current.read()?)
+        current_snapshot_result(&self.snapshot(&capital_group_id)?)
     }
 
     pub fn objectives(
         &self,
         capital_group_id: String,
     ) -> Result<CapitalObjectivesResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id.clone())?;
-        objectives_snapshot_result(capital_group_id, &current.read()?)
+        objectives_snapshot_result(capital_group_id.clone(), &self.snapshot(&capital_group_id)?)
     }
 
     pub fn demands(
         &self,
         capital_group_id: String,
     ) -> Result<CapitalDemandsResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id.clone())?;
-        demands_snapshot_result(capital_group_id, &current.read()?)
+        demands_snapshot_result(capital_group_id.clone(), &self.snapshot(&capital_group_id)?)
     }
 
     pub fn availabilities(
         &self,
         capital_group_id: String,
     ) -> Result<CapitalAvailabilitiesResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id.clone())?;
-        availabilities_snapshot_result(capital_group_id, &current.read()?)
+        availabilities_snapshot_result(capital_group_id.clone(), &self.snapshot(&capital_group_id)?)
     }
 
     pub fn routes(
         &self,
         capital_group_id: String,
     ) -> Result<CapitalRoutesResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id.clone())?;
-        routes_snapshot_result(capital_group_id, &current.read()?)
+        routes_snapshot_result(capital_group_id.clone(), &self.snapshot(&capital_group_id)?)
     }
 
     pub fn plans(
         &self,
         capital_group_id: String,
     ) -> Result<CapitalPlansResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id.clone())?;
-        plans_snapshot_result(capital_group_id, &current.read()?)
+        plans_snapshot_result(capital_group_id.clone(), &self.snapshot(&capital_group_id)?)
     }
 
     pub fn reservations(
         &self,
         capital_group_id: String,
     ) -> Result<CapitalReservationsResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id.clone())?;
-        reservations_snapshot_result(capital_group_id, &current.read()?)
+        reservations_snapshot_result(capital_group_id.clone(), &self.snapshot(&capital_group_id)?)
     }
 
     pub fn operations(
         &self,
         capital_group_id: String,
     ) -> Result<CapitalOperationsResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id.clone())?;
-        operations_snapshot_result(capital_group_id, &current.read()?)
+        operations_snapshot_result(capital_group_id.clone(), &self.snapshot(&capital_group_id)?)
     }
 
     pub fn alerts(
         &self,
         capital_group_id: String,
     ) -> Result<CapitalAlertsResult, Box<dyn std::error::Error>> {
-        let current = self.client.current(capital_group_id.clone())?;
-        alerts_snapshot_result(capital_group_id, &current.read()?)
+        alerts_snapshot_result(capital_group_id.clone(), &self.snapshot(&capital_group_id)?)
     }
 
     pub async fn query_capital_availability(
@@ -401,18 +399,28 @@ impl ConnectedCapitalApplication {
             .await?;
         Ok(response)
     }
+
+    fn snapshot(
+        &self,
+        capital_group_id: &str,
+    ) -> Result<CapitalIndexedSnapshot, Box<dyn std::error::Error>> {
+        let group_id = CapitalGroupId::new(capital_group_id)?;
+        Ok(self
+            .client
+            .indexed_current(&self.identity, group_id)?
+            .snapshot()?)
+    }
 }
 
 fn current_snapshot_result(
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalCurrentResult, Box<dyn std::error::Error>> {
-    let metadata = snapshot.envelope_metadata();
-    let view = snapshot.view()?;
-    let state = view.state();
+    let metadata = snapshot.metadata();
+    let state = snapshot.state()?;
     Ok(CapitalCurrentResult {
         capital_group_id: state.capital_group_id().to_owned(),
         kind: "current",
-        generation: metadata.generation,
+        generation: state.event_sequence(),
         applied_event_sequence: metadata.applied_event_sequence,
         strategy_id: state.strategy_id().to_owned(),
         environment: state.environment().to_owned(),
@@ -420,128 +428,138 @@ fn current_snapshot_result(
         event_sequence: state.event_sequence(),
         journal_sequence: state.journal_sequence(),
         summary: CapitalCurrentSummary {
-            objective_count: state.objectives().len(),
-            demand_count: state.demands().len(),
-            policy_count: state.policies().len(),
-            facts_count: state.facts().len(),
-            availability_count: state.availability().len(),
-            route_count: state.routes().len(),
-            plan_count: state.plans().len(),
-            reservation_count: state.reservations().len(),
-            operation_count: state.operations().len(),
-            alert_count: state.alerts().len(),
+            objective_count: snapshot.entities(CAPITAL_OBJECTIVES_DATABASE)?.len(),
+            demand_count: snapshot.entities(CAPITAL_DEMANDS_DATABASE)?.len(),
+            policy_count: snapshot.entities(CAPITAL_POLICIES_DATABASE)?.len(),
+            facts_count: snapshot.entities(CAPITAL_FACTS_DATABASE)?.len(),
+            availability_count: snapshot.entities(CAPITAL_AVAILABILITY_DATABASE)?.len(),
+            route_count: snapshot.entities(CAPITAL_ROUTES_DATABASE)?.len(),
+            plan_count: snapshot.entities(CAPITAL_PLANS_DATABASE)?.len(),
+            reservation_count: snapshot.entities(CAPITAL_RESERVATIONS_DATABASE)?.len(),
+            operation_count: snapshot.entities(CAPITAL_OPERATIONS_DATABASE)?.len(),
+            alert_count: snapshot.entities(CAPITAL_ALERTS_DATABASE)?.len(),
         },
         envelope_metadata: CapitalEnvelopeMetadata {
             resource_epoch: metadata.resource_epoch,
             producer_incarnation: metadata.producer_incarnation,
-            generation: metadata.generation,
+            generation: state.event_sequence(),
             applied_event_sequence: metadata.applied_event_sequence,
-            published_at_unix_nanos: metadata.published_at_unix_nanos,
+            published_at_unix_nanos: metadata.committed_at_unix_nanos,
         },
     })
 }
 
 fn availabilities_snapshot_result(
     capital_group_id: String,
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalAvailabilitiesResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(CapitalAvailabilitiesResult {
         capital_group_id,
-        availabilities: state
-            .availability()
-            .iter()
-            .map(availability_result)
+        availabilities: snapshot
+            .entities(CAPITAL_AVAILABILITY_DATABASE)?
+            .into_iter()
+            .map(|value| {
+                availability_result(value.availability().expect("validated Capital entity"))
+            })
             .collect(),
     })
 }
 
 fn objectives_snapshot_result(
     capital_group_id: String,
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalObjectivesResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(CapitalObjectivesResult {
         capital_group_id,
-        objectives: state.objectives().iter().map(objective_result).collect(),
+        objectives: snapshot
+            .entities(CAPITAL_OBJECTIVES_DATABASE)?
+            .into_iter()
+            .map(|value| objective_result(value.objective().expect("validated Capital entity")))
+            .collect(),
     })
 }
 
 fn demands_snapshot_result(
     capital_group_id: String,
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalDemandsResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(CapitalDemandsResult {
         capital_group_id,
-        demands: state.demands().iter().map(demand_result).collect(),
+        demands: snapshot
+            .entities(CAPITAL_DEMANDS_DATABASE)?
+            .into_iter()
+            .map(|value| demand_result(value.demand().expect("validated Capital entity")))
+            .collect(),
     })
 }
 
 fn plans_snapshot_result(
     capital_group_id: String,
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalPlansResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(CapitalPlansResult {
         capital_group_id,
-        plans: state.plans().iter().map(plan_result).collect(),
+        plans: snapshot
+            .entities(CAPITAL_PLANS_DATABASE)?
+            .into_iter()
+            .map(|value| plan_result(value.plan().expect("validated Capital entity")))
+            .collect(),
     })
 }
 
 fn routes_snapshot_result(
     capital_group_id: String,
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalRoutesResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(CapitalRoutesResult {
         capital_group_id,
-        routes: state.routes().iter().map(route_result).collect(),
+        routes: snapshot
+            .entities(CAPITAL_ROUTES_DATABASE)?
+            .into_iter()
+            .map(|value| route_result(value.route().expect("validated Capital entity")))
+            .collect(),
     })
 }
 
 fn reservations_snapshot_result(
     capital_group_id: String,
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalReservationsResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(CapitalReservationsResult {
         capital_group_id,
-        reservations: state
-            .reservations()
-            .iter()
-            .map(reservation_result)
+        reservations: snapshot
+            .entities(CAPITAL_RESERVATIONS_DATABASE)?
+            .into_iter()
+            .map(|value| reservation_result(value.reservation().expect("validated Capital entity")))
             .collect(),
     })
 }
 
 fn operations_snapshot_result(
     capital_group_id: String,
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalOperationsResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(CapitalOperationsResult {
         capital_group_id,
-        operations: state.operations().iter().map(operation_result).collect(),
+        operations: snapshot
+            .entities(CAPITAL_OPERATIONS_DATABASE)?
+            .into_iter()
+            .map(|value| operation_result(value.operation().expect("validated Capital entity")))
+            .collect(),
     })
 }
 
 fn alerts_snapshot_result(
     capital_group_id: String,
-    snapshot: &CapitalCurrentSnapshot,
+    snapshot: &CapitalIndexedSnapshot,
 ) -> Result<CapitalAlertsResult, Box<dyn std::error::Error>> {
-    let view = snapshot.view()?;
-    let state = view.state();
     Ok(CapitalAlertsResult {
         capital_group_id,
-        alerts: state.alerts().iter().map(alert_result).collect(),
+        alerts: snapshot
+            .entities(CAPITAL_ALERTS_DATABASE)?
+            .into_iter()
+            .map(|value| alert_result(value.alert().expect("validated Capital entity")))
+            .collect(),
     })
 }
 

@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, Mapping
 from decimal import Decimal
-import sys
 
 from kairospy.primitives.account import AccountId
-from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
 from .view_contract import (
-    AccountViewKey,
-    AccountViewKind,
-    account_view_path,
-    decode_view,
+    BALANCES_DATABASE,
+    EARN_HOLDINGS_DATABASE,
+    OBSERVED_ORDERS_DATABASE,
+    POSITIONS_DATABASE,
+    SEGMENTS_DATABASE,
+    VALUATIONS_DATABASE,
+    AccountIndexedViewReader,
 )
-from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 from ..base import CommandEnvelope, QueryEnvelope
 from kairospy.infrastructure.transport.commands import UnixJsonRpcClient
 
@@ -56,93 +56,112 @@ class AccountContractClient:
 
 
 class AccountCurrentViewReader:
-    """Synchronous Account application current-view reader over one v2 current view."""
+    """Synchronous Account application reader over indexed entity roots."""
 
-    def __init__(self, view_root: str | Path, *, account_id: AccountId) -> None:
-        sys.modules.setdefault("kairos", _generated_kairos)
-        self._key = AccountViewKey(
-            account_runtime_id=f"account:{account_id}",
+    def __init__(
+        self,
+        view_root: str | Path,
+        *,
+        account_id: AccountId,
+        workspace_id: str,
+        launch_id: str | None,
+        instance_id: str | None,
+    ) -> None:
+        self._account_id = account_id
+        self._reader = AccountIndexedViewReader(
+            view_root,
             account_id=str(account_id),
+            workspace_id=workspace_id,
+            launch_id=launch_id,
+            instance_id=instance_id,
         )
-        self._reader = SharedSnapshotReader(account_view_path(view_root, self._key))
 
     @property
     def path(self) -> Path:
         return self._reader.path
 
     def snapshot(self, account_id: AccountId) -> dict[str, object]:
-        snapshot = self._reader.read()
-        root = cast(Any, decode_view(snapshot.payload, AccountViewKind.CURRENT))
-        metadata = root.Metadata()
-        if metadata is None:
-            raise ValueError("Account current view metadata is missing")
-        if _text(metadata.ViewKey()) != self._key.canonical_key():
-            raise ValueError("Account current view key identity mismatch")
-        if _text(root.AccountId()) != str(account_id):
-            raise ValueError(
-                f"account {account_id!s} is not present in Account current view"
+        if account_id != self._account_id:
+            raise ValueError("Account reader identity does not match requested account")
+        metadata, values = self._reader.snapshot()
+        balances = _group_current(values[BALANCES_DATABASE], "Balance")
+        positions = _group_current(values[POSITIONS_DATABASE], "Position")
+        holdings = _group_current(values[EARN_HOLDINGS_DATABASE], "Holding")
+        valuations = _group_current(values[VALUATIONS_DATABASE], "Valuation")
+        segments = []
+        for current in values[SEGMENTS_DATABASE]:
+            state = current.State()
+            if state is None:
+                raise ValueError("Account indexed segment is missing state")
+            key = _text(state.SegmentKey()) or ""
+            segments.append(
+                _segment_snapshot(
+                    state,
+                    account_id,
+                    balances.get(key, ()),
+                    positions.get(key, ()),
+                    holdings.get(key, ()),
+                    valuations.get(key, ()),
+                )
             )
-        generation = snapshot.generation
-        if int(metadata.Generation()) != generation:
-            raise ValueError("Account mmap frame and metadata generation disagree")
-        if int(metadata.Completeness()) != 1:
-            raise ValueError("Account mmap current view is not complete")
-        event_sequence = metadata.AppliedRevision()
-        if event_sequence is None:
-            raise ValueError("Account mmap current view is missing applied revision")
+        generation = max(
+            (int(segment["generation"]) for segment in segments), default=0
+        )
         return {
             "account_id": str(account_id),
-            "segments": list(
-                _segment_snapshot(root.Segments(index), account_id, generation)
-                for index in range(root.SegmentsLength())
-            ),
+            "segments": segments,
             "generation": generation,
-            "event_sequence": int(event_sequence),
+            "event_sequence": metadata.applied_event_sequence,
         }
 
 
 class AccountObservedOrdersViewReader:
     """Synchronous Account current view over the observed-orders view."""
 
-    def __init__(self, view_root: str | Path, *, account_id: AccountId) -> None:
-        sys.modules.setdefault("kairos", _generated_kairos)
-        self._key = AccountViewKey(
-            account_runtime_id=f"account:{account_id}",
+    def __init__(
+        self,
+        view_root: str | Path,
+        *,
+        account_id: AccountId,
+        workspace_id: str,
+        launch_id: str | None,
+        instance_id: str | None,
+    ) -> None:
+        self._account_id = account_id
+        self._reader = AccountIndexedViewReader(
+            view_root,
             account_id=str(account_id),
-            kind=AccountViewKind.OBSERVED_ORDERS,
+            workspace_id=workspace_id,
+            launch_id=launch_id,
+            instance_id=instance_id,
         )
-        self._reader = SharedSnapshotReader(account_view_path(view_root, self._key))
 
     @property
     def path(self) -> Path:
         return self._reader.path
 
     def open_orders(self, account_id: AccountId) -> dict[str, object]:
-        snapshot = self._reader.read()
-        root = cast(Any, decode_view(snapshot.payload, AccountViewKind.OBSERVED_ORDERS))
-        metadata = root.Metadata()
-        if metadata is None:
-            raise ValueError("Account observed-orders metadata is missing")
-        if _text(metadata.ViewKey()) != self._key.canonical_key():
-            raise ValueError("Account observed-orders view key identity mismatch")
-        if _text(root.AccountId()) != str(account_id):
-            raise ValueError(
-                f"account {account_id!s} is not present in Account observed-orders current view"
-            )
+        if account_id != self._account_id:
+            raise ValueError("Account reader identity does not match requested account")
+        metadata, values = self._reader.snapshot()
         return {
             "account_id": str(account_id),
-            "generation": snapshot.generation,
-            "event_sequence": int(metadata.AppliedRevision() or 0),
+            "generation": metadata.applied_event_sequence,
+            "event_sequence": metadata.applied_event_sequence,
             "open_orders": [
-                order
-                for segment_index in range(root.SegmentsLength())
-                for order in _segment_observed_orders(root.Segments(segment_index))
+                {**_observed_order(current.Order()), "segment_key": _text(current.SegmentKey()) or ""}
+                for current in values[OBSERVED_ORDERS_DATABASE]
             ],
         }
 
 
 def _segment_snapshot(
-    account: Any, account_id: AccountId, generation: int
+    account: Any,
+    account_id: AccountId,
+    balance_values: tuple[Any, ...],
+    position_values: tuple[Any, ...],
+    holding_values: tuple[Any, ...],
+    valuation_values: tuple[Any, ...],
 ) -> dict[str, object]:
     segment_key = _text(account.SegmentKey()) or ""
     balances = tuple(
@@ -154,7 +173,7 @@ def _segment_snapshot(
             ),
             "reserved": _decimal_text(_decimal64(value.Locked()) or Decimal("0")),
         }
-        for value in _table_items(account, "Balances")
+        for value in balance_values
     )
     positions = tuple(
         {
@@ -165,7 +184,7 @@ def _segment_snapshot(
             "market_value": _decimal_text(_market_value(value)),
             "unrealized_pnl": _decimal_text(_decimal64(value.UnrealizedPnl())),
         }
-        for value in _table_items(account, "Positions")
+        for value in position_values
     )
     earn_holdings = tuple(
         {
@@ -192,7 +211,7 @@ def _segment_snapshot(
                 value.ObservedAtUnixNanos()
             ),
         }
-        for value in _table_items(account, "EarnHoldings")
+        for value in holding_values
     )
     raw_status = account.Status()
     status = _account_status(int(raw_status))
@@ -205,9 +224,9 @@ def _segment_snapshot(
         "broker": _text(account.Broker()) or "",
         "environment": _text(account.Environment()) or "",
         "account_model": _account_model(int(account.ObservedAccountModel())),
-        "equity": _decimal_text(_decimal64(
-            None if account.Valuation() is None else account.Valuation().Equity()
-        )),
+        "equity": _decimal_text(
+            _decimal64(valuation_values[0].Equity()) if valuation_values else None
+        ),
         "balances": list(balances),
         "positions": list(positions),
         "earn_holdings": list(earn_holdings),
@@ -215,7 +234,7 @@ def _segment_snapshot(
             account.EarnWatermarkUnixNanos()
         ),
         "freshness": freshness,
-        "generation": generation,
+        "generation": int(account.StateGeneration()),
         "sync_mode": {1: "snapshot_then_stream", 2: "snapshot_only"}.get(
             int(account.SyncMode()), "unknown"
         ),
@@ -246,18 +265,21 @@ def _segment_snapshot(
     }
 
 
+def _group_current(
+    values: tuple[Any, ...], accessor: str
+) -> dict[str, tuple[Any, ...]]:
+    grouped: dict[str, list[Any]] = {}
+    for current in values:
+        segment_key = _text(current.SegmentKey()) or ""
+        value = getattr(current, accessor)()
+        if value is None:
+            raise ValueError(f"Account indexed {accessor} value is missing")
+        grouped.setdefault(segment_key, []).append(value)
+    return {key: tuple(items) for key, items in grouped.items()}
+
+
 def _text(value: bytes | None) -> str | None:
     return None if value is None else value.decode("utf-8")
-
-
-def _segment_observed_orders(segment: Any | None) -> list[dict[str, object]]:
-    if segment is None:
-        raise ValueError("Account observed-orders view contains an empty segment")
-    segment_key = _text(segment.SegmentKey()) or ""
-    return [
-        {**_observed_order(segment.Orders(index)), "segment_key": segment_key}
-        for index in range(segment.OrdersLength())
-    ]
 
 
 def _observed_order(order: Any | None) -> dict[str, object]:
@@ -308,15 +330,6 @@ def _account_status(value: int) -> str:
 
 def _account_model(value: int) -> str | None:
     return {1: "cash", 2: "margin", 3: "portfolio_margin"}.get(value)
-
-
-def _table_items(value: object, name: str) -> tuple[Any, ...]:
-    table = cast(Any, value)
-    length = int(getattr(table, f"{name}Length")())
-    result = tuple(getattr(table, name)(index) for index in range(length))
-    if any(item is None for item in result):
-        raise ValueError(f"Account snapshot contains an empty {name} entry")
-    return cast(tuple[Any, ...], result)
 
 
 def _decimal64(value: object | None) -> Decimal | None:

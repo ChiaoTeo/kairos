@@ -15,7 +15,7 @@ use kairos_capital_contract::{
     PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest, ReconcileCapitalPlanRequest,
 };
 use kairos_primitives::capital::CapitalPlanId;
-use kairos_primitives::runtime::IdempotencyKey;
+use kairos_primitives::runtime::{IdempotencyKey, InstanceIdentity};
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};
 use serde::Serialize;
@@ -125,6 +125,12 @@ enum ConnectedCommand {
 
 #[derive(Debug, ClapArgs)]
 struct ConnectedTargetArgs {
+    #[arg(long, default_value = "live")]
+    launch_mode: String,
+    #[arg(long)]
+    launch_id: String,
+    #[arg(long)]
+    instance_id: String,
     #[arg(long)]
     socket: Option<PathBuf>,
     #[arg(long)]
@@ -497,16 +503,21 @@ fn connected_capital_app(
     target: ConnectedTargetArgs,
     workspace: &Workspace,
 ) -> Result<ConnectedCapitalApplication, Box<dyn std::error::Error>> {
+    let instance =
+        workspace.instance(&target.launch_mode, &target.launch_id, &target.instance_id)?;
     let socket = match target.socket {
         Some(socket) => socket,
-        None => workspace.process_socket("capital")?,
+        None => instance.socket("capital")?,
     };
     let connection = CapitalConnection::control_only(socket);
     let connection = match target.view_root {
         Some(view_root) => connection.with_view_root(view_root),
-        None => connection.with_view_root(workspace.root().join("snapshots")),
+        None => connection.with_view_root(instance.snapshot(&[])?),
     };
+    let identity =
+        InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id())?;
     Ok(ConnectedCapitalApplication::connect(
         CapitalClient::connect(connection),
+        identity,
     ))
 }

@@ -38,7 +38,7 @@ class RiskApplication:
         self._event_source_ready = event_source is None
 
     def check_event_source_ready(self) -> None:
-        """Validate the configured Risk event source without reading mmap."""
+        """Validate the configured Risk event source without reading the indexed view."""
 
         if self._event_source_ready:
             return

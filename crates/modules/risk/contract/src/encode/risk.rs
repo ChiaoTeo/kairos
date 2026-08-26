@@ -2,189 +2,153 @@
 //!
 //! Current state is `RXV2`; durable facts use one typed root per fact.
 
+use std::collections::BTreeMap;
+
 use flatbuffers::FlatBufferBuilder;
 use kairos_protocol::generated::kairos::common::v_2::{self as common_fb, Decimal64};
 use kairos_protocol::generated::kairos::risk::v_2 as fb;
 
 use crate::control::{ReservationStatus, RiskCurrentView, RiskDecision, RiskEvent};
 
-pub struct FlatbuffersRiskSnapshotWriter {
-    pub actor_id: String,
-    pub last_payload: Option<Vec<u8>>,
-}
-
-pub struct MmapRiskSnapshotPublisher {
-    publisher: crate::RiskViewPublisher,
-    encoder: FlatbuffersRiskSnapshotWriter,
-    producer_incarnation: u64,
-}
-
-pub struct FileRiskSnapshotPublisher {
-    publisher: kairos_transport::AtomicFileSnapshotStorage,
-    encoder: FlatbuffersRiskSnapshotWriter,
-    producer_incarnation: u64,
-}
-
-pub enum RiskSnapshotPublisher {
-    Mmap(MmapRiskSnapshotPublisher),
-    File(FileRiskSnapshotPublisher),
-}
-
-impl MmapRiskSnapshotPublisher {
-    pub fn create(
-        path: impl AsRef<std::path::Path>,
-        slot_size: usize,
-        actor_id: impl Into<String>,
-    ) -> crate::ContractResult<Self> {
-        Ok(Self {
-            publisher: crate::RiskViewPublisher::create(
-                path,
-                crate::view::RiskViewKey::latest(actor_id.into()),
-                slot_size,
-            )?,
-            encoder: FlatbuffersRiskSnapshotWriter::new("risk"),
-            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
-        })
-    }
-    pub fn publish(&mut self, snapshot: &RiskCurrentView) -> crate::ContractResult<()> {
-        self.encoder
-            .publish(snapshot)
-            .map_err(crate::ContractError::Invalid)?;
-        self.publisher.publish(
-            snapshot_metadata(snapshot, self.producer_incarnation),
-            self.encoder.last_payload.as_deref().unwrap_or_default(),
-        )
-    }
-}
-
-impl FileRiskSnapshotPublisher {
-    pub fn create(
-        path: impl AsRef<std::path::Path>,
-        max_payload_len: usize,
-        actor_id: impl Into<String>,
-    ) -> crate::ContractResult<Self> {
-        let actor_id = actor_id.into();
-        Ok(Self {
-            publisher: kairos_transport::AtomicFileSnapshotStorage::create(path, max_payload_len)
-                .map_err(|error| crate::ContractError::Transport(error.to_string()))?,
-            encoder: FlatbuffersRiskSnapshotWriter::new(actor_id),
-            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
-        })
-    }
-
-    pub fn publish(&mut self, snapshot: &RiskCurrentView) -> crate::ContractResult<()> {
-        self.encoder
-            .publish(snapshot)
-            .map_err(crate::ContractError::Invalid)?;
-        self.publisher
-            .publish(
-                snapshot_metadata(snapshot, self.producer_incarnation),
-                self.encoder.last_payload.as_deref().unwrap_or_default(),
-            )
-            .map(|_| ())
-            .map_err(|error| crate::ContractError::Transport(error.to_string()))
-    }
-}
-
-impl RiskSnapshotPublisher {
-    pub fn publish(&mut self, snapshot: &RiskCurrentView) -> crate::ContractResult<()> {
-        match self {
-            Self::Mmap(publisher) => publisher.publish(snapshot),
-            Self::File(publisher) => publisher.publish(snapshot),
-        }
-    }
-}
-
-fn snapshot_metadata(
+pub fn encode_indexed_current(
     snapshot: &RiskCurrentView,
-    producer_incarnation: u64,
-) -> kairos_transport::SnapshotEnvelopeMetadata {
-    kairos_transport::SnapshotEnvelopeMetadata {
-        resource_epoch: 1,
-        producer_incarnation,
-        generation: snapshot.generation.get(),
-        applied_event_sequence: snapshot.event_sequence.get(),
-        published_at_unix_nanos: now_unix_nanos(),
+) -> Result<BTreeMap<(String, Vec<u8>), Vec<u8>>, String> {
+    let mut values = BTreeMap::new();
+    let actor_id = snapshot.actor_id.as_str();
+    insert_indexed(&mut values, crate::RISK_STATE_DATABASE, &[actor_id], |b| {
+        let actor_id = b.create_string(actor_id);
+        let root = fb::RiskStateCurrent::create(
+            b,
+            &fb::RiskStateCurrentArgs {
+                actor_id: Some(actor_id),
+                generation: snapshot.generation.get(),
+                policy_version: snapshot.policy_version.get(),
+            },
+        );
+        fb::finish_risk_state_current_buffer(b, root);
+        Ok(())
+    })?;
+    for limit_view in &snapshot.limits {
+        let policy_id = limit_view.policy.policy_id.as_str();
+        insert_indexed(
+            &mut values,
+            crate::RISK_POLICIES_DATABASE,
+            &[policy_id],
+            |b| {
+                let actor_id = b.create_string(actor_id);
+                let policy = policy(b, &limit_view.policy);
+                let root = fb::RiskPolicyCurrent::create(
+                    b,
+                    &fb::RiskPolicyCurrentArgs {
+                        actor_id: Some(actor_id),
+                        policy: Some(policy),
+                    },
+                );
+                fb::finish_risk_policy_current_buffer(b, root);
+                Ok(())
+            },
+        )?;
+        insert_indexed(
+            &mut values,
+            crate::RISK_LIMIT_USAGE_DATABASE,
+            &[policy_id],
+            |b| {
+                let actor_id = b.create_string(actor_id);
+                let policy_id = b.create_string(policy_id);
+                let used = decimal(limit_view.used);
+                let reserved = decimal(limit_view.reserved);
+                let available = decimal(limit_view.available);
+                let root = fb::RiskLimitUsageCurrent::create(
+                    b,
+                    &fb::RiskLimitUsageCurrentArgs {
+                        actor_id: Some(actor_id),
+                        policy_id: Some(policy_id),
+                        used: Some(&used),
+                        reserved: Some(&reserved),
+                        available: Some(&available),
+                    },
+                );
+                fb::finish_risk_limit_usage_current_buffer(b, root);
+                Ok(())
+            },
+        )?;
     }
-}
-
-fn now_unix_nanos() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-        .min(u64::MAX as u128) as u64
-}
-
-impl FlatbuffersRiskSnapshotWriter {
-    pub fn new(actor_id: impl Into<String>) -> Self {
-        Self {
-            actor_id: actor_id.into(),
-            last_payload: None,
+    for reservation in &snapshot.reservations {
+        let reservation_id = reservation.reservation_id.as_str();
+        insert_indexed(
+            &mut values,
+            crate::RISK_RESERVATIONS_DATABASE,
+            &[reservation_id],
+            |b| {
+                let actor_id = b.create_string(actor_id);
+                let reservation = reservation_state_fb(b, reservation);
+                let root = fb::RiskReservationCurrent::create(
+                    b,
+                    &fb::RiskReservationCurrentArgs {
+                        actor_id: Some(actor_id),
+                        reservation: Some(reservation),
+                    },
+                );
+                fb::finish_risk_reservation_current_buffer(b, root);
+                Ok(())
+            },
+        )?;
+        for value in &reservation.allocations {
+            let metric_key = metric_key(value.metric);
+            insert_indexed(
+                &mut values,
+                crate::RISK_ALLOCATIONS_DATABASE,
+                &[reservation_id, value.policy_id.as_str(), metric_key],
+                |b| {
+                    let actor_id = b.create_string(actor_id);
+                    let reservation_id = b.create_string(reservation_id);
+                    let allocation = allocation(b, value);
+                    let root = fb::RiskAllocationCurrent::create(
+                        b,
+                        &fb::RiskAllocationCurrentArgs {
+                            actor_id: Some(actor_id),
+                            reservation_id: Some(reservation_id),
+                            allocation: Some(allocation),
+                        },
+                    );
+                    fb::finish_risk_allocation_current_buffer(b, root);
+                    Ok(())
+                },
+            )?;
         }
     }
-    pub fn publish(&mut self, snapshot: &RiskCurrentView) -> Result<(), String> {
-        let mut b = FlatBufferBuilder::new();
-        let limits = snapshot
-            .limits
-            .iter()
-            .map(|value| limit(&mut b, value))
-            .collect::<Result<Vec<_>, _>>()?;
-        let reservations = snapshot
-            .reservations
-            .iter()
-            .map(|value| reservation_fb(&mut b, value))
-            .collect::<Result<Vec<_>, _>>()?;
-        let circuits = snapshot
-            .circuits
-            .iter()
-            .map(|value| circuit_fb(&mut b, value))
-            .collect::<Result<Vec<_>, _>>()?;
-        let limits = b.create_vector(&limits);
-        let reservations = b.create_vector(&reservations);
-        let circuits = b.create_vector(&circuits);
-        let state = fb::RiskLatestState::create(
-            &mut b,
-            &fb::RiskLatestStateArgs {
-                policy_version: snapshot.policy_version.get(),
-                limits: Some(limits),
-                active_reservations: Some(reservations),
-                circuits: Some(circuits),
-            },
-        );
-        let snapshot_id = b.create_string(&format!("risk-{}", snapshot.generation));
-        let view_key = b.create_string("risk.latest");
-        let owner = b.create_string(&self.actor_id);
-        let workspace = b.create_string(&self.actor_id);
-        let metadata = common_fb::ViewMetadata::create(
-            &mut b,
-            &common_fb::ViewMetadataArgs {
-                snapshot_id: Some(snapshot_id),
-                resource_id: Some(view_key),
-                resource_epoch: 1,
-                view_key: Some(view_key),
-                owner_id: Some(owner),
-                workspace_id: Some(workspace),
-                launch_id: None,
-                instance_id: None,
-                generation: snapshot.generation.get(),
-                as_of_unix_nanos: as_of(snapshot),
-                published_at_unix_nanos: now(),
-                completeness: common_fb::ViewCompleteness::COMPLETE,
-                applied_revision: Some(snapshot.event_sequence.get()),
-            },
-        );
-        let root = fb::RiskLatestView::create(
-            &mut b,
-            &fb::RiskLatestViewArgs {
-                metadata: Some(metadata),
-                state: Some(state),
-            },
-        );
-        fb::finish_risk_latest_view_buffer(&mut b, root);
-        self.last_payload = Some(b.finished_data().to_vec());
-        Ok(())
+    for circuit in &snapshot.circuits {
+        let key = circuit_key(circuit);
+        insert_indexed(&mut values, crate::RISK_CIRCUITS_DATABASE, &[&key], |b| {
+            let actor_id = b.create_string(actor_id);
+            let circuit_key = b.create_string(&key);
+            let circuit = circuit_fb(b, circuit)?;
+            let root = fb::RiskCircuitCurrent::create(
+                b,
+                &fb::RiskCircuitCurrentArgs {
+                    actor_id: Some(actor_id),
+                    circuit_key: Some(circuit_key),
+                    circuit: Some(circuit),
+                },
+            );
+            fb::finish_risk_circuit_current_buffer(b, root);
+            Ok(())
+        })?;
     }
+    Ok(values)
+}
+
+fn insert_indexed(
+    values: &mut BTreeMap<(String, Vec<u8>), Vec<u8>>,
+    database: &str,
+    parts: &[&str],
+    encode: impl FnOnce(&mut FlatBufferBuilder<'_>) -> Result<(), String>,
+) -> Result<(), String> {
+    let key = crate::risk_indexed_key(parts).map_err(|error| error.to_string())?;
+    let mut builder = FlatBufferBuilder::new();
+    encode(&mut builder)?;
+    values.insert((database.to_owned(), key), builder.finished_data().to_vec());
+    Ok(())
 }
 
 pub struct FlatbuffersRiskEventWriter {
@@ -368,36 +332,6 @@ impl FlatbuffersRiskEventWriter {
     }
 }
 
-#[cfg(test)]
-mod file_view_tests {
-    use kairos_primitives::runtime::ActorId;
-
-    use super::*;
-
-    #[test]
-    fn typed_risk_view_is_published_as_an_atomic_file_envelope() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("risk.latest.view");
-        let mut publisher = FileRiskSnapshotPublisher::create(&path, 64 * 1024, "risk").unwrap();
-        let view = RiskCurrentView {
-            actor_id: ActorId::new("risk").unwrap(),
-            generation: 3.into(),
-            event_sequence: 9.into(),
-            policy_version: 2.into(),
-            limits: Vec::new(),
-            reservations: Vec::new(),
-            circuits: Vec::new(),
-        };
-
-        publisher.publish(&view).unwrap();
-
-        let frame = kairos_transport::read_atomic_file_snapshot(path).unwrap();
-        assert_eq!(frame.metadata.generation, 3);
-        assert_eq!(frame.metadata.applied_event_sequence, 9);
-        assert!(fb::risk_latest_view_buffer_has_identifier(&frame.payload));
-    }
-}
-
 fn metadata<'a>(
     b: &mut FlatBufferBuilder<'a>,
     actor: &str,
@@ -442,15 +376,6 @@ fn now() -> u64 {
         .as_nanos()
         .try_into()
         .unwrap_or(u64::MAX)
-}
-fn as_of(value: &RiskCurrentView) -> u64 {
-    value
-        .reservations
-        .iter()
-        .map(|x| x.updated_at_unix_nanos)
-        .max()
-        .unwrap_or_default()
-        .get()
 }
 fn decision_request_time(event: &RiskEvent) -> u64 {
     match event {
@@ -537,6 +462,38 @@ fn allocation<'a>(
         },
     )
 }
+
+fn reservation_state_fb<'a>(
+    b: &mut FlatBufferBuilder<'a>,
+    value: &crate::control::Reservation,
+) -> flatbuffers::WIPOffset<fb::RiskReservationState<'a>> {
+    let reservation_id = b.create_string(value.reservation_id.as_str());
+    let request_id = b.create_string(value.request_id.as_str());
+    let account_id = value
+        .account_id
+        .as_deref()
+        .map(|value| b.create_string(value));
+    let strategy_id = value
+        .strategy_id
+        .as_deref()
+        .map(|value| b.create_string(value));
+    let idempotency_key = b.create_string(value.idempotency_key.as_str());
+    fb::RiskReservationState::create(
+        b,
+        &fb::RiskReservationStateArgs {
+            reservation_id: Some(reservation_id),
+            request_id: Some(request_id),
+            account_id,
+            strategy_id,
+            idempotency_key: Some(idempotency_key),
+            status: status(value.status),
+            created_at_unix_nanos: value.created_at_unix_nanos.get(),
+            updated_at_unix_nanos: value.updated_at_unix_nanos.get(),
+            expires_at_unix_nanos: value.expires_at_unix_nanos.get(),
+            policy_version: value.policy_version.get(),
+        },
+    )
+}
 fn reservation_fb<'a>(
     b: &mut FlatBufferBuilder<'a>,
     value: &crate::control::Reservation,
@@ -573,29 +530,12 @@ fn reservation_fb<'a>(
         },
     ))
 }
-fn limit<'a>(
-    b: &mut FlatBufferBuilder<'a>,
-    value: &crate::control::LimitView,
-) -> Result<flatbuffers::WIPOffset<fb::LimitUsage<'a>>, String> {
-    let p = policy(b, &value.policy);
-    let used = decimal(value.used);
-    let reserved = decimal(value.reserved);
-    let available = decimal(value.available);
-    Ok(fb::LimitUsage::create(
-        b,
-        &fb::LimitUsageArgs {
-            policy: Some(p),
-            used: Some(&used),
-            reserved: Some(&reserved),
-            available: Some(&available),
-        },
-    ))
-}
 fn circuit_fb<'a>(
     b: &mut FlatBufferBuilder<'a>,
     value: &crate::control::CircuitState,
 ) -> Result<flatbuffers::WIPOffset<fb::CircuitState<'a>>, String> {
-    let id = b.create_string("risk-circuit");
+    let key = circuit_key(value);
+    let id = b.create_string(&key);
     let account = value
         .scope
         .account_id
@@ -635,6 +575,31 @@ fn circuit_fb<'a>(
             reason: Some(reason),
         },
     ))
+}
+
+fn circuit_key(value: &crate::control::CircuitState) -> String {
+    format!(
+        "account={};strategy={};exchange={}",
+        value.scope.account_id.as_deref().unwrap_or("*"),
+        value.scope.strategy_id.as_deref().unwrap_or("*"),
+        value.scope.exchange_id.as_deref().unwrap_or("*")
+    )
+}
+
+fn metric_key(value: crate::Metric) -> &'static str {
+    match value {
+        crate::Metric::Notional => "NOTIONAL",
+        crate::Metric::Margin => "MARGIN",
+        crate::Metric::GrossExposure => "GROSS_EXPOSURE",
+        crate::Metric::NetExposure => "NET_EXPOSURE",
+        crate::Metric::Turnover => "TURNOVER",
+        crate::Metric::OrderRate => "ORDER_RATE",
+        crate::Metric::DailyLoss => "DAILY_LOSS",
+        crate::Metric::Drawdown => "DRAWDOWN",
+        crate::Metric::Leverage => "LEVERAGE",
+        crate::Metric::PriceDeviation => "PRICE_DEVIATION",
+        crate::Metric::StressLoss => "STRESS_LOSS",
+    }
 }
 fn context_fb<'a>(
     b: &mut FlatBufferBuilder<'a>,

@@ -5,42 +5,47 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from .view import ExecutionViewKey, ExecutionViewKind, ExecutionViewReader
+from .view import (
+    COMMITMENTS_DATABASE,
+    INTENTS_DATABASE,
+    ORDERS_DATABASE,
+    RISK_RESERVATIONS_DATABASE,
+    ExecutionIndexedViewReader,
+)
 
 
 class ExecutionCurrentViews:
     """Read-only application queries backed only by v2 current views."""
 
-    def __init__(self, instance: object, *, retries: int = 8) -> None:
-        self._root = getattr(instance, "root")
+    def __init__(self, instance: object) -> None:
+        snapshot = getattr(instance, "snapshot")
         self._workspace_id = getattr(getattr(instance, "workspace"), "workspace_id")
         self._launch_id = getattr(instance, "launch_id")
         self._instance_id = getattr(instance, "instance_id")
-        self._retries = retries
+        self._reader = ExecutionIndexedViewReader(
+            snapshot(),
+            workspace_id=self._workspace_id,
+            launch_id=self._launch_id,
+            instance_id=self._instance_id,
+        )
 
     def orders(self) -> tuple[dict[str, object], ...]:
-        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
-        return tuple(
-            _order(value.Orders(index)) for index in range(value.OrdersLength())
-        )
+        return tuple(_order(_state(value, "order")) for value in self._reader.values(ORDERS_DATABASE))
 
     def get_order(self, order_id: str) -> dict[str, object] | None:
-        return next(
-            (value for value in self.orders() if value["order_id"] == order_id), None
-        )
+        value = self._reader.get(ORDERS_DATABASE, order_id)
+        return None if value is None else _order(_state(value, "order"))
 
     def commitments(self) -> tuple[dict[str, object], ...]:
-        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
         return tuple(
-            _commitment(value.Commitments(index))
-            for index in range(value.CommitmentsLength())
+            _commitment(_state(value, "commitment"))
+            for value in self._reader.values(COMMITMENTS_DATABASE)
         )
 
     def risk_reservations(self) -> tuple[dict[str, object], ...]:
-        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
         return tuple(
-            _risk_reservation(value.RiskReservations(index))
-            for index in range(value.RiskReservationsLength())
+            _risk_reservation(_state(value, "risk reservation"))
+            for value in self._reader.values(RISK_RESERVATIONS_DATABASE)
         )
 
     def open_orders(
@@ -61,101 +66,24 @@ class ExecutionCurrentViews:
         )
 
     def intents(self) -> tuple[dict[str, object], ...]:
-        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
         return tuple(
-            _intent(value.Intents(index)) for index in range(value.IntentsLength())
+            _intent(_state(value, "intent"))
+            for value in self._reader.values(INTENTS_DATABASE)
         )
 
     def get_intent(self, intent_id: str) -> dict[str, object] | None:
-        return next(
-            (value for value in self.intents() if value["intent_id"] == intent_id), None
-        )
+        value = self._reader.get(INTENTS_DATABASE, intent_id)
+        return None if value is None else _intent(_state(value, "intent"))
 
-    def recovery_snapshot(
-        self,
-    ) -> tuple[
-        int,
-        tuple[dict[str, object], ...],
-        tuple[dict[str, object], ...],
-        bool,
-    ]:
-        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
-        metadata = value.Metadata()
-        if metadata is None:
-            raise ValueError("Execution current view metadata is missing")
-        return (
-            int(metadata.AppliedRevision() or 0),
-            tuple(
-                _intent(value.Intents(index)) for index in range(value.IntentsLength())
-            ),
-            tuple(_fill(value.Fills(index)) for index in range(value.FillsLength())),
-            bool(value.FillHistoryTruncated()),
-        )
+    def close(self) -> None:
+        self._reader.close()
 
-    def diagnostic_intent(self, intent_id: str) -> dict[str, object] | None:
-        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
-        state = None
-        for index in range(value.IntentsLength()):
-            candidate = value.Intents(index)
-            candidate_intent = candidate.Intent()
-            if (
-                candidate_intent is not None
-                and _text(candidate_intent.IntentId()) == intent_id
-            ):
-                state = candidate
-                break
-        if state is None:
-            return None
-        intent = _intent(state)
-        plan = state.Plan()
-        metadata = value.Metadata()
-        return {
-            "intent": {
-                **intent,
-            },
-            "plan": None if plan is None else _diagnostic_plan(plan),
-            "orders": [
-                _diagnostic_order(value.Orders(index))
-                for index in range(value.OrdersLength())
-                if _text(value.Orders(index).IntentId()) == intent_id
-            ],
-            "fills": [
-                _diagnostic_fill(value.Fills(index))
-                for index in range(value.FillsLength())
-                if _text(value.Fills(index).IntentId()) == intent_id
-            ],
-            "lifecycle_transitions": [
-                _diagnostic_intent_event(value.IntentEvents(index))
-                for index in range(value.IntentEventsLength())
-                if _text(value.IntentEvents(index).IntentId()) == intent_id
-            ],
-            "order_transitions": [
-                _diagnostic_order_event(value.OrderEvents(index))
-                for index in range(value.OrderEventsLength())
-                if _text(value.OrderEvents(index).IntentId()) == intent_id
-            ],
-            "view": {
-                "applied_event_sequence": (
-                    None if metadata is None else int(metadata.AppliedRevision() or 0)
-                ),
-                "fill_history_truncated": bool(value.FillHistoryTruncated()),
-                "order_event_history_truncated": bool(
-                    value.OrderEventHistoryTruncated()
-                ),
-                "intent_event_history_truncated": bool(
-                    value.IntentEventHistoryTruncated()
-                ),
-            },
-        }
 
-    def _read(self, kind: ExecutionViewKind) -> Any:
-        key = ExecutionViewKey(
-            workspace_id=self._workspace_id,
-            launch_id=self._launch_id,
-            instance_id=self._instance_id,
-            kind=kind,
-        )
-        return ExecutionViewReader(self._root, key, retries=self._retries).read().value
+def _state(value: Any, name: str) -> Any:
+    state = value.State()
+    if state is None:
+        raise ValueError(f"Execution indexed {name} value has no state")
+    return state
 
 
 def _order(value: Any) -> dict[str, object]:
@@ -217,116 +145,6 @@ def _intent(value: Any) -> dict[str, object]:
         "order_ids": list(order_ids),
         "strategy_decision_id": _text(intent.StrategyDecisionId()),
         "updated_at_unix_nanos": int(value.UpdatedAtUnixNanos()),
-    }
-
-
-def _diagnostic_plan(value: Any) -> dict[str, object]:
-    return {
-        "plan_id": _required_text(value.PlanId(), "plan_id"),
-        "intent_id": _required_text(value.IntentId(), "plan intent_id"),
-        "intent_type": int(value.IntentType()),
-        "completion_policy": int(value.CompletionPolicy()),
-        "failure_policy": int(value.FailurePolicy()),
-        "created_at_unix_nanos": int(value.CreatedAtUnixNanos()),
-        "legs": [
-            {
-                "leg_id": _required_text(value.Legs(index).LegId(), "plan leg_id"),
-                "account_id": _required_text(
-                    value.Legs(index).AccountId(), "plan leg account_id"
-                ),
-                "instrument_id": _required_text(
-                    value.Legs(index).InstrumentId(), "plan leg instrument_id"
-                ),
-                "market_id": _text(value.Legs(index).MarketId()),
-                "lifecycle": int(value.Legs(index).Lifecycle()),
-                "order_ids": [
-                    _required_text(
-                        value.Legs(index).OrderIds(order_index), "plan order_id"
-                    )
-                    for order_index in range(value.Legs(index).OrderIdsLength())
-                ],
-                "completed_quantity": _decimal_text(
-                    value.Legs(index).CompletedQuantity()
-                ),
-            }
-            for index in range(value.LegsLength())
-        ],
-    }
-
-
-def _diagnostic_order(value: Any) -> dict[str, object]:
-    return {
-        "order_id": _required_text(value.OrderId(), "order_id"),
-        "plan_id": _text(value.PlanId()),
-        "leg_id": _text(value.LegId()),
-        "account_id": _required_text(value.AccountId(), "order account_id"),
-        "instrument_id": _required_text(value.InstrumentId(), "order instrument_id"),
-        "lifecycle": _order_status(int(value.Lifecycle())),
-        "quantity": _decimal_text(value.Quantity()),
-        "filled_quantity": _decimal_text(value.FilledQuantity()),
-        "average_fill_price": _decimal_text(value.AverageFillPrice()),
-        "remote_order_id": _text(value.RemoteOrderId()),
-        "updated_at_unix_nanos": int(value.UpdatedAtUnixNanos()),
-        "reason": _text(value.Reason()) or "",
-    }
-
-
-def _diagnostic_fill(value: Any) -> dict[str, object]:
-    return {
-        "fill_id": _required_text(value.FillId(), "fill_id"),
-        "order_id": _required_text(value.OrderId(), "fill order_id"),
-        "plan_id": _text(value.PlanId()),
-        "leg_id": _text(value.LegId()),
-        "account_id": _required_text(value.AccountId(), "fill account_id"),
-        "instrument_id": _required_text(value.InstrumentId(), "fill instrument_id"),
-        "quantity": _decimal_text(value.Quantity()),
-        "price": _decimal_text(value.Price()),
-        "fee": _decimal_text(value.Fee()),
-        "fee_asset_id": _text(value.FeeAssetId()),
-        "source_filled_at_unix_nanos": int(value.SourceFilledAtUnixNanos()),
-    }
-
-
-def _fill(value: Any) -> dict[str, object]:
-    instrument_id = _required_text(value.InstrumentId(), "fill instrument_id")
-    occurred_at_unix_nanos = int(value.SourceFilledAtUnixNanos())
-    return {
-        "fill_id": _required_text(value.FillId(), "fill_id"),
-        "order_id": _required_text(value.OrderId(), "fill order_id"),
-        "instrument_id": instrument_id,
-        "quantity": _required_decimal_text(value.Quantity(), "fill quantity"),
-        "price": _required_decimal_text(value.Price(), "fill price"),
-        "occurred_at_unix_nanos": occurred_at_unix_nanos,
-        "intent_id": _optional_text(value.IntentId()),
-    }
-
-
-def _diagnostic_intent_event(value: Any) -> dict[str, object]:
-    return {
-        "event_sequence": int(value.EventSequence()),
-        "previous_status": _intent_status(int(value.PreviousLifecycle())),
-        "status": _intent_status(int(value.Lifecycle())),
-        "order_ids": [
-            _required_text(value.OrderIds(index), "intent event order_id")
-            for index in range(value.OrderIdsLength())
-        ],
-        "completed_quantity": _decimal_text(value.CompletedQuantity()),
-        "occurred_at_unix_nanos": int(value.OccurredAtUnixNanos()),
-        "reason": _text(value.Reason()) or "",
-    }
-
-
-def _diagnostic_order_event(value: Any) -> dict[str, object]:
-    return {
-        "order_id": _required_text(value.OrderId(), "order event order_id"),
-        "plan_id": _text(value.PlanId()),
-        "leg_id": _text(value.LegId()),
-        "status": _order_status(int(value.Lifecycle())),
-        "remote_order_id": _text(value.RemoteOrderId()),
-        "occurred_at_unix_nanos": int(value.OccurredAtUnixNanos()),
-        "reason": _text(value.Reason()) or "",
-        "fill_id": _text(value.FillId()),
-        "filled_quantity": _decimal_text(value.FilledQuantity()),
     }
 
 

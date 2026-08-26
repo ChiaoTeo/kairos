@@ -2,11 +2,11 @@
 //!
 //! The application layer still owns business values.  This module is the
 //! composition boundary where those values will be encoded into the v2
-//! contract and sent over Aeron or mmap.  Keeping the adapters here prevents
+//! contract and sent over Aeron or the indexed current view. Keeping the adapters here prevents
 //! generated FlatBuffers types from leaking into the Actor.
 
 use flatbuffers::FlatBufferBuilder;
-use kairos_execution_contract::{EncodeContext, ExecutionViewKey, event_metadata, view_metadata};
+use kairos_execution_contract::{EncodeContext, event_metadata};
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::common::v_2 as common_fb;
 use kairos_protocol::generated::kairos::execution::v_2 as fb;
@@ -27,23 +27,30 @@ pub(crate) use events::encode_business_change;
 mod tests {
     use std::collections::BTreeMap;
 
-    use kairos_execution_contract::ExecutionViewKind;
+    use kairos_execution_contract::{
+        ALGORITHM_RUNS_DATABASE, COMMITMENTS_DATABASE, INTENTS_DATABASE, ORDERS_DATABASE,
+        RISK_RESERVATIONS_DATABASE, indexed_entity_key,
+    };
     use kairos_primitives::account::{AccountId, PositionSide, SegmentKey};
     use kairos_primitives::decimal::{Money, Price, Quantity};
     use kairos_primitives::execution::{IntentId, LegId, OrderId};
     use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
+    use kairos_primitives::runtime::InstanceIdentity;
     use kairos_primitives::time::{DurationNanos, Generation, Sequence, UnixNanos};
+    use kairos_protocol::generated::kairos::common::v_2 as common_fb;
+    use kairos_protocol::generated::kairos::execution::v_2 as fb;
 
     use super::*;
     use crate::application::{
-        DependencyWatermarks, ExecuteStrategyIntent, ExecutionBusinessChange, IntentEvent,
-        IntentExecutionBenchmark, IntentState, IntentStatus, SnapshotWatermark,
+        DependencyWatermarks, ExecuteStrategyIntent, ExecutionBusinessChange, ExecutionCurrentView,
+        IntentEvent, IntentExecutionBenchmark, IntentState, IntentStatus, SnapshotWatermark,
     };
     use crate::domain::{
         AlgorithmExecutionQuality, AlgorithmLegBenchmark, AlgorithmLegBenchmarkQuality,
         AlgorithmLegExecutionQuality, AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus,
         CommitmentBasis, CommitmentResource, ExecutionBenchmarkKind, ExecutionFeeTotal,
-        OrderCommitment, RiskReservationEvidence, RiskReservationSagaStatus,
+        ExecutionOrder, ExecutionOrderStatus, OrderCommitment, OrderSide, OrderType,
+        RiskReservationEvidence, RiskReservationSagaStatus,
     };
 
     #[test]
@@ -71,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    fn current_execution_mmap_excludes_terminal_and_released_state() {
+    fn indexed_current_excludes_terminal_and_released_state() {
         let order_id = OrderId::new("order-1").unwrap();
         let account_id = AccountId::new("account-1").unwrap();
         let segment_key = SegmentKey::new("spot").unwrap();
@@ -153,42 +160,51 @@ mod tests {
             unknown_remote_orders: Vec::new(),
             exchange_event_watermark_unix_nanos: UnixNanos::new(0),
         };
-        let identity = InstanceIdentity::new("workspace", "launch", "instance").unwrap();
-        let current_key =
-            ExecutionViewKey::from_identity(&identity, ExecutionViewKind::CurrentExecution);
-        let bytes =
-            encode_current_execution("execution", &identity, 3, &current_key, &snapshot).unwrap();
-        let current = fb::root_as_current_execution_view(&bytes).unwrap();
-        assert_eq!(current.metadata().generation(), 3);
-        assert_eq!(current.metadata().applied_revision(), Some(4));
-        assert_eq!(current.orders().len(), 1);
-        assert_eq!(current.orders().get(0).order_id(), "active-order");
-        assert_eq!(current.commitments().len(), 1);
-        assert_eq!(current.risk_reservations().len(), 1);
+        let values = encode_indexed_current(&snapshot).unwrap();
+        assert_eq!(values.len(), 3);
+        let order = fb::root_as_execution_order_current(
+            &values[&(
+                ORDERS_DATABASE.to_owned(),
+                indexed_entity_key("active-order").unwrap(),
+            )],
+        )
+        .unwrap()
+        .state();
+        assert_eq!(order.order_id(), "active-order");
+        let commitment = fb::root_as_execution_commitment_current(
+            &values[&(
+                COMMITMENTS_DATABASE.to_owned(),
+                indexed_entity_key("order-1").unwrap(),
+            )],
+        )
+        .unwrap()
+        .state();
+        let reservation = fb::root_as_execution_risk_reservation_current(
+            &values[&(
+                RISK_RESERVATIONS_DATABASE.to_owned(),
+                indexed_entity_key("execution:order-1").unwrap(),
+            )],
+        )
+        .unwrap()
+        .state();
         assert_eq!(
-            current.commitments().get(0).lifecycle(),
+            commitment.lifecycle(),
             fb::CommitmentLifecycle::HELD_BEFORE_SEND
         );
+        assert_eq!(commitment.settlement_asset(), Some("USDT"));
         assert_eq!(
-            current.commitments().get(0).settlement_asset(),
-            Some("USDT")
-        );
-        assert_eq!(
-            current.commitments().get(0).resource_kind(),
+            commitment.resource_kind(),
             fb::CommitmentResourceKind::CLOSEABLE_POSITION
         );
+        assert_eq!(commitment.position_side(), fb::CommitmentPositionSide::LONG);
         assert_eq!(
-            current.commitments().get(0).position_side(),
-            fb::CommitmentPositionSide::LONG
-        );
-        assert_eq!(
-            current.risk_reservations().get(0).lifecycle(),
+            reservation.lifecycle(),
             fb::RiskReservationSagaLifecycle::ACTIVE
         );
     }
 
     #[test]
-    fn algorithm_run_quality_is_published_in_current_execution_view() {
+    fn algorithm_run_quality_is_published_as_an_indexed_entity() {
         let intent_id = IntentId::new("intent-quality").unwrap();
         let leg_id = LegId::new("leg-quality").unwrap();
         let mut run = AlgorithmRun::immediate(
@@ -287,16 +303,20 @@ mod tests {
             unknown_remote_orders: Vec::new(),
             exchange_event_watermark_unix_nanos: UnixNanos::new(120),
         };
-        let identity = InstanceIdentity::new("workspace", "launch", "instance").unwrap();
-
-        let current_key =
-            ExecutionViewKey::from_identity(&identity, ExecutionViewKind::CurrentExecution);
-        let current_bytes =
-            encode_current_execution("execution", &identity, 5, &current_key, &snapshot).unwrap();
-        let current = fb::root_as_current_execution_view(&current_bytes).unwrap();
-        assert_eq!(current.intents().len(), 1);
-        assert_eq!(current.algorithm_runs().len(), 1);
-        assert_algorithm_quality(current.algorithm_runs().get(0));
+        let values = encode_indexed_current(&snapshot).unwrap();
+        assert!(values.contains_key(&(
+            INTENTS_DATABASE.to_owned(),
+            indexed_entity_key("intent-quality").unwrap(),
+        )));
+        let run = fb::root_as_execution_algorithm_run_current(
+            &values[&(
+                ALGORITHM_RUNS_DATABASE.to_owned(),
+                indexed_entity_key("intent-quality:algorithm:1").unwrap(),
+            )],
+        )
+        .unwrap()
+        .state();
+        assert_algorithm_quality(run);
     }
 
     fn assert_algorithm_quality(run: fb::AlgorithmRunState<'_>) {

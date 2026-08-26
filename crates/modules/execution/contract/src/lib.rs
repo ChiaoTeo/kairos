@@ -31,7 +31,7 @@ pub use control::{
     PassiveLimitPolicyRequest, ReconcileExecutionRequest, ReplaceOrderRequest,
     SplitOrderPolicyRequest, SubmitIntentRequest, TwapPolicyRequest,
 };
-pub use encode::{EncodeContext, event_metadata, view_metadata};
+pub use encode::{EncodeContext, event_metadata};
 pub use error::{ContractError, ContractResult};
 pub use event::{
     ExecutionEvent, ExecutionEventFrame, ExecutionEventPublisher, ExecutionEventStream,
@@ -39,10 +39,11 @@ pub use event::{
 pub type ExecutionConnection = kairos_protocol::ContractClient;
 
 pub use kairos_transport::AeronEndpoint;
-use kairos_transport::SnapshotEnvelopeMetadata;
 pub use view::{
-    ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher, ViewFrame, ViewMetadata,
-    execution_view_path,
+    ALGORITHM_RUNS_DATABASE, COMMITMENTS_DATABASE, EXECUTION_MAP_SIZE, ExecutionIndexedView,
+    ExecutionIndexedViewValue, INTENTS_DATABASE, ORDERS_DATABASE, RISK_RESERVATIONS_DATABASE,
+    UNKNOWN_REMOTE_ORDERS_DATABASE, execution_indexed_environment_path, execution_indexed_identity,
+    execution_indexed_schema_set, indexed_entity_key,
 };
 
 #[derive(Clone)]
@@ -68,14 +69,11 @@ impl ExecutionClient {
         )
     }
 
-    pub fn current_execution(
+    pub fn indexed_current(
         &self,
         identity: &kairos_primitives::runtime::InstanceIdentity,
-    ) -> ContractResult<CurrentExecution> {
-        CurrentExecution::open(
-            self.require_view_root()?,
-            ExecutionViewKey::from_identity(identity, ExecutionViewKind::CurrentExecution),
-        )
+    ) -> ContractResult<view::ExecutionIndexedView> {
+        view::ExecutionIndexedView::open(self.require_view_root()?, identity)
     }
 
     fn require_view_root(&self) -> ContractResult<&Path> {
@@ -84,54 +82,3 @@ impl ExecutionClient {
             .map_err(|error| ContractError::Transport(error.to_string()))
     }
 }
-
-macro_rules! execution_view_handle {
-    ($handle:ident, $snapshot:ident, $view:ty, $decode:ident) => {
-        pub struct $handle {
-            reader: view::ExecutionViewReader,
-        }
-
-        impl $handle {
-            fn open(root: &Path, key: ExecutionViewKey) -> ContractResult<Self> {
-                Ok(Self {
-                    reader: view::ExecutionViewReader::open(root, key)?,
-                })
-            }
-
-            pub fn read(&self) -> ContractResult<$snapshot> {
-                Ok($snapshot {
-                    frame: self.reader.read()?,
-                })
-            }
-
-            pub fn key(&self) -> &ExecutionViewKey {
-                self.reader.key()
-            }
-        }
-
-        pub struct $snapshot {
-            frame: ViewFrame,
-        }
-
-        impl $snapshot {
-            pub fn generation(&self) -> u64 {
-                self.frame.generation()
-            }
-
-            pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
-                self.frame.envelope_metadata()
-            }
-
-            pub fn view(&self) -> ContractResult<$view> {
-                self.frame.$decode()
-            }
-        }
-    };
-}
-
-execution_view_handle!(
-    CurrentExecution,
-    CurrentExecutionSnapshot,
-    view::CurrentExecutionView<'_>,
-    current_execution
-);

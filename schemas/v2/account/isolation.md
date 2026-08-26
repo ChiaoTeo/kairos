@@ -39,7 +39,7 @@ launch_id          = required
 instance_id        = required
 ```
 
-Its event stream, resource manifest, and KSS1 files are resolved below the
+Its event stream, resource manifest, and indexed-view environment are resolved below the
 launch-instance resource root. A reader or event from another runtime is
 rejected.
 

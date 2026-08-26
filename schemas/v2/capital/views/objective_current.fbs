@@ -1,0 +1,5 @@
+include "../types/state.fbs";
+namespace kairos.capital.v2;
+table CapitalObjectiveCurrent { capital_group_id:string (required); value:FundingObjective (required); }
+root_type CapitalObjectiveCurrent;
+file_identifier "CFO3";

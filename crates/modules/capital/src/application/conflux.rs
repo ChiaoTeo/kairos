@@ -11,8 +11,9 @@ use kairos_capital_contract::{
 };
 use kairos_conflux::{
     AssetTransferCommand, AssetTransferStatusQuery, ConfluxActor, ConfluxEvent, Context,
-    EarnActionStatusQuery, EarnCommand, EarnProductQuery, SnapshotEnvelopeMetadata, SystemEvent,
+    EarnActionStatusQuery, EarnCommand, EarnProductQuery, IndexedMutation, SystemEvent,
 };
+use kairos_primitives::runtime::ActorId;
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 
@@ -428,6 +429,7 @@ where
         let instance_id = state.config.instance_id.clone();
         let automatic_execution = state.config.automatic_execution;
         let plan_ttl_nanos = state.config.plan_ttl_nanos;
+        let identity = state.config.identity.clone();
         let accepting_writes = state.accepting_writes;
         let snapshot = self.application().snapshot();
         let capital_group_id = snapshot.capital_group_id.clone();
@@ -451,7 +453,7 @@ where
                             member.account_id
                         )
                     })
-                    .and_then(|account| read_member_account_observation(account, member))
+                    .and_then(|account| read_member_account_observation(account, &identity, member))
                     .unwrap_or_else(|error| {
                         tracing::warn!(
                             event = "capital_member_account_unavailable",
@@ -476,23 +478,26 @@ where
                 })?;
         }
 
-        let risk_latest = context
+        let risk_current = context
             .risk_client("risk")
             .ok_or_else(|| {
                 CapitalProcessError::Connection(
                     "Risk contract client is not configured: risk".into(),
                 )
             })?
-            .latest(format!("risk:{instance_id}"))
+            .indexed_current(
+                &identity,
+                ActorId::new(format!("risk:{instance_id}"))
+                    .map_err(|error| CapitalProcessError::Connection(error.to_string()))?,
+            )
             .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
-        let risk_frame = risk_latest
-            .read()
+        let risk_snapshot = risk_current
+            .snapshot()
             .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
-        let risk_root = risk_frame
-            .view()
+        let risk_state = risk_snapshot
+            .state()
             .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
-        let risk_state = risk_root.state();
-        let risk_metadata = risk_frame.envelope_metadata();
+        let risk_metadata = risk_snapshot.metadata();
         let risk_watermark = Sequence::new(risk_metadata.applied_event_sequence);
         let risk_policy_version = Generation::new(risk_state.policy_version());
 
@@ -517,9 +522,10 @@ where
                 })?;
             match read_location_facts(
                 account,
+                &identity,
                 location,
                 strategy_id.as_str(),
-                risk_state,
+                &risk_snapshot,
                 risk_policy_version,
                 risk_watermark,
             ) {
@@ -931,7 +937,7 @@ where
             CapitalProcessError::Invalid("Capital Conflux runtime was not configured".into())
         })?;
         let identity = state.config.identity.clone();
-        let producer_incarnation = state.producer_incarnation;
+        let previous_indexed_values = state.published_indexed_values.clone();
         let snapshot = self.application().snapshot();
         let owner_id = format!("capital:{}", snapshot.capital_group_id);
         while let Some(event) = self.application().pending_event().cloned() {
@@ -954,29 +960,43 @@ where
             self.application_mut().acknowledge_event()?;
         }
         let view = capital_current_view(&self.application().snapshot());
-        let key =
-            kairos_capital_contract::CapitalViewKey::current(view.capital_group_id.to_string());
-        let resource_key = key.canonical_key();
-        let mut writer =
-            kairos_capital_contract::FlatbuffersCapitalViewWriter::new(owner_id, identity, key);
-        writer
-            .publish(&view)
-            .map_err(CapitalProcessError::Connection)?;
+        let next = kairos_capital_contract::encode_indexed_current(&view)
+            .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
+        let mut mutations = Vec::new();
+        for ((database, key), _) in previous_indexed_values
+            .iter()
+            .filter(|(key, _)| !next.contains_key(*key))
+        {
+            mutations.push(IndexedMutation::Delete {
+                database: database.clone(),
+                key: key.clone(),
+            });
+        }
+        for ((database, key), value) in &next {
+            if previous_indexed_values.get(&(database.clone(), key.clone())) == Some(value) {
+                continue;
+            }
+            mutations.push(IndexedMutation::Put {
+                database: database.clone(),
+                key: key.clone(),
+                value: value.clone(),
+            });
+        }
         context
             .outputs()
-            .mmap
-            .publish(
-                &resource_key,
-                SnapshotEnvelopeMetadata {
-                    resource_epoch: 1,
-                    producer_incarnation,
-                    generation: view.event_sequence.get(),
-                    applied_event_sequence: view.event_sequence.get(),
-                    published_at_unix_nanos: now_unix_nanos(),
-                },
-                writer.last_payload.as_deref().unwrap_or_default(),
+            .indexed
+            .apply(
+                "capital-current",
+                &mutations,
+                view.event_sequence.get(),
+                now_unix_nanos(),
             )
-            .map_err(|error| CapitalProcessError::Connection(error.to_string()))
+            .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
+        self.conflux
+            .as_mut()
+            .expect("Capital Conflux checked above")
+            .published_indexed_values = next;
+        Ok(())
     }
 }
 

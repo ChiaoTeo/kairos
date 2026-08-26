@@ -1,58 +1,63 @@
 use kairos_account_contract::AccountClient;
+use kairos_primitives::account::AccountId;
 use kairos_primitives::decimal::Quantity;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
 use crate::{CapitalGroupMember, FundingLocation};
 
 pub(crate) fn read_member_account_observation(
     account: &AccountClient,
+    identity: &InstanceIdentity,
     member: &CapitalGroupMember,
 ) -> Result<crate::CapitalMemberAccountObservation, String> {
     let account_id = member.account_id.as_str();
     let account_current = account
-        .account_current(format!("account:{account_id}"), account_id)
+        .indexed_current(
+            identity,
+            AccountId::new(account_id).map_err(|error| error.to_string())?,
+        )
         .map_err(|error| error.to_string())?;
-    let account_frame = account_current.read().map_err(|error| error.to_string())?;
-    let account_root = account_frame.view().map_err(|error| error.to_string())?;
-    if account_root.account_id() != account_id {
-        return Err(format!(
-            "Account view identity '{}' does not match Capital member '{account_id}'",
-            account_root.account_id()
-        ));
-    }
-    let metadata = account_root.metadata();
+    let snapshot = account_current
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let metadata = snapshot.metadata();
     Ok(crate::CapitalMemberAccountObservation {
         broker: member.broker.clone(),
         account_id: member.account_id.clone(),
-        account_watermark: Sequence::new(
-            account_frame
-                .envelope_metadata()
-                .applied_event_sequence
-                .max(metadata.applied_revision().unwrap_or(0)),
-        ),
-        account_observed_at: UnixNanos::new(metadata.as_of_unix_nanos()),
-        account_complete: metadata.completeness()
-            == kairos_protocol::generated::kairos::common::v_2::ViewCompleteness::COMPLETE,
+        account_watermark: Sequence::new(metadata.applied_event_sequence),
+        account_observed_at: UnixNanos::new(metadata.committed_at_unix_nanos),
+        account_complete: true,
     })
 }
 
 pub(crate) fn read_location_facts(
     account: &AccountClient,
+    identity: &InstanceIdentity,
     location: &FundingLocation,
     strategy_id: &str,
-    risk_state: kairos_protocol::generated::kairos::risk::v_2::RiskLatestState<'_>,
+    risk_snapshot: &kairos_risk_contract::RiskIndexedSnapshot,
     risk_policy_version: Generation,
     risk_watermark: Sequence,
 ) -> Result<crate::CapitalFacts, String> {
     let account_id = location.account_id.as_str();
     let account_current = account
-        .account_current(format!("account:{account_id}"), account_id)
+        .indexed_current(
+            identity,
+            AccountId::new(account_id).map_err(|error| error.to_string())?,
+        )
         .map_err(|error| error.to_string())?;
-    let account_frame = account_current.read().map_err(|error| error.to_string())?;
-    let account_root = account_frame.view().map_err(|error| error.to_string())?;
-    let segment = account_root
-        .segments()
+    let snapshot = account_current
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let metadata = snapshot.metadata();
+    let segment_values = snapshot.segments();
+    let segment = segment_values
         .iter()
+        .map(|value| value.segment().map(|current| current.state()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?
+        .into_iter()
         .find(|segment| segment.segment_key() == location.segment.as_str())
         .ok_or_else(|| {
             format!(
@@ -60,9 +65,15 @@ pub(crate) fn read_location_facts(
                 location.account_id, location.segment
             )
         })?;
-    let observed_available = segment
+    let observed_available = snapshot
         .balances()
         .iter()
+        .map(|value| value.balance())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|current| current.segment_key() == location.segment.as_str())
+        .map(|current| current.balance())
         .find(|balance| {
             balance.asset_code().unwrap_or(balance.asset_id()) == location.asset.as_str()
         })
@@ -70,9 +81,15 @@ pub(crate) fn read_location_facts(
         .map(quantity_from_decimal)
         .transpose()?
         .unwrap_or(Quantity::ZERO);
-    let earn_holdings = segment
+    let earn_holdings = snapshot
         .earn_holdings()
         .iter()
+        .map(|value| value.earn_holding())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|current| current.segment_key() == location.segment.as_str())
+        .map(|current| current.holding())
         .filter(|holding| holding.asset() == location.asset.as_str())
         .filter_map(|holding| {
             holding.redeemable().map(|redeemable| {
@@ -94,22 +111,34 @@ pub(crate) fn read_location_facts(
         segment
             .snapshot_watermark()
             .max(segment.event_watermark())
-            .max(account_frame.envelope_metadata().applied_event_sequence),
+            .max(metadata.applied_event_sequence),
     );
-    let account_complete = account_root.metadata().completeness()
-        == kairos_protocol::generated::kairos::common::v_2::ViewCompleteness::COMPLETE
-        && segment.completeness()
-            == kairos_protocol::generated::kairos::account::v_2::SegmentCompleteness::COMPLETE;
-    let risk_capacity = risk_state
-        .limits()
+    let account_complete = segment.completeness()
+        == kairos_protocol::generated::kairos::account::v_2::SegmentCompleteness::COMPLETE;
+    let policy_values = risk_snapshot.policies();
+    let matching_policy_ids = policy_values
         .iter()
-        .filter(|usage| {
-            let risk_policy = usage.policy();
+        .map(|value| value.policy())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|current| {
+            let risk_policy = current.policy();
             let scope = risk_policy.scope();
             risk_policy.metric() == kairos_protocol::generated::kairos::risk::v_2::Metric::MARGIN
                 && scope.account_id().is_none_or(|value| value == account_id)
                 && scope.strategy_id().is_none_or(|value| value == strategy_id)
         })
+        .map(|current| current.policy().policy_id().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    let limit_usage_values = risk_snapshot.limit_usage();
+    let risk_capacity = limit_usage_values
+        .iter()
+        .map(|value| value.limit_usage())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|usage| matching_policy_ids.contains(usage.policy_id()))
         .map(|usage| quantity_from_decimal(usage.available()))
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()

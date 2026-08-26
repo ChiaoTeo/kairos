@@ -84,317 +84,179 @@ pub(super) fn active_risk_reservation_status(status: RiskReservationSagaStatus) 
     )
 }
 
-pub(crate) fn encode_current_execution(
-    actor_id: &str,
-    identity: &InstanceIdentity,
-    generation: u64,
-    key: &ExecutionViewKey,
+pub(crate) fn encode_indexed_current(
     snapshot: &ExecutionCurrentView,
-) -> Result<Vec<u8>, String> {
-    const HISTORY_LIMIT: usize = 4_096;
-    let mut builder = FlatBufferBuilder::new();
-    let context = EncodeContext::view(
-        actor_id,
-        actor_id,
-        identity.clone(),
-        generation,
-        key.canonical_key(),
-    )?;
-    let metadata = view_metadata(
-        &mut builder,
-        &context,
-        key,
-        snapshot.exchange_event_watermark_unix_nanos.get(),
-        snapshot.event_sequence.get(),
-    );
+) -> Result<std::collections::BTreeMap<(String, Vec<u8>), Vec<u8>>, String> {
+    use kairos_execution_contract::{
+        ALGORITHM_RUNS_DATABASE, COMMITMENTS_DATABASE, INTENTS_DATABASE, ORDERS_DATABASE,
+        RISK_RESERVATIONS_DATABASE, UNKNOWN_REMOTE_ORDERS_DATABASE, indexed_entity_key,
+    };
+
     let active_intent_ids = snapshot
         .intents
         .iter()
         .filter(|intent| active_intent_status(intent.status))
         .map(|intent| intent.intent.intent_id.clone())
         .collect::<std::collections::BTreeSet<_>>();
-    let offsets = snapshot
+    let mut values = std::collections::BTreeMap::new();
+    for order in snapshot
         .orders
         .iter()
         .filter(|order| active_order_status(order.status))
-        .map(|value| encode_order_state(&mut builder, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    let orders = builder.create_vector(&offsets);
-    let offsets = snapshot
+    {
+        insert_indexed_value(
+            &mut values,
+            ORDERS_DATABASE,
+            order.order_id.as_str(),
+            encode_order_current(order)?,
+        )?;
+    }
+    for intent in snapshot
         .intents
         .iter()
         .filter(|intent| active_intent_ids.contains(&intent.intent.intent_id))
-        .map(|value| encode_intent_state(&mut builder, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    let intents = builder.create_vector(&offsets);
-    let offsets = snapshot
+    {
+        insert_indexed_value(
+            &mut values,
+            INTENTS_DATABASE,
+            intent.intent.intent_id.as_str(),
+            encode_intent_current(intent)?,
+        )?;
+    }
+    for run in snapshot
         .algorithm_runs
         .iter()
         .filter(|run| active_intent_ids.contains(&run.intent_id))
-        .map(|value| encode_algorithm_run_state(&mut builder, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    let algorithm_runs = builder.create_vector(&offsets);
-    let fill_start = snapshot.fills.len().saturating_sub(HISTORY_LIMIT);
-    let offsets = snapshot.fills[fill_start..]
-        .iter()
-        .map(|value| encode_current_fill(&mut builder, value, &snapshot.orders))
-        .collect::<Result<Vec<_>, _>>()?;
-    let fills = builder.create_vector(&offsets);
-    let event_start = snapshot.events.len().saturating_sub(HISTORY_LIMIT);
-    let offsets = snapshot.events[event_start..]
-        .iter()
-        .map(|value| encode_order_event_state(&mut builder, value))
-        .collect::<Vec<_>>();
-    let order_events = builder.create_vector(&offsets);
-    let intent_event_start = snapshot.intent_events.len().saturating_sub(HISTORY_LIMIT);
-    let offsets = snapshot.intent_events[intent_event_start..]
-        .iter()
-        .map(|value| encode_intent_event_state(&mut builder, value))
-        .collect::<Vec<_>>();
-    let intent_events = builder.create_vector(&offsets);
-    let offsets = snapshot
-        .unknown_remote_orders
-        .iter()
-        .filter(|value| {
-            matches!(
-                value.resolution,
-                crate::application::UnknownRemoteOrderResolution::Pending
-                    | crate::application::UnknownRemoteOrderResolution::ManualReview
-            )
-        })
-        .map(|value| encode_unknown_remote_order(&mut builder, value))
-        .collect::<Vec<_>>();
-    let unknown_remote_orders = builder.create_vector(&offsets);
-    let offsets = snapshot
+    {
+        insert_indexed_value(
+            &mut values,
+            ALGORITHM_RUNS_DATABASE,
+            run.algorithm_run_id.as_str(),
+            encode_algorithm_run_current(run)?,
+        )?;
+    }
+    for commitment in snapshot
         .commitments
         .iter()
-        .filter(|commitment| commitment.status.consumes_capacity())
-        .map(|value| encode_commitment_state(&mut builder, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    let commitments = builder.create_vector(&offsets);
-    let offsets = snapshot
+        .filter(|value| value.status.consumes_capacity())
+    {
+        insert_indexed_value(
+            &mut values,
+            COMMITMENTS_DATABASE,
+            commitment.order_id.as_str(),
+            encode_commitment_current(commitment)?,
+        )?;
+    }
+    for reservation in snapshot
         .risk_reservations
         .iter()
-        .filter(|reservation| active_risk_reservation_status(reservation.status))
-        .map(|value| encode_risk_reservation_state(&mut builder, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    let risk_reservations = builder.create_vector(&offsets);
-    let root = fb::CurrentExecutionView::create(
+        .filter(|value| active_risk_reservation_status(value.status))
+    {
+        insert_indexed_value(
+            &mut values,
+            RISK_RESERVATIONS_DATABASE,
+            reservation.reservation_id.as_str(),
+            encode_risk_reservation_current(reservation)?,
+        )?;
+    }
+    for remote in snapshot.unknown_remote_orders.iter().filter(|value| {
+        matches!(
+            value.resolution,
+            crate::application::UnknownRemoteOrderResolution::Pending
+                | crate::application::UnknownRemoteOrderResolution::ManualReview
+        )
+    }) {
+        insert_indexed_value(
+            &mut values,
+            UNKNOWN_REMOTE_ORDERS_DATABASE,
+            &remote.remote_order_id,
+            encode_unknown_remote_order_current(remote),
+        )?;
+    }
+    return Ok(values);
+
+    fn insert_indexed_value(
+        values: &mut std::collections::BTreeMap<(String, Vec<u8>), Vec<u8>>,
+        database: &str,
+        identity: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), String> {
+        let key = indexed_entity_key(identity).map_err(|error| error.to_string())?;
+        if values.insert((database.to_owned(), key), bytes).is_some() {
+            return Err(format!(
+                "duplicate Execution indexed current value: database={database}, identity={identity}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn encode_order_current(order: &ExecutionOrder) -> Result<Vec<u8>, String> {
+    let mut builder = FlatBufferBuilder::new();
+    let state = encode_order_state(&mut builder, order)?;
+    let root = fb::ExecutionOrderCurrent::create(
         &mut builder,
-        &fb::CurrentExecutionViewArgs {
-            metadata: Some(metadata),
-            orders: Some(orders),
-            intents: Some(intents),
-            algorithm_runs: Some(algorithm_runs),
-            fills: Some(fills),
-            order_events: Some(order_events),
-            intent_events: Some(intent_events),
-            unknown_remote_orders: Some(unknown_remote_orders),
-            commitments: Some(commitments),
-            risk_reservations: Some(risk_reservations),
-            exchange_event_watermark_unix_nanos: snapshot.exchange_event_watermark_unix_nanos.get(),
-            fill_history_truncated: snapshot.fills.len() > HISTORY_LIMIT,
-            order_event_history_truncated: snapshot.events.len() > HISTORY_LIMIT,
-            intent_event_history_truncated: snapshot.intent_events.len() > HISTORY_LIMIT,
-        },
+        &fb::ExecutionOrderCurrentArgs { state: Some(state) },
     );
-    fb::finish_current_execution_view_buffer(&mut builder, root);
+    fb::finish_execution_order_current_buffer(&mut builder, root);
     Ok(builder.finished_data().to_vec())
 }
 
-pub(super) fn encode_current_fill<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    fill: &crate::domain::ExecutionFill,
-    orders: &[ExecutionOrder],
-) -> Result<flatbuffers::WIPOffset<fb::Fill<'a>>, String> {
-    let order = orders.iter().find(|value| value.order_id == fill.order_id);
-    let fill_id = builder.create_string(fill.fill_id.as_str());
-    let order_id = builder.create_string(fill.order_id.as_str());
-    let intent_id = builder.create_string(
-        &fill
-            .intent_id
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default(),
+fn encode_intent_current(intent: &crate::application::IntentState) -> Result<Vec<u8>, String> {
+    let mut builder = FlatBufferBuilder::new();
+    let state = encode_intent_state(&mut builder, intent)?;
+    let root = fb::ExecutionIntentCurrent::create(
+        &mut builder,
+        &fb::ExecutionIntentCurrentArgs { state: Some(state) },
     );
-    let plan_id = builder.create_string(
-        &fill
-            .plan_id
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default(),
-    );
-    let leg_id = builder.create_string(
-        &fill
-            .leg_id
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default(),
-    );
-    let strategy_id = builder.create_string(
-        &order
-            .and_then(|value| value.strategy_id.as_ref())
-            .map(ToString::to_string)
-            .unwrap_or_default(),
-    );
-    let account_id = builder.create_string(
-        &order
-            .map(|value| value.account_id.to_string())
-            .unwrap_or_default(),
-    );
-    let segment_key = builder.create_string(
-        &order
-            .map(|value| value.segment_key.to_string())
-            .unwrap_or_default(),
-    );
-    let instrument_id = builder.create_string(fill.instrument_id.as_str());
-    let market_id = builder.create_string(
-        &fill
-            .execution_market_id
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default(),
-    );
-    let execution_route_id = builder.create_string(
-        &order
-            .and_then(|value| value.execution_route_id.as_ref())
-            .map(ToString::to_string)
-            .unwrap_or_default(),
-    );
-    let remote_order_id = fill
-        .remote_order_id
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let reported_broker_id = fill
-        .reported_broker_id
-        .as_ref()
-        .map(|value| builder.create_string(value));
-    let execution_channel = fill
-        .execution_channel
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let order_entry_symbol = fill
-        .order_entry_symbol
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let fee_asset_id = fill
-        .fee_currency
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let quantity = decimal(fill.quantity);
-    let price = decimal(fill.price);
-    let fee = decimal(fill.fee);
-    Ok(fb::Fill::create(
-        builder,
-        &fb::FillArgs {
-            fill_id: Some(fill_id),
-            trade_id: None,
-            order_id: Some(order_id),
-            intent_id: Some(intent_id),
-            plan_id: Some(plan_id),
-            leg_id: Some(leg_id),
-            strategy_id: Some(strategy_id),
-            account_id: Some(account_id),
-            segment_key: Some(segment_key),
-            instrument_id: Some(instrument_id),
-            market_id: Some(market_id),
-            execution_route_id: Some(execution_route_id),
-            remote_order_id,
-            reported_broker_id,
-            execution_channel,
-            provider_symbol: order_entry_symbol,
-            side: match fill.side {
-                OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,
-                OrderSide::Sell => kairos_protocol::generated::kairos::common::v_2::Side::SELL,
-            },
-            quantity: Some(&quantity),
-            price: Some(&price),
-            fee: Some(&fee),
-            fee_asset_id,
-            notional: None,
-            source_filled_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
-        },
-    ))
+    fb::finish_execution_intent_current_buffer(&mut builder, root);
+    Ok(builder.finished_data().to_vec())
 }
 
-pub(super) fn encode_order_event_state<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    event: &crate::application::ExecutionEvent,
-) -> flatbuffers::WIPOffset<fb::OrderLifecycleEventState<'a>> {
-    let order_id = builder.create_string(event.order_id.as_str());
-    let intent_id = event
-        .intent_id
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let plan_id = event
-        .plan_id
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let leg_id = event
-        .leg_id
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let remote_order_id = event
-        .remote_order_id
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let reason = (!event.reason.is_empty()).then(|| builder.create_string(&event.reason));
-    let fill_id = event
-        .fill_id
-        .as_ref()
-        .map(|value| builder.create_string(value.as_str()));
-    let filled_quantity = event.filled_quantity.map(decimal);
-    fb::OrderLifecycleEventState::create(
-        builder,
-        &fb::OrderLifecycleEventStateArgs {
-            order_id: Some(order_id),
-            intent_id,
-            plan_id,
-            leg_id,
-            lifecycle: order_lifecycle(event.status),
-            remote_order_id,
-            occurred_at_unix_nanos: event.occurred_at_unix_nanos.get(),
-            reason,
-            fill_id,
-            filled_quantity: filled_quantity.as_ref(),
-        },
-    )
+fn encode_algorithm_run_current(run: &crate::domain::AlgorithmRun) -> Result<Vec<u8>, String> {
+    let mut builder = FlatBufferBuilder::new();
+    let state = encode_algorithm_run_state(&mut builder, run)?;
+    let root = fb::ExecutionAlgorithmRunCurrent::create(
+        &mut builder,
+        &fb::ExecutionAlgorithmRunCurrentArgs { state: Some(state) },
+    );
+    fb::finish_execution_algorithm_run_current_buffer(&mut builder, root);
+    Ok(builder.finished_data().to_vec())
 }
 
-pub(super) fn encode_intent_event_state<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    event: &crate::application::IntentEvent,
-) -> flatbuffers::WIPOffset<fb::IntentLifecycleEventState<'a>> {
-    let intent_id = builder.create_string(event.intent_id.as_str());
-    let order_ids = event
-        .order_ids
-        .iter()
-        .map(|value| builder.create_string(value.as_str()))
-        .collect::<Vec<_>>();
-    let order_ids = builder.create_vector(&order_ids);
-    let completed_quantity = decimal(event.completed_quantity);
-    let reason = (!event.reason.is_empty()).then(|| builder.create_string(&event.reason));
-    let strategy_decision_id = event
-        .strategy_decision_id
-        .as_ref()
-        .map(|value| builder.create_string(value));
-    fb::IntentLifecycleEventState::create(
-        builder,
-        &fb::IntentLifecycleEventStateArgs {
-            intent_id: Some(intent_id),
-            event_sequence: event.event_sequence.get(),
-            lifecycle: intent_lifecycle(event.status),
-            order_ids: Some(order_ids),
-            completed_quantity: Some(&completed_quantity),
-            occurred_at_unix_nanos: event.occurred_at_unix_nanos.get(),
-            reason,
-            strategy_decision_id,
-            previous_lifecycle: event
-                .previous_status
-                .map(intent_lifecycle)
-                .unwrap_or(fb::IntentLifecycle::UNSPECIFIED),
-        },
-    )
+fn encode_commitment_current(commitment: &OrderCommitment) -> Result<Vec<u8>, String> {
+    let mut builder = FlatBufferBuilder::new();
+    let state = encode_commitment_state(&mut builder, commitment)?;
+    let root = fb::ExecutionCommitmentCurrent::create(
+        &mut builder,
+        &fb::ExecutionCommitmentCurrentArgs { state: Some(state) },
+    );
+    fb::finish_execution_commitment_current_buffer(&mut builder, root);
+    Ok(builder.finished_data().to_vec())
+}
+
+fn encode_risk_reservation_current(
+    reservation: &RiskReservationEvidence,
+) -> Result<Vec<u8>, String> {
+    let mut builder = FlatBufferBuilder::new();
+    let state = encode_risk_reservation_state(&mut builder, reservation)?;
+    let root = fb::ExecutionRiskReservationCurrent::create(
+        &mut builder,
+        &fb::ExecutionRiskReservationCurrentArgs { state: Some(state) },
+    );
+    fb::finish_execution_risk_reservation_current_buffer(&mut builder, root);
+    Ok(builder.finished_data().to_vec())
+}
+
+fn encode_unknown_remote_order_current(remote: &crate::application::UnknownRemoteOrder) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let state = encode_unknown_remote_order(&mut builder, remote);
+    let root = fb::ExecutionUnknownRemoteOrderCurrent::create(
+        &mut builder,
+        &fb::ExecutionUnknownRemoteOrderCurrentArgs { state: Some(state) },
+    );
+    fb::finish_execution_unknown_remote_order_current_buffer(&mut builder, root);
+    builder.finished_data().to_vec()
 }
 
 pub(super) fn encode_unknown_remote_order<'a>(
@@ -839,7 +701,7 @@ pub(super) fn decimal(
     kairos_protocol::generated::kairos::common::v_2::Decimal64::new(value.mantissa(), value.scale())
 }
 
-fn encode_algorithm_run_state<'a>(
+pub(super) fn encode_algorithm_run_state<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     run: &crate::domain::AlgorithmRun,
 ) -> Result<flatbuffers::WIPOffset<fb::AlgorithmRunState<'a>>, String> {

@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/bar.fbs";
+
+namespace kairos.market.v2;
+
+table MarketBarCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:Bar (required);
+}
+
+root_type MarketBarCurrent;
+file_identifier "MBC3";

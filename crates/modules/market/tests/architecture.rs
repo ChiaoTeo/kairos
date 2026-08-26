@@ -225,9 +225,10 @@ fn actor_is_the_single_source_runtime_state_owner() {
 }
 
 #[test]
-fn market_json_rpc_keeps_only_bounded_capability_queries_off_mmap() {
+fn market_json_rpc_keeps_current_state_in_the_indexed_owner_view() {
     let host = source("src/composition/host.rs");
     let actor = source("src/application/conflux.rs");
+    let indexed = source("src/services/publication/contract/indexed.rs");
     assert!(host.contains("MarketRpcService"));
     assert!(host.contains("MarketControlRpcServer"));
     assert!(host.contains("with_json_rpc"));
@@ -238,9 +239,27 @@ fn market_json_rpc_keeps_only_bounded_capability_queries_off_mmap() {
     assert!(actor.contains("async fn health"));
     assert!(actor.contains("async fn data_routes"));
     assert!(actor.contains("outputs()"));
-    assert!(actor.contains("MmapOutputDeclaration"));
-    assert!(actor.contains("MarketViewPublisher::resolved_path"));
-    assert!(!actor.contains("MarketViewPublisher::create"));
+    assert!(indexed.contains("IndexedMutation::Put"));
+    assert!(!indexed.contains("IndexedMutation::DeletePrefix"));
+    for dedicated_root in [
+        "MarketQuoteCurrent",
+        "MarketBarCurrent",
+        "MarketGreeksCurrent",
+        "MarketRateCurrent",
+        "MarketTicker24hCurrent",
+        "MarketMarkPriceCurrent",
+        "MarketFundingRateCurrent",
+        "MarketOpenInterestCurrent",
+        "MarketIndexPriceCurrent",
+        "MarketOrderBookCurrent",
+        "MarketFreshnessCurrent",
+    ] {
+        assert!(indexed.contains(dedicated_root));
+    }
+    assert!(!indexed.contains("MarketEntityCurrent"));
+    assert!(!indexed.contains("BarWindow"));
+    assert!(actor.contains(".indexed"));
+    assert!(actor.contains(".apply("));
 }
 
 #[test]
@@ -376,7 +395,7 @@ fn view_checkpoint_and_change_have_distinct_boundaries() {
     assert!(!access.contains("pub fn snapshot"));
     assert!(access.contains("pub fn current_view"));
     assert!(!crate_root().join("src/application/process").exists());
-    let publication = source("src/services/publication/contract/mmap.rs");
+    let publication = source("src/services/publication/contract/indexed.rs");
     assert!(publication.contains("fn encode_change_view"));
     assert!(!publication.contains("trait MarketChangePublisher"));
 }
@@ -627,7 +646,7 @@ fn publication_history_and_replay_implementations_have_final_owners() {
             .join("src/services/publication/fanout.rs")
             .exists()
     );
-    for file in ["events.rs", "encoding.rs", "mmap.rs"] {
+    for file in ["events.rs", "encoding.rs", "indexed.rs"] {
         assert!(
             crate_root()
                 .join(format!("src/services/publication/contract/{file}"))
@@ -649,7 +668,6 @@ fn publication_history_and_replay_implementations_have_final_owners() {
     for old in [
         "src/services/publication/encoding.rs",
         "src/services/history/mod.rs",
-        "src/composition/publisher/mmap.rs",
     ] {
         assert!(
             !crate_root().join(old).exists(),

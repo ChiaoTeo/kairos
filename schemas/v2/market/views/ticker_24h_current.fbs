@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/ticker_24h.fbs";
+
+namespace kairos.market.v2;
+
+table MarketTicker24hCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:Ticker24h (required);
+}
+
+root_type MarketTicker24hCurrent;
+file_identifier "MTC3";

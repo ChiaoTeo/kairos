@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/index_price.fbs";
+
+namespace kairos.market.v2;
+
+table MarketIndexPriceCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:IndexPrice (required);
+}
+
+root_type MarketIndexPriceCurrent;
+file_identifier "MIP3";

@@ -51,6 +51,7 @@ pub(super) struct CapitalConfluxState {
     pub accepting_writes: bool,
     pub reconcile_after: BTreeMap<String, UnixNanos>,
     pub producer_incarnation: u64,
+    pub published_indexed_values: BTreeMap<(String, Vec<u8>), Vec<u8>>,
 }
 
 impl<C> CapitalProcess<C>
@@ -101,8 +102,19 @@ where
             accepting_writes: true,
             reconcile_after: BTreeMap::new(),
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
+            published_indexed_values: BTreeMap::new(),
         });
         Ok(())
+    }
+
+    pub(crate) fn conflux_publication(&self) -> Option<(&PathBuf, &InstanceIdentity, u64)> {
+        self.conflux.as_ref().map(|state| {
+            (
+                &state.config.snapshot_root,
+                &state.config.identity,
+                state.producer_incarnation,
+            )
+        })
     }
 
     pub fn application(&self) -> &CapitalApplication {

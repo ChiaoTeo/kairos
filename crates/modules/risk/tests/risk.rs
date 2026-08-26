@@ -1,10 +1,9 @@
 use kairos_protocol::generated::kairos::risk::v_2::{
-    reservation_reserved_buffer_has_identifier, risk_latest_view_buffer_has_identifier,
-    root_as_reservation_reserved, root_as_risk_decision_made, root_as_risk_latest_view,
+    reservation_reserved_buffer_has_identifier, risk_circuit_current_buffer_has_identifier,
+    risk_limit_usage_current_buffer_has_identifier, root_as_reservation_reserved,
+    root_as_risk_circuit_current, root_as_risk_decision_made,
 };
-use kairos_risk::composition::{
-    FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, compose_risk_application,
-};
+use kairos_risk::composition::{FlatbuffersRiskEventWriter, compose_risk_application};
 use kairos_risk::{
     Amount, AuthorizeRequest, CircuitScope, CloseCircuit, ConsumeReservation, EnforcementMode,
     Metric, OpenCircuit, PolicyScope, PublishPolicy, ReleaseReservation, ReservationStatus,
@@ -199,18 +198,13 @@ fn current_view_and_reservation_event_use_independent_writers() {
     let mut app = application(100);
     app.authorize_and_reserve(request("order", 40)).unwrap();
     let snapshot = app.current_view();
-    let mut writer = FlatbuffersRiskSnapshotWriter::new("risk");
-    writer.publish(&snapshot).unwrap();
-    let payload = writer.last_payload.unwrap();
-    assert!(risk_latest_view_buffer_has_identifier(&payload));
-    assert_eq!(
-        root_as_risk_latest_view(&payload)
-            .unwrap()
-            .state()
-            .limits()
-            .len(),
-        1
-    );
+    let values = kairos_risk::composition::encode_indexed_current(&snapshot).unwrap();
+    let payload = values
+        .iter()
+        .find(|((database, _), _)| database == kairos_risk_contract::RISK_LIMIT_USAGE_DATABASE)
+        .map(|(_, value)| value)
+        .unwrap();
+    assert!(risk_limit_usage_current_buffer_has_identifier(payload));
 
     while !matches!(
         app.pending_event(),
@@ -528,11 +522,20 @@ fn circuit_state_is_published_in_the_risk_current_view() {
     })
     .unwrap();
     let snapshot = app.current_view();
-    let mut writer = FlatbuffersRiskSnapshotWriter::new("risk");
-    writer.publish(&snapshot).unwrap();
-    let payload = writer.last_payload.unwrap();
-    let root = root_as_risk_latest_view(&payload).unwrap();
-    assert_eq!(root.state().circuits().len(), 1);
+    let values = kairos_risk::composition::encode_indexed_current(&snapshot).unwrap();
+    let payload = values
+        .iter()
+        .find(|((database, _), _)| database == kairos_risk_contract::RISK_CIRCUITS_DATABASE)
+        .map(|(_, value)| value)
+        .unwrap();
+    assert!(risk_circuit_current_buffer_has_identifier(payload));
+    assert_eq!(
+        root_as_risk_circuit_current(payload)
+            .unwrap()
+            .circuit()
+            .reason(),
+        Some("risk halt")
+    );
 }
 
 #[test]

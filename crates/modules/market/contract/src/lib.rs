@@ -19,21 +19,22 @@ pub use control::{
     MarketUnsubscribePayload, ObservationRequirement, ProviderPreference, SubscriptionOwnerKey,
     SubscriptionPendingReason,
 };
-pub use encode::{
-    BarEncoder, EncodeContext, GreeksEncoder, OrderBookEncoder, QuoteEncoder, TradeEncoder,
-    event_metadata, view_metadata,
-};
+pub use encode::{EncodeContext, event_metadata};
 pub use error::{ContractError, ContractResult};
 pub use event::{MarketEvent, MarketEventFrame, MarketEventPublisher, MarketEventStream};
 pub type MarketConnection = kairos_protocol::ContractClient;
-
-pub use kairos_transport::{AeronEndpoint, SnapshotEnvelopeMetadata};
+pub use kairos_indexed_view::MetadataSnapshot as IndexedViewMetadata;
+pub use kairos_transport::AeronEndpoint;
 pub use view::{
-    MarketViewKey, MarketViewKind, MarketViewPublisher, ViewFrame, ViewMetadata, market_view_path,
+    MARKET_BARS_DATABASE, MARKET_FRESHNESS_DATABASE, MARKET_FUNDING_RATES_DATABASE,
+    MARKET_GREEKS_DATABASE, MARKET_INDEX_PRICES_DATABASE, MARKET_MAP_SIZE,
+    MARKET_MARK_PRICES_DATABASE, MARKET_OPEN_INTEREST_DATABASE, MARKET_ORDER_BOOKS_DATABASE,
+    MARKET_QUOTES_DATABASE, MARKET_RATES_DATABASE, MARKET_RESOURCE_EPOCH, MARKET_TICKERS_DATABASE,
+    MarketIndexedSnapshot, MarketIndexedValue, MarketIndexedView, MarketViewKey, MarketViewKind,
+    market_database, market_indexed_environment_path, market_indexed_identity, market_indexed_key,
+    market_indexed_schema_set,
 };
 
-/// Unified public entry point. Control, events, and views remain separate
-/// capabilities underneath this facade.
 #[derive(Clone)]
 pub struct MarketClient {
     inner: kairos_protocol::ContractClient,
@@ -43,11 +44,9 @@ impl MarketClient {
     pub fn connect(connection: MarketConnection) -> Self {
         Self { inner: connection }
     }
-
     pub fn control(&self) -> impl MarketControlRpcClient + '_ {
         self.inner.control()
     }
-
     pub fn events(&self, capacity: usize) -> ContractResult<MarketEventStream> {
         MarketEventStream::connect(
             self.inner
@@ -56,233 +55,15 @@ impl MarketClient {
             capacity,
         )
     }
-
-    pub fn quote(
+    pub fn indexed_current(
         &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<Quote> {
-        Quote::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::Quote, qualifier)?,
-        )
+        identity: &kairos_primitives::runtime::InstanceIdentity,
+    ) -> ContractResult<MarketIndexedView> {
+        MarketIndexedView::open(self.require_view_root()?, identity)
     }
-
-    pub fn bar_window(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<BarWindow> {
-        BarWindow::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::BarWindow, qualifier)?,
-        )
-    }
-
-    pub fn order_book(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<OrderBook> {
-        OrderBook::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::OrderBook, qualifier)?,
-        )
-    }
-
-    pub fn freshness(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<Freshness> {
-        Freshness::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::Freshness, qualifier)?,
-        )
-    }
-
-    pub fn greeks(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<Greeks> {
-        Greeks::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::Greeks, qualifier)?,
-        )
-    }
-
-    pub fn rate(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<Rate> {
-        Rate::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::Rate, qualifier)?,
-        )
-    }
-
-    pub fn ticker_24h(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<Ticker24h> {
-        Ticker24h::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::Ticker24h, qualifier)?,
-        )
-    }
-
-    pub fn mark_price(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<MarkPrice> {
-        MarkPrice::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::MarkPrice, qualifier)?,
-        )
-    }
-
-    pub fn funding_rate(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<FundingRate> {
-        FundingRate::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::FundingRate, qualifier)?,
-        )
-    }
-
-    pub fn open_interest(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<OpenInterest> {
-        OpenInterest::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::OpenInterest, qualifier)?,
-        )
-    }
-
-    pub fn index_price(
-        &self,
-        scope_key: impl Into<String>,
-        provider: impl AsRef<str>,
-        qualifier: Option<impl Into<String>>,
-    ) -> ContractResult<IndexPrice> {
-        IndexPrice::open(
-            self.require_view_root()?,
-            MarketViewKey::new(scope_key, provider, MarketViewKind::IndexPrice, qualifier)?,
-        )
-    }
-
     fn require_view_root(&self) -> ContractResult<&Path> {
         self.inner
             .require_view_root()
             .map_err(|error| ContractError::Transport(error.to_string()))
     }
 }
-
-macro_rules! market_view_handle {
-    ($handle:ident, $snapshot:ident, $view:ty, $decode:ident) => {
-        pub struct $handle {
-            reader: view::MarketViewReader,
-        }
-
-        impl $handle {
-            fn open(root: &Path, key: MarketViewKey) -> ContractResult<Self> {
-                Ok(Self {
-                    reader: view::MarketViewReader::open(root, key)?,
-                })
-            }
-
-            pub fn read(&self) -> ContractResult<$snapshot> {
-                Ok($snapshot {
-                    frame: self.reader.read()?,
-                })
-            }
-
-            pub fn key(&self) -> &MarketViewKey {
-                self.reader.key()
-            }
-        }
-
-        pub struct $snapshot {
-            frame: ViewFrame,
-        }
-
-        impl $snapshot {
-            pub fn generation(&self) -> u64 {
-                self.frame.generation()
-            }
-
-            pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
-                self.frame.envelope_metadata()
-            }
-
-            pub fn view(&self) -> ContractResult<$view> {
-                self.frame.$decode()
-            }
-        }
-    };
-}
-
-market_view_handle!(Quote, QuoteSnapshot, view::QuoteLatestView<'_>, quote);
-market_view_handle!(BarWindow, BarWindowSnapshot, view::BarWindowView<'_>, bar);
-market_view_handle!(
-    OrderBook,
-    OrderBookSnapshot,
-    view::OrderBookLatestView<'_>,
-    order_book
-);
-market_view_handle!(
-    Freshness,
-    FreshnessSnapshot,
-    view::FreshnessView<'_>,
-    freshness
-);
-market_view_handle!(Greeks, GreeksSnapshot, view::GreeksLatestView<'_>, greeks);
-market_view_handle!(Rate, RateSnapshot, view::RateLatestView<'_>, rate);
-market_view_handle!(
-    Ticker24h,
-    Ticker24hSnapshot,
-    view::Ticker24hLatestView<'_>,
-    ticker_24h
-);
-market_view_handle!(
-    MarkPrice,
-    MarkPriceSnapshot,
-    view::MarkPriceLatestView<'_>,
-    mark_price
-);
-market_view_handle!(
-    FundingRate,
-    FundingRateSnapshot,
-    view::FundingRateLatestView<'_>,
-    funding_rate
-);
-market_view_handle!(
-    OpenInterest,
-    OpenInterestSnapshot,
-    view::OpenInterestLatestView<'_>,
-    open_interest
-);
-market_view_handle!(
-    IndexPrice,
-    IndexPriceSnapshot,
-    view::IndexPriceLatestView<'_>,
-    index_price
-);

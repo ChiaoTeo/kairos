@@ -1,0 +1,10 @@
+namespace kairos.risk.v2;
+
+table RiskStateCurrent {
+  actor_id:string (required);
+  generation:ulong;
+  policy_version:ulong;
+}
+
+root_type RiskStateCurrent;
+file_identifier "RSM3";

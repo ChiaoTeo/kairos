@@ -8,16 +8,16 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use kairos_account_contract::{
-    AccountClient, AccountControlRpcClient, AccountCurrent, DecimalValue as AccountDecimal, Health,
-    ObservedOrders,
+    AccountClient, AccountControlRpcClient, AccountIndexedView, DecimalValue as AccountDecimal,
+    Health,
 };
-use kairos_primitives::account::PositionSide;
+use kairos_primitives::account::{AccountId, PositionSide};
 use kairos_primitives::execution::OrderId;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_primitives::time::Sequence;
 use kairos_protocol::generated::kairos::account::v_2::{
     AccountStatus, FreshnessState, PositionSide as AccountPositionSide,
 };
-use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
 use kairos_reference_contract::Market;
 use kairos_risk_contract::{Health as RiskHealth, RiskControlRpcClient};
 
@@ -85,11 +85,13 @@ pub(super) struct DependencyStateRuntime {
     state: Arc<RwLock<DependencyState>>,
     stop: Arc<AtomicBool>,
     workers: Vec<JoinHandle<()>>,
+    identity: InstanceIdentity,
 }
 
 impl DependencyStateRuntime {
     pub(super) fn start(
         accounts: &BTreeMap<String, AccountClient>,
+        identity: &InstanceIdentity,
         market_snapshot: Option<&Path>,
         reference: Option<ReferenceDependencyState>,
         risk: Option<kairos_risk_contract::RiskClient>,
@@ -102,6 +104,7 @@ impl DependencyStateRuntime {
             let client = client.clone();
             let state = Arc::clone(&state);
             let stop = Arc::clone(&stop);
+            let identity = identity.clone();
             workers.push(std::thread::spawn(move || {
                 let runtime = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -111,16 +114,13 @@ impl DependencyStateRuntime {
                     Err(_) => return,
                 };
                 let reader = loop {
-                    match client.account_current(format!("account:{account_id}"), &account_id) {
-                        Ok(reader) => break reader,
-                        Err(_) if !stop.load(Ordering::Acquire) => {
-                            std::thread::sleep(DEPENDENCY_REFRESH_INTERVAL)
-                        },
-                        Err(_) => return,
-                    }
-                };
-                let observed_orders_reader = loop {
-                    match client.observed_orders(format!("account:{account_id}"), &account_id) {
+                    match AccountId::new(account_id.clone())
+                        .map_err(|error| error.to_string())
+                        .and_then(|id| {
+                            client
+                                .indexed_current(&identity, id)
+                                .map_err(|error| error.to_string())
+                        }) {
                         Ok(reader) => break reader,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(DEPENDENCY_REFRESH_INTERVAL)
@@ -133,12 +133,7 @@ impl DependencyStateRuntime {
                         .block_on(AccountControlRpcClient::health(&client.control()))
                         .map_err(|error| error.to_string())
                         .and_then(|health| {
-                            read_account_dependency_state(
-                                &reader,
-                                &observed_orders_reader,
-                                &account_id,
-                                health,
-                            )
+                            read_account_dependency_state(&reader, &account_id, health)
                         });
                     if let Ok(value) = result {
                         if let Ok(mut state) = state.write() {
@@ -150,18 +145,24 @@ impl DependencyStateRuntime {
             }));
         }
         if market_snapshot.is_some() {
+            let market_snapshot = market_snapshot
+                .expect("checked Market snapshot root")
+                .to_path_buf();
+            let identity = identity.clone();
             let state = Arc::clone(&state);
             let stop = Arc::clone(&stop);
             workers.push(std::thread::spawn(move || {
                 while !stop.load(Ordering::Acquire) {
-                    if let Ok(mut state) = state.write() {
-                        if let Some(value) = state.market.as_mut() {
-                            value.refreshed_at = Instant::now();
-                        } else {
-                            state.market = Some(MarketDependencyState {
-                                generation: 0,
-                                refreshed_at: Instant::now(),
-                            });
+                    if let Ok(reader) =
+                        kairos_market_contract::MarketIndexedView::open(&market_snapshot, &identity)
+                    {
+                        if let Ok(metadata) = reader.metadata() {
+                            if let Ok(mut state) = state.write() {
+                                state.market = Some(MarketDependencyState {
+                                    generation: metadata.applied_event_sequence,
+                                    refreshed_at: Instant::now(),
+                                });
+                            }
                         }
                     }
                     std::thread::sleep(DEPENDENCY_REFRESH_INTERVAL);
@@ -202,6 +203,7 @@ impl DependencyStateRuntime {
             state,
             stop,
             workers,
+            identity: identity.clone(),
         }
     }
 
@@ -246,17 +248,9 @@ impl DependencyStateRuntime {
                 .block_on(AccountControlRpcClient::health(&client.control()))
                 .map_err(|error| error.to_string())?;
             let reader = client
-                .account_current(format!("account:{account_id}"), account_id)
+                .indexed_current(&self.identity, AccountId::new(account_id.clone())?)
                 .map_err(|error| error.to_string())?;
-            let observed_orders_reader = client
-                .observed_orders(format!("account:{account_id}"), account_id)
-                .map_err(|error| error.to_string())?;
-            let value = read_account_dependency_state(
-                &reader,
-                &observed_orders_reader,
-                account_id,
-                health,
-            )?;
+            let value = read_account_dependency_state(&reader, account_id, health)?;
             self.state
                 .write()
                 .map_err(|_| "account state lock poisoned".to_string())?
@@ -357,26 +351,22 @@ pub(super) fn reference_dependency_state(
 }
 
 pub(super) fn read_account_dependency_state(
-    reader: &AccountCurrent,
-    observed_orders_reader: &ObservedOrders,
+    reader: &AccountIndexedView,
     account_id: &str,
     health: Health,
 ) -> Result<AccountDependencyState, String> {
-    let snapshot = reader.read().map_err(|error| error.to_string())?;
-    let view = snapshot.view().map_err(|error| error.to_string())?;
-    let metadata = view.metadata();
-    if snapshot.generation() != metadata.generation()
-        || metadata.generation() != health.generation.get()
-        || metadata.applied_revision() != Some(health.event_sequence.get())
-    {
-        return Err("Account health and mmap watermark disagree".into());
-    }
-    if metadata.completeness() != ViewCompleteness::COMPLETE || view.account_id() != account_id {
-        return Err("Account mmap identity or completeness is invalid".into());
+    let snapshot = reader.snapshot().map_err(|error| error.to_string())?;
+    let metadata = snapshot.metadata();
+    if metadata.applied_event_sequence != health.event_sequence.get() {
+        return Err("Account health and indexed-view watermark disagree".into());
     }
     let mut balances = Vec::new();
     let mut positions = Vec::new();
-    for segment in view.segments() {
+    let mut maximum_generation = 0;
+    for value in snapshot.segments() {
+        let current = value.segment().map_err(|error| error.to_string())?;
+        let segment = current.state();
+        maximum_generation = maximum_generation.max(segment.state_generation());
         if segment.freshness() != FreshnessState::FRESH || segment.status() != AccountStatus::ACTIVE
         {
             return Err(format!(
@@ -384,49 +374,44 @@ pub(super) fn read_account_dependency_state(
                 segment.segment_key()
             ));
         }
-        balances.extend(segment.balances().iter().map(|balance| AccountBalanceFact {
+    }
+    if maximum_generation != health.generation.get() {
+        return Err("Account health and indexed-view generation disagree".into());
+    }
+    for value in snapshot.balances() {
+        let current = value.balance().map_err(|error| error.to_string())?;
+        let balance = current.balance();
+        balances.push(AccountBalanceFact {
             asset_code: balance.asset_code().unwrap_or_default().to_owned(),
             available: balance.available().map(|value| {
                 AccountDecimal::new(value.mantissa(), value.scale())
                     .expect("Account balance satisfies contract decimal bounds")
             }),
-        }));
-        positions.extend(segment.positions().iter().map(|position| {
-            let quantity = position.quantity();
-            AccountPositionFact {
-                segment_key: segment.segment_key().to_owned(),
-                instrument_id: position.instrument_id().to_owned(),
-                position_side: match position.position_side() {
-                    AccountPositionSide::LONG => PositionSide::Long,
-                    AccountPositionSide::SHORT => PositionSide::Short,
-                    _ => PositionSide::Net,
-                },
-                quantity: AccountDecimal::new(quantity.mantissa(), quantity.scale())
-                    .expect("Account position satisfies contract decimal bounds"),
-            }
-        }));
+        });
     }
-    let observed_snapshot = observed_orders_reader
-        .read()
-        .map_err(|error| error.to_string())?;
-    let observed_view = observed_snapshot
-        .view()
-        .map_err(|error| error.to_string())?;
-    let observed_metadata = observed_view.metadata();
-    if observed_snapshot.generation() != observed_metadata.generation()
-        || observed_metadata.generation() != health.generation.get()
-        || observed_metadata.applied_revision() != Some(health.event_sequence.get())
-        || observed_metadata.completeness() != ViewCompleteness::COMPLETE
-        || observed_view.account_id() != account_id
-    {
-        return Err(
-            "Account observed-orders watermark, identity, or completeness is invalid".into(),
-        );
+    for value in snapshot.positions() {
+        let current = value.position().map_err(|error| error.to_string())?;
+        let position = current.position();
+        let quantity = position.quantity();
+        positions.push(AccountPositionFact {
+            segment_key: current.segment_key().to_owned(),
+            instrument_id: position.instrument_id().to_owned(),
+            position_side: match position.position_side() {
+                AccountPositionSide::LONG => PositionSide::Long,
+                AccountPositionSide::SHORT => PositionSide::Short,
+                _ => PositionSide::Net,
+            },
+            quantity: AccountDecimal::new(quantity.mantissa(), quantity.scale())
+                .expect("Account position satisfies contract decimal bounds"),
+        });
     }
-    let observed_order_ids = observed_view
-        .segments()
+    let observed_order_ids = snapshot
+        .observed_orders()
         .iter()
-        .flat_map(|segment| segment.orders().iter())
+        .map(|value| value.observed_order().map(|current| current.order()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?
+        .into_iter()
         .filter_map(|order| order.execution_order_id())
         .filter(|value| !value.is_empty())
         .map(OrderId::new)
@@ -438,7 +423,7 @@ pub(super) fn read_account_dependency_state(
         positions,
         commitment_observation: AccountCommitmentObservation {
             account_id: account_id.to_owned(),
-            watermark: Sequence::new(observed_snapshot.envelope_metadata().applied_event_sequence),
+            watermark: Sequence::new(metadata.applied_event_sequence),
             observed_order_ids,
         },
         refreshed_at: Instant::now(),

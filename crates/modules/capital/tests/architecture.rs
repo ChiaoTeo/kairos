@@ -36,6 +36,27 @@ fn capital_application_does_not_publish_provider_or_persistence_ports() {
 }
 
 #[test]
+fn capital_indexed_databases_use_dedicated_current_roots() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let publisher = fs::read_to_string(crate_root.join("contract/src/view/encode.rs")).unwrap();
+    for dedicated_root in [
+        "CapitalObjectiveCurrent",
+        "CapitalDemandCurrent",
+        "CapitalPolicyCurrent",
+        "CapitalFactsCurrent",
+        "CapitalAvailabilityCurrent",
+        "CapitalRouteCurrent",
+        "CapitalPlanCurrent",
+        "CapitalReservationCurrent",
+        "CapitalOperationCurrent",
+        "CapitalAlertCurrent",
+    ] {
+        assert!(publisher.contains(dedicated_root));
+    }
+    assert!(!publisher.contains("CapitalEntityCurrent"));
+}
+
+#[test]
 fn capital_uses_conflux_instead_of_integration_directly() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = fs::read_to_string(crate_root.join("Cargo.toml")).unwrap();

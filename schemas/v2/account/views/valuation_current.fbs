@@ -1,0 +1,12 @@
+include "../types/valuation.fbs";
+
+namespace kairos.account.v2;
+
+table AccountValuationCurrent {
+  account_id:string (required);
+  segment_key:string (required);
+  valuation:AccountValuation (required);
+}
+
+root_type AccountValuationCurrent;
+file_identifier "AVL3";

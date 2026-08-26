@@ -12,8 +12,8 @@ use crate::{
     FundingPriority,
 };
 
-pub fn capital_current_view(snapshot: &CapitalSnapshot) -> contract::CapitalCurrentView {
-    contract::CapitalCurrentView {
+pub fn capital_current_view(snapshot: &CapitalSnapshot) -> contract::CapitalCurrentRecords {
+    contract::CapitalCurrentRecords {
         capital_group_id: snapshot.capital_group_id.clone(),
         strategy_id: snapshot.strategy_id.clone(),
         environment: snapshot.environment.clone(),

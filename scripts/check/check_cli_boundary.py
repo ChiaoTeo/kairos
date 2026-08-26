@@ -1059,9 +1059,9 @@ def main() -> int:
                                 )
                         for token in (
                             "pub struct ConnectedAccountApplication",
-                            "observed_orders(",
-                            "account_current(",
-                            "ViewCompleteness::COMPLETE",
+                            "indexed_current(",
+                            "view.observed_orders()?",
+                            "ensure_ready()?",
                             "AccountControlRpcClient::apply_simulated_settlement",
                             "AccountControlRpcClient::refresh",
                             "AccountControlRpcClient::reconcile",
@@ -1310,12 +1310,10 @@ def main() -> int:
                     for token in (
                         "AccountControlRpcClient",
                         "AccountClient",
-                        "ViewCompleteness",
                         "Decimal64",
                         "install_account_connection(",
                         "account_client(",
-                        ".observed_orders(format!",
-                        ".account_current(format!",
+                        ".indexed_current(",
                         "fn decimal_text(",
                         "fn optional_decimal(",
                     ):
@@ -1363,7 +1361,6 @@ def main() -> int:
                         "MarketControlRpcClient",
                         "MarketDataSourcesQuery",
                         "MarketDataRoutesQuery",
-                        "SnapshotEnvelopeMetadata",
                         "ViewMetadata",
                         "fn connected_market_client(",
                         "fn snapshot_json(",

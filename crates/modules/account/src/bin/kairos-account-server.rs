@@ -12,13 +12,15 @@ use kairos_account::composition::account::{
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
 use kairos_account::{AccountApplication, AccountRpcService};
 use kairos_account_contract::{
-    AccountControlRpcServer, AccountViewKey, AccountViewKind, AccountViewPublisher, AeronEndpoint,
+    ACCOUNT_MAP_SIZE, AccountControlRpcServer, AeronEndpoint, account_indexed_environment_path,
+    account_indexed_identity,
 };
 use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, JsonRpcRuntimeConfig,
-    MmapOutputDeclaration,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, IndexedEnvironmentOptions,
+    IndexedOutputDeclaration, JsonRpcRuntimeConfig,
 };
 use kairos_credentials::CredentialStore;
+use kairos_primitives::account::AccountId;
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_workspace::Workspace;
 
@@ -193,11 +195,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let refresh_interval = Duration::from_millis(args.refresh_ms);
     let (mut application, system) = composition.into_conflux(refresh_interval)?;
-    application.configure_publication_identity(transport_identity);
+    application.configure_publication_identity(transport_identity.clone());
+    let producer_incarnation = application.conflux_producer_incarnation();
     let system = configure_publication(
         system,
         &args.account_id,
         &view_root,
+        &transport_identity,
+        producer_incarnation,
         args.aeron_dir.as_deref(),
         &args.aeron_channel,
         args.account_events_stream_id,
@@ -209,29 +214,24 @@ fn configure_publication(
     system: ConfluxSystem,
     account_id: &str,
     view_root: &Path,
+    identity: &InstanceIdentity,
+    producer_incarnation: u64,
     aeron_dir: Option<&str>,
     aeron_channel: &str,
     event_stream_id: i32,
 ) -> Result<ConfluxSystem, Box<dyn std::error::Error>> {
-    const SLOT_SIZE: usize = 1024 * 1024;
-    let runtime_id = format!("account:{account_id}");
     let endpoint = AeronEndpoint::from_parts(aeron_dir, aeron_channel, event_stream_id)?;
     let mut system = system;
-    for (resource_key, kind) in [
-        ("account-current", AccountViewKind::Current),
-        ("account-observed-orders", AccountViewKind::ObservedOrders),
-    ] {
-        let key = AccountViewKey::new(&runtime_id, account_id, kind)?;
-        let path = AccountViewPublisher::resolved_path(view_root, &key)?;
-        system.outputs().mmap.declare(
-            resource_key.to_owned(),
-            MmapOutputDeclaration {
-                path,
-                slot_capacity: SLOT_SIZE,
-                revision: 1,
-            },
-        )?;
-    }
+    let account_id = AccountId::new(account_id)?;
+    let path = account_indexed_environment_path(view_root, identity, &account_id)?;
+    system.outputs().indexed.declare(
+        "account-current",
+        IndexedOutputDeclaration {
+            options: IndexedEnvironmentOptions::new(path, ACCOUNT_MAP_SIZE)?,
+            identity: account_indexed_identity(identity, &account_id, producer_incarnation),
+            revision: 1,
+        },
+    )?;
     system.outputs().aeron.declare(
         "account-events".to_owned(),
         AeronOutputDeclaration {

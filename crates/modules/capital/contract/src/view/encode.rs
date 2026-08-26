@@ -1,195 +1,179 @@
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
-use kairos_primitives::runtime::InstanceIdentity;
-use kairos_protocol::ProtocolContext;
 use kairos_protocol::generated::kairos::capital::v_2 as fb;
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
 
-use super::{CapitalViewKey, CapitalViewPublisher};
 use crate::{
-    CapitalAlert, CapitalAlertKind, CapitalAlertSeverity, CapitalAvailability, CapitalCurrentView,
-    CapitalDemand, CapitalDemandLifecycleStatus, CapitalEarnHolding, CapitalFacts,
-    CapitalFundingHorizon, CapitalOperation, CapitalOperationKind, CapitalOperationStatus,
-    CapitalPlan, CapitalPlanStatus, CapitalPolicy, CapitalReadiness, CapitalRecoveryAction,
-    CapitalReservation, CapitalReservationStatus, CapitalRoute, CapitalRouteKind,
-    CapitalSettlementClass, ContractError, ContractResult, FundingLocation, FundingObjective,
+    CapitalAlert, CapitalAlertKind, CapitalAlertSeverity, CapitalAvailability,
+    CapitalCurrentRecords, CapitalDemand, CapitalDemandLifecycleStatus, CapitalEarnHolding,
+    CapitalFacts, CapitalFundingHorizon, CapitalOperation, CapitalOperationKind,
+    CapitalOperationStatus, CapitalPlan, CapitalPlanStatus, CapitalPolicy, CapitalReadiness,
+    CapitalRecoveryAction, CapitalReservation, CapitalReservationStatus, CapitalRoute,
+    CapitalRouteKind, CapitalSettlementClass, ContractResult, FundingLocation, FundingObjective,
     FundingObjectiveLifecycleStatus, FundingPriority,
 };
 
-pub struct FlatbuffersCapitalViewWriter {
-    owner_id: String,
-    identity: InstanceIdentity,
-    key: CapitalViewKey,
-    pub last_payload: Option<Vec<u8>>,
-}
-
-impl FlatbuffersCapitalViewWriter {
-    pub fn new(
-        owner_id: impl Into<String>,
-        identity: InstanceIdentity,
-        key: CapitalViewKey,
-    ) -> Self {
-        Self {
-            owner_id: owner_id.into(),
-            identity,
-            key,
-            last_payload: None,
-        }
-    }
-
-    pub fn publish(&mut self, view: &CapitalCurrentView) -> Result<(), String> {
-        if self.key.capital_group_id != view.capital_group_id.as_str() {
-            return Err("Capital view key does not match capital_group_id".into());
-        }
+pub fn encode_indexed_current(
+    view: &CapitalCurrentRecords,
+) -> ContractResult<std::collections::BTreeMap<(String, Vec<u8>), Vec<u8>>> {
+    let mut values = std::collections::BTreeMap::new();
+    {
         let mut builder = FlatBufferBuilder::new();
-        let availability = view
-            .availability
-            .iter()
-            .map(|value| availability(&mut builder, value))
-            .collect::<Vec<_>>();
-        let plans = view
-            .plans
-            .iter()
-            .map(|value| plan(&mut builder, value))
-            .collect::<Vec<_>>();
-        let operations = view
-            .operations
-            .iter()
-            .map(|value| operation(&mut builder, value))
-            .collect::<Vec<_>>();
-        let alerts = view
-            .alerts
-            .iter()
-            .map(|value| alert(&mut builder, value))
-            .collect::<Vec<_>>();
-        let objectives = view
-            .objectives
-            .iter()
-            .map(|value| objective(&mut builder, value))
-            .collect::<Vec<_>>();
-        let demands = view
-            .demands
-            .iter()
-            .map(|value| demand(&mut builder, value))
-            .collect::<Vec<_>>();
-        let policies = view
-            .policies
-            .iter()
-            .map(|value| policy(&mut builder, value))
-            .collect::<Vec<_>>();
-        let facts = view
-            .facts
-            .iter()
-            .map(|value| capital_facts(&mut builder, value))
-            .collect::<Vec<_>>();
-        let routes = view
-            .routes
-            .iter()
-            .map(|value| route(&mut builder, value))
-            .collect::<Vec<_>>();
-        let reservations = view
-            .reservations
-            .iter()
-            .map(|value| reservation(&mut builder, value))
-            .collect::<Vec<_>>();
-        let objectives = builder.create_vector(&objectives);
-        let demands = builder.create_vector(&demands);
-        let policies = builder.create_vector(&policies);
-        let facts = builder.create_vector(&facts);
-        let availability = builder.create_vector(&availability);
-        let routes = builder.create_vector(&routes);
-        let plans = builder.create_vector(&plans);
-        let reservations = builder.create_vector(&reservations);
-        let operations = builder.create_vector(&operations);
-        let alerts = builder.create_vector(&alerts);
         let group_id = builder.create_string(view.capital_group_id.as_str());
         let strategy_id = builder.create_string(view.strategy_id.as_str());
         let environment = builder.create_string(&view.environment);
-        let state = fb::CapitalCurrentState::create(
+        let root = fb::CapitalStateCurrent::create(
             &mut builder,
-            &fb::CapitalCurrentStateArgs {
+            &fb::CapitalStateCurrentArgs {
                 capital_group_id: Some(group_id),
                 strategy_id: Some(strategy_id),
                 environment: Some(environment),
                 membership_version: view.membership_version.get(),
                 event_sequence: view.event_sequence.get(),
                 journal_sequence: view.journal_sequence.get(),
-                objectives: Some(objectives),
-                demands: Some(demands),
-                policies: Some(policies),
-                facts: Some(facts),
-                availability: Some(availability),
-                routes: Some(routes),
-                plans: Some(plans),
-                reservations: Some(reservations),
-                operations: Some(operations),
-                alerts: Some(alerts),
             },
         );
-        let canonical_key = self.key.canonical_key();
-        let context = ProtocolContext::view(
-            "capital",
-            &self.owner_id,
-            self.identity.clone(),
-            view.event_sequence.get(),
-            &canonical_key,
-        )?;
-        let snapshot_id = format!("{canonical_key}:{}", view.event_sequence);
-        let metadata = kairos_protocol::metadata::view_metadata(
-            &mut builder,
-            &context,
-            &snapshot_id,
-            &canonical_key,
-            as_of(view),
-            Some(view.event_sequence.get()),
+        fb::finish_capital_state_current_buffer(&mut builder, root);
+        values.insert(
+            (
+                crate::CAPITAL_STATE_DATABASE.to_owned(),
+                crate::capital_indexed_key(&[view.capital_group_id.as_str()])?,
+            ),
+            builder.finished_data().to_vec(),
         );
-        let root = fb::CapitalCurrentView::create(
-            &mut builder,
-            &fb::CapitalCurrentViewArgs {
-                metadata: Some(metadata),
-                state: Some(state),
-            },
+    }
+
+    macro_rules! entity {
+        ($database:expr, $key:expr, $root:ident, $args:ident, $finish:ident, $encoder:ident, $value:expr) => {{
+            let mut builder = FlatBufferBuilder::new();
+            let entity = $encoder(&mut builder, $value);
+            let group_id = builder.create_string(view.capital_group_id.as_str());
+            let root = fb::$root::create(
+                &mut builder,
+                &fb::$args {
+                    capital_group_id: Some(group_id),
+                    value: Some(entity),
+                },
+            );
+            fb::$finish(&mut builder, root);
+            values.insert(
+                ($database.to_owned(), $key),
+                builder.finished_data().to_vec(),
+            );
+        }};
+    }
+
+    for value in &view.objectives {
+        entity!(
+            crate::CAPITAL_OBJECTIVES_DATABASE,
+            crate::capital_indexed_key(&[value.objective_id.as_str()])?,
+            CapitalObjectiveCurrent,
+            CapitalObjectiveCurrentArgs,
+            finish_capital_objective_current_buffer,
+            objective,
+            value
         );
-        fb::finish_capital_current_view_buffer(&mut builder, root);
-        self.last_payload = Some(builder.finished_data().to_vec());
-        Ok(())
     }
-}
-
-pub struct MmapCapitalViewPublisher {
-    publisher: CapitalViewPublisher,
-    encoder: FlatbuffersCapitalViewWriter,
-    producer_incarnation: u64,
-}
-
-impl MmapCapitalViewPublisher {
-    pub fn create(
-        root: impl AsRef<std::path::Path>,
-        slot_capacity: usize,
-        owner_id: impl Into<String>,
-        identity: InstanceIdentity,
-        capital_group_id: impl Into<String>,
-    ) -> ContractResult<Self> {
-        let key = CapitalViewKey::current(capital_group_id);
-        Ok(Self {
-            publisher: CapitalViewPublisher::create(root, key.clone(), slot_capacity)?,
-            encoder: FlatbuffersCapitalViewWriter::new(owner_id, identity, key),
-            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
-        })
+    for value in &view.demands {
+        entity!(
+            crate::CAPITAL_DEMANDS_DATABASE,
+            crate::capital_indexed_key(&[value.demand_id.as_str()])?,
+            CapitalDemandCurrent,
+            CapitalDemandCurrentArgs,
+            finish_capital_demand_current_buffer,
+            demand,
+            value
+        );
+    }
+    for value in &view.policies {
+        entity!(
+            crate::CAPITAL_POLICIES_DATABASE,
+            crate::location_key(&value.destination)?,
+            CapitalPolicyCurrent,
+            CapitalPolicyCurrentArgs,
+            finish_capital_policy_current_buffer,
+            policy,
+            value
+        );
+    }
+    for value in &view.facts {
+        entity!(
+            crate::CAPITAL_FACTS_DATABASE,
+            crate::location_key(&value.destination)?,
+            CapitalFactsCurrent,
+            CapitalFactsCurrentArgs,
+            finish_capital_facts_current_buffer,
+            capital_facts,
+            value
+        );
+    }
+    for value in &view.availability {
+        entity!(
+            crate::CAPITAL_AVAILABILITY_DATABASE,
+            crate::location_key(&value.destination)?,
+            CapitalAvailabilityCurrent,
+            CapitalAvailabilityCurrentArgs,
+            finish_capital_availability_current_buffer,
+            availability,
+            value
+        );
+    }
+    for value in &view.routes {
+        entity!(
+            crate::CAPITAL_ROUTES_DATABASE,
+            crate::capital_indexed_key(&[value.route_id.as_str()])?,
+            CapitalRouteCurrent,
+            CapitalRouteCurrentArgs,
+            finish_capital_route_current_buffer,
+            route,
+            value
+        );
+    }
+    for value in &view.plans {
+        entity!(
+            crate::CAPITAL_PLANS_DATABASE,
+            crate::capital_indexed_key(&[value.plan_id.as_str()])?,
+            CapitalPlanCurrent,
+            CapitalPlanCurrentArgs,
+            finish_capital_plan_current_buffer,
+            plan,
+            value
+        );
+    }
+    for value in &view.reservations {
+        entity!(
+            crate::CAPITAL_RESERVATIONS_DATABASE,
+            crate::capital_indexed_key(&[value.reservation_id.as_str()])?,
+            CapitalReservationCurrent,
+            CapitalReservationCurrentArgs,
+            finish_capital_reservation_current_buffer,
+            reservation,
+            value
+        );
+    }
+    for value in &view.operations {
+        entity!(
+            crate::CAPITAL_OPERATIONS_DATABASE,
+            crate::capital_indexed_key(&[value.operation_id.as_str()])?,
+            CapitalOperationCurrent,
+            CapitalOperationCurrentArgs,
+            finish_capital_operation_current_buffer,
+            operation,
+            value
+        );
+    }
+    for value in &view.alerts {
+        entity!(
+            crate::CAPITAL_ALERTS_DATABASE,
+            crate::capital_indexed_key(&[value.alert_id.as_str()])?,
+            CapitalAlertCurrent,
+            CapitalAlertCurrentArgs,
+            finish_capital_alert_current_buffer,
+            alert,
+            value
+        );
     }
 
-    pub fn publish(&mut self, view: &CapitalCurrentView) -> ContractResult<()> {
-        self.encoder.publish(view).map_err(ContractError::Invalid)?;
-        self.publisher.publish(
-            kairos_transport::SnapshotEnvelopeMetadata {
-                resource_epoch: 1,
-                producer_incarnation: self.producer_incarnation,
-                generation: view.event_sequence.get(),
-                applied_event_sequence: view.event_sequence.get(),
-                published_at_unix_nanos: now_unix_nanos(),
-            },
-            self.encoder.last_payload.as_deref().unwrap_or_default(),
-        )
-    }
+    Ok(values)
 }
 
 pub(crate) fn location<'a>(
@@ -731,108 +715,10 @@ fn alert<'a>(
     )
 }
 
-fn as_of(view: &CapitalCurrentView) -> u64 {
-    view.availability
-        .iter()
-        .map(|value| value.evaluated_at.get())
-        .chain(view.plans.iter().map(|value| value.created_at.get()))
-        .chain(view.operations.iter().map(|value| value.updated_at.get()))
-        .chain(view.alerts.iter().map(|value| value.opened_at.get()))
-        .max()
-        .unwrap_or_default()
-}
-
 pub(crate) fn now_unix_nanos() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
         .min(u128::from(u64::MAX)) as u64
-}
-
-#[cfg(test)]
-mod tests {
-    use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
-    use kairos_primitives::capital::{CapitalGroupId, CapitalOperationId, CapitalPlanId};
-    use kairos_primitives::reference::Currency;
-    use kairos_primitives::runtime::StrategyId;
-    use kairos_primitives::time::{Generation, Sequence, UnixNanos};
-
-    use super::*;
-
-    #[test]
-    fn current_view_round_trips_through_the_flatbuffer_root() {
-        let key = CapitalViewKey::current("group-1");
-        let mut writer = FlatbuffersCapitalViewWriter::new(
-            "capital",
-            InstanceIdentity::new("workspace", "launch", "instance").unwrap(),
-            key,
-        );
-        writer
-            .publish(&CapitalCurrentView {
-                capital_group_id: CapitalGroupId::new("group-1").unwrap(),
-                strategy_id: StrategyId::new("strategy-1").unwrap(),
-                environment: "paper".into(),
-                membership_version: Generation::new(1),
-                event_sequence: Sequence::new(2),
-                journal_sequence: Sequence::new(3),
-                objectives: vec![],
-                demands: vec![],
-                policies: vec![],
-                facts: vec![],
-                availability: vec![CapitalAvailability {
-                    destination: FundingLocation {
-                        broker: BrokerId::new("paper").unwrap(),
-                        account_id: AccountId::new("main").unwrap(),
-                        segment: SegmentKey::new("spot").unwrap(),
-                        asset: Currency::new("USDT").unwrap(),
-                    },
-                    readiness: CapitalReadiness::Ready,
-                    policy_version: Generation::new(1),
-                    active_objective_ids: vec![],
-                    active_demand_ids: vec![],
-                    funding_horizons: vec![],
-                    desired_target: "10".parse().unwrap(),
-                    effective_target: "10".parse().unwrap(),
-                    observed_available: "4".parse().unwrap(),
-                    deficit: "6".parse().unwrap(),
-                    deficit_observed_since: None,
-                    cooldown_until: None,
-                    account_watermark: Sequence::new(7),
-                    risk_policy_version: Generation::new(8),
-                    risk_watermark: Sequence::new(9),
-                    evaluated_at: 10.into(),
-                    reason: None,
-                }],
-                routes: vec![],
-                plans: vec![],
-                reservations: vec![],
-                operations: vec![],
-                alerts: vec![CapitalAlert {
-                    alert_id: kairos_primitives::runtime::EventId::new("capital-recovery:plan-1")
-                        .unwrap(),
-                    plan_id: CapitalPlanId::new("plan-1").unwrap(),
-                    operation_id: Some(CapitalOperationId::new("operation-1").unwrap()),
-                    kind: CapitalAlertKind::ReconciliationRequired,
-                    severity: CapitalAlertSeverity::Warning,
-                    recovery_action: CapitalRecoveryAction::ReconcileOriginalOperation,
-                    message: "query the original operation".into(),
-                    opened_at: UnixNanos::new(11),
-                }],
-            })
-            .unwrap();
-        let payload = writer.last_payload.unwrap();
-        assert!(fb::capital_current_view_buffer_has_identifier(&payload));
-        let root = fb::root_as_capital_current_view(&payload).unwrap();
-        let state = root.state();
-        assert_eq!(state.capital_group_id(), "group-1");
-        assert_eq!(state.availability().len(), 1);
-        assert_eq!(state.availability().get(0).deficit().mantissa(), 6);
-        assert_eq!(state.alerts().len(), 1);
-        assert_eq!(state.alerts().get(0).plan_id(), "plan-1");
-        assert_eq!(
-            state.alerts().get(0).recovery_action(),
-            fb::CapitalRecoveryAction::RECONCILE_ORIGINAL_OPERATION
-        );
-    }
 }

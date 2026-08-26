@@ -7,14 +7,10 @@ depend on a process client when they only need a snapshot or event contract.
 
 from .base import (
     CommandEnvelope,
-    ContractSnapshot,
     QueryEnvelope,
-    SnapshotMetadata,
 )
 
 __all__ = [
     "CommandEnvelope",
-    "ContractSnapshot",
     "QueryEnvelope",
-    "SnapshotMetadata",
 ]

@@ -6,12 +6,14 @@ from typing import Any
 _EXPORTS = {
     "ExecutionControlClient": (".control", "ExecutionControlClient"),
     "ExecutionCurrentViews": (".current", "ExecutionCurrentViews"),
-    "ExecutionViewFrame": (".view", "ExecutionViewFrame"),
-    "ExecutionViewKey": (".view", "ExecutionViewKey"),
-    "ExecutionViewKind": (".view", "ExecutionViewKind"),
-    "ExecutionViewReader": (".view", "ExecutionViewReader"),
+    "ExecutionIndexedViewReader": (".view", "ExecutionIndexedViewReader"),
     "decode_event": (".events", "decode_event"),
-    "decode_view": (".view", "decode_view"),
+    "decode_indexed_value": (".view", "decode_indexed_value"),
+    "execution_indexed_environment_path": (
+        ".view",
+        "execution_indexed_environment_path",
+    ),
+    "indexed_entity_key": (".view", "indexed_entity_key"),
 }
 
 

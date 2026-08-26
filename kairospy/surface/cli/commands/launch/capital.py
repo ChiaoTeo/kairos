@@ -99,7 +99,7 @@ def launch_instance_component_capital_availabilities(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read launch-scoped Capital availability facts from mmap."""
+    """Read launch-scoped Capital availability facts from the indexed view."""
     owner = WorkspaceApplication().open(workspace)
     client, resolved_instance, mode = _instance_capital_client(
         owner, launch_id, instance
@@ -124,7 +124,7 @@ def launch_instance_component_capital_objectives(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read launch-scoped Capital funding objectives from mmap."""
+    """Read launch-scoped Capital funding objectives from the indexed view."""
     owner = WorkspaceApplication().open(workspace)
     client, resolved_instance, mode = _instance_capital_client(
         owner, launch_id, instance
@@ -149,7 +149,7 @@ def launch_instance_component_capital_demands(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read launch-scoped Capital demands from mmap."""
+    """Read launch-scoped Capital demands from the indexed view."""
     owner = WorkspaceApplication().open(workspace)
     client, resolved_instance, mode = _instance_capital_client(
         owner, launch_id, instance
@@ -174,7 +174,7 @@ def launch_instance_component_capital_plans(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read launch-scoped Capital plans from mmap."""
+    """Read launch-scoped Capital plans from the indexed view."""
     owner = WorkspaceApplication().open(workspace)
     client, resolved_instance, mode = _instance_capital_client(
         owner, launch_id, instance
@@ -199,7 +199,7 @@ def launch_instance_component_capital_routes(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read launch-scoped Capital routes from mmap."""
+    """Read launch-scoped Capital routes from the indexed view."""
     owner = WorkspaceApplication().open(workspace)
     client, resolved_instance, mode = _instance_capital_client(
         owner, launch_id, instance
@@ -224,7 +224,7 @@ def launch_instance_component_capital_reservations(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read launch-scoped Capital reservations from mmap."""
+    """Read launch-scoped Capital reservations from the indexed view."""
     owner = WorkspaceApplication().open(workspace)
     client, resolved_instance, mode = _instance_capital_client(
         owner, launch_id, instance
@@ -249,7 +249,7 @@ def launch_instance_component_capital_operations(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read launch-scoped Capital operations from mmap."""
+    """Read launch-scoped Capital operations from the indexed view."""
     owner = WorkspaceApplication().open(workspace)
     client, resolved_instance, mode = _instance_capital_client(
         owner, launch_id, instance
@@ -274,7 +274,7 @@ def launch_instance_component_capital_alerts(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.JSON, "--output", "--format"),
 ) -> None:
-    """Read launch-scoped Capital recovery alerts from mmap."""
+    """Read launch-scoped Capital recovery alerts from the indexed view."""
     owner = WorkspaceApplication().open(workspace)
     client, resolved_instance, mode = _instance_capital_client(
         owner, launch_id, instance

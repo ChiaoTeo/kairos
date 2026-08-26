@@ -1,0 +1,12 @@
+include "../types/earn_holding.fbs";
+
+namespace kairos.account.v2;
+
+table AccountEarnHoldingCurrent {
+  account_id:string (required);
+  segment_key:string (required);
+  holding:EarnHolding (required);
+}
+
+root_type AccountEarnHoldingCurrent;
+file_identifier "AEH3";

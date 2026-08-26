@@ -1,0 +1,12 @@
+include "../types/current_identity.fbs";
+include "../types/freshness.fbs";
+
+namespace kairos.market.v2;
+
+table MarketFreshnessCurrent {
+  identity:MarketCurrentIdentity (required);
+  value:FreshnessEntry (required);
+}
+
+root_type MarketFreshnessCurrent;
+file_identifier "MFS3";

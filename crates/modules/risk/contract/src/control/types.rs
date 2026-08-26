@@ -377,7 +377,7 @@ pub struct FundingRequirement {
     pub collateral_asset: Currency,
 }
 
-/// mmap current-state contract. It cannot carry event history or positions.
+/// indexed current-state contract. It cannot carry event history or positions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RiskCurrentView {
     pub actor_id: ActorId,

@@ -6,10 +6,10 @@ workspace Unix control socket.
 authoritative decision plus reservation result. `ConsumeReservation` and
 `ReleaseReservation` are idempotent cleanup commands.
 
-FlatBuffers is used for the retained Risk event stream and may encode individual indexed current
-values. The target current view separates policies, limit usage, allocations, reservations, and
-circuits into named LMDB databases. `RiskLatestView` is the legacy KSS aggregate until Risk's hard
-migration. Events describe concrete facts such as a
+FlatBuffers is used for the retained Risk event stream and individual indexed current
+values. The current view separates state, policies, limit usage, allocations, reservations, and
+circuits into named LMDB databases. The former aggregate root and reader have been removed.
+Events describe concrete facts such as a
 reservation being reserved, consumed, released, or expired, and a circuit
 opening or closing. They are not status polling notifications.
 

@@ -1,0 +1,14 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.risk.v2;
+
+table RiskLimitUsageCurrent {
+  actor_id:string (required);
+  policy_id:string (required);
+  used:kairos.common.v2.Decimal64 (required);
+  reserved:kairos.common.v2.Decimal64 (required);
+  available:kairos.common.v2.Decimal64 (required);
+}
+
+root_type RiskLimitUsageCurrent;
+file_identifier "RLU3";

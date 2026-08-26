@@ -162,7 +162,7 @@ fn execution_server_uses_only_normalized_multi_route_configuration() {
 }
 
 #[test]
-fn execution_reads_account_business_state_from_the_typed_mmap_view() {
+fn execution_reads_account_business_state_from_the_typed_indexed_view() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/services");
     let dependencies = fs::read_to_string(root.join("dependencies/mod.rs"))
         .expect("read Execution dependency adapter");
@@ -180,11 +180,10 @@ fn execution_reads_account_business_state_from_the_typed_mmap_view() {
     let dependency_state = fs::read_to_string(root.join("dependencies/state/mod.rs"))
         .expect("read Execution typed dependency states");
     assert!(dependency_state.contains("AccountClient"));
-    assert!(dependency_state.contains("account_current("));
-    assert!(dependency_state.contains("observed_orders("));
-    assert!(!dependency_state.contains("SharedSnapshotReader"));
-    assert!(dependency_state.contains("metadata.applied_revision()"));
-    assert!(dependency_state.contains("ViewCompleteness::COMPLETE"));
+    assert!(dependency_state.contains("indexed_current("));
+    assert!(dependency_state.contains("snapshot.observed_orders()"));
+    assert!(dependency_state.contains("metadata.applied_event_sequence"));
+    assert!(dependency_state.contains("reader.snapshot()"));
     assert!(dependency_state.contains("FreshnessState::FRESH"));
     assert!(dependency_state.contains("struct DependencyStateRuntime"));
     assert!(dependency_state.contains("impl Drop for DependencyStateRuntime"));
@@ -233,7 +232,7 @@ fn execution_does_not_create_reference_contract_clients_inside_the_module() {
 }
 
 #[test]
-fn execution_connected_facade_reads_mmap_and_routes_from_control() {
+fn execution_connected_facade_reads_indexed_current_view_and_routes_from_control() {
     let cli = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-execution-cli.rs"),
     )
@@ -247,9 +246,9 @@ fn execution_connected_facade_reads_mmap_and_routes_from_control() {
     assert!(!cli.contains("ExecutionControlRpcClient"));
     assert!(!cli.contains("client.current_execution("));
     assert!(!cli.contains("install_execution_connection("));
-    assert!(server.contains("current_execution(&self.identity)"));
-    assert!(server.contains("client.current_execution("));
-    assert!(server.contains("frame.view()?"));
+    assert!(server.contains("client.indexed_current(&self.identity)"));
+    assert!(server.contains("current.ensure_ready()?"));
+    assert!(server.contains(".with_order(order_id"));
     assert!(server.contains("ConfluxSystem::new()"));
     assert!(server.contains("install_execution_connection("));
     assert!(server.contains("execution_client("));
@@ -257,7 +256,6 @@ fn execution_connected_facade_reads_mmap_and_routes_from_control() {
     assert!(server.contains("ExecutionControlRpcClient::order_audit"));
     assert!(!server.contains("ExecutionConnection::control_only"));
     assert!(!server.contains("ExecutionClient::connect"));
-    assert!(!server.contains("ExecutionViewReader::open"));
     assert!(!server.contains("\"execution_routes\""));
     assert!(!server.contains("RestControlClient::new"));
     assert!(!server.contains("/v1/routes"));
@@ -284,59 +282,43 @@ fn execution_connected_facade_reads_mmap_and_routes_from_control() {
         );
     }
 
-    let schema = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../schemas/v2/execution/views/current_execution.fbs"),
-    )
-    .expect("read CurrentExecutionView schema");
+    let schemas =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../schemas/v2/execution/views");
     for required in [
-        "orders:[OrderState]",
-        "intents:[IntentState]",
-        "fills:[Fill]",
-        "order_events:[OrderLifecycleEventState]",
-        "intent_events:[IntentLifecycleEventState]",
-        "unknown_remote_orders:[UnknownRemoteOrderState]",
-        "commitments:[OrderCommitmentState]",
-        "risk_reservations:[RiskReservationSagaState]",
+        "order_current.fbs",
+        "intent_current.fbs",
+        "algorithm_run_current.fbs",
+        "commitment_current.fbs",
+        "risk_reservation_current.fbs",
+        "unknown_remote_order_current.fbs",
     ] {
         assert!(
-            schema.contains(required),
-            "missing current view field: {required}"
+            schemas.join(required).is_file(),
+            "missing indexed entity schema: {required}"
         );
     }
+    assert!(!schemas.join("current_execution.fbs").exists());
 }
 
 #[test]
 fn execution_has_one_instance_partitioned_current_view_without_compatibility_roots() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let contract =
-        fs::read_to_string(root.join("contract/src/view/key.rs")).expect("read Execution view key");
+    let contract = fs::read_to_string(root.join("contract/src/view/indexed.rs"))
+        .expect("read Execution indexed view contract");
     let launch = fs::read_to_string(root.join("src/composition/launch.rs"))
         .expect("read Execution composition");
     let publisher = fs::read_to_string(root.join("src/application/conflux.rs"))
         .expect("read Execution publisher");
     let schemas = root.join("../../../schemas/v2/execution/views");
 
-    assert!(contract.contains("CurrentExecution"));
-    assert!(contract.contains("launch="));
-    assert!(contract.contains("instance="));
-    assert!(!contract.contains("ActiveOrders"));
-    assert!(!contract.contains("ActiveIntents"));
-    assert_eq!(
-        launch
-            .matches("ExecutionViewKind::CurrentExecution")
-            .count(),
-        1
-    );
-    assert_eq!(
-        publisher
-            .matches("ExecutionViewKind::CurrentExecution")
-            .count(),
-        2
-    );
+    assert!(contract.contains("execution_indexed_schema_set"));
+    assert!(contract.contains("EXECUTION_RESOURCE_EPOCH"));
+    assert!(contract.contains("IndexedViewReader"));
+    assert!(launch.contains("outputs().indexed.declare"));
+    assert!(publisher.contains(".indexed"));
     assert!(!schemas.join("active_orders.fbs").exists());
     assert!(!schemas.join("active_intents.fbs").exists());
-    assert!(schemas.join("current_execution.fbs").is_file());
+    assert!(!schemas.join("current_execution.fbs").exists());
 }
 
 #[test]
@@ -468,7 +450,7 @@ fn execution_publication_is_owned_by_conflux_resources() {
     let services = rust_source(&root.join("src/services/publication"));
     assert!(actor.contains("outputs()"));
     assert!(actor.contains(".aeron"));
-    assert!(actor.contains(".mmap"));
+    assert!(actor.contains(".indexed"));
     assert!(!actor.contains("try_with"));
     assert!(actor.contains("flush_durable_events"));
     assert!(!services.contains("SharedExecutionSnapshotPublisher"));

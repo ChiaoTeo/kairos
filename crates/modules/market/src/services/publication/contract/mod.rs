@@ -1,6 +1,6 @@
 mod encoding;
 mod events;
-mod mmap;
+mod indexed;
 
 pub(crate) use events::encode_event;
-pub(crate) use mmap::encode_change_view;
+pub(crate) use indexed::encode_change_view;

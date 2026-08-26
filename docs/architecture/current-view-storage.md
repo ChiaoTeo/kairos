@@ -1,9 +1,9 @@
 # Current-view storage architecture
 
-This document specifies the target cross-module storage contract for current business state. It is
-governed by [Decision 0034](../decisions/0034-unified-current-view-storage.md). The implementation-status
-section distinguishes the accepted target from the KSS snapshot code that still exists during the hard
-migration.
+This document specifies the implemented cross-module storage contract for current business state. It is
+governed by [Decision 0034](../decisions/0034-unified-current-view-storage.md). Execution, Account, Risk,
+Capital, and Market publish and read only owner-scoped LMDB indexed current views; the former aggregate
+snapshot transports and roots have been removed.
 
 ## 1. Outcome and scope
 
@@ -109,7 +109,7 @@ epoch. There is no old-version fallback.
 
 ### 5.1 Storage versions versus business ordering
 
-LMDB removes KSS active-slot generation, per-file generation joins, application seqlocks, physical-slot
+LMDB removes the former active-slot generation, per-file generation joins, application seqlocks, physical-slot
 generation/ABA handling, and manual crash-atomic publication. Its read transaction already selects one
 internally consistent MVCC database version. Kairos does not expose the LMDB transaction ID as a
 business sequence because maintenance, rebuild, and storage implementation details may advance it
@@ -208,29 +208,18 @@ Current databases retain only facts needed to answer “what is true now?” Exa
 
 Events, diagnostic logs, and unbounded history are not duplicated into current databases.
 
-## 10. Bounded windows
+## 10. Windows are consumer state
 
-The baseline represents a retained window as indexed records plus one metadata record, not one array
-value and not a new ring protocol:
+Market current storage keeps exactly one latest completed `MarketBarCurrent` per semantic series key.
+It does not retain a bar window, window metadata, or sequence-suffixed historical rows.
 
-```text
-bars database:
-  key   = (series_id, bar_sequence)
-  value = one Bar
+Strategy builds each rolling window from immutable `BarCompleted` events because window length,
+warm-up, gap policy, and replay position are consumer-owned behavior. A consumer that starts after the
+required event range must use an explicit Market history/backfill query before becoming ready. Current
+storage is never treated as an event-recovery or historical-window path.
 
-bar_windows database:
-  key   = series_id
-  value = first_sequence, last_sequence, capacity, completeness
-```
-
-Insertion/revision, expired-key deletion, and metadata update occur in one transaction. Range reads use
-the ordered composite-key prefix. The number of retained keys is logically bounded; LMDB map size and
-MVCC page retention are separately monitored.
-
-Storing `Bar[N]` as one LMDB value is forbidden for a frequently updated window because replacing one
-element rewrites the whole value. A custom fixed-slot ring is not part of this baseline. It may be
-introduced only by a later Decision backed by end-to-end latency and write-amplification evidence for a
-named owner/current consumer.
+A future shared retained window requires a named owner and consumer, explicit retention and gap
+semantics, and measurement evidence. It is not admitted as a generic indexed-view feature.
 
 ## 11. Capacity, lifecycle, and health
 
@@ -288,10 +277,10 @@ evidence to show the indexed baseline is insufficient.
 | Owner | Target named databases |
 | --- | --- |
 | Execution | `orders`, `intents`, `algorithm_runs`, `commitments`, `risk_reservations`, `unknown_remote_orders` |
-| Account | `account_status`, `segments`, `balances`, `collateral`, `positions`, `valuations`, `observed_orders` |
+| Account | `segments`, `balances`, `collateral`, `positions`, `valuations`, `earn_holdings`, `observed_orders` |
 | Risk | `policies`, `limit_usage`, `allocations`, `reservations`, `circuits` |
 | Capital | `objectives`, `demands`, `source_facts`, `targets`, `routes`, `plans`, `reservations`, `operations`, `alerts` |
-| Market | latest family databases keyed by observation identity, plus `bars` and `bar_windows` |
+| Market | one latest-value database per observation type, including `bars` keyed by bar series |
 
 This table fixes ownership and intended access units, not final schema spelling. A named database is
 created only with a current publisher and consumer.
@@ -299,20 +288,13 @@ created only with a current publisher and consumer.
 Reference remains outside this layout because its contract-owned SQLite catalog already provides the
 authoritative point-in-time indexed read surface.
 
-## 15. Implementation status and hard migration
+## 15. Implementation status
 
-As of 2026-08-26, modules still publish KSS1 double-slot FlatBuffers snapshots. The existing physical
-contract is documented as legacy in [`schemas/v2/mmap-contract.md`](../../schemas/v2/mmap-contract.md).
-No LMDB current-view implementation is claimed complete by this document.
+As of 2026-08-27, Execution, Account, Risk, Capital, and Market publish and read only their
+owner-scoped LMDB indexed current views. Conflux owns only Aeron and indexed output collections.
+The former shared-memory and atomic-file current-view transports, aggregate roots, native Python
+reader, fixtures, and compatibility entry points have been removed.
 
-Migration order:
-
-1. add and certify the concrete platform indexed-view capability and native Python reader;
-2. migrate Execution as the first complete owner vertical slice;
-3. remove `CurrentExecutionView`, KSS declaration/publication/reader, and connected snapshot decoding in
-   the same change;
-4. migrate Account, Risk, Capital, and Market owner by owner using the same hard-cut rule;
-5. remove KSS current-view transport after its final caller is gone.
-
-There is never a production dual-read comparison or compatibility fallback. Pre-cut tests may construct
-isolated fixtures for evidence, but the activated owner exposes exactly one current-state path.
+There is no production dual-write, dual-read comparison, fallback, or compatibility alias. A reader
+gets metadata and the requested exact value or database ranges from one LMDB read transaction and
+returns owned bytes; a borrowed slice is exposed only inside a transaction-scoped Rust callback.

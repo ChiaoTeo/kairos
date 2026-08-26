@@ -3,7 +3,4 @@
 
 mod risk;
 
-pub use risk::{
-    FileRiskSnapshotPublisher, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter,
-    MmapRiskSnapshotPublisher, RiskAeronEventPublisher, RiskSnapshotPublisher,
-};
+pub use risk::{FlatbuffersRiskEventWriter, RiskAeronEventPublisher, encode_indexed_current};

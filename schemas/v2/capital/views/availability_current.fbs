@@ -1,0 +1,5 @@
+include "../types/state.fbs";
+namespace kairos.capital.v2;
+table CapitalAvailabilityCurrent { capital_group_id:string (required); value:CapitalAvailability (required); }
+root_type CapitalAvailabilityCurrent;
+file_identifier "CAV3";

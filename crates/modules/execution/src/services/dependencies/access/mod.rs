@@ -8,6 +8,7 @@ pub(super) struct ExecutionDependencyAccess {
     pub(super) accounts: BTreeMap<String, kairos_account_contract::AccountClient>,
     pub(super) market: Option<kairos_market_contract::MarketClient>,
     pub(super) market_snapshot: Option<PathBuf>,
+    pub(super) identity: kairos_primitives::runtime::InstanceIdentity,
     pub(super) market_source_id: String,
     pub(super) risk: Option<kairos_risk_contract::RiskClient>,
     pub(super) risk_actor_id: Option<String>,
@@ -27,7 +28,8 @@ impl ExecutionDependencyAccess {
                 .ok_or_else(|| "risk endpoint is not configured".to_string())?,
             self.risk_actor_id
                 .clone()
-                .ok_or_else(|| "risk mmap actor_id is not configured".to_string())?,
+                .ok_or_else(|| "risk indexed-view actor_id is not configured".to_string())?,
+            self.identity.clone(),
             reservation_ttl_nanos,
             skip_backtest_risk_authorization,
         ))
@@ -52,6 +54,21 @@ impl ExecutionDependencyAccess {
                 .map_err(|error| format!("read endpoint manifest: {error}"))?,
         )
         .map_err(|error| format!("decode endpoint manifest: {error}"))?;
+        let identity = kairos_primitives::runtime::InstanceIdentity::new(
+            value
+                .get("workspace_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "endpoint manifest has no workspace_id".to_string())?,
+            value
+                .get("launch_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "endpoint manifest has no launch_id".to_string())?,
+            value
+                .get("instance_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "endpoint manifest has no instance_id".to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
         let mut accounts = BTreeMap::new();
         for (account_id, endpoint) in value
             .get("accounts")
@@ -102,9 +119,7 @@ impl ExecutionDependencyAccess {
                     .map(|instance_id| format!("risk:{instance_id}"))
             });
         let instance_root = manifest_path.parent().map(Path::to_path_buf);
-        let market_snapshot = instance_root
-            .clone()
-            .map(|root| root.join("snapshots").join("market").join("market-shared"));
+        let market_snapshot = instance_root.clone().map(|root| root.join("snapshots"));
         if let Some(socket) = component_socket("market") {
             system
                 .install_market_connection("market", PathBuf::from(socket), market_snapshot.clone())
@@ -126,6 +141,7 @@ impl ExecutionDependencyAccess {
         let reference_dependency_state = reference_snapshot.map(super::reference_dependency_state);
         let dependency_state = DependencyStateRuntime::start(
             &accounts,
+            &identity,
             market_snapshot.as_deref(),
             reference_dependency_state,
             risk.clone(),
@@ -134,6 +150,7 @@ impl ExecutionDependencyAccess {
             accounts,
             market,
             market_snapshot,
+            identity,
             market_source_id,
             risk,
             risk_actor_id,
@@ -164,15 +181,25 @@ impl ExecutionDependencyAccess {
         let Some(market_id) = market_id else {
             return Ok(None);
         };
-        let frame = client
-            .quote(market_id, self.market_source_id.as_str(), None::<String>)
-            .and_then(|quote| quote.read())
+        let key = kairos_market_contract::MarketViewKey::new(
+            market_id,
+            self.market_source_id.as_str(),
+            kairos_market_contract::MarketViewKind::Quote,
+            None::<String>,
+        )
+        .map_err(|error| error.to_string())?;
+        let reader = client
+            .indexed_current(&self.identity)
             .map_err(|error| error.to_string())?;
-        let quote = frame
-            .view()
-            .map_err(|error| error.to_string())?
-            .quote()
-            .value();
+        let frame = reader.get(&key).map_err(|error| error.to_string())?;
+        let Some(frame) = frame else {
+            return Ok(None);
+        };
+        let kairos_market_contract::MarketIndexedValue::Quote(quote) =
+            frame.value().map_err(|error| error.to_string())?
+        else {
+            return Err("Market quote database returned a non-quote value".to_string());
+        };
         if !quote.instrument_id().eq_ignore_ascii_case(instrument_id) {
             return Ok(None);
         }
@@ -210,7 +237,7 @@ impl ExecutionDependencyAccess {
                 ask_price: decimal(quote.ask_price()),
                 observed_at_unix_nanos: quote.source_observed_at_unix_nanos(),
             },
-            frame.generation(),
+            frame.metadata().applied_event_sequence,
         )))
     }
 

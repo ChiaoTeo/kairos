@@ -1,0 +1,12 @@
+include "../types/position.fbs";
+
+namespace kairos.account.v2;
+
+table AccountPositionCurrent {
+  account_id:string (required);
+  segment_key:string (required);
+  position:Position (required);
+}
+
+root_type AccountPositionCurrent;
+file_identifier "APO3";

@@ -158,139 +158,28 @@ class AccountSegmentState(object):
         return 0
 
     # AccountSegmentState
-    def Valuation(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
-        if o != 0:
-            x = self._tab.Indirect(o + self._tab.Pos)
-            from kairos.account.v2.AccountValuation import AccountValuation
-            obj = AccountValuation()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # AccountSegmentState
-    def Balances(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
-        if o != 0:
-            x = self._tab.Vector(o)
-            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
-            x = self._tab.Indirect(x)
-            from kairos.account.v2.Balance import Balance
-            obj = Balance()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # AccountSegmentState
-    def BalancesLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
-        if o != 0:
-            return self._tab.VectorLen(o)
-        return 0
-
-    # AccountSegmentState
-    def BalancesIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
-        return o == 0
-
-    # AccountSegmentState
-    def Collateral(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
-        if o != 0:
-            x = self._tab.Vector(o)
-            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
-            x = self._tab.Indirect(x)
-            from kairos.account.v2.Balance import Balance
-            obj = Balance()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # AccountSegmentState
-    def CollateralLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
-        if o != 0:
-            return self._tab.VectorLen(o)
-        return 0
-
-    # AccountSegmentState
-    def CollateralIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
-        return o == 0
-
-    # AccountSegmentState
-    def Positions(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(48))
-        if o != 0:
-            x = self._tab.Vector(o)
-            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
-            x = self._tab.Indirect(x)
-            from kairos.account.v2.Position import Position
-            obj = Position()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # AccountSegmentState
-    def PositionsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(48))
-        if o != 0:
-            return self._tab.VectorLen(o)
-        return 0
-
-    # AccountSegmentState
-    def PositionsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(48))
-        return o == 0
-
-    # AccountSegmentState
-    def EarnHoldings(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(50))
-        if o != 0:
-            x = self._tab.Vector(o)
-            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
-            x = self._tab.Indirect(x)
-            from kairos.account.v2.EarnHolding import EarnHolding
-            obj = EarnHolding()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # AccountSegmentState
-    def EarnHoldingsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(50))
-        if o != 0:
-            return self._tab.VectorLen(o)
-        return 0
-
-    # AccountSegmentState
-    def EarnHoldingsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(50))
-        return o == 0
-
-    # AccountSegmentState
     def EarnWatermarkUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(52))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # AccountSegmentState
     def MarginMode(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(54))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # AccountSegmentState
     def PositionMode(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(56))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
 def AccountSegmentStateStart(builder):
-    builder.StartObject(27)
+    builder.StartObject(22)
 
 def Start(builder):
     AccountSegmentStateStart(builder)
@@ -409,74 +298,20 @@ def AccountSegmentStateAddStateGeneration(builder, stateGeneration):
 def AddStateGeneration(builder, stateGeneration):
     AccountSegmentStateAddStateGeneration(builder, stateGeneration)
 
-def AccountSegmentStateAddValuation(builder, valuation):
-    builder.PrependUOffsetTRelativeSlot(19, flatbuffers.number_types.UOffsetTFlags.py_type(valuation), 0)
-
-def AddValuation(builder, valuation):
-    AccountSegmentStateAddValuation(builder, valuation)
-
-def AccountSegmentStateAddBalances(builder, balances):
-    builder.PrependUOffsetTRelativeSlot(20, flatbuffers.number_types.UOffsetTFlags.py_type(balances), 0)
-
-def AddBalances(builder, balances):
-    AccountSegmentStateAddBalances(builder, balances)
-
-def AccountSegmentStateStartBalancesVector(builder, numElems):
-    return builder.StartVector(4, numElems, 4)
-
-def StartBalancesVector(builder, numElems):
-    return AccountSegmentStateStartBalancesVector(builder, numElems)
-
-def AccountSegmentStateAddCollateral(builder, collateral):
-    builder.PrependUOffsetTRelativeSlot(21, flatbuffers.number_types.UOffsetTFlags.py_type(collateral), 0)
-
-def AddCollateral(builder, collateral):
-    AccountSegmentStateAddCollateral(builder, collateral)
-
-def AccountSegmentStateStartCollateralVector(builder, numElems):
-    return builder.StartVector(4, numElems, 4)
-
-def StartCollateralVector(builder, numElems):
-    return AccountSegmentStateStartCollateralVector(builder, numElems)
-
-def AccountSegmentStateAddPositions(builder, positions):
-    builder.PrependUOffsetTRelativeSlot(22, flatbuffers.number_types.UOffsetTFlags.py_type(positions), 0)
-
-def AddPositions(builder, positions):
-    AccountSegmentStateAddPositions(builder, positions)
-
-def AccountSegmentStateStartPositionsVector(builder, numElems):
-    return builder.StartVector(4, numElems, 4)
-
-def StartPositionsVector(builder, numElems):
-    return AccountSegmentStateStartPositionsVector(builder, numElems)
-
-def AccountSegmentStateAddEarnHoldings(builder, earnHoldings):
-    builder.PrependUOffsetTRelativeSlot(23, flatbuffers.number_types.UOffsetTFlags.py_type(earnHoldings), 0)
-
-def AddEarnHoldings(builder, earnHoldings):
-    AccountSegmentStateAddEarnHoldings(builder, earnHoldings)
-
-def AccountSegmentStateStartEarnHoldingsVector(builder, numElems):
-    return builder.StartVector(4, numElems, 4)
-
-def StartEarnHoldingsVector(builder, numElems):
-    return AccountSegmentStateStartEarnHoldingsVector(builder, numElems)
-
 def AccountSegmentStateAddEarnWatermarkUnixNanos(builder, earnWatermarkUnixNanos):
-    builder.PrependUint64Slot(24, earnWatermarkUnixNanos, 0)
+    builder.PrependUint64Slot(19, earnWatermarkUnixNanos, 0)
 
 def AddEarnWatermarkUnixNanos(builder, earnWatermarkUnixNanos):
     AccountSegmentStateAddEarnWatermarkUnixNanos(builder, earnWatermarkUnixNanos)
 
 def AccountSegmentStateAddMarginMode(builder, marginMode):
-    builder.PrependUint8Slot(25, marginMode, 0)
+    builder.PrependUint8Slot(20, marginMode, 0)
 
 def AddMarginMode(builder, marginMode):
     AccountSegmentStateAddMarginMode(builder, marginMode)
 
 def AccountSegmentStateAddPositionMode(builder, positionMode):
-    builder.PrependUint8Slot(26, positionMode, 0)
+    builder.PrependUint8Slot(21, positionMode, 0)
 
 def AddPositionMode(builder, positionMode):
     AccountSegmentStateAddPositionMode(builder, positionMode)
