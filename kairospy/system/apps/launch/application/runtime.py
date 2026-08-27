@@ -21,6 +21,12 @@ from kairospy.system.apps.components.application import (
     MarketSystemClient,
     ReferenceProcessConfig,
 )
+from kairospy.system.apps.components.application.event_routes import (
+    EventTransportRoute,
+    ensure_instance_event_route,
+    ensure_workspace_event_route,
+    release_instance_event_route,
+)
 from kairospy.system.apps.workspace.application import InstanceWorkspace, Workspace
 from ..domain.identity import new_instance_id
 from ..composition import release_strategy_market_owner
@@ -120,15 +126,20 @@ def write_instance_manifest(
     *,
     accounts: dict[str, dict[str, Any]],
     components: dict[str, dict[str, Any]],
+    event_routes: Mapping[str, EventTransportRoute],
 ) -> None:
     manifest = instance_workspace.component_manifest()
     manifest.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "workspace_id": instance_workspace.workspace.workspace_id,
         "launch_id": instance_workspace.launch_id,
         "instance_id": instance_workspace.instance_id,
         "mode": instance_workspace.mode,
+        "event_routes": {
+            route_id: route.as_manifest()
+            for route_id, route in event_routes.items()
+        },
         "accounts": accounts,
         "components": components,
     }
@@ -147,11 +158,18 @@ def stop_component_safely(
     socket_name: str | None = None,
 ) -> dict[str, Any]:
     try:
-        return components.stop(
+        result = components.stop(
             component,
             instance_workspace=instance_workspace,
             socket_name=socket_name,
         )
+        components.wait_stopped(
+            component,
+            instance_workspace=instance_workspace,
+            socket_name=socket_name,
+        )
+        result["status"] = "stopped"
+        return result
     except Exception as error:
         return {
             "component": component,
@@ -216,6 +234,16 @@ def cleanup_instance_components(
         stopped["market"] = stop_component_safely(
             components, "market", instance_workspace=instance_workspace
         )
+    terminal = {"stopped", "not_running", "not_found"}
+    process_results = {
+        name: value
+        for name, value in stopped.items()
+        if name != "market_subscriptions"
+    }
+    if process_results and all(
+        str(value.get("status")) in terminal for value in process_results.values()
+    ):
+        release_instance_event_route(instance_workspace)
     return stopped
 
 
@@ -444,6 +472,12 @@ class LaunchRuntimeApplication:
                 mode, launch_id, instance
             )
             instance_workspace.prepare()
+            workspace_event_route = ensure_workspace_event_route(self.workspace)
+            instance_event_route = ensure_instance_event_route(instance_workspace)
+            event_routes = {
+                workspace_event_route.route_id: workspace_event_route,
+                instance_event_route.route_id: instance_event_route,
+            }
             market_runtime_profile = plan.market_profile
             market_replay_file: Path | None = None
             replay_is_materialized = False
@@ -559,6 +593,7 @@ class LaunchRuntimeApplication:
                         bound_account_id, "critical"
                     ),
                     "lease_fence": account_lease_fences[bound_account_id],
+                    "event_route": instance_event_route.route_id,
                 }
             components.ensure_running("risk", instance_workspace=instance_workspace)
             component_connections: dict[str, dict[str, Any]] = {
@@ -570,6 +605,7 @@ class LaunchRuntimeApplication:
                         instance_workspace.snapshot("risk", "risk.snapshot")
                     ),
                     "actor_id": f"risk:{instance_workspace.instance_id}",
+                    "event_route": instance_event_route.route_id,
                 },
                 "market": {
                     "socket": (
@@ -587,23 +623,30 @@ class LaunchRuntimeApplication:
                         if market_instance_workspace is not None
                         else str(self.workspace.paths.snapshots)
                     ),
+                    "event_route": (
+                        instance_event_route.route_id
+                        if market_instance_workspace is not None
+                        else workspace_event_route.route_id
+                    ),
                 },
-                "reference": (
-                    {
+                **(
+                    {"reference": {
                         "socket": str(self.workspace.paths.process_socket("reference")),
                         "health": str(self.workspace.paths.health_file("reference")),
                         "database": str(self.workspace.paths.reference_database()),
                         "actor_id": "reference-actor",
                         "required": True,
-                    }
+                        "event_route": workspace_event_route.route_id,
+                    }}
                     if reference_required
-                    else {"required": False}
+                    else {}
                 ),
             }
             write_instance_manifest(
                 instance_workspace,
                 accounts=account_connections,
                 components=component_connections,
+                event_routes=event_routes,
             )
             if bool(plan.capital.get("enabled", False)):
                 components.ensure_running(
@@ -613,6 +656,7 @@ class LaunchRuntimeApplication:
                     "socket": str(instance_workspace.socket("capital")),
                     "health": str(instance_workspace.health("capital")),
                     "view_root": str(instance_workspace.snapshot()),
+                    "event_route": instance_event_route.route_id,
                 }
             if execution_enabled:
                 components.ensure_running(
@@ -624,11 +668,13 @@ class LaunchRuntimeApplication:
                     "socket": str(instance_workspace.socket("execution")),
                     "health": str(instance_workspace.health("execution")),
                     "view_root": str(instance_workspace.snapshot()),
+                    "event_route": instance_event_route.route_id,
                 }
             write_instance_manifest(
                 instance_workspace,
                 accounts=account_connections,
                 components=component_connections,
+                event_routes=event_routes,
             )
             params = {**dict(plan.strategy_params), **dict(strategy_params or {})}
             StrategyProcessController(self.workspace).ensure_running(
@@ -1016,6 +1062,11 @@ class LaunchRuntimeApplication:
             stopped["market"] = stop_component_safely(
                 components, "market", instance_workspace=instance_workspace
             )
+        terminal = {"stopped", "not_running", "not_found"}
+        if stopped and all(
+            str(value.get("status")) in terminal for value in stopped.values()
+        ):
+            release_instance_event_route(instance_workspace)
         release_launch_leases(self.workspace, account_ids, instance=resolved_instance)
         try:
             LaunchRegistryApplication(self.workspace).update_state(

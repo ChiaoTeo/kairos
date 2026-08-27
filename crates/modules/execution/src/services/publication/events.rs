@@ -2,6 +2,7 @@ use super::*;
 
 pub(crate) fn encode_business_change(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     occurred_at: u64,
@@ -10,7 +11,13 @@ pub(crate) fn encode_business_change(
 ) -> Result<Vec<Vec<u8>>, String> {
     use crate::application::ExecutionBusinessChange;
     let event_id = format!("execution:{sequence}:{index}");
-    let context = EncodeContext::event(actor_id, identity.clone(), sequence, event_id)?;
+    let context = EncodeContext::event(
+        actor_id,
+        producer_incarnation,
+        identity.clone(),
+        sequence,
+        event_id,
+    )?;
     match change {
         ExecutionBusinessChange::Intent { state, event } => {
             let mut builder = FlatBufferBuilder::new();

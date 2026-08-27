@@ -146,6 +146,21 @@ impl FlatbuffersRiskEventWriter {
         }
     }
 
+    pub fn new_with_incarnation(
+        actor_id: impl Into<String>,
+        identity: kairos_primitives::runtime::InstanceIdentity,
+        producer_incarnation: u64,
+    ) -> Self {
+        Self {
+            inner: kairos_risk_contract::FlatbuffersRiskEventWriter::new_with_incarnation(
+                actor_id,
+                identity,
+                producer_incarnation,
+            ),
+            last_payload: None,
+        }
+    }
+
     pub fn publish(&mut self, event: &crate::RiskEvent) -> Result<(), String> {
         self.inner
             .publish(&crate::application::contract::event(event))?;

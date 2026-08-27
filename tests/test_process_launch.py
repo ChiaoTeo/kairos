@@ -43,6 +43,7 @@ def test_component_process_application_starts_bin_and_waits_for_health(
             from pathlib import Path
             parser = argparse.ArgumentParser()
             parser.add_argument('--workspace', required=True)
+            parser.add_argument('--aeron-channel', required=True)
             args = parser.parse_args()
             path = Path(args.workspace) / 'run' / 'execution' / 'control.sock'
             path.parent.mkdir(parents=True, exist_ok=True)

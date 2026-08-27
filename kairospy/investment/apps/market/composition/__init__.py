@@ -54,13 +54,21 @@ def build_strategy_access(
         view_launch_id = identity.launch_id
         view_instance_id = identity.instance_id
 
+    route = client.event_route
+    if route is None:
+        raise RuntimeError("Market connection manifest is missing its event route")
+    expected_scope = "workspace" if config.scope == "shared" else "instance"
+    if route.scope != expected_scope:
+        raise RuntimeError(f"Market {config.scope} access requires a {expected_scope} route")
+
     owner = MarketClient(
         client.socket_path,
         workspace_id=workspace.identity.workspace_id,
         view_root=snapshot,
         launch_id=view_launch_id,
         instance_id=view_instance_id,
-        aeron_dir=str(workspace.paths.aeron_dir()),
+        aeron_dir=str(route.aeron_dir),
+        channel=route.channel,
         timeout=client.timeout,
     )
     current_view = owner.current

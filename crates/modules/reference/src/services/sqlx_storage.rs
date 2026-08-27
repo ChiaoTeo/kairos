@@ -41,7 +41,7 @@ mod tests {
             changed: catalog.generation != previous_generation,
             event_count: events.len(),
         };
-        let publications = crate::services::publication::encode_publications(&catalog, &events)?;
+        let publications = crate::services::publication::encode_publications(&catalog, &events, 1)?;
         catalog_store
             .save_refresh(&catalog, &events, &publications)
             .await?;
@@ -176,7 +176,7 @@ mod tests {
             10.into(),
         );
         let first_publication =
-            crate::services::publication::encode_publications(&catalog, &first).unwrap();
+            crate::services::publication::encode_publications(&catalog, &first, 1).unwrap();
         let mut store = SqlxCatalogStore::open(&path).await.unwrap();
         store
             .save_refresh(&catalog, &first, &first_publication)
@@ -193,7 +193,7 @@ mod tests {
             20.into(),
         );
         let second_publication =
-            crate::services::publication::encode_publications(&catalog, &second).unwrap();
+            crate::services::publication::encode_publications(&catalog, &second, 1).unwrap();
         store
             .save_refresh(&catalog, &second, &second_publication)
             .await

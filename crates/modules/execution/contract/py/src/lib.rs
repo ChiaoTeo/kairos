@@ -186,6 +186,8 @@ struct ExecutionEventMetadata {
     #[pyo3(get)]
     producer: String,
     #[pyo3(get)]
+    producer_incarnation: u64,
+    #[pyo3(get)]
     workspace_id: String,
     #[pyo3(get)]
     launch_id: Option<String>,
@@ -379,6 +381,14 @@ impl ExecutionEvent {
         self.metadata.sequence
     }
     #[getter]
+    fn producer(&self) -> &str {
+        &self.metadata.producer
+    }
+    #[getter]
+    fn producer_incarnation(&self) -> u64 {
+        self.metadata.producer_incarnation
+    }
+    #[getter]
     fn launch_id(&self) -> Option<&str> {
         self.metadata.launch_id.as_deref()
     }
@@ -388,19 +398,21 @@ impl ExecutionEvent {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (*, sequence, instance_id, occurred_at_unix_nanos, launch_id=None))]
+    #[pyo3(signature = (*, sequence, instance_id, occurred_at_unix_nanos, launch_id=None, producer_incarnation=1))]
     fn simulation_ignored(
         py: Python<'_>,
         sequence: u64,
         instance_id: String,
         occurred_at_unix_nanos: u64,
         launch_id: Option<String>,
+        producer_incarnation: u64,
     ) -> PyResult<Self> {
         let metadata = simulation_execution_metadata(
             sequence,
             instance_id,
             occurred_at_unix_nanos,
             launch_id,
+            producer_incarnation,
         )?;
         Ok(Self {
             metadata,
@@ -460,6 +472,7 @@ impl ExecutionEvent {
             instance_id.clone(),
             occurred_at_unix_nanos,
             launch_id.clone(),
+            1,
         )?;
         let intent = ExecutionIntentEventValue {
             intent_id: intent_id.clone(),
@@ -530,6 +543,7 @@ impl ExecutionEvent {
             instance_id,
             occurred_at_unix_nanos,
             launch_id,
+            1,
         )?;
         let payload = ExecutionFillValue {
             fill_id,
@@ -1205,6 +1219,7 @@ fn execution_event_metadata(
         stream_id,
         sequence,
         producer_id,
+        producer_incarnation,
         workspace_id,
         launch_id,
         instance_id,
@@ -1219,6 +1234,7 @@ fn execution_event_metadata(
         stream_id: stream_id.to_string(),
         sequence: sequence.get(),
         producer: producer_id.to_string(),
+        producer_incarnation,
         workspace_id: workspace_id.to_string(),
         launch_id: launch_id.map(|value| value.to_string()),
         instance_id: instance_id.map(|value| value.to_string()),
@@ -1234,8 +1250,13 @@ fn simulation_execution_metadata(
     instance_id: String,
     occurred_at_unix_nanos: u64,
     launch_id: Option<String>,
+    producer_incarnation: u64,
 ) -> PyResult<ExecutionEventMetadata> {
-    if sequence == 0 || instance_id.trim().is_empty() || occurred_at_unix_nanos == 0 {
+    if sequence == 0
+        || producer_incarnation == 0
+        || instance_id.trim().is_empty()
+        || occurred_at_unix_nanos == 0
+    {
         return Err(ExecutionInvalidInputError::new_err(
             "simulation event requires positive sequence/time and instance_id",
         ));
@@ -1245,6 +1266,7 @@ fn simulation_execution_metadata(
         stream_id: "execution.events".to_owned(),
         sequence,
         producer: "execution-simulation".to_owned(),
+        producer_incarnation,
         workspace_id: "workspace:simulation".to_owned(),
         launch_id,
         instance_id: Some(instance_id),

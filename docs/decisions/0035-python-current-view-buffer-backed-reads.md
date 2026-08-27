@@ -1,6 +1,6 @@
 # Decision 0035: Python current-view buffer-backed reads
 
-- Status: Accepted
+- Status: Superseded by [Decision 0036](0036-owner-contract-python-bindings.md)
 - Date: 2026-08-27
 - Refines: [Decision 0034](0034-unified-current-view-storage.md) Python read semantics
 
@@ -68,7 +68,8 @@ writer crash atomicity.
   transaction immediately.
 - Consecutive reads may contain different revisions by contract. Callers that care about skew check
   business freshness and sequence evidence rather than relying on an implicit LMDB snapshot.
-- Generated FlatBuffers bindings remain wire adapters and do not become the Python application API.
+- Generated Rust FlatBuffers code remains a wire adapter. Python does not generate or consume
+  FlatBuffers bindings; it enters the owner contract through the native PyO3 companion.
 - Full-family reads require a contract-owned limit or continuation mechanism; `usize::MAX` is not a
   public population policy.
 - Large-vector zero-copy or native field extraction requires benchmark evidence and a concrete caller.

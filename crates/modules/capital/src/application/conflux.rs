@@ -937,15 +937,18 @@ where
             CapitalProcessError::Invalid("Capital Conflux runtime was not configured".into())
         })?;
         let identity = state.config.identity.clone();
+        let producer_incarnation = state.producer_incarnation;
         let previous_indexed_values = state.published_indexed_values.clone();
         let snapshot = self.application().snapshot();
         let owner_id = format!("capital:{}", snapshot.capital_group_id);
         while let Some(event) = self.application().pending_event().cloned() {
             let event = capital_event(&event);
-            let mut writer = kairos_capital_contract::FlatbuffersCapitalEventWriter::new(
-                owner_id.clone(),
-                identity.clone(),
-            );
+            let mut writer =
+                kairos_capital_contract::FlatbuffersCapitalEventWriter::new_with_incarnation(
+                    owner_id.clone(),
+                    identity.clone(),
+                    producer_incarnation,
+                );
             writer
                 .publish(&event)
                 .map_err(CapitalProcessError::Connection)?;

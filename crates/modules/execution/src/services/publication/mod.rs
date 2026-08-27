@@ -423,6 +423,7 @@ mod tests {
         };
         let payloads = encode_business_change(
             "execution",
+            1,
             &InstanceIdentity::new("workspace", "launch-1", "instance-1").unwrap(),
             9,
             20,
@@ -465,6 +466,7 @@ mod tests {
         rejected_event.reason = rejected_state.reason.clone();
         let rejected_payloads = encode_business_change(
             "execution",
+            1,
             &InstanceIdentity::new("workspace", "launch-1", "instance-1").unwrap(),
             10,
             21,

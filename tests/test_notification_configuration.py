@@ -20,6 +20,9 @@ from kairospy.strategy.apps.notification.composition import (
 )
 from kairospy.strategy.apps.notification.application import NotificationAdminApplication
 from kairospy.system.apps.launch.composition import compose_strategy_process
+from kairospy.system.apps.components.application.event_routes import (
+    ensure_instance_event_route,
+)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.strategy import StrategyIdentity, StrategyLogger
 from kairospy.strategy import ImmediateAlgorithm, InstrumentId
@@ -447,12 +450,23 @@ signals = ["feishu-options", "telegram-personal"]
             launch, workspace_root=workspace.paths.root, instance_id="one"
         )
         instance = workspace.instance("backtest", "signal-backtest", "one")
+        instance_route = ensure_instance_event_route(instance)
         instance.component_manifest().write_text(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
+                    "workspace_id": workspace.workspace_id,
+                    "launch_id": "signal-backtest",
+                    "instance_id": "one",
+                    "mode": "backtest",
+                    "event_routes": {
+                        instance_route.route_id: instance_route.as_manifest(),
+                    },
                     "components": {
-                        "market": {"socket": str(instance.socket("market"))}
+                        "market": {
+                            "socket": str(instance.socket("market")),
+                            "event_route": instance_route.route_id,
+                        }
                     },
                     "accounts": {},
                 }

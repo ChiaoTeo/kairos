@@ -12,14 +12,28 @@ use crate::{ContractError, ContractResult};
 pub struct FlatbuffersCapitalEventWriter {
     actor_id: String,
     identity: InstanceIdentity,
+    producer_incarnation: u64,
     pub last_payload: Option<Vec<u8>>,
 }
 
 impl FlatbuffersCapitalEventWriter {
     pub fn new(actor_id: impl Into<String>, identity: InstanceIdentity) -> Self {
+        Self::new_with_incarnation(actor_id, identity, 1)
+    }
+
+    pub fn new_with_incarnation(
+        actor_id: impl Into<String>,
+        identity: InstanceIdentity,
+        producer_incarnation: u64,
+    ) -> Self {
+        assert!(
+            producer_incarnation > 0,
+            "producer incarnation must be positive"
+        );
         Self {
             actor_id: actor_id.into(),
             identity,
+            producer_incarnation,
             last_payload: None,
         }
     }
@@ -30,6 +44,7 @@ impl FlatbuffersCapitalEventWriter {
             &mut builder,
             &self.actor_id,
             &self.identity,
+            self.producer_incarnation,
             event.sequence().get(),
             event.occurred_at().get(),
         );
@@ -214,6 +229,7 @@ fn event_metadata<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     actor_id: &str,
     identity: &InstanceIdentity,
+    producer_incarnation: u64,
     sequence: u64,
     occurred_at: u64,
 ) -> flatbuffers::WIPOffset<common_fb::EventMetadata<'a>> {
@@ -234,6 +250,7 @@ fn event_metadata<'a>(
             stream_id: Some(stream_id),
             sequence,
             producer_id: Some(producer_id),
+            producer_incarnation,
             workspace_id: Some(workspace_id),
             launch_id,
             instance_id,

@@ -422,23 +422,30 @@ pub async fn build_market_host(
             },
         )
         .map_err(MarketStartupError::new)?;
-    let event_endpoint = kairos_market_contract::AeronEndpoint::new(
-        request.aeron_dir,
-        kairos_conflux::DEFAULT_AERON_CHANNEL,
-        kairos_conflux::output_stream_ids::MARKET_EVENTS,
-    )
-    .map_err(MarketStartupError::new)?;
-    system
-        .outputs()
-        .aeron
-        .declare(
-            "market-events".to_owned(),
-            AeronOutputDeclaration {
-                endpoint: event_endpoint,
-                revision: 1,
-            },
+    if profile.scope != MarketRuntimeScope::Replay {
+        let aeron_channel = request.aeron_channel.as_deref().ok_or_else(|| {
+            MarketStartupError::new(
+                "Market live event publication requires an explicit System event route",
+            )
+        })?;
+        let event_endpoint = kairos_market_contract::AeronEndpoint::new(
+            request.aeron_dir,
+            aeron_channel,
+            kairos_conflux::output_stream_ids::MARKET_EVENTS,
         )
         .map_err(MarketStartupError::new)?;
+        system
+            .outputs()
+            .aeron
+            .declare(
+                "market-events".to_owned(),
+                AeronOutputDeclaration {
+                    endpoint: event_endpoint,
+                    revision: 1,
+                },
+            )
+            .map_err(MarketStartupError::new)?;
+    }
     let _ = event_socket_path;
     Ok(MarketHost::new(
         application,

@@ -16,27 +16,36 @@ use crate::domain::observation::order_book::{DepthPolicy, OrderBook, OrderBookDe
 
 pub(super) fn encode_contract_event(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     event: &MarketEvent,
 ) -> Result<Vec<u8>, String> {
     match event {
-        MarketEvent::Observation(value) => encode_observation(actor_id, identity, sequence, value),
+        MarketEvent::Observation(value) => {
+            encode_observation(actor_id, producer_incarnation, identity, sequence, value)
+        },
         MarketEvent::OrderBookSnapshot(book) => {
-            encode_orderbook_snapshot(actor_id, identity, sequence, book)
+            encode_orderbook_snapshot(actor_id, producer_incarnation, identity, sequence, book)
         },
         MarketEvent::OrderBookDelta(delta) => {
-            encode_orderbook_delta(actor_id, identity, sequence, delta)
+            encode_orderbook_delta(actor_id, producer_incarnation, identity, sequence, delta)
         },
         MarketEvent::OrderBookResyncRequired(value) => {
-            encode_orderbook_resync(actor_id, identity, sequence, value)
+            encode_orderbook_resync(actor_id, producer_incarnation, identity, sequence, value)
         },
     }
 }
 
-fn context(actor_id: &str, identity: &InstanceIdentity, sequence: u64) -> EncodeContext {
+fn context(
+    actor_id: &str,
+    producer_incarnation: u64,
+    identity: &InstanceIdentity,
+    sequence: u64,
+) -> EncodeContext {
     EncodeContext::event(
         actor_id,
+        producer_incarnation,
         identity.clone(),
         sequence,
         format!("market:{sequence}"),
@@ -122,6 +131,7 @@ where
 
 fn encode_observation(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     value: &MarketObservation,
@@ -131,7 +141,7 @@ fn encode_observation(
             let mut b = FlatBufferBuilder::new();
             let metadata = event_metadata(
                 &mut b,
-                &context(actor_id, identity, sequence),
+                &context(actor_id, producer_incarnation, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
             let (_scope_key, instrument_id, provider) = strings(
@@ -191,7 +201,7 @@ fn encode_observation(
             let mut b = FlatBufferBuilder::new();
             let metadata = event_metadata(
                 &mut b,
-                &context(actor_id, identity, sequence),
+                &context(actor_id, producer_incarnation, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
             let (_scope_key, instrument_id, provider) = strings(
@@ -255,7 +265,7 @@ fn encode_observation(
             let mut b = FlatBufferBuilder::new();
             let metadata = event_metadata(
                 &mut b,
-                &context(actor_id, identity, sequence),
+                &context(actor_id, producer_incarnation, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
             let (_scope_key, instrument_id, provider) = strings(
@@ -311,7 +321,7 @@ fn encode_observation(
             let mut b = FlatBufferBuilder::new();
             let metadata = event_metadata(
                 &mut b,
-                &context(actor_id, identity, sequence),
+                &context(actor_id, producer_incarnation, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
             let (_scope_key, instrument_id, provider) = strings(
@@ -362,19 +372,23 @@ fn encode_observation(
                 },
             ))
         },
-        MarketObservation::Rate(value) => encode_rate(actor_id, identity, sequence, value),
-        MarketObservation::Ticker24h(value) => encode_ticker(actor_id, identity, sequence, value),
+        MarketObservation::Rate(value) => {
+            encode_rate(actor_id, producer_incarnation, identity, sequence, value)
+        },
+        MarketObservation::Ticker24h(value) => {
+            encode_ticker(actor_id, producer_incarnation, identity, sequence, value)
+        },
         MarketObservation::MarkPrice(value) => {
-            encode_mark_price(actor_id, identity, sequence, value)
+            encode_mark_price(actor_id, producer_incarnation, identity, sequence, value)
         },
         MarketObservation::FundingRate(value) => {
-            encode_funding(actor_id, identity, sequence, value)
+            encode_funding(actor_id, producer_incarnation, identity, sequence, value)
         },
         MarketObservation::OpenInterest(value) => {
-            encode_open_interest(actor_id, identity, sequence, value)
+            encode_open_interest(actor_id, producer_incarnation, identity, sequence, value)
         },
         MarketObservation::IndexPrice(value) => {
-            encode_index_price(actor_id, identity, sequence, value)
+            encode_index_price(actor_id, producer_incarnation, identity, sequence, value)
         },
     }
 }
@@ -398,6 +412,7 @@ fn bar_kind(value: &str) -> fb::BarKind {
 
 fn encode_rate(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     value: &crate::Rate,
@@ -405,7 +420,7 @@ fn encode_rate(
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(
         &mut b,
-        &context(actor_id, identity, sequence),
+        &context(actor_id, producer_incarnation, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
     let (_scope_key, instrument_id, provider) = strings(
@@ -452,6 +467,7 @@ fn encode_rate(
 
 fn encode_ticker(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     value: &crate::Ticker24h,
@@ -459,7 +475,7 @@ fn encode_ticker(
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(
         &mut b,
-        &context(actor_id, identity, sequence),
+        &context(actor_id, producer_incarnation, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
     let (_scope_key, instrument_id, provider) = strings(
@@ -526,6 +542,7 @@ fn encode_ticker(
 
 fn encode_mark_price(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     value: &crate::MarkPrice,
@@ -533,7 +550,7 @@ fn encode_mark_price(
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(
         &mut b,
-        &context(actor_id, identity, sequence),
+        &context(actor_id, producer_incarnation, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
     let (_scope_key, instrument_id, provider) = strings(
@@ -581,6 +598,7 @@ fn encode_mark_price(
 
 fn encode_funding(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     value: &crate::FundingRate,
@@ -588,7 +606,7 @@ fn encode_funding(
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(
         &mut b,
-        &context(actor_id, identity, sequence),
+        &context(actor_id, producer_incarnation, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
     let (_scope_key, instrument_id, provider) = strings(
@@ -631,6 +649,7 @@ fn encode_funding(
 
 fn encode_open_interest(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     value: &crate::OpenInterest,
@@ -638,7 +657,7 @@ fn encode_open_interest(
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(
         &mut b,
-        &context(actor_id, identity, sequence),
+        &context(actor_id, producer_incarnation, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
     let (_scope_key, instrument_id, provider) = strings(
@@ -685,6 +704,7 @@ fn encode_open_interest(
 
 fn encode_index_price(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     value: &crate::IndexPrice,
@@ -692,7 +712,7 @@ fn encode_index_price(
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(
         &mut b,
-        &context(actor_id, identity, sequence),
+        &context(actor_id, producer_incarnation, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
     let (_scope_key, instrument_id, provider) = strings(
@@ -755,6 +775,7 @@ fn orderbook_identity<'a, A: flatbuffers::Allocator + 'a>(
 }
 fn encode_orderbook_snapshot(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     book: &OrderBook,
@@ -762,14 +783,21 @@ fn encode_orderbook_snapshot(
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(
         &mut b,
-        &context(actor_id, identity, sequence),
+        &context(actor_id, producer_incarnation, identity, sequence),
         book.event_time_unix_nanos.get(),
     );
     let identity_offset = orderbook_identity(&mut b, book);
     let depth = b.create_string(match book.depth_policy {
         DepthPolicy::Full => "full",
         DepthPolicy::TopN(n) => {
-            return encode_orderbook_snapshot_top(actor_id, identity, sequence, book, n);
+            return encode_orderbook_snapshot_top(
+                actor_id,
+                producer_incarnation,
+                identity,
+                sequence,
+                book,
+                n,
+            );
         },
     });
     let bids = levels(&mut b, &book.bids, fb::OrderBookSide::BID);
@@ -806,6 +834,7 @@ fn encode_orderbook_snapshot(
 }
 fn encode_orderbook_snapshot_top(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     book: &OrderBook,
@@ -814,7 +843,7 @@ fn encode_orderbook_snapshot_top(
     let mut copy = book.clone();
     copy.bids.truncate(n as usize);
     copy.asks.truncate(n as usize);
-    encode_orderbook_snapshot(actor_id, identity, sequence, &copy)
+    encode_orderbook_snapshot(actor_id, producer_incarnation, identity, sequence, &copy)
 }
 fn levels<'a, A: flatbuffers::Allocator + 'a>(
     b: &mut FlatBufferBuilder<'a, A>,
@@ -843,6 +872,7 @@ fn levels<'a, A: flatbuffers::Allocator + 'a>(
 }
 fn encode_orderbook_delta(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     delta: &OrderBookDelta,
@@ -850,7 +880,7 @@ fn encode_orderbook_delta(
     let mut b = FlatBufferBuilder::new();
     let metadata = event_metadata(
         &mut b,
-        &context(actor_id, identity, sequence),
+        &context(actor_id, producer_incarnation, identity, sequence),
         delta.event_time_unix_nanos.get(),
     );
     let s = b.create_string(&delta.provider);
@@ -926,12 +956,17 @@ fn encode_orderbook_delta(
 
 fn encode_orderbook_resync(
     actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     sequence: u64,
     value: &OrderBookResyncRequired,
 ) -> Result<Vec<u8>, String> {
     let mut b = FlatBufferBuilder::new();
-    let metadata = event_metadata(&mut b, &context(actor_id, identity, sequence), 0);
+    let metadata = event_metadata(
+        &mut b,
+        &context(actor_id, producer_incarnation, identity, sequence),
+        0,
+    );
     let provider = b.create_string(&value.provider);
     let market_id = b.create_string(value.market_id.as_str());
     let instrument_id = b.create_string(value.instrument_id.as_str());
@@ -987,6 +1022,7 @@ mod tests {
         };
         let bytes = encode_event(
             "market",
+            1,
             &InstanceIdentity::default(),
             1,
             &MarketEvent::Observation(crate::domain::observation::MarketObservation::Quote(quote)),
@@ -1010,6 +1046,7 @@ mod tests {
         };
         let bytes = encode_event(
             "market",
+            1,
             &InstanceIdentity::default(),
             1,
             &MarketEvent::Observation(crate::domain::observation::MarketObservation::Rate(rate)),

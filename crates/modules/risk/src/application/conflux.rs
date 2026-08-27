@@ -261,9 +261,10 @@ impl RiskApplication {
             if !context.outputs().aeron.contains("risk-events") {
                 break;
             }
-            let mut encoder = FlatbuffersRiskEventWriter::new_with_identity(
+            let mut encoder = FlatbuffersRiskEventWriter::new_with_incarnation(
                 view.actor_id.to_string(),
                 self.publication_identity.clone(),
+                self.producer_incarnation,
             );
             if encoder.publish(&event).is_err() {
                 break;

@@ -154,6 +154,7 @@ fn insert_indexed(
 pub struct FlatbuffersRiskEventWriter {
     pub actor_id: String,
     identity: kairos_primitives::runtime::InstanceIdentity,
+    producer_incarnation: u64,
     pub last_payload: Option<Vec<u8>>,
 }
 pub struct RiskAeronEventPublisher {
@@ -201,9 +202,21 @@ impl FlatbuffersRiskEventWriter {
         actor_id: impl Into<String>,
         identity: kairos_primitives::runtime::InstanceIdentity,
     ) -> Self {
+        Self::new_with_incarnation(actor_id, identity, 1)
+    }
+    pub fn new_with_incarnation(
+        actor_id: impl Into<String>,
+        identity: kairos_primitives::runtime::InstanceIdentity,
+        producer_incarnation: u64,
+    ) -> Self {
+        assert!(
+            producer_incarnation > 0,
+            "producer incarnation must be positive"
+        );
         Self {
             actor_id: actor_id.into(),
             identity,
+            producer_incarnation,
             last_payload: None,
         }
     }
@@ -222,6 +235,7 @@ impl FlatbuffersRiskEventWriter {
                     &mut b,
                     &self.actor_id,
                     &self.identity,
+                    self.producer_incarnation,
                     event_sequence.get(),
                     decision_request_time(event),
                 );
@@ -243,6 +257,7 @@ impl FlatbuffersRiskEventWriter {
                     &mut b,
                     &self.actor_id,
                     &self.identity,
+                    self.producer_incarnation,
                     event_sequence.get(),
                     reservation.updated_at_unix_nanos.get(),
                 );
@@ -303,6 +318,7 @@ impl FlatbuffersRiskEventWriter {
                     &mut b,
                     &self.actor_id,
                     &self.identity,
+                    self.producer_incarnation,
                     event_sequence.get(),
                     at.get(),
                 );
@@ -336,6 +352,7 @@ fn metadata<'a>(
     b: &mut FlatBufferBuilder<'a>,
     actor: &str,
     identity: &kairos_primitives::runtime::InstanceIdentity,
+    producer_incarnation: u64,
     sequence: u64,
     at: u64,
 ) -> flatbuffers::WIPOffset<common_fb::EventMetadata<'a>> {
@@ -356,6 +373,7 @@ fn metadata<'a>(
             stream_id: Some(stream),
             sequence,
             producer_id: Some(producer),
+            producer_incarnation,
             workspace_id: Some(workspace),
             launch_id: launch,
             instance_id: instance,

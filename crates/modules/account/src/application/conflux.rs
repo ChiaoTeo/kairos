@@ -624,6 +624,7 @@ impl AccountApplication {
             for (index, change) in event.changes.iter().enumerate() {
                 let bytes = encode_business_change(
                     self.actor_id(),
+                    self.conflux.producer_incarnation,
                     &self.conflux.identity,
                     &event,
                     index,

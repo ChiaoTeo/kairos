@@ -55,6 +55,8 @@ struct ReferenceEventMetadata {
     #[pyo3(get)]
     producer: String,
     #[pyo3(get)]
+    producer_incarnation: u64,
+    #[pyo3(get)]
     workspace_id: String,
     #[pyo3(get)]
     launch_id: Option<String>,
@@ -102,6 +104,10 @@ impl ReferenceEvent {
     #[getter]
     fn producer(&self) -> &str {
         &self.metadata.producer
+    }
+    #[getter]
+    fn producer_incarnation(&self) -> u64 {
+        self.metadata.producer_incarnation
     }
     #[getter]
     fn launch_id(&self) -> Option<&str> {
@@ -793,6 +799,7 @@ fn event_metadata(value: EventMetadataOwned) -> ReferenceEventMetadata {
         stream_id: value.stream_id,
         sequence: value.sequence.get(),
         producer: value.producer_id.to_string(),
+        producer_incarnation: value.producer_incarnation,
         workspace_id: value.workspace_id.to_string(),
         launch_id: value.launch_id.map(|item| item.to_string()),
         instance_id: value.instance_id.map(|item| item.to_string()),

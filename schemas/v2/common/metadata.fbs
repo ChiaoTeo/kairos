@@ -18,6 +18,7 @@ table EventMetadata {
   causation_id:string;
   occurred_at_unix_nanos:ulong;
   published_at_unix_nanos:ulong;
+  producer_incarnation:ulong;
 }
 
 table ViewMetadata {

@@ -31,6 +31,7 @@ impl<'a> EventMetadata<'a> {
     pub const VT_CAUSATION_ID: ::flatbuffers::VOffsetT = 20;
     pub const VT_OCCURRED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
     pub const VT_PUBLISHED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_PRODUCER_INCARNATION: ::flatbuffers::VOffsetT = 26;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -47,6 +48,7 @@ impl<'a> EventMetadata<'a> {
         args: &'args EventMetadataArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<EventMetadata<'bldr>> {
         let mut builder = EventMetadataBuilder::new(_fbb);
+        builder.add_producer_incarnation(args.producer_incarnation);
         builder.add_published_at_unix_nanos(args.published_at_unix_nanos);
         builder.add_occurred_at_unix_nanos(args.occurred_at_unix_nanos);
         builder.add_sequence(args.sequence);
@@ -194,6 +196,17 @@ impl<'a> EventMetadata<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn producer_incarnation(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(EventMetadata::VT_PRODUCER_INCARNATION, Some(0))
+                .unwrap()
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for EventMetadata<'_> {
@@ -254,6 +267,7 @@ impl ::flatbuffers::Verifiable for EventMetadata<'_> {
                 Self::VT_PUBLISHED_AT_UNIX_NANOS,
                 false,
             )?
+            .visit_field::<u64>("producer_incarnation", Self::VT_PRODUCER_INCARNATION, false)?
             .finish();
         Ok(())
     }
@@ -270,6 +284,7 @@ pub struct EventMetadataArgs<'a> {
     pub causation_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub occurred_at_unix_nanos: u64,
     pub published_at_unix_nanos: u64,
+    pub producer_incarnation: u64,
 }
 impl<'a> Default for EventMetadataArgs<'a> {
     #[inline]
@@ -286,6 +301,7 @@ impl<'a> Default for EventMetadataArgs<'a> {
             causation_id: None,
             occurred_at_unix_nanos: 0,
             published_at_unix_nanos: 0,
+            producer_incarnation: 0,
         }
     }
 }
@@ -371,6 +387,14 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> EventMetadataBuilder<'a, 'b, 
         );
     }
     #[inline]
+    pub fn add_producer_incarnation(&mut self, producer_incarnation: u64) {
+        self.fbb_.push_slot::<u64>(
+            EventMetadata::VT_PRODUCER_INCARNATION,
+            producer_incarnation,
+            0,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> EventMetadataBuilder<'a, 'b, A> {
@@ -409,6 +433,7 @@ impl ::core::fmt::Debug for EventMetadata<'_> {
         ds.field("causation_id", &self.causation_id());
         ds.field("occurred_at_unix_nanos", &self.occurred_at_unix_nanos());
         ds.field("published_at_unix_nanos", &self.published_at_unix_nanos());
+        ds.field("producer_incarnation", &self.producer_incarnation());
         ds.finish()
     }
 }

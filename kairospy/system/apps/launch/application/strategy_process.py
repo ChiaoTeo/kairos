@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from kairospy.system.apps.components.application import UnixRestClient
+from kairospy.system.apps.components.application.event_routes import (
+    ensure_instance_event_route,
+)
 from kairospy.system.apps.workspace.application import Workspace
 
 
@@ -70,7 +73,9 @@ class StrategyProcessController:
         if params:
             command.extend(("--params", json.dumps(params, separators=(",", ":"))))
         process_environment = os.environ.copy()
-        process_environment["AERON_DIR"] = str(self.workspace.paths.aeron_dir())
+        process_environment["AERON_DIR"] = str(
+            ensure_instance_event_route(instance_workspace).aeron_dir
+        )
         if environment is not None:
             process_environment.update(environment)
         try:
@@ -103,12 +108,9 @@ class StrategyProcessController:
     def stop(
         self, launch_id: str, instance_id: str, mode: str = "paper"
     ) -> dict[str, Any]:
+        socket = self.socket(launch_id, instance_id, mode)
         try:
-            return asyncio.run(
-                UnixRestClient(self.socket(launch_id, instance_id, mode)).request(
-                    "POST", "/v1/stop"
-                )
-            )
+            result = asyncio.run(UnixRestClient(socket).request("POST", "/v1/stop"))
         except (FileNotFoundError, OSError, RuntimeError, TimeoutError) as error:
             return {
                 "launch_id": launch_id,
@@ -116,3 +118,14 @@ class StrategyProcessController:
                 "status": "not_running",
                 "control_error": str(error),
             }
+        deadline = time.monotonic() + self.ready_timeout
+        while socket.exists():
+            if time.monotonic() >= deadline:
+                return {
+                    **result,
+                    "status": "stop_failed",
+                    "error": "strategy control socket remained after stop timeout",
+                }
+            time.sleep(0.05)
+        result["status"] = "stopped"
+        return result

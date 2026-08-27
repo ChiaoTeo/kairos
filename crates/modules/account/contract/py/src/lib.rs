@@ -749,6 +749,8 @@ struct AccountEventMetadata {
     #[pyo3(get)]
     producer: String,
     #[pyo3(get)]
+    producer_incarnation: u64,
+    #[pyo3(get)]
     workspace_id: String,
     #[pyo3(get)]
     launch_id: Option<String>,
@@ -989,6 +991,7 @@ impl AccountEvent {
             sequence,
             launch_id,
             instance_id,
+            1,
             AccountEventChange {
                 kind: "status_changed".to_owned(),
                 segment_key: String::new(),
@@ -1030,6 +1033,7 @@ impl AccountEvent {
             sequence,
             launch_id,
             instance_id,
+            1,
             AccountEventChange {
                 kind: "balance_changed".to_owned(),
                 segment_key: String::new(),
@@ -1056,7 +1060,7 @@ impl AccountEvent {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (account_id, segment_key, sequence, equity, *, launch_id=None, instance_id=None))]
+    #[pyo3(signature = (account_id, segment_key, sequence, equity, *, launch_id=None, instance_id=None, producer_incarnation=1))]
     fn simulation_valuation(
         account_id: String,
         segment_key: String,
@@ -1064,6 +1068,7 @@ impl AccountEvent {
         equity: String,
         launch_id: Option<String>,
         instance_id: Option<String>,
+        producer_incarnation: u64,
     ) -> PyResult<Self> {
         simulation_event(
             account_id,
@@ -1071,6 +1076,7 @@ impl AccountEvent {
             sequence,
             launch_id,
             instance_id,
+            producer_incarnation,
             AccountEventChange {
                 kind: "equity_changed".to_owned(),
                 segment_key: String::new(),
@@ -1105,6 +1111,10 @@ impl AccountEvent {
     #[getter]
     fn producer(&self) -> &str {
         &self.metadata.producer
+    }
+    #[getter]
+    fn producer_incarnation(&self) -> u64 {
+        self.metadata.producer_incarnation
     }
     #[getter]
     fn occurred_at_unix_nanos(&self) -> u64 {
@@ -1640,6 +1650,7 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
         stream_id: value.metadata.stream_id,
         sequence: value.metadata.sequence.get(),
         producer: value.metadata.producer_id.to_string(),
+        producer_incarnation: value.metadata.producer_incarnation,
         workspace_id: value.metadata.workspace_id.to_string(),
         launch_id: value.metadata.launch_id.map(|item| item.to_string()),
         instance_id: value.metadata.instance_id.map(|item| item.to_string()),
@@ -1946,12 +1957,18 @@ fn simulation_event(
     sequence: u64,
     launch_id: Option<String>,
     instance_id: Option<String>,
+    producer_incarnation: u64,
     mut change: AccountEventChange,
 ) -> PyResult<AccountEvent> {
     AccountId::new(account_id.clone())
         .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?;
     SegmentKey::new(segment_key.clone())
         .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?;
+    if producer_incarnation == 0 {
+        return Err(AccountInvalidInputError::new_err(
+            "producer_incarnation must be positive",
+        ));
+    }
     if launch_id.is_some() != instance_id.is_some() {
         return Err(AccountInvalidInputError::new_err(
             "launch_id and instance_id must both be present or both be absent",
@@ -1964,6 +1981,7 @@ fn simulation_event(
             stream_id: format!("account.events/account:{account_id}"),
             sequence,
             producer: "account".to_owned(),
+            producer_incarnation,
             workspace_id: "simulation".to_owned(),
             launch_id,
             instance_id,

@@ -7,6 +7,7 @@ use kairos_primitives::time::{Generation, Sequence};
 #[derive(Clone, Debug)]
 pub struct ProtocolContext {
     pub producer_id: ProducerId,
+    pub producer_incarnation: u64,
     pub identity: InstanceIdentity,
     pub sequence: Sequence,
     pub event_id: Option<EventId>,
@@ -18,12 +19,17 @@ pub struct ProtocolContext {
 impl ProtocolContext {
     pub fn event(
         producer_id: impl Into<String>,
+        producer_incarnation: u64,
         identity: InstanceIdentity,
         sequence: u64,
         event_id: impl Into<String>,
     ) -> Result<Self, String> {
+        if producer_incarnation == 0 {
+            return Err("producer incarnation must be positive".into());
+        }
         Ok(Self {
             producer_id: ProducerId::new(producer_id).map_err(|error| error.to_string())?,
+            producer_incarnation,
             identity,
             sequence: Sequence::new(sequence),
             event_id: Some(EventId::new(event_id).map_err(|error| error.to_string())?),
@@ -42,6 +48,7 @@ impl ProtocolContext {
     ) -> Result<Self, String> {
         Ok(Self {
             producer_id: ProducerId::new(producer_id).map_err(|error| error.to_string())?,
+            producer_incarnation: 0,
             identity,
             sequence: Sequence::new(0),
             event_id: None,

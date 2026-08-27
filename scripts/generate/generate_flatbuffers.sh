@@ -9,10 +9,8 @@ command -v flatc >/dev/null 2>&1 || {
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 rustfmt_toolchain="${RUSTFMT_TOOLCHAIN:-nightly-2025-08-26}"
 schema_root="$repo_root/schemas"
-python_out="$repo_root/kairospy/infrastructure/protocol/generated"
 rust_out="$repo_root/crates/platform/protocol/src/generated"
 stage_root="$(mktemp -d)"
-python_stage="$stage_root/python"
 rust_stage="$stage_root/rust"
 trap 'rmdir "$stage_root" 2>/dev/null || true' EXIT
 
@@ -25,8 +23,6 @@ if (( ${#schemas[@]} == 0 )); then
   echo "no v2 FlatBuffers schemas found" >&2
   exit 1
 fi
-
-flatc -I "$schema_root" --python -o "$python_stage" "${schemas[@]}"
 
 for index in "${!schemas[@]}"; do
   schema="${schemas[$index]}"
@@ -44,6 +40,5 @@ find "$rust_stage" -type f -name '*.rs' -print0 \
   | xargs -0 rustup run "$rustfmt_toolchain" rustfmt \
       --edition 2021 --config-path "$repo_root/rustfmt.toml"
 
-mkdir -p "$python_out/kairos" "$rust_out/kairos"
-rsync -a --delete "$python_stage/kairos/" "$python_out/kairos/"
+mkdir -p "$rust_out/kairos"
 rsync -a --delete "$rust_stage/kairos/" "$rust_out/kairos/"

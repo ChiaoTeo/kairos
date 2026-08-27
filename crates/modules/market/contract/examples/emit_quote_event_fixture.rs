@@ -8,6 +8,7 @@ fn main() {
     let mut builder = FlatBufferBuilder::new();
     let context = EncodeContext::event(
         "market:fixture",
+        1,
         InstanceIdentity::new("workspace", "launch", "instance").unwrap(),
         17,
         "market-event-17",

@@ -33,6 +33,7 @@ pub struct ReferenceActor {
     store: SqlxCatalogStore,
     provider_sync_store: SqlxProviderSyncStore,
     publication_outbox: SqlxPublicationOutbox,
+    producer_incarnation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -206,6 +207,7 @@ impl ReferenceActor {
             source_plan: Some(source_plan),
             provider_sync_store: SqlxProviderSyncStore::from_pool(store.pool.clone()),
             publication_outbox: SqlxPublicationOutbox::from_pool(store.pool.clone()),
+            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
             store,
         })
     }
@@ -229,6 +231,7 @@ impl ReferenceActor {
             source_plan: None,
             provider_sync_store: SqlxProviderSyncStore::from_pool(store.pool.clone()),
             publication_outbox: SqlxPublicationOutbox::from_pool(store.pool.clone()),
+            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
             store,
         })
     }
@@ -464,7 +467,7 @@ impl ReferenceActor {
         let changed = previous_generation != candidate.generation || !events.is_empty();
         let mut save_outcome = None;
         if changed || commit_provider_promotions {
-            let publications = encode_publications(&candidate, &events)?;
+            let publications = encode_publications(&candidate, &events, self.producer_incarnation)?;
             save_outcome = Some(
                 self.store
                     .save_refresh(&candidate, &events, &publications)
@@ -500,7 +503,11 @@ impl ReferenceActor {
         catalog: ReferenceCatalog,
         event: LifecycleEvent,
     ) -> ReferenceResult<()> {
-        let publications = encode_publications(&catalog, std::slice::from_ref(&event))?;
+        let publications = encode_publications(
+            &catalog,
+            std::slice::from_ref(&event),
+            self.producer_incarnation,
+        )?;
         self.store
             .save_refresh(&catalog, std::slice::from_ref(&event), &publications)
             .await?;

@@ -29,6 +29,11 @@ from .reference import ReferenceProcessConfig
 from .binaries import reject_owned_options, resolve_binary
 from .risk import RiskProcessConfig
 from .process_logging import start_logged_process
+from .event_routes import (
+    EventTransportRoute,
+    ensure_instance_event_route,
+    ensure_workspace_event_route,
+)
 
 
 # Only these runtimes have workspace-scoped identity. Account, Risk, Capital,
@@ -159,7 +164,7 @@ class ComponentProcessApplication:
         # a provider/reference Aeron source.  Keeping the driver out of this
         # path makes offline backtests independent from a live workspace
         # driver (and allows multiple replay instances to run safely).
-        if component in {"reference", "account", "risk", "execution"} or (
+        if component in {"reference", "account", "risk", "execution", "capital"} or (
             component == "market" and market_runtime_profile != "replay"
         ):
             self._ensure_aeron_driver()
@@ -207,6 +212,15 @@ class ComponentProcessApplication:
             socket.unlink(missing_ok=True)
             health_file.unlink(missing_ok=True)
 
+        event_route = (
+            None
+            if component == "market" and market_runtime_profile == "replay"
+            else (
+                ensure_instance_event_route(runtime)
+                if runtime is not None
+                else ensure_workspace_event_route(self.workspace)
+            )
+        )
         command, extra_environment = self._command(
             component,
             account_id=account_id,
@@ -215,6 +229,7 @@ class ComponentProcessApplication:
             market_runtime_profile=market_runtime_profile,
             confirm_live=confirm_live,
             instance_workspace=runtime,
+            event_route=event_route,
         )
         log_dir = (
             runtime.log(component)
@@ -384,11 +399,18 @@ class ComponentProcessApplication:
         self,
         component: str,
         *,
+        instance_workspace: Any | None = None,
+        socket_name: str | None = None,
         progress: Callable[[str], None] | None = None,
     ) -> None:
         """Wait until no live process can still own the component runtime."""
-        lock = self.workspace.paths.process_lock(component)
-        health_file = self.workspace.paths.health_file(component)
+        runtime_name = socket_name or component
+        lock = _runtime_lock_path(self.workspace, runtime_name, instance_workspace)
+        health_file = (
+            instance_workspace.health(runtime_name)
+            if instance_workspace is not None
+            else self.workspace.paths.health_file(runtime_name)
+        )
         started = time.monotonic()
         deadline = started + self.stop_timeout
         next_progress = started + 1.0
@@ -418,6 +440,21 @@ class ComponentProcessApplication:
                 progress(f"Still waiting for {component} to stop... {elapsed}s")
                 next_progress = now + 1.0
             time.sleep(0.05)
+
+    def wait_stopped(
+        self,
+        component: str,
+        *,
+        instance_workspace: Any | None = None,
+        socket_name: str | None = None,
+    ) -> None:
+        """Confirm that a stopped runtime no longer owns its process resources."""
+
+        self._wait_stopped(
+            component,
+            instance_workspace=instance_workspace,
+            socket_name=socket_name,
+        )
 
     def status(
         self,
@@ -658,11 +695,25 @@ class ComponentProcessApplication:
         market_runtime_profile: str | None = None,
         confirm_live: bool = False,
         instance_workspace: Any | None = None,
+        event_route: EventTransportRoute | None = None,
     ) -> tuple[list[str], Mapping[str, str]]:
+        if event_route is None and component != "control" and not (
+            component == "market" and market_runtime_profile == "replay"
+        ):
+            event_route = (
+                ensure_instance_event_route(instance_workspace)
+                if instance_workspace is not None
+                else ensure_workspace_event_route(self.workspace)
+            )
         if component == "reference":
+            if event_route is None or event_route.scope != "workspace":
+                raise RuntimeError("Reference requires an explicit Workspace event route")
             config = reference_config or ReferenceProcessConfig(self.workspace)
-            if config.aeron_dir is None:
-                config = replace(config, aeron_dir=self.workspace.paths.aeron_dir())
+            config = replace(
+                config,
+                aeron_dir=event_route.aeron_dir,
+                aeron_channel=event_route.channel,
+            )
             configured = self.binaries.get("reference")
             if configured is not None or config.binary == "kairos-reference-server":
                 config = replace(
@@ -694,6 +745,17 @@ class ComponentProcessApplication:
         }.get(component, f"kairos-{component}-server")
         binary = self.binaries.get(component) or resolve_binary(binary_name)
         command = [binary, "--workspace", str(self.workspace.paths.root)]
+        if component != "control" and not (
+            component == "market" and market_runtime_profile == "replay"
+        ):
+            if event_route is None:
+                raise RuntimeError(f"{component} requires an explicit event route")
+            expected_scope = "instance" if instance_workspace is not None else "workspace"
+            if event_route.scope != expected_scope:
+                raise RuntimeError(
+                    f"{component} event route must have {expected_scope} scope"
+                )
+            command.extend(("--aeron-channel", event_route.channel))
         if instance_workspace is not None:
             command.extend(
                 (
@@ -707,7 +769,11 @@ class ComponentProcessApplication:
             )
         child_environment: dict[str, str] = {
             "KAIROS_WORKSPACE_ID": self.workspace.workspace_id,
-            "AERON_DIR": str(self.workspace.paths.aeron_dir()),
+            "AERON_DIR": str(
+                event_route.aeron_dir
+                if event_route is not None
+                else self.workspace.paths.aeron_dir()
+            ),
         }
         if instance_workspace is not None:
             child_environment.update(

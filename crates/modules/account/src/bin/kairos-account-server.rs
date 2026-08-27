@@ -294,7 +294,7 @@ struct Args {
     refresh_ms: u64,
     #[arg(long, env = "AERON_DIR")]
     aeron_dir: Option<String>,
-    #[arg(long, default_value = kairos_conflux::DEFAULT_AERON_CHANNEL)]
+    #[arg(long)]
     aeron_channel: String,
     #[arg(
         long,

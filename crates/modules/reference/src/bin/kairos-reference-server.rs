@@ -165,7 +165,7 @@ struct Args {
     socket: Option<PathBuf>,
     #[arg(long = "health-file")]
     health_file: Option<PathBuf>,
-    #[arg(long = "aeron-channel", default_value = kairos_conflux::DEFAULT_AERON_CHANNEL)]
+    #[arg(long = "aeron-channel")]
     aeron_channel: String,
     #[arg(
         long = "reference-changes-stream",

@@ -201,6 +201,8 @@ struct CapitalEventMetadata {
     #[pyo3(get)]
     producer: String,
     #[pyo3(get)]
+    producer_incarnation: u64,
+    #[pyo3(get)]
     workspace_id: String,
     #[pyo3(get)]
     launch_id: Option<String>,
@@ -261,6 +263,10 @@ impl CapitalEvent {
     #[getter]
     fn producer(&self) -> &str {
         &self.metadata.producer
+    }
+    #[getter]
+    fn producer_incarnation(&self) -> u64 {
+        self.metadata.producer_incarnation
     }
 
     #[getter]
@@ -1845,6 +1851,7 @@ fn event_metadata(
         stream_id,
         sequence,
         producer_id,
+        producer_incarnation,
         workspace_id,
         launch_id,
         instance_id,
@@ -1859,6 +1866,7 @@ fn event_metadata(
         stream_id: stream_id.to_string(),
         sequence: sequence.get(),
         producer: producer_id.to_string(),
+        producer_incarnation,
         workspace_id: workspace_id.to_string(),
         launch_id: launch_id.map(|value| value.to_string()),
         instance_id: instance_id.map(|value| value.to_string()),

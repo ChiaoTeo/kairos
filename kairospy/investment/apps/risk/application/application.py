@@ -33,6 +33,7 @@ class RiskApplication:
         self._launch_id = launch_id
         self._instance_id = instance_id
         self._event_cursor = 0
+        self._event_cursor_key: tuple[str, str, int] | None = None
         self._event_source_ready = event_source is None
 
     def check_event_source_ready(self) -> None:
@@ -60,6 +61,21 @@ class RiskApplication:
                 raise RuntimeError("Risk event belongs to another launch")
             if self._instance_id is not None and record.instance_id != self._instance_id:
                 raise RuntimeError("Risk event belongs to another launch instance")
+            cursor_key = (
+                record.stream_id,
+                str(record.producer),
+                int(record.producer_incarnation),
+            )
+            if self._event_cursor_key is not None and cursor_key != self._event_cursor_key:
+                if self._latest_view is None:
+                    raise RuntimeError(
+                        "Risk producer restarted but current view is unavailable for resync"
+                    )
+                self._latest_view.snapshot()
+                cursor = record.sequence - 1
+            elif self._event_cursor_key is None:
+                cursor = record.sequence - 1
+            self._event_cursor_key = cursor_key
             if cursor == 0:
                 cursor = record.sequence - 1
             if record.sequence <= cursor:

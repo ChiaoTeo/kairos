@@ -1065,6 +1065,7 @@ impl ExecutionApplication {
             for (index, change) in event.changes.iter().enumerate() {
                 for bytes in crate::services::publication::encode_business_change(
                     &actor_id,
+                    self.conflux.producer_incarnation,
                     &self.conflux.identity,
                     event.sequence.get(),
                     event.occurred_at_unix_nanos.get(),

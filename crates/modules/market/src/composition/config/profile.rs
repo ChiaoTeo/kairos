@@ -13,6 +13,7 @@ pub struct MarketHostRequest {
     pub instance_id: String,
     pub runtime_profile: Option<String>,
     pub aeron_dir: Option<PathBuf>,
+    pub aeron_channel: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

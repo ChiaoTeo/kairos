@@ -1410,6 +1410,8 @@ struct MarketEventMetadata {
     #[pyo3(get)]
     producer: String,
     #[pyo3(get)]
+    producer_incarnation: u64,
+    #[pyo3(get)]
     workspace_id: String,
     #[pyo3(get)]
     launch_id: Option<String>,
@@ -1688,7 +1690,7 @@ impl NativeMarketViewKey {
 #[pymethods]
 impl MarketEvent {
     #[staticmethod]
-    #[pyo3(signature = (*, sequence, market_id, instrument_id, provider, bar_spec_id, open, high, low, close, volume=None, occurred_at_unix_nanos, launch_id=None, instance_id=None))]
+    #[pyo3(signature = (*, sequence, market_id, instrument_id, provider, bar_spec_id, open, high, low, close, volume=None, occurred_at_unix_nanos, launch_id=None, instance_id=None, producer_incarnation=1))]
     #[allow(clippy::too_many_arguments)]
     fn simulation_bar(
         py: Python<'_>,
@@ -1705,6 +1707,7 @@ impl MarketEvent {
         occurred_at_unix_nanos: u64,
         launch_id: Option<String>,
         instance_id: Option<String>,
+        producer_incarnation: u64,
     ) -> PyResult<Self> {
         let (metadata, scope, instrument_id, provider) = simulation_identity(
             sequence,
@@ -1714,6 +1717,7 @@ impl MarketEvent {
             occurred_at_unix_nanos,
             launch_id,
             instance_id,
+            producer_incarnation,
         )?;
         let bar_spec_id = validated_required_text(bar_spec_id, "bar_spec_id")?;
         let payload = MarketBarCurrent {
@@ -1767,6 +1771,7 @@ impl MarketEvent {
             occurred_at_unix_nanos,
             launch_id,
             instance_id,
+            1,
         )?;
         let payload = MarketQuoteCurrent {
             evidence: simulation_evidence(sequence, occurred_at_unix_nanos),
@@ -1818,6 +1823,10 @@ impl MarketEvent {
     #[getter]
     fn producer(&self) -> &str {
         &self.metadata.producer
+    }
+    #[getter]
+    fn producer_incarnation(&self) -> u64 {
+        self.metadata.producer_incarnation
     }
     #[getter]
     fn causation_id(&self) -> Option<&str> {
@@ -2900,7 +2909,13 @@ fn simulation_identity(
     occurred_at_unix_nanos: u64,
     launch_id: Option<String>,
     instance_id: Option<String>,
+    producer_incarnation: u64,
 ) -> PyResult<(MarketEventMetadata, MarketObservationScope, String, String)> {
+    if producer_incarnation == 0 {
+        return Err(MarketInvalidInputError::new_err(
+            "producer_incarnation must be positive",
+        ));
+    }
     let market_id = MarketId::new(market_id)
         .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))?;
     let instrument_id = InstrumentId::new(instrument_id)
@@ -2914,6 +2929,7 @@ fn simulation_identity(
         stream_id: "market.events".to_owned(),
         sequence,
         producer: "market.simulation".to_owned(),
+        producer_incarnation,
         workspace_id: "simulation".to_owned(),
         launch_id,
         instance_id,
@@ -3317,6 +3333,7 @@ fn market_event_metadata(
         stream_id,
         sequence,
         producer_id,
+        producer_incarnation,
         workspace_id,
         launch_id,
         instance_id,
@@ -3331,6 +3348,7 @@ fn market_event_metadata(
         stream_id: stream_id.to_string(),
         sequence: sequence.get(),
         producer: producer_id.to_string(),
+        producer_incarnation,
         workspace_id: workspace_id.to_string(),
         launch_id: launch_id.map(|value| value.to_string()),
         instance_id: instance_id.map(|value| value.to_string()),

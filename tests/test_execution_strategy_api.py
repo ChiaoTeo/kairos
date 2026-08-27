@@ -388,6 +388,21 @@ def test_execution_cursor_recovers_decision_progress_from_current_view(
     assert execution.health()["event_recovery_incomplete"] is True
 
 
+def test_execution_checkpoint_partitions_sequence_by_producer_incarnation(
+    tmp_path,
+) -> None:
+    checkpoint = ExecutionEventCursorCheckpoint(
+        tmp_path / "cursor.json", instance_id="instance-1"
+    )
+    checkpoint.save(9, producer="execution", producer_incarnation=1)
+    checkpoint.save(1, producer="execution", producer_incarnation=2)
+
+    position = checkpoint.load_position()
+    assert position.sequence == 1
+    assert position.producer == "execution"
+    assert position.producer_incarnation == 2
+
+
 async def _drain(execution: ExecutionApplication) -> None:
     async for _ in execution.events():
         pass

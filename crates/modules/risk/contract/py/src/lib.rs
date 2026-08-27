@@ -184,6 +184,8 @@ struct RiskEventMetadata {
     #[pyo3(get)]
     producer: String,
     #[pyo3(get)]
+    producer_incarnation: u64,
+    #[pyo3(get)]
     workspace_id: String,
     #[pyo3(get)]
     launch_id: Option<String>,
@@ -282,7 +284,7 @@ impl RiskEvent {
             ));
         }
         Ok(Self {
-            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id)?,
+            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id, 1)?,
             kind: "reservation_changed".to_owned(),
             account_id: Some(account_id),
             strategy_id: Some(strategy_id),
@@ -319,7 +321,7 @@ impl RiskEvent {
         StrategyId::new(strategy_id.clone()).map_err(value_error)?;
         RequestId::new(request_id.clone()).map_err(value_error)?;
         Ok(Self {
-            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id)?,
+            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id, 1)?,
             kind: "decision_evaluated".to_owned(),
             account_id: Some(account_id),
             strategy_id: Some(strategy_id),
@@ -369,7 +371,7 @@ impl RiskEvent {
             ExchangeId::new(value.clone()).map_err(value_error)?;
         }
         Ok(Self {
-            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id)?,
+            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id, 1)?,
             kind: "circuit_changed".to_owned(),
             account_id,
             strategy_id,
@@ -388,15 +390,21 @@ impl RiskEvent {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (sequence, *, launch_id=None, instance_id=None))]
+    #[pyo3(signature = (sequence, *, launch_id=None, instance_id=None, producer_incarnation=1))]
     fn policy_activated(
         py: Python<'_>,
         sequence: u64,
         launch_id: Option<String>,
         instance_id: Option<String>,
+        producer_incarnation: u64,
     ) -> PyResult<Self> {
         Ok(Self {
-            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id)?,
+            metadata: synthetic_risk_metadata(
+                sequence,
+                launch_id,
+                instance_id,
+                producer_incarnation,
+            )?,
             kind: "policy_activated".to_owned(),
             account_id: None,
             strategy_id: None,
@@ -423,6 +431,10 @@ impl RiskEvent {
     #[getter]
     fn producer(&self) -> &str {
         &self.metadata.producer
+    }
+    #[getter]
+    fn producer_incarnation(&self) -> u64 {
+        self.metadata.producer_incarnation
     }
     #[getter]
     fn occurred_at_unix_nanos(&self) -> u64 {
@@ -1543,6 +1555,7 @@ fn risk_event_metadata(
         stream_id,
         sequence,
         producer_id,
+        producer_incarnation,
         workspace_id,
         launch_id,
         instance_id,
@@ -1557,6 +1570,7 @@ fn risk_event_metadata(
         stream_id: stream_id.to_string(),
         sequence: sequence.get(),
         producer: producer_id.to_string(),
+        producer_incarnation,
         workspace_id: workspace_id.to_string(),
         launch_id: launch_id.map(|value| value.to_string()),
         instance_id: instance_id.map(|value| value.to_string()),
@@ -1763,8 +1777,9 @@ fn synthetic_risk_metadata(
     sequence: u64,
     launch_id: Option<String>,
     instance_id: Option<String>,
+    producer_incarnation: u64,
 ) -> PyResult<RiskEventMetadata> {
-    if sequence == 0 {
+    if sequence == 0 || producer_incarnation == 0 {
         return Err(RiskInvalidInputError::new_err(
             "Risk event sequence must be positive",
         ));
@@ -1786,6 +1801,7 @@ fn synthetic_risk_metadata(
         stream_id: "risk.events".to_owned(),
         sequence,
         producer: "risk".to_owned(),
+        producer_incarnation,
         workspace_id: "workspace".to_owned(),
         launch_id,
         instance_id,

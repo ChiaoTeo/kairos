@@ -33,6 +33,9 @@ def build_strategy_access(
         raise ValueError("enabled Capital requires capital_group_id")
     if client.workspace_id is None:
         raise RuntimeError("Capital owner client requires workspace identity")
+    route = client.event_route
+    if route is None or route.scope != "instance":
+        raise RuntimeError("Capital connection requires an explicit Instance event route")
     owner = CapitalClient(
         client.socket_path,
         capital_group_id=capital_group_id,
@@ -40,6 +43,8 @@ def build_strategy_access(
         view_root=client.require_view_root(),
         launch_id=identity.launch_id,
         instance_id=identity.instance_id,
+        aeron_dir=str(route.aeron_dir),
+        channel=route.channel,
         timeout=client.timeout,
     )
     if commands is None:

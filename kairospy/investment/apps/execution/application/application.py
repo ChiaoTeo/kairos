@@ -81,9 +81,21 @@ class ExecutionApplication:
         self._launch_id = launch_id
         self._account_ids = frozenset(account_ids)
         self._cursor_checkpoint = cursor_checkpoint
-        self._event_cursor = (
-            0 if cursor_checkpoint is None else cursor_checkpoint.load()
+        cursor_position = (
+            None if cursor_checkpoint is None else cursor_checkpoint.load_position()
         )
+        self._event_cursor = 0 if cursor_position is None else cursor_position.sequence
+        self._event_cursor_key: tuple[str, str, int] | None = None
+        if (
+            cursor_position is not None
+            and cursor_position.producer is not None
+            and cursor_position.producer_incarnation is not None
+        ):
+            self._event_cursor_key = (
+                "execution.events",
+                cursor_position.producer,
+                cursor_position.producer_incarnation,
+            )
         self._durable_event_cursor = self._event_cursor
         self._event_head_sequence = self._event_cursor
         self._event_source_ready = event_source is None
@@ -161,6 +173,34 @@ class ExecutionApplication:
             if self._launch_id is not None and record.launch_id != self._launch_id:
                 self._event_scope_error_count += 1
                 raise RuntimeError("Execution event belongs to another launch")
+            if record.instance_id != self._instance_id:
+                self._event_scope_error_count += 1
+                raise RuntimeError("Execution event belongs to another launch instance")
+            cursor_key = (
+                record.stream_id,
+                str(record.producer),
+                int(record.producer_incarnation),
+            )
+            if self._event_cursor_key is not None and cursor_key != self._event_cursor_key:
+                recovered = self._recover_from_current_view(
+                    force=True, cursor_key=cursor_key
+                )
+                if recovered is None:
+                    raise RuntimeError(
+                        "Execution producer restarted but current view is unavailable for resync"
+                    )
+                cursor = recovered
+            elif self._event_cursor_key is None and cursor > 0:
+                recovered = self._recover_from_current_view(
+                    force=True, cursor_key=cursor_key
+                )
+                if recovered is None:
+                    raise RuntimeError(
+                        "Execution cursor has no producer incarnation and cannot resume "
+                        "without a current view"
+                    )
+                cursor = recovered
+            self._event_cursor_key = cursor_key
             if cursor == 0:
                 cursor = record.sequence - 1
             if record.sequence <= cursor:
@@ -172,9 +212,6 @@ class ExecutionApplication:
                     "Execution event stream is not contiguous: "
                     f"expected {expected}, received {record.sequence}"
                 )
-            if record.instance_id != self._instance_id:
-                self._event_scope_error_count += 1
-                raise RuntimeError("Execution event belongs to another launch instance")
             cursor = record.sequence
             self._event_cursor = cursor
             self._event_head_sequence = max(self._event_head_sequence, cursor)
@@ -182,11 +219,11 @@ class ExecutionApplication:
                 record.strategy_id != self._strategy_id
                 or not self._change_belongs_to_accounts(record)
             ):
-                self._checkpoint_cursor(cursor)
+                self._checkpoint_cursor(cursor, cursor_key)
                 continue
             if record.kind != "plan_created":
                 yield record
-            self._checkpoint_cursor(cursor)
+            self._checkpoint_cursor(cursor, cursor_key)
 
     def health(self) -> dict[str, object]:
         """Return process-local event consumption diagnostics."""
@@ -202,17 +239,29 @@ class ExecutionApplication:
             "event_recovery_incomplete": self._event_recovery_incomplete,
         }
 
-    def _checkpoint_cursor(self, sequence: int) -> None:
+    def _checkpoint_cursor(
+        self, sequence: int, cursor_key: tuple[str, str, int] | None = None
+    ) -> None:
+        cursor_key = self._event_cursor_key if cursor_key is None else cursor_key
         if self._cursor_checkpoint is not None:
-            self._cursor_checkpoint.save(sequence)
+            self._cursor_checkpoint.save(
+                sequence,
+                producer=None if cursor_key is None else cursor_key[1],
+                producer_incarnation=None if cursor_key is None else cursor_key[2],
+            )
         self._durable_event_cursor = sequence
 
-    def _recover_from_current_view(self) -> None:
+    def _recover_from_current_view(
+        self,
+        *,
+        force: bool = False,
+        cursor_key: tuple[str, str, int] | None = None,
+    ) -> int | None:
         if self._current_views is None:
-            return
+            return None
         recovery_snapshot = getattr(self._current_views, "recovery_snapshot", None)
         if not callable(recovery_snapshot):
-            return
+            return None
         try:
             raw_snapshot = recovery_snapshot()
             if not isinstance(raw_snapshot, (list, tuple)):
@@ -235,10 +284,10 @@ class ExecutionApplication:
             intents = tuple(map_execution_intent(value) for value in intents)
             fills = tuple(map_execution_fill(value) for value in fills)
         except FileNotFoundError:
-            return
-        if head <= self._event_cursor:
+            return None
+        if not force and head <= self._event_cursor:
             self._event_head_sequence = max(self._event_head_sequence, head)
-            return
+            return head
         if self._decision_application is not None:
             scoped_intent_ids: set[str] = set()
             for intent in intents:
@@ -262,8 +311,10 @@ class ExecutionApplication:
         self._event_recovery_incomplete = bool(fill_history_truncated)
         self._event_cursor = head
         self._event_head_sequence = head
-        self._checkpoint_cursor(head)
+        self._event_cursor_key = cursor_key or self._event_cursor_key
+        self._checkpoint_cursor(head, cursor_key)
         self._event_recovery_count += 1
+        return head
 
     def _change_belongs_to_accounts(self, change: object) -> bool:
         if not self._account_ids:

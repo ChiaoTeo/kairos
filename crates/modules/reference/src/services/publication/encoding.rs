@@ -13,16 +13,18 @@ pub(crate) struct EncodedPublication {
 pub(crate) fn encode_publications(
     catalog: &ReferenceCatalog,
     events: &[LifecycleEvent],
+    producer_incarnation: u64,
 ) -> ReferenceResult<Vec<EncodedPublication>> {
     events
         .iter()
-        .map(|event| encode_publication(catalog, event))
+        .map(|event| encode_publication(catalog, event, producer_incarnation))
         .collect()
 }
 
 fn encode_publication(
     catalog: &ReferenceCatalog,
     event: &LifecycleEvent,
+    producer_incarnation: u64,
 ) -> ReferenceResult<EncodedPublication> {
     let kind = event.record_kind.as_deref().ok_or_else(|| {
         ReferenceError::Publication("Reference event is missing record_kind".into())
@@ -43,6 +45,7 @@ fn encode_publication(
         })?;
     let context = EncodeContext::event(
         "reference-actor",
+        producer_incarnation,
         InstanceIdentity::default(),
         sequence,
         event.event_id.clone(),

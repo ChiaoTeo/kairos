@@ -81,8 +81,14 @@ def test_research_business_use_cases_are_owned_by_application() -> None:
 def test_python_does_not_expose_account_fact_mutation_or_legacy_backtest_settlement() -> (
     None
 ):
-    account_contract = (
-        ROOT / "kairospy/infrastructure/contracts/account/runtime.py"
+    account_facade = ROOT / "kairospy/infrastructure/contracts/account"
+    assert not (account_facade / "runtime.py").exists()
+    account_contract = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(account_facade.glob("*.py"))
+    )
+    account_contract += (
+        ROOT / "crates/modules/account/contract/py/src/lib.rs"
     ).read_text(encoding="utf-8")
     for forbidden in (
         "publish_order_event",

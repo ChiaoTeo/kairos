@@ -92,6 +92,7 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
     };
     let context = EncodeContext::event(
         "reference-actor",
+        1,
         InstanceIdentity::default(),
         7,
         "reference:event:7",

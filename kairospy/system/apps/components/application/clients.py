@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Protocol
 from kairospy.infrastructure.unix_http import request_sync
 
 if TYPE_CHECKING:
+    from .event_routes import EventTransportRoute
     from kairospy.system.apps.workspace.application import InstanceWorkspace
     from kairospy.primitives.account import AccountId
     from kairospy.infrastructure.contracts.account import (
@@ -85,6 +86,7 @@ class SystemRpcClient:
     workspace_id: str | None = None
     launch_id: str | None = None
     instance_id: str | None = None
+    event_route: EventTransportRoute | None = None
     timeout: float = 3.0
 
     def __post_init__(self) -> None:
@@ -857,6 +859,7 @@ class InstanceSystemClients:
                     workspace_id=connections.workspace_id,
                     launch_id=connections.launch_id,
                     instance_id=connections.instance_id,
+                    event_route=connection.event_route,
                 )
                 for account_id, connection in connections.accounts.items()
             },
@@ -866,6 +869,10 @@ class InstanceSystemClients:
                 else MarketSystemClient(
                     connections.market.socket,
                     view_root=connections.market.view_root,
+                    workspace_id=connections.workspace_id,
+                    launch_id=connections.launch_id,
+                    instance_id=connections.instance_id,
+                    event_route=connections.market.event_route,
                 )
             ),
             risk=(
@@ -877,6 +884,7 @@ class InstanceSystemClients:
                     workspace_id=connections.workspace_id,
                     launch_id=connections.launch_id,
                     instance_id=connections.instance_id,
+                    event_route=connections.risk.event_route,
                 )
             ),
             execution=(
@@ -885,6 +893,10 @@ class InstanceSystemClients:
                 else ExecutionSystemClient(
                     connections.execution.socket,
                     view_root=connections.execution.view_root,
+                    workspace_id=connections.workspace_id,
+                    launch_id=connections.launch_id,
+                    instance_id=connections.instance_id,
+                    event_route=connections.execution.event_route,
                 )
             ),
             capital=(
@@ -896,6 +908,7 @@ class InstanceSystemClients:
                     workspace_id=connections.workspace_id,
                     launch_id=connections.launch_id,
                     instance_id=connections.instance_id,
+                    event_route=connections.capital.event_route,
                 )
             ),
             reference=(
@@ -905,6 +918,8 @@ class InstanceSystemClients:
                     connections.reference.socket,
                     database_path=connections.reference.database,
                     actor_id=connections.reference.actor_id,
+                    workspace_id=connections.workspace_id,
+                    event_route=connections.reference.event_route,
                 )
             ),
         )

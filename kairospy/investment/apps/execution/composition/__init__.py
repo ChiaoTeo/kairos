@@ -42,13 +42,17 @@ def build_strategy_access(
             account_ids=account_ids,
             cursor_checkpoint=cursor_checkpoint,
         )
+    route = client.event_route
+    if route is None or route.scope != "instance":
+        raise RuntimeError("Execution connection requires an explicit Instance event route")
     owner = ExecutionClient(
         client.socket_path,
         workspace_id=instance.workspace.workspace_id,
         view_root=instance.snapshot(),
         launch_id=identity.launch_id,
         instance_id=identity.instance_id,
-        aeron_dir=str(instance.workspace.paths.aeron_dir()),
+        aeron_dir=str(route.aeron_dir),
+        channel=route.channel,
         timeout=client.timeout,
     )
     commands = ExecutionCommandClient(

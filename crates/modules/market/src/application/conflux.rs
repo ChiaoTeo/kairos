@@ -846,8 +846,14 @@ impl MarketApplication {
         let actor_id = self.current_view().actor_id.to_string();
         let event_key = "market-events".to_owned();
         for (sequence, event) in &events {
-            let bytes = encode_event(&actor_id, &self.conflux.identity, *sequence, event)
-                .map_err(MarketError::Recovery)?;
+            let bytes = encode_event(
+                &actor_id,
+                self.conflux.producer_incarnation,
+                &self.conflux.identity,
+                *sequence,
+                event,
+            )
+            .map_err(MarketError::Recovery)?;
             if context.outputs().aeron.contains(&event_key) {
                 context
                     .outputs()

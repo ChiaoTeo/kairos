@@ -8,6 +8,7 @@ from kairospy.system.apps.components.application.clients import AccountSystemCli
 from kairospy.system.apps.workspace.application import InstanceWorkspace
 from kairospy.primitives.account import AccountId
 from kairospy.infrastructure.contracts.account import AccountClient
+from kairospy.system.apps.components.application.event_routes import EventTransportRoute
 
 from ..application.application import AccountApplication
 from ..application.models import AccountSegmentSnapshot
@@ -23,6 +24,24 @@ def build_strategy_access(
 
     if not account_clients:
         return AccountApplication({})
+    if any(
+        client.event_route is None or client.event_route.scope != "instance"
+        for client in account_clients.values()
+    ):
+        raise RuntimeError("Account connections require an explicit Instance event route")
+    routes = {
+        (str(client.event_route.aeron_dir), client.event_route.channel)
+        for client in account_clients.values()
+        if client.event_route is not None
+    }
+    if len(routes) != 1:
+        raise RuntimeError("enabled Accounts must share one Instance event route")
+    resolved_clients: dict[AccountId, tuple[AccountSystemClient, EventTransportRoute]] = {}
+    for account_id, client in account_clients.items():
+        route = client.event_route
+        if route is None:
+            raise RuntimeError("Account connection is missing its Instance event route")
+        resolved_clients[account_id] = (client, route)
     owner_clients = {
         account_id: AccountClient(
             client.socket_path,
@@ -31,10 +50,11 @@ def build_strategy_access(
             view_root=client.require_view_root(),
             launch_id=instance.launch_id,
             instance_id=instance.instance_id,
-            aeron_dir=str(instance.workspace.paths.aeron_dir()),
+            aeron_dir=str(route.aeron_dir),
+            channel=route.channel,
             timeout=client.timeout,
         )
-        for account_id, client in account_clients.items()
+        for account_id, (client, route) in resolved_clients.items()
     }
     current_views: dict[AccountId, object] = {}
     for account_id, owner in owner_clients.items():

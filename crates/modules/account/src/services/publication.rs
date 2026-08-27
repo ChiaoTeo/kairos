@@ -379,6 +379,7 @@ fn encode_valuation<'a>(
 
 pub(crate) fn encode_business_change(
     owner_actor_id: &str,
+    producer_incarnation: u64,
     identity: &InstanceIdentity,
     event: &AccountBusinessEvent,
     index: usize,
@@ -388,6 +389,7 @@ pub(crate) fn encode_business_change(
     let runtime_id = format!("account:{}", event.account_id);
     let context = EncodeContext::event(
         owner_actor_id,
+        producer_incarnation,
         runtime_id,
         identity.clone(),
         event.sequence.get(),

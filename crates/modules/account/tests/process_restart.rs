@@ -61,6 +61,8 @@ fn start_server(workspace: &Workspace, aeron_dir: &Path) -> Server {
             "25",
             "--aeron-dir",
             aeron_dir.to_str().unwrap(),
+            "--aeron-channel",
+            "aeron:udp?endpoint=127.0.0.1:40123",
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::from(stderr))

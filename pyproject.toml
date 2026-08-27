@@ -7,7 +7,6 @@ dependencies = [
     "aiohttp>=3.10,<4",
     "apprise>=1.12,<2",
     "click>=8,<9",
-    "flatbuffers>=25,<26",
     "jmespath>=1.0,<2",
     "prettytable>=3,<4",
     "textual>=8,<9",

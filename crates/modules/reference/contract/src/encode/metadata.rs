@@ -23,13 +23,20 @@ impl std::ops::Deref for EncodeContext {
 impl EncodeContext {
     pub fn event(
         producer_id: impl Into<String>,
+        producer_incarnation: u64,
         identity: InstanceIdentity,
         sequence: u64,
         event_id: impl Into<String>,
         catalog_revision: u64,
     ) -> Result<Self, String> {
         Ok(Self {
-            common: ProtocolContext::event(producer_id, identity, sequence, event_id)?,
+            common: ProtocolContext::event(
+                producer_id,
+                producer_incarnation,
+                identity,
+                sequence,
+                event_id,
+            )?,
             catalog_revision: catalog_revision.into(),
         })
     }

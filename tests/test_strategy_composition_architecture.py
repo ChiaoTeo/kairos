@@ -13,6 +13,10 @@ from kairospy.system.apps.launch.application.strategy_runtime import (
     StrategyLaunchConfig,
 )
 from kairospy.system.apps.components.application.clients import MarketSystemClient
+from kairospy.system.apps.components.application.event_routes import (
+    ensure_instance_event_route,
+    ensure_workspace_event_route,
+)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
@@ -177,22 +181,39 @@ def test_instance_connections_validate_identity_and_accounts(tmp_path: Path) -> 
     workspace = WorkspaceApplication().init(tmp_path / "w", workspace_id="typed")
     instance = workspace.instance("paper", "launch", "instance")
     instance.prepare()
+    workspace_route = ensure_workspace_event_route(workspace)
+    instance_route = ensure_instance_event_route(instance)
     instance.component_manifest().write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
+                "workspace_id": workspace.workspace_id,
                 "launch_id": "launch",
                 "instance_id": "instance",
                 "mode": "paper",
+                "event_routes": {
+                    workspace_route.route_id: workspace_route.as_manifest(),
+                    instance_route.route_id: instance_route.as_manifest(),
+                },
                 "components": {
-                    "market": {"socket": str(instance.socket("market"))},
-                    "risk": {"socket": str(instance.socket("risk"))},
-                    "execution": {"socket": str(instance.socket("execution"))},
+                    "market": {
+                        "socket": str(instance.socket("market")),
+                        "event_route": instance_route.route_id,
+                    },
+                    "risk": {
+                        "socket": str(instance.socket("risk")),
+                        "event_route": instance_route.route_id,
+                    },
+                    "execution": {
+                        "socket": str(instance.socket("execution")),
+                        "event_route": instance_route.route_id,
+                    },
                 },
                 "accounts": {
                     "main": {
                         "socket": str(instance.socket("account-main")),
                         "view_root": str(instance.snapshot()),
+                        "event_route": instance_route.route_id,
                     }
                 },
             }
@@ -241,13 +262,16 @@ def test_shared_market_access_does_not_claim_launch_instance_scope(
     workspace = WorkspaceApplication().init(tmp_path / "w", workspace_id="shared")
     instance = workspace.instance("paper", "launch", "instance")
     instance.prepare()
+    route = ensure_workspace_event_route(workspace)
 
     access = build_market_strategy_access(
         workspace=workspace,
         instance=instance,
         identity=StrategyIdentity("strategy", "launch", "instance"),
         config=MarketAccessConfig(scope="shared"),
-        client=MarketSystemClient(workspace.paths.process_socket("market")),
+        client=MarketSystemClient(
+            workspace.paths.process_socket("market"), event_route=route
+        ),
     )
 
     assert access.application._launch_id is None

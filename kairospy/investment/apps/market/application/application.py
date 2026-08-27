@@ -129,6 +129,7 @@ class MarketApplication:
         self._snapshots = snapshots
         self._event_source = event_source
         self._event_cursor: int | None = None
+        self._event_cursor_key: tuple[str, str, int] | None = None
         self._strategy_id = strategy_id
         self._instance_id = instance_id
         self._launch_id = launch_id
@@ -173,6 +174,11 @@ class MarketApplication:
                 )
             stream_id = record.metadata.stream_id
             sequence = record.metadata.sequence
+            cursor_key = (
+                stream_id,
+                str(record.metadata.producer),
+                int(record.metadata.producer_incarnation),
+            )
             if stream_id != "market.events":
                 raise RuntimeError(
                     f"Market event stream identity is invalid: {stream_id}"
@@ -181,6 +187,14 @@ class MarketApplication:
                 raise RuntimeError("Market event belongs to another launch")
             if self._launch_id is not None and record.instance_id != self._instance_id:
                 raise RuntimeError("Market event belongs to another launch instance")
+            if self._event_cursor_key is not None and cursor_key != self._event_cursor_key:
+                # Market current values are read through the owner view. Drop the
+                # only event-derived cache before accepting the restarted producer.
+                self._latest_trades.clear()
+                cursor = sequence - 1
+            elif self._event_cursor_key is None:
+                cursor = sequence - 1 if live else cursor
+            self._event_cursor_key = cursor_key
             if cursor == 0 and live:
                 cursor = sequence - 1
             if sequence <= cursor:

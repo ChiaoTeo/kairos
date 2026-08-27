@@ -110,6 +110,15 @@ def main() -> int:
     generated = PACKAGE / "infrastructure" / "protocol" / "generated"
     if generated.exists():
         failures.append("removed Python generated protocol tree has returned")
+    flatbuffer_generator = (
+        ROOT / "scripts" / "generate" / "generate_flatbuffers.sh"
+    ).read_text(encoding="utf-8")
+    for forbidden in ("--python", "infrastructure/protocol/generated"):
+        if forbidden in flatbuffer_generator:
+            failures.append(
+                "FlatBuffers generation reintroduced a Python binding target: "
+                f"{forbidden!r}"
+            )
 
     generic_indexed_view = PACKAGE / "infrastructure" / "transport" / "indexed_view.py"
     if generic_indexed_view.exists():

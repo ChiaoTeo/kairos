@@ -12,9 +12,58 @@ from kairospy.system.apps.launch.composition import compose_strategy_process
 from kairospy.system.apps.launch import LaunchControlApplication
 from kairospy.system.apps.launch.composition import release_strategy_market_owner
 from kairospy.system.apps.components.application import UnixRestClient
+from kairospy.system.apps.components.application.event_routes import (
+    ensure_instance_event_route,
+    ensure_workspace_event_route,
+)
 from kairospy.system.apps.workspace.application import WorkspaceApplication
 from kairospy.strategy import StrategyCommand
 from kairospy.strategy import CommandResult
+
+
+def _write_component_manifest(
+    instance,
+    *,
+    components: dict[str, dict[str, str]],
+    accounts: dict[str, dict[str, str]] | None = None,
+) -> None:
+    workspace_route = ensure_workspace_event_route(instance.workspace)
+    instance_route = ensure_instance_event_route(instance)
+    routed_components: dict[str, dict[str, str]] = {}
+    for name, value in components.items():
+        route = (
+            workspace_route
+            if name == "reference"
+            or (
+                name == "market"
+                and value.get("socket")
+                == str(instance.workspace.paths.process_socket("market"))
+            )
+            else instance_route
+        )
+        routed_components[name] = {**value, "event_route": route.route_id}
+    routed_accounts = {
+        account_id: {**value, "event_route": instance_route.route_id}
+        for account_id, value in (accounts or {}).items()
+    }
+    instance.component_manifest().write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "workspace_id": instance.workspace.workspace_id,
+                "launch_id": instance.launch_id,
+                "instance_id": instance.instance_id,
+                "mode": instance.mode,
+                "event_routes": {
+                    workspace_route.route_id: workspace_route.as_manifest(),
+                    instance_route.route_id: instance_route.as_manifest(),
+                },
+                "components": routed_components,
+                "accounts": routed_accounts,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_strategy_process_starts_without_snapshot_event_join(
@@ -31,17 +80,16 @@ def test_strategy_process_starts_without_snapshot_event_join(
     )
     instance = workspace.instance("paper", "l", "i")
     instance.prepare()
-    instance.component_manifest().write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "components": {
-                    "market": {"socket": str(workspace.paths.process_socket("market"))}
-                },
-                "accounts": {},
-            }
-        ),
+    instance.normalized_config().parent.mkdir(parents=True, exist_ok=True)
+    instance.normalized_config().write_text(
+        json.dumps({"market_scope": "shared", "execution": {"enabled": False}}),
         encoding="utf-8",
+    )
+    _write_component_manifest(
+        instance,
+        components={
+            "market": {"socket": str(workspace.paths.process_socket("market"))}
+        },
     )
     process = StrategyProcessController(workspace, ready_timeout=5)
     socket = process.ensure_running(
@@ -167,18 +215,12 @@ def test_strategy_composition_uses_instance_market_and_account_resources(
     )
     instance = workspace.instance("backtest", "launch", "run-1")
     instance.prepare()
-    instance.component_manifest().write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "components": {
-                    "market": {"socket": str(instance.socket("market"))},
-                    "execution": {"socket": str(instance.socket("execution"))},
-                },
-                "accounts": {},
-            }
-        ),
-        encoding="utf-8",
+    _write_component_manifest(
+        instance,
+        components={
+            "market": {"socket": str(instance.socket("market"))},
+            "execution": {"socket": str(instance.socket("execution"))},
+        },
     )
     composition = compose_strategy_process(
         workspace,
@@ -207,17 +249,16 @@ def test_interactive_strategy_composes_without_execution_or_accounts(
     )
     instance = workspace.instance("paper", "manual", "run-1")
     instance.prepare()
-    instance.component_manifest().write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "components": {
-                    "market": {"socket": str(workspace.paths.process_socket("market"))}
-                },
-                "accounts": {},
-            }
-        ),
+    instance.normalized_config().parent.mkdir(parents=True, exist_ok=True)
+    instance.normalized_config().write_text(
+        json.dumps({"market_scope": "shared", "execution": {"enabled": False}}),
         encoding="utf-8",
+    )
+    _write_component_manifest(
+        instance,
+        components={
+            "market": {"socket": str(workspace.paths.process_socket("market"))}
+        },
     )
 
     composition = compose_strategy_process(
@@ -272,17 +313,9 @@ def test_authoritative_config_requires_enabled_execution_connection(
         ),
         encoding="utf-8",
     )
-    instance.component_manifest().write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "components": {
-                    "market": {"socket": str(instance.socket("market"))}
-                },
-                "accounts": {},
-            }
-        ),
-        encoding="utf-8",
+    _write_component_manifest(
+        instance,
+        components={"market": {"socket": str(instance.socket("market"))}},
     )
 
     with pytest.raises(RuntimeError, match="Execution is enabled"):
@@ -313,18 +346,12 @@ def test_disabled_execution_ignores_a_residual_manifest_connection(
         ),
         encoding="utf-8",
     )
-    instance.component_manifest().write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "components": {
-                    "market": {"socket": str(instance.socket("market"))},
-                    "execution": {"socket": str(instance.socket("execution"))}
-                },
-                "accounts": {},
-            }
-        ),
-        encoding="utf-8",
+    _write_component_manifest(
+        instance,
+        components={
+            "market": {"socket": str(instance.socket("market"))},
+            "execution": {"socket": str(instance.socket("execution"))},
+        },
     )
 
     composition = compose_strategy_process(
