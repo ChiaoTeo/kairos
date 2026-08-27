@@ -26,6 +26,7 @@ ACCOUNT_RESOURCE_EPOCH = 1
 ACCOUNT_MAP_SIZE = 256 * 1024 * 1024
 _KEY_VERSION = 1
 _ALL_VALUES_PREFIX = bytes((_KEY_VERSION,))
+MAX_INDEXED_VALUES_PER_DATABASE = 100_000
 
 ACCOUNT_INDEXED_SCHEMAS = (
     IndexedViewSchema(SEGMENTS_DATABASE, 1, "ASG3", 1),
@@ -67,7 +68,9 @@ def account_indexed_key(*parts: str) -> bytes:
     for part in parts:
         encoded = part.encode()
         if not part or part.strip() != part or b"\0" in encoded:
-            raise ValueError("Account indexed key components must be non-empty and trimmed")
+            raise ValueError(
+                "Account indexed key components must be non-empty and trimmed"
+            )
         if len(encoded) > 0xFFFF:
             raise ValueError("Account indexed key component is too long")
         key.extend(len(encoded).to_bytes(2, "big"))
@@ -141,9 +144,13 @@ class AccountIndexedViewReader:
     def values(self, database: str) -> tuple[Any, ...]:
         self.ensure_ready()
         values: list[Any] = []
-        for key, payload in self._reader.prefix(
-            database, _ALL_VALUES_PREFIX, limit=sys.maxsize
-        ):
+        rows = self._reader.prefix(
+            database,
+            _ALL_VALUES_PREFIX,
+            limit=MAX_INDEXED_VALUES_PER_DATABASE + 1,
+        )
+        _ensure_bounded(database, rows)
+        for key, payload in rows:
             value = decode_indexed_value(payload, database)
             _validate(database, account_indexed_key_parts(key), value, self.account_id)
             values.append(value)
@@ -152,12 +159,20 @@ class AccountIndexedViewReader:
     def snapshot(self) -> tuple[IndexedViewMetadata, dict[str, tuple[Any, ...]]]:
         databases = tuple(_ROOTS)
         snapshot = self._reader.snapshot(
-            tuple((database, _ALL_VALUES_PREFIX, sys.maxsize) for database in databases)
+            tuple(
+                (
+                    database,
+                    _ALL_VALUES_PREFIX,
+                    MAX_INDEXED_VALUES_PER_DATABASE + 1,
+                )
+                for database in databases
+            )
         )
         if snapshot.metadata.rebuild_state != "ready":
             raise RuntimeError("Account indexed current view is not ready")
         values: dict[str, tuple[Any, ...]] = {}
         for database in databases:
+            _ensure_bounded(database, snapshot.rows[database])
             decoded: list[Any] = []
             for key, payload in snapshot.rows[database]:
                 value = decode_indexed_value(payload, database)
@@ -175,7 +190,16 @@ class AccountIndexedViewReader:
         self._reader.close()
 
 
-def _validate(database: str, parts: tuple[str, ...], value: Any, account_id: str) -> None:
+def _ensure_bounded(database: str, rows: tuple[tuple[bytes, bytes], ...]) -> None:
+    if len(rows) > MAX_INDEXED_VALUES_PER_DATABASE:
+        raise RuntimeError(
+            f"Account indexed database {database} exceeds its read bound"
+        )
+
+
+def _validate(
+    database: str, parts: tuple[str, ...], value: Any, account_id: str
+) -> None:
     actual_account = _required_text(value.AccountId(), "account_id")
     if actual_account != account_id:
         raise ValueError("Account indexed account identity mismatch")
@@ -192,12 +216,20 @@ def _validate(database: str, parts: tuple[str, ...], value: Any, account_id: str
             EARN_HOLDINGS_DATABASE: lambda: value.Holding().HoldingKey(),
             OBSERVED_ORDERS_DATABASE: lambda: value.Order().SourceId(),
         }[database]
-        expected = (segment,) if database == VALUATIONS_DATABASE else (
-            segment,
-            _required_text(entity(), "entity identity"),
+        expected = (
+            (segment,)
+            if database == VALUATIONS_DATABASE
+            else (
+                segment,
+                _required_text(entity(), "entity identity"),
+            )
         )
         if database == POSITIONS_DATABASE:
-            expected += ({1: "NET", 2: "LONG", 3: "SHORT"}.get(int(value.Position().PositionSide()), "UNSPECIFIED"),)
+            expected += (
+                {1: "NET", 2: "LONG", 3: "SHORT"}.get(
+                    int(value.Position().PositionSide()), "UNSPECIFIED"
+                ),
+            )
         elif database == OBSERVED_ORDERS_DATABASE:
             expected += (_required_text(value.Order().ExecutionOrderId(), "order_id"),)
     if parts != expected:
@@ -217,6 +249,7 @@ __all__ = [
     "BALANCES_DATABASE",
     "COLLATERAL_DATABASE",
     "EARN_HOLDINGS_DATABASE",
+    "MAX_INDEXED_VALUES_PER_DATABASE",
     "OBSERVED_ORDERS_DATABASE",
     "POSITIONS_DATABASE",
     "SEGMENTS_DATABASE",

@@ -27,6 +27,7 @@ RISK_RESOURCE_EPOCH = 1
 RISK_MAP_SIZE = 128 * 1024 * 1024
 _KEY_VERSION = 1
 _ALL_VALUES_PREFIX = bytes((_KEY_VERSION,))
+MAX_INDEXED_VALUES_PER_DATABASE = 100_000
 
 RISK_INDEXED_SCHEMAS = (
     IndexedViewSchema(STATE_DATABASE, 1, "RSM3", 1),
@@ -66,7 +67,9 @@ def risk_indexed_key(*parts: str) -> bytes:
     for part in parts:
         encoded = part.encode()
         if not part or part.strip() != part or b"\0" in encoded:
-            raise ValueError("Risk indexed key components must be non-empty and trimmed")
+            raise ValueError(
+                "Risk indexed key components must be non-empty and trimmed"
+            )
         if len(encoded) > 0xFFFF:
             raise ValueError("Risk indexed key component is too long")
         key.extend(len(encoded).to_bytes(2, "big"))
@@ -103,7 +106,7 @@ def _decode(payload: bytes, database: str) -> Any:
 
 
 class RiskIndexedViewQueries:
-    """Atomic queries over all Risk indexed families."""
+    """Explicit bounded snapshots over Risk indexed families."""
 
     def __init__(
         self,
@@ -135,12 +138,23 @@ class RiskIndexedViewQueries:
 
     def _snapshot(self) -> tuple[IndexedViewMetadata, dict[str, tuple[Any, ...]]]:
         snapshot = self._reader.snapshot(
-            tuple((database, _ALL_VALUES_PREFIX, sys.maxsize) for database in _ROOTS)
+            tuple(
+                (
+                    database,
+                    _ALL_VALUES_PREFIX,
+                    MAX_INDEXED_VALUES_PER_DATABASE + 1,
+                )
+                for database in _ROOTS
+            )
         )
         if snapshot.metadata.rebuild_state != "ready":
             raise RuntimeError("Risk indexed current view is not ready")
         decoded: dict[str, tuple[Any, ...]] = {}
         for database, rows in snapshot.rows.items():
+            if len(rows) > MAX_INDEXED_VALUES_PER_DATABASE:
+                raise RuntimeError(
+                    f"Risk indexed database {database} exceeds its read bound"
+                )
             values = []
             for key, payload in rows:
                 value = _decode(payload, database)
@@ -172,7 +186,9 @@ class RiskIndexedViewQueries:
         state = _one(values[STATE_DATABASE], "state")
         limits = _limits(values)
         reservations = _reservations(values)
-        circuits = tuple(_circuit(value.Circuit()) for value in values[CIRCUITS_DATABASE])
+        circuits = tuple(
+            _circuit(value.Circuit()) for value in values[CIRCUITS_DATABASE]
+        )
         return {
             "actor_id": self.actor_id,
             "kind": "latest",
@@ -185,7 +201,9 @@ class RiskIndexedViewQueries:
             "summary": {
                 "limit_count": len(limits),
                 "active_reservation_count": len(reservations),
-                "open_circuit_count": sum(1 for value in circuits if value["status"] == "open"),
+                "open_circuit_count": sum(
+                    1 for value in circuits if value["status"] == "open"
+                ),
             },
             "applied_event_sequence": metadata.applied_event_sequence,
         }
@@ -197,11 +215,17 @@ class RiskIndexedViewQueries:
         return _reservations(self._snapshot()[1])
 
     def circuits(self) -> tuple[dict[str, Any], ...]:
-        return tuple(_circuit(value.Circuit()) for value in self._snapshot()[1][CIRCUITS_DATABASE])
+        return tuple(
+            _circuit(value.Circuit())
+            for value in self._snapshot()[1][CIRCUITS_DATABASE]
+        )
 
     def status(self, account_id: AccountId) -> dict[str, object]:
         metadata, values = self._snapshot()
-        policies = {_text(value.Policy().PolicyId()): value.Policy() for value in values[POLICIES_DATABASE]}
+        policies = {
+            _text(value.Policy().PolicyId()): value.Policy()
+            for value in values[POLICIES_DATABASE]
+        }
         usages = tuple(
             value
             for value in values[LIMIT_USAGE_DATABASE]
@@ -214,11 +238,22 @@ class RiskIndexedViewQueries:
             for value in values[CIRCUITS_DATABASE]
             if _scope_account(value.Circuit().Scope()) in {None, str(account_id)}
         )
-        available = sum((_decimal64(value.Available()) or Decimal(0) for value in usages), Decimal(0))
-        reserved = sum((_decimal64(value.Reserved()) or Decimal(0) for value in usages), Decimal(0))
+        available = sum(
+            (_decimal64(value.Available()) or Decimal(0) for value in usages),
+            Decimal(0),
+        )
+        reserved = sum(
+            (_decimal64(value.Reserved()) or Decimal(0) for value in usages), Decimal(0)
+        )
         violations = [
-            {"code": "circuit_open", "message": _text(value.Reason()) or "Risk circuit is open", "limit": None, "actual": None}
-            for value in circuits if int(value.Status()) == _CIRCUIT_OPEN
+            {
+                "code": "circuit_open",
+                "message": _text(value.Reason()) or "Risk circuit is open",
+                "limit": None,
+                "actual": None,
+            }
+            for value in circuits
+            if int(value.Status()) == _CIRCUIT_OPEN
         ]
         return {
             "account_id": str(account_id),
@@ -233,46 +268,141 @@ class RiskIndexedViewQueries:
 
 _METRIC_NOTIONAL = 1
 _CIRCUIT_OPEN = 2
-_METRICS = {0: "unspecified", 1: "notional", 2: "margin", 3: "gross_exposure", 4: "net_exposure", 5: "turnover", 6: "order_rate", 7: "daily_loss", 8: "drawdown", 9: "leverage", 10: "price_deviation", 11: "stress_loss"}
+_METRICS = {
+    0: "unspecified",
+    1: "notional",
+    2: "margin",
+    3: "gross_exposure",
+    4: "net_exposure",
+    5: "turnover",
+    6: "order_rate",
+    7: "daily_loss",
+    8: "drawdown",
+    9: "leverage",
+    10: "price_deviation",
+    11: "stress_loss",
+}
 _ENFORCEMENT = {0: "unspecified", 1: "reject", 2: "warn", 3: "observe"}
-_RESERVATION_STATUS = {0: "unspecified", 1: "reserved", 2: "consumed", 3: "released", 4: "expired"}
+_RESERVATION_STATUS = {
+    0: "unspecified",
+    1: "reserved",
+    2: "consumed",
+    3: "released",
+    4: "expired",
+}
 _CIRCUIT_STATUS = {0: "unspecified", 1: "closed", 2: "open"}
 
 
 def _limits(values: dict[str, tuple[Any, ...]]) -> tuple[dict[str, Any], ...]:
-    policies = {_text(value.Policy().PolicyId()): value.Policy() for value in values[POLICIES_DATABASE]}
-    return tuple({"policy": _policy(policies[_text(value.PolicyId())]), "used": _decimal_text(value.Used()), "reserved": _decimal_text(value.Reserved()), "available": _decimal_text(value.Available())} for value in values[LIMIT_USAGE_DATABASE])
+    policies = {
+        _text(value.Policy().PolicyId()): value.Policy()
+        for value in values[POLICIES_DATABASE]
+    }
+    return tuple(
+        {
+            "policy": _policy(policies[_text(value.PolicyId())]),
+            "used": _decimal_text(value.Used()),
+            "reserved": _decimal_text(value.Reserved()),
+            "available": _decimal_text(value.Available()),
+        }
+        for value in values[LIMIT_USAGE_DATABASE]
+    )
 
 
 def _reservations(values: dict[str, tuple[Any, ...]]) -> tuple[dict[str, Any], ...]:
     allocations: dict[str, list[dict[str, Any]]] = {}
     for value in values[ALLOCATIONS_DATABASE]:
-        allocations.setdefault(_text(value.ReservationId()) or "", []).append(_allocation(value.Allocation()))
-    return tuple(_reservation(value.Reservation(), allocations.get(_text(value.Reservation().ReservationId()) or "", [])) for value in values[RESERVATIONS_DATABASE])
+        allocations.setdefault(_text(value.ReservationId()) or "", []).append(
+            _allocation(value.Allocation())
+        )
+    return tuple(
+        _reservation(
+            value.Reservation(),
+            allocations.get(_text(value.Reservation().ReservationId()) or "", []),
+        )
+        for value in values[RESERVATIONS_DATABASE]
+    )
 
 
 def _policy(row: Any) -> dict[str, Any]:
-    return {"policy_id": _text(row.PolicyId()), "version": int(row.Version()), "scope": _policy_scope(row.Scope()), "metric": _enum_name(_METRICS, int(row.Metric())), "limit": _decimal_text(row.Limit()), "enforcement": _enum_name(_ENFORCEMENT, int(row.Enforcement())), "valid_from_unix_nanos": int(row.ValidFromUnixNanos()), "valid_until_unix_nanos": _optional_int(row.ValidUntilUnixNanos()), "window_nanos": _optional_int(row.WindowNanos())}
+    return {
+        "policy_id": _text(row.PolicyId()),
+        "version": int(row.Version()),
+        "scope": _policy_scope(row.Scope()),
+        "metric": _enum_name(_METRICS, int(row.Metric())),
+        "limit": _decimal_text(row.Limit()),
+        "enforcement": _enum_name(_ENFORCEMENT, int(row.Enforcement())),
+        "valid_from_unix_nanos": int(row.ValidFromUnixNanos()),
+        "valid_until_unix_nanos": _optional_int(row.ValidUntilUnixNanos()),
+        "window_nanos": _optional_int(row.WindowNanos()),
+    }
 
 
 def _reservation(row: Any, allocations: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"reservation_id": _text(row.ReservationId()), "request_id": _text(row.RequestId()), "account_id": _text(row.AccountId()), "strategy_id": _text(row.StrategyId()), "instrument_id": "", "idempotency_key": _text(row.IdempotencyKey()), "requested_usages": [], "allocations": allocations, "status": _enum_name(_RESERVATION_STATUS, int(row.Status())), "created_at_unix_nanos": int(row.CreatedAtUnixNanos()), "updated_at_unix_nanos": int(row.UpdatedAtUnixNanos()), "expires_at_unix_nanos": int(row.ExpiresAtUnixNanos()), "policy_version": int(row.PolicyVersion())}
+    return {
+        "reservation_id": _text(row.ReservationId()),
+        "request_id": _text(row.RequestId()),
+        "account_id": _text(row.AccountId()),
+        "strategy_id": _text(row.StrategyId()),
+        "instrument_id": "",
+        "idempotency_key": _text(row.IdempotencyKey()),
+        "requested_usages": [],
+        "allocations": allocations,
+        "status": _enum_name(_RESERVATION_STATUS, int(row.Status())),
+        "created_at_unix_nanos": int(row.CreatedAtUnixNanos()),
+        "updated_at_unix_nanos": int(row.UpdatedAtUnixNanos()),
+        "expires_at_unix_nanos": int(row.ExpiresAtUnixNanos()),
+        "policy_version": int(row.PolicyVersion()),
+    }
 
 
 def _allocation(row: Any) -> dict[str, Any]:
-    return {"policy_id": _text(row.PolicyId()), "metric": _enum_name(_METRICS, int(row.Metric())), "amount": _decimal_text(row.Amount())}
+    return {
+        "policy_id": _text(row.PolicyId()),
+        "metric": _enum_name(_METRICS, int(row.Metric())),
+        "amount": _decimal_text(row.Amount()),
+    }
 
 
 def _circuit(row: Any) -> dict[str, Any]:
-    return {"circuit_id": _text(row.CircuitId()), "scope": _circuit_scope(row.Scope()), "status": _enum_name(_CIRCUIT_STATUS, int(row.Status())), "opened_at_unix_nanos": _optional_int(row.OpenedAtUnixNanos()), "reset_at_unix_nanos": _optional_int(row.ResetAtUnixNanos()), "reason": _text(row.Reason())}
+    return {
+        "circuit_id": _text(row.CircuitId()),
+        "scope": _circuit_scope(row.Scope()),
+        "status": _enum_name(_CIRCUIT_STATUS, int(row.Status())),
+        "opened_at_unix_nanos": _optional_int(row.OpenedAtUnixNanos()),
+        "reset_at_unix_nanos": _optional_int(row.ResetAtUnixNanos()),
+        "reason": _text(row.Reason()),
+    }
 
 
 def _policy_scope(row: Any | None) -> dict[str, str | None]:
-    return {"account_id": None, "strategy_id": None, "instrument_id": None, "exchange_id": None} if row is None else {"account_id": _text(row.AccountId()), "strategy_id": _text(row.StrategyId()), "instrument_id": _text(row.InstrumentId()), "exchange_id": _text(row.ExchangeId())}
+    return (
+        {
+            "account_id": None,
+            "strategy_id": None,
+            "instrument_id": None,
+            "exchange_id": None,
+        }
+        if row is None
+        else {
+            "account_id": _text(row.AccountId()),
+            "strategy_id": _text(row.StrategyId()),
+            "instrument_id": _text(row.InstrumentId()),
+            "exchange_id": _text(row.ExchangeId()),
+        }
+    )
 
 
 def _circuit_scope(row: Any | None) -> dict[str, str | None]:
-    return {"account_id": None, "strategy_id": None, "exchange_id": None} if row is None else {"account_id": _text(row.AccountId()), "strategy_id": _text(row.StrategyId()), "exchange_id": _text(row.ExchangeId())}
+    return (
+        {"account_id": None, "strategy_id": None, "exchange_id": None}
+        if row is None
+        else {
+            "account_id": _text(row.AccountId()),
+            "strategy_id": _text(row.StrategyId()),
+            "exchange_id": _text(row.ExchangeId()),
+        }
+    )
 
 
 def _scope_account(row: Any | None) -> str | None:
@@ -290,7 +420,12 @@ def _text(value: bytes | None) -> str | None:
 
 
 def _component(value: str) -> str:
-    return "".join(chr(byte) if byte < 128 and (chr(byte).isalnum() or chr(byte) in "-_ .".replace(" ", "")) else f"%{byte:02X}" for byte in value.encode())
+    return "".join(
+        chr(byte)
+        if byte < 128 and (chr(byte).isalnum() or chr(byte) in "-_ .".replace(" ", ""))
+        else f"%{byte:02X}"
+        for byte in value.encode()
+    )
 
 
 def _decimal64(value: object | None) -> Decimal | None:
@@ -317,4 +452,8 @@ def _enum_name(mapping: dict[int, str], value: int) -> str:
     return mapping.get(value, f"unknown:{value}")
 
 
-__all__ = ["RiskIndexedViewQueries", "risk_indexed_environment_path", "risk_indexed_key"]
+__all__ = [
+    "RiskIndexedViewQueries",
+    "risk_indexed_environment_path",
+    "risk_indexed_key",
+]

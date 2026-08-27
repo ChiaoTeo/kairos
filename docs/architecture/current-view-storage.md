@@ -3,7 +3,8 @@
 This document specifies the implemented cross-module storage contract for current business state. It is
 governed by [Decision 0034](../decisions/0034-unified-current-view-storage.md). Execution, Account, Risk,
 Capital, and Market publish and read only owner-scoped LMDB indexed current views; the former aggregate
-snapshot transports and roots have been removed.
+snapshot transports and roots have been removed. Python value-reading semantics are refined by
+[Decision 0035](../decisions/0035-python-current-view-buffer-backed-reads.md).
 
 ## 1. Outcome and scope
 
@@ -181,14 +182,22 @@ Readers open the exact environment read-only through the owner contract:
 
 1. validate safe path, permissions, environment identity, epoch, and schema set;
 2. begin a short read transaction;
-3. read metadata and the requested key/range;
-4. decode and semantically validate values while the transaction is alive;
-5. map to owned application/SDK values unless a callback explicitly bounds the borrowed lifetime;
+3. read the requested key or an explicitly bounded range;
+4. verify and semantically validate each value while its bytes remain available;
+5. return an owned immutable buffer-backed view, or use a callback that explicitly bounds a borrowed
+   lifetime;
 6. end the transaction promptly.
 
 Long-lived read transactions are forbidden in ordinary clients because they pin old MVCC pages and can
 cause file growth. Python obtains reads through the native transport extension; it does not keep raw
-pointers, LMDB buffers, or transactions behind Python object lifetimes.
+pointers, LMDB buffers, or transactions behind Python object lifetimes. Its default exact-value path
+copies the LMDB slice directly into Python `bytes` without an intermediate Rust `Vec<u8>`; generated
+FlatBuffers accessors read lazily from that buffer instead of requiring a second owned object tree.
+
+One keyed value is complete, but consecutive Python reads need not observe one LMDB transaction or one
+business revision. Consumers use value-owned revision, sequence, time, freshness, and synchronization
+evidence. Metadata-and-value and multi-database snapshots are explicit owner operations for callers
+that require storage-version consistency; they are not a mandatory prelude to each Python read.
 
 Missing key means `not observed` or `not active` according to the owner contract. It is not an empty
 fabricated entity. A schema/identity/epoch mismatch is a hard error, not a transient retry.
@@ -278,9 +287,9 @@ evidence to show the indexed baseline is insufficient.
 | --- | --- |
 | Execution | `orders`, `intents`, `algorithm_runs`, `commitments`, `risk_reservations`, `unknown_remote_orders` |
 | Account | `segments`, `balances`, `collateral`, `positions`, `valuations`, `earn_holdings`, `observed_orders` |
-| Risk | `policies`, `limit_usage`, `allocations`, `reservations`, `circuits` |
-| Capital | `objectives`, `demands`, `source_facts`, `targets`, `routes`, `plans`, `reservations`, `operations`, `alerts` |
-| Market | one latest-value database per observation type, including `bars` keyed by bar series |
+| Risk | `state`, `policies`, `limit_usage`, `allocations`, `reservations`, `circuits` |
+| Capital | `state`, `objectives`, `demands`, `policies`, `facts`, `availability`, `routes`, `plans`, `reservations`, `operations`, `alerts` |
+| Market | `quotes`, `bars`, `greeks`, `rates`, `tickers_24h`, `mark_prices`, `funding_rates`, `open_interest`, `index_prices`, `order_books`, `freshness` |
 
 This table fixes ownership and intended access units, not final schema spelling. A named database is
 created only with a current publisher and consumer.
@@ -296,5 +305,7 @@ The former shared-memory and atomic-file current-view transports, aggregate root
 reader, fixtures, and compatibility entry points have been removed.
 
 There is no production dual-write, dual-read comparison, fallback, or compatibility alias. A reader
-gets metadata and the requested exact value or database ranges from one LMDB read transaction and
-returns owned bytes; a borrowed slice is exposed only inside a transaction-scoped Rust callback.
+gets an exact value or bounded database range through a short LMDB read transaction and returns owned
+bytes. Explicit snapshot operations may read metadata and multiple ranges from one transaction. A
+borrowed slice is exposed only inside a transaction-scoped Rust callback; Python mmap borrowing remains
+unimplemented unless benchmark evidence admits a concrete large-value caller.

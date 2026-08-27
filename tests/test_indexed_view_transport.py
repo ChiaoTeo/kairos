@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from kairospy.infrastructure.transport.indexed_view import (
     IndexedViewReader,
     IndexedViewSchema,
@@ -40,7 +42,9 @@ def test_rust_writer_is_readable_by_native_python_reader(tmp_path: Path) -> None
         resource_epoch=1,
         schemas=schemas,
     ) as reader:
-        assert reader.get("orders", b"order/1") == b"open"
+        retained_value = reader.get("orders", b"order/1")
+        assert type(retained_value) is bytes
+        assert retained_value == b"open"
         assert reader.get("orders", b"missing") is None
         value_metadata, value = reader.value_snapshot("orders", b"order/1")
         assert value == b"open"
@@ -67,3 +71,10 @@ def test_rust_writer_is_readable_by_native_python_reader(tmp_path: Path) -> None
         assert metadata.applied_event_sequence == 11
         assert metadata.committed_at_unix_nanos == 2_000
         assert metadata.rebuild_state == "ready"
+
+        with pytest.raises(ValueError, match="positive limit"):
+            reader.prefix("orders", b"order/", limit=0)
+
+    # Python owns the immutable buffer; no LMDB transaction or reader lifetime
+    # is retained by a normal value read.
+    assert retained_value == b"open"

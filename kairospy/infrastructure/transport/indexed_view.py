@@ -1,4 +1,4 @@
-"""Owned Python reads over Kairos LMDB indexed current views."""
+"""Short LMDB reads returning immutable Python buffers."""
 
 from __future__ import annotations
 
@@ -112,33 +112,32 @@ class IndexedViewReader:
         return _metadata(self._open().metadata())
 
     def get(self, database: str, key: bytes) -> bytes | None:
-        value = self._open().get(database, key)
-        return None if value is None else bytes(value)
+        return self._open().get(database, key)
 
     def value_snapshot(
         self, database: str, key: bytes
     ) -> tuple[IndexedViewMetadata, bytes | None]:
         metadata, value = self._open().value_snapshot(database, key)
-        return _metadata(metadata), None if value is None else bytes(value)
+        return _metadata(metadata), value
 
     def prefix(
         self, database: str, prefix: bytes, *, limit: int
     ) -> tuple[tuple[bytes, bytes], ...]:
+        if limit <= 0:
+            raise ValueError("indexed-view prefix reads require a positive limit")
         return tuple(
-            (bytes(key), bytes(value))
-            for key, value in self._open().prefix(database, prefix, limit)
+            (key, value) for key, value in self._open().prefix(database, prefix, limit)
         )
 
     def snapshot(
         self, requests: tuple[tuple[str, bytes, int], ...]
     ) -> IndexedViewSnapshot:
+        if any(limit <= 0 for _, _, limit in requests):
+            raise ValueError("indexed-view snapshot reads require positive limits")
         metadata, rows = self._open().snapshot(list(requests))
         return IndexedViewSnapshot(
             metadata=_metadata(metadata),
-            rows={
-                database: tuple((bytes(key), bytes(value)) for key, value in values)
-                for database, values in rows.items()
-            },
+            rows={database: tuple(values) for database, values in rows.items()},
         )
 
     def close(self) -> None:

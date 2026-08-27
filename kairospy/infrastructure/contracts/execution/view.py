@@ -25,6 +25,7 @@ EXECUTION_RESOURCE_EPOCH = 1
 EXECUTION_MAP_SIZE = 128 * 1024 * 1024
 _ENTITY_KEY_VERSION = 1
 _ENTITY_PREFIX = bytes((_ENTITY_KEY_VERSION,))
+MAX_INDEXED_VALUES_PER_DATABASE = 100_000
 
 EXECUTION_INDEXED_SCHEMAS = (
     IndexedViewSchema(ORDERS_DATABASE, 1, "EOR3", 1),
@@ -60,9 +61,7 @@ def execution_indexed_environment_path(root: str | Path) -> Path:
 def indexed_entity_key(value: str) -> bytes:
     encoded = value.encode()
     if not value or value.strip() != value or b"\0" in encoded:
-        raise ValueError(
-            "indexed current-view identity must be non-empty and trimmed"
-        )
+        raise ValueError("indexed current-view identity must be non-empty and trimmed")
     if len(encoded) > 0xFFFF:
         raise ValueError("indexed current-view identity is too long")
     return bytes((_ENTITY_KEY_VERSION,)) + len(encoded).to_bytes(2, "big") + encoded
@@ -132,7 +131,15 @@ class ExecutionIndexedViewReader:
 
     def values(self, database: str) -> tuple[Any, ...]:
         self.ensure_ready()
-        rows = self._reader.prefix(database, _ENTITY_PREFIX, limit=sys.maxsize)
+        rows = self._reader.prefix(
+            database,
+            _ENTITY_PREFIX,
+            limit=MAX_INDEXED_VALUES_PER_DATABASE + 1,
+        )
+        if len(rows) > MAX_INDEXED_VALUES_PER_DATABASE:
+            raise RuntimeError(
+                f"Execution indexed database {database} exceeds its read bound"
+            )
         values: list[Any] = []
         for key, payload in rows:
             identity = indexed_entity_identity(key)
@@ -182,6 +189,7 @@ __all__ = [
     "EXECUTION_RESOURCE_EPOCH",
     "ExecutionIndexedViewReader",
     "INTENTS_DATABASE",
+    "MAX_INDEXED_VALUES_PER_DATABASE",
     "ORDERS_DATABASE",
     "RISK_RESERVATIONS_DATABASE",
     "UNKNOWN_REMOTE_ORDERS_DATABASE",

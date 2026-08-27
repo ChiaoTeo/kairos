@@ -6,15 +6,128 @@ from decimal import Decimal
 import pytest
 
 from kairospy.investment.apps.market.application.events import MarketEventRecord
-from kairospy.investment.apps.market.application import ObservationScope
 from kairospy.investment.apps.execution.application.mapping import (
     map_execution_fill,
     map_execution_intent,
     map_execution_order,
 )
 from kairospy.investment.apps.market.application.mapping import map_market_event
-from kairospy.infrastructure.contracts.market.source import BarView, DecimalValue, GreeksView
 from kairospy.strategy import BarEvent, GreeksEvent, IntentStatus, OrderStatus
+
+
+class _DecimalAccessor:
+    def __init__(self, mantissa: int, scale: int) -> None:
+        self._mantissa = mantissa
+        self._scale = scale
+
+    def Mantissa(self) -> int:
+        return self._mantissa
+
+    def Scale(self) -> int:
+        return self._scale
+
+
+class _MarketScopeAccessor:
+    def __init__(self, market_id: str) -> None:
+        self._market_id = market_id.encode()
+
+    def Kind(self) -> int:
+        return 1
+
+    def MarketId(self) -> bytes:
+        return self._market_id
+
+
+class _BarAccessor:
+    def __init__(
+        self,
+        *,
+        instrument_id: str = "instrument:test:SPY",
+        market_id: str = "market:test:SPY",
+        event_time_unix_nanos: int = 1_704_067_200_123_456_789,
+        open_value: tuple[int, int] = (123456789, 6),
+        high_value: tuple[int, int] = (124000000, 6),
+        low_value: tuple[int, int] = (123000000, 6),
+        close_value: tuple[int, int] = (123999999, 6),
+    ) -> None:
+        self._instrument_id = instrument_id.encode()
+        self._scope = _MarketScopeAccessor(market_id)
+        self._event_time = event_time_unix_nanos
+        self._open = _DecimalAccessor(*open_value)
+        self._high = _DecimalAccessor(*high_value)
+        self._low = _DecimalAccessor(*low_value)
+        self._close = _DecimalAccessor(*close_value)
+
+    def InstrumentId(self) -> bytes:
+        return self._instrument_id
+
+    def Scope(self) -> _MarketScopeAccessor:
+        return self._scope
+
+    def BarSpecId(self) -> bytes:
+        return b"1h"
+
+    def Open(self) -> _DecimalAccessor:
+        return self._open
+
+    def High(self) -> _DecimalAccessor:
+        return self._high
+
+    def Low(self) -> _DecimalAccessor:
+        return self._low
+
+    def Close(self) -> _DecimalAccessor:
+        return self._close
+
+    def Volume(self) -> None:
+        return None
+
+    def SourceObservedAtUnixNanos(self) -> int:
+        return self._event_time
+
+    def Provider(self) -> bytes:
+        return b"test"
+
+
+class _GreeksAccessor:
+    def __init__(self) -> None:
+        self._scope = _MarketScopeAccessor("market:test:SPY-PUT")
+
+    def InstrumentId(self) -> bytes:
+        return b"instrument:test:SPY-PUT"
+
+    def Scope(self) -> _MarketScopeAccessor:
+        return self._scope
+
+    def ExpiryUnixNanos(self) -> int:
+        return 1_710_000_000_000_000_000
+
+    def Strike(self) -> _DecimalAccessor:
+        return _DecimalAccessor(45000, 2)
+
+    def Delta(self) -> _DecimalAccessor:
+        return _DecimalAccessor(-250000, 6)
+
+    def Gamma(self) -> _DecimalAccessor:
+        return _DecimalAccessor(1250, 6)
+
+    def Vega(self) -> _DecimalAccessor:
+        return _DecimalAccessor(123456, 6)
+
+    def Theta(self) -> _DecimalAccessor:
+        return _DecimalAccessor(-654321, 6)
+
+    def ImpliedVolatility(self) -> _DecimalAccessor:
+        return _DecimalAccessor(234567, 6)
+
+    def SourceObservedAtUnixNanos(self) -> int:
+        return 1_704_067_200_123_456_789
+
+    def Provider(self) -> bytes:
+        return b"test"
+
+    def DerivationId(self) -> bytes:
+        return b"provider"
 
 
 def test_market_mapper_preserves_decimal_precision_and_unix_nanos() -> None:
@@ -22,19 +135,7 @@ def test_market_mapper_preserves_decimal_precision_and_unix_nanos() -> None:
         "market.events",
         7,
         "bar",
-        BarView(
-            "instrument:test:SPY",
-            ObservationScope.market("market:test:SPY"),
-            "1h",
-            DecimalValue(123456789, 6),
-            DecimalValue(124000000, 6),
-            DecimalValue(123000000, 6),
-            DecimalValue(123999999, 6),
-            None,
-            1_704_067_200_123_456_789,
-            "test",
-            "provider",
-        ),
+        _BarAccessor(),
     )
     event = map_market_event(raw)
     assert isinstance(event, BarEvent)
@@ -50,18 +151,12 @@ def test_market_mapper_rejects_discriminator_payload_mismatch() -> None:
         "market.events",
         1,
         "quote",
-        BarView(
-            "instrument:test:SPY",
-            ObservationScope.market("market:test:SPY"),
-            "1h",
-            DecimalValue(1, 0),
-            DecimalValue(1, 0),
-            DecimalValue(1, 0),
-            DecimalValue(1, 0),
-            None,
-            1,
-            None,
-            None,
+        _BarAccessor(
+            event_time_unix_nanos=1,
+            open_value=(1, 0),
+            high_value=(1, 0),
+            low_value=(1, 0),
+            close_value=(1, 0),
         ),
     )
     with pytest.raises(ValueError, match="does not match"):
@@ -73,20 +168,7 @@ def test_market_mapper_exposes_option_greeks_without_losing_precision() -> None:
         "market.events",
         8,
         "greeks",
-        GreeksView(
-            "instrument:test:SPY-PUT",
-            ObservationScope.market("market:test:SPY-PUT"),
-            1_710_000_000_000_000_000,
-            DecimalValue(45000, 2),
-            DecimalValue(-250000, 6),
-            DecimalValue(1250, 6),
-            DecimalValue(123456, 6),
-            DecimalValue(-654321, 6),
-            DecimalValue(234567, 6),
-            1_704_067_200_123_456_789,
-            "test",
-            "provider",
-        ),
+        _GreeksAccessor(),
     )
 
     event = map_market_event(raw)

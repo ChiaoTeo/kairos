@@ -550,7 +550,7 @@ fn account_cli_separates_standalone_direct_queries_from_launch_connected_views()
     assert!(connected.contains("install_account_connection("));
     assert!(connected.contains("account_client("));
     assert!(connected.contains(".indexed_current("));
-    assert!(connected.contains("view.observed_orders()?"));
+    assert!(connected.contains("snapshot.observed_orders()"));
     assert!(cli.contains("Account connected mode is launch-scoped"));
     assert!(cli.contains("command.is_indexed_query()"));
     for forbidden in [

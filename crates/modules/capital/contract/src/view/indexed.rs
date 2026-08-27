@@ -24,6 +24,7 @@ pub const CAPITAL_OPERATIONS_DATABASE: &str = "operations";
 pub const CAPITAL_ALERTS_DATABASE: &str = "alerts";
 pub const CAPITAL_RESOURCE_EPOCH: u64 = 1;
 pub const CAPITAL_MAP_SIZE: usize = 256 * 1024 * 1024;
+pub const MAX_CAPITAL_INDEXED_VALUES_PER_DATABASE: usize = 100_000;
 const KEY_VERSION: u8 = 1;
 const ALL_VALUES_PREFIX: [u8; 1] = [KEY_VERSION];
 
@@ -151,7 +152,7 @@ impl CapitalIndexedView {
         let requests = DATABASES.map(|database| PrefixRequest {
             database,
             prefix: &ALL_VALUES_PREFIX,
-            limit: usize::MAX,
+            limit: MAX_CAPITAL_INDEXED_VALUES_PER_DATABASE + 1,
         });
         let snapshot = self
             .reader
@@ -162,12 +163,24 @@ impl CapitalIndexedView {
                 "Capital indexed current view is not ready".into(),
             ));
         }
+        ensure_bounded_rows(&snapshot.rows)?;
         Ok(CapitalIndexedSnapshot {
             metadata: snapshot.metadata,
             group_id: self.group_id.clone(),
             rows: snapshot.rows,
         })
     }
+}
+
+fn ensure_bounded_rows(rows: &BTreeMap<String, Vec<(Vec<u8>, Vec<u8>)>>) -> ContractResult<()> {
+    for (database, values) in rows {
+        if values.len() > MAX_CAPITAL_INDEXED_VALUES_PER_DATABASE {
+            return Err(ContractError::Invalid(format!(
+                "Capital indexed database `{database}` exceeds its read bound"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub struct CapitalIndexedSnapshot {

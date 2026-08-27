@@ -102,36 +102,29 @@ impl IndexedViewReader {
         Ok(metadata_value(snapshot))
     }
 
-    fn get<'py>(
-        &self,
-        py: Python<'py>,
-        database: String,
-        key: Vec<u8>,
-    ) -> PyResult<Option<Bound<'py, PyBytes>>> {
-        self.with_reader_attached(py, move |reader| {
-            reader
-                .with_value(&database, &key, |value| {
-                    value.map(|value| PyBytes::new(py, value))
-                })
-                .map_err(|error| errors::indexed_view(py, error))
+    fn get(&self, py: Python<'_>, database: String, key: Vec<u8>) -> PyResult<Option<Py<PyBytes>>> {
+        self.with_reader(py, move |reader| {
+            reader.with_value(&database, &key, |value| {
+                Python::attach(|py| value.map(|value| PyBytes::new(py, value).unbind()))
+            })
         })
     }
 
-    fn value_snapshot<'py>(
+    fn value_snapshot(
         &self,
-        py: Python<'py>,
+        py: Python<'_>,
         database: String,
         key: Vec<u8>,
-    ) -> PyResult<(IndexedViewMetadata, Option<Bound<'py, PyBytes>>)> {
-        self.with_reader_attached(py, move |reader| {
-            reader
-                .with_value_snapshot(&database, &key, |metadata, value| {
+    ) -> PyResult<(IndexedViewMetadata, Option<Py<PyBytes>>)> {
+        self.with_reader(py, move |reader| {
+            reader.with_value_snapshot(&database, &key, |metadata, value| {
+                Python::attach(|py| {
                     (
                         metadata_value(metadata),
-                        value.map(|value| PyBytes::new(py, value)),
+                        value.map(|value| PyBytes::new(py, value).unbind()),
                     )
                 })
-                .map_err(|error| errors::indexed_view(py, error))
+            })
         })
     }
 
@@ -142,15 +135,15 @@ impl IndexedViewReader {
         prefix: Vec<u8>,
         limit: usize,
     ) -> PyResult<Vec<(Py<PyBytes>, Py<PyBytes>)>> {
-        self.with_reader_attached(py, move |reader| {
-            reader
-                .map_prefix(&database, &prefix, limit, |key, value| {
+        self.with_reader(py, move |reader| {
+            reader.map_prefix(&database, &prefix, limit, |key, value| {
+                Python::attach(|py| {
                     (
                         PyBytes::new(py, key).unbind(),
                         PyBytes::new(py, value).unbind(),
                     )
                 })
-                .map_err(|error| errors::indexed_view(py, error))
+            })
         })
     }
 
@@ -229,20 +222,6 @@ fn metadata_value(snapshot: kairos_indexed_view::MetadataSnapshot) -> IndexedVie
 }
 
 impl IndexedViewReader {
-    fn with_reader_attached<'py, T>(
-        &self,
-        py: Python<'py>,
-        operation: impl FnOnce(&kairos_indexed_view::IndexedViewReader) -> PyResult<T>,
-    ) -> PyResult<T> {
-        self.ensure_process(py)?;
-        let guard = self
-            .reader
-            .lock()
-            .map_err(|_| errors::internal_panic(py))?;
-        let reader = guard.as_ref().ok_or_else(|| errors::closed(py))?;
-        operation(reader)
-    }
-
     fn with_reader<T: Send>(
         &self,
         py: Python<'_>,

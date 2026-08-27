@@ -61,114 +61,73 @@ def map_market_view(
             )
         return value
     raw = cast(Any, value)
-    if kind == "bar" or (kind is None and hasattr(value, "timeframe")):
-        _require_attributes(
-            value,
-            "instrument_id",
-            "scope",
-            "timeframe",
-            "open",
-            "high",
-            "low",
-            "close",
-            "event_time_unix_nanos",
-        )
-        occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
+    kind = kind or _payload_kind(value)
+    if kind == "bar":
+        event_time = _fb_nanos(raw, "SourceObservedAtUnixNanos")
         return Bar(
-            scope=_observation_scope(raw.scope),
-            instrument=_instrument(raw.instrument_id),
-            timeframe=raw.timeframe,
-            open=Decimal(raw.open.value),
-            high=Decimal(raw.high.value),
-            low=Decimal(raw.low.value),
-            close=Decimal(raw.close.value),
-            volume=None if raw.volume is None else Decimal(raw.volume.value),
-            occurred_at=occurred_at,
-            occurred_at_unix_nanos=raw.event_time_unix_nanos,
-            provider=raw.provider,
+            scope=_fb_scope(raw),
+            instrument=_instrument(_fb_required_text(raw, "InstrumentId")),
+            timeframe=_fb_required_text(raw, "BarSpecId"),
+            open=_fb_required_decimal(raw, "Open"),
+            high=_fb_required_decimal(raw, "High"),
+            low=_fb_required_decimal(raw, "Low"),
+            close=_fb_required_decimal(raw, "Close"),
+            volume=_fb_decimal(raw, "Volume"),
+            occurred_at=datetime_from_unix_nanos(event_time),
+            occurred_at_unix_nanos=event_time,
+            provider=_fb_text(raw, "Provider"),
         )
-    if kind == "quote" or (kind is None and hasattr(value, "bid_price")):
-        _require_attributes(
-            value,
-            "instrument_id",
-            "scope",
-            "bid_price",
-            "ask_price",
-            "event_time_unix_nanos",
-        )
-        occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
+    if kind == "quote":
+        event_time = _fb_nanos(raw, "SourceObservedAtUnixNanos")
         return Quote(
-            scope=_observation_scope(raw.scope),
-            instrument=_instrument(raw.instrument_id),
-            bid_price=_decimal(raw.bid_price),
-            bid_quantity=_decimal(raw.bid_quantity),
-            ask_price=_decimal(raw.ask_price),
-            ask_quantity=_decimal(raw.ask_quantity),
-            occurred_at=occurred_at,
-            occurred_at_unix_nanos=raw.event_time_unix_nanos,
-            provider=raw.provider,
-            bid_venue_code=getattr(raw, "bid_venue_code", None),
-            ask_venue_code=getattr(raw, "ask_venue_code", None),
-            tape=getattr(raw, "tape", None),
+            scope=_fb_scope(raw),
+            instrument=_instrument(_fb_required_text(raw, "InstrumentId")),
+            bid_price=_fb_decimal(raw, "BidPrice"),
+            bid_quantity=_fb_decimal(raw, "BidQuantity"),
+            ask_price=_fb_decimal(raw, "AskPrice"),
+            ask_quantity=_fb_decimal(raw, "AskQuantity"),
+            occurred_at=datetime_from_unix_nanos(event_time),
+            occurred_at_unix_nanos=event_time,
+            provider=_fb_text(raw, "Provider"),
+            bid_venue_code=_fb_text(raw, "BidVenueCode"),
+            ask_venue_code=_fb_text(raw, "AskVenueCode"),
+            tape=raw.Tape() or None,
         )
-    if kind == "trade" or (kind is None and hasattr(value, "trade_id")):
-        _require_attributes(
-            value,
-            "instrument_id",
-            "scope",
-            "price",
-            "quantity",
-            "event_time_unix_nanos",
-        )
-        if raw.price is None or raw.quantity is None:
-            raise ValueError("trade price and quantity are required")
-        occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
+    if kind == "trade":
+        event_time = _fb_nanos(raw, "SourceObservedAtUnixNanos")
         return Trade(
-            scope=_observation_scope(raw.scope),
-            instrument=_instrument(raw.instrument_id),
-            price=Decimal(raw.price.value),
-            quantity=Decimal(raw.quantity.value),
+            scope=_fb_scope(raw),
+            instrument=_instrument(_fb_required_text(raw, "InstrumentId")),
+            price=_fb_required_decimal(raw, "Price"),
+            quantity=_fb_required_decimal(raw, "Quantity"),
             aggressor_side=None,
-            occurred_at=occurred_at,
-            occurred_at_unix_nanos=raw.event_time_unix_nanos,
-            provider=raw.provider,
-            venue_code=getattr(raw, "venue_code", None),
-            tape=getattr(raw, "tape", None),
-            trf_id=getattr(raw, "trf_id", None),
-            participant_timestamp_unix_nanos=getattr(
-                raw, "participant_timestamp_unix_nanos", None
+            occurred_at=datetime_from_unix_nanos(event_time),
+            occurred_at_unix_nanos=event_time,
+            provider=_fb_text(raw, "Provider"),
+            venue_code=_fb_text(raw, "VenueCode"),
+            tape=raw.Tape() or None,
+            trf_id=raw.TrfId() or None,
+            participant_timestamp_unix_nanos=(
+                raw.ParticipantTimestampUnixNanos() or None
             ),
-            trf_timestamp_unix_nanos=getattr(raw, "trf_timestamp_unix_nanos", None),
+            trf_timestamp_unix_nanos=raw.TrfTimestampUnixNanos() or None,
         )
-    if kind == "greeks" or (kind is None and hasattr(value, "implied_volatility")):
-        _require_attributes(
-            value,
-            "instrument_id",
-            "scope",
-            "expiry_unix_nanos",
-            "strike",
-            "delta",
-            "gamma",
-            "vega",
-            "theta",
-            "implied_volatility",
-            "event_time_unix_nanos",
-        )
-        occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
+    if kind == "greeks":
+        event_time = _fb_nanos(raw, "SourceObservedAtUnixNanos")
         return OptionGreeks(
-            scope=_observation_scope(raw.scope),
-            instrument=_instrument(raw.instrument_id),
-            expiry_unix_nanos=raw.expiry_unix_nanos,
-            strike=_decimal(raw.strike),
-            delta=_decimal(raw.delta),
-            gamma=_decimal(raw.gamma),
-            vega=_decimal(raw.vega),
-            theta=_decimal(raw.theta),
-            implied_volatility=_decimal(raw.implied_volatility),
-            occurred_at=occurred_at,
-            occurred_at_unix_nanos=raw.event_time_unix_nanos,
-            provider=raw.provider,
-            derivation=raw.derivation,
+            scope=_fb_scope(raw),
+            instrument=_instrument(_fb_required_text(raw, "InstrumentId")),
+            expiry_unix_nanos=int(raw.ExpiryUnixNanos()),
+            strike=_fb_decimal(raw, "Strike"),
+            delta=_fb_decimal(raw, "Delta"),
+            gamma=_fb_decimal(raw, "Gamma"),
+            vega=_fb_decimal(raw, "Vega"),
+            theta=_fb_decimal(raw, "Theta"),
+            implied_volatility=_fb_decimal(raw, "ImpliedVolatility"),
+            occurred_at=datetime_from_unix_nanos(event_time),
+            occurred_at_unix_nanos=event_time,
+            provider=_fb_text(raw, "Provider"),
+            derivation=_fb_text(raw, "DerivationId"),
         )
     raise TypeError(f"unsupported Market payload: {type(value).__name__}")
 
@@ -186,23 +145,15 @@ def _public_kind(value: Bar | Quote | Trade | OptionGreeks) -> str:
 def _payload_kind(value: object) -> str | None:
     if isinstance(value, (Bar, Quote, Trade, OptionGreeks)):
         return _public_kind(value)
-    if hasattr(value, "timeframe"):
+    if callable(getattr(value, "BarSpecId", None)):
         return "bar"
-    if hasattr(value, "bid_price") or hasattr(value, "ask_price"):
+    if callable(getattr(value, "BidPrice", None)):
         return "quote"
-    if hasattr(value, "trade_id"):
+    if callable(getattr(value, "TradeId", None)):
         return "trade"
-    if hasattr(value, "implied_volatility"):
+    if callable(getattr(value, "ImpliedVolatility", None)):
         return "greeks"
     return None
-
-
-def _require_attributes(value: object, *names: str) -> None:
-    missing = [name for name in names if not hasattr(value, name)]
-    if missing:
-        raise TypeError(
-            f"Market {type(value).__name__} is missing fields: {', '.join(missing)}"
-        )
 
 
 def _instrument(value: str) -> InstrumentRef:
@@ -210,30 +161,63 @@ def _instrument(value: str) -> InstrumentRef:
     return InstrumentRef(identifier, value.rsplit(":", 1)[-1])
 
 
-def _observation_scope(value: object) -> ObservationScope:
-    if isinstance(value, ObservationScope):
-        return value
-    kind = getattr(value, "kind", None)
-    if kind == "market":
-        return ObservationScope.market(_required(getattr(value, "market_id", None), "market_id"))
-    if kind == "consolidated":
+def _fb_scope(value: Any) -> ObservationScope:
+    scope = value.Scope()
+    if scope is None:
+        raise ValueError("Market observation scope is required")
+    kind = int(scope.Kind())
+    if kind == 1:
+        return ObservationScope.market(_fb_required_text(scope, "MarketId"))
+    if kind == 2:
         return ObservationScope.consolidated(
-            _required(getattr(value, "instrument_id", None), "instrument_id"),
-            getattr(value, "network_id", None),
+            _fb_required_text(scope, "InstrumentId"),
+            _fb_text(scope, "NetworkId"),
         )
-    raise TypeError(f"unsupported Market observation scope: {type(value).__name__}")
+    raise ValueError(f"unknown Market observation scope kind: {kind}")
 
 
-def _required(value: str | None, name: str) -> str:
-    if value is None or not value.strip():
-        raise ValueError(f"{name} is required")
-    return value
+def _fb_text(value: Any, name: str) -> str | None:
+    raw = getattr(value, name)()
+    if raw is None:
+        return None
+    return raw.decode() if isinstance(raw, bytes) else str(raw)
 
 
-def _decimal(value) -> Decimal | None:
-    return None if value is None else Decimal(value.value)
+def _fb_required_text(value: Any, name: str) -> str:
+    result = _fb_text(value, name)
+    if result is None or not result.strip():
+        raise ValueError(f"Market {name} is required")
+    return result
+
+
+def _fb_decimal(value: Any, name: str) -> Decimal | None:
+    raw = getattr(value, name)()
+    if raw is None:
+        return None
+    return Decimal(int(raw.Mantissa())).scaleb(-int(raw.Scale()))
+
+
+def _fb_required_decimal(value: Any, name: str) -> Decimal:
+    result = _fb_decimal(value, name)
+    if result is None:
+        raise ValueError(f"Market {name} is required")
+    return result
+
+
+def _fb_nanos(value: Any, name: str) -> int:
+    result = int(getattr(value, name)())
+    if result < 0:
+        raise ValueError(f"Market {name} cannot be negative")
+    return result
 
 
 def _event_nanos(value: object) -> int | None:
-    nanos = getattr(value, "event_time_unix_nanos", None)
-    return nanos if isinstance(nanos, int) else None
+    if isinstance(value, (Bar, Quote, Trade, OptionGreeks)):
+        return value.occurred_at_unix_nanos
+    accessor = getattr(value, "SourceObservedAtUnixNanos", None)
+    if not callable(accessor):
+        return None
+    observed_at = accessor()
+    if not isinstance(observed_at, int):
+        raise ValueError("Market SourceObservedAtUnixNanos must be an integer")
+    return observed_at

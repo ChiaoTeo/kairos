@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 import subprocess
 
@@ -9,6 +10,7 @@ from kairospy.infrastructure.contracts.market import (
     MarketViewKind,
     market_indexed_environment_path,
 )
+from kairospy.investment.apps.market.application.mapping import map_market_view
 
 
 def test_market_view_key_matches_rust_contract_encoding() -> None:
@@ -63,5 +65,10 @@ def test_rust_market_publisher_value_is_readable_by_kairospy(tmp_path: Path) -> 
     assert frame is not None
     assert frame.metadata.applied_event_sequence == 41
     assert frame.payload[4:8] == b"MQC3"
+    queries.close()
+    # The generated FlatBuffer view remains backed by its Python-owned bytes
+    # after the short LMDB transaction and reader have ended.
     assert frame.value.InstrumentId() == b"instrument:fixture"
     assert frame.value.BidPrice().Mantissa() == 12345
+    quote = map_market_view(frame.value, kind="quote")
+    assert quote.bid_price == Decimal("123.45")

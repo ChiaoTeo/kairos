@@ -686,6 +686,12 @@ mod tests {
         let reader = IndexedViewReader::open(&options, identity).unwrap();
         let rows = reader.prefix("orders", b"a/", 1).unwrap();
         assert_eq!(rows, vec![(b"a/1".to_vec(), vec![1])]);
+        assert!(reader.prefix("orders", b"a/", 0).is_err());
+
+        let mapped = reader
+            .map_prefix("orders", b"a/", 2, |key, value| (key.len(), value[0]))
+            .unwrap();
+        assert_eq!(mapped, vec![(3, 1), (3, 2)]);
     }
 
     #[test]
@@ -799,6 +805,16 @@ mod tests {
         assert_eq!(snapshot.metadata.applied_event_sequence, 17);
         assert_eq!(snapshot.metadata.committed_at_unix_nanos, 23);
         assert_eq!(snapshot.value, Some(b"open".to_vec()));
+
+        let inspected = reader
+            .with_value_snapshot("orders", b"order-1", |metadata, value| {
+                (
+                    metadata.applied_event_sequence,
+                    value.map(|value| value == b"open"),
+                )
+            })
+            .unwrap();
+        assert_eq!(inspected, (17, Some(true)));
     }
 
     #[test]

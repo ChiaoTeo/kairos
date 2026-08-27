@@ -8,7 +8,10 @@ import sys
 from typing import Any, cast
 
 from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
-from kairospy.infrastructure.transport.indexed_view import IndexedViewReader, IndexedViewSchema
+from kairospy.infrastructure.transport.indexed_view import (
+    IndexedViewReader,
+    IndexedViewSchema,
+)
 
 sys.modules.setdefault("kairos", _generated_kairos)
 
@@ -24,7 +27,19 @@ PLANS_DATABASE = "plans"
 RESERVATIONS_DATABASE = "reservations"
 OPERATIONS_DATABASE = "operations"
 ALERTS_DATABASE = "alerts"
-_DATABASES = (STATE_DATABASE, OBJECTIVES_DATABASE, DEMANDS_DATABASE, POLICIES_DATABASE, FACTS_DATABASE, AVAILABILITY_DATABASE, ROUTES_DATABASE, PLANS_DATABASE, RESERVATIONS_DATABASE, OPERATIONS_DATABASE, ALERTS_DATABASE)
+_DATABASES = (
+    STATE_DATABASE,
+    OBJECTIVES_DATABASE,
+    DEMANDS_DATABASE,
+    POLICIES_DATABASE,
+    FACTS_DATABASE,
+    AVAILABILITY_DATABASE,
+    ROUTES_DATABASE,
+    PLANS_DATABASE,
+    RESERVATIONS_DATABASE,
+    OPERATIONS_DATABASE,
+    ALERTS_DATABASE,
+)
 _ROOTS = {
     STATE_DATABASE: ("CSM3", "CapitalStateCurrent"),
     OBJECTIVES_DATABASE: ("CFO3", "CapitalObjectiveCurrent"),
@@ -39,29 +54,47 @@ _ROOTS = {
     ALERTS_DATABASE: ("CAL3", "CapitalAlertCurrent"),
 }
 _SCHEMAS = tuple(
-    IndexedViewSchema(database, 1, _ROOTS[database][0], 1)
-    for database in _DATABASES
+    IndexedViewSchema(database, 1, _ROOTS[database][0], 1) for database in _DATABASES
 )
 _PREFIX = b"\x01"
+MAX_INDEXED_VALUES_PER_DATABASE = 100_000
 
 
 def capital_indexed_environment_path(root: str | Path, capital_group_id: str) -> Path:
-    return Path(root) / "views" / "v3" / "Capital" / f"capital-{_component(capital_group_id)}" / "epoch-1" / "current.lmdb"
+    return (
+        Path(root)
+        / "views"
+        / "v3"
+        / "Capital"
+        / f"capital-{_component(capital_group_id)}"
+        / "epoch-1"
+        / "current.lmdb"
+    )
 
 
 class CapitalIndexedViewQueries:
     """Read Capital availability without using its JSON control plane."""
 
     def __init__(
-        self, root: str | Path, capital_group_id: str, *, workspace_id: str,
-        launch_id: str | None, instance_id: str | None,
+        self,
+        root: str | Path,
+        capital_group_id: str,
+        *,
+        workspace_id: str,
+        launch_id: str | None,
+        instance_id: str | None,
     ) -> None:
         self.capital_group_id = capital_group_id
         self._reader = IndexedViewReader(
-            capital_indexed_environment_path(root, capital_group_id), map_size=256 * 1024 * 1024,
-            workspace_id=workspace_id, launch_id=launch_id, instance_id=instance_id,
-            owner="Capital", publisher_resource_id=f"capital-{capital_group_id}",
-            resource_epoch=1, schemas=_SCHEMAS,
+            capital_indexed_environment_path(root, capital_group_id),
+            map_size=256 * 1024 * 1024,
+            workspace_id=workspace_id,
+            launch_id=launch_id,
+            instance_id=instance_id,
+            owner="Capital",
+            publisher_resource_id=f"capital-{capital_group_id}",
+            resource_epoch=1,
+            schemas=_SCHEMAS,
         )
 
     @property
@@ -69,15 +102,31 @@ class CapitalIndexedViewQueries:
         return self._reader.path
 
     def _snapshot(self) -> tuple[Any, dict[str, tuple[Any, ...]]]:
-        snapshot = self._reader.snapshot(tuple((database, _PREFIX, sys.maxsize) for database in _DATABASES))
+        snapshot = self._reader.snapshot(
+            tuple(
+                (
+                    database,
+                    _PREFIX,
+                    MAX_INDEXED_VALUES_PER_DATABASE + 1,
+                )
+                for database in _DATABASES
+            )
+        )
         values: dict[str, tuple[Any, ...]] = {}
         for database, rows in snapshot.rows.items():
+            if len(rows) > MAX_INDEXED_VALUES_PER_DATABASE:
+                raise RuntimeError(
+                    f"Capital indexed database {database} exceeds its read bound"
+                )
             identifier, root_name = _ROOTS[database]
             decoded = []
             for _, payload in rows:
                 if len(payload) < 8 or payload[4:8] != identifier.encode():
                     raise ValueError(f"invalid Capital indexed value for {database}")
-                module = __import__(f"kairospy.infrastructure.protocol.generated.kairos.capital.v2.{root_name}", fromlist=[root_name])
+                module = __import__(
+                    f"kairospy.infrastructure.protocol.generated.kairos.capital.v2.{root_name}",
+                    fromlist=[root_name],
+                )
                 root = getattr(module, root_name).GetRootAs(payload, 0)
                 if _text(root.CapitalGroupId()) != self.capital_group_id:
                     raise ValueError("Capital indexed group identity mismatch")
@@ -97,9 +146,7 @@ class CapitalIndexedViewQueries:
             _availability(value, self.capital_group_id)
             for value in values[AVAILABILITY_DATABASE]
         )
-        alerts = tuple(
-            _recovery_alert(value) for value in values[ALERTS_DATABASE]
-        )
+        alerts = tuple(_recovery_alert(value) for value in values[ALERTS_DATABASE])
         return {
             "capital_group_id": self.capital_group_id,
             "kind": "current",
@@ -123,19 +170,13 @@ class CapitalIndexedViewQueries:
                 "operation_count": len(values[OPERATIONS_DATABASE]),
                 "alert_count": len(alerts),
                 "ready_availability_count": sum(
-                    1
-                    for value in availabilities
-                    if value["readiness"] == "ready"
+                    1 for value in availabilities if value["readiness"] == "ready"
                 ),
                 "degraded_availability_count": sum(
-                    1
-                    for value in availabilities
-                    if value["readiness"] == "degraded"
+                    1 for value in availabilities if value["readiness"] == "degraded"
                 ),
                 "critical_alert_count": sum(
-                    1
-                    for value in alerts
-                    if value["severity"] == "critical"
+                    1 for value in alerts if value["severity"] == "critical"
                 ),
             },
             "availabilities": list(availabilities),
@@ -149,7 +190,9 @@ class CapitalIndexedViewQueries:
         )
 
     def objectives(self) -> tuple[dict[str, Any], ...]:
-        return tuple(_objective(value) for value in self._snapshot()[1][OBJECTIVES_DATABASE])
+        return tuple(
+            _objective(value) for value in self._snapshot()[1][OBJECTIVES_DATABASE]
+        )
 
     def demands(self) -> tuple[dict[str, Any], ...]:
         return tuple(_demand(value) for value in self._snapshot()[1][DEMANDS_DATABASE])
@@ -161,13 +204,19 @@ class CapitalIndexedViewQueries:
         return tuple(_route(value) for value in self._snapshot()[1][ROUTES_DATABASE])
 
     def reservations(self) -> tuple[dict[str, Any], ...]:
-        return tuple(_reservation(value) for value in self._snapshot()[1][RESERVATIONS_DATABASE])
+        return tuple(
+            _reservation(value) for value in self._snapshot()[1][RESERVATIONS_DATABASE]
+        )
 
     def operations(self) -> tuple[dict[str, Any], ...]:
-        return tuple(_operation(value) for value in self._snapshot()[1][OPERATIONS_DATABASE])
+        return tuple(
+            _operation(value) for value in self._snapshot()[1][OPERATIONS_DATABASE]
+        )
 
     def alerts(self) -> tuple[dict[str, Any], ...]:
-        return tuple(_recovery_alert(value) for value in self._snapshot()[1][ALERTS_DATABASE])
+        return tuple(
+            _recovery_alert(value) for value in self._snapshot()[1][ALERTS_DATABASE]
+        )
 
     def availability(
         self,

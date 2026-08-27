@@ -181,7 +181,7 @@ fn execution_reads_account_business_state_from_the_typed_indexed_view() {
         .expect("read Execution typed dependency states");
     assert!(dependency_state.contains("AccountClient"));
     assert!(dependency_state.contains("indexed_current("));
-    assert!(dependency_state.contains("snapshot.observed_orders()"));
+    assert!(dependency_state.contains(".observed_orders()"));
     assert!(dependency_state.contains("metadata.applied_event_sequence"));
     assert!(dependency_state.contains("reader.snapshot()"));
     assert!(dependency_state.contains("FreshnessState::FRESH"));

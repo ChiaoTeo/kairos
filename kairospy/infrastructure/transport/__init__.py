@@ -10,16 +10,6 @@ cycle.
 from importlib import import_module
 
 _EXPORTS = {
-    "DecimalValue": (".market", "DecimalValue"),
-    "EventStreamGap": (".market", "EventStreamGap"),
-    "BarView": (".market", "BarView"),
-    "GreeksView": (".market", "GreeksView"),
-    "MarketDataView": (".market", "MarketDataView"),
-    "MarketViewAccess": (".market", "MarketViewAccess"),
-    "AeronMarketEventSource": (".market", "AeronMarketEventSource"),
-    "QuoteView": (".market", "QuoteView"),
-    "TradeView": (".market", "TradeView"),
-    "UnixMarketEventStream": (".market", "UnixMarketEventStream"),
     "UnixJsonCommandClient": (".commands", "UnixJsonCommandClient"),
     "UnixJsonRpcClient": (".commands", "UnixJsonRpcClient"),
     "AeronReferenceEventSource": (".reference", "AeronReferenceEventSource"),

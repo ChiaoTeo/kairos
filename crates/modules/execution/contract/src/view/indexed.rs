@@ -17,6 +17,7 @@ pub const RISK_RESERVATIONS_DATABASE: &str = "risk_reservations";
 pub const UNKNOWN_REMOTE_ORDERS_DATABASE: &str = "unknown_remote_orders";
 pub const EXECUTION_RESOURCE_EPOCH: u64 = 1;
 pub const EXECUTION_MAP_SIZE: usize = 128 * 1024 * 1024;
+pub const MAX_EXECUTION_INDEXED_VALUES_PER_DATABASE: usize = 100_000;
 const ENTITY_KEY_VERSION: u8 = 1;
 const ENTITY_PREFIX: [u8; 1] = [ENTITY_KEY_VERSION];
 
@@ -181,14 +182,23 @@ impl ExecutionIndexedView {
 
     fn values(&self, database: &str) -> ContractResult<Vec<ExecutionIndexedViewValue>> {
         self.ensure_ready()?;
-        self.reader
-            .prefix(database, &ENTITY_PREFIX, usize::MAX)
-            .map(|rows| {
-                rows.into_iter()
-                    .map(|(key, value)| ExecutionIndexedViewValue::new(key, value))
-                    .collect()
-            })
-            .map_err(|error| ContractError::Transport(error.to_string()))
+        let rows = self
+            .reader
+            .prefix(
+                database,
+                &ENTITY_PREFIX,
+                MAX_EXECUTION_INDEXED_VALUES_PER_DATABASE + 1,
+            )
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        if rows.len() > MAX_EXECUTION_INDEXED_VALUES_PER_DATABASE {
+            return Err(ContractError::Invalid(format!(
+                "Execution indexed database `{database}` exceeds its read bound"
+            )));
+        }
+        Ok(rows
+            .into_iter()
+            .map(|(key, value)| ExecutionIndexedViewValue::new(key, value))
+            .collect())
     }
 }
 

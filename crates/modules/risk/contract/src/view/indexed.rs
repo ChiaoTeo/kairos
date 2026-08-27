@@ -18,6 +18,7 @@ pub const RISK_RESERVATIONS_DATABASE: &str = "reservations";
 pub const RISK_CIRCUITS_DATABASE: &str = "circuits";
 pub const RISK_RESOURCE_EPOCH: u64 = 1;
 pub const RISK_MAP_SIZE: usize = 128 * 1024 * 1024;
+pub const MAX_RISK_INDEXED_VALUES_PER_DATABASE: usize = 100_000;
 const KEY_VERSION: u8 = 1;
 const ALL_VALUES_PREFIX: [u8; 1] = [KEY_VERSION];
 
@@ -118,7 +119,7 @@ impl RiskIndexedView {
         let requests = databases.map(|database| PrefixRequest {
             database,
             prefix: &ALL_VALUES_PREFIX,
-            limit: usize::MAX,
+            limit: MAX_RISK_INDEXED_VALUES_PER_DATABASE + 1,
         });
         let snapshot = self
             .reader
@@ -129,12 +130,24 @@ impl RiskIndexedView {
                 "Risk indexed current view is not ready".into(),
             ));
         }
+        ensure_bounded_rows(&snapshot.rows)?;
         Ok(RiskIndexedSnapshot {
             metadata: snapshot.metadata,
             actor_id: self.actor_id.clone(),
             rows: snapshot.rows,
         })
     }
+}
+
+fn ensure_bounded_rows(rows: &BTreeMap<String, Vec<(Vec<u8>, Vec<u8>)>>) -> ContractResult<()> {
+    for (database, values) in rows {
+        if values.len() > MAX_RISK_INDEXED_VALUES_PER_DATABASE {
+            return Err(ContractError::Invalid(format!(
+                "Risk indexed database `{database}` exceeds its read bound"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub struct RiskIndexedSnapshot {

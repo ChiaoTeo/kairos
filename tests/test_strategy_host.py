@@ -24,7 +24,7 @@ from kairospy.strategy.apps.runtime.services.ingress import StrategyEventIngress
 from kairospy.investment.apps.account.application import AccountSegmentSnapshot, DataFreshness, SPOT
 from kairospy.investment.apps.execution.application import ExecutionBacktestResult
 from kairospy.primitives.account import AccountId
-from kairospy.investment.apps.market.application import MarketSnapshot, ObservationScope, Quote
+from kairospy.investment.apps.market.application import Bar, MarketSnapshot, ObservationScope, Quote
 from kairospy.investment.apps.market.application.events import MarketEventRecord
 from kairospy.investment.apps.market.application.mapping import map_market_event
 from kairospy.strategy import (
@@ -64,7 +64,6 @@ from kairospy.strategy.apps.runtime.services import (
 )
 from kairospy.strategy import StrategyState
 from kairospy.investment.apps.market.application import EventStreamGap
-from kairospy.infrastructure.contracts.market.source import BarView, DecimalValue, QuoteView
 from kairospy.system.apps.components.application import UnixRestClient
 from kairospy.strategy import StrategyLogger, StrategyOutput
 from kairospy.strategy import CommandResult
@@ -98,33 +97,33 @@ def EventEnvelope(
         provider = str(payload.get("provider", "test"))
         instrument_id = f"instrument:test:{symbol}"
         market_id = f"market:test:{symbol}"
+        occurred_at = datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
         if kind == "bar":
-            close = DecimalValue(int(payload.get("close", 100)), 0)
-            payload = BarView(
-                instrument_id,
-                ObservationScope.market(market_id),
-                "1m",
-                close,
-                close,
-                close,
-                close,
-                None,
-                event_time,
-                provider,
-                "provider",
+            close = Decimal(int(payload.get("close", 100)))
+            payload = Bar(
+                scope=ObservationScope.market(market_id),
+                instrument=InstrumentRef(InstrumentId(instrument_id), symbol),
+                timeframe="1m",
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                volume=None,
+                occurred_at=occurred_at,
+                occurred_at_unix_nanos=event_time,
+                provider=provider,
             )
         elif kind == "quote":
-            bid = DecimalValue(100, 0)
-            ask = DecimalValue(101, 0)
-            payload = QuoteView(
-                instrument_id,
-                ObservationScope.market(market_id),
-                bid,
-                None,
-                ask,
-                None,
-                event_time,
-                provider,
+            payload = Quote(
+                scope=ObservationScope.market(market_id),
+                instrument=InstrumentRef(InstrumentId(instrument_id), symbol),
+                bid_price=Decimal(100),
+                bid_quantity=None,
+                ask_price=Decimal(101),
+                ask_quantity=None,
+                occurred_at=occurred_at,
+                occurred_at_unix_nanos=event_time,
+                provider=provider,
             )
     if domain == "clock" and kind == "advance":
         assert occurred_at is not None

@@ -20,6 +20,7 @@ pub const ACCOUNT_EARN_HOLDINGS_DATABASE: &str = "earn_holdings";
 pub const ACCOUNT_OBSERVED_ORDERS_DATABASE: &str = "observed_orders";
 pub const ACCOUNT_RESOURCE_EPOCH: u64 = 1;
 pub const ACCOUNT_MAP_SIZE: usize = 256 * 1024 * 1024;
+pub const MAX_ACCOUNT_INDEXED_VALUES_PER_DATABASE: usize = 100_000;
 const KEY_VERSION: u8 = 1;
 const ALL_VALUES_PREFIX: [u8; 1] = [KEY_VERSION];
 
@@ -141,7 +142,7 @@ impl AccountIndexedView {
         let requests = databases.map(|database| PrefixRequest {
             database,
             prefix: &ALL_VALUES_PREFIX,
-            limit: usize::MAX,
+            limit: MAX_ACCOUNT_INDEXED_VALUES_PER_DATABASE + 1,
         });
         let snapshot = self
             .reader
@@ -152,6 +153,7 @@ impl AccountIndexedView {
                 "Account indexed current view is not ready".into(),
             ));
         }
+        ensure_bounded_rows(&snapshot.rows)?;
         Ok(AccountIndexedSnapshot {
             metadata: snapshot.metadata,
             account_id: self.account_id.clone(),
@@ -189,19 +191,39 @@ impl AccountIndexedView {
 
     fn values(&self, database: &str) -> ContractResult<Vec<AccountIndexedViewValue>> {
         self.ensure_ready()?;
-        self.reader
-            .prefix(database, &ALL_VALUES_PREFIX, usize::MAX)
-            .map(|rows| {
-                rows.into_iter()
-                    .map(|(key, bytes)| AccountIndexedViewValue {
-                        account_id: self.account_id.clone(),
-                        key,
-                        bytes,
-                    })
-                    .collect()
+        let rows = self
+            .reader
+            .prefix(
+                database,
+                &ALL_VALUES_PREFIX,
+                MAX_ACCOUNT_INDEXED_VALUES_PER_DATABASE + 1,
+            )
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        if rows.len() > MAX_ACCOUNT_INDEXED_VALUES_PER_DATABASE {
+            return Err(ContractError::Invalid(format!(
+                "Account indexed database `{database}` exceeds its read bound"
+            )));
+        }
+        Ok(rows
+            .into_iter()
+            .map(|(key, bytes)| AccountIndexedViewValue {
+                account_id: self.account_id.clone(),
+                key,
+                bytes,
             })
-            .map_err(|error| ContractError::Transport(error.to_string()))
+            .collect())
     }
+}
+
+fn ensure_bounded_rows(rows: &BTreeMap<String, Vec<(Vec<u8>, Vec<u8>)>>) -> ContractResult<()> {
+    for (database, values) in rows {
+        if values.len() > MAX_ACCOUNT_INDEXED_VALUES_PER_DATABASE {
+            return Err(ContractError::Invalid(format!(
+                "Account indexed database `{database}` exceeds its read bound"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub struct AccountIndexedSnapshot {
