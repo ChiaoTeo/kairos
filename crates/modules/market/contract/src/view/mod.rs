@@ -1,4 +1,5 @@
 mod key;
+mod read;
 
 use std::path::{Path, PathBuf};
 
@@ -9,6 +10,13 @@ use kairos_indexed_view::{
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::market::v_2 as fb;
 pub use key::{MarketViewKey, MarketViewKind};
+pub use read::{
+    MarketBarCurrent, MarketBarKind, MarketCurrentEvidence, MarketFreshnessCurrent,
+    MarketFreshnessStatus, MarketFundingRateCurrent, MarketGreeksCurrent, MarketIndexPriceCurrent,
+    MarketMarkPriceCurrent, MarketObservationScope, MarketOpenInterestCurrent,
+    MarketOrderBookCurrent, MarketOrderBookLevel, MarketQuoteCurrent, MarketRateCurrent,
+    MarketTicker24hCurrent,
+};
 
 use crate::{ContractError, ContractResult};
 

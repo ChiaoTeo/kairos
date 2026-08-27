@@ -366,6 +366,40 @@ impl IndexedViewReader {
         Ok(rows)
     }
 
+    /// Reads owner metadata and maps a bounded prefix range from the same
+    /// short LMDB read transaction. Keys and values cannot escape the
+    /// callback unless the caller deliberately returns owned data.
+    pub fn map_prefix_snapshot<R>(
+        &self,
+        database: &str,
+        prefix: &[u8],
+        limit: usize,
+        mut map: impl FnMut(&MetadataSnapshot, &[u8], &[u8]) -> R,
+    ) -> Result<(MetadataSnapshot, Vec<R>), StoreError> {
+        if prefix.is_empty() {
+            return Err(StoreError::InvalidSchema(
+                "prefix reads require a non-empty canonical prefix".into(),
+            ));
+        }
+        if limit == 0 {
+            return Err(StoreError::InvalidSchema(
+                "prefix reads require a positive limit".into(),
+            ));
+        }
+        let txn = self.env.read_txn()?;
+        let metadata = read_metadata(&self.metadata, &txn)?;
+        let mut rows = Vec::new();
+        for result in self.database(database)?.prefix_iter(&txn, prefix)? {
+            let (key, value) = result?;
+            rows.push(map(&metadata, key, value));
+            if rows.len() == limit {
+                break;
+            }
+        }
+        txn.commit()?;
+        Ok((metadata, rows))
+    }
+
     /// Reads metadata and multiple named-database ranges from one LMDB read
     /// transaction, preserving an atomic owner snapshot while returning owned bytes.
     pub fn snapshot(&self, requests: &[PrefixRequest<'_>]) -> Result<ReadSnapshot, StoreError> {

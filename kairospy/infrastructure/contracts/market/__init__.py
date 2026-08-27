@@ -7,6 +7,7 @@ _EXPORTS = {
     "MarketControlClient": (".control", "MarketControlClient"),
     "MarketIndexedFrame": (".view", "MarketIndexedFrame"),
     "MarketIndexedViewQueries": (".view", "MarketIndexedViewQueries"),
+    "MarketQuoteCurrent": (".view", "MarketQuoteCurrent"),
     "MarketViewKey": (".view", "MarketViewKey"),
     "MarketViewKind": (".view", "MarketViewKind"),
     "market_indexed_environment_path": (".view", "market_indexed_environment_path"),

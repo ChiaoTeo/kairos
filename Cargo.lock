@@ -3079,6 +3079,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairos-account-contract-py"
+version = "0.2.0"
+dependencies = [
+ "kairos-account-contract",
+ "kairos-primitives",
+ "kairos-protocol",
+ "pyo3",
+]
+
+[[package]]
 name = "kairos-capital"
 version = "0.2.0"
 dependencies = [
@@ -3117,6 +3127,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "kairos-capital-contract-py"
+version = "0.2.0"
+dependencies = [
+ "flatbuffers",
+ "kairos-capital-contract",
+ "kairos-primitives",
+ "kairos-protocol",
+ "pyo3",
 ]
 
 [[package]]
@@ -3208,9 +3229,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairos-execution-contract-py"
+version = "0.2.0"
+dependencies = [
+ "kairos-execution-contract",
+ "kairos-primitives",
+ "kairos-protocol",
+ "pyo3",
+]
+
+[[package]]
 name = "kairos-indexed-view"
 version = "0.2.0"
 dependencies = [
+ "criterion",
  "heed",
  "tempfile",
  "thiserror 2.0.19",
@@ -3294,6 +3326,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairos-market-contract-py"
+version = "0.2.0"
+dependencies = [
+ "kairos-market-contract",
+ "kairos-primitives",
+ "pyo3",
+]
+
+[[package]]
 name = "kairos-network"
 version = "0.2.0"
 dependencies = [
@@ -3338,7 +3379,6 @@ dependencies = [
 name = "kairos-python-transport"
 version = "0.2.0"
 dependencies = [
- "kairos-indexed-view",
  "kairos-transport",
  "pyo3",
 ]
@@ -3390,6 +3430,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairos-reference-contract-py"
+version = "0.2.0"
+dependencies = [
+ "kairos-reference-contract",
+ "pyo3",
+]
+
+[[package]]
 name = "kairos-risk"
 version = "0.2.0"
 dependencies = [
@@ -3427,6 +3475,16 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+]
+
+[[package]]
+name = "kairos-risk-contract-py"
+version = "0.2.0"
+dependencies = [
+ "kairos-primitives",
+ "kairos-protocol",
+ "kairos-risk-contract",
+ "pyo3",
 ]
 
 [[package]]

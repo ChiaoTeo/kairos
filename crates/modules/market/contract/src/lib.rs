@@ -30,9 +30,13 @@ pub use view::{
     MARKET_GREEKS_DATABASE, MARKET_INDEX_PRICES_DATABASE, MARKET_MAP_SIZE,
     MARKET_MARK_PRICES_DATABASE, MARKET_OPEN_INTEREST_DATABASE, MARKET_ORDER_BOOKS_DATABASE,
     MARKET_QUOTES_DATABASE, MARKET_RATES_DATABASE, MARKET_RESOURCE_EPOCH, MARKET_TICKERS_DATABASE,
-    MarketIndexedSnapshot, MarketIndexedValue, MarketIndexedView, MarketViewKey, MarketViewKind,
-    market_database, market_indexed_environment_path, market_indexed_identity, market_indexed_key,
-    market_indexed_schema_set,
+    MarketBarCurrent, MarketBarKind, MarketCurrentEvidence, MarketFreshnessCurrent,
+    MarketFreshnessStatus, MarketFundingRateCurrent, MarketGreeksCurrent, MarketIndexPriceCurrent,
+    MarketIndexedSnapshot, MarketIndexedValue, MarketIndexedView, MarketMarkPriceCurrent,
+    MarketObservationScope, MarketOpenInterestCurrent, MarketOrderBookCurrent,
+    MarketOrderBookLevel, MarketQuoteCurrent, MarketRateCurrent, MarketTicker24hCurrent,
+    MarketViewKey, MarketViewKind, market_database, market_indexed_environment_path,
+    market_indexed_identity, market_indexed_key, market_indexed_schema_set,
 };
 
 #[derive(Clone)]

@@ -19,6 +19,12 @@ from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.investment.application.eventing import EventMetadata
 from kairospy.primitives.reference import InstrumentId
 from kairospy.primitives.time import datetime_from_unix_nanos
+from kairospy.infrastructure.contracts.market.view import (
+    MarketBarCurrent,
+    MarketGreeksCurrent,
+    MarketObservationScope as ContractObservationScope,
+    MarketQuoteCurrent,
+)
 
 
 def map_market_event(raw) -> MarketEvent:
@@ -60,6 +66,53 @@ def map_market_view(
                 f"Market event discriminator {kind!r} does not match {type(value).__name__}"
             )
         return value
+    if isinstance(value, MarketBarCurrent):
+        return Bar(
+            scope=_contract_scope(value.scope),
+            instrument=_instrument(value.instrument_id),
+            timeframe=value.bar_spec_id,
+            open=value.open,
+            high=value.high,
+            low=value.low,
+            close=value.close,
+            volume=value.volume,
+            occurred_at=datetime_from_unix_nanos(value.source_observed_at_unix_nanos),
+            occurred_at_unix_nanos=value.source_observed_at_unix_nanos,
+            provider=value.provider,
+        )
+    if isinstance(value, MarketQuoteCurrent):
+        return Quote(
+            scope=_contract_scope(value.scope),
+            instrument=_instrument(value.instrument_id),
+            bid_price=value.bid_price,
+            bid_quantity=value.bid_quantity,
+            ask_price=value.ask_price,
+            ask_quantity=value.ask_quantity,
+            occurred_at=datetime_from_unix_nanos(value.source_observed_at_unix_nanos),
+            occurred_at_unix_nanos=value.source_observed_at_unix_nanos,
+            provider=value.provider,
+            bid_venue_code=value.bid_venue_code,
+            ask_venue_code=value.ask_venue_code,
+            tape=value.tape,
+        )
+    if isinstance(value, MarketGreeksCurrent):
+        if value.expiry_unix_nanos is None:
+            raise ValueError("Market Greeks expiry is required by the Strategy API")
+        return OptionGreeks(
+            scope=_contract_scope(value.scope),
+            instrument=_instrument(value.instrument_id),
+            expiry_unix_nanos=value.expiry_unix_nanos,
+            strike=value.strike,
+            delta=value.delta,
+            gamma=value.gamma,
+            vega=value.vega,
+            theta=value.theta,
+            implied_volatility=value.implied_volatility,
+            occurred_at=datetime_from_unix_nanos(value.source_observed_at_unix_nanos),
+            occurred_at_unix_nanos=value.source_observed_at_unix_nanos,
+            provider=value.provider,
+            derivation=value.derivation_id,
+        )
     raw = cast(Any, value)
     kind = kind or _payload_kind(value)
     if kind == "bar":
@@ -145,6 +198,12 @@ def _public_kind(value: Bar | Quote | Trade | OptionGreeks) -> str:
 def _payload_kind(value: object) -> str | None:
     if isinstance(value, (Bar, Quote, Trade, OptionGreeks)):
         return _public_kind(value)
+    if isinstance(value, MarketBarCurrent):
+        return "bar"
+    if isinstance(value, MarketQuoteCurrent):
+        return "quote"
+    if isinstance(value, MarketGreeksCurrent):
+        return "greeks"
     if callable(getattr(value, "BarSpecId", None)):
         return "bar"
     if callable(getattr(value, "BidPrice", None)):
@@ -159,6 +218,14 @@ def _payload_kind(value: object) -> str | None:
 def _instrument(value: str) -> InstrumentRef:
     identifier = InstrumentId(value)
     return InstrumentRef(identifier, value.rsplit(":", 1)[-1])
+
+
+def _contract_scope(value: ContractObservationScope) -> ObservationScope:
+    if value.kind == "market" and value.market_id is not None:
+        return ObservationScope.market(value.market_id)
+    if value.kind == "consolidated" and value.instrument_id is not None:
+        return ObservationScope.consolidated(value.instrument_id, value.network_id)
+    raise ValueError("Market contract observation scope is invalid")
 
 
 def _fb_scope(value: Any) -> ObservationScope:
@@ -214,6 +281,8 @@ def _fb_nanos(value: Any, name: str) -> int:
 def _event_nanos(value: object) -> int | None:
     if isinstance(value, (Bar, Quote, Trade, OptionGreeks)):
         return value.occurred_at_unix_nanos
+    if isinstance(value, (MarketBarCurrent, MarketQuoteCurrent, MarketGreeksCurrent)):
+        return value.source_observed_at_unix_nanos
     accessor = getattr(value, "SourceObservedAtUnixNanos", None)
     if not callable(accessor):
         return None

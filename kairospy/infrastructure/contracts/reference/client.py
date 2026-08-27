@@ -1,85 +1,58 @@
-"""Reference control commands and contract-owned read-only SQLite queries."""
+"""Reference control and owner-contract catalog reads."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-import json
+from importlib import import_module
 from pathlib import Path
-import sqlite3
 from typing import Any
 
 
-_COLLECTIONS = {
-    "exchanges": ("reference_exchanges_current", "exchange_id"),
-    "assets": ("reference_assets_current", "asset_id"),
-    "instruments": ("reference_instruments_current", "instrument_id"),
-    "listings": ("reference_listings_current", "listing_id"),
-}
-_MAX_QUERY_LIMIT = 10_000
+def _native_module() -> Any:
+    native = import_module("kairospy._native_reference_contract")
+    info = native.build_info()
+    if info.api_version != 1 or info.owner != "Reference":
+        raise RuntimeError("incompatible Reference native contract binding")
+    return native
 
 
 @dataclass(frozen=True, slots=True)
 class ReferenceReadSession:
-    """One generation-pinned, read-only view of the Reference catalog."""
+    """One generation-pinned view whose SQLite transaction stays in Rust."""
 
-    _connection: sqlite3.Connection
+    _native: Any
     generation: int
     event_sequence: int
 
-    def catalog(self) -> dict[str, Any]:
-        tables = {
-            "exchange_count": "reference_exchanges_current",
-            "asset_count": "reference_assets_current",
-            "instrument_count": "reference_instruments_current",
-            "listing_count": "reference_listings_current",
-            "market_count": "reference_markets_current",
-        }
-        counts = {
-            name: int(
-                self._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            )
-            for name, table in tables.items()
-        }
-        counts["active_market_count"] = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM reference_markets_current "
-                "WHERE status IN ('active', 'trading')"
-            ).fetchone()[0]
-        )
-        return {
-            "generation": self.generation,
-            "event_sequence": self.event_sequence,
-            "catalog": counts,
-            "integrity": self._integrity(),
-        }
+    def close(self) -> None:
+        self._native.close()
 
-    def _integrity(self) -> dict[str, int]:
-        values = self._connection.execute(
-            "SELECT "
-            "(SELECT COUNT(*) FROM reference_listings_current AS listing "
-            " WHERE listing.status IN ('active', 'trading') "
-            "   AND listing.listing_id LIKE '%:equity:%' "
-            "   AND NOT EXISTS ("
-            "     SELECT 1 FROM reference_markets_current AS market "
-            "     WHERE market.listing_id = listing.listing_id"
-            "   )), "
-            "(SELECT COUNT(*) FROM reference_markets_current "
-            " WHERE market_id LIKE 'market:exchange:%'), "
-            "(SELECT COUNT(*) FROM reference_listings_current "
-            " WHERE listing_id LIKE 'listing:exchange:%'), "
-            "(SELECT COUNT(*) FROM reference_listings_current "
-            " WHERE listing_id LIKE '%:option:%'), "
-            "(SELECT COUNT(*) FROM reference_markets_current "
-            " WHERE instrument_kind = 'option')"
-        ).fetchone()
+    def catalog(self) -> dict[str, Any]:
+        status = self._native.status()
         return {
-            "missing_equity_markets": int(values[0]),
-            "legacy_exchange_market_ids": int(values[1]),
-            "legacy_exchange_listing_ids": int(values[2]),
-            "option_listings": int(values[3]),
-            "option_markets": int(values[4]),
+            "generation": int(status.generation),
+            "event_sequence": int(status.event_sequence),
+            "catalog": {
+                "exchange_count": int(status.exchange_count),
+                "asset_count": int(status.asset_count),
+                "instrument_count": int(status.instrument_count),
+                "listing_count": int(status.listing_count),
+                "market_count": int(status.market_count),
+                "active_market_count": int(status.active_market_count),
+            },
+            "integrity": {
+                "missing_equity_markets": int(status.missing_equity_markets),
+                "legacy_exchange_market_ids": int(
+                    status.legacy_exchange_market_ids
+                ),
+                "legacy_exchange_listing_ids": int(
+                    status.legacy_exchange_listing_ids
+                ),
+                "option_listings": int(status.option_listings),
+                "option_markets": int(status.option_markets),
+            },
         }
 
     def events(
@@ -89,49 +62,29 @@ class ReferenceReadSession:
         sequence_to: int | None = None,
         limit: int = 256,
     ) -> dict[str, Any]:
-        if sequence_from is not None and sequence_from < 0:
-            raise ValueError("sequence_from must be non-negative")
-        if sequence_to is not None and sequence_to < 0:
-            raise ValueError("sequence_to must be non-negative")
-        bounded_limit, _ = _page(limit, 0, maximum=4096)
-        assert bounded_limit is not None
-        clauses: list[str] = []
-        values: list[object] = []
-        if sequence_from is not None:
-            clauses.append("sequence >= ?")
-            values.append(sequence_from)
-        if sequence_to is not None:
-            clauses.append("sequence <= ?")
-            values.append(sequence_to)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        rows = self._connection.execute(
-            f"SELECT sequence, payload FROM reference_lifecycle{where} "
-            "ORDER BY sequence LIMIT ?",
-            (*values, bounded_limit),
-        ).fetchall()
-        events = []
-        for row in rows:
-            payload = _payload(row["payload"])
-            payload.setdefault("sequence", int(row["sequence"]))
-            events.append(payload)
         return {
             "generation": self.generation,
             "event_sequence": self.event_sequence,
-            "events": events,
+            "events": [
+                _event(value)
+                for value in self._native.events(
+                    sequence_from=sequence_from,
+                    sequence_to=sequence_to,
+                    limit=limit,
+                )
+            ],
         }
 
     def option_coverage(self) -> dict[str, Any]:
-        rows = self._connection.execute(
-            "SELECT underlying FROM reference_option_coverage "
-            "WHERE provider = ? AND enabled = 1 ORDER BY underlying",
-            ("massive-options",),
-        ).fetchall()
         return {
             "source_id": "massive-options",
             "generation": self.generation,
             "event_sequence": self.event_sequence,
-            "underlyings": [str(row["underlying"]) for row in rows],
+            "underlyings": list(self._native.option_coverage()),
         }
+
+    def outbox_depth(self) -> int:
+        return int(self._native.outbox_depth())
 
     def exchanges(
         self,
@@ -143,15 +96,15 @@ class ReferenceReadSession:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        return self._records(
-            "exchanges",
-            filters={"status": status},
-            ids=exchange_ids,
+        values = self._native.exchanges(
+            exchange_ids=_identifiers(exchange_ids),
             query=query,
+            status=status,
             active_only=active_only,
             limit=limit,
             offset=offset,
         )
+        return [_exchange(value) for value in values]
 
     def assets(
         self,
@@ -165,15 +118,17 @@ class ReferenceReadSession:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        return self._records(
-            "assets",
-            filters={"code": code, "asset_class": asset_class, "status": status},
-            ids=asset_ids,
+        values = self._native.assets(
+            asset_ids=_identifiers(asset_ids),
             query=query,
+            code=code,
+            asset_class=asset_class,
+            status=status,
             active_only=active_only,
             limit=limit,
             offset=offset,
         )
+        return [_asset(value) for value in values]
 
     def instruments(
         self,
@@ -193,62 +148,23 @@ class ReferenceReadSession:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        expiry_values = (
-            expiry_unix_nanos,
-            expiry_from_unix_nanos,
-            expiry_to_unix_nanos,
-        )
-        if any(value is not None and value < 0 for value in expiry_values):
-            raise ValueError("expiry timestamps must be non-negative")
-        if (
-            expiry_from_unix_nanos is not None
-            and expiry_to_unix_nanos is not None
-            and expiry_from_unix_nanos > expiry_to_unix_nanos
-        ):
-            raise ValueError(
-                "expiry_from_unix_nanos must not exceed expiry_to_unix_nanos"
-            )
-        normalized_option_right = (
-            option_right.strip().lower() if option_right is not None else None
-        )
-        if normalized_option_right not in {None, "call", "put"}:
-            raise ValueError("option_right must be call or put")
-        filters: dict[str, object | None] = {
-            "symbol": symbol,
-            "instrument_type": instrument_type,
-            "product_family": product_family,
-            "underlying_instrument_id": underlying_instrument_id,
-            "expiry_unix_nanos": expiry_unix_nanos,
-            "status": status,
-        }
-        extra_clauses: list[str] = []
-        extra_values: list[object] = []
-        if expiry_from_unix_nanos is not None:
-            extra_clauses.append("expiry_unix_nanos >= ?")
-            extra_values.append(expiry_from_unix_nanos)
-        if expiry_to_unix_nanos is not None:
-            extra_clauses.append("expiry_unix_nanos <= ?")
-            extra_values.append(expiry_to_unix_nanos)
-        if normalized_option_right is not None:
-            extra_clauses.append("json_extract(payload, '$.option_right') = ?")
-            extra_values.append(normalized_option_right)
-        return self._records(
-            "instruments",
-            filters=filters,
-            ids=instrument_ids,
+        values = self._native.instruments(
+            instrument_ids=_identifiers(instrument_ids),
             query=query,
+            symbol=symbol,
+            instrument_type=instrument_type,
+            product_family=product_family,
+            underlying_instrument_id=underlying_instrument_id,
+            expiry_unix_nanos=expiry_unix_nanos,
+            expiry_from_unix_nanos=expiry_from_unix_nanos,
+            expiry_to_unix_nanos=expiry_to_unix_nanos,
+            option_right=option_right,
+            status=status,
             active_only=active_only,
-            extra_clauses=extra_clauses,
-            extra_values=extra_values,
             limit=limit,
             offset=offset,
-            order_by=(
-                "expiry_unix_nanos, "
-                "CAST(json_extract(payload, '$.strike') AS REAL), instrument_id"
-                if underlying_instrument_id is not None
-                else "instrument_id"
-            ),
         )
+        return [_instrument(value) for value in values]
 
     def listings(
         self,
@@ -263,20 +179,18 @@ class ReferenceReadSession:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        return self._records(
-            "listings",
-            filters={
-                "instrument_id": instrument_id,
-                "exchange_id": _exchange_id(exchange_id),
-                "exchange_symbol": exchange_symbol,
-                "status": status,
-            },
-            ids=listing_ids,
+        values = self._native.listings(
+            listing_ids=_identifiers(listing_ids),
             query=query,
+            instrument_id=instrument_id,
+            exchange_id=exchange_id,
+            exchange_symbol=exchange_symbol,
+            status=status,
             active_only=active_only,
             limit=limit,
             offset=offset,
         )
+        return [_listing(value) for value in values]
 
     def markets(
         self,
@@ -296,55 +210,23 @@ class ReferenceReadSession:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        extra_clauses: list[str] = []
-        extra_values: list[object] = []
-        if asset_code is not None:
-            normalized_asset_code = asset_code.strip().upper()
-            extra_clauses.append(
-                "("
-                "instrument_id IN ("
-                "SELECT instrument_id FROM reference_instruments_current "
-                "WHERE symbol = ?"
-                ") OR underlying_instrument_id IN ("
-                "SELECT instrument_id FROM reference_instruments_current "
-                "WHERE symbol = ?"
-                ") OR json_extract(payload, '$.base_asset_id') IN ("
-                "SELECT asset_id FROM reference_assets_current WHERE code = ?"
-                ") OR json_extract(payload, '$.quote_asset_id') IN ("
-                "SELECT asset_id FROM reference_assets_current WHERE code = ?"
-                ")"
-                ")"
-            )
-            extra_values.extend(
-                (
-                    normalized_asset_code,
-                    normalized_asset_code,
-                    normalized_asset_code,
-                    normalized_asset_code,
-                )
-            )
-        rows = self._query_rows(
-            table="reference_markets_current",
-            key="market_id",
-            filters={
-                "venue_symbol": symbol,
-                "exchange_id": _exchange_id(exchange_id),
-                "instrument_kind": instrument_kind,
-                "asset_type": asset_type,
-                "instrument_id": instrument_id,
-                "listing_id": listing_id,
-                "underlying_instrument_id": underlying_instrument_id,
-                "status": status,
-            },
-            ids=market_ids,
+        values = self._native.markets(
+            market_ids=_identifiers(market_ids),
             query=query,
+            symbol=symbol,
+            asset_code=asset_code,
+            exchange_id=exchange_id,
+            instrument_kind=instrument_kind,
+            asset_type=asset_type,
+            instrument_id=instrument_id,
+            listing_id=listing_id,
+            underlying_instrument_id=underlying_instrument_id,
             active_only=active_only,
-            extra_clauses=extra_clauses,
-            extra_values=extra_values,
+            status=status,
             limit=limit,
             offset=offset,
         )
-        return [_market(_payload(row["payload"])) for row in rows]
+        return [_market(value) for value in values]
 
     def collection(
         self,
@@ -353,101 +235,22 @@ class ReferenceReadSession:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        return self._records(name, filters={}, limit=limit, offset=offset)
-
-    def _records(
-        self,
-        name: str,
-        *,
-        filters: dict[str, object | None],
-        ids: Sequence[str] | None = None,
-        query: str | None = None,
-        active_only: bool = False,
-        extra_clauses: Sequence[str] = (),
-        extra_values: Sequence[object] = (),
-        limit: int | None = None,
-        offset: int = 0,
-        order_by: str | None = None,
-    ) -> list[dict[str, Any]]:
+        readers = {
+            "exchanges": self.exchanges,
+            "assets": self.assets,
+            "instruments": self.instruments,
+            "listings": self.listings,
+        }
         try:
-            table, key = _COLLECTIONS[name]
+            reader = readers[name]
         except KeyError as error:
             raise ValueError(f"unsupported Reference collection: {name}") from error
-        rows = self._query_rows(
-            table=table,
-            key=key,
-            filters=filters,
-            ids=ids,
-            query=query,
-            active_only=active_only,
-            extra_clauses=extra_clauses,
-            extra_values=extra_values,
-            limit=limit,
-            offset=offset,
-            order_by=order_by,
-        )
-        return [_public_record(name, _payload(row["payload"])) for row in rows]
-
-    def _query_rows(
-        self,
-        *,
-        table: str,
-        key: str,
-        filters: dict[str, object | None],
-        ids: Sequence[str] | None = None,
-        query: str | None = None,
-        active_only: bool = False,
-        extra_clauses: Sequence[str] = (),
-        extra_values: Sequence[object] = (),
-        limit: int | None = None,
-        offset: int = 0,
-        order_by: str | None = None,
-    ) -> list[sqlite3.Row]:
-        bounded_limit, offset = _page(limit, offset)
-        clauses = [
-            f"{name} = ?" for name, value in filters.items() if value is not None
-        ]
-        values: list[object] = [
-            value for value in filters.values() if value is not None
-        ]
-        id_values: Sequence[str] = (ids,) if isinstance(ids, str) else (ids or ())
-        normalized_ids = tuple(dict.fromkeys(str(value) for value in id_values))
-        if ids is not None:
-            if not normalized_ids:
-                return []
-            clauses.append(f"{key} IN ({','.join('?' for _ in normalized_ids)})")
-            values.extend(normalized_ids)
-        if query is not None:
-            normalized_query = query.strip()
-            if not normalized_query:
-                raise ValueError("Reference query must not be empty")
-            pattern = _like_pattern(normalized_query)
-            clauses.append(
-                f"(LOWER({key}) LIKE LOWER(?) ESCAPE '\\' "
-                "OR LOWER(payload) LIKE LOWER(?) ESCAPE '\\')"
-            )
-            values.extend((pattern, pattern))
-        if active_only:
-            clauses.append("status IN ('active', 'trading')")
-        clauses.extend(extra_clauses)
-        values.extend(extra_values)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        if bounded_limit is None:
-            return self._connection.execute(
-                f"SELECT payload FROM {table}{where} "
-                f"ORDER BY {order_by or key} LIMIT -1 OFFSET ?",
-                (*values, offset),
-            ).fetchall()
-        return self._connection.execute(
-            f"SELECT payload FROM {table}{where} "
-            f"ORDER BY {order_by or key} LIMIT ? OFFSET ?",
-            (*values, bounded_limit, offset),
-        ).fetchall()
+        return reader(limit=limit, offset=offset)
 
 
 @dataclass(frozen=True, slots=True)
 class ReferenceClient:
-    """Keep Reference persistence details behind one typed client boundary."""
+    """Reference facade with Rust-owned catalog persistence details."""
 
     socket_path: Path | None = None
     database_path: Path | None = None
@@ -460,37 +263,22 @@ class ReferenceClient:
 
         return ReferenceControlClient(self.socket_path, timeout=self.timeout)
 
-    def _connection(self) -> sqlite3.Connection:
-        if self.database_path is None:
-            raise RuntimeError("Reference database is not configured")
-        connection = sqlite3.connect(
-            f"file:{self.database_path}?mode=ro",
-            uri=True,
-            timeout=self.timeout,
-        )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA query_only = ON")
-        return connection
-
     @contextmanager
     def snapshot(self) -> Iterator[ReferenceReadSession]:
         """Pin all enclosed reads to one committed Reference generation."""
 
-        connection = self._connection()
+        if self.database_path is None:
+            raise RuntimeError("Reference database is not configured")
+        native = _native_module().ReferenceCatalog(self.database_path).snapshot()
+        session = ReferenceReadSession(
+            native,
+            generation=int(native.generation),
+            event_sequence=int(native.event_sequence),
+        )
         try:
-            connection.execute("BEGIN")
-            row = connection.execute(
-                "SELECT generation, event_sequence FROM reference_meta WHERE id = 1"
-            ).fetchone()
-            if row is None:
-                raise RuntimeError("Reference SQLite metadata is missing")
-            yield ReferenceReadSession(
-                connection,
-                generation=int(row["generation"]),
-                event_sequence=int(row["event_sequence"]),
-            )
+            yield session
         finally:
-            connection.close()
+            session.close()
 
     def request(
         self,
@@ -531,23 +319,16 @@ class ReferenceClient:
                 "providers": provider_rows,
             }
         with self.snapshot() as snapshot:
-            outbox_depth = int(
-                snapshot._connection.execute(
-                    "SELECT COUNT(*) FROM reference_publication_outbox"
-                ).fetchone()[0]
-            )
             return {
                 "generation": snapshot.generation,
                 "event_sequence": snapshot.event_sequence,
-                "outbox_depth": outbox_depth,
+                "outbox_depth": snapshot.outbox_depth(),
                 "providers": provider_rows,
             }
 
     def refresh(self, *, source: str | None = None) -> dict[str, Any]:
         return self.request(
-            "reference_refresh",
-            timeout=max(self.timeout, 120.0),
-            params=[source],
+            "reference_refresh", timeout=max(self.timeout, 120.0), params=[source]
         )
 
     def set_source_paused(self, source: str, paused: bool) -> dict[str, Any]:
@@ -616,71 +397,116 @@ class ReferenceClient:
         return markets[0]
 
 
-def _page(
-    limit: int | None, offset: int, *, maximum: int = _MAX_QUERY_LIMIT
-) -> tuple[int | None, int]:
-    if limit is not None and not 1 <= limit <= maximum:
-        raise ValueError(f"limit must be between 1 and {maximum}")
-    if offset < 0:
-        raise ValueError("offset must be non-negative")
-    return limit, offset
+def _identifiers(values: Sequence[str] | None) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        return [values]
+    return list(dict.fromkeys(str(value) for value in values))
 
 
-def _exchange_id(value: str | None) -> str | None:
-    if value is None or value.startswith("exchange:"):
-        return value
-    return f"exchange:{value}"
-
-
-def _like_pattern(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
-def _payload(value: str) -> dict[str, Any]:
-    decoded = json.loads(value)
-    if not isinstance(decoded, dict):
-        raise RuntimeError("Reference SQLite payload is not an object")
-    return decoded
-
-
-def _market(value: dict[str, Any]) -> dict[str, Any]:
-    result = dict(value)
-    result["symbol"] = result.get("venue_symbol")
-    result["base_asset"] = result.get("base_asset_id")
-    result["quote_asset"] = result.get("quote_asset_id")
-    result["price_increment"] = result.get("price_tick")
-    result["quantity_increment"] = result.get("quantity_tick")
-    result["contract_multiplier"] = result.get("contract_size")
-    return result
-
-
-def _public_record(name: str, value: dict[str, Any]) -> dict[str, Any]:
-    mappings = {
-        "exchanges": {"exchange_id": "exchangeId"},
-        "assets": {"asset_id": "assetId", "asset_class": "assetClass"},
-        "instruments": {
-            "instrument_id": "instrumentId",
-            "instrument_type": "instrumentType",
-            "product_family": "productFamily",
-            "issuer_id": "issuerId",
-            "share_class": "shareClass",
-            "primary_currency_asset_id": "primaryCurrencyAssetId",
-            "underlying_instrument_id": "underlyingInstrumentId",
-            "expiry_unix_nanos": "expiryUnixNanos",
-            "option_right": "optionRight",
-        },
-        "listings": {
-            "listing_id": "listingId",
-            "instrument_id": "instrumentId",
-            "exchange_id": "exchangeId",
-            "exchange_symbol": "exchangeSymbol",
-            "effective_from_unix_nanos": "effectiveFromUnixNanos",
-            "effective_to_unix_nanos": "effectiveToUnixNanos",
-        },
+def _exchange(value: Any) -> dict[str, Any]:
+    return {
+        "exchangeId": value.exchange_id,
+        "name": value.name,
+        "status": value.status,
     }
-    renames = mappings[name]
-    return {renames.get(key, key): item for key, item in value.items()}
+
+
+def _asset(value: Any) -> dict[str, Any]:
+    return {
+        "assetId": value.asset_id,
+        "code": value.code,
+        "name": value.name,
+        "assetClass": value.asset_class,
+        "status": value.status,
+    }
+
+
+def _instrument(value: Any) -> dict[str, Any]:
+    return {
+        "instrumentId": value.instrument_id,
+        "symbol": value.symbol,
+        "name": value.name,
+        "instrumentType": value.instrument_type,
+        "productFamily": value.product_family,
+        "issuerId": value.issuer_id,
+        "shareClass": value.share_class,
+        "primaryCurrencyAssetId": value.primary_currency_asset_id,
+        "underlyingInstrumentId": value.underlying_instrument_id,
+        "expiryUnixNanos": value.expiry_unix_nanos,
+        "strike": value.strike,
+        "optionRight": value.option_right,
+        "status": value.status,
+    }
+
+
+def _listing(value: Any) -> dict[str, Any]:
+    return {
+        "listingId": value.listing_id,
+        "instrumentId": value.instrument_id,
+        "exchangeId": value.exchange_id,
+        "exchangeSymbol": value.exchange_symbol,
+        "status": value.status,
+        "effectiveFromUnixNanos": value.effective_from_unix_nanos,
+        "effectiveToUnixNanos": value.effective_to_unix_nanos,
+    }
+
+
+def _market(value: Any) -> dict[str, Any]:
+    return {
+        "market_id": value.market_id,
+        "instrument_id": value.instrument_id,
+        "listing_id": value.listing_id,
+        "exchange_id": value.exchange_id,
+        "instrument_kind": value.instrument_kind,
+        "asset_type": value.asset_type,
+        "underlying_instrument_id": value.underlying_instrument_id,
+        "venue_symbol": value.venue_symbol,
+        "symbol": value.venue_symbol,
+        "base_asset_id": value.base_asset_id,
+        "base_asset": value.base_asset_id,
+        "quote_asset_id": value.quote_asset_id,
+        "quote_asset": value.quote_asset_id,
+        "status": value.status,
+        "price_tick": value.price_tick,
+        "price_increment": value.price_tick,
+        "quantity_tick": value.quantity_tick,
+        "quantity_increment": value.quantity_tick,
+        "price_precision": value.price_precision,
+        "quantity_precision": value.quantity_precision,
+        "minimum_quantity": value.minimum_quantity,
+        "minimum_notional": value.minimum_notional,
+        "contract_size": value.contract_size,
+        "contract_multiplier": value.contract_size,
+        "effective_from_unix_nanos": value.effective_from_unix_nanos,
+        "effective_to_unix_nanos": value.effective_to_unix_nanos,
+    }
+
+
+def _event(value: Any) -> dict[str, Any]:
+    result = {
+        "sequence": value.sequence,
+        "event_id": value.event_id,
+        "event_type": value.event_type,
+        "event_time_unix_nanos": value.event_time_unix_nanos,
+        "record_kind": value.record_kind,
+        "record_id": value.record_id,
+        "market_id": value.market_id,
+        "instrument_id": value.instrument_id,
+        "listing_id": value.listing_id,
+        "exchange_id": value.exchange_id,
+        "venue_symbol": value.venue_symbol,
+        "previous_status": value.previous_status,
+        "current_status": value.current_status,
+        "previous_symbol": value.previous_symbol,
+        "current_symbol": value.current_symbol,
+        "operation": value.operation,
+        "provenance": value.provenance,
+        "conflict_policy": value.conflict_policy,
+        "generation": value.generation,
+    }
+    return {key: item for key, item in result.items() if item is not None}
 
 
 __all__ = ["ReferenceClient", "ReferenceReadSession"]

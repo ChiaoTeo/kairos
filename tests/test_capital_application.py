@@ -21,10 +21,7 @@ from kairospy.investment.apps.capital.application import (
     FundingObjectiveStatus,
 )
 from kairospy.primitives.account import AccountId, SegmentKey
-from kairospy.infrastructure.contracts.capital.view import (
-    _recovery_alert,
-    capital_indexed_environment_path,
-)
+from kairospy.infrastructure.contracts.capital.view import capital_indexed_environment_path
 from kairospy.investment.apps.capital.application.mapping import map_capital_alert
 
 
@@ -264,32 +261,18 @@ def test_capital_view_key_matches_the_rust_resource_topology(tmp_path) -> None:
 
 
 def test_capital_recovery_alert_decoder_preserves_operator_evidence() -> None:
-    class Row:
-        def AlertId(self):
-            return b"capital-recovery:plan-a"
-
-        def PlanId(self):
-            return b"plan-a"
-
-        def OperationId(self):
-            return b"operation-a"
-
-        def Kind(self):
-            return 1
-
-        def Severity(self):
-            return 1
-
-        def RecoveryAction(self):
-            return 3
-
-        def Message(self):
-            return b"hold funds and review"
-
-        def OpenedAtUnixNanos(self):
-            return 1_787_200_000_000_000_000
-
-    alert = map_capital_alert(_recovery_alert(Row()))
+    alert = map_capital_alert(
+        {
+            "alert_id": "capital-recovery:plan-a",
+            "plan_id": "plan-a",
+            "operation_id": "operation-a",
+            "kind": "manual_review",
+            "severity": "critical",
+            "recovery_action": "hold_and_review",
+            "message": "hold funds and review",
+            "opened_at_unix_nanos": 1_787_200_000_000_000_000,
+        }
+    )
 
     assert alert.plan_id == "plan-a"
     assert alert.operation_id == "operation-a"

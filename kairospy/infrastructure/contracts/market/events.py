@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from importlib import import_module
+import sys
 from typing import Any
 
-from .view import _generated_kairos  # noqa: F401 - installs generated namespace
+
+_generated_kairos = import_module("kairospy.infrastructure.protocol.generated.kairos")
+sys.modules.setdefault("kairos", _generated_kairos)
 
 
 _EVENT_ROOTS: tuple[tuple[bytes, str], ...] = (

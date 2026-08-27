@@ -29,9 +29,10 @@ def _reference_database(tmp_path: Path) -> Path:
     connection.executescript(
         """
         CREATE TABLE reference_meta(
-            id INTEGER PRIMARY KEY, generation INTEGER, event_sequence INTEGER
+            id INTEGER PRIMARY KEY, schema_version INTEGER, generation INTEGER,
+            event_sequence INTEGER, committed_at_unix_nanos INTEGER
         );
-        INSERT INTO reference_meta VALUES(1, 3, 7);
+        INSERT INTO reference_meta VALUES(1, 6, 3, 7, 123);
         CREATE TABLE reference_exchanges_current(
             exchange_id TEXT PRIMARY KEY, status TEXT, payload TEXT
         );
@@ -70,6 +71,9 @@ def _reference_database(tmp_path: Path) -> Path:
         "asset_type": None,
         "venue_symbol": "BTCUSDT",
         "status": "active",
+        "price_precision": 0,
+        "quantity_precision": 0,
+        "effective_from_unix_nanos": 0,
     }
     connection.execute(
         "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?)",

@@ -1,15 +1,11 @@
 from pathlib import Path
 
 import flatbuffers
-import pytest
 
 from kairospy.infrastructure.contracts.execution import (
-    decode_indexed_value,
     decode_event,
     execution_indexed_environment_path,
-    indexed_entity_key,
 )
-from kairospy.infrastructure.contracts.execution.view import ORDERS_DATABASE
 from kairospy.infrastructure.contracts.execution.source import decode_execution_event
 
 
@@ -17,20 +13,6 @@ def test_execution_indexed_path_matches_rust_contract() -> None:
     assert execution_indexed_environment_path("/tmp/workspace") == Path(
         "/tmp/workspace/views/v3/Execution/execution-main/epoch-1/current.lmdb"
     )
-
-
-def test_execution_indexed_entity_key_is_versioned_and_length_delimited() -> None:
-    assert indexed_entity_key("order-1") == b"\x01\x00\x07order-1"
-    with pytest.raises(ValueError, match="identity must be non-empty"):
-        indexed_entity_key("")
-
-
-def test_execution_root_decoders_reject_unknown_identifiers() -> None:
-    for identifier in (b"NOPE", b"EXV2"):
-        with pytest.raises(ValueError, match="unknown Execution v2 event identifier"):
-            decode_event(b"\x00\x00\x00\x00" + identifier)
-    with pytest.raises(ValueError, match="invalid Execution indexed value identifier"):
-        decode_indexed_value(b"\x00\x00\x00\x00NOPE", ORDERS_DATABASE)
 
 
 def test_execution_event_decoder_returns_generated_v2_root() -> None:

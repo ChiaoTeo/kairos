@@ -14,16 +14,22 @@ members = [
     "crates/platform/workspace",
     "crates/modules/account",
     "crates/modules/account/contract",
+    "crates/modules/account/contract/py",
     "crates/modules/capital",
     "crates/modules/capital/contract",
+    "crates/modules/capital/contract/py",
     "crates/modules/execution",
     "crates/modules/execution/contract",
+    "crates/modules/execution/contract/py",
     "crates/modules/market",
     "crates/modules/market/contract",
+    "crates/modules/market/contract/py",
     "crates/modules/reference",
     "crates/modules/reference/contract",
+    "crates/modules/reference/contract/py",
     "crates/modules/risk",
     "crates/modules/risk/contract",
+    "crates/modules/risk/contract/py",
 ]
 
 [workspace.package]
@@ -58,16 +64,20 @@ jsonrpsee = { version = "0.26", default-features = false, features = [
 ] }
 kairos-account = { path = "crates/modules/account" }
 kairos-account-contract = { path = "crates/modules/account/contract" }
+kairos-account-contract-py = { path = "crates/modules/account/contract/py" }
 kairos-capital = { path = "crates/modules/capital" }
 kairos-capital-contract = { path = "crates/modules/capital/contract" }
+kairos-capital-contract-py = { path = "crates/modules/capital/contract/py" }
 kairos-conflux = { path = "crates/platform/conflux" }
 kairos-credentials = { path = "crates/platform/credentials" }
 kairos-execution = { path = "crates/modules/execution" }
 kairos-execution-contract = { path = "crates/modules/execution/contract" }
+kairos-execution-contract-py = { path = "crates/modules/execution/contract/py" }
 kairos-integration = { path = "crates/platform/integration" }
 kairos-indexed-view = { path = "crates/platform/indexed-view" }
 kairos-market = { path = "crates/modules/market" }
 kairos-market-contract = { path = "crates/modules/market/contract" }
+kairos-market-contract-py = { path = "crates/modules/market/contract/py" }
 kairos-network = { path = "crates/platform/network" }
 kairos-primitives = { path = "crates/primitives" }
 kairos-protocol = { path = "crates/platform/protocol" }
@@ -75,8 +85,10 @@ kairos-protocol-macros = { path = "crates/platform/protocol-macros" }
 kairos-python-transport = { path = "crates/platform/python-transport" }
 kairos-reference = { path = "crates/modules/reference" }
 kairos-reference-contract = { path = "crates/modules/reference/contract" }
+kairos-reference-contract-py = { path = "crates/modules/reference/contract/py" }
 kairos-risk = { path = "crates/modules/risk" }
 kairos-risk-contract = { path = "crates/modules/risk/contract" }
+kairos-risk-contract-py = { path = "crates/modules/risk/contract/py" }
 kairos-transport = { path = "crates/platform/transport" }
 kairos-workspace = { path = "crates/platform/workspace" }
 libc = "0.2"

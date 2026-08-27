@@ -10,4 +10,9 @@ heed.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tempfile.workspace = true
+
+[[bench]]
+name = "field_reads"
+harness = false

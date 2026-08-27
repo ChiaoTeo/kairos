@@ -11,6 +11,7 @@ __pycache__
 build/
 /dist/
 target/
+kairospy/_native_*_contract.abi3.so
 .DS_Store
 .env
 /configs/

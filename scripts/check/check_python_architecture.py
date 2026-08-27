@@ -20,6 +20,7 @@ RUST_BACKED_INVESTMENT_APPS = {
     "capital",
     "execution",
 }
+CURRENT_VIEW_OWNERS = ("account", "capital", "execution", "market", "risk")
 
 
 def _module_name(path: Path) -> str:
@@ -93,6 +94,27 @@ def main() -> int:
     if not generated.is_dir():
         failures.append("kairospy/infrastructure/protocol/generated is missing")
 
+    generic_indexed_view = PACKAGE / "infrastructure" / "transport" / "indexed_view.py"
+    if generic_indexed_view.exists():
+        failures.append(
+            "generic Python indexed-view reader remains: "
+            f"{generic_indexed_view.relative_to(ROOT)}"
+        )
+
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    native_transport = (
+        ROOT / "crates" / "platform" / "python-transport" / "src" / "lib.rs"
+    ).read_text(encoding="utf-8")
+    if "IndexedViewReader" in native_transport:
+        failures.append("generic IndexedViewReader remains in kairos-python-transport")
+    for owner in CURRENT_VIEW_OWNERS:
+        binding = ROOT / "crates" / "modules" / owner / "contract" / "py"
+        if not (binding / "Cargo.toml").is_file() or not (binding / "src" / "lib.rs").is_file():
+            failures.append(f"owner contract PyO3 binding is missing: {binding.relative_to(ROOT)}")
+        target = f'kairospy._native_{owner}_contract'
+        if target not in pyproject:
+            failures.append(f"owner contract extension is missing from pyproject.toml: {target}")
+
     for path in python_files:
         relative = path.relative_to(PACKAGE)
         source_subsystem = _subsystem(path)
@@ -107,6 +129,22 @@ def main() -> int:
 
         for line, module in _imports(path):
             target_parts = module.split(".")
+
+            if (
+                path.is_relative_to(PACKAGE / "infrastructure" / "contracts")
+                and any(owner in relative.parts for owner in CURRENT_VIEW_OWNERS)
+                and path.stem in {"view", "view_contract", "current", "runtime"}
+                and (
+                    module == "kairospy.infrastructure.transport.indexed_view"
+                    or "kairospy.infrastructure.protocol.generated" in module
+                )
+            ):
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    f"business current view bypasses its owner PyO3 contract via {module}",
+                )
             target_subsystem = (
                 target_parts[1]
                 if len(target_parts) > 1

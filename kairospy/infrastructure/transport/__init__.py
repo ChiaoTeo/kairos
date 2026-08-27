@@ -15,9 +15,6 @@ _EXPORTS = {
     "AeronReferenceEventSource": (".reference", "AeronReferenceEventSource"),
     "AeronCapitalEventSource": (".capital", "AeronCapitalEventSource"),
     "decode_reference_event": (".reference", "decode_reference_event"),
-    "IndexedViewMetadata": (".indexed_view", "IndexedViewMetadata"),
-    "IndexedViewReader": (".indexed_view", "IndexedViewReader"),
-    "IndexedViewSchema": (".indexed_view", "IndexedViewSchema"),
 }
 
 

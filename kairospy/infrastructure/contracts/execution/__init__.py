@@ -8,12 +8,10 @@ _EXPORTS = {
     "ExecutionCurrentViews": (".current", "ExecutionCurrentViews"),
     "ExecutionIndexedViewReader": (".view", "ExecutionIndexedViewReader"),
     "decode_event": (".events", "decode_event"),
-    "decode_indexed_value": (".view", "decode_indexed_value"),
     "execution_indexed_environment_path": (
         ".view",
         "execution_indexed_environment_path",
     ),
-    "indexed_entity_key": (".view", "indexed_entity_key"),
 }
 
 

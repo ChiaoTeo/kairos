@@ -422,9 +422,7 @@ class CapitalSystemClient(SystemRpcClient):
         current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "availabilities": [
-                asdict(value) for value in current_view.availabilities()
-            ],
+            "availabilities": list(current_view.availabilities()),
         }
 
     def current_objectives(self, capital_group_id: str) -> dict[str, Any]:
@@ -473,7 +471,7 @@ class CapitalSystemClient(SystemRpcClient):
         current_view = self.current_view(capital_group_id)
         return {
             "capital_group_id": capital_group_id,
-            "alerts": [asdict(value) for value in current_view.alerts()],
+            "alerts": list(current_view.alerts()),
         }
 
 

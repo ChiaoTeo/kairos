@@ -1,0 +1,16 @@
+[package]
+name = "kairos-account-contract-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_native_account_contract"
+crate-type = ["cdylib"]
+
+[dependencies]
+kairos-account-contract.workspace = true
+kairos-primitives.workspace = true
+kairos-protocol.workspace = true
+pyo3.workspace = true

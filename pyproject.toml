@@ -68,6 +68,42 @@ path = "crates/platform/python-transport/Cargo.toml"
 binding = "PyO3"
 py-limited-api = "cp311"
 
+[[tool.setuptools-rust.ext-modules]]
+target = "kairospy._native_account_contract"
+path = "crates/modules/account/contract/py/Cargo.toml"
+binding = "PyO3"
+py-limited-api = "cp311"
+
+[[tool.setuptools-rust.ext-modules]]
+target = "kairospy._native_capital_contract"
+path = "crates/modules/capital/contract/py/Cargo.toml"
+binding = "PyO3"
+py-limited-api = "cp311"
+
+[[tool.setuptools-rust.ext-modules]]
+target = "kairospy._native_execution_contract"
+path = "crates/modules/execution/contract/py/Cargo.toml"
+binding = "PyO3"
+py-limited-api = "cp311"
+
+[[tool.setuptools-rust.ext-modules]]
+target = "kairospy._native_market_contract"
+path = "crates/modules/market/contract/py/Cargo.toml"
+binding = "PyO3"
+py-limited-api = "cp311"
+
+[[tool.setuptools-rust.ext-modules]]
+target = "kairospy._native_reference_contract"
+path = "crates/modules/reference/contract/py/Cargo.toml"
+binding = "PyO3"
+py-limited-api = "cp311"
+
+[[tool.setuptools-rust.ext-modules]]
+target = "kairospy._native_risk_contract"
+path = "crates/modules/risk/contract/py/Cargo.toml"
+binding = "PyO3"
+py-limited-api = "cp311"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

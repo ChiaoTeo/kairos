@@ -15,12 +15,14 @@ pub mod event;
 use std::path::PathBuf;
 
 pub use catalog::{
-    AccountReferenceSnapshot, Asset, Exchange, ExecutionReferenceSnapshot, Instrument,
-    InstrumentCatalogQuery, LifecycleEntry, Listing, Market, MarketCatalogQuery,
-    MarketReferenceSnapshot, ProviderHealthState, REFERENCE_SQLITE_SCHEMA_VERSION,
-    ReferenceCatalog, ReferenceCatalogSnapshot, ReferenceCatalogStats, ReferenceCatalogStatus,
-    ReferenceCollection, ReferenceIntegrityStats, ReferenceMarketCatalogPage, ReferenceMarketPage,
-    ReferenceWatermark,
+    AccountReferenceSnapshot, Asset, AssetCatalogQuery, Exchange, ExchangeCatalogQuery,
+    ExecutionReferenceSnapshot, Instrument, InstrumentCatalogQuery, InstrumentSearchQuery,
+    LifecycleCatalogQuery, LifecycleEntry, Listing, ListingCatalogQuery, Market,
+    MarketCatalogQuery, MarketReferenceSnapshot, MarketSearchQuery, ProviderHealthState,
+    REFERENCE_SQLITE_SCHEMA_VERSION, ReferenceCatalog, ReferenceCatalogSnapshot,
+    ReferenceCatalogStats, ReferenceCatalogStatus, ReferenceCollection, ReferenceIntegrityStats,
+    ReferenceLifecycleEvent, ReferenceMarketCatalogPage, ReferenceMarketPage,
+    ReferenceOptionCoverage, ReferencePage, ReferenceReadSession, ReferenceWatermark,
 };
 pub use control::{
     BinanceReferenceSource, HyperliquidReferenceSource, MassiveReferenceSource, OkxReferenceSource,

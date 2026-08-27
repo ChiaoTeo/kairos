@@ -6,6 +6,7 @@ import pytest
 
 from kairospy.infrastructure.contracts.market import (
     MarketIndexedViewQueries,
+    MarketQuoteCurrent,
     MarketViewKey,
     MarketViewKind,
     market_indexed_environment_path,
@@ -23,9 +24,6 @@ def test_market_view_key_matches_rust_contract_encoding() -> None:
 
     assert key.canonical_key() == (
         "scope=market:binance:spot:BTCUSDT;provider=binance;view=bar;qualifier=1m"
-    )
-    assert key.encoded() == (
-        b"\x01\x00\x1bmarket:binance:spot:BTCUSDT\x00\x07binance\x00\x021m"
     )
     assert str(market_indexed_environment_path("/tmp/workspace")) == (
         "/tmp/workspace/views/v3/Market/market-main/epoch-1/current.lmdb"
@@ -64,11 +62,10 @@ def test_rust_market_publisher_value_is_readable_by_kairospy(tmp_path: Path) -> 
 
     assert frame is not None
     assert frame.metadata.applied_event_sequence == 41
-    assert frame.payload[4:8] == b"MQC3"
+    assert isinstance(frame.value, MarketQuoteCurrent)
     queries.close()
-    # The generated FlatBuffer view remains backed by its Python-owned bytes
-    # after the short LMDB transaction and reader have ended.
-    assert frame.value.InstrumentId() == b"instrument:fixture"
-    assert frame.value.BidPrice().Mantissa() == 12345
+    # The typed result is Python-owned and does not retain an LMDB transaction.
+    assert frame.value.instrument_id == "instrument:fixture"
+    assert frame.value.bid_price == Decimal("123.45")
     quote = map_market_view(frame.value, kind="quote")
     assert quote.bid_price == Decimal("123.45")

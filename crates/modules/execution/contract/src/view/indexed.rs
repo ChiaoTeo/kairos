@@ -112,6 +112,10 @@ impl ExecutionIndexedView {
         self.value(ORDERS_DATABASE, order_id)
     }
 
+    pub fn intent(&self, intent_id: &str) -> ContractResult<Option<ExecutionIndexedViewValue>> {
+        self.value(INTENTS_DATABASE, intent_id)
+    }
+
     /// Decodes an order directly from LMDB while the short read transaction is
     /// alive. The FlatBuffer root cannot escape this callback.
     pub fn with_order<R>(
@@ -119,10 +123,14 @@ impl ExecutionIndexedView {
         order_id: &str,
         read: impl FnOnce(Option<fb::ExecutionOrderCurrent<'_>>) -> ContractResult<R>,
     ) -> ContractResult<R> {
-        self.ensure_ready()?;
         let key = indexed_entity_key(order_id)?;
         self.reader
-            .with_value(ORDERS_DATABASE, &key, |bytes| {
+            .with_value_snapshot(ORDERS_DATABASE, &key, |metadata, bytes| {
+                if metadata.rebuild_state != kairos_indexed_view::RebuildState::Ready {
+                    return Err(ContractError::Transport(
+                        "Execution indexed current view is not ready".into(),
+                    ));
+                }
                 let value = bytes
                     .map(|bytes| {
                         decode(
@@ -172,24 +180,37 @@ impl ExecutionIndexedView {
         database: &str,
         identity: &str,
     ) -> ContractResult<Option<ExecutionIndexedViewValue>> {
-        self.ensure_ready()?;
         let key = indexed_entity_key(identity)?;
         self.reader
-            .get(database, &key)
-            .map(|value| value.map(|bytes| ExecutionIndexedViewValue::new(key, bytes)))
+            .value_snapshot(database, &key)
             .map_err(|error| ContractError::Transport(error.to_string()))
+            .and_then(|snapshot| {
+                if snapshot.metadata.rebuild_state != kairos_indexed_view::RebuildState::Ready {
+                    return Err(ContractError::Transport(
+                        "Execution indexed current view is not ready".into(),
+                    ));
+                }
+                Ok(snapshot
+                    .value
+                    .map(|bytes| ExecutionIndexedViewValue::new(key, bytes)))
+            })
     }
 
     fn values(&self, database: &str) -> ContractResult<Vec<ExecutionIndexedViewValue>> {
-        self.ensure_ready()?;
-        let rows = self
+        let (metadata, rows) = self
             .reader
-            .prefix(
+            .map_prefix_snapshot(
                 database,
                 &ENTITY_PREFIX,
                 MAX_EXECUTION_INDEXED_VALUES_PER_DATABASE + 1,
+                |_metadata, key, value| (key.to_owned(), value.to_owned()),
             )
             .map_err(|error| ContractError::Transport(error.to_string()))?;
+        if metadata.rebuild_state != kairos_indexed_view::RebuildState::Ready {
+            return Err(ContractError::Transport(
+                "Execution indexed current view is not ready".into(),
+            ));
+        }
         if rows.len() > MAX_EXECUTION_INDEXED_VALUES_PER_DATABASE {
             return Err(ContractError::Invalid(format!(
                 "Execution indexed database `{database}` exceeds its read bound"

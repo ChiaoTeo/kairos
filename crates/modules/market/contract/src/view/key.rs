@@ -2,7 +2,7 @@ use kairos_primitives::market::Provider;
 
 use crate::{ContractError, ContractResult};
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum MarketViewKind {
     Quote,
     Bar,

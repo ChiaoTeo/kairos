@@ -1,6 +1,5 @@
 mod aeron;
 mod errors;
-mod indexed_view;
 
 use pyo3::prelude::*;
 
@@ -27,8 +26,6 @@ fn build_info() -> NativeBuildInfo {
 fn _native_transport(module: &Bound<'_, PyModule>) -> PyResult<()> {
     errors::register(module)?;
     module.add_class::<NativeBuildInfo>()?;
-    module.add_class::<indexed_view::IndexedViewMetadata>()?;
-    module.add_class::<indexed_view::IndexedViewReader>()?;
     module.add_class::<aeron::StreamSpec>()?;
     module.add_class::<aeron::PyAeronSubscription>()?;
     module.add_function(wrap_pyfunction!(build_info, module)?)?;

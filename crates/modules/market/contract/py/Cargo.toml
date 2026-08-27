@@ -1,0 +1,15 @@
+[package]
+name = "kairos-market-contract-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_native_market_contract"
+crate-type = ["cdylib"]
+
+[dependencies]
+kairos-market-contract.workspace = true
+kairos-primitives.workspace = true
+pyo3.workspace = true

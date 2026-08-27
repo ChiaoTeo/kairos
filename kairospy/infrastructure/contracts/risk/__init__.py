@@ -10,7 +10,6 @@ _EXPORTS = {
     "RiskIndexedViewQueries": (".view", "RiskIndexedViewQueries"),
     "decode_event": (".events", "decode_event"),
     "risk_indexed_environment_path": (".view", "risk_indexed_environment_path"),
-    "risk_indexed_key": (".view", "risk_indexed_key"),
 }
 
 
@@ -33,5 +32,4 @@ __all__ = [
     "RiskIndexedViewQueries",
     "decode_event",
     "risk_indexed_environment_path",
-    "risk_indexed_key",
 ]
