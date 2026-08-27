@@ -17,6 +17,7 @@ from kairospy.strategy import (
     StrategyContext,
     StrikeRange,
 )
+from kairospy.strategy.api.market import DecimalValue, ObservationScope
 
 
 class PrintSpyOptionChain(Strategy):
@@ -101,7 +102,7 @@ class PrintSpyOptionChain(Strategy):
 
     def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
         quote = event.data
-        scope_key = quote.scope.key()
+        scope_key = _scope_key(quote.scope)
         if scope_key == self._underlying_scope_key:
             bid = quote.bid_price
             ask = quote.ask_price
@@ -117,23 +118,26 @@ class PrintSpyOptionChain(Strategy):
                 and bid is not None
                 and ask is not None
             ):
-                spot = (bid + ask) / Decimal("2")
+                spot = (bid.value + ask.value) / Decimal("2")
                 if spot > 0:
                     self._option_subscription_attempted = True
                     self._subscribe_option_window(
                         context,
                         spot=spot,
-                        observed_at=quote.occurred_at,
+                        observed_at=datetime.fromtimestamp(
+                            quote.source_observed_at_unix_nanos / 1_000_000_000,
+                            tz=timezone.utc,
+                        ),
                     )
             return
 
-        if not str(quote.instrument.id).startswith("instrument:option:"):
+        if not quote.instrument_id.startswith("instrument:option:"):
             return
         context.logger.info(
             "spy_option_quote",
             symbol=self.underlying,
-            market=quote.market_id,
-            instrument=quote.instrument.id,
+            market=quote.scope.market_id,
+            instrument=quote.instrument_id,
             bid=_price(quote.bid_price),
             ask=_price(quote.ask_price),
             bid_size=_price(quote.bid_quantity),
@@ -150,5 +154,11 @@ def _expiry_window(observed_at: datetime, max_days: int) -> tuple[int, int]:
     return int(start.timestamp() * 1_000_000_000), int(end.timestamp() * 1_000_000_000)
 
 
-def _price(value: Decimal | None) -> str:
-    return "-" if value is None else str(value)
+def _price(value: DecimalValue | None) -> str:
+    return "-" if value is None else str(value.value)
+
+
+def _scope_key(scope: ObservationScope) -> str:
+    if scope.market_id is not None:
+        return scope.market_id
+    return f"consolidated:{scope.instrument_id}:{scope.network_id or '*'}"

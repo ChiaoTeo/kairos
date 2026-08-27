@@ -7,7 +7,7 @@ from collections.abc import Callable
 from kairospy.system.apps.components.application.clients import ExecutionSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace
 from ..application.commands import ExecutionCommandClient
-from kairospy.infrastructure.contracts.execution.source import AeronExecutionEventSource
+from kairospy.infrastructure.contracts.execution import ExecutionClient
 from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
 
@@ -44,6 +44,7 @@ def build_strategy_access(
         )
     commands = ExecutionCommandClient(
         client.control,
+        workspace_id=instance.workspace.workspace_id,
         allow_trading=policy.allow_trading,
         max_order_notional=policy.max_order_notional,
         require_limit_orders=policy.require_limit_orders,
@@ -55,9 +56,11 @@ def build_strategy_access(
     return ExecutionApplication(
         commands,
         current_views,
-        AeronExecutionEventSource(
-            aeron_dir=instance.workspace.paths.aeron_dir(),
-        ),
+        ExecutionClient(
+            client.socket_path,
+            workspace_id=instance.workspace.workspace_id,
+            aeron_dir=str(instance.workspace.paths.aeron_dir()),
+        ).events,
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,
         launch_id=identity.launch_id,

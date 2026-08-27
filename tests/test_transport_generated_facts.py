@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import re
 import subprocess
 import sys
@@ -30,7 +29,13 @@ def test_transport_limits_cover_the_u32_bridge_frame() -> None:
     assert len(generated_spec.TRANSPORT_FINGERPRINT) == 64
 
 
-def test_every_schema_root_matches_its_generated_python_identifier() -> None:
+def _snake_case(value: str) -> str:
+    value = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", value)
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return re.sub(r"([A-Za-z])([0-9]+)", r"\1_\2", value).lower()
+
+
+def test_every_schema_root_matches_its_generated_rust_identifier() -> None:
     checked = 0
     for schema in sorted(SCHEMA_ROOT.glob("**/*.fbs")):
         source = schema.read_text()
@@ -40,13 +45,16 @@ def test_every_schema_root_matches_its_generated_python_identifier() -> None:
         if root_match is None or identifier_match is None or namespace_match is None:
             continue
         root = root_match.group(1)
-        identifier = identifier_match.group(1).encode()
+        identifier = identifier_match.group(1)
         namespace = namespace_match.group(1)
-        module = importlib.import_module(
-            "kairospy.infrastructure.protocol.generated." + namespace + "." + root
+        parts = ["v_2" if part == "v2" else part for part in namespace.split(".")]
+        generated = (
+            ROOT
+            / "crates/platform/protocol/src/generated"
+            / Path(*parts)
+            / f"{_snake_case(root)}_generated.rs"
         )
-        generated_root = getattr(module, root)
-        has_identifier = getattr(generated_root, f"{root}BufferHasIdentifier")
-        assert has_identifier(b"\0\0\0\0" + identifier, 0), schema.relative_to(ROOT)
+        source = generated.read_text()
+        assert f'_IDENTIFIER: &str = "{identifier}";' in source, schema.relative_to(ROOT)
         checked += 1
     assert checked > 0

@@ -4,14 +4,18 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS = {
-    "ExecutionControlClient": (".control", "ExecutionControlClient"),
-    "ExecutionCurrentViews": (".current", "ExecutionCurrentViews"),
-    "ExecutionIndexedViewReader": (".view", "ExecutionIndexedViewReader"),
+    "ExecutionClient": (".types", "ExecutionClient"),
+    "ExecutionControlClient": (".types", "ExecutionControlClient"),
+    "ExecutionControlRejectedError": (".types", "ExecutionControlRejectedError"),
+    "ExecutionControlUnavailableError": (".types", "ExecutionControlUnavailableError"),
+    "ExecutionInvalidInputError": (".types", "ExecutionInvalidInputError"),
+    "ExecutionInvalidCurrentViewError": (".types", "ExecutionInvalidCurrentViewError"),
+    "ExecutionCurrentViewUnavailableError": (".types", "ExecutionCurrentViewUnavailableError"),
+    "ExecutionCurrentView": (".types", "ExecutionCurrentView"),
     "decode_event": (".events", "decode_event"),
-    "execution_indexed_environment_path": (
-        ".view",
-        "execution_indexed_environment_path",
-    ),
+    "ExecutionEvent": (".events", "ExecutionEvent"),
+    "ExecutionInvalidEventError": (".events", "ExecutionInvalidEventError"),
+    "indexed_environment_path": (".types", "indexed_environment_path"),
 }
 
 

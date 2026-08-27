@@ -7,15 +7,11 @@ from typing import Literal
 
 from kairospy.system.apps.components.application.clients import MarketSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace, Workspace
-from ..application.commands import MarketCommandClient
-from kairospy.infrastructure.contracts.market.source import (
-    AeronMarketEventSource,
-    MarketViewAccess,
-    UnixMarketEventStream,
-)
+from kairospy.infrastructure.contracts.market import MarketClient, MarketCurrentView
 from kairospy.strategy import StrategyIdentity
 
 from ..application.application import MarketApplication
+from .replay import UnixMarketEventStream
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,25 +54,22 @@ def build_strategy_access(
         view_launch_id = identity.launch_id
         view_instance_id = identity.instance_id
 
-    commands = MarketCommandClient(
-        client.control,
-        launch_id=identity.launch_id if config.scope == "instance" else None,
-        workspace_id=workspace.identity.workspace_id,
-    )
     event_source = (
-        UnixMarketEventStream(event_socket, replayable=True)
+        UnixMarketEventStream(event_socket)
         if config.replayable
-        else AeronMarketEventSource(
-            aeron_dir=workspace.paths.aeron_dir(),
-        )
+        else MarketClient(
+            client.socket_path,
+            workspace_id=workspace.identity.workspace_id,
+            aeron_dir=str(workspace.paths.aeron_dir()),
+        ).events
     )
     application = MarketApplication(
-        commands,
-        MarketViewAccess(
+        client.control,
+        MarketCurrentView(
             snapshot,
-            workspace_id=workspace.identity.workspace_id,
-            launch_id=view_launch_id,
-            instance_id=view_instance_id,
+            workspace.identity.workspace_id,
+            view_launch_id,
+            view_instance_id,
         ),
         event_source,
         strategy_id=identity.strategy_id,
@@ -100,22 +93,15 @@ def release_strategy_owner(
         f"{identity.strategy_id}:{identity.instance_id}:"
         "market.release_owner:external-stop"
     )
-    handle = MarketCommandClient(
-        client.control,
-        launch_id=identity.launch_id if scope == "instance" else None,
-    ).release_owner(
+    response = client.control.release_owner(
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,
         request_id=request_id,
+        launch_id=identity.launch_id if scope == "instance" else None,
     )
-    removed = handle.result.get("removed_subscription_ids", ())
     return StrategyOwnerRelease(
-        request_id=handle.request_id,
-        status=handle.status,
-        removed_subscription_ids=(
-            tuple(str(value) for value in removed if isinstance(value, str))
-            if isinstance(removed, (list, tuple, set))
-            else ()
-        ),
-        error=handle.error,
+        request_id=request_id,
+        status="applied",
+        removed_subscription_ids=tuple(response.released_subscription_ids),
+        error=None,
     )

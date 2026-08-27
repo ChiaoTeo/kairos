@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.investment.apps.market.composition import release_strategy_owner
-from kairospy.investment.apps.market.application import MarketEvent
+from kairospy.strategy.api.market import MarketEvent
 from kairospy.investment.apps.account.application import AccountSegmentSnapshot
 from kairospy.investment.apps.account.composition import mark_backtest_account
 from kairospy.investment.apps.execution.application import ExecutionBacktestResult

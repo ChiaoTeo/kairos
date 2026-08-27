@@ -1,41 +1,32 @@
-"""Reference v2 typed event decoding into generated FlatBuffers roots."""
+"""Reference events backed only by the owner-native contract."""
 
 from __future__ import annotations
 
-from typing import Any
-import sys
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
 
-from kairospy.infrastructure.protocol.generated import kairos as _generated_kairos
-
-sys.modules.setdefault("kairos", _generated_kairos)
-
-
-_EVENT_ROOTS: tuple[tuple[bytes, str], ...] = (
-    (b"RENU", "ExchangeUpserted"),
-    (b"REND", "ExchangeUpdated"),
-    (b"RAU2", "AssetUpserted"),
-    (b"RAD2", "AssetUpdated"),
-    (b"RIU2", "InstrumentUpserted"),
-    (b"RID2", "InstrumentUpdated"),
-    (b"RLU2", "ListingUpserted"),
-    (b"RLD2", "ListingUpdated"),
-    (b"RMU2", "MarketUpserted"),
-    (b"RMD2", "MarketUpdated"),
-)
+if TYPE_CHECKING:
+    from kairospy._native_reference_contract import (
+        ReferenceEvent,
+        ReferenceInvalidEventError,
+    )
 
 
-def decode_event(payload: bytes) -> Any:
-    """Decode one Reference v2 event into its generated root object."""
-
-    for identifier, root_name in _EVENT_ROOTS:
-        if len(payload) < 8 or payload[4:8] != identifier:
-            continue
-        module = __import__(
-            f"kairospy.infrastructure.protocol.generated.kairos.reference.v2.{root_name}",
-            fromlist=[root_name],
-        )
-        return getattr(module, root_name).GetRootAs(payload, 0)
-    raise ValueError("unknown Reference v2 event identifier")
+def _native() -> Any:
+    module = import_module("kairospy._native_reference_contract")
+    info = module.build_info()
+    if info.api_version != 1 or info.owner != "Reference":
+        raise ImportError("kairospy Reference native contract ABI mismatch")
+    return module
 
 
-__all__ = ["decode_event"]
+def decode_event(payload: bytes) -> ReferenceEvent:
+    return _native().decode_event(payload)
+
+
+if not TYPE_CHECKING:
+    ReferenceEvent = _native().ReferenceEvent
+    ReferenceInvalidEventError = _native().ReferenceInvalidEventError
+
+
+__all__ = ["ReferenceEvent", "ReferenceInvalidEventError", "decode_event"]

@@ -3086,6 +3086,7 @@ dependencies = [
  "kairos-primitives",
  "kairos-protocol",
  "pyo3",
+ "tokio",
 ]
 
 [[package]]
@@ -3138,6 +3139,7 @@ dependencies = [
  "kairos-primitives",
  "kairos-protocol",
  "pyo3",
+ "tokio",
 ]
 
 [[package]]
@@ -3236,6 +3238,9 @@ dependencies = [
  "kairos-primitives",
  "kairos-protocol",
  "pyo3",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]
@@ -3331,7 +3336,9 @@ version = "0.2.0"
 dependencies = [
  "kairos-market-contract",
  "kairos-primitives",
+ "kairos-protocol",
  "pyo3",
+ "tokio",
 ]
 
 [[package]]
@@ -3433,6 +3440,8 @@ dependencies = [
 name = "kairos-reference-contract-py"
 version = "0.2.0"
 dependencies = [
+ "kairos-primitives",
+ "kairos-protocol",
  "kairos-reference-contract",
  "pyo3",
 ]
@@ -3485,6 +3494,7 @@ dependencies = [
  "kairos-protocol",
  "kairos-risk-contract",
  "pyo3",
+ "tokio",
 ]
 
 [[package]]

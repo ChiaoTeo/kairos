@@ -15,7 +15,7 @@ impl AccountEventFrame {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-    pub fn decode(&self) -> ContractResult<AccountEvent<'_>> {
+    pub fn decode(&self) -> ContractResult<AccountEvent> {
         super::decode::decode_event(&self.bytes)
     }
 }

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from kairospy.infrastructure.contracts.capital.records import CapitalEventRecord
+"""Capital application event types belong here when application consumption is added."""
 
-
-__all__ = ["CapitalEventRecord"]
+__all__: list[str] = []

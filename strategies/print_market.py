@@ -12,14 +12,14 @@ class PrintMarket(Strategy):
         if not markets:
             raise RuntimeError(f"no active market found for {self.symbol}")
         for market in markets:
-            context.market.subscribe_quotes(market)
+            context.market.subscribe_quotes(market.id)
 
     def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
         del context
         quote = event.data
         print(
-            f"market event kind=quote symbol={quote.instrument.display_symbol} "
-            f"bid={quote.bid_price if quote.bid_price is not None else '-'} "
-            f"ask={quote.ask_price if quote.ask_price is not None else '-'}",
+            f"market event kind=quote instrument={quote.instrument_id} "
+            f"bid={quote.bid_price.value if quote.bid_price is not None else '-'} "
+            f"ask={quote.ask_price.value if quote.ask_price is not None else '-'}",
             flush=True,
         )

@@ -237,6 +237,7 @@ impl MarketIndexedView {
                 let Some(bytes) = bytes else {
                     return Ok(None);
                 };
+                ensure_identifier_readable(bytes, "MQC3 MarketQuoteCurrent")?;
                 if !fb::market_quote_current_buffer_has_identifier(bytes) {
                     return Err(ContractError::Invalid(
                         "expected MQC3 MarketQuoteCurrent".into(),
@@ -263,6 +264,7 @@ impl MarketIndexedView {
                 let Some(bytes) = bytes else {
                     return Ok(None);
                 };
+                ensure_identifier_readable(bytes, "MBC3 MarketBarCurrent")?;
                 if !fb::market_bar_current_buffer_has_identifier(bytes) {
                     return Err(ContractError::Invalid(
                         "expected MBC3 MarketBarCurrent".into(),
@@ -285,6 +287,7 @@ impl MarketIndexedView {
                 let Some(bytes) = bytes else {
                     return Ok(None);
                 };
+                ensure_identifier_readable(bytes, "MGC3 MarketGreeksCurrent")?;
                 if !fb::market_greeks_current_buffer_has_identifier(bytes) {
                     return Err(ContractError::Invalid(
                         "expected MGC3 MarketGreeksCurrent".into(),
@@ -474,10 +477,21 @@ impl MarketIndexedView {
             .with_value_snapshot(database, &encoded, |metadata, bytes| {
                 ensure_ready(&metadata)?;
                 let Some(bytes) = bytes else { return Ok(None) };
+                ensure_identifier_readable(bytes, "Market current view")?;
                 let identity = current_identity(kind, bytes)?;
                 project(&metadata, identity, bytes).map(Some)
             })
             .map_err(|e| ContractError::Transport(e.to_string()))?
+    }
+}
+
+fn ensure_identifier_readable(bytes: &[u8], expected: &str) -> ContractResult<()> {
+    if kairos_protocol::flatbuffer::identifier_is_readable(bytes) {
+        Ok(())
+    } else {
+        Err(ContractError::Invalid(format!(
+            "truncated {expected} FlatBuffers value"
+        )))
     }
 }
 

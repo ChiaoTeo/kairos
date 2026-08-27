@@ -4,33 +4,17 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
-from kairospy.investment.apps.account.application import (
-    AccountApplication,
-    AccountStatusChangedEvent,
-    BalanceChangedEvent,
-    EquityChangedEvent,
-    PositionChangedEvent,
-)
+from kairospy.investment.apps.account.application import AccountApplication
+from kairospy.infrastructure.contracts.account.events import AccountEvent
 from kairospy.strategy.apps.agent.application import AgentEvent
 from kairospy.investment.apps.execution.application import (
     ExecutionApplication,
-    FillEvent,
-    IntentUpdateEvent,
-    OrderUpdateEvent,
 )
-from kairospy.investment.apps.market.application import (
-    BarEvent,
-    GreeksEvent,
-    MarketApplication,
-    QuoteEvent,
-    TradeEvent,
-)
-from kairospy.investment.apps.risk.application import (
-    RiskApplication,
-    ReservationChangedEvent,
-    RiskCircuitChangedEvent,
-    RiskDecisionEvent,
-)
+from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
+from kairospy.investment.apps.market.application import MarketApplication
+from kairospy.infrastructure.contracts.market.events import MarketEvent
+from kairospy.infrastructure.contracts.risk.events import RiskEvent
+from kairospy.investment.apps.risk.application import RiskApplication
 from kairospy.strategy import ClockAdvancedEvent, SystemEvent, TimerFiredEvent
 
 
@@ -122,24 +106,13 @@ class StrategyEventIngress:
     def route(event: object) -> StrategyDispatch:
         if isinstance(event, AgentEvent):
             return StrategyDispatch("agent", "on_agent", event)
-        if isinstance(event, (BarEvent, QuoteEvent, TradeEvent, GreeksEvent)):
+        if isinstance(event, MarketEvent):
             return StrategyDispatch("market", "on_market", event)
-        if isinstance(
-            event,
-            (
-                AccountStatusChangedEvent,
-                BalanceChangedEvent,
-                EquityChangedEvent,
-                PositionChangedEvent,
-            ),
-        ):
+        if isinstance(event, AccountEvent):
             return StrategyDispatch("account", "on_account", event)
-        if isinstance(
-            event,
-            (ReservationChangedEvent, RiskDecisionEvent, RiskCircuitChangedEvent),
-        ):
+        if isinstance(event, RiskEvent):
             return StrategyDispatch("risk", "on_risk", event)
-        if isinstance(event, (IntentUpdateEvent, OrderUpdateEvent, FillEvent)):
+        if isinstance(event, ExecutionEvent):
             return StrategyDispatch("execution", "on_execution", event)
         if isinstance(event, (TimerFiredEvent, ClockAdvancedEvent)):
             return StrategyDispatch("clock", "on_clock", event)

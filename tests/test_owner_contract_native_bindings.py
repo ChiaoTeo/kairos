@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from importlib import import_module
+from types import SimpleNamespace
 
 import pytest
+
+from kairospy.infrastructure.contracts import _native as native_loader
 
 
 @pytest.mark.parametrize(
@@ -23,6 +26,7 @@ def test_owner_contract_extension_is_the_only_business_view_entrypoint(
 
     assert info.api_version == 1
     assert info.owner.lower() == owner
+    assert info.contract_fingerprint == f"kairos.{owner}.contract.v2"
     assert getattr(native, reader) is not None
     prefix = owner.title()
     assert issubclass(getattr(native, f"{prefix}InvalidCurrentViewError"), ValueError)
@@ -31,11 +35,117 @@ def test_owner_contract_extension_is_the_only_business_view_entrypoint(
     )
 
 
+@pytest.mark.parametrize(
+    ("owner", "identity"),
+    (
+        ("account", {"account_id": "main"}),
+        ("capital", {"capital_group_id": "group-a"}),
+        ("execution", {}),
+        ("market", {}),
+        ("risk", {"actor_id": "risk-main"}),
+    ),
+)
+def test_owner_named_client_unifies_control_events_and_optional_current(
+    owner: str, identity: dict[str, str]
+) -> None:
+    native = import_module(f"kairospy._native_{owner}_contract")
+    prefix = owner.title()
+    client = getattr(native, f"{prefix}Client")(
+        f"/tmp/{owner}.sock",
+        workspace_id="workspace-a",
+        **identity,
+    )
+
+    assert type(client.control).__name__ == f"{prefix}ControlClient"
+    assert type(client.events).__name__ == "NativeEventSource"
+    assert type(client.events).__module__ == (
+        "kairospy.infrastructure.transport.native_event"
+    )
+    assert client.current is None
+
+    with pytest.raises(
+        getattr(native, f"{prefix}InvalidInputError"), match="stream_id"
+    ) as invalid:
+        getattr(native, f"{prefix}Client")(
+            f"/tmp/{owner}.sock",
+            workspace_id="workspace-a",
+            stream_id=0,
+            **identity,
+        )
+    assert invalid.value.code == "invalid_input"
+
+
+@pytest.mark.parametrize("owner", ("account", "capital", "execution", "market", "risk"))
+def test_owner_errors_expose_stable_contract_codes(owner: str) -> None:
+    native = import_module(f"kairospy._native_{owner}_contract")
+    prefix = owner.title()
+
+    with pytest.raises(getattr(native, f"{prefix}InvalidEventError")) as invalid:
+        native.decode_event(b"invalid")
+    assert invalid.value.code == "invalid_wire_data"
+    assert getattr(native, f"{prefix}ControlUnavailableError").code == (
+        "transport_unavailable"
+    )
+    assert getattr(native, f"{prefix}ControlRejectedError").code == (
+        "operation_rejected"
+    )
+    assert getattr(native, f"{prefix}CurrentViewUnavailableError").code == (
+        "current_view_unavailable"
+    )
+
+
+@pytest.mark.parametrize("owner", ("account", "capital", "execution", "market", "risk"))
+def test_missing_control_socket_is_transport_unavailable(owner: str) -> None:
+    native = import_module(f"kairospy._native_{owner}_contract")
+    prefix = owner.title()
+    client = getattr(native, f"{prefix}ControlClient")(
+        f"/tmp/kairos-missing-{owner}-control.sock"
+    )
+
+    with pytest.raises(getattr(native, f"{prefix}ControlUnavailableError")) as error:
+        client.health()
+    assert error.value.code == "transport_unavailable"
+
+
+def test_public_owner_facades_export_the_native_owner_named_client() -> None:
+    for owner in ("account", "capital", "execution", "market", "risk"):
+        facade = import_module(f"kairospy.infrastructure.contracts.{owner}")
+        native = import_module(f"kairospy._native_{owner}_contract")
+        name = f"{owner.title()}Client"
+        assert getattr(facade, name) is getattr(native, name)
+
+
+def test_owner_native_loader_rejects_a_fingerprint_mismatch(monkeypatch) -> None:
+    incompatible = SimpleNamespace(
+        build_info=lambda: SimpleNamespace(
+            owner="Market",
+            api_version=1,
+            contract_fingerprint="wrong",
+        )
+    )
+    monkeypatch.setattr(native_loader, "import_module", lambda _name: incompatible)
+
+    with pytest.raises(ImportError, match="ABI mismatch"):
+        native_loader.load_owner_contract("Market")
+
+
 def test_generic_native_transport_no_longer_exports_indexed_view_reader() -> None:
     native = import_module("kairospy._native_transport")
 
     assert not hasattr(native, "IndexedViewReader")
     assert not hasattr(native, "IndexedViewMetadata")
+
+
+def test_reference_contract_extension_owns_sqlite_catalog_reads() -> None:
+    native = import_module("kairospy._native_reference_contract")
+    info = native.build_info()
+
+    assert info.api_version == 1
+    assert info.owner == "Reference"
+    assert native.ReferenceCatalog is not None
+    assert native.ReferenceReadSession is not None
+    assert issubclass(native.ReferenceInvalidCatalogError, ValueError)
+    assert issubclass(native.ReferenceCatalogUnavailableError, RuntimeError)
 
 
 def test_execution_binding_exposes_every_indexed_family() -> None:
@@ -52,6 +162,19 @@ def test_execution_binding_exposes_every_indexed_family() -> None:
         assert hasattr(native.ExecutionCurrentView, method)
 
 
+def test_execution_backtest_quote_validates_optional_decimal_fields() -> None:
+    native = import_module("kairospy._native_execution_contract")
+
+    with pytest.raises(native.ExecutionInvalidInputError, match="bid_price"):
+        native.ExecutionBacktestMarketRequest.quote(
+            market_id="market:BTCUSDT",
+            instrument_id="instrument:BTCUSDT",
+            observed_at_unix_nanos=1,
+            source_id="test",
+            bid_price="not-a-decimal",
+        )
+
+
 def test_atomic_snapshot_bindings_expose_non_summary_families() -> None:
     account = import_module("kairospy._native_account_contract")
     capital = import_module("kairospy._native_capital_contract")
@@ -59,3 +182,33 @@ def test_atomic_snapshot_bindings_expose_non_summary_families() -> None:
     assert hasattr(account.AccountCurrentSnapshot, "collateral")
     assert hasattr(capital.CapitalCurrentSnapshot, "policies")
     assert hasattr(capital.CapitalCurrentSnapshot, "facts")
+
+
+def test_account_binding_owns_typed_control_requests_and_client() -> None:
+    native = import_module("kairospy._native_account_contract")
+
+    assert native.AccountControlClient is not None
+    assert native.AccountSegmentsRequest(["spot"]).segments == ["spot"]
+    mark = native.MarkToMarketRequest(
+        "spot", "instrument:BTCUSDT", "USDT", "100.25", 10
+    )
+    assert mark.segment_key == "spot"
+    assert native.AdvanceAccountTimeRequest(11).event_time_unix_nanos == 11
+    assert native.SimulatedSettlement(
+        "fill-1",
+        "spot",
+        "instrument:BTCUSDT",
+        "1",
+        "100",
+        "buy",
+        12,
+    ) is not None
+    assert native.SimulatedCapitalMutation(
+        "mutation-1", "spot", "USDT", "1", "debit_liquid", 13
+    ) is not None
+    assert native.SimulatedCapitalMutationQuery("mutation-1", "spot") is not None
+
+    with pytest.raises(ValueError):
+        native.MarkToMarketRequest("", "instrument:BTCUSDT", "USDT", "100", 10)
+    with pytest.raises(ValueError):
+        native.AccountControlClient("/tmp/account.sock", timeout=0)

@@ -21,6 +21,10 @@ RUST_BACKED_INVESTMENT_APPS = {
     "execution",
 }
 CURRENT_VIEW_OWNERS = ("account", "capital", "execution", "market", "risk")
+OWNER_CONTRACT_PY_BINDINGS = (*CURRENT_VIEW_OWNERS, "reference")
+OWNER_NATIVE_MODULES = {
+    f"kairospy._native_{owner}_contract" for owner in CURRENT_VIEW_OWNERS
+}
 
 
 def _module_name(path: Path) -> str:
@@ -73,6 +77,11 @@ def _failure(failures: list[str], path: Path, line: int, message: str) -> None:
     failures.append(f"{path.relative_to(ROOT)}:{line}: {message}")
 
 
+def _is_generated_protocol(module: str) -> bool:
+    root = "kairospy.infrastructure.protocol.generated"
+    return module == root or module.startswith(root + ".")
+
+
 def main() -> int:
     failures: list[str] = []
     python_files = tuple(sorted(PACKAGE.rglob("*.py")))
@@ -91,8 +100,8 @@ def main() -> int:
             failures.append(f"legacy business transport remains: {path.relative_to(ROOT)}")
 
     generated = PACKAGE / "infrastructure" / "protocol" / "generated"
-    if not generated.is_dir():
-        failures.append("kairospy/infrastructure/protocol/generated is missing")
+    if generated.exists():
+        failures.append("removed Python generated protocol tree has returned")
 
     generic_indexed_view = PACKAGE / "infrastructure" / "transport" / "indexed_view.py"
     if generic_indexed_view.exists():
@@ -102,18 +111,78 @@ def main() -> int:
         )
 
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    strategy_protocol = (PACKAGE / "strategy" / "api" / "protocol.py").read_text(
+        encoding="utf-8"
+    )
+    if "reference: ReferenceApplication" not in strategy_protocol:
+        failures.append(
+            "StrategyContext.reference must expose ReferenceApplication, not a raw contract"
+        )
     native_transport = (
         ROOT / "crates" / "platform" / "python-transport" / "src" / "lib.rs"
     ).read_text(encoding="utf-8")
     if "IndexedViewReader" in native_transport:
         failures.append("generic IndexedViewReader remains in kairos-python-transport")
-    for owner in CURRENT_VIEW_OWNERS:
+    reference_client = (
+        PACKAGE / "infrastructure" / "contracts" / "reference" / "client.py"
+    )
+    reference_source = reference_client.read_text(encoding="utf-8")
+    for forbidden in ("reference_meta", "reference_markets_current", "SELECT ", "sqlite3"):
+        if forbidden in reference_source:
+            failures.append(
+                "Reference Python contract contains SQLite implementation detail "
+                f"{forbidden!r}: {reference_client.relative_to(ROOT)}"
+            )
+    for owner in OWNER_CONTRACT_PY_BINDINGS:
         binding = ROOT / "crates" / "modules" / owner / "contract" / "py"
         if not (binding / "Cargo.toml").is_file() or not (binding / "src" / "lib.rs").is_file():
             failures.append(f"owner contract PyO3 binding is missing: {binding.relative_to(ROOT)}")
         target = f'kairospy._native_{owner}_contract'
         if target not in pyproject:
             failures.append(f"owner contract extension is missing from pyproject.toml: {target}")
+
+    forbidden_owner_files = {
+        "account": ("control.py", "runtime.py", "source.py", "view_contract.py"),
+        "capital": ("client.py", "source.py"),
+        "execution": ("control.py", "current.py", "source.py"),
+        "market": ("control.py", "source.py"),
+        "risk": ("control.py", "source.py"),
+    }
+    for owner, names in forbidden_owner_files.items():
+        facade = PACKAGE / "infrastructure" / "contracts" / owner
+        for name in names:
+            path = facade / name
+            if path.exists():
+                failures.append(
+                    "owner Python implementation has returned: "
+                    f"{path.relative_to(ROOT)}"
+                )
+        rust = (
+            ROOT / "crates" / "modules" / owner / "contract" / "py" / "src" / "lib.rs"
+        ).read_text(encoding="utf-8")
+        source_module = f"kairospy.infrastructure.contracts.{owner}.source"
+        if source_module in rust:
+            failures.append(
+                f"{owner} native companion delegates events back to Python source.py"
+            )
+
+    scoped_owner_roots = tuple(
+        PACKAGE / "infrastructure" / "contracts" / owner
+        for owner in CURRENT_VIEW_OWNERS
+    ) + tuple(
+        PACKAGE / "investment" / "apps" / owner
+        for owner in CURRENT_VIEW_OWNERS
+    )
+    for path in python_files:
+        if not any(path.is_relative_to(root) for root in scoped_owner_roots):
+            continue
+        source = path.read_text(encoding="utf-8")
+        for forbidden in ("UnixJsonRpcClient", "JsonRpcCaller"):
+            if forbidden in source:
+                failures.append(
+                    f"owner Python path contains handwritten RPC client {forbidden}: "
+                    f"{path.relative_to(ROOT)}"
+                )
 
     for path in python_files:
         relative = path.relative_to(PACKAGE)
@@ -130,13 +199,36 @@ def main() -> int:
         for line, module in _imports(path):
             target_parts = module.split(".")
 
+            if path.is_relative_to(PACKAGE / "strategy" / "api") and module.startswith(
+                "kairospy.infrastructure.contracts.reference"
+            ):
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    "Strategy API exposes the raw Reference contract instead of ReferenceApplication",
+                )
+
+            if (
+                path.is_relative_to(
+                    PACKAGE / "infrastructure" / "contracts" / "reference"
+                )
+                and module == "sqlite3"
+            ):
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    "Reference Python contract bypasses its owner binding via sqlite3",
+                )
+
             if (
                 path.is_relative_to(PACKAGE / "infrastructure" / "contracts")
                 and any(owner in relative.parts for owner in CURRENT_VIEW_OWNERS)
                 and path.stem in {"view", "view_contract", "current", "runtime"}
                 and (
                     module == "kairospy.infrastructure.transport.indexed_view"
-                    or "kairospy.infrastructure.protocol.generated" in module
+                    or _is_generated_protocol(module)
                 )
             ):
                 _failure(
@@ -144,6 +236,32 @@ def main() -> int:
                     path,
                     line,
                     f"business current view bypasses its owner PyO3 contract via {module}",
+                )
+
+            if module in OWNER_NATIVE_MODULES and not path.is_relative_to(
+                PACKAGE / "infrastructure" / "contracts"
+            ):
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    f"private owner extension leaks outside its public facade via {module}",
+                )
+
+            if (
+                any(
+                    path.is_relative_to(
+                        PACKAGE / "infrastructure" / "contracts" / owner
+                    )
+                    for owner in CURRENT_VIEW_OWNERS
+                )
+                and module in {"typing.Mapping", "collections.abc.Mapping"}
+            ):
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    "owner facade reintroduced a generic Mapping contract",
                 )
             target_subsystem = (
                 target_parts[1]
@@ -190,7 +308,7 @@ def main() -> int:
 
             if (
                 (source_subsystem is not None or is_entrypoint)
-                and "kairospy.infrastructure.protocol.generated" in module
+                and _is_generated_protocol(module)
             ):
                 _failure(failures, path, line, f"Generated Protocol leaks through {module}")
 

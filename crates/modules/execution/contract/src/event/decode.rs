@@ -3,6 +3,11 @@ use kairos_protocol::generated::kairos::execution::v_2 as fb;
 use super::view::ExecutionEvent;
 use crate::{ContractError, ContractResult};
 pub fn decode_event(bytes: &[u8]) -> ContractResult<ExecutionEvent<'_>> {
+    if !kairos_protocol::flatbuffer::identifier_is_readable(bytes) {
+        return Err(ContractError::Invalid(
+            "Execution v2 event payload is shorter than the FlatBuffers header".into(),
+        ));
+    }
     macro_rules! root {
         ($check:ident, $decode:ident, $variant:ident) => {
             if fb::$check(bytes) {
@@ -65,4 +70,14 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<ExecutionEvent<'_>> {
     Err(ContractError::Invalid(
         "unknown Execution v2 event identifier".into(),
     ))
+}
+
+#[cfg(test)]
+mod short_frame_tests {
+    use super::decode_event;
+
+    #[test]
+    fn short_event_frame_is_rejected_without_panicking() {
+        assert!(decode_event(b"invalid").is_err());
+    }
 }

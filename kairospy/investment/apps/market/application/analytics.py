@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any, Mapping
-
-from .models import ObservationScope, ObservationScopeKind
+from typing import Any, Mapping, Protocol
 
 
 _YEAR_NANOS = 365.25 * 86_400 * 1_000_000_000
@@ -19,9 +17,16 @@ _SQRT_TWO = math.sqrt(2.0)
 _SQRT_TWO_PI = math.sqrt(2.0 * math.pi)
 
 
+class AnalyticalScope(Protocol):
+    kind: str
+    market_id: object | None
+    instrument_id: object | None
+    network_id: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class OptionGreeksCalculationRequest:
-    scope: ObservationScope
+    scope: AnalyticalScope
     instrument_id: str
     option_right: str
     expiry_unix_nanos: int
@@ -116,8 +121,8 @@ class MarketAnalyticalApplication:
         )
 
 
-def _scope_payload(scope: ObservationScope) -> Mapping[str, object]:
-    if scope.kind is ObservationScopeKind.MARKET:
+def _scope_payload(scope: AnalyticalScope) -> Mapping[str, object]:
+    if str(scope.kind) == "market":
         return {"kind": "market", "market_id": str(scope.market_id)}
     return {
         "kind": "consolidated",

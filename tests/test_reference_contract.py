@@ -412,6 +412,9 @@ def test_market_id_lookup_is_not_truncated_by_catalog_size(tmp_path) -> None:
         "asset_type": "crypto",
         "venue_symbol": "TEST",
         "status": "active",
+        "price_precision": 0,
+        "quantity_precision": 0,
+        "effective_from_unix_nanos": 0,
     }
     rows = []
     for index in range(10_001):
@@ -512,6 +515,7 @@ def test_reference_client_scopes_refresh_and_provider_controls(
 def test_reference_client_pages_filtered_collections(tmp_path) -> None:
     client = ReferenceClient(database_path=_reference_database(tmp_path))
 
+    assert client.instruments(instrument_ids=[]) == []
     first = client.instruments(active_only=True, limit=1, offset=0)
     second = client.instruments(active_only=True, limit=1, offset=1)
 
@@ -528,6 +532,8 @@ def test_reference_client_pages_filtered_collections(tmp_path) -> None:
         )
     with pytest.raises(ValueError, match="call or put"):
         client.instruments(option_right="unknown")
+    with pytest.raises(ValueError, match="invalid instrument_id"):
+        client.instruments(instrument_ids=(" instrument:spot:BTC",))
 
 
 def test_reference_application_exposes_filtered_markets_and_option_chain(

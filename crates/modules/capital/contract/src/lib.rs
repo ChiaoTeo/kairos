@@ -17,12 +17,13 @@ pub mod view;
 pub use error::{ContractError, ContractResult};
 pub use event::{
     CapitalAeronEventPublisher, CapitalEvent, CapitalEventFrame, CapitalEventStream,
-    DecodedCapitalEvent, FlatbuffersCapitalEventWriter, QueuedCapitalEventPublisher,
+    DecodedCapitalEvent, FlatbuffersCapitalEventWriter, QueuedCapitalEventPublisher, decode_event,
 };
 pub type CapitalConnection = kairos_protocol::ContractClient;
 pub use kairos_transport::AeronEndpoint;
 pub const CAPITAL_EVENTS_STREAM_ID: i32 = kairos_transport::stream_ids::CAPITAL_EVENTS;
 pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
+pub const CONTRACT_FINGERPRINT: &str = "kairos.capital.contract.v2";
 pub use control::{
     CancelFundingObjectiveRequest, CapitalAvailabilityResponse, CapitalControlError,
     CapitalControlResponse, CapitalControlRpcClient, CapitalControlRpcServer,

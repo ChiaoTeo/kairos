@@ -10,5 +10,7 @@ name = "_native_reference_contract"
 crate-type = ["cdylib"]
 
 [dependencies]
+kairos-primitives.workspace = true
+kairos-protocol.workspace = true
 kairos-reference-contract.workspace = true
 pyo3.workspace = true

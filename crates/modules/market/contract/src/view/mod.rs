@@ -243,6 +243,11 @@ fn validate_current_identity(
 
 macro_rules! validate_current_root {
     ($bytes:expr, $key:expr, $identifier:ident, $decode:ident, $label:literal) => {{
+        if !kairos_protocol::flatbuffer::identifier_is_readable($bytes) {
+            return Err(ContractError::Invalid(
+                concat!("truncated ", $label, " FlatBuffers value").into(),
+            ));
+        }
         if !fb::$identifier($bytes) {
             return Err(ContractError::Invalid(concat!("expected ", $label).into()));
         }

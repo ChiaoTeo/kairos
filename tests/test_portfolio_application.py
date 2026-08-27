@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -22,23 +21,21 @@ from kairospy.investment.apps.account.application import (
     SPOT,
     USD_M_FUTURES,
 )
-from kairospy.investment.apps.market.application import ObservationScope, Quote, QuoteEvent
+from kairospy.infrastructure.contracts.market.events import MarketEvent
 from kairospy.investment.apps.portfolio.application import (
     PortfolioApplication,
     PortfolioFreshness,
 )
 from kairospy.investment.apps.reference.application import InstrumentRef
-from kairospy.investment.application.eventing import EventMetadata
 from kairospy.primitives.account import AccountId
-from kairospy.primitives.reference import InstrumentId, MarketId
+from kairospy.primitives.reference import InstrumentId
 
 
 class _CurrentView:
     def __init__(self, snapshot: AccountSnapshot) -> None:
         self.value = snapshot
 
-    def snapshot(self, account_id: AccountId) -> AccountSnapshot:
-        assert account_id == self.value.account_id
+    def snapshot(self) -> AccountSnapshot:
         return self.value
 
 
@@ -231,27 +228,16 @@ def test_market_observation_advances_portfolio_valuation_watermark() -> None:
         "paper:strategy-a",
         AccountApplication({account.account_id: _CurrentView(account)}),
     )
-    occurred_at = datetime(2026, 8, 19, tzinfo=timezone.utc)
-    event = QuoteEvent(
-        Quote(
-            scope=ObservationScope.market(MarketId("market:test:BTCUSDT")),
-            instrument=InstrumentRef(
-                InstrumentId("instrument:test:BTCUSDT"), "BTCUSDT"
-            ),
-            bid_price=Decimal("99"),
-            bid_quantity=Decimal("1"),
-            ask_price=Decimal("101"),
-            ask_quantity=Decimal("1"),
-            occurred_at=occurred_at,
-            occurred_at_unix_nanos=1_787_097_600_000_000_000,
-        ),
-        EventMetadata(
-            "market.events",
-            9,
-            producer="market",
-            occurred_at=occurred_at,
-            occurred_at_unix_nanos=1_787_097_600_000_000_000,
-        ),
+    event = MarketEvent.simulation_quote(
+        sequence=9,
+        market_id="market:test:BTCUSDT",
+        instrument_id="instrument:test:BTCUSDT",
+        provider="test",
+        bid_price="99",
+        bid_quantity="1",
+        ask_price="101",
+        ask_quantity="1",
+        occurred_at_unix_nanos=1_787_097_600_000_000_000,
     )
 
     snapshot = portfolio.observe(event)

@@ -185,20 +185,21 @@ code, tests, and adapter provenance under
 
 Reference owns the canonical catalog and the Rust `ReferenceActor` remains its
 only mutable state owner. The Python query surface is read-only:
-`ReferenceClient` owns knowledge of the SQLite catalog, while
+the Rust owner contract owns all knowledge of the SQLite catalog, while
 `ReferenceApplication` maps contract records into strategy-safe business
 models. Strategy code and CLI commands do not import table names or issue
 arbitrary SQL.
 
-`ReferenceReadSession` holds one read-only SQLite transaction and pins its
-catalog generation and event sequence. `ReferenceApplication.snapshot()`
+The native `ReferenceReadSession` holds one read-only SQLite transaction and
+pins its catalog generation and event sequence. Its Python facade contains no
+connection, SQL, table name, or JSON row decoder. `ReferenceApplication.snapshot()`
 scopes that session for a strategy decision so related exchange, asset,
-instrument, listing, market, execution-access, and market-data-access queries
+instrument, listing, and market queries
 cannot accidentally combine different catalog generations. One-shot queries
 use the same indexed filters and typed results.
 
 The CLI exposes that typed query inventory, including batch IDs, pagination,
-market-data access and option-chain filters. It intentionally does not expose
+asset-code resolution and option-chain filters. It intentionally does not expose
 arbitrary SQL because the table layout is a contract implementation detail.
 
 Coverage includes catalogs larger than 10,000 markets, WAL-backed concurrent

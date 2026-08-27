@@ -49,6 +49,10 @@ impl ContractClient {
         &self.control
     }
 
+    pub fn control_socket_path(&self) -> &Path {
+        self.control.socket_path()
+    }
+
     pub fn require_view_root(&self) -> Result<&Path, MissingContractEndpoint> {
         self.view_root
             .as_deref()
@@ -62,10 +66,43 @@ impl ContractClient {
     }
 }
 
+/// Distinguishes an owner operation rejection from transport or wire failure.
+#[must_use]
+pub trait ControlCallError: std::fmt::Display {
+    fn is_operation_rejection(&self) -> bool;
+}
+
+impl ControlCallError for jsonrpsee::core::ClientError {
+    fn is_operation_rejection(&self) -> bool {
+        matches!(self, Self::Call(_))
+    }
+}
+
+#[must_use]
+pub fn is_control_rejection(error: &impl ControlCallError) -> bool {
+    error.is_operation_rejection()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MissingContractEndpoint {
     #[error("contract client has no view root")]
     ViewRoot,
     #[error("contract client has no Aeron endpoint")]
     AeronEndpoint,
+}
+
+#[cfg(test)]
+mod tests {
+    use jsonrpsee::types::ErrorObjectOwned;
+
+    use super::{ControlCallError, is_control_rejection};
+
+    #[test]
+    fn only_json_rpc_error_responses_are_operation_rejections() {
+        let rejected = jsonrpsee::core::ClientError::Call(ErrorObjectOwned::owned(
+            -32000, "rejected", None::<()>,
+        ));
+        assert!(is_control_rejection(&rejected));
+        assert!(!jsonrpsee::core::ClientError::Custom("offline".into()).is_operation_rejection());
+    }
 }

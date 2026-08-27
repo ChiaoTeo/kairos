@@ -154,7 +154,7 @@ def _instance_account_snapshot(
         raise typer.BadParameter(
             f"launch instance has no connected account component for {account_id}"
         )
-    snapshot = client.current_view(account_key).snapshot(account_key)
+    snapshot = client.current_view(account_key).snapshot()
     return asdict(snapshot), resolved_instance, mode
 
 

@@ -24,8 +24,11 @@ pub use control::{
 };
 pub use encode::{FlatbuffersRiskEventWriter, RiskAeronEventPublisher, encode_indexed_current};
 pub use error::{ContractError, ContractResult};
-pub use event::{DecodedRiskEvent, RiskEventFrame, RiskEventStream};
+pub use event::{DecodedRiskEvent, RiskEventFrame, RiskEventStream, decode_event};
 pub type RiskConnection = kairos_protocol::ContractClient;
+pub const RISK_EVENTS_STREAM_ID: i32 = kairos_transport::stream_ids::RISK_EVENTS;
+pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
+pub const CONTRACT_FINGERPRINT: &str = "kairos.risk.contract.v2";
 
 pub use kairos_transport::AeronEndpoint;
 pub use view::{

@@ -10,15 +10,13 @@ from typing import Literal, Mapping
 from kairospy.investment.apps.execution.application import (
     ExecutionIntent,
     Fill,
-    FillEvent,
     IntentStatus,
-    IntentUpdateEvent,
 )
+from kairospy.strategy.api.execution import ExecutionEvent
 from kairospy.strategy.apps.notification.application import (
     NotificationApplication,
     NotificationSeverity,
 )
-from kairospy.investment.application.eventing import EventMetadata
 from kairospy.strategy.api.clock import StrategyClock, TimerEvent, parse_duration
 
 from ..services.journal import StrategyDecisionJournal
@@ -154,7 +152,6 @@ class _DecisionState:
 _TERMINAL_INTENT_STATUSES = frozenset(
     {
         IntentStatus.SATISFIED,
-        IntentStatus.COMPLETED,
         IntentStatus.REJECTED,
         IntentStatus.CANCELED,
         IntentStatus.EXPIRED,
@@ -308,11 +305,96 @@ class StrategyDecisionApplication:
         return self._snapshot(state)
 
     def observe_execution(
-        self, event: IntentUpdateEvent | FillEvent, *, replay: bool = False
+        self, event: ExecutionEvent, *, replay: bool = False
     ) -> StrategyDecision | None:
-        if isinstance(event, FillEvent):
-            return self._observe_fill(event)
-        intent = event.data
+        if event.kind == "fill":
+            fill = event.data
+            return self._observe_fill_values(
+                intent_id=str(getattr(fill, "intent_id")),
+                fill_id=str(getattr(fill, "fill_id")),
+                order_id=str(getattr(fill, "order_id")),
+                instrument_id=str(getattr(fill, "instrument_id")),
+                quantity=str(getattr(getattr(fill, "quantity"), "value")),
+                price=str(getattr(getattr(fill, "price"), "value")),
+                occurred_at_unix_nanos=int(
+                    getattr(fill, "occurred_at_unix_nanos")
+                ),
+                source_event_sequence=event.metadata.sequence,
+            )
+        if event.kind != "intent_update":
+            return None
+        update = event.data
+        intent = getattr(update, "intent")
+        if intent is None:
+            return None
+        decision_id = getattr(intent, "strategy_decision_id")
+        if decision_id is None:
+            self._unattributed_intents += 1
+            return None
+        intent_id = str(getattr(update, "intent_id"))
+        status = IntentStatus(str(getattr(update, "status")))
+        previous_status_raw = getattr(update, "previous_status")
+        previous_status = (
+            None
+            if previous_status_raw is None
+            else IntentStatus(str(previous_status_raw))
+        )
+        reason = str(getattr(update, "reason"))
+        order_ids = tuple(str(value) for value in getattr(update, "order_ids"))
+        state = self._states.get(decision_id)
+        if state is None:
+            raise ValueError(
+                f"Execution Intent {intent_id} references unknown Strategy decision {decision_id}"
+            )
+        self.attach_intent(decision_id, intent_id)
+        previous = state.intent_statuses.get(intent_id)
+        occurred_at_unix_nanos = event.metadata.occurred_at_unix_nanos
+        if previous == status:
+            self._complete_execution_if_ready(
+                state, occurred_at_unix_nanos, replay=replay
+            )
+            return self._snapshot(state)
+        if (
+            previous is not None
+            and previous_status is not None
+            and previous_status is not previous
+        ):
+            self._lifecycle_sequence_gaps += 1
+            raise ValueError(
+                f"Intent {intent_id} lifecycle is not contiguous: "
+                f"expected previous={previous.value}, "
+                f"received previous={previous_status.value}"
+            )
+        state.intent_statuses[intent_id] = status
+        self._append(
+            "intent_status_observed",
+            state,
+            intent_id=intent_id,
+            previous_status=None if previous is None else previous.value,
+            status=status.value,
+            order_ids=list(order_ids),
+            reason=reason,
+            source_event_sequence=event.metadata.sequence,
+            occurred_at_unix_nanos=occurred_at_unix_nanos,
+            recovered_from_snapshot=replay,
+        )
+        if not replay:
+            self._notify_intent(
+                intent_id=intent_id,
+                strategy_decision_id=decision_id,
+                status=status,
+                reason=reason,
+                source_event_sequence=event.metadata.sequence,
+            )
+        self._complete_execution_if_ready(
+            state, occurred_at_unix_nanos, replay=replay
+        )
+        return self._snapshot(state)
+
+    def reconcile_execution_snapshot(
+        self, intent: ExecutionIntent, *, source_event_sequence: int
+    ) -> StrategyDecision | None:
+        occurred_nanos = intent.updated_at_unix_nanos
         decision_id = intent.strategy_decision_id
         if decision_id is None:
             self._unattributed_intents += 1
@@ -323,127 +405,92 @@ class StrategyDecisionApplication:
                 f"Execution Intent {intent.id} references unknown Strategy decision {decision_id}"
             )
         self.attach_intent(decision_id, str(intent.id))
-        previous = state.intent_statuses.get(str(intent.id))
-        if previous == intent.status:
-            self._complete_execution_if_ready(state, event, replay=replay)
-            return self._snapshot(state)
-        if (
-            previous is not None
-            and event.previous_status is not None
-            and event.previous_status is not previous
-        ):
-            self._lifecycle_sequence_gaps += 1
-            raise ValueError(
-                f"Intent {intent.id} lifecycle is not contiguous: "
-                f"expected previous={previous.value}, "
-                f"received previous={event.previous_status.value}"
-            )
         state.intent_statuses[str(intent.id)] = intent.status
         self._append(
             "intent_status_observed",
             state,
             intent_id=str(intent.id),
-            previous_status=None if previous is None else previous.value,
+            previous_status=None,
             status=intent.status.value,
             order_ids=[str(value) for value in intent.order_ids],
             reason=intent.reason,
-            source_event_sequence=event.metadata.sequence,
-            occurred_at_unix_nanos=event.metadata.occurred_at_unix_nanos,
-            recovered_from_snapshot=replay,
+            source_event_sequence=source_event_sequence,
+            occurred_at_unix_nanos=occurred_nanos,
+            recovered_from_snapshot=True,
         )
-        if not replay:
-            self._notify_intent(event)
-        self._complete_execution_if_ready(state, event, replay=replay)
+        self._complete_execution_if_ready(state, occurred_nanos, replay=True)
         return self._snapshot(state)
-
-    def reconcile_execution_snapshot(
-        self, intent: ExecutionIntent, *, source_event_sequence: int
-    ) -> StrategyDecision | None:
-        occurred_nanos = intent.updated_at_unix_nanos
-        occurred_at = (
-            None
-            if occurred_nanos is None
-            else datetime.fromtimestamp(occurred_nanos / 1_000_000_000, tz=timezone.utc)
-        )
-        return self.observe_execution(
-            IntentUpdateEvent(
-                intent,
-                EventMetadata(
-                    "execution.events",
-                    source_event_sequence,
-                    producer="execution.snapshot-recovery",
-                    occurred_at=occurred_at,
-                    occurred_at_unix_nanos=occurred_nanos,
-                ),
-            ),
-            replay=True,
-        )
 
     def reconcile_execution_fill(
         self, fill: Fill, *, source_event_sequence: int
     ) -> StrategyDecision | None:
-        occurred_nanos = self._unix_nanos(fill.occurred_at)
-        return self.observe_execution(
-            FillEvent(
-                fill,
-                EventMetadata(
-                    "execution.events",
-                    source_event_sequence,
-                    producer="execution.snapshot-recovery",
-                    occurred_at=fill.occurred_at,
-                    occurred_at_unix_nanos=occurred_nanos,
-                ),
-            ),
-            replay=True,
+        return self._observe_fill_values(
+            intent_id=None if fill.intent_id is None else str(fill.intent_id),
+            fill_id=str(fill.id),
+            order_id=str(fill.order_id),
+            instrument_id=str(fill.instrument.id),
+            quantity=str(fill.quantity),
+            price=str(fill.price),
+            occurred_at_unix_nanos=self._unix_nanos(fill.occurred_at),
+            source_event_sequence=source_event_sequence,
         )
 
-    def _observe_fill(self, event: FillEvent) -> StrategyDecision | None:
-        fill = event.data
-        if fill.intent_id is None:
+    def _observe_fill_values(
+        self,
+        *,
+        intent_id: str | None,
+        fill_id: str,
+        order_id: str,
+        instrument_id: str,
+        quantity: str,
+        price: str,
+        occurred_at_unix_nanos: int,
+        source_event_sequence: int,
+    ) -> StrategyDecision | None:
+        if not intent_id:
             return None
-        intent_id = str(fill.intent_id)
         state = next(
             (value for value in self._states.values() if intent_id in value.intent_ids),
             None,
         )
-        if state is None or str(fill.id) in state.observed_fill_ids:
+        if state is None or fill_id in state.observed_fill_ids:
             return None
-        state.observed_fill_ids.add(str(fill.id))
+        state.observed_fill_ids.add(fill_id)
+        occurred_at = datetime.fromtimestamp(
+            occurred_at_unix_nanos / 1_000_000_000, tz=timezone.utc
+        )
         revised_horizons = {value.horizon for value in state.evaluations}
         if not revised_horizons:
             self._append(
                 "fill_observed",
                 state,
-                fill_id=str(fill.id),
+                fill_id=fill_id,
                 intent_id=intent_id,
-                order_id=str(fill.order_id),
-                instrument_id=str(fill.instrument.id),
-                quantity=str(fill.quantity),
-                price=str(fill.price),
-                occurred_at=fill.occurred_at.isoformat(),
-                source_event_sequence=event.metadata.sequence,
+                order_id=order_id,
+                instrument_id=instrument_id,
+                quantity=quantity,
+                price=price,
+                occurred_at=occurred_at.isoformat(),
+                source_event_sequence=source_event_sequence,
             )
             return self._snapshot(state)
-        occurred_at = event.metadata.occurred_at_unix_nanos or self._unix_nanos(
-            fill.occurred_at
-        )
         for horizon in revised_horizons:
             state.due_horizons.add(horizon)
-            state.due_at_unix_nanos[horizon] = occurred_at
+            state.due_at_unix_nanos[horizon] = occurred_at_unix_nanos
         state.lifecycle = DecisionLifecycle.EVALUATION_PENDING
         self._append(
             "effect_revision_required",
             state,
-            fill_id=str(fill.id),
+            fill_id=fill_id,
             intent_id=intent_id,
-            order_id=str(fill.order_id),
-            instrument_id=str(fill.instrument.id),
-            quantity=str(fill.quantity),
-            price=str(fill.price),
-            occurred_at=fill.occurred_at.isoformat(),
+            order_id=order_id,
+            instrument_id=instrument_id,
+            quantity=quantity,
+            price=price,
+            occurred_at=occurred_at.isoformat(),
             horizons=sorted(revised_horizons),
-            source_event_sequence=event.metadata.sequence,
-            occurred_at_unix_nanos=occurred_at,
+            source_event_sequence=source_event_sequence,
+            occurred_at_unix_nanos=occurred_at_unix_nanos,
         )
         return self._snapshot(state)
 
@@ -643,7 +690,7 @@ class StrategyDecisionApplication:
     def _complete_execution_if_ready(
         self,
         state: _DecisionState,
-        event: IntentUpdateEvent,
+        occurred_at_unix_nanos: int | None,
         *,
         replay: bool = False,
     ) -> None:
@@ -658,7 +705,7 @@ class StrategyDecisionApplication:
                     for intent_id, status in state.intent_statuses.items()
                 )
                 adverse = any(
-                    status not in {IntentStatus.SATISFIED, IntentStatus.COMPLETED}
+                    status is not IntentStatus.SATISFIED
                     for status in state.intent_statuses.values()
                 )
                 self._notify(
@@ -671,15 +718,15 @@ class StrategyDecisionApplication:
                         "lifecycle": "execution_completed",
                     },
                 )
-            self._schedule_evaluations(state, event)
+            self._schedule_evaluations(state, occurred_at_unix_nanos)
 
     def _schedule_evaluations(
-        self, state: _DecisionState, event: IntentUpdateEvent
+        self, state: _DecisionState, occurred_at_unix_nanos: int | None
     ) -> None:
-        base = event.metadata.occurred_at
-        if base is None and event.metadata.occurred_at_unix_nanos is not None:
+        base = None
+        if occurred_at_unix_nanos is not None:
             base = datetime.fromtimestamp(
-                event.metadata.occurred_at_unix_nanos / 1_000_000_000,
+                occurred_at_unix_nanos / 1_000_000_000,
                 tz=timezone.utc,
             )
         base = base or self._clock.now
@@ -707,8 +754,15 @@ class StrategyDecisionApplication:
             scheduled_horizons=scheduled,
         )
 
-    def _notify_intent(self, event: IntentUpdateEvent) -> None:
-        status = event.data.status
+    def _notify_intent(
+        self,
+        *,
+        intent_id: str,
+        strategy_decision_id: str,
+        status: IntentStatus,
+        reason: str,
+        source_event_sequence: int,
+    ) -> None:
         severity_by_status: dict[IntentStatus, NotificationSeverity] = {
             IntentStatus.REJECTED: "warning",
             IntentStatus.CANCELED: "warning",
@@ -720,7 +774,6 @@ class StrategyDecisionApplication:
         severity = severity_by_status.get(status, "info")
         if status not in {
             IntentStatus.SATISFIED,
-            IntentStatus.COMPLETED,
             IntentStatus.REJECTED,
             IntentStatus.CANCELED,
             IntentStatus.EXPIRED,
@@ -731,12 +784,12 @@ class StrategyDecisionApplication:
             return
         self._notify(
             title=f"Intent {status.value}",
-            body=f"Intent {event.data.id}: {event.data.reason or status.value}",
+            body=f"Intent {intent_id}: {reason or status.value}",
             severity=severity,
-            dedupe_key=f"intent:{event.data.id}:lifecycle:{event.metadata.sequence}",
+            dedupe_key=f"intent:{intent_id}:lifecycle:{source_event_sequence}",
             attributes={
-                "strategy_decision_id": event.data.strategy_decision_id or "",
-                "intent_id": str(event.data.id),
+                "strategy_decision_id": strategy_decision_id,
+                "intent_id": intent_id,
                 "lifecycle": status.value,
             },
         )

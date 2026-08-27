@@ -10,11 +10,13 @@
 pub mod context;
 pub mod contract;
 pub mod control;
+pub mod flatbuffer;
 pub mod generated;
 pub mod metadata;
 
 pub use context::ProtocolContext;
 pub use contract::{ContractClient, MissingContractEndpoint};
+pub use metadata::{EventMetadataDecodeError, EventMetadataOwned, decode_event_metadata};
 
 // Runtime identity values are owned by primitives.  Re-exporting them here is
 // intentionally avoided: callers should make the primitives/protocol boundary

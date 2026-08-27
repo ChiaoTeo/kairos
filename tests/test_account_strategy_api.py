@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +22,6 @@ from kairospy.investment.apps.account.application import (
     SegmentSyncLifecycle,
 )
 from kairospy.investment.apps.reference.application import InstrumentRef
-from kairospy.investment.apps.account.application.mapping import map_accounts_snapshot
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.primitives.reference import InstrumentId
 
@@ -74,22 +74,76 @@ class _CurrentView:
         self.segments = segments
         self.reads = 0
 
-    def snapshot(self, account_id: AccountId) -> AccountSnapshot:
-        assert account_id == self.account_id
+    def snapshot(self) -> object:
+        account_id = self.account_id
         self.reads += 1
-        return AccountSnapshot(
-            account_id,
-            tuple(
-                _segment(
+        segments = tuple(
+            _segment(
                     str(account_id),
                     segment,
                     generation=self.generation,
                     available="90" if segment == SPOT else "40",
-                )
-                for segment in self.segments
-            ),
-            self.generation,
+            )
+            for segment in self.segments
         )
+        return _contract_snapshot(account_id, segments, self.generation)
+
+
+def _contract_snapshot(
+    account_id: AccountId,
+    segments: tuple[AccountSegmentSnapshot, ...],
+    generation: int,
+) -> object:
+    """Build the narrow native-current shape used by this application test fake."""
+
+    return SimpleNamespace(
+        account_id=str(account_id),
+        generation=generation,
+        event_sequence=generation,
+        segments=tuple(
+            SimpleNamespace(
+                segment_key=str(segment.segment_key),
+                broker=segment.broker,
+                environment=segment.environment,
+                observed_account_model=segment.account_model,
+                equity=None if segment.equity is None else format(segment.equity, "f"),
+                balances=tuple(
+                    SimpleNamespace(
+                        asset=value.asset,
+                        total=format(value.total, "f"),
+                        available=format(value.available, "f"),
+                        reserved=format(value.reserved, "f"),
+                    )
+                    for value in segment.balances
+                ),
+                positions=tuple(
+                    SimpleNamespace(
+                        instrument_id=str(value.instrument.id),
+                        quantity=format(value.quantity, "f"),
+                        position_side=value.position_side.value,
+                        average_price=None,
+                        market_value=None,
+                        unrealized_pnl=None,
+                    )
+                    for value in segment.positions
+                ),
+                earn_holdings=(),
+                earn_watermark_unix_nanos=None,
+                freshness=segment.freshness.value,
+                sync_mode=segment.sync_mode.value,
+                sync_lifecycle=segment.sync_lifecycle.value,
+                completeness=segment.completeness.value,
+                snapshot_watermark=None,
+                event_watermark=None,
+                channel_epoch=None,
+                last_event_at_unix_nanos=None,
+                last_success_at_unix_nanos=None,
+                last_error=None,
+                recovery_buffer_depth=0,
+            )
+            for segment in segments
+        ),
+    )
 
 
 def test_accounts_chain_reads_each_account_current_view_once_and_preserves_order() -> None:
@@ -119,13 +173,12 @@ def test_required_segment_readiness_is_checked_from_account_current_view() -> No
     class CurrentView:
         lifecycle = SegmentSyncLifecycle.BOOTSTRAPPING
 
-        def snapshot(self, requested: AccountId) -> AccountSnapshot:
-            assert requested == account_id
+        def snapshot(self) -> object:
             segment = replace(
                 _segment("main", SPOT, generation=1, available="90"),
                 sync_lifecycle=self.lifecycle,
             )
-            return AccountSnapshot(account_id, (segment,), 1)
+            return _contract_snapshot(account_id, (segment,), 1)
 
     current_view = CurrentView()
     application = AccountApplication(
@@ -186,77 +239,6 @@ def test_custom_segment_keys_remain_open_ended() -> None:
     )
 
     assert account.segment("provider_custom").segment_key == custom
-
-
-def test_current_view_mapper_groups_every_segment_without_cross_account_leakage() -> None:
-    snapshot = map_accounts_snapshot(
-        {
-            "generation": 9,
-            "accounts": [
-                {
-                    "account_id": "main",
-                    "segment_key": "spot",
-                    "broker": "binance",
-                    "environment": "live",
-                    "status": "ready",
-                    "equity": "100",
-                    "balances": [
-                        {"asset_code": "USDT", "total": "100", "available": "90"}
-                    ],
-                    "positions": [],
-                },
-                {
-                    "account_id": "main",
-                    "segment_key": "usd_m_futures",
-                    "broker": "binance",
-                    "environment": "live",
-                    "status": "ready",
-                    "equity": "250",
-                    "balances": [
-                        {"asset_code": "USDT", "total": "250", "available": "220"}
-                    ],
-                    "positions": [
-                        {
-                            "instrument_id": "instrument:binance:BTCUSDT",
-                            "position_side": "long",
-                            "quantity": "2",
-                        },
-                        {
-                            "instrument_id": "instrument:binance:BTCUSDT",
-                            "position_side": "short",
-                            "quantity": "-1",
-                        },
-                    ],
-                },
-                {
-                    "account_id": "outside",
-                    "segment_key": "spot",
-                    "broker": "paper",
-                    "environment": "paper",
-                    "status": "ready",
-                    "balances": [],
-                    "positions": [],
-                },
-            ],
-        },
-        enabled_account_ids=(AccountId("main"),),
-    )
-
-    account = snapshot.account("main")
-    assert [str(value.segment_key) for value in account.segments] == [
-        "spot",
-        "usd_m_futures",
-    ]
-    assert account.segment("spot").require_balance("USDT").total == Decimal("100")
-    assert account.segment("usd_m_futures").require_balance("USDT").total == Decimal(
-        "250"
-    )
-    futures_positions = account.segment("usd_m_futures").positions
-    assert [value.position_side for value in futures_positions] == [
-        PositionSide.LONG,
-        PositionSide.SHORT,
-    ]
-    assert snapshot.find_account("outside") is None
 
 
 def test_runtime_readiness_method_is_not_public_account_api() -> None:

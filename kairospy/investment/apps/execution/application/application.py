@@ -15,7 +15,7 @@ from .errors import (
     IntentNotFoundError,
     OrderNotFoundError,
 )
-from .events import ExecutionEvent
+from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
 from .intents import (
     ExecutionAlgorithmPolicy,
     MakerExecutionPolicy,
@@ -28,7 +28,6 @@ from .intents import (
     TargetPositionRequest,
 )
 from .mapping import (
-    map_execution_event,
     map_execution_fill,
     map_execution_intent,
     map_execution_order,
@@ -118,55 +117,42 @@ class ExecutionApplication:
         """Read Execution-owned capacity commitments from the indexed view."""
         if self._current_views is None:
             return ()
-        return tuple(
-            value
-            if isinstance(value, OrderCommitment)
-            else map_order_commitment(value)
-            for value in self._current_views.commitments()
-        )
+        return tuple(map_order_commitment(value) for value in self._current_views.commitments())
 
     def risk_reservations(self) -> tuple[RiskReservationSaga, ...]:
         """Read the persisted Risk reservation saga from the indexed view."""
         if self._current_views is None:
             return ()
-        return tuple(
-            value
-            if isinstance(value, RiskReservationSaga)
-            else map_risk_reservation(value)
-            for value in self._current_views.risk_reservations()
-        )
+        return tuple(map_risk_reservation(value) for value in self._current_views.risk_reservations())
 
-    def diagnostic_intent(self, intent_id: IntentId | str) -> dict[str, object] | None:
+    def diagnostic_intent(self, intent_id: IntentId | str) -> ExecutionIntent | None:
         """Read one authoritative Execution trace from the current v2 view."""
 
         if self._current_views is None:
             return None
-        query = getattr(self._current_views, "diagnostic_intent", None)
-        if not callable(query):
-            return None
-        value = query(str(intent_id))
+        value = self._current_views.get_intent(str(intent_id))
         if value is None:
             return None
-        if not isinstance(value, dict):
-            raise ValueError("Execution diagnostic payload must be an object")
-        intent = value.get("intent")
-        if not isinstance(intent, Mapping):
-            raise ValueError("Execution diagnostic intent payload is invalid")
-        if intent.get("strategy_id") != self._strategy_id:
+        intent = map_execution_intent(value)
+        if intent.strategy_id != self._strategy_id:
             return None
-        account_ids = intent.get("account_ids")
-        if self._account_ids:
-            if not isinstance(account_ids, list) or not set(
-                AccountId(str(item)) for item in account_ids
-            ).issubset(self._account_ids):
-                return None
-        return cast(dict[str, object], value)
+        if self._account_ids and not set(intent.account_ids).issubset(self._account_ids):
+            return None
+        return intent
 
     async def events(self) -> AsyncIterator[ExecutionEvent]:
         if self._event_source is None:
             return
         cursor = self._event_cursor
         async for record in self._event_source.subscribe_live():
+            from kairospy.infrastructure.contracts.execution.events import (
+                ExecutionEvent as NativeExecutionEvent,
+            )
+
+            if not isinstance(record, NativeExecutionEvent):
+                raise TypeError(
+                    "Execution event source must yield owner-native ExecutionEvent values"
+                )
             if record.stream_id != "execution.events":
                 self._event_scope_error_count += 1
                 raise RuntimeError(
@@ -192,27 +178,14 @@ class ExecutionApplication:
             cursor = record.sequence
             self._event_cursor = cursor
             self._event_head_sequence = max(self._event_head_sequence, cursor)
-            scoped = tuple(
-                change
-                for change in record.changes
-                if change.strategy_id == self._strategy_id
-                and self._change_belongs_to_accounts(change)
-            )
-            if not scoped:
+            if (
+                record.strategy_id != self._strategy_id
+                or not self._change_belongs_to_accounts(record)
+            ):
                 self._checkpoint_cursor(cursor)
                 continue
-            for event in map_execution_event(
-                type(record)(
-                    record.stream_id,
-                    record.sequence,
-                    record.producer,
-                    record.instance_id,
-                    scoped,
-                    record.occurred_at_unix_nanos,
-                    record.launch_id,
-                )
-            ):
-                yield event
+            if record.kind != "plan_created":
+                yield record
             self._checkpoint_cursor(cursor)
 
     def health(self) -> dict[str, object]:
@@ -259,16 +232,8 @@ class ExecutionApplication:
                 raise ValueError("Execution recovery intents must be an array")
             if not isinstance(fills, (list, tuple)):
                 raise ValueError("Execution recovery fills must be an array")
-            intents = tuple(
-                value
-                if isinstance(value, ExecutionIntent)
-                else map_execution_intent(value)
-                for value in intents
-            )
-            fills = tuple(
-                value if isinstance(value, Fill) else map_execution_fill(value)
-                for value in fills
-            )
+            intents = tuple(map_execution_intent(value) for value in intents)
+            fills = tuple(map_execution_fill(value) for value in fills)
         except FileNotFoundError:
             return
         if head <= self._event_cursor:
@@ -306,13 +271,11 @@ class ExecutionApplication:
         kind = getattr(change, "kind", "")
         account_id = getattr(change, "account_id", None)
         if kind == "intent_update":
-            payload = getattr(change, "payload", None)
-            if not isinstance(payload, Mapping):
-                raise ValueError("Execution intent scope payload must be an object")
-            intent = payload.get("intent")
-            if not isinstance(intent, Mapping):
+            payload = getattr(change, "data", None)
+            intent = getattr(payload, "intent", None)
+            if intent is None:
                 raise ValueError("Execution intent scope is missing intent payload")
-            raw_account_ids = intent.get("account_ids")
+            raw_account_ids = getattr(intent, "account_ids", None)
             if not isinstance(raw_account_ids, (list, tuple)) or not raw_account_ids:
                 raise ValueError("Execution intent scope requires account_ids")
             account_ids = frozenset(AccountId(str(value)) for value in raw_account_ids)
@@ -738,12 +701,13 @@ class ExecutionApplication:
     ) -> tuple[Order, ...]:
         if self._current_views is None:
             return ()
-        orders = self._current_views.open_orders(
-            account_id=None if account is None else str(account)
-        )
+        terminal = {"filled", "canceled", "rejected", "expired", "failed"}
+        account_id = None if account is None else str(account)
         orders = tuple(
-            order if isinstance(order, Order) else map_execution_order(order)
-            for order in orders
+            map_execution_order(order)
+            for order in self._current_views.orders()
+            if getattr(order, "status") not in terminal
+            and (account_id is None or getattr(order, "account_id") == account_id)
         )
         orders = tuple(
             order

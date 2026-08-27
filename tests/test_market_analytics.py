@@ -1,17 +1,35 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import pytest
 
 from kairospy.investment.apps.market.application import (
     MarketAnalyticalApplication,
-    ObservationScope,
     OptionGreeksCalculationRequest,
 )
 
 
 YEAR_NANOS = int(365.25 * 86_400 * 1_000_000_000)
+
+
+@dataclass(frozen=True)
+class _Scope:
+    kind: str
+    market_id: str | None = None
+    instrument_id: str | None = None
+    network_id: str | None = None
+
+    @classmethod
+    def market(cls, market_id: str) -> _Scope:
+        return cls("market", market_id=market_id)
+
+    @classmethod
+    def consolidated(cls, instrument_id: str, network_id: str) -> _Scope:
+        return cls(
+            "consolidated", instrument_id=instrument_id, network_id=network_id
+        )
 
 
 def _normal_cdf(value: float) -> float:
@@ -27,7 +45,7 @@ def _put_price(spot: float, strike: float, rate: float, sigma: float) -> float:
 def test_market_derives_reproducible_put_iv_and_greeks_with_lineage() -> None:
     observed = 1_700_000_000_000_000_000
     request = OptionGreeksCalculationRequest(
-        scope=ObservationScope.consolidated("instrument:option:SPY:test", "opra"),
+        scope=_Scope.consolidated("instrument:option:SPY:test", "opra"),
         instrument_id="instrument:option:SPY:test",
         option_right="P",
         expiry_unix_nanos=observed + YEAR_NANOS,
@@ -62,7 +80,7 @@ def test_market_rejects_future_or_no_arbitrage_invalid_current_view_inputs() -> 
     observed = 1_700_000_000_000_000_000
     with pytest.raises(ValueError, match="available before"):
         OptionGreeksCalculationRequest(
-            scope=ObservationScope.market("market"),
+            scope=_Scope.market("market"),
             instrument_id="instrument",
             option_right="P",
             expiry_unix_nanos=observed + YEAR_NANOS,
@@ -75,7 +93,7 @@ def test_market_rejects_future_or_no_arbitrage_invalid_current_view_inputs() -> 
             provider="test",
         )
     invalid_price = OptionGreeksCalculationRequest(
-        scope=ObservationScope.market("market"),
+        scope=_Scope.market("market"),
         instrument_id="instrument",
         option_right="C",
         expiry_unix_nanos=observed + YEAR_NANOS,

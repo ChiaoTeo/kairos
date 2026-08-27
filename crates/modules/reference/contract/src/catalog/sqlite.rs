@@ -103,66 +103,66 @@ pub struct ReferencePage {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ExchangeCatalogQuery {
-    pub exchange_ids: Vec<String>,
+    pub exchange_ids: Option<Vec<ExchangeId>>,
     pub search: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<ReferenceStatus>,
     pub active_only: bool,
     pub page: ReferencePage,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AssetCatalogQuery {
-    pub asset_ids: Vec<String>,
+    pub asset_ids: Option<Vec<AssetId>>,
     pub search: Option<String>,
-    pub code: Option<String>,
-    pub asset_class: Option<String>,
-    pub status: Option<String>,
+    pub code: Option<Symbol>,
+    pub asset_class: Option<AssetClass>,
+    pub status: Option<ReferenceStatus>,
     pub active_only: bool,
     pub page: ReferencePage,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct InstrumentSearchQuery {
-    pub instrument_ids: Vec<String>,
+    pub instrument_ids: Option<Vec<InstrumentId>>,
     pub search: Option<String>,
-    pub symbol: Option<String>,
-    pub instrument_type: Option<String>,
+    pub symbol: Option<Symbol>,
+    pub instrument_type: Option<InstrumentKind>,
     pub product_family: Option<String>,
-    pub underlying_instrument_id: Option<String>,
+    pub underlying_instrument_id: Option<InstrumentId>,
     pub expiry_unix_nanos: Option<u64>,
     pub expiry_from_unix_nanos: Option<u64>,
     pub expiry_to_unix_nanos: Option<u64>,
     pub option_right: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<ReferenceStatus>,
     pub active_only: bool,
     pub page: ReferencePage,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ListingCatalogQuery {
-    pub listing_ids: Vec<String>,
+    pub listing_ids: Option<Vec<ListingId>>,
     pub search: Option<String>,
-    pub instrument_id: Option<String>,
-    pub exchange_id: Option<String>,
-    pub exchange_symbol: Option<String>,
-    pub status: Option<String>,
+    pub instrument_id: Option<InstrumentId>,
+    pub exchange_id: Option<ExchangeId>,
+    pub exchange_symbol: Option<Symbol>,
+    pub status: Option<ReferenceStatus>,
     pub active_only: bool,
     pub page: ReferencePage,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MarketSearchQuery {
-    pub market_ids: Vec<String>,
+    pub market_ids: Option<Vec<MarketId>>,
     pub search: Option<String>,
-    pub venue_symbol: Option<String>,
-    pub asset_code: Option<String>,
-    pub exchange_id: Option<String>,
-    pub instrument_kind: Option<String>,
-    pub asset_type: Option<String>,
-    pub instrument_id: Option<String>,
-    pub listing_id: Option<String>,
-    pub underlying_instrument_id: Option<String>,
-    pub status: Option<String>,
+    pub venue_symbol: Option<Symbol>,
+    pub asset_code: Option<Symbol>,
+    pub exchange_id: Option<ExchangeId>,
+    pub instrument_kind: Option<InstrumentKind>,
+    pub asset_type: Option<AssetClass>,
+    pub instrument_id: Option<InstrumentId>,
+    pub listing_id: Option<ListingId>,
+    pub underlying_instrument_id: Option<InstrumentId>,
+    pub status: Option<ReferenceStatus>,
     pub active_only: bool,
     pub page: ReferencePage,
 }
@@ -176,6 +176,7 @@ pub struct LifecycleCatalogQuery {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReferenceLifecycleEvent {
+    #[serde(default)]
     pub sequence: u64,
     pub event_id: String,
     pub event_type: String,
@@ -568,90 +569,117 @@ impl ReferenceReadSession {
     }
 
     pub fn exchanges(&self, query: &ExchangeCatalogQuery) -> ContractResult<Vec<Exchange>> {
-        let mut builder = RecordQuery::new("reference_exchanges_current", "exchange_id", &query.page)?;
-        builder.ids(&query.exchange_ids)?;
+        let mut builder =
+            RecordQuery::new("reference_exchanges_current", "exchange_id", &query.page)?;
+        builder.ids(query.exchange_ids.as_deref())?;
         builder.search(query.search.as_deref())?;
-        builder.filter_text("status", query.status.as_deref());
+        builder.filter_text("status", query.status.as_ref());
         builder.active_only(query.active_only);
         read_typed_records(&self.connection, builder)
     }
 
     pub fn assets(&self, query: &AssetCatalogQuery) -> ContractResult<Vec<Asset>> {
         let mut builder = RecordQuery::new("reference_assets_current", "asset_id", &query.page)?;
-        builder.ids(&query.asset_ids)?;
+        builder.ids(query.asset_ids.as_deref())?;
         builder.search(query.search.as_deref())?;
         builder.filter_text("code", query.code.as_deref());
-        builder.filter_text("asset_class", query.asset_class.as_deref());
-        builder.filter_text("status", query.status.as_deref());
+        builder.filter_text("asset_class", query.asset_class.as_ref());
+        builder.filter_text("status", query.status.as_ref());
         builder.active_only(query.active_only);
         read_typed_records(&self.connection, builder)
     }
 
-    pub fn instruments(
-        &self,
-        query: &InstrumentSearchQuery,
-    ) -> ContractResult<Vec<Instrument>> {
-        if query.expiry_from_unix_nanos.zip(query.expiry_to_unix_nanos).is_some_and(|(from, to)| from > to) {
+    pub fn instruments(&self, query: &InstrumentSearchQuery) -> ContractResult<Vec<Instrument>> {
+        if query
+            .expiry_from_unix_nanos
+            .zip(query.expiry_to_unix_nanos)
+            .is_some_and(|(from, to)| from > to)
+        {
             return Err(ContractError::Invalid(
                 "expiry_from_unix_nanos must not exceed expiry_to_unix_nanos".into(),
             ));
         }
-        if query.option_right.as_deref().is_some_and(|value| !matches!(value, "call" | "put")) {
-            return Err(ContractError::Invalid("option_right must be call or put".into()));
+        if query
+            .option_right
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "call" | "put"))
+        {
+            return Err(ContractError::Invalid(
+                "option_right must be call or put".into(),
+            ));
         }
-        let mut builder = RecordQuery::new("reference_instruments_current", "instrument_id", &query.page)?;
-        builder.ids(&query.instrument_ids)?;
+        let mut builder = RecordQuery::new(
+            "reference_instruments_current",
+            "instrument_id",
+            &query.page,
+        )?;
+        builder.ids(query.instrument_ids.as_deref())?;
         builder.search(query.search.as_deref())?;
         builder.filter_text("symbol", query.symbol.as_deref());
-        builder.filter_text("instrument_type", query.instrument_type.as_deref());
+        builder.filter_text("instrument_type", query.instrument_type.as_ref());
         builder.filter_text("product_family", query.product_family.as_deref());
-        builder.filter_text("underlying_instrument_id", query.underlying_instrument_id.as_deref());
+        builder.filter_text(
+            "underlying_instrument_id",
+            query.underlying_instrument_id.as_deref(),
+        );
         builder.filter_u64("expiry_unix_nanos", query.expiry_unix_nanos)?;
         builder.compare_u64("expiry_unix_nanos >=", query.expiry_from_unix_nanos)?;
         builder.compare_u64("expiry_unix_nanos <=", query.expiry_to_unix_nanos)?;
         if let Some(option_right) = query.option_right.as_deref() {
-            builder.clause("json_extract(payload, '$.option_right') = ?", Value::Text(option_right.into()));
+            builder.clause(
+                "json_extract(payload, '$.option_right') = ?",
+                Value::Text(option_right.into()),
+            );
         }
-        builder.filter_text("status", query.status.as_deref());
+        builder.filter_text("status", query.status.as_ref());
         builder.active_only(query.active_only);
         if query.underlying_instrument_id.is_some() {
-            builder.order_by = "expiry_unix_nanos, CAST(json_extract(payload, '$.strike') AS REAL), instrument_id";
+            builder.order_by =
+                "expiry_unix_nanos, CAST(json_extract(payload, '$.strike') AS REAL), instrument_id";
         }
         read_typed_records(&self.connection, builder)
     }
 
     pub fn listings(&self, query: &ListingCatalogQuery) -> ContractResult<Vec<Listing>> {
-        let mut builder = RecordQuery::new("reference_listings_current", "listing_id", &query.page)?;
-        builder.ids(&query.listing_ids)?;
+        let mut builder =
+            RecordQuery::new("reference_listings_current", "listing_id", &query.page)?;
+        builder.ids(query.listing_ids.as_deref())?;
         builder.search(query.search.as_deref())?;
         builder.filter_text("instrument_id", query.instrument_id.as_deref());
         builder.filter_text("exchange_id", query.exchange_id.as_deref());
         builder.filter_text("exchange_symbol", query.exchange_symbol.as_deref());
-        builder.filter_text("status", query.status.as_deref());
+        builder.filter_text("status", query.status.as_ref());
         builder.active_only(query.active_only);
         read_typed_records(&self.connection, builder)
     }
 
     pub fn markets(&self, query: &MarketSearchQuery) -> ContractResult<Vec<Market>> {
         let mut builder = RecordQuery::new("reference_markets_current", "market_id", &query.page)?;
-        builder.ids(&query.market_ids)?;
+        builder.ids(query.market_ids.as_deref())?;
         builder.search(query.search.as_deref())?;
         builder.filter_text("venue_symbol", query.venue_symbol.as_deref());
         builder.filter_text("exchange_id", query.exchange_id.as_deref());
-        builder.filter_text("instrument_kind", query.instrument_kind.as_deref());
-        builder.filter_text("asset_type", query.asset_type.as_deref());
+        builder.filter_text("instrument_kind", query.instrument_kind.as_ref());
+        builder.filter_text("asset_type", query.asset_type.as_ref());
         builder.filter_text("instrument_id", query.instrument_id.as_deref());
         builder.filter_text("listing_id", query.listing_id.as_deref());
-        builder.filter_text("underlying_instrument_id", query.underlying_instrument_id.as_deref());
-        builder.filter_text("status", query.status.as_deref());
+        builder.filter_text(
+            "underlying_instrument_id",
+            query.underlying_instrument_id.as_deref(),
+        );
+        builder.filter_text("status", query.status.as_ref());
         builder.active_only(query.active_only);
         if let Some(asset_code) = query.asset_code.as_deref() {
             let code = asset_code.trim().to_uppercase();
             if code.is_empty() {
-                return Err(ContractError::Invalid("asset_code must not be empty".into()));
+                return Err(ContractError::Invalid(
+                    "asset_code must not be empty".into(),
+                ));
             }
             builder.sql.push_str(" AND (instrument_id IN (SELECT instrument_id FROM reference_instruments_current WHERE symbol = ?) OR underlying_instrument_id IN (SELECT instrument_id FROM reference_instruments_current WHERE symbol = ?) OR json_extract(payload, '$.base_asset_id') IN (SELECT asset_id FROM reference_assets_current WHERE code = ?) OR json_extract(payload, '$.quote_asset_id') IN (SELECT asset_id FROM reference_assets_current WHERE code = ?))");
-            builder.values.extend((0..4).map(|_| Value::Text(code.clone())));
+            builder
+                .values
+                .extend((0..4).map(|_| Value::Text(code.clone())));
         }
         read_typed_records(&self.connection, builder)
     }
@@ -660,7 +688,16 @@ impl ReferenceReadSession {
         &self,
         query: &LifecycleCatalogQuery,
     ) -> ContractResult<Vec<ReferenceLifecycleEvent>> {
-        if query.sequence_from.zip(query.sequence_to).is_some_and(|(from, to)| from > to) {
+        if !(1..=MAX_EVENT_PAGE_SIZE).contains(&query.limit) {
+            return Err(ContractError::Invalid(format!(
+                "limit must be between 1 and {MAX_EVENT_PAGE_SIZE}"
+            )));
+        }
+        if query
+            .sequence_from
+            .zip(query.sequence_to)
+            .is_some_and(|(from, to)| from > to)
+        {
             return Err(ContractError::Invalid(
                 "sequence_from must not exceed sequence_to".into(),
             ));
@@ -676,36 +713,46 @@ impl ReferenceReadSession {
             values.push(sqlite_integer(to, "sequence_to")?);
         }
         sql.push_str(" ORDER BY sequence LIMIT ?");
-        values.push(Value::Integer(query.limit.clamp(1, MAX_EVENT_PAGE_SIZE) as i64));
+        values.push(Value::Integer(query.limit as i64));
         let mut statement = self.connection.prepare(&sql).map_err(transport)?;
         let rows = statement
-            .query_map(params_from_iter(values), |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+            .query_map(params_from_iter(values), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(transport)?;
         rows.map(|row| {
             let (sequence, payload) = row.map_err(transport)?;
             let mut event: ReferenceLifecycleEvent = decode_payload(&payload)?;
             event.sequence = non_negative(sequence, "lifecycle sequence")?;
             Ok(event)
-        }).collect()
+        })
+        .collect()
     }
 
     pub fn option_coverage(&self) -> ContractResult<ReferenceOptionCoverage> {
         let mut statement = self.connection.prepare(
             "SELECT underlying FROM reference_option_coverage WHERE provider = ? AND enabled = 1 ORDER BY underlying",
         ).map_err(transport)?;
-        let rows = statement.query_map(["massive-options"], |row| row.get::<_, String>(0)).map_err(transport)?;
+        let rows = statement
+            .query_map(["massive-options"], |row| row.get::<_, String>(0))
+            .map_err(transport)?;
         Ok(ReferenceOptionCoverage {
             source_id: "massive-options".into(),
-            underlyings: rows.map(|row| row.map_err(transport)).collect::<ContractResult<_>>()?,
+            underlyings: rows
+                .map(|row| row.map_err(transport))
+                .collect::<ContractResult<_>>()?,
         })
     }
 
     pub fn outbox_depth(&self) -> ContractResult<u64> {
-        let count = self.connection.query_row(
-            "SELECT COUNT(*) FROM reference_publication_outbox",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).map_err(transport)?;
+        let count = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM reference_publication_outbox",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(transport)?;
         non_negative(count, "publication outbox depth")
     }
 }
@@ -727,7 +774,10 @@ struct RecordQuery<'a> {
 
 impl<'a> RecordQuery<'a> {
     fn new(table: &str, key: &'a str, page: &ReferencePage) -> ContractResult<Self> {
-        if page.limit.is_some_and(|limit| !(1..=MAX_PAGE_SIZE as u64).contains(&limit)) {
+        if page
+            .limit
+            .is_some_and(|limit| !(1..=MAX_PAGE_SIZE as u64).contains(&limit))
+        {
             return Err(ContractError::Invalid(format!(
                 "limit must be between 1 and {MAX_PAGE_SIZE}"
             )));
@@ -743,42 +793,56 @@ impl<'a> RecordQuery<'a> {
         })
     }
 
-    fn ids(&mut self, ids: &[String]) -> ContractResult<()> {
+    fn ids<T: ToString>(&mut self, ids: Option<&[T]>) -> ContractResult<()> {
+        let Some(ids) = ids else {
+            return Ok(());
+        };
         if ids.is_empty() {
+            self.sql.push_str(" AND 0 = 1");
             return Ok(());
         }
-        let ids = ids.iter().collect::<BTreeSet<_>>();
+        let ids = ids.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         if ids.len() > MAX_PAGE_SIZE {
-            return Err(ContractError::Invalid(format!("too many identifiers; maximum is {MAX_PAGE_SIZE}")));
+            return Err(ContractError::Invalid(format!(
+                "too many identifiers; maximum is {MAX_PAGE_SIZE}"
+            )));
         }
         self.sql.push_str(" AND ");
         self.sql.push_str(self.key);
         self.sql.push_str(" IN (");
         self.sql.push_str(&vec!["?"; ids.len()].join(","));
         self.sql.push(')');
-        self.values.extend(ids.into_iter().map(|value| Value::Text(value.clone())));
+        self.values.extend(ids.into_iter().map(Value::Text));
         Ok(())
     }
 
     fn search(&mut self, search: Option<&str>) -> ContractResult<()> {
-        let Some(search) = search else { return Ok(()); };
+        let Some(search) = search else {
+            return Ok(());
+        };
         let search = search.trim();
         if search.is_empty() {
-            return Err(ContractError::Invalid("Reference query must not be empty".into()));
+            return Err(ContractError::Invalid(
+                "Reference query must not be empty".into(),
+            ));
         }
-        let escaped = search.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let escaped = search
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         self.sql.push_str(" AND (LOWER(");
         self.sql.push_str(self.key);
-        self.sql.push_str(") LIKE LOWER(?) ESCAPE '\\' OR LOWER(payload) LIKE LOWER(?) ESCAPE '\\')");
+        self.sql
+            .push_str(") LIKE LOWER(?) ESCAPE '\\' OR LOWER(payload) LIKE LOWER(?) ESCAPE '\\')");
         self.values.push(Value::Text(pattern.clone()));
         self.values.push(Value::Text(pattern));
         Ok(())
     }
 
-    fn filter_text(&mut self, column: &str, value: Option<&str>) {
+    fn filter_text<T: ToString + ?Sized>(&mut self, column: &str, value: Option<&T>) {
         if let Some(value) = value {
-            self.clause(&format!("{column} = ?"), Value::Text(value.into()));
+            self.clause(&format!("{column} = ?"), Value::Text(value.to_string()));
         }
     }
 
@@ -819,15 +883,18 @@ fn read_typed_records<T: serde::de::DeserializeOwned>(
         Some(limit) => {
             query.sql.push_str(" LIMIT ? OFFSET ?");
             query.values.push(Value::Integer(limit as i64));
-        }
+        },
         None => query.sql.push_str(" LIMIT -1 OFFSET ?"),
     }
     query.values.push(sqlite_integer(query.offset, "offset")?);
     let mut statement = connection.prepare(&query.sql).map_err(transport)?;
     let rows = statement
-        .query_map(params_from_iter(query.values), |row| row.get::<_, String>(0))
+        .query_map(params_from_iter(query.values), |row| {
+            row.get::<_, String>(0)
+        })
         .map_err(transport)?;
-    rows.map(|row| decode_payload(&row.map_err(transport)?)).collect()
+    rows.map(|row| decode_payload(&row.map_err(transport)?))
+        .collect()
 }
 
 fn sqlite_integer(value: u64, label: &str) -> ContractResult<Value> {
@@ -848,17 +915,39 @@ fn collection_table(collection: ReferenceCollection) -> (&'static str, &'static 
 }
 
 fn open_read_only(path: &Path) -> ContractResult<Connection> {
-    let connection = Connection::open_with_flags(
+    // SQLite may need to create the `-shm` sidecar before it can read a cleanly
+    // closed WAL database. `READ_ONLY` rejects that operation on some linked
+    // SQLite versions even though no catalog page is being mutated. Open the
+    // existing file without CREATE, then enable SQLite's connection-level
+    // write prohibition before any schema or data access.
+    let read_only = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
     )
-    .map_err(transport)?;
-    connection
-        .busy_timeout(Duration::from_secs(5))
-        .map_err(transport)?;
-    connection
-        .pragma_update(None, "query_only", true)
-        .map_err(transport)?;
+    .and_then(configure_read_connection);
+    let connection = match read_only {
+        Ok(connection) => return Ok(connection),
+        Err(read_only_error) => Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
+        )
+        .and_then(configure_read_connection)
+        .map_err(|sidecar_error| {
+            transport(format!(
+                "read-only open failed ({read_only_error}); WAL sidecar open failed ({sidecar_error})"
+            ))
+        })?,
+    };
+    Ok(connection)
+}
+
+fn configure_read_connection(connection: Connection) -> rusqlite::Result<Connection> {
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.pragma_update(None, "query_only", true)?;
+    // sqlite3_open_v2 may defer the WAL/-shm failure until the first page is
+    // read. Probe the schema here so the existing-file READ_WRITE fallback is
+    // selected before this connection escapes the boundary.
+    connection.query_row("PRAGMA schema_version", [], |_| Ok(()))?;
     Ok(connection)
 }
 
@@ -910,7 +999,7 @@ fn read_stats(connection: &Connection) -> ContractResult<ReferenceCatalogStats> 
              (SELECT COUNT(*) FROM reference_instruments_current), \
              (SELECT COUNT(*) FROM reference_listings_current), \
              (SELECT COUNT(*) FROM reference_markets_current), \
-             (SELECT COUNT(*) FROM reference_markets_current WHERE status = 'active'), \
+             (SELECT COUNT(*) FROM reference_markets_current WHERE status IN ('active', 'trading')), \
              (SELECT COUNT(*) FROM reference_lifecycle)",
             [],
             |row| {
@@ -1139,7 +1228,11 @@ fn transport(error: impl std::fmt::Display) -> ContractError {
 
 #[cfg(test)]
 mod tests {
-    use super::{MarketCatalogQuery, ReferenceCatalog, ReferenceCollection};
+    use kairos_primitives::reference::MarketId;
+
+    use super::{
+        MarketCatalogQuery, MarketSearchQuery, ReferenceCatalog, ReferenceCollection, ReferencePage,
+    };
 
     #[test]
     fn reader_is_read_only_and_returns_consistent_catalog_page() {
@@ -1229,6 +1322,100 @@ mod tests {
         );
         assert_eq!(scoped.markets.len(), 1);
         assert_eq!(scoped.instruments.len(), 1);
+    }
+
+    #[test]
+    fn read_session_pins_watermark_and_rows_to_one_wal_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL);
+                 INSERT INTO reference_meta VALUES(1,6,3,7,11);
+                 CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, instrument_id TEXT, listing_id TEXT, exchange_id TEXT, instrument_kind TEXT, asset_type TEXT, underlying_instrument_id TEXT, venue_symbol TEXT, status TEXT, effective_to_unix_nanos INTEGER, payload TEXT);
+                 CREATE TABLE reference_instruments_current(instrument_id TEXT PRIMARY KEY, payload TEXT);
+                 CREATE TABLE reference_exchanges_current(exchange_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
+                 CREATE TABLE reference_assets_current(asset_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
+                 CREATE TABLE reference_listings_current(listing_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
+                 CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);
+                 CREATE TABLE reference_option_coverage(provider TEXT, underlying TEXT, enabled INTEGER);
+                 CREATE TABLE reference_publication_outbox(sequence INTEGER);",
+            )
+            .unwrap();
+        let market = serde_json::json!({
+            "market_id": "market:test",
+            "instrument_id": "instrument:test",
+            "exchange_id": "exchange:test",
+            "instrument_kind": "spot",
+            "venue_symbol": "OLD",
+            "status": "active",
+            "price_precision": 2,
+            "quantity_precision": 6,
+            "effective_from_unix_nanos": 0
+        });
+        connection
+            .execute(
+                "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                rusqlite::params![
+                    "market:test",
+                    "instrument:test",
+                    Option::<String>::None,
+                    "exchange:test",
+                    "spot",
+                    Option::<String>::None,
+                    Option::<String>::None,
+                    "OLD",
+                    "active",
+                    Option::<i64>::None,
+                    market.to_string()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        let catalog = ReferenceCatalog::open(&path).unwrap();
+        let session = catalog.read_session().unwrap();
+        assert_eq!(session.watermark().generation.get(), 3);
+
+        let writer = rusqlite::Connection::open(&path).unwrap();
+        let updated = serde_json::json!({
+            "market_id": "market:test",
+            "instrument_id": "instrument:test",
+            "exchange_id": "exchange:test",
+            "instrument_kind": "spot",
+            "venue_symbol": "NEW",
+            "status": "active",
+            "price_precision": 2,
+            "quantity_precision": 6,
+            "effective_from_unix_nanos": 0
+        });
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        writer
+            .execute(
+                "UPDATE reference_meta SET generation=4, event_sequence=8 WHERE id=1",
+                [],
+            )
+            .unwrap();
+        writer.execute("UPDATE reference_markets_current SET venue_symbol='NEW', payload=? WHERE market_id='market:test'", [updated.to_string()]).unwrap();
+        writer.execute_batch("COMMIT").unwrap();
+
+        let rows = session
+            .markets(&MarketSearchQuery {
+                market_ids: Some(vec![MarketId::new("market:test").unwrap()]),
+                page: ReferencePage {
+                    limit: Some(2),
+                    offset: 0,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows[0].venue_symbol.as_ref().unwrap().as_str(), "OLD");
+        assert_eq!(session.watermark().generation.get(), 3);
+
+        drop(session);
+        assert_eq!(catalog.watermark().unwrap().generation.get(), 4);
     }
 
     #[test]

@@ -21,8 +21,13 @@ pub use control::{
 };
 pub use encode::{EncodeContext, event_metadata};
 pub use error::{ContractError, ContractResult};
-pub use event::{MarketEvent, MarketEventFrame, MarketEventPublisher, MarketEventStream};
+pub use event::{
+    MarketEvent, MarketEventFrame, MarketEventPublisher, MarketEventStream, decode_event,
+};
 pub type MarketConnection = kairos_protocol::ContractClient;
+pub const MARKET_EVENTS_STREAM_ID: i32 = kairos_transport::stream_ids::MARKET_EVENTS;
+pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
+pub const CONTRACT_FINGERPRINT: &str = "kairos.market.contract.v2";
 pub use kairos_indexed_view::MetadataSnapshot as IndexedViewMetadata;
 pub use kairos_transport::AeronEndpoint;
 pub use view::{

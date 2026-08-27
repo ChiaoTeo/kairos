@@ -320,6 +320,11 @@ fn decode<'a, T>(
     root: impl Fn(&'a [u8]) -> Result<T, flatbuffers::InvalidFlatbuffer>,
     expected: &str,
 ) -> ContractResult<T> {
+    if !kairos_protocol::flatbuffer::identifier_is_readable(bytes) {
+        return Err(ContractError::Invalid(format!(
+            "truncated {expected} FlatBuffers value"
+        )));
+    }
     if !has_identifier(bytes) {
         return Err(ContractError::Invalid(format!("expected {expected}")));
     }

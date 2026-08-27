@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
+from kairospy.infrastructure.contracts.capital.types import (
+    CancelFundingObjectiveRequest,
+)
 from kairospy.primitives.account import AccountId
 
 from .models import (
@@ -94,9 +98,13 @@ class CapitalApplication:
                 FundingObjectiveStatus.DISABLED,
                 self._disabled_reason,
             )
-        scope = self._command_scope("capital.objective.publish")
-        value = self._commands.publish_funding_objective_request(
-            funding_objective_request(objective, scope=scope)
+        value = self._commands.publish_funding_objective(
+            funding_objective_request(
+                objective,
+                request_id=self._request_id("capital.objective.publish"),
+                capital_group_id=self._required_group_id(),
+                strategy_id=self._strategy_id,
+            )
         )
         return _receipt(value)
 
@@ -123,13 +131,14 @@ class CapitalApplication:
             )
         return _receipt(
             self._commands.cancel_funding_objective(
-                normalized,
-                expected_version=expected_version,
-                request_id=self._request_id("capital.objective.cancel"),
-                capital_group_id=self._capital_group_id,
-                strategy_id=self._strategy_id,
-                launch_id=self._launch_id,
-                instance_id=self._instance_id,
+                CancelFundingObjectiveRequest(
+                    self._request_id("capital.objective.cancel"),
+                    self._required_group_id(),
+                    normalized,
+                    expected_version,
+                    self._strategy_id,
+                    time.time_ns(),
+                )
             )
         )
 
@@ -152,15 +161,19 @@ class CapitalApplication:
                 FundingObjectiveStatus.REJECTED,
                 "Capital demand destination lease fence is stale or unavailable",
             )
-        scope = self._command_scope("capital.demand.observe")
-        value = self._commands.observe_capital_demand_request(
-            capital_demand_request(demand, scope=scope)
+        value = self._commands.observe_capital_demand(
+            capital_demand_request(
+                demand,
+                request_id=self._request_id("capital.demand.observe"),
+                capital_group_id=self._required_group_id(),
+                strategy_id=self._strategy_id,
+                launch_id=self._launch_id,
+                instance_id=self._instance_id,
+            )
         )
-        if isinstance(value, CapitalDemandReceipt):
-            return value
         return CapitalDemandReceipt(
-            demand_id=str(value["demand_id"]),
-            status=FundingObjectiveStatus(str(value["status"])),
+            demand_id=str(value.demand_id),
+            status=FundingObjectiveStatus(str(value.status)),
             message=_control_message(value),
         )
 
@@ -191,42 +204,16 @@ class CapitalApplication:
                     else "Capital availability current_view is unavailable"
                 ),
             )
-        try:
-            value = self._current_view.availability(
-                capital_group_id=self._capital_group_id,
-                location=location,
-            )
-            return (
-                value
-                if isinstance(value, CapitalAvailability)
-                else map_capital_availability(value)
-            )
-        except Exception as error:
-            return CapitalAvailability(
-                self._capital_group_id,
-                CapitalReadiness.DEGRADED,
-                location=location,
-                reason=f"Capital availability query failed: {error}",
-            )
+        value = self._current_view.availability(
+            capital_group_id=self._capital_group_id,
+            location=location,
+        )
+        return map_capital_availability(value)
 
     def recovery_alerts(self) -> tuple[CapitalRecoveryAlert, ...]:
         if self._current_view is None:
             return ()
-        return tuple(
-            value
-            if isinstance(value, CapitalRecoveryAlert)
-            else map_capital_alert(value)
-            for value in self._current_view.alerts()
-        )
-
-    def _command_scope(self, operation: str) -> dict[str, object]:
-        return {
-            "request_id": self._request_id(operation),
-            "capital_group_id": self._capital_group_id,
-            "strategy_id": self._strategy_id,
-            "launch_id": self._launch_id,
-            "instance_id": self._instance_id,
-        }
+        return tuple(map_capital_alert(value) for value in self._current_view.alerts())
 
     def _scope_error(self, location: FundingLocation) -> str | None:
         if self._account_ids and location.account_id not in self._account_ids:
@@ -240,6 +227,11 @@ class CapitalApplication:
             f"{operation}:{self._request_counter}"
         )
 
+    def _required_group_id(self) -> str:
+        if self._capital_group_id is None:
+            raise RuntimeError("Capital group is unavailable")
+        return self._capital_group_id
+
     @staticmethod
     def _rejected(objective: FundingObjective, message: str) -> FundingObjectiveReceipt:
         return FundingObjectiveReceipt(
@@ -251,24 +243,21 @@ class CapitalApplication:
 
 
 def _receipt(
-    value: FundingObjectiveReceipt | dict[str, object],
+    value: FundingObjectiveReceipt | object,
 ) -> FundingObjectiveReceipt:
     if isinstance(value, FundingObjectiveReceipt):
         return value
-    version = value["version"]
+    version = getattr(value, "version")
     if isinstance(version, bool) or not isinstance(version, int):
         raise ValueError("Funding objective receipt version must be an integer")
     return FundingObjectiveReceipt(
-        objective_id=str(value["objective_id"]),
+        objective_id=str(getattr(value, "objective_id")),
         version=version,
-        status=FundingObjectiveStatus(str(value["status"])),
+        status=FundingObjectiveStatus(str(getattr(value, "status"))),
         message=_control_message(value),
     )
 
 
-def _control_message(value: dict[str, object]) -> str | None:
-    error = value.get("error")
-    if isinstance(error, dict) and error.get("message") is not None:
-        return str(error["message"])
-    message = value.get("message")
+def _control_message(value: object) -> str | None:
+    message = getattr(value, "error_message", None)
     return None if message is None else str(message)

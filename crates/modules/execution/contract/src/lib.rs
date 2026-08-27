@@ -37,6 +37,9 @@ pub use event::{
     ExecutionEvent, ExecutionEventFrame, ExecutionEventPublisher, ExecutionEventStream,
 };
 pub type ExecutionConnection = kairos_protocol::ContractClient;
+pub const EXECUTION_EVENTS_STREAM_ID: i32 = kairos_transport::stream_ids::EXECUTION_EVENTS;
+pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
+pub const CONTRACT_FINGERPRINT: &str = "kairos.execution.contract.v2";
 
 pub use kairos_transport::AeronEndpoint;
 pub use view::{

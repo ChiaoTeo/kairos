@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from kairospy.infrastructure.transport import native_event
-from kairospy.infrastructure.contracts.account.source import AeronAccountEventSource
-from kairospy.infrastructure.contracts.capital.source import AeronCapitalEventSource
-from kairospy.infrastructure.contracts.execution.source import AeronExecutionEventSource
+from kairospy.infrastructure.contracts.account import AccountClient
+from kairospy.infrastructure.contracts.capital import CapitalClient
+from kairospy.infrastructure.contracts.execution import ExecutionClient
+from kairospy.infrastructure.contracts.market import MarketClient
+from kairospy.infrastructure.contracts.risk import RiskClient
 from kairospy.infrastructure.protocol.generated_spec import (
     ACCOUNT_EVENTS,
     CAPITAL_EVENTS,
@@ -13,77 +16,24 @@ from kairospy.infrastructure.protocol.generated_spec import (
     MARKET_EVENTS,
     RISK_EVENTS,
 )
-from kairospy.infrastructure.contracts.market.source import AeronMarketEventSource
-from kairospy.infrastructure.contracts.risk.source import AeronRiskEventSource
 
 
-@pytest.mark.parametrize(
-    ("source_type", "stream_id"),
-    (
-        (AeronMarketEventSource, MARKET_EVENTS),
-        (AeronAccountEventSource, ACCOUNT_EVENTS),
-        (AeronExecutionEventSource, EXECUTION_EVENTS),
-        (AeronRiskEventSource, RISK_EVENTS),
-        (AeronCapitalEventSource, CAPITAL_EVENTS),
-    ),
-)
-def test_aeron_sources_use_the_generated_native_stream_spec(
-    source_type, stream_id: int
-) -> None:
-    source = source_type(aeron_dir="/workspace/run/aeron/media")
+def _clients(socket: Path):
+    common = {"workspace_id": "workspace", "aeron_dir": "/workspace/run/aeron/media"}
+    return (
+        (MarketClient(socket, **common), MARKET_EVENTS),
+        (AccountClient(socket, account_id="main", **common), ACCOUNT_EVENTS),
+        (ExecutionClient(socket, **common), EXECUTION_EVENTS),
+        (RiskClient(socket, actor_id="risk:main", **common), RISK_EVENTS),
+        (CapitalClient(socket, capital_group_id="main", **common), CAPITAL_EVENTS),
+    )
+
+
+@pytest.mark.parametrize("index", range(5))
+def test_owner_clients_supply_native_event_sources(index: int, tmp_path: Path) -> None:
+    client, stream_id = _clients(tmp_path / "control.sock")[index]
+    source = client.events
 
     assert source._aeron_dir == "/workspace/run/aeron/media"
     assert source._spec.stream_id == stream_id
-
-
-@pytest.mark.parametrize(
-    "source_type",
-    (
-        AeronMarketEventSource,
-        AeronAccountEventSource,
-        AeronRiskEventSource,
-        AeronCapitalEventSource,
-    ),
-)
-def test_live_aeron_source_readiness_opens_and_closes_native_subscription(
-    monkeypatch: pytest.MonkeyPatch, source_type
-) -> None:
-    opened: list[tuple[object, str | None, int]] = []
-
-    class Subscription:
-        def __init__(self, spec, *, aeron_dir, queue_capacity) -> None:
-            opened.append((spec, aeron_dir, queue_capacity))
-            self.closed = False
-
-        def close(self) -> None:
-            self.closed = True
-
-    monkeypatch.setattr(native_event.native, "AeronSubscription", Subscription)
-    source = source_type(aeron_dir="/workspace/run/aeron/media")
-
-    source.check_ready()
-
-    assert len(opened) == 1
-    assert opened[0][1:] == ("/workspace/run/aeron/media", 1024)
-    assert source._subscription is None
-
-
-def test_execution_readiness_retains_subscription_for_snapshot_live_handoff(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    opened = []
-
-    class Subscription:
-        def __init__(self, spec, *, aeron_dir, queue_capacity) -> None:
-            opened.append(self)
-
-        def close(self) -> None:
-            raise AssertionError("Execution readiness must retain the subscription")
-
-    monkeypatch.setattr(native_event.native, "AeronSubscription", Subscription)
-    source = AeronExecutionEventSource(aeron_dir="/workspace/run/aeron/media")
-
-    source.check_ready()
-
-    assert len(opened) == 1
-    assert source._subscription is opened[0]
+    assert callable(source._decoder)

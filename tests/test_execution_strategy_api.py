@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,10 +19,7 @@ from kairospy.investment.apps.execution.application import (
     QuoteRefreshRequest,
     SubmissionStatus,
 )
-from kairospy.investment.apps.execution.application.events import (
-    ExecutionChangeRecord,
-    ExecutionEventRecord,
-)
+from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
 from kairospy.investment.apps.execution.services import ExecutionEventCursorCheckpoint
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.execution import IntentId, OrderId
@@ -220,7 +218,7 @@ def test_rejected_receipt_require_accepted_preserves_delivery_semantics() -> Non
 
 
 class EventSource:
-    def __init__(self, records: tuple[ExecutionEventRecord, ...]) -> None:
+    def __init__(self, records: tuple[object, ...]) -> None:
         self.records = records
 
     async def subscribe_live(self):
@@ -231,14 +229,11 @@ class EventSource:
         return None
 
 
-def _event_record(sequence: int) -> ExecutionEventRecord:
-    return ExecutionEventRecord(
-        "execution.events",
-        sequence,
-        "execution",
-        "instance-1",
-        (),
-        sequence,
+def _event_record(sequence: int) -> object:
+    return ExecutionEvent.simulation_ignored(
+        sequence=sequence,
+        instance_id="instance-1",
+        occurred_at_unix_nanos=sequence,
     )
 
 
@@ -280,38 +275,21 @@ def test_execution_cursor_checkpoints_only_after_record_consumption(
     checkpoint = ExecutionEventCursorCheckpoint(
         tmp_path / "cursor.json", instance_id="instance-1"
     )
-    change = ExecutionChangeRecord(
-        "intent_update",
-        "strategy-a",
-        "main",
-        {
-            "intent": {
-                "intent_id": "intent-1",
-                "instrument_id": "instrument:test:BTCUSDT",
-                "account_ids": ["main"],
-                "strategy_decision_id": "decision-1",
-            },
-            "status": "accepted",
-            "previous_status": None,
-            "order_ids": [],
-            "reason": "",
-        },
+    event = ExecutionEvent.simulation_intent_update(
+        sequence=1,
+        strategy_id="strategy-a",
+        account_id="main",
+        intent_id="intent-1",
+        instrument_id="instrument:test:BTCUSDT",
+        status="accepted",
+        instance_id="instance-1",
+        occurred_at_unix_nanos=1,
+        strategy_decision_id="decision-1",
     )
     execution = ExecutionApplication(
         None,
         None,
-        EventSource(
-            (
-                ExecutionEventRecord(
-                    "execution.events",
-                    1,
-                    "execution",
-                    "instance-1",
-                    (change,),
-                    1,
-                ),
-            )
-        ),
+        EventSource((event,)),
         strategy_id="strategy-a",
         instance_id="instance-1",
         account_ids=(AccountId("main"),),
@@ -359,7 +337,22 @@ def test_execution_cursor_recovers_decision_progress_from_current_view(
 
     class CurrentView:
         def recovery_snapshot(self):
-            return 7, (intent,), (), True
+            native_intent = SimpleNamespace(
+                intent=SimpleNamespace(
+                    intent_id=str(intent.id),
+                    instrument_id=str(intent.instrument.id),
+                    account_ids=tuple(str(value) for value in intent.account_ids),
+                    target_quantity=format(intent.target_quantity, "f"),
+                    status=intent.status.value,
+                    reason=intent.reason,
+                    strategy_decision_id=intent.strategy_decision_id,
+                    source_event_sequence=7,
+                ),
+                strategy_id=intent.strategy_id,
+                status=intent.status.value,
+                order_ids=tuple(str(value) for value in intent.order_ids),
+            )
+            return 7, (native_intent,), (), True
 
     class Decisions:
         def __init__(self) -> None:
@@ -384,7 +377,12 @@ def test_execution_cursor_recovers_decision_progress_from_current_view(
     execution.bind_decisions(decisions)
     execution.check_event_source_ready()
 
-    assert decisions.values == [(intent, 7)]
+    assert len(decisions.values) == 1
+    recovered, source_event_sequence = decisions.values[0]
+    assert recovered.id == intent.id
+    assert recovered.status is IntentStatus.SATISFIED
+    assert recovered.source_event_sequence == 7
+    assert source_event_sequence == 7
     assert checkpoint.load() == 7
     assert execution.health()["event_recovery_count"] == 1
     assert execution.health()["event_recovery_incomplete"] is True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from io import StringIO
@@ -19,32 +20,38 @@ from kairospy.strategy.apps.agent.application import (
     AgentEvent,
     AgentEventStatus,
 )
-from kairospy.strategy.apps.runtime.application import StrategyApplication, StrategyLifecycle
+from kairospy.strategy.apps.runtime.application import (
+    StrategyApplication,
+    StrategyLifecycle,
+)
 from kairospy.strategy.apps.runtime.services.ingress import StrategyEventIngress
-from kairospy.investment.apps.account.application import AccountSegmentSnapshot, DataFreshness, SPOT
+from kairospy.investment.apps.account.application import (
+    AccountSegmentSnapshot,
+    DataFreshness,
+    SPOT,
+)
 from kairospy.investment.apps.execution.application import ExecutionBacktestResult
+from kairospy.investment.apps.reference.application import (
+    InstrumentRef,
+    Market,
+    MarketStatus,
+)
 from kairospy.primitives.account import AccountId
-from kairospy.investment.apps.market.application import Bar, MarketSnapshot, ObservationScope, Quote
-from kairospy.investment.apps.market.application.events import MarketEventRecord
-from kairospy.investment.apps.market.application.mapping import map_market_event
+from kairospy.infrastructure.contracts.market import MarketTarget
+from kairospy.infrastructure.contracts.market.events import MarketEvent
 from kairospy.strategy import (
-    BarEvent,
     ClockAdvance,
     ClockAdvancedEvent,
     EventMetadata,
     ExchangeId,
     InstrumentId,
-    InstrumentRef,
     ImmediateAlgorithm,
     ListingId,
-    Market,
     MarketData,
     MarketId,
-    MarketStatus,
     OptionFilter,
     OptionRight,
     Options,
-    OptionsTarget,
     Provider,
     ProviderPreference,
     StrikeRange,
@@ -97,33 +104,29 @@ def EventEnvelope(
         provider = str(payload.get("provider", "test"))
         instrument_id = f"instrument:test:{symbol}"
         market_id = f"market:test:{symbol}"
-        occurred_at = datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
         if kind == "bar":
-            close = Decimal(int(payload.get("close", 100)))
-            payload = Bar(
-                scope=ObservationScope.market(market_id),
-                instrument=InstrumentRef(InstrumentId(instrument_id), symbol),
-                timeframe="1m",
+            close = str(payload.get("close", "100"))
+            return MarketEvent.simulation_bar(
+                sequence=sequence,
+                market_id=market_id,
+                instrument_id=instrument_id,
+                provider=provider,
+                bar_spec_id="1m",
                 open=close,
                 high=close,
                 low=close,
                 close=close,
-                volume=None,
-                occurred_at=occurred_at,
                 occurred_at_unix_nanos=event_time,
-                provider=provider,
             )
-        elif kind == "quote":
-            payload = Quote(
-                scope=ObservationScope.market(market_id),
-                instrument=InstrumentRef(InstrumentId(instrument_id), symbol),
-                bid_price=Decimal(100),
-                bid_quantity=None,
-                ask_price=Decimal(101),
-                ask_quantity=None,
-                occurred_at=occurred_at,
-                occurred_at_unix_nanos=event_time,
+        if kind == "quote":
+            return MarketEvent.simulation_quote(
+                sequence=sequence,
+                market_id=market_id,
+                instrument_id=instrument_id,
                 provider=provider,
+                bid_price=str(payload.get("bid", "100")),
+                ask_price=str(payload.get("ask", "101")),
+                occurred_at_unix_nanos=event_time,
             )
     if domain == "clock" and kind == "advance":
         assert occurred_at is not None
@@ -139,9 +142,7 @@ def EventEnvelope(
         )
     if domain != "data":
         raise ValueError(f"unsupported test event domain: {domain}")
-    return map_market_event(
-        MarketEventRecord(stream_id, sequence, kind, payload, occurred_at)
-    )
+    raise ValueError(f"unsupported test event kind: {kind}")
 
 
 class UserStrategy(Strategy):
@@ -154,7 +155,7 @@ class UserStrategy(Strategy):
         context.market.subscribe_bars(_MARKET, timeframe="1m")
 
     def on_market(self, context, event) -> None:
-        if not isinstance(event, BarEvent):
+        if event.kind != "bar":
             return
         self.events.append(event.metadata.sequence)
         decision = context.decisions.record(
@@ -165,7 +166,7 @@ class UserStrategy(Strategy):
             expected_outcome="move the account toward the target position",
         )
         context.execution.target_position(
-            event.data.instrument,
+            InstrumentId(event.data.instrument_id),
             Decimal("1"),
             account="main",
             algorithm=ImmediateAlgorithm(),
@@ -242,14 +243,9 @@ class RecoveringSnapshotReader:
     def __init__(self) -> None:
         self.read_count = 0
 
-    def read(self, view_key: str) -> MarketSnapshot:
+    def read(self, view_key: str) -> object:
         self.read_count += 1
-        return MarketSnapshot(
-            view_key,
-            f"snapshot-{self.read_count}",
-            "market-actor",
-            self.read_count,
-        )
+        return object()
 
 
 class GapThenRecoveryStream:
@@ -350,16 +346,7 @@ def _host(
 ):
     bus = bus or InMemoryApplicationPorts()
     stream = InMemoryMarketEventSource("market.events")
-    snapshots = InMemoryMarketSnapshotReader(
-        {
-            "market.current": MarketSnapshot(
-                "market.current",
-                "snapshot-1",
-                "market-actor",
-                1,
-            ),
-        }
-    )
+    snapshots = InMemoryMarketSnapshotReader({"market.current": object()})
     strategy = strategy or UserStrategy()
     host = StrategyApplication(
         strategy,
@@ -382,16 +369,7 @@ def _host(
 def _timer_host(tmp_path: Path):
     bus = InMemoryApplicationPorts()
     stream = InMemoryMarketEventSource("market.events")
-    snapshots = InMemoryMarketSnapshotReader(
-        {
-            "market.current": MarketSnapshot(
-                "market.current",
-                "snapshot-1",
-                "market-actor",
-                1,
-            ),
-        }
-    )
+    snapshots = InMemoryMarketSnapshotReader({"market.current": object()})
     strategy = TimerStrategy()
     host = StrategyApplication(
         strategy,
@@ -551,13 +529,7 @@ def test_live_market_events_do_not_move_business_time_backwards(tmp_path: Path) 
 def test_replay_driver_fires_each_timer_in_empty_market_gap(tmp_path: Path) -> None:
     bus = InMemoryApplicationPorts()
     stream = FiniteReplayStream("market.events")
-    snapshots = InMemoryMarketSnapshotReader(
-        {
-            "market.current": MarketSnapshot(
-                "market.current", "snapshot-1", "market-actor", 1
-            )
-        }
-    )
+    snapshots = InMemoryMarketSnapshotReader({"market.current": object()})
     strategy = TimerStrategy()
     host = StrategyApplication(
         strategy,
@@ -807,14 +779,15 @@ def test_market_subscription_accepts_options_target(tmp_path: Path) -> None:
     )
 
     request = bus.requests[-1].payload
-    assert isinstance(request.target, OptionsTarget)
+    assert isinstance(request.target, MarketTarget)
+    assert request.target.kind == "options"
     assert request.target.underlying_market_id == str(underlying)
     assert request.target.strike_lower == "440"
     assert request.target.strike_upper == "460"
     assert request.target.limit == 40
     assert tuple(value.selector for value in request.observations) == (
         "quote",
-        "greeks",
+        "option_greeks",
     )
     assert request.provider_preference == ProviderPreference.require(Provider.MASSIVE)
 
@@ -833,7 +806,8 @@ def test_options_subscription_all_eligible_does_not_use_discovery(
     )
 
     request = bus.requests[-1].payload
-    assert isinstance(request.target, OptionsTarget)
+    assert isinstance(request.target, MarketTarget)
+    assert request.target.kind == "options"
     assert request.provider_preference == ProviderPreference.all_eligible()
 
 
@@ -841,19 +815,20 @@ def test_options_subscription_resolves_around_spot_from_current_quote(
     tmp_path: Path,
 ) -> None:
     class QuoteSnapshots(InMemoryMarketSnapshotReader):
-        def read_quote(self, market_id: str, provider: str) -> Quote:
+        def quote(self, market_id: str, provider: str) -> object:
             assert market_id == "market:exchange:nasdaq:equity:SPY"
             assert provider == "massive"
-            return Quote(
-                ObservationScope.market(MarketId(market_id)),
-                InstrumentRef(InstrumentId("instrument:equity:US:SPY:common"), "SPY"),
-                Decimal("100"),
-                Decimal("1"),
-                Decimal("102"),
-                Decimal("1"),
-                datetime(2026, 1, 1, tzinfo=timezone.utc),
-                1_767_225_600_000_000_000,
-            )
+            return MarketEvent.simulation_quote(
+                sequence=1,
+                market_id=market_id,
+                instrument_id="instrument:equity:US:SPY:common",
+                provider=provider,
+                bid_price="100",
+                bid_quantity="1",
+                ask_price="102",
+                ask_quantity="1",
+                occurred_at_unix_nanos=1_767_225_600_000_000_000,
+            ).data
 
     host, _, bus, _ = _host(tmp_path)
     host.context.market._snapshots = QuoteSnapshots()
@@ -872,7 +847,8 @@ def test_options_subscription_resolves_around_spot_from_current_quote(
     )
 
     target = bus.requests[-1].payload.target
-    assert isinstance(target, OptionsTarget)
+    assert isinstance(target, MarketTarget)
+    assert target.kind == "options"
     assert Decimal(target.strike_lower) == Decimal("90.9")
     assert Decimal(target.strike_upper) == Decimal("111.1")
 
@@ -881,7 +857,7 @@ def test_options_subscription_around_spot_requires_current_quote(
     tmp_path: Path,
 ) -> None:
     class EmptyQuoteSnapshots(InMemoryMarketSnapshotReader):
-        def read_quote(self, market_id: str, provider: str) -> None:
+        def quote(self, market_id: str, provider: str) -> None:
             del market_id, provider
             return None
 
@@ -901,7 +877,9 @@ def test_options_subscription_around_spot_requires_current_quote(
     assert not bus.requests
 
 
-def test_market_client_does_not_guess_provider_from_event_source_names(tmp_path: Path) -> None:
+def test_market_client_does_not_guess_provider_from_event_source_names(
+    tmp_path: Path,
+) -> None:
     host, _, _, stream = _host(tmp_path)
     market_id = MarketId("market:test:AAPL")
     host.context.market.subscribe_quotes(
@@ -937,7 +915,7 @@ def test_market_client_does_not_guess_provider_from_event_source_names(tmp_path:
     event = asyncio.run(first_market_event())
 
     assert event.metadata.sequence == 1
-    assert event.data.provider == Provider.BINANCE
+    assert event.data.provider == str(Provider.BINANCE)
 
 
 def test_strategy_start_fails_when_enabled_business_event_source_is_not_ready(
@@ -945,13 +923,7 @@ def test_strategy_start_fails_when_enabled_business_event_source_is_not_ready(
 ) -> None:
     bus = InMemoryApplicationPorts()
     stream = FailingReadinessStream("market.events")
-    snapshots = InMemoryMarketSnapshotReader(
-        {
-            "market.current": MarketSnapshot(
-                "market.current", "snapshot-1", "market-actor", 1
-            )
-        }
-    )
+    snapshots = InMemoryMarketSnapshotReader({"market.current": object()})
     strategy = UserStrategy()
     application = StrategyApplication(
         strategy,
@@ -1189,11 +1161,14 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
         if record.get("event") == "market_subscription_requested"
     )
     assert requested["data"]["target"] == {
-        "type": "market",
+        "kind": "market",
         "market_id": str(_MARKET.id),
     }
     assert requested["data"]["observations"] == ["bar:1m"]
-    assert requested["data"]["provider_preference"] == {"mode": "automatic"}
+    assert requested["data"]["provider_preference"] == {
+        "mode": "automatic",
+        "providers": [],
+    }
     assert any(
         record.get("event") == "market_subscriptions_active" for record in records
     )
@@ -1454,7 +1429,7 @@ def test_strategy_can_enable_on_market_logging_at_runtime(tmp_path: Path) -> Non
         record for record in records if record.get("event") == "strategy_on_market"
     )
     assert event["data"]["event_kind"] == "quote"
-    assert "AAPL" in event["data"]["event_payload"]
+    assert event["data"]["event_payload"]["instrument_id"] == "instrument:test:AAPL"
 
 
 def test_strategy_on_market_logging_is_disabled_by_default(tmp_path: Path) -> None:

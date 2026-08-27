@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -15,35 +16,118 @@ from kairospy.investment.apps.account.application import (
     SPOT,
 )
 from kairospy.investment.apps.execution.application import ExecutionApplication
-from kairospy.investment.apps.market.application import Bar as ApplicationBar
+from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.investment.apps.risk.application import RiskApplication, RiskStatus
 from kairospy.strategy import (
     AccountId,
-    AggressorSide,
-    Bar,
-    BarEvent,
     EventMetadata,
-    GreeksEvent,
     InstrumentId,
-    InstrumentRef,
     ImmediateAlgorithm,
     MarketId,
-    ObservationScope,
-    OptionGreeks,
-    Quote,
-    QuoteEvent,
     Strategy,
     StrategyContractError,
     StrategyState,
     StrategyStateTypeError,
-    Trade,
-    TradeEvent,
     validate_strategy,
 )
+from kairospy.strategy.api.market import Bar as PublicBar
 
 
-def test_strategy_reexports_module_owned_types_without_copying() -> None:
-    assert Bar is ApplicationBar
+@dataclass(frozen=True)
+class ObservationScope:
+    market_id: MarketId
+
+    @classmethod
+    def market(cls, value: str) -> ObservationScope:
+        return cls(MarketId(value))
+
+
+@dataclass(frozen=True)
+class Quote:
+    scope: ObservationScope
+    instrument: InstrumentRef
+    bid_price: Decimal | None
+    bid_quantity: Decimal | None
+    ask_price: Decimal | None
+    ask_quantity: Decimal | None
+    occurred_at: datetime
+    occurred_at_unix_nanos: int
+
+
+@dataclass(frozen=True)
+class Bar:
+    scope: ObservationScope
+    instrument: InstrumentRef
+    timeframe: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal | None
+    occurred_at: datetime
+    occurred_at_unix_nanos: int
+
+
+@dataclass(frozen=True)
+class Trade:
+    scope: ObservationScope
+    instrument: InstrumentRef
+    price: Decimal
+    quantity: Decimal
+    aggressor_side: str
+    occurred_at: datetime
+    occurred_at_unix_nanos: int
+
+
+@dataclass(frozen=True)
+class OptionGreeks:
+    scope: ObservationScope
+    instrument: InstrumentRef
+    expiry_unix_nanos: int
+    strike: Decimal
+    delta: Decimal
+    gamma: Decimal
+    vega: Decimal
+    theta: Decimal
+    implied_volatility: Decimal
+    occurred_at: datetime
+    occurred_at_unix_nanos: int
+
+
+@dataclass(frozen=True)
+class QuoteEvent:
+    data: Quote
+    metadata: EventMetadata
+    kind: str = field(init=False, default="quote")
+
+
+@dataclass(frozen=True)
+class BarEvent:
+    data: Bar
+    metadata: EventMetadata
+    kind: str = field(init=False, default="bar")
+
+
+@dataclass(frozen=True)
+class TradeEvent:
+    data: Trade
+    metadata: EventMetadata
+    kind: str = field(init=False, default="trade")
+
+
+@dataclass(frozen=True)
+class GreeksEvent:
+    data: OptionGreeks
+    metadata: EventMetadata
+    kind: str = field(init=False, default="greeks")
+
+
+def test_strategy_exposes_read_only_market_protocol_without_application_dto() -> None:
+    assert PublicBar.__module__ == "kairospy.strategy.api.market"
+    assert not hasattr(
+        __import__("kairospy.investment.apps.market.application", fromlist=["Bar"]),
+        "Bar",
+    )
 
 
 def test_market_application_has_no_internal_port_or_contract_facade() -> None:
@@ -83,15 +167,19 @@ def test_disabled_execution_returns_a_typed_rejected_receipt() -> None:
     assert receipt.error == "execution is disabled for this launch"
 
 
-def test_account_application_owns_concrete_multi_account_current_view_selection() -> None:
+def test_account_application_owns_concrete_multi_account_current_view_selection() -> (
+    None
+):
     main_id = AccountId("main")
     secondary_id = AccountId("secondary")
 
     class LatestView:
-        def __init__(self, equity: Decimal) -> None:
+        def __init__(self, account_id: AccountId, equity: Decimal) -> None:
+            self.account_id = account_id
             self.equity = equity
 
-        def snapshot(self, account_id: AccountId) -> AccountSnapshot:
+        def snapshot(self) -> AccountSnapshot:
+            account_id = self.account_id
             return AccountSnapshot(
                 account_id,
                 (
@@ -113,8 +201,8 @@ def test_account_application_owns_concrete_multi_account_current_view_selection(
 
     account = AccountApplication(
         {
-            main_id: LatestView(Decimal("100")),
-            secondary_id: LatestView(Decimal("200")),
+            main_id: LatestView(main_id, Decimal("100")),
+            secondary_id: LatestView(secondary_id, Decimal("200")),
         }
     )
 
@@ -130,9 +218,7 @@ def test_account_application_has_no_callable_or_object_adapter() -> None:
     root = Path(__file__).parents[1]
     application = (
         root / "kairospy/investment/apps/account/application/application.py"
-    ).read_text(
-        encoding="utf-8"
-    )
+    ).read_text(encoding="utf-8")
     assert "Callable" not in application
     assert not (
         root / "kairospy/application/strategy/services/applications.py"
@@ -141,16 +227,19 @@ def test_account_application_has_no_callable_or_object_adapter() -> None:
 
 def test_risk_application_owns_concrete_current_view_query() -> None:
     class LatestView:
-        def status(self, account_id: AccountId) -> dict[str, object]:
-            return {
-                "account_id": str(account_id),
-                "trading_allowed": True,
-                "available_notional": "1000",
-                "reserved_notional": "0",
-                "utilization": "0",
-                "violations": [],
-                "generation": 1,
-            }
+        def snapshot(self) -> object:
+            from types import SimpleNamespace
+
+            scope = SimpleNamespace(account_id="main")
+            policy = SimpleNamespace(scope=scope, metric="notional")
+            limit = SimpleNamespace(
+                policy=policy,
+                available=SimpleNamespace(value=Decimal("1000")),
+                reserved=SimpleNamespace(value=Decimal("0")),
+            )
+            return SimpleNamespace(
+                limits=[limit], circuits=[], applied_event_sequence=1
+            )
 
     risk = RiskApplication(LatestView())
 
@@ -169,9 +258,7 @@ def test_risk_application_has_no_callable_or_object_adapter() -> None:
     root = Path(__file__).parents[1]
     application = (
         root / "kairospy/investment/apps/risk/application/application.py"
-    ).read_text(
-        encoding="utf-8"
-    )
+    ).read_text(encoding="utf-8")
     assert "Callable" not in application
     assert not (
         root / "kairospy/application/strategy/services/applications.py"
@@ -230,7 +317,7 @@ def test_strategy_default_market_dispatch_selects_one_typed_hook() -> None:
             instrument,
             Decimal("1.5"),
             Decimal("10"),
-            AggressorSide.BUY,
+            "buy",
             occurred_at,
             1_704_067_200_000_000_000,
         ),

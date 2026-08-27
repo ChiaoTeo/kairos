@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 from kairospy.strategy import CommandResult, StrategyCommand, StrategyLogger
 
@@ -38,16 +39,17 @@ class StrategyCallbackHost:
         on_bound: Callable[[], None] | None = None,
     ) -> None:
         metadata = getattr(event, "metadata")
+        event_time = _metadata_datetime(metadata)
         event_time_source = (
             "none"
-            if metadata.occurred_at is None
+            if event_time is None
             else "market_event"
             if domain == "market"
             else f"{domain}_event"
         )
         self.context._bind(event)
         with self.logger.bind_event(
-            event_time=metadata.occurred_at,
+            event_time=event_time,
             event_time_source=event_time_source,
             event_sequence=metadata.sequence,
         ):
@@ -82,3 +84,13 @@ class StrategyCallbackHost:
             raise TypeError(
                 f"{name} must return None; use context bus to interact with the system"
             )
+
+
+def _metadata_datetime(metadata: object) -> datetime | None:
+    occurred_at = getattr(metadata, "occurred_at", None)
+    if occurred_at is not None:
+        return occurred_at
+    nanos = getattr(metadata, "occurred_at_unix_nanos", None)
+    if nanos is None:
+        return None
+    return datetime.fromtimestamp(int(nanos) / 1_000_000_000, tz=timezone.utc)

@@ -12,4 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 kairos-market-contract.workspace = true
 kairos-primitives.workspace = true
+kairos-protocol.workspace = true
 pyo3.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt", "time"] }

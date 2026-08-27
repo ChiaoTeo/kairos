@@ -51,6 +51,8 @@ pub use event::{
 };
 use kairos_primitives::runtime::ActorId;
 pub use kairos_transport::AeronEndpoint;
+pub const REFERENCE_EVENTS_STREAM_ID: i32 = kairos_transport::stream_ids::REFERENCE_CHANGES;
+pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
 
 /// Unified Reference client. Business reads use consumer-scoped SQLite queries.
 #[derive(Clone)]

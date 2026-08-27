@@ -1,12 +1,19 @@
-"""Account v2 event contract."""
+"""Account event exports backed only by the owner native contract."""
 
-from .source import decode_account_event
+from typing import Any
 
-
-def decode_event(payload: bytes):
-    """Decode one Account v2 event into the Account transport record."""
-
-    return decode_account_event(payload)
+from kairospy.infrastructure.contracts._native import load_owner_contract
 
 
-__all__ = ["decode_event"]
+def _native() -> Any:
+    return load_owner_contract("Account")
+
+
+def decode_event(payload: bytes) -> object:
+    return _native().decode_event(payload)
+
+
+AccountEvent = _native().AccountEvent
+
+
+__all__ = ["AccountEvent", "decode_event"]

@@ -9,13 +9,13 @@ import re
 import tomllib
 from typing import Any
 
-from kairospy.system.apps.configuration.services.transactions import (
+from kairospy.system.apps.workspace.application import (
+    Workspace,
     WorkspaceConfigurationTransaction,
 )
 from kairospy.system.apps.integration.application import (
     ProviderConnectionConfigurationApplication,
 )
-from kairospy.system.domain.workspace import Workspace
 
 
 @dataclass(frozen=True, slots=True)

@@ -16,6 +16,11 @@ pub enum ReferenceEvent<'a> {
 }
 
 pub fn decode_event(bytes: &[u8]) -> ContractResult<ReferenceEvent<'_>> {
+    if bytes.len() < 8 {
+        return Err(ContractError::Invalid(
+            "unknown Reference v2 event identifier".into(),
+        ));
+    }
     macro_rules! decode {
         ($has:ident, $root:ident, $variant:ident) => {
             if fb::$has(bytes) {

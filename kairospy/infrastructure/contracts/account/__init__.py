@@ -4,12 +4,23 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS = {
-    "AccountContractClient": (".control", "AccountContractClient"),
-    "AccountCurrentViewReader": (".view", "AccountCurrentViewReader"),
-    "AccountObservedOrdersViewReader": (".view", "AccountObservedOrdersViewReader"),
-    "AccountIndexedViewReader": (".view", "AccountIndexedViewReader"),
-    "account_indexed_environment_path": (".view", "account_indexed_environment_path"),
-    "backtest_mark_to_market_request": (".runtime", "backtest_mark_to_market_request"),
+    "AccountContractClient": (".types", "AccountClient"),
+    "AccountClient": (".types", "AccountClient"),
+    "AccountControlClient": (".types", "AccountControlClient"),
+    "AccountSegmentsRequest": (".types", "AccountSegmentsRequest"),
+    "AccountInvalidInputError": (".types", "AccountInvalidInputError"),
+    "AccountInvalidEventError": (".types", "AccountInvalidEventError"),
+    "AccountInvalidCurrentViewError": (".types", "AccountInvalidCurrentViewError"),
+    "AccountCurrentViewUnavailableError": (".types", "AccountCurrentViewUnavailableError"),
+    "AccountControlUnavailableError": (".types", "AccountControlUnavailableError"),
+    "AccountControlRejectedError": (".types", "AccountControlRejectedError"),
+    "MarkToMarketRequest": (".types", "MarkToMarketRequest"),
+    "AdvanceAccountTimeRequest": (".types", "AdvanceAccountTimeRequest"),
+    "SimulatedSettlement": (".types", "SimulatedSettlement"),
+    "SimulatedCapitalMutation": (".types", "SimulatedCapitalMutation"),
+    "SimulatedCapitalMutationQuery": (".types", "SimulatedCapitalMutationQuery"),
+    "AccountCurrentView": (".types", "AccountCurrentView"),
+    "indexed_environment_path": (".types", "indexed_environment_path"),
     "decode_event": (".events", "decode_event"),
 }
 

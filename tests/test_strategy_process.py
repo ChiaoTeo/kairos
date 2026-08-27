@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import pytest
 
-from kairospy.infrastructure.contracts.market import market_indexed_environment_path
+from kairospy.infrastructure.contracts.market import indexed_environment_path
 from kairospy.system.apps.launch import StrategyProcessController
 from kairospy.system.apps.launch.composition import compose_strategy_process
 from kairospy.system.apps.launch import LaunchControlApplication
@@ -107,20 +107,25 @@ def test_launch_cleanup_releases_subscriptions_for_dead_strategy_process(
 
     class Port:
         def release_owner(self, **kwargs):
+            kwargs.pop("launch_id", None)
             calls.append(kwargs)
-            return CommandResult(
-                kwargs["request_id"],
-                "accepted",
-                {"removed_subscription_ids": ["subscription-1"]},
-            )
+            return type(
+                "ReleaseResponse",
+                (),
+                {"released_subscription_ids": ["subscription-1"]},
+            )()
+
+    class Client:
+        def __init__(self, _socket):
+            self.control = Port()
 
     monkeypatch.setattr(
-        "kairospy.investment.apps.market.composition.MarketCommandClient",
-        lambda client, launch_id=None: Port(),
+        "kairospy.system.apps.launch.composition.MarketSystemClient",
+        Client,
     )
     result = release_strategy_market_owner(workspace, instance)
 
-    assert result is not None and result["status"] == "accepted"
+    assert result is not None and result["status"] == "applied"
     assert calls == [
         {
             "strategy_id": "orphaned-strategy",
@@ -183,12 +188,14 @@ def test_strategy_composition_uses_instance_market_and_account_resources(
         instance_id="run-1",
         mode="backtest",
     )
-    assert composition.application.context.market._snapshots.path == instance.snapshot()
-    assert composition.application.context.market._snapshots._queries.path == (
-        market_indexed_environment_path(instance.snapshot())
+    assert type(composition.application.context.market._snapshots).__module__ == (
+        "kairospy._native_market_contract"
     )
+    assert indexed_environment_path(
+        instance.snapshot(), "sp-resources", "launch", "run-1"
+    ).is_relative_to(instance.snapshot())
     assert (
-        composition.application.context.execution._commands.client._client.socket_path
+        composition.application.context.execution._commands.client.socket_path
         == instance.paths.process_socket("execution")
     )
 

@@ -69,7 +69,6 @@ class IntentStatus(StrEnum):
     SATISFIED = "satisfied"
     PENDING = "pending"
     ACTIVE = "active"
-    COMPLETED = "completed"
     CANCELED = "canceled"
     REJECTED = "rejected"
     EXPIRED = "expired"

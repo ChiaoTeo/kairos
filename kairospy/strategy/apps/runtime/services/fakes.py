@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Mapping
 
-from kairospy.investment.apps.market.application import MarketSnapshot, SubscriptionRequest
+from kairospy.investment.apps.market.application import SubscriptionRequest
 from kairospy.investment.apps.account.application import AccountApplication
 from kairospy.investment.apps.execution.application import ExecutionApplication
 from kairospy.investment.apps.market.application import MarketApplication
@@ -27,12 +27,33 @@ class RecordedApplicationRequest:
     instance_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class _MarketSubscriptionResponse:
+    subscription_id: str
+    owner_id: str
+    state: str
+    satisfied_selectors: tuple[str, ...] = ()
+    missing_selectors: tuple[str, ...] = ()
+    resolved_providers: tuple[str, ...] = ()
+    pending_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _MarketCommandStatus:
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class _MarketReleaseOwnerResponse:
+    released_subscription_ids: tuple[str, ...] = ()
+
+
 class InMemoryApplicationPorts:
     """Deterministic Market and Execution port fake for runtime tests."""
 
     def __init__(self) -> None:
         self.requests: list[RecordedApplicationRequest] = []
-        self._handles: dict[str, CommandHandle] = {}
+        self._handles: dict[str, object] = {}
 
     def _record(
         self,
@@ -60,15 +81,19 @@ class InMemoryApplicationPorts:
         strategy_id: str,
         instance_id: str,
         request_id: str,
-    ) -> CommandHandle:
-        return self._record(
-            "market.subscribe",
-            request,
-            strategy_id,
-            instance_id,
-            request_id,
-            status="pending",
+        launch_id: str | None = None,
+    ) -> _MarketSubscriptionResponse:
+        del launch_id
+        self.requests.append(
+            RecordedApplicationRequest(
+                "market.subscribe", request, strategy_id, request_id, instance_id
+            )
         )
+        response = _MarketSubscriptionResponse(
+            request_id, f"{strategy_id}:{instance_id}", "pending"
+        )
+        self._handles[request_id] = response
+        return response
 
     def data_routes(self, query: Mapping[str, object] | None = None) -> dict[str, object]:
         del query
@@ -81,10 +106,17 @@ class InMemoryApplicationPorts:
         strategy_id: str,
         instance_id: str,
         request_id: str,
-    ) -> CommandHandle:
-        return self._record(
-            "market.unsubscribe", subscription, strategy_id, instance_id, request_id
+        launch_id: str | None = None,
+    ) -> _MarketCommandStatus:
+        del launch_id
+        self.requests.append(
+            RecordedApplicationRequest(
+                "market.unsubscribe", subscription, strategy_id, request_id, instance_id
+            )
         )
+        response = _MarketCommandStatus("applied")
+        self._handles[request_id] = response
+        return response
 
     def target_position(self, request: object, **identity: str) -> CommandHandle:
         return self._record("intent.target_position", request, **identity)
@@ -131,7 +163,7 @@ class InMemoryApplicationPorts:
             **identity,
         )
 
-    def status(self, request_id: str) -> CommandHandle:
+    def status(self, request_id: str) -> object:
         return self._handles.get(
             request_id, CommandHandle(request_id, "missing", error="request not found")
         )
@@ -142,19 +174,17 @@ class InMemoryApplicationPorts:
         strategy_id: str,
         instance_id: str,
         request_id: str,
-    ) -> CommandHandle:
+        launch_id: str | None = None,
+    ) -> _MarketReleaseOwnerResponse:
+        del launch_id
         self.requests.append(
             RecordedApplicationRequest(
                 "market.release_owner", None, strategy_id, request_id, instance_id
             )
         )
-        handle = CommandHandle(
-            request_id,
-            "accepted",
-            {"removed_subscription_ids": []},
-        )
-        self._handles[request_id] = handle
-        return handle
+        response = _MarketReleaseOwnerResponse()
+        self._handles[request_id] = response
+        return response
 
     def resolve(
         self,
@@ -166,17 +196,39 @@ class InMemoryApplicationPorts:
     ) -> None:
         if request_id not in self._handles:
             raise KeyError(request_id)
-        self._handles[request_id] = CommandHandle(
-            request_id, status, result or {}, error
-        )
+        current = self._handles[request_id]
+        if isinstance(current, _MarketSubscriptionResponse):
+            raw_providers = (result or {}).get("resolved_providers", ())
+            if not isinstance(raw_providers, (list, tuple)):
+                raise TypeError("resolved_providers must be a sequence")
+            providers = tuple(
+                str(value) for value in raw_providers
+            )
+            self._handles[request_id] = replace(
+                current, state=status, resolved_providers=providers
+            )
+        else:
+            self._handles[request_id] = CommandHandle(
+                request_id, status, result or {}, error
+            )
 
 
 class InMemoryMarketSnapshotReader:
-    def __init__(self, snapshots: Mapping[str, MarketSnapshot] | None = None) -> None:
+    def __init__(self, snapshots: Mapping[str, object] | None = None) -> None:
         self.snapshots = dict(snapshots or {})
 
-    def read(self, view_key: str) -> MarketSnapshot:
-        return self.snapshots[view_key]
+    def get(self, view_key: object) -> object | None:
+        canonical_key = getattr(view_key, "canonical_key")
+        return self.snapshots.get(canonical_key())
+
+    def quote(self, market_id: str, provider: str) -> object | None:
+        return self.snapshots.get(f"{market_id}:{provider}:quote")
+
+    def bar(self, market_id: str, provider: str, qualifier: str) -> object | None:
+        return self.snapshots.get(f"{market_id}:{provider}:bar:{qualifier}")
+
+    def greeks(self, market_id: str, provider: str) -> object | None:
+        return self.snapshots.get(f"{market_id}:{provider}:greeks")
 
 
 class InMemoryMarketEventSource:

@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
+from kairospy.infrastructure.contracts.account.events import (
+    AccountEvent as NativeAccountEvent,
+)
 from kairospy.primitives.account import AccountId
 
 from .errors import AccountNotEnabledError
-from .events import AccountEvent
-from .mapping import map_account_event, map_account_snapshot
+from .mapping import map_account_snapshot
 from .models import (
     AccountSnapshot,
     AccountsSnapshot,
     DataFreshness,
     SegmentSyncLifecycle,
 )
+
+if TYPE_CHECKING:
+    from kairospy.strategy.api.account import AccountEvent
 
 
 class AccountApplication:
@@ -61,7 +66,7 @@ class AccountApplication:
 
         return AccountsSnapshot(
             tuple(
-                _map_snapshot(current_view.snapshot(account_id), account_id)
+                _map_snapshot(current_view.snapshot(), account_id)
                 for account_id, current_view in self._current_views.items()
             )
         )
@@ -74,7 +79,8 @@ class AccountApplication:
             current_view = self._current_views[account_id]
         except KeyError as error:
             raise AccountNotEnabledError(account_id) from error
-        return _map_snapshot(current_view.snapshot(account_id), account_id)
+        return _map_snapshot(current_view.snapshot(), account_id)
+
     def _check_event_source_ready(self) -> None:
         if not self._event_source_ready:
             check_ready = getattr(self._event_source, "check_ready", None)
@@ -105,6 +111,10 @@ class AccountApplication:
         async for record in self._event_source.subscribe_live():
             if AccountId(record.account_id) not in self._current_views:
                 continue
+            if not isinstance(record, NativeAccountEvent):
+                raise TypeError(
+                    "Account event source must yield owner-native AccountEvent values"
+                )
             expected_stream_id = f"account.events/account:{record.account_id}"
             if record.stream_id != expected_stream_id:
                 raise RuntimeError(
@@ -124,8 +134,7 @@ class AccountApplication:
                     f"expected {expected}, received {record.sequence}"
                 )
             self._event_cursors[record.account_id] = record.sequence
-            for event in map_account_event(record):
-                yield event
+            yield cast("AccountEvent", record)
 
     def _validate_event_scope(
         self, launch_id: str | None, instance_id: str | None
@@ -137,11 +146,11 @@ class AccountApplication:
 
 
 def _map_snapshot(value: object, account_id: AccountId) -> AccountSnapshot:
-    return (
-        value
-        if isinstance(value, AccountSnapshot)
-        else map_account_snapshot(value, account_id=account_id)
-    )
+    if isinstance(value, AccountSnapshot):
+        if value.account_id != account_id:
+            raise ValueError("Account snapshot belongs to another account")
+        return value
+    return map_account_snapshot(value, account_id=account_id)
 
 
 def _account_id(value: AccountId | str) -> AccountId:

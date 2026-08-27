@@ -1,28 +1,45 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, cast
+from time import time_ns
+from typing import TYPE_CHECKING, Any, cast
 
-from kairospy.investment.apps.reference.application import Instrument, InstrumentRef, Market
+from kairospy.investment.apps.reference.application import (
+    Instrument,
+    InstrumentRef,
+    Market,
+)
 from kairospy.primitives.reference import InstrumentId, MarketId
 
-from .events import BarEvent, MarketEvent, TradeEvent
-from .models import Bar, ObservationScope, OptionGreeks, Quote, Trade
-from .requests import (
-    CanonicalMarketTarget,
-    ConsolidatedInstrumentTarget,
-    MarketData,
+from kairospy.infrastructure.contracts.market.events import (
+    MarketEvent as NativeMarketEvent,
+)
+from kairospy.infrastructure.contracts.market.types import (
+    MarketSubscriptionRequest as SubscriptionRequest,
+    MarketTarget,
     ObservationRequirement,
-    OptionFilter,
     Options,
-    OptionsTarget,
     Provider,
     ProviderPreference,
-    StrikeRange,
-    SubscriptionRequest,
 )
+from kairospy.infrastructure.contracts.market.view import (
+    MarketBarCurrent,
+    MarketGreeksCurrent,
+    MarketQuoteCurrent,
+    MarketViewKey,
+)
+from .requests import MarketData
+
+if TYPE_CHECKING:
+    from kairospy.strategy.api.market import (
+        Bar,
+        MarketEvent,
+        OptionGreeks,
+        Quote,
+        Trade,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +58,9 @@ class SubscriptionGroup:
 
     def __post_init__(self) -> None:
         if not self.subscriptions:
-            raise ValueError("subscription group must contain at least one subscription")
+            raise ValueError(
+                "subscription group must contain at least one subscription"
+            )
 
     @property
     def subscription_id(self) -> str:
@@ -71,7 +90,7 @@ class SubscriptionStatus:
     subscription_id: str | None
     status: str
     request: SubscriptionRequest
-    result: Mapping[str, object]
+    response: object
     error: str | None = None
 
 
@@ -114,7 +133,8 @@ class MarketApplication:
         self._instance_id = instance_id
         self._launch_id = launch_id
         self._event_sequence: int | None = None
-        self._latest_trades: dict[str, Trade] = {}
+        self._event_occurred_at_unix_nanos: int | None = None
+        self._latest_trades: dict[str, object] = {}
         self._event_source_ready = event_source is None
         self._request_counter = 0
         self._handles: dict[str, Any] = {}
@@ -136,14 +156,7 @@ class MarketApplication:
 
         if self._event_source is None:
             raise RuntimeError("Market event source is unavailable")
-        from .mapping import map_market_event
-        from .events import (
-            BarEvent,
-            EventStreamGap,
-            GreeksEvent,
-            QuoteEvent,
-            TradeEvent,
-        )
+        from .events import EventStreamGap
 
         cursor = self._event_cursor or 0
         subscribe_live = getattr(self._event_source, "subscribe_live", None)
@@ -154,23 +167,20 @@ class MarketApplication:
             records = cast(AsyncIterator[Any], self._event_source.replay_from(cursor))
             live = False
         async for record in records:
-            typed = isinstance(record, (BarEvent, QuoteEvent, TradeEvent, GreeksEvent))
-            stream_id = record.metadata.stream_id if typed else record.stream_id
-            sequence = record.metadata.sequence if typed else record.sequence
+            if not isinstance(record, NativeMarketEvent):
+                raise TypeError(
+                    "Market event source must yield owner-native MarketEvent values"
+                )
+            stream_id = record.metadata.stream_id
+            sequence = record.metadata.sequence
             if stream_id != "market.events":
                 raise RuntimeError(
                     f"Market event stream identity is invalid: {stream_id}"
                 )
-            if not typed:
-                if self._launch_id is not None and record.launch_id != self._launch_id:
-                    raise RuntimeError("Market event belongs to another launch")
-                if (
-                    self._launch_id is not None
-                    and record.instance_id != self._instance_id
-                ):
-                    raise RuntimeError(
-                        "Market event belongs to another launch instance"
-                    )
+            if self._launch_id is not None and record.launch_id != self._launch_id:
+                raise RuntimeError("Market event belongs to another launch")
+            if self._launch_id is not None and record.instance_id != self._instance_id:
+                raise RuntimeError("Market event belongs to another launch instance")
             if cursor == 0 and live:
                 cursor = sequence - 1
             if sequence <= cursor:
@@ -180,11 +190,12 @@ class MarketApplication:
                 raise EventStreamGap(stream_id, expected, sequence)
             cursor = sequence
             self._event_cursor = cursor
-            if not typed and record.kind not in {"bar", "quote", "trade", "greeks"}:
+            if record.kind not in {"bar", "quote", "trade", "greeks"}:
                 continue
-            event = record if typed else map_market_event(record)
-            if isinstance(event, TradeEvent):
-                self._latest_trades[event.data.scope.key()] = event.data
+            event = cast("MarketEvent", record)
+            if event.kind == "trade":
+                trade = cast("Trade", event.data)
+                self._latest_trades[_scope_key(trade.scope)] = trade
             if self._matches_subscription(event):
                 yield event
 
@@ -198,10 +209,13 @@ class MarketApplication:
 
         return self.events_replayable or bool(self._subscription_requests)
 
-    def bind_event(self, sequence: int | None) -> None:
+    def bind_event(
+        self, sequence: int | None, occurred_at_unix_nanos: int | None = None
+    ) -> None:
         """Bind command causation to the currently dispatched strategy event."""
 
         self._event_sequence = sequence
+        self._event_occurred_at_unix_nanos = occurred_at_unix_nanos
 
     def subscribe_bars(
         self,
@@ -239,61 +253,54 @@ class MarketApplication:
     ) -> SubscriptionGroup:
         """Subscribe to typed Market data for one explicit market identity."""
 
-        observations = tuple(ObservationRequirement.from_selector(value) for value in data)
+        observations = tuple(
+            ObservationRequirement.from_selector(
+                value.selector if isinstance(value, MarketData) else str(value)
+            )
+            for value in data
+        )
         if not observations:
             raise ValueError("market subscription data selectors are required")
         preference = provider_preference or ProviderPreference.automatic()
         if isinstance(market, Options):
-            market = self._resolve_spot_relative_options_target(market, preference)
-            subscription = self._subscribe(
-                SubscriptionRequest(
-                    _options_target(market), observations, preference
+            spot: Decimal | None = None
+            strike = market.filter.strike
+            if strike is not None and strike.mode == "around_spot":
+                underlying = market.underlying
+                if not underlying.startswith("market:"):
+                    raise RuntimeError(
+                        "around_spot option subscription requires a MarketId underlying "
+                        "so the current quote can be read"
+                    )
+                requested_provider = (
+                    preference.providers[0]
+                    if preference.mode in {"prefer", "require"} and preference.providers
+                    else None
                 )
+                quote = self.latest_quote(
+                    MarketId(underlying), provider=requested_provider
+                )
+                if quote is None:
+                    raise RuntimeError(
+                        "around_spot option subscription requires a current underlying quote"
+                    )
+                spot = _quote_midpoint(quote)
+            target = market.to_target(
+                spot=None if spot is None else str(spot),
+                now_unix_nanos=self._event_occurred_at_unix_nanos or time_ns(),
+            )
+            subscription = self._subscribe(
+                SubscriptionRequest(target, observations, preference)
             )
             return SubscriptionGroup((subscription,))
         subscription = self._subscribe(
             SubscriptionRequest(
-                CanonicalMarketTarget(str(_market_id(market))),
+                MarketTarget.market(str(_market_id(market))),
                 observations,
                 preference,
             )
         )
         return SubscriptionGroup((subscription,))
-
-    def _resolve_spot_relative_options_target(
-        self, target: Options, preference: ProviderPreference
-    ) -> Options:
-        strike = target.filter.strike
-        if strike is None or strike.mode != "around_spot":
-            return target
-        if strike.percent is None:
-            raise ValueError("around_spot strike range requires a positive percent")
-        if not isinstance(target.underlying, (Market, MarketId)):
-            raise RuntimeError(
-                "around_spot option subscription requires a MarketId or Reference Market "
-                "underlying so the current quote can be read"
-            )
-        underlying_market_id = _market_id(target.underlying)
-        requested_provider = (
-            preference.providers[0]
-            if preference.mode in {"prefer", "require"} and preference.providers
-            else None
-        )
-        quote = self.latest_quote(underlying_market_id, provider=requested_provider)
-        if quote is None:
-            raise RuntimeError(
-                "around_spot option subscription requires a current underlying quote"
-            )
-        spot = _quote_midpoint(quote)
-        lower = spot * (Decimal("1") - strike.percent)
-        upper = spot * (Decimal("1") + strike.percent)
-        resolved_filter = OptionFilter(
-            expiry=target.filter.expiry,
-            strike=StrikeRange.between(lower, upper),
-            right=target.filter.right,
-            limit=target.filter.limit,
-        )
-        return Options(target.underlying, resolved_filter)
 
     def subscribe_consolidated_quotes(
         self,
@@ -311,7 +318,7 @@ class MarketApplication:
         )
         return self._subscribe(
             SubscriptionRequest(
-                ConsolidatedInstrumentTarget(str(instrument_id), network_id),
+                MarketTarget.consolidated_instrument(str(instrument_id), network_id),
                 (ObservationRequirement("quote"),),
                 provider_preference or ProviderPreference.automatic(),
             )
@@ -352,6 +359,7 @@ class MarketApplication:
             strategy_id=self._strategy_id,
             instance_id=self._instance_id,
             request_id=request_id,
+            launch_id=self._launch_id,
         )
         self._handles[request_id] = handle
         owner_request_id = self._subscription_request_ids.pop(
@@ -367,17 +375,14 @@ class MarketApplication:
         timeframe: str,
         provider: Provider | str | None = None,
     ) -> Bar | None:
-        reader = getattr(self._snapshots, "read_bar", None)
-        if callable(reader):
-            value = reader(
-                str(_market_id(market)), self._provider_for(market, provider), timeframe
-            )
-            if value is None:
-                return None
-            from .mapping import map_market_view
-
-            return cast(Bar, map_market_view(value, kind="bar"))
-        raise RuntimeError("Market v2 bar view reader is unavailable")
+        value = self._snapshots.bar(
+            str(_market_id(market)), self._provider_for(market, provider), timeframe
+        )
+        if value is None:
+            return None
+        if not isinstance(value, MarketBarCurrent):
+            raise TypeError("Market bar view returned a non-native value")
+        return cast("Bar", value)
 
     def latest_quote(
         self,
@@ -385,15 +390,14 @@ class MarketApplication:
         *,
         provider: Provider | str | None = None,
     ) -> Quote | None:
-        reader = getattr(self._snapshots, "read_quote", None)
-        if callable(reader):
-            value = reader(str(_market_id(market)), self._provider_for(market, provider))
-            if value is None:
-                return None
-            from .mapping import map_market_view
-
-            return cast(Quote, map_market_view(value, kind="quote"))
-        raise RuntimeError("Market v2 quote view reader is unavailable")
+        value = self._snapshots.quote(
+            str(_market_id(market)), self._provider_for(market, provider)
+        )
+        if value is None:
+            return None
+        if not isinstance(value, MarketQuoteCurrent):
+            raise TypeError("Market quote view returned a non-native value")
+        return cast("Quote", value)
 
     def latest_trade(self, market: Market | MarketId) -> Trade | None:
         """Return the latest consumed trade event.
@@ -403,7 +407,7 @@ class MarketApplication:
         delivered a trade, rather than through an aggregate snapshot read.
         """
 
-        return self._latest_trades.get(str(_market_id(market)))
+        return cast("Trade | None", self._latest_trades.get(str(_market_id(market))))
 
     def latest_greeks(
         self,
@@ -411,15 +415,14 @@ class MarketApplication:
         *,
         provider: Provider | str | None = None,
     ) -> OptionGreeks | None:
-        reader = getattr(self._snapshots, "read_greeks", None)
-        if callable(reader):
-            value = reader(str(_market_id(market)), self._provider_for(market, provider))
-            if value is None:
-                return None
-            from .mapping import map_market_view
-
-            return cast(OptionGreeks, map_market_view(value, kind="greeks"))
-        raise RuntimeError("Market v2 greeks view reader is unavailable")
+        value = self._snapshots.greeks(
+            str(_market_id(market)), self._provider_for(market, provider)
+        )
+        if value is None:
+            return None
+        if not isinstance(value, MarketGreeksCurrent):
+            raise TypeError("Market Greeks view returned a non-native value")
+        return cast("OptionGreeks", value)
 
     def current_view(
         self,
@@ -436,12 +439,9 @@ class MarketApplication:
         aggregate snapshot when one field changes.
         """
 
-        reader = getattr(self._snapshots, "read_view", None)
-        if not callable(reader):
-            raise RuntimeError("Market v2 view reader is unavailable")
-        return reader(
+        return self._snapshots.get(MarketViewKey(
             str(_market_id(market)), self._provider_for(market, provider), kind, qualifier
-        )
+        ))
 
     def _provider_for(
         self,
@@ -456,14 +456,16 @@ class MarketApplication:
         market_id = str(_market_id(market))
         providers: set[str] = set()
         for request_id, request in self._subscription_requests.items():
-            if not isinstance(request.target, CanonicalMarketTarget):
+            if request.target.kind != "market":
                 continue
             if request.target.market_id != market_id:
                 continue
-            handle = self._command_status(request_id)
-            values = handle.result.get("resolved_providers", ())
-            if isinstance(values, (list, tuple, set)):
-                providers.update(str(value) for value in values if str(value).strip())
+            response = self._command_status(request_id)
+            providers.update(
+                str(value)
+                for value in response.resolved_providers
+                if str(value).strip()
+            )
         if len(providers) == 1:
             return next(iter(providers))
         if not providers:
@@ -481,10 +483,11 @@ class MarketApplication:
             strategy_id=self._strategy_id,
             instance_id=self._instance_id,
             request_id=request_id,
+            launch_id=self._launch_id,
         )
         self._handles[request_id] = handle
         self._subscription_requests[request_id] = request
-        subscription = _subscription(handle)
+        subscription = _subscription(handle, request_id=request_id)
         self._subscription_request_ids[subscription.subscription_id] = request_id
         return subscription
 
@@ -505,14 +508,14 @@ class MarketApplication:
                 f"unknown Market subscription request: {request_id}"
             ) from error
         handle = self._command_status(request_id)
-        subscription_id = handle.result.get("subscription_id")
+        subscription_id = handle.subscription_id
         return SubscriptionStatus(
-            request_id=handle.request_id,
-            subscription_id=(None if subscription_id is None else str(subscription_id)),
-            status=handle.status,
+            request_id=request_id,
+            subscription_id=str(subscription_id),
+            status=handle.state,
             request=request,
-            result=dict(handle.result),
-            error=handle.error,
+            response=handle,
+            error=None,
         )
 
     def subscription_statuses(self) -> tuple[SubscriptionStatus, ...]:
@@ -526,52 +529,50 @@ class MarketApplication:
     def release_strategy_subscriptions(self) -> SubscriptionReleaseResult:
         """Release the owner-scoped Market demand for this Strategy instance."""
 
-        handle = self._release_owner()
-        removed = handle.result.get("removed_subscription_ids", ())
-        removed_ids = (
-            tuple(str(value) for value in removed if isinstance(value, str))
-            if isinstance(removed, (list, tuple, set))
-            else ()
-        )
+        request_id, handle = self._release_owner()
+        removed_ids = tuple(handle.released_subscription_ids)
         self._subscription_requests.clear()
         self._subscription_request_ids.clear()
         return SubscriptionReleaseResult(
-            request_id=handle.request_id,
-            status=handle.status,
+            request_id=request_id,
+            status="applied",
             removed_subscription_ids=removed_ids,
-            error=handle.error,
+            error=None,
         )
 
+    def _release_owner(self) -> Any:
+        request_id = self._request_id("market.release_owner")
+        response = self._commands.release_owner(
+            strategy_id=self._strategy_id,
+            instance_id=self._instance_id,
+            request_id=request_id,
+            launch_id=self._launch_id,
+        )
+        self._handles[request_id] = response
+        return request_id, response
+
     def _command_status(self, request_id: str) -> Any:
+        """Allow deterministic application-protocol fakes to advance state."""
+
         status = getattr(self._commands, "status", None)
         if callable(status):
             return status(request_id)
         return self._handles[request_id]
-
-    def _release_owner(self) -> Any:
-        request_id = self._request_id("market.release_owner")
-        handle = self._commands.release_owner(
-            strategy_id=self._strategy_id,
-            instance_id=self._instance_id,
-            request_id=request_id,
-        )
-        self._handles[request_id] = handle
-        return handle
 
     def _matches_subscription(self, event: MarketEvent) -> bool:
         """Apply this Strategy instance's requested Market demand."""
 
         if self.events_replayable or not self._subscription_requests:
             return True
-        scope_key = event.data.scope.key()
+        data = event.data
+        scope_key = _scope_key(getattr(data, "scope"))
         selector = (
-            f"bar:{event.data.timeframe}" if isinstance(event, BarEvent) else event.kind
+            f"bar:{getattr(data, 'bar_spec_id')}" if event.kind == "bar" else event.kind
         )
         return any(
             _request_accepts_scope(request, scope_key, event)
-            and selector in {
-                observation.selector for observation in request.observations
-            }
+            and selector
+            in {observation.selector for observation in request.observations}
             for request in self._subscription_requests.values()
         )
 
@@ -581,83 +582,53 @@ def _market_id(value: Market | MarketId) -> MarketId:
 
 
 def _quote_midpoint(quote: Quote) -> Decimal:
-    if quote.bid_price is not None and quote.ask_price is not None:
-        return (quote.bid_price + quote.ask_price) / Decimal("2")
-    if quote.bid_price is not None:
-        return quote.bid_price
-    if quote.ask_price is not None:
-        return quote.ask_price
+    bid = _native_decimal(quote.bid_price)
+    ask = _native_decimal(quote.ask_price)
+    if bid is not None and ask is not None:
+        return (bid + ask) / Decimal("2")
+    if bid is not None:
+        return bid
+    if ask is not None:
+        return ask
     raise RuntimeError("around_spot option subscription requires a priced quote")
+
+
+def _native_decimal(value: object | None) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(int(getattr(value, "mantissa"))).scaleb(
+        -int(getattr(value, "scale"))
+    )
 
 
 def _request_accepts_scope(
     request: SubscriptionRequest, scope_key: str, event: MarketEvent
 ) -> bool:
     target = request.target
-    if isinstance(target, CanonicalMarketTarget):
+    if target.kind == "market":
         return target.market_id == scope_key
-    if isinstance(target, ConsolidatedInstrumentTarget):
-        return ObservationScope.consolidated(
-            InstrumentId(target.instrument_id), target.network_id
-        ).key() == scope_key
-    return str(event.data.instrument.id).startswith("instrument:option:")
-
-
-def _options_target(target: Options) -> OptionsTarget:
-    underlying = _underlying_params(target.underlying)
-    values = target.filter.params()
-    strike_mode = values.get("strike_mode")
-    if strike_mode == "around_spot":
-        raise ValueError(
-            "around_spot must be resolved by Market; the process contract does not support it yet"
+    if target.kind == "consolidated_instrument":
+        return (
+            f"consolidated:{target.instrument_id}:{target.network_id or '*'}"
+            == scope_key
         )
-    return OptionsTarget(
-        underlying_market_id=underlying.get("underlying_market_id"),
-        underlying_instrument_id=underlying.get("underlying_instrument_id"),
-        expiry_from_unix_nanos=_optional_int(values.get("expiry_from_unix_nanos")),
-        expiry_to_unix_nanos=_optional_int(values.get("expiry_to_unix_nanos")),
-        strike_lower=_optional_text(values.get("strike_lower")),
-        strike_upper=_optional_text(values.get("strike_upper")),
-        option_right=_optional_text(values.get("right")),
-        limit=_optional_int(values.get("limit")),
+    return str(getattr(event.data, "instrument_id")).startswith("instrument:option:")
+
+
+def _scope_key(scope: object) -> str:
+    market_id = getattr(scope, "market_id", None)
+    if market_id is not None:
+        return str(market_id)
+    return (
+        f"consolidated:{getattr(scope, 'instrument_id')}:"
+        f"{getattr(scope, 'network_id', None) or '*'}"
     )
 
 
-def _underlying_params(underlying: object) -> dict[str, str]:
-    if isinstance(underlying, Market):
-        return {"underlying_market_id": str(underlying.id)}
-    if isinstance(underlying, MarketId):
-        return {"underlying_market_id": str(underlying)}
-    if isinstance(underlying, (Instrument, InstrumentRef)):
-        return {"underlying_instrument_id": str(underlying.id)}
-    if isinstance(underlying, InstrumentId):
-        return {"underlying_instrument_id": str(underlying)}
-    value = str(underlying).strip()
-    if not value:
-        raise ValueError("options underlying is required")
-    if value.startswith("market:"):
-        return {"underlying_market_id": value}
-    if value.startswith("instrument:"):
-        return {"underlying_instrument_id": value}
-    raise ValueError(
-        "options underlying must be a canonical MarketId or InstrumentId"
-    )
-
-
-def _optional_text(value: object | None) -> str | None:
-    return None if value is None else str(value)
-
-
-def _optional_int(value: object | None) -> int | None:
-    return None if value is None else int(cast(Any, value))
-
-
-def _subscription(value: Any) -> Subscription:
-    request_id = value.request_id
-    subscription_id = value.result.get("subscription_id", request_id)
+def _subscription(value: Any, *, request_id: str) -> Subscription:
     return Subscription(
-        str(subscription_id),
+        str(value.subscription_id),
         request_id,
-        value.status,
-        value.error,
+        value.state,
+        None,
     )

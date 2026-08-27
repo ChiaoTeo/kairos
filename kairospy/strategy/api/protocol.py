@@ -1,29 +1,26 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Protocol, TypeAlias, Union, assert_never
+from typing import TYPE_CHECKING, Protocol, TypeAlias, Union, cast
 
-from kairospy.investment.apps.account.application import AccountApplication, AccountEvent
+from kairospy.investment.apps.account.application import AccountApplication
 from kairospy.investment.apps.capital.application import CapitalApplication
-from kairospy.investment.apps.execution.application import ExecutionApplication, ExecutionEvent
-from kairospy.investment.apps.market.application import (
-    BarEvent,
-    GreeksEvent,
-    MarketApplication,
-    MarketEvent,
-    QuoteEvent,
-    TradeEvent,
-)
+from kairospy.investment.apps.execution.application import ExecutionApplication
+from kairospy.investment.apps.market.application import MarketApplication
 from kairospy.strategy.apps.notification.application import NotificationApplication
 from kairospy.investment.apps.portfolio.application import PortfolioApplication
+from kairospy.investment.apps.risk.application import RiskApplication
 from kairospy.investment.apps.reference.application import ReferenceApplication
-from kairospy.investment.apps.risk.application import RiskApplication, RiskEvent
 
 from .clock import StrategyClock
+from .account import AccountEvent
 from .commands import StrategyCommand
 from .events import ClockEvent, SystemEvent
 from .identity import StrategyIdentity
 from .logging import StrategyLogger
+from .market import BarEvent, GreeksEvent, MarketEvent, QuoteEvent, TradeEvent
+from .execution import ExecutionEvent
+from .risk import RiskEvent
 from .results import CommandResult
 from .state import StrategyState
 
@@ -104,15 +101,14 @@ class Strategy:
         return None
 
     def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None:
-        if isinstance(event, QuoteEvent):
-            return self.on_quote(ctx, event)
-        if isinstance(event, BarEvent):
-            return self.on_bar(ctx, event)
-        if isinstance(event, TradeEvent):
-            return self.on_trade(ctx, event)
-        if isinstance(event, GreeksEvent):
-            return self.on_greeks(ctx, event)
-        assert_never(event)
+        if event.kind == "quote":
+            return self.on_quote(ctx, cast(QuoteEvent, event))
+        if event.kind == "bar":
+            return self.on_bar(ctx, cast(BarEvent, event))
+        if event.kind == "trade":
+            return self.on_trade(ctx, cast(TradeEvent, event))
+        if event.kind == "greeks":
+            return self.on_greeks(ctx, cast(GreeksEvent, event))
 
     def on_quote(self, ctx: StrategyContext, event: QuoteEvent) -> None:
         """Handle one quote when using the default market dispatcher."""

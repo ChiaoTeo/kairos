@@ -6,17 +6,12 @@ from typing import cast
 
 from kairospy.investment.apps.account.application import (
     AccountApplication,
-    AccountStatusChangedEvent,
-    BalanceChangedEvent,
     DataFreshness,
-    EquityChangedEvent,
-    EarnHoldingChangedEvent,
-    ObservedOrderChangedEvent,
-    PositionChangedEvent,
     PositionSide,
     SegmentCompleteness,
 )
-from kairospy.investment.apps.market.application import BarEvent, GreeksEvent, QuoteEvent, TradeEvent
+from kairospy.infrastructure.contracts.account.events import AccountEvent
+from kairospy.infrastructure.contracts.market.events import MarketEvent
 from kairospy.investment.apps.reference.application import InstrumentRef
 
 from .models import (
@@ -31,17 +26,6 @@ from .models import (
     SegmentWatermark,
     ValuationWatermark,
 )
-
-
-_ACCOUNT_EVENT_TYPES = (
-    AccountStatusChangedEvent,
-    BalanceChangedEvent,
-    EquityChangedEvent,
-    EarnHoldingChangedEvent,
-    ObservedOrderChangedEvent,
-    PositionChangedEvent,
-)
-_MARKET_EVENT_TYPES = (BarEvent, GreeksEvent, QuoteEvent, TradeEvent)
 
 
 class PortfolioApplication:
@@ -289,11 +273,17 @@ class PortfolioApplication:
         return self._snapshot
 
     def observe(self, event: object) -> PortfolioSnapshot:
-        if isinstance(event, _ACCOUNT_EVENT_TYPES):
-            return self.rebuild(
-                observed_at_unix_nanos=event.metadata.occurred_at_unix_nanos
+        if isinstance(event, AccountEvent):
+            metadata = getattr(event, "metadata")
+            observed_at_unix_nanos = getattr(
+                metadata, "occurred_at_unix_nanos", None
             )
-        if isinstance(event, _MARKET_EVENT_TYPES):
+            if not isinstance(observed_at_unix_nanos, int):
+                raise TypeError("Account native event omitted occurrence time")
+            return self.rebuild(
+                observed_at_unix_nanos=observed_at_unix_nanos
+            )
+        if isinstance(event, MarketEvent):
             self._valuation_watermark = ValuationWatermark(
                 event.metadata.stream_id,
                 event.metadata.sequence,

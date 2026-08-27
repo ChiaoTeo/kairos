@@ -20,8 +20,8 @@ from kairospy.investment.apps.execution.application import ExecutionApplication
 from kairospy.investment.apps.market.application import MarketApplication
 from kairospy.strategy.apps.notification.application import NotificationApplication
 from kairospy.investment.apps.portfolio.application import PortfolioApplication
-from kairospy.investment.apps.reference.application import ReferenceApplication
 from kairospy.investment.apps.risk.application import RiskApplication
+from kairospy.investment.apps.reference.application import ReferenceApplication
 
 if TYPE_CHECKING:
     from kairospy.strategy.apps.decisions.application import StrategyDecisionApplication
@@ -92,7 +92,7 @@ class StrategyContext(StrategyContextContract):
         sequence = getattr(metadata, "sequence", None)
         occurred_at_unix_nanos = getattr(metadata, "occurred_at_unix_nanos", None)
         occurred_at = getattr(metadata, "occurred_at", None)
-        self.market.bind_event(sequence)
+        self.market.bind_event(sequence, occurred_at_unix_nanos)
         self.execution.bind_event(sequence, occurred_at_unix_nanos)
         self.agent._bind_event(sequence, occurred_at)
         self.notifications.bind_event(occurred_at)

@@ -397,9 +397,9 @@ class ReferenceClient:
         return markets[0]
 
 
-def _identifiers(values: Sequence[str] | None) -> list[str]:
+def _identifiers(values: Sequence[str] | None) -> list[str] | None:
     if values is None:
-        return []
+        return None
     if isinstance(values, str):
         return [values]
     return list(dict.fromkeys(str(value) for value in values))

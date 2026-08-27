@@ -13,7 +13,6 @@ _EXPORTS = {
     "UnixJsonCommandClient": (".commands", "UnixJsonCommandClient"),
     "UnixJsonRpcClient": (".commands", "UnixJsonRpcClient"),
     "AeronReferenceEventSource": (".reference", "AeronReferenceEventSource"),
-    "AeronCapitalEventSource": (".capital", "AeronCapitalEventSource"),
     "decode_reference_event": (".reference", "decode_reference_event"),
 }
 

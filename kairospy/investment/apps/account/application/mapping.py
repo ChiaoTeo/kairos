@@ -1,42 +1,48 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Sequence
 from decimal import Decimal
+from typing import Protocol, cast
 
+from kairospy.infrastructure.contracts.account.types import MarkToMarketRequest
+from kairospy.infrastructure.contracts.market.events import MarketEvent
 from kairospy.investment.apps.reference.application import InstrumentRef
-from kairospy.investment.application.eventing import EventMetadata
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.primitives.reference import InstrumentId
 
-from .events import (
-    AccountEvent,
-    AccountEventRecord,
-    AccountStatusChangedEvent,
-    BalanceChangedEvent,
-    EarnHoldingChangedEvent,
-    EquityChangedEvent,
-    ObservedOrderChangedEvent,
-    PositionChangedEvent,
-)
 from .models import (
     AccountSegmentSnapshot,
     AccountSnapshot,
-    AccountsSnapshot,
-    AccountStatusChange,
     Balance,
     DataFreshness,
     EarnHolding,
     EarnHoldingState,
     EarnLiquidity,
-    EquityChange,
-    ObservedOrder,
     Position,
     PositionSide,
     SegmentCompleteness,
     SegmentSyncLifecycle,
     SegmentSyncMode,
 )
-from kairospy.investment.apps.market.application import BarEvent, QuoteEvent
+
+
+class _MarketDecimal(Protocol):
+    mantissa: int
+    scale: int
+
+
+class _MarketObservation(Protocol):
+    instrument_id: str
+    source_observed_at_unix_nanos: int
+
+
+class _MarketBar(_MarketObservation, Protocol):
+    close: _MarketDecimal
+
+
+class _MarketQuote(_MarketObservation, Protocol):
+    bid_price: _MarketDecimal | None
+    ask_price: _MarketDecimal | None
 
 
 def backtest_mark_to_market_request(
@@ -44,16 +50,16 @@ def backtest_mark_to_market_request(
     *,
     segment_key: str = "spot",
     quote_asset: str = "USDT",
-) -> dict[str, object] | None:
-    """Map a strategy-visible quote or bar into an Account simulation command."""
+) -> object | None:
+    """Adapt a Strategy Market observation to a typed Account simulation command."""
 
-    if isinstance(event, BarEvent):
-        observation = event.data
-        mark = observation.close
-    elif isinstance(event, QuoteEvent):
-        observation = event.data
+    if isinstance(event, MarketEvent) and event.kind == "bar":
+        observation = cast(_MarketBar, event.data)
+        mark = _market_decimal(observation.close)
+    elif isinstance(event, MarketEvent) and event.kind == "quote":
+        observation = cast(_MarketQuote, event.data)
         prices = tuple(
-            value
+            _market_decimal(value)
             for value in (observation.bid_price, observation.ask_price)
             if value is not None
         )
@@ -64,245 +70,35 @@ def backtest_mark_to_market_request(
         return None
     if not mark.is_finite():
         raise ValueError("decimal value must be finite")
-    return {
-        "segment_key": segment_key,
-        "instrument_id": str(observation.instrument.id),
-        "quote_asset": quote_asset,
-        "mark_price": format(mark, "f"),
-        "observed_at_unix_nanos": observation.occurred_at_unix_nanos,
-    }
+    return MarkToMarketRequest(
+        segment_key,
+        str(observation.instrument_id),
+        quote_asset,
+        format(mark, "f"),
+        observation.source_observed_at_unix_nanos,
+    )
 
 
 def map_account_snapshot(value: object, *, account_id: AccountId) -> AccountSnapshot:
-    root = _mapping(value, "Account snapshot")
-    actual_account_id = AccountId(_required_text(root.get("account_id"), "account_id"))
+    """Project one native owner snapshot into the Strategy read model."""
+
+    actual_account_id = AccountId(
+        _required_text(_field(value, "account_id"), "account_id")
+    )
     if actual_account_id != account_id:
         raise ValueError("Account snapshot belongs to another account")
-    generation = _integer(root.get("generation", 0), "generation")
+    generation = _integer(_field(value, "generation", 0), "generation")
     return AccountSnapshot(
         account_id=account_id,
         segments=tuple(
             map_account_segment_snapshot(
-                item,
-                account_id=account_id,
-                generation=generation,
+                item, account_id=account_id, generation=generation
             )
-            for item in _sequence(root.get("segments", ()), "segments")
+            for item in _sequence(_field(value, "segments", ()), "segments")
         ),
         generation=generation,
-        event_sequence=_integer(root.get("event_sequence", 0), "event_sequence"),
+        event_sequence=_integer(_field(value, "event_sequence", 0), "event_sequence"),
     )
-
-
-def map_account_event(record: AccountEventRecord) -> tuple[AccountEvent, ...]:
-    account_id = AccountId(record.account_id)
-    metadata = EventMetadata(
-        stream_id=record.stream_id,
-        sequence=record.sequence,
-        producer=record.producer,
-        occurred_at_unix_nanos=record.occurred_at_unix_nanos,
-    )
-    events: list[AccountEvent] = []
-    for change in record.changes:
-        segment_key = SegmentKey(change.segment_key)
-        if change.kind == "balance_changed":
-            events.append(
-                BalanceChangedEvent(
-                    map_balance(
-                        change.payload,
-                        account_id=account_id,
-                        segment_key=segment_key,
-                    ),
-                    metadata,
-                )
-            )
-        elif change.kind == "balance_removed":
-            row = _mapping(change.payload, "removed balance")
-            events.append(
-                BalanceChangedEvent(
-                    Balance(
-                        account_id,
-                        segment_key,
-                        str(row.get("asset_id", "")),
-                        Decimal("0"),
-                        Decimal("0"),
-                        Decimal("0"),
-                    ),
-                    metadata,
-                )
-            )
-        elif change.kind == "position_changed":
-            events.append(
-                PositionChangedEvent(
-                    map_position(
-                        change.payload,
-                        account_id=account_id,
-                        segment_key=segment_key,
-                    ),
-                    metadata,
-                )
-            )
-        elif change.kind in {"earn_holding_changed", "earn_holding_removed"}:
-            row = _mapping(change.payload, "Earn holding")
-            removed = change.kind == "earn_holding_removed"
-            events.append(
-                EarnHoldingChangedEvent(
-                    EarnHolding(
-                        account_id=account_id,
-                        segment_key=segment_key,
-                        holding_key=str(row.get("holding_key", "")),
-                        product_id=str(row.get("product_id", "")),
-                        asset=str(row.get("asset", "")),
-                        principal=Decimal("0")
-                        if removed
-                        else (_decimal(row.get("principal")) or Decimal("0")),
-                        redeemable=None if removed else _decimal(row.get("redeemable")),
-                        state=EarnHoldingState.REDEEMED
-                        if removed
-                        else EarnHoldingState(str(row.get("state", "unknown"))),
-                        liquidity=EarnLiquidity(str(row.get("liquidity", "unknown"))),
-                        participant_position_id=None
-                        if removed
-                        else _optional_text(row.get("participant_position_id")),
-                        participant_state=None
-                        if removed
-                        else _optional_text(row.get("participant_state")),
-                        notice_seconds=None
-                        if removed
-                        else _optional_int(row.get("notice_seconds")),
-                        matures_at_unix_nanos=None
-                        if removed
-                        else _optional_int(row.get("matures_at_unix_nanos")),
-                        observed_at_unix_nanos=None
-                        if removed
-                        else _optional_int(row.get("observed_at_unix_nanos")),
-                    ),
-                    metadata,
-                )
-            )
-        elif change.kind == "position_removed":
-            row = _mapping(change.payload, "removed position")
-            instrument_id = str(row.get("instrument_id", ""))
-            events.append(
-                PositionChangedEvent(
-                    Position(
-                        account_id,
-                        segment_key,
-                        InstrumentRef(
-                            InstrumentId(instrument_id),
-                            instrument_id.rsplit(":", 1)[-1],
-                        ),
-                        Decimal("0"),
-                        _position_side(row.get("position_side")),
-                    ),
-                    metadata,
-                )
-            )
-        elif change.kind in {"observed_order_changed", "observed_order_removed"}:
-            row = _mapping(change.payload, "observed order")
-            instrument_id = str(row.get("instrument_id", row.get("order_id", "")))
-            events.append(
-                ObservedOrderChangedEvent(
-                    ObservedOrder(
-                        account_id=account_id,
-                        segment_key=segment_key,
-                        order_id=str(row.get("order_id", "")),
-                        remote_order_id=_optional_text(row.get("remote_order_id")),
-                        instrument=InstrumentRef(
-                            InstrumentId(instrument_id),
-                            instrument_id.rsplit(":", 1)[-1],
-                        ),
-                        market_id=str(row.get("market_id", "")),
-                        quantity=_decimal(row.get("quantity")) or Decimal("0"),
-                        filled_quantity=_decimal(row.get("filled_quantity"))
-                        or Decimal("0"),
-                        status=str(
-                            row.get(
-                                "status",
-                                "closed"
-                                if change.kind == "observed_order_removed"
-                                else "unknown",
-                            )
-                        ),
-                    ),
-                    metadata,
-                )
-            )
-        elif change.kind == "equity_changed":
-            row = _mapping(change.payload, "equity change")
-            events.append(
-                EquityChangedEvent(
-                    EquityChange(account_id, segment_key, _decimal(row.get("equity"))),
-                    metadata,
-                )
-            )
-        elif change.kind == "status_changed":
-            row = _mapping(change.payload, "status change")
-            events.append(
-                AccountStatusChangedEvent(
-                    AccountStatusChange(
-                        account_id=account_id,
-                        segment_key=segment_key,
-                        freshness=_freshness(row),
-                        trading_enabled=bool(row.get("trading_enabled", False)),
-                        reason=(
-                            None
-                            if str(row.get("status", "")).lower() == "ready"
-                            else str(row.get("status", "unknown")).lower()
-                        ),
-                    ),
-                    metadata,
-                )
-            )
-        else:
-            raise ValueError(f"unsupported Account event kind: {change.kind}")
-    return tuple(events)
-
-
-def map_accounts_snapshot(
-    value: object,
-    *,
-    enabled_account_ids: Iterable[AccountId | str] = (),
-) -> AccountsSnapshot:
-    """Map every enabled (account, segment) row without collapsing segments."""
-
-    root = _mapping(value, "Accounts snapshot")
-    root = _mapping(root.get("snapshot", root), "Accounts snapshot payload")
-    generation = _integer(root.get("generation", 0), "generation")
-    rows = tuple(
-        _mapping(account, "account current view")
-        for account in _sequence(root.get("accounts", ()), "accounts")
-    )
-    enabled = tuple(
-        value if isinstance(value, AccountId) else AccountId(value)
-        for value in enabled_account_ids
-    )
-    ordered_ids = enabled or tuple(
-        dict.fromkeys(
-            AccountId(str(row.get("account_id", "")))
-            for row in rows
-            if str(row.get("account_id", "")).strip()
-        )
-    )
-    enabled_set = frozenset(ordered_ids)
-    grouped: dict[AccountId, list[AccountSegmentSnapshot]] = {
-        account_id: [] for account_id in ordered_ids
-    }
-    for row in rows:
-        account_id = AccountId(_required_text(row.get("account_id"), "account_id"))
-        if enabled_set and account_id not in enabled_set:
-            continue
-        grouped.setdefault(account_id, []).append(
-            map_account_segment_snapshot(
-                row, account_id=account_id, generation=generation
-            )
-        )
-    accounts = tuple(
-        AccountSnapshot(account_id, tuple(grouped.get(account_id, ())), generation)
-        for account_id in ordered_ids
-        if grouped.get(account_id)
-    )
-    return AccountsSnapshot(accounts)
 
 
 def map_account_segment_snapshot(
@@ -311,27 +107,18 @@ def map_account_segment_snapshot(
     account_id: AccountId,
     generation: int,
 ) -> AccountSegmentSnapshot:
-    row = _mapping(value, "Account segment snapshot")
-    segment_key = SegmentKey(_required_text(row.get("segment_key"), "segment_key"))
-    balances = tuple(
-        map_balance(item, account_id=account_id, segment_key=segment_key)
-        for item in _sequence(row.get("balances", ()), "balances")
+    segment_key = SegmentKey(
+        _required_text(_field(value, "segment_key"), "segment_key")
     )
-    positions = tuple(
-        map_position(item, account_id=account_id, segment_key=segment_key)
-        for item in _sequence(row.get("positions", ()), "positions")
+    observed_model = _field(value, "observed_account_model", None)
+    configured_model = _field(
+        value, "configured_account_model", _field(value, "account_model", None)
     )
-    earn_holdings = tuple(
-        map_earn_holding(item, account_id=account_id, segment_key=segment_key)
-        for item in _sequence(row.get("earn_holdings", ()), "earn_holdings")
-    )
-    observed_model = row.get("observed_account_model")
-    configured_model = row.get("configured_account_model", row.get("account_model"))
     return AccountSegmentSnapshot(
         account_id=account_id,
         segment_key=segment_key,
-        broker=str(row.get("broker", "")),
-        environment=str(row.get("environment", "")),
+        broker=str(_field(value, "broker", "")),
+        environment=str(_field(value, "environment", "")),
         account_model=(
             str(observed_model)
             if observed_model is not None
@@ -339,97 +126,119 @@ def map_account_segment_snapshot(
             if configured_model is None
             else str(configured_model)
         ),
-        equity=_decimal(row.get("equity")),
-        balances=balances,
-        positions=positions,
-        earn_holdings=earn_holdings,
-        earn_watermark_unix_nanos=_optional_int(row.get("earn_watermark_unix_nanos")),
-        freshness=_freshness(row),
-        generation=generation,
-        sync_mode=SegmentSyncMode(str(row.get("sync_mode", "unknown"))),
-        sync_lifecycle=SegmentSyncLifecycle(
-            str(row.get("sync_lifecycle", "configured"))
+        equity=_decimal(_field(value, "equity", None)),
+        balances=tuple(
+            _map_balance(item, account_id=account_id, segment_key=segment_key)
+            for item in _sequence(_field(value, "balances", ()), "balances")
         ),
-        completeness=SegmentCompleteness(str(row.get("completeness", "unknown"))),
-        snapshot_watermark=_optional_int(row.get("snapshot_watermark")),
-        event_watermark=_optional_int(row.get("event_watermark")),
-        channel_epoch=_optional_int(row.get("channel_epoch")),
+        positions=tuple(
+            _map_position(item, account_id=account_id, segment_key=segment_key)
+            for item in _sequence(_field(value, "positions", ()), "positions")
+        ),
+        earn_holdings=tuple(
+            _map_earn_holding(item, account_id=account_id, segment_key=segment_key)
+            for item in _sequence(_field(value, "earn_holdings", ()), "earn_holdings")
+        ),
+        earn_watermark_unix_nanos=_optional_int(
+            _field(value, "earn_watermark_unix_nanos", None)
+        ),
+        freshness=_freshness(value),
+        generation=generation,
+        sync_mode=SegmentSyncMode(str(_field(value, "sync_mode", "unknown"))),
+        sync_lifecycle=SegmentSyncLifecycle(
+            str(_field(value, "sync_lifecycle", "configured"))
+        ),
+        completeness=SegmentCompleteness(str(_field(value, "completeness", "unknown"))),
+        snapshot_watermark=_optional_int(_field(value, "snapshot_watermark", None)),
+        event_watermark=_optional_int(_field(value, "event_watermark", None)),
+        channel_epoch=_optional_int(_field(value, "channel_epoch", None)),
         last_event_at_unix_nanos=_optional_int(
-            row.get("last_event_at_unix_nanos")
+            _field(value, "last_event_at_unix_nanos", None)
         ),
         last_success_at_unix_nanos=_optional_int(
-            row.get("last_success_at_unix_nanos")
+            _field(value, "last_success_at_unix_nanos", None)
         ),
-        last_error=_optional_text(row.get("last_error")),
+        last_error=_optional_text(_field(value, "last_error", None)),
         recovery_buffer_depth=_integer(
-            row.get("recovery_buffer_depth", 0), "recovery_buffer_depth"
+            _field(value, "recovery_buffer_depth", 0), "recovery_buffer_depth"
         ),
     )
 
 
-def map_balance(
+def _map_balance(
     value: object, *, account_id: AccountId, segment_key: SegmentKey
 ) -> Balance:
-    row = _mapping(value, "balance")
-    total = _decimal(row.get("total")) or Decimal("0")
-    available = _decimal(row.get("available")) or Decimal("0")
-    reserved = _decimal(row.get("reserved", row.get("locked")))
+    total = _decimal(_field(value, "total", None)) or Decimal("0")
+    available = _decimal(_field(value, "available", None)) or Decimal("0")
+    reserved = _decimal(_field(value, "reserved", _field(value, "locked", None)))
     return Balance(
         account_id,
         segment_key,
-        str(row.get("asset", row.get("asset_code", row.get("symbol", "")))),
+        str(
+            _field(
+                value,
+                "asset",
+                _field(value, "asset_code", _field(value, "symbol", "")),
+            )
+        ),
         total,
         available,
         total - available if reserved is None else reserved,
     )
 
 
-def map_position(
+def _map_position(
     value: object, *, account_id: AccountId, segment_key: SegmentKey
 ) -> Position:
-    row = _mapping(value, "position")
-    instrument_id = str(row.get("instrument_id", row.get("symbol", "")))
+    instrument_id = str(_field(value, "instrument_id", _field(value, "symbol", "")))
     return Position(
         account_id=account_id,
         segment_key=segment_key,
         instrument=InstrumentRef(
             InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]
         ),
-        quantity=_decimal(row.get("quantity")) or Decimal("0"),
-        position_side=_position_side(row.get("position_side")),
-        average_price=_decimal(row.get("average_price")),
-        market_value=_decimal(row.get("market_value")),
-        unrealized_pnl=_decimal(row.get("unrealized_pnl")),
+        quantity=_decimal(_field(value, "quantity", None)) or Decimal("0"),
+        position_side=_position_side(_field(value, "position_side", None)),
+        average_price=_decimal(_field(value, "average_price", None)),
+        market_value=_decimal(_field(value, "market_value", None)),
+        unrealized_pnl=_decimal(_field(value, "unrealized_pnl", None)),
     )
 
 
-def map_earn_holding(
+def _map_earn_holding(
     value: object, *, account_id: AccountId, segment_key: SegmentKey
 ) -> EarnHolding:
-    row = _mapping(value, "Earn holding")
+    participant_position_id = _field(value, "participant_position_id", None)
+    participant_state = _field(value, "participant_state", None)
     return EarnHolding(
         account_id=account_id,
         segment_key=segment_key,
-        holding_key=_required_text(row.get("holding_key"), "earn holding_key"),
+        holding_key=_required_text(_field(value, "holding_key"), "earn holding_key"),
         participant_position_id=(
-            None
-            if row.get("participant_position_id") is None
-            else str(row["participant_position_id"])
+            None if participant_position_id is None else str(participant_position_id)
         ),
-        product_id=_required_text(row.get("product_id"), "earn product_id"),
-        asset=_required_text(row.get("asset"), "earn asset"),
-        principal=_decimal(row.get("principal")) or Decimal("0"),
-        redeemable=_decimal(row.get("redeemable")),
-        state=EarnHoldingState(str(row.get("state", "unknown"))),
+        product_id=_required_text(_field(value, "product_id"), "earn product_id"),
+        asset=_required_text(_field(value, "asset"), "earn asset"),
+        principal=_decimal(_field(value, "principal", None)) or Decimal("0"),
+        redeemable=_decimal(_field(value, "redeemable", None)),
+        state=EarnHoldingState(str(_field(value, "state", "unknown"))),
         participant_state=(
-            None
-            if row.get("participant_state") is None
-            else str(row["participant_state"])
+            None if participant_state is None else str(participant_state)
         ),
-        liquidity=EarnLiquidity(str(row.get("liquidity", "unknown"))),
-        notice_seconds=_optional_int(row.get("notice_seconds")),
-        matures_at_unix_nanos=_optional_int(row.get("matures_at_unix_nanos")),
-        observed_at_unix_nanos=_optional_int(row.get("observed_at_unix_nanos")),
+        liquidity=EarnLiquidity(str(_field(value, "liquidity", "unknown"))),
+        notice_seconds=_optional_int(_field(value, "notice_seconds", None)),
+        matures_at_unix_nanos=_optional_int(
+            _field(value, "matures_at_unix_nanos", None)
+        ),
+        observed_at_unix_nanos=_optional_int(
+            _field(value, "observed_at_unix_nanos", None)
+        ),
+    )
+
+
+def _market_decimal(value: object) -> Decimal:
+    return Decimal(int(getattr(value, "mantissa"))).scaleb(
+        -int(getattr(value, "scale"))
     )
 
 
@@ -439,13 +248,13 @@ def _position_side(value: object) -> PositionSide:
         raw = "net"
     try:
         return PositionSide(raw)
-    except ValueError as exc:
-        raise ValueError(f"unknown Account position side {value!r}") from exc
+    except ValueError as error:
+        raise ValueError(f"unknown Account position side {value!r}") from error
 
 
-def _freshness(row: Mapping[str, object]) -> DataFreshness:
-    raw = str(row.get("freshness", row.get("status", "unknown"))).lower()
-    if bool(row.get("stale", False)):
+def _freshness(value: object) -> DataFreshness:
+    raw = str(_field(value, "freshness", _field(value, "status", "unknown"))).lower()
+    if bool(_field(value, "stale", False)):
         return DataFreshness.STALE
     if raw == "reconciling":
         return DataFreshness.RESYNCING
@@ -460,10 +269,15 @@ def _freshness(row: Mapping[str, object]) -> DataFreshness:
     )
 
 
-def _mapping(value: object, name: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{name} must be an object")
-    return value
+_MISSING = object()
+
+
+def _field(value: object, name: str, default: object = _MISSING) -> object:
+    if hasattr(value, name):
+        return getattr(value, name)
+    if default is not _MISSING:
+        return default
+    raise ValueError(f"Account value omitted {name}")
 
 
 def _sequence(value: object, name: str) -> Sequence[object]:
@@ -475,9 +289,20 @@ def _sequence(value: object, name: str) -> Sequence[object]:
 def _decimal(value: object) -> Decimal | None:
     if value is None:
         return None
-    if not isinstance(value, str):
-        raise ValueError("decimal values must use the canonical string representation")
-    return Decimal(value)
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, str):
+        return Decimal(value)
+    decimal_value = getattr(value, "value", None)
+    if isinstance(decimal_value, Decimal):
+        return decimal_value
+    mantissa = getattr(value, "mantissa", None)
+    scale = getattr(value, "scale", None)
+    if isinstance(mantissa, bool) or not isinstance(mantissa, int):
+        raise ValueError("decimal mantissa must be an integer")
+    if isinstance(scale, bool) or not isinstance(scale, int):
+        raise ValueError("decimal scale must be an integer")
+    return Decimal(mantissa).scaleb(-scale)
 
 
 def _optional_int(value: object) -> int | None:
@@ -499,7 +324,8 @@ def _integer(value: object, name: str) -> int:
 
 
 def _required_text(value: object, name: str) -> str:
-    result = value if isinstance(value, str) else ""
+    semantic_value = getattr(value, "value", value)
+    result = semantic_value if isinstance(semantic_value, str) else ""
     if not result.strip():
         raise ValueError(f"Account snapshot {name} is required")
     return result

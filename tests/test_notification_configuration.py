@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from kairospy.infrastructure.contracts.market import MarketControlUnavailableError
 from kairospy.system.apps.launch.application.configuration import (
     LaunchConfigError,
     LaunchConfigurationApplication,
@@ -471,7 +472,7 @@ signals = ["feishu-options", "telegram-personal"]
             composition.application.enable()
             try:
                 composition.application.stop()
-            except FileNotFoundError:
+            except (FileNotFoundError, MarketControlUnavailableError):
                 # This focused composition has no running Market control socket;
                 # on_end has already run before owner-release cleanup is attempted.
                 pass

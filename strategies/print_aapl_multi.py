@@ -46,24 +46,36 @@ class PrintAaplMulti(Strategy):
     def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
         del context
         quote = event.data
-        provider = quote.provider or quote.scope.key()
+        scope_key = _scope_key(quote.scope)
+        provider = quote.provider or scope_key
         print(
             f"AAPL quote provider={provider} "
-            f"scope={quote.scope.key()} "
-            f"market={quote.market_id or '-'} instrument={quote.instrument.id} "
-            f"bid={quote.bid_price if quote.bid_price is not None else '-'} "
-            f"ask={quote.ask_price if quote.ask_price is not None else '-'}",
+            f"scope={scope_key} "
+            f"market={quote.scope.market_id or '-'} instrument={quote.instrument_id} "
+            f"bid={quote.bid_price.value if quote.bid_price is not None else '-'} "
+            f"ask={quote.ask_price.value if quote.ask_price is not None else '-'}",
             flush=True,
         )
 
     def on_bar(self, context: StrategyContext, event: BarEvent) -> None:
         del context
         bar = event.data
-        provider = bar.provider or bar.scope.key()
+        scope_key = _scope_key(bar.scope)
+        provider = bar.provider or scope_key
         print(
             f"AAPL bar provider={provider} "
-            f"scope={bar.scope.key()} "
-            f"market={bar.market_id or '-'} instrument={bar.instrument.id} "
-            f"timeframe={bar.timeframe} close={bar.close}",
+            f"scope={scope_key} "
+            f"market={bar.scope.market_id or '-'} instrument={bar.instrument_id} "
+            f"timeframe={bar.bar_spec_id} close={bar.close.value}",
             flush=True,
         )
+
+
+def _scope_key(scope: object) -> str:
+    market_id = getattr(scope, "market_id", None)
+    if market_id is not None:
+        return str(market_id)
+    return (
+        f"consolidated:{getattr(scope, 'instrument_id')}:"
+        f"{getattr(scope, 'network_id', None) or '*'}"
+    )

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shlex
 from types import SimpleNamespace
+from decimal import Decimal
 
 import pytest
 import typer
@@ -302,7 +303,7 @@ def test_launch_instance_component_execution_active_orders_uses_connected_owner_
             "btc",
             "--instance-id",
             "run-1",
-        "active-orders",
+            "active-orders",
             "--account-id",
             "main",
         ],
@@ -411,31 +412,71 @@ def test_launch_instance_component_risk_latest_uses_connected_owner_cli(
 def test_risk_system_client_latest_returns_current_view_business_facts(
     tmp_path: Path, monkeypatch
 ) -> None:
+    from decimal import Decimal
+    from types import SimpleNamespace
+
     from kairospy.system.apps.components.application.clients import RiskSystemClient
 
     class FakeCurrentView:
-        def latest(self):
-            return {
-                "kind": "latest",
-                "generation": 3,
-                "limits": [{"policy": {"policy_id": "policy-1"}}],
-                "active_reservations": [{"reservation_id": "reservation-1"}],
-                "circuits": [{"circuit_id": "circuit-1", "status": "open"}],
-                "summary": {
-                    "limit_count": 1,
-                    "active_reservation_count": 1,
-                    "open_circuit_count": 1,
-                },
-            }
+        path = tmp_path / "snapshots" / "risk"
 
-        def limits(self):
-            return ({"policy": {"policy_id": "policy-1"}},)
+        def snapshot(self):
+            scope = SimpleNamespace(
+                account_id="main",
+                strategy_id=None,
+                instrument_id=None,
+                exchange_id=None,
+            )
+            def amount(value: str) -> SimpleNamespace:
+                return SimpleNamespace(value=Decimal(value))
 
-        def active_reservations(self):
-            return ({"reservation_id": "reservation-1"},)
-
-        def circuits(self):
-            return ({"circuit_id": "circuit-1", "status": "open"},)
+            policy = SimpleNamespace(
+                policy_id="policy-1",
+                version=2,
+                scope=scope,
+                metric="notional",
+                limit=amount("100"),
+                enforcement="hard",
+                valid_from_unix_nanos=1,
+                valid_until_unix_nanos=None,
+                window_nanos=None,
+            )
+            limit = SimpleNamespace(
+                policy=policy,
+                used=amount("20"),
+                reserved=amount("5"),
+                available=amount("75"),
+            )
+            reservation = SimpleNamespace(
+                reservation_id="reservation-1",
+                request_id="request-1",
+                account_id="main",
+                strategy_id="strategy-1",
+                idempotency_key="idempotency-1",
+                allocations=[],
+                status="reserved",
+                created_at_unix_nanos=1,
+                updated_at_unix_nanos=2,
+                expires_at_unix_nanos=3,
+                policy_version=2,
+            )
+            circuit = SimpleNamespace(
+                circuit_id="circuit-1",
+                scope=scope,
+                status="open",
+                opened_at_unix_nanos=1,
+                reset_at_unix_nanos=None,
+                reason="test",
+            )
+            return SimpleNamespace(
+                actor_id="risk:run-1",
+                generation=3,
+                policy_version=2,
+                limits=[limit],
+                reservations=[reservation],
+                circuits=[circuit],
+                applied_event_sequence=9,
+            )
 
     seen: dict[str, object] = {}
 
@@ -445,34 +486,33 @@ def test_risk_system_client_latest_returns_current_view_business_facts(
 
     monkeypatch.setattr(RiskSystemClient, "latest_view", latest_view)
 
-    client = RiskSystemClient(tmp_path / "risk.sock", view_root=tmp_path / "snapshots")
-    assert client.latest(actor_id="risk:run-1") == {
-        "kind": "latest",
-        "generation": 3,
-        "limits": [{"policy": {"policy_id": "policy-1"}}],
-        "active_reservations": [{"reservation_id": "reservation-1"}],
-        "circuits": [{"circuit_id": "circuit-1", "status": "open"}],
-        "summary": {
-            "limit_count": 1,
-            "active_reservation_count": 1,
-            "open_circuit_count": 1,
-        },
+    client = RiskSystemClient(
+        tmp_path / "risk.sock",
+        view_root=tmp_path / "snapshots",
+        workspace_id="workspace",
+    )
+    latest = client.latest(actor_id="risk:run-1")
+    assert latest["generation"] == 3
+    assert latest["limits"][0]["policy"]["policy_id"] == "policy-1"
+    assert latest["active_reservations"][0]["reservation_id"] == "reservation-1"
+    assert latest["circuits"][0]["circuit_id"] == "circuit-1"
+    assert latest["summary"] == {
+        "limit_count": 1,
+        "active_reservation_count": 1,
+        "open_circuit_count": 1,
     }
     assert client.latest_metadata(actor_id="risk:run-1") == client.latest(
         actor_id="risk:run-1"
     )
-    assert client.latest_limits(actor_id="risk:run-1") == {
-        "actor_id": "risk:run-1",
-        "limits": [{"policy": {"policy_id": "policy-1"}}],
-    }
-    assert client.latest_reservations(actor_id="risk:run-1") == {
-        "actor_id": "risk:run-1",
-        "active_reservations": [{"reservation_id": "reservation-1"}],
-    }
-    assert client.latest_circuits(actor_id="risk:run-1") == {
-        "actor_id": "risk:run-1",
-        "circuits": [{"circuit_id": "circuit-1", "status": "open"}],
-    }
+    assert client.latest_limits(actor_id="risk:run-1")["limits"][0]["policy"][
+        "policy_id"
+    ] == "policy-1"
+    assert client.latest_reservations(actor_id="risk:run-1")[
+        "active_reservations"
+    ][0]["reservation_id"] == "reservation-1"
+    assert client.latest_circuits(actor_id="risk:run-1")["circuits"][0][
+        "circuit_id"
+    ] == "circuit-1"
     assert seen["actor_id"] == "risk:run-1"
 
 
@@ -634,37 +674,21 @@ def test_capital_system_client_current_returns_current_view_business_facts(
     from kairospy.system.apps.components.application.clients import CapitalSystemClient
 
     class FakeCurrentView:
-        def current(self):
-            return {
-                "capital_group_id": "group-1",
-                "kind": "current",
-                "generation": 4,
-                "summary": {
-                    "availability_count": 1,
-                    "alert_count": 1,
-                    "critical_alert_count": 1,
-                },
-                "availabilities": [{"readiness": "degraded"}],
-                "alerts": [{"severity": "critical"}],
-            }
-
-        def objectives(self):
-            return ({"objective_id": "objective-1"},)
-
-        def demands(self):
-            return ({"demand_id": "demand-1"},)
-
-        def plans(self):
-            return ({"plan_id": "plan-1"},)
-
-        def routes(self):
-            return ({"route_id": "route-1"},)
-
-        def reservations(self):
-            return ({"reservation_id": "reservation-1"},)
-
-        def operations(self):
-            return ({"operation_id": "operation-1"},)
+        def snapshot(self):
+            return SimpleNamespace(
+                capital_group_id="group-1",
+                generation=4,
+                availabilities=({"readiness": "degraded"},),
+                objectives=({"objective_id": "objective-1"},),
+                demands=({"demand_id": "demand-1"},),
+                policies=(),
+                facts=(),
+                plans=({"plan_id": "plan-1"},),
+                routes=({"route_id": "route-1"},),
+                reservations=({"reservation_id": "reservation-1"},),
+                operations=({"operation_id": "operation-1"},),
+                alerts=({"severity": "critical"},),
+            )
 
     seen: dict[str, object] = {}
 
@@ -677,19 +701,8 @@ def test_capital_system_client_current_returns_current_view_business_facts(
     client = CapitalSystemClient(
         tmp_path / "capital.sock", view_root=tmp_path / "snapshots"
     )
-    assert client.current("group-1") == {
-        "capital_group_id": "group-1",
-        "kind": "current",
-        "generation": 4,
-        "summary": {
-            "availability_count": 1,
-            "alert_count": 1,
-            "critical_alert_count": 1,
-        },
-        "availabilities": [{"readiness": "degraded"}],
-        "alerts": [{"severity": "critical"}],
-    }
-    assert client.current_metadata("group-1") == client.current("group-1")
+    assert client.current("group-1").generation == 4
+    assert client.current_metadata("group-1").capital_group_id == "group-1"
     assert client.current_objectives("group-1") == {
         "capital_group_id": "group-1",
         "objectives": [{"objective_id": "objective-1"}],
@@ -1897,8 +1910,7 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
     seen: dict[str, object] = {}
 
     class CurrentView:
-        def snapshot(self, account_id):
-            seen["snapshot_account_id"] = str(account_id)
+        def snapshot(self):
             return AccountSnapshot(
                 account_id=AccountId("main"),
                 segments=(),
@@ -1947,7 +1959,7 @@ def test_launch_instance_component_account_balances_uses_manifest_client(
     assert value["scope"] == "launch-instance"
     assert value["launch_id"] == "btc"
     assert value["instance_id"] == "run-1"
-    assert seen == {"current_view_account_id": "main", "snapshot_account_id": "main"}
+    assert seen == {"current_view_account_id": "main"}
 
 
 def test_launch_account_balances_table_uses_balance_columns() -> None:
@@ -2076,12 +2088,24 @@ def test_launch_instance_component_account_open_orders_is_scoped_component_resul
     seen: dict[str, object] = {}
 
     class ObservedOrdersView:
-        def open_orders(self, account_id):
-            seen["open_orders_account_id"] = str(account_id)
-            return {
-                "account_id": str(account_id),
-                "open_orders": [{"remote_order_id": "remote-1"}],
-            }
+        def snapshot(self):
+            decimal = SimpleNamespace(value=Decimal("1"))
+            return SimpleNamespace(observed_orders=(
+                SimpleNamespace(
+                    observation_id="observation-1",
+                    source_id="source-1",
+                    execution_order_id="order-1",
+                    remote_order_id="remote-1",
+                    instrument_id="instrument-1",
+                    market_id="market-1",
+                    side="buy",
+                    quantity=decimal,
+                    filled_quantity=decimal,
+                    status="open",
+                    observed_at_unix_nanos=1,
+                    segment_key="spot",
+                ),
+            ))
 
     class AccountClient:
         def observed_orders_view(self, account_id):
@@ -2119,16 +2143,28 @@ def test_launch_instance_component_account_open_orders_is_scoped_component_resul
     )
     assert json.loads(output.getvalue()) == {
         "account_id": "main",
-        "open_orders": [{"remote_order_id": "remote-1"}],
+        "open_orders": [
+            {
+                "observation_id": "observation-1",
+                "source_id": "source-1",
+                "execution_order_id": "order-1",
+                "remote_order_id": "remote-1",
+                "instrument_id": "instrument-1",
+                "market_id": "market-1",
+                "side": "buy",
+                "quantity": "1",
+                "filled_quantity": "1",
+                "status": "open",
+                "observed_at_unix_nanos": 1,
+                "segment_key": "spot",
+            }
+        ],
         "launch_id": "btc",
         "instance_id": "run-1",
         "mode": "paper",
         "scope": "launch-instance",
     }
-    assert seen == {
-        "current_view_account_id": "main",
-        "open_orders_account_id": "main",
-    }
+    assert seen == {"current_view_account_id": "main"}
 
 
 def test_system_component_reference_status_inspects_workspace_component(

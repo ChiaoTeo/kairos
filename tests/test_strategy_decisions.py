@@ -9,10 +9,9 @@ import pytest
 from kairospy.investment.apps.execution.application import (
     ExecutionIntent,
     Fill,
-    FillEvent,
     IntentStatus,
-    IntentUpdateEvent,
 )
+from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
 from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.strategy.apps.decisions.application import (
     DecisionHorizon,
@@ -23,7 +22,6 @@ from kairospy.strategy.apps.decisions.application import (
 from kairospy.strategy.apps.decisions.services.journal import (
     StrategyDecisionJournal,
 )
-from kairospy.investment.application.eventing import EventMetadata
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.execution import FillId, IntentId, OrderId
 from kairospy.primitives.reference import InstrumentId
@@ -64,27 +62,18 @@ def _intent_event(
     status: IntentStatus,
     sequence: int,
     occurred_at: datetime,
-) -> IntentUpdateEvent:
-    intent = ExecutionIntent(
-        id=IntentId(intent_id),
+) -> ExecutionEvent:
+    return ExecutionEvent.simulation_intent_update(
+        sequence=sequence,
         strategy_id="strategy-a",
-        instrument=InstrumentRef(InstrumentId("instrument:test:BTCUSDT"), "BTCUSDT"),
-        account_ids=(AccountId("main"),),
-        target_quantity=None,
-        status=status,
-        reason=status.value,
-        order_ids=(),
+        account_id="main",
+        intent_id=intent_id,
+        instrument_id="instrument:test:BTCUSDT",
+        status=status.value,
+        instance_id="instance-1",
+        occurred_at_unix_nanos=int(occurred_at.timestamp() * 1_000_000_000),
         strategy_decision_id=decision_id,
-    )
-    return IntentUpdateEvent(
-        intent,
-        EventMetadata(
-            "execution.events",
-            sequence,
-            producer="execution",
-            occurred_at=occurred_at,
-            occurred_at_unix_nanos=int(occurred_at.timestamp() * 1_000_000_000),
-        ),
+        reason=status.value,
     )
 
 
@@ -105,10 +94,9 @@ def test_decision_progress_waits_for_every_expected_intent(tmp_path: Path) -> No
             decision.strategy_decision_id, "intent-1", IntentStatus.SATISFIED, 1, now
         )
     )
-    assert (
-        decisions.decision(decision.strategy_decision_id).lifecycle
-        is DecisionLifecycle.SUBMITTED
-    )  # type: ignore[union-attr]
+    progress = decisions.decision(decision.strategy_decision_id)
+    assert progress is not None
+    assert progress.lifecycle is DecisionLifecycle.SUBMITTED
 
     decisions.observe_execution(
         _intent_event(
@@ -137,7 +125,6 @@ def test_decision_progress_waits_for_every_expected_intent(tmp_path: Path) -> No
     "status",
     [
         IntentStatus.SATISFIED,
-        IntentStatus.COMPLETED,
         IntentStatus.REJECTED,
         IntentStatus.CANCELED,
         IntentStatus.EXPIRED,
@@ -197,8 +184,17 @@ def test_decision_progress_rejects_a_lifecycle_gap(tmp_path: Path) -> None:
         2,
         clock.now,
     )
-    executing = IntentUpdateEvent(
-        executing.data, executing.metadata, IntentStatus.PLANNED
+    executing = ExecutionEvent.simulation_intent_update(
+        sequence=2,
+        strategy_id="strategy-a",
+        account_id="main",
+        intent_id="intent-1",
+        instrument_id="instrument:test:BTCUSDT",
+        status=IntentStatus.EXECUTING.value,
+        previous_status=IntentStatus.PLANNED.value,
+        instance_id="instance-1",
+        occurred_at_unix_nanos=int(clock.now.timestamp() * 1_000_000_000),
+        strategy_decision_id=decision.strategy_decision_id,
     )
     with pytest.raises(ValueError, match="not contiguous"):
         decisions.observe_execution(executing)
@@ -380,25 +376,18 @@ def test_late_fill_requires_a_new_effect_revision(tmp_path: Path) -> None:
     )
 
     decisions.observe_execution(
-        FillEvent(
-            Fill(
-                id=FillId("fill-late"),
-                order_id=OrderId("order-1"),
-                instrument=InstrumentRef(
-                    InstrumentId("instrument:test:BTCUSDT"), "BTCUSDT"
-                ),
-                quantity=Decimal("1"),
-                price=Decimal("100"),
-                occurred_at=now,
-                intent_id=IntentId("intent-1"),
-            ),
-            EventMetadata(
-                "execution.events",
-                2,
-                producer="execution",
-                occurred_at=now,
-                occurred_at_unix_nanos=int(now.timestamp() * 1_000_000_000),
-            ),
+        ExecutionEvent.simulation_fill(
+            sequence=2,
+            strategy_id="strategy-a",
+            account_id="main",
+            intent_id="intent-1",
+            fill_id="fill-late",
+            order_id="order-1",
+            instrument_id="instrument:test:BTCUSDT",
+            quantity=1,
+            price=100,
+            instance_id="instance-1",
+            occurred_at_unix_nanos=int(now.timestamp() * 1_000_000_000),
         )
     )
 

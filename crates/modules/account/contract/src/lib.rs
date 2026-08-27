@@ -24,10 +24,13 @@ pub use control::{
 };
 pub use encode::{EncodeContext, event_metadata};
 pub use error::{ContractError, ContractResult};
-pub use event::{AccountEvent, AccountEventFrame, AccountEventPublisher, AccountEventStream};
+pub use event::*;
 pub type AccountConnection = kairos_protocol::ContractClient;
 
 pub use kairos_transport::AeronEndpoint;
+pub const ACCOUNT_EVENT_STREAM_ID: i32 = kairos_transport::stream_ids::ACCOUNT_EVENTS;
+pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
+pub const CONTRACT_FINGERPRINT: &str = "kairos.account.contract.v2";
 pub use view::{
     ACCOUNT_BALANCES_DATABASE, ACCOUNT_COLLATERAL_DATABASE, ACCOUNT_EARN_HOLDINGS_DATABASE,
     ACCOUNT_MAP_SIZE, ACCOUNT_OBSERVED_ORDERS_DATABASE, ACCOUNT_POSITIONS_DATABASE,

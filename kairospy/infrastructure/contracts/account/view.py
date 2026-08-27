@@ -1,11 +1,5 @@
-"""Account v2 current-view contract."""
+"""Pure exports for the Account owner-native current-view boundary."""
 
-from .runtime import AccountCurrentViewReader, AccountObservedOrdersViewReader
-from .view_contract import AccountIndexedViewReader, account_indexed_environment_path
+from .types import AccountCurrentView, indexed_environment_path
 
-__all__ = [
-    "AccountCurrentViewReader",
-    "AccountObservedOrdersViewReader",
-    "AccountIndexedViewReader",
-    "account_indexed_environment_path",
-]
+__all__ = ["AccountCurrentView", "indexed_environment_path"]

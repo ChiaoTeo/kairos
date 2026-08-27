@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 import asyncio
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Mapping
+from typing import Mapping, cast
 
 from ..domain.lifecycle import StrategyDataHealth, StrategyLifecycle, StrategyReadiness
 from ..domain.messages import LifecycleRecord
@@ -25,32 +25,27 @@ from kairospy.investment.apps.execution.application import (
     ExecutionApplication,
     ExecutionBacktestResult,
     Fill,
-    FillEvent,
-    IntentUpdateEvent,
-    OrderStatus,
-    OrderUpdateEvent,
 )
+from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
 from kairospy.investment.apps.market.application import MarketApplication
 from kairospy.strategy.apps.notification.application import NotificationApplication
 from kairospy.investment.apps.portfolio.application import PortfolioApplication
 from kairospy.investment.apps.reference.application import ReferenceApplication
 from kairospy.investment.apps.risk.application import RiskApplication
-from kairospy.primitives.account import SegmentKey
+from kairospy.primitives.account import AccountId, SegmentKey
 from ..services.context import StrategyContext
 from ..services.callbacks import StrategyCallbackHost
 from ..services.ingress import StrategyEventIngress
 from kairospy.strategy.api import (
-    BarEvent,
     EventMetadata,
     MarketEvent,
-    QuoteEvent,
     StrategyLogger,
     TimerFiredEvent,
-    TradeEvent,
     SystemEvent,
     SystemNotice,
 )
 from kairospy.strategy.api import CommandResult, StrategyCommand
+from kairospy.infrastructure.contracts.market.types import MarketSubscriptionResponse
 from kairospy.strategy.api.clock import (
     DeterministicTimerQueue,
     StrategyClock,
@@ -339,8 +334,9 @@ class StrategyApplication:
             return
         domain = self.ingress.route(event).domain
         metadata = getattr(event, "metadata")
-        if domain in {"market", "clock"} and metadata.occurred_at is not None:
-            event_time = ensure_utc(metadata.occurred_at)
+        occurred_at = _metadata_datetime(metadata)
+        if domain in {"market", "clock"} and occurred_at is not None:
+            event_time = ensure_utc(occurred_at)
             if self._clock.now is None or event_time >= self._clock.now:
                 self.advance_time(event_time)
         self._dispatch_event(event)
@@ -352,10 +348,11 @@ class StrategyApplication:
         clock is allowed to visit timer timestamps inside a data gap.  Clock
         events at the same timestamp are emitted before the market event.
         """
-        if event.metadata.occurred_at is None:
+        occurred_at = _metadata_datetime(event.metadata)
+        if occurred_at is None:
             self._dispatch_event(event)
             return
-        event_time = ensure_utc(event.metadata.occurred_at)
+        event_time = ensure_utc(occurred_at)
         self._advance_replay_time(event_time)
         self._dispatch_event(event)
 
@@ -415,8 +412,11 @@ class StrategyApplication:
         if self._status.state is not StrategyLifecycle.RUNNING:
             return
         route = self.ingress.route(event)
-        if isinstance(event, (IntentUpdateEvent, FillEvent)):
-            self.decisions.observe_execution(event)
+        if isinstance(event, ExecutionEvent) and getattr(event, "kind") in {
+            "intent_update",
+            "fill",
+        }:
+            self.decisions.observe_execution(cast(ExecutionEvent, event))
         domain, hook = route.domain, route.hook
         metadata = getattr(event, "metadata")
         previous_sequence = self._stream_sequences.get(metadata.stream_id, 0)
@@ -442,7 +442,7 @@ class StrategyApplication:
                 "trace_sequence": self._trace_sequence,
                 "domain": domain,
                 "kind": getattr(event, "kind"),
-                "event_time": metadata.occurred_at,
+                "event_time": _metadata_datetime(metadata),
                 "source_sequence": metadata.sequence,
                 "source_stream_id": metadata.stream_id,
             }
@@ -455,13 +455,14 @@ class StrategyApplication:
         # event.  This prevents a strategy from observing a bar close and
         # immediately filling against that same close by accident.  Quote
         # events keep the existing quote-after-intent behavior.
-        if isinstance(event, BarEvent):
+        if domain == "market" and getattr(event, "kind") == "bar":
+            market_event = cast(MarketEvent, event)
             if self._pending_bar_event is not None:
                 self._apply_backtest_callbacks(self._pending_bar_event)
-            self._pending_bar_event = event
-            self._last_data_event = event
-        elif isinstance(event, (QuoteEvent, TradeEvent)):
-            self._last_data_event = event
+            self._pending_bar_event = market_event
+            self._last_data_event = market_event
+        elif domain == "market" and getattr(event, "kind") in {"quote", "trade"}:
+            self._last_data_event = cast(MarketEvent, event)
 
         def log_dispatch() -> None:
             if hook == "on_market":
@@ -471,7 +472,7 @@ class StrategyApplication:
                         event="strategy_on_market",
                         event_domain=domain,
                         event_kind=getattr(event, "kind"),
-                        event_payload=repr(getattr(event, "data")),
+                        event_payload=_market_event_log_value(getattr(event, "data")),
                     )
             else:
                 self._log(f"dispatch {hook}", event_kind=getattr(event, "kind"))
@@ -484,8 +485,8 @@ class StrategyApplication:
             raise
         if self.backtest is not None:
             self._synchronize_agent_events()
-        if isinstance(event, (QuoteEvent, TradeEvent)):
-            self._apply_backtest_callbacks(event)
+        if domain == "market" and getattr(event, "kind") in {"quote", "trade"}:
+            self._apply_backtest_callbacks(cast(MarketEvent, event))
         first_event = not self._status.first_event_received and domain == "market"
         self._status = replace(
             self._status,
@@ -502,7 +503,7 @@ class StrategyApplication:
             first_event_received=(
                 True if domain == "market" else self._status.first_event_received
             ),
-            last_event_time=metadata.occurred_at,
+            last_event_time=_metadata_datetime(metadata),
             last_event_kind=getattr(event, "kind"),
             event_count=self._status.event_count + 1,
         )
@@ -517,49 +518,54 @@ class StrategyApplication:
     def _observe_execution_funding_demand(self, event: object) -> None:
         if (
             not self.context.capital.enabled
-            or not isinstance(event, OrderUpdateEvent)
-            or event.data.status is not OrderStatus.REJECTED
+            or not isinstance(event, ExecutionEvent)
+            or getattr(event, "kind") != "order_update"
         ):
             return
+        execution_event = cast(ExecutionEvent, event)
+        if str(getattr(execution_event.data, "status")) != "rejected":
+            return
+        order_id = str(getattr(execution_event.data, "order_id"))
+        account_id = AccountId(str(getattr(execution_event.data, "account_id")))
         reservation = next(
             (
                 value
                 for value in self.context.execution.risk_reservations()
-                if value.order_id == event.data.id
+                if str(value.order_id) == order_id
             ),
             None,
         )
         if reservation is None or reservation.funding_requirement is None:
             return
         requirement = reservation.funding_requirement
-        lease_fence = self.context.capital.account_lease_fence(event.data.account_id)
+        lease_fence = self.context.capital.account_lease_fence(account_id)
         if lease_fence is None:
             self._log(
                 "capital demand omitted because account lease fence is unavailable",
                 event="capital_demand_omitted",
-                order_id=str(event.data.id),
+                order_id=order_id,
             )
             return
-        occurred_at_unix_nanos = event.metadata.occurred_at_unix_nanos
+        occurred_at_unix_nanos = execution_event.metadata.occurred_at_unix_nanos
         if occurred_at_unix_nanos is None:
             self._log(
                 "capital demand omitted because event time is unavailable",
                 event="capital_demand_omitted",
-                order_id=str(event.data.id),
+                order_id=order_id,
             )
             return
         observed_at = datetime.fromtimestamp(
             occurred_at_unix_nanos / 1_000_000_000,
             tz=timezone.utc,
         )
-        demand_id = f"risk:{requirement.risk_decision_id}:{event.data.id}"
+        demand_id = f"risk:{requirement.risk_decision_id}:{order_id}"
         try:
             receipt = self.context.capital.observe_demand(
                 CapitalDemand(
                     demand_id=demand_id,
                     idempotency_key=demand_id,
                     destination=FundingLocation(
-                        event.data.account_id,
+                        account_id,
                         SegmentKey(requirement.segment),
                         requirement.collateral_asset,
                         requirement.broker,
@@ -576,7 +582,7 @@ class StrategyApplication:
                     destination_lease_fence=lease_fence,
                     priority=FundingPriority.HIGH,
                     causal_references=(
-                        f"execution-order:{event.data.id}",
+                        f"execution-order:{order_id}",
                         f"risk-decision:{requirement.risk_decision_id}",
                     ),
                 )
@@ -585,7 +591,7 @@ class StrategyApplication:
             self._log(
                 "capital demand observation failed",
                 event="capital_demand_failed",
-                order_id=str(event.data.id),
+                order_id=order_id,
                 error=str(error),
             )
             return
@@ -850,7 +856,7 @@ class StrategyApplication:
             return
         result = self.context.market.release_strategy_subscriptions()
         request_id = result.request_id
-        if result.status not in {"accepted", "completed", "removed", "ready"}:
+        if result.status not in {"accepted", "applied", "completed", "removed", "ready"}:
             raise RuntimeError(
                 result.error
                 or f"Market rejected subscription owner release: {result.status}"
@@ -911,11 +917,21 @@ class StrategyApplication:
             subscription = self._subscriptions.setdefault(
                 request_id, {"request_id": request_id}
             )
+            response = cast(MarketSubscriptionResponse, result.response)
+            response_summary = {
+                "subscription_id": response.subscription_id,
+                "owner_id": response.owner_id,
+                "state": response.state,
+                "satisfied_selectors": list(response.satisfied_selectors),
+                "missing_selectors": list(response.missing_selectors),
+                "resolved_providers": list(response.resolved_providers),
+                "pending_reason": response.pending_reason,
+            }
             subscription.update(
                 {
                     "status": result.status,
                     "error": result.error,
-                    "result": dict(result.result),
+                    "response": response_summary,
                 }
             )
             self._log(
@@ -924,7 +940,7 @@ class StrategyApplication:
                 request_id=request_id,
                 subscription_status=result.status,
                 error=result.error,
-                result=dict(result.result),
+                response=response_summary,
             )
         pending = [
             request_id
@@ -984,9 +1000,12 @@ class StrategyApplication:
         target = getattr(request, "target")
         observations = getattr(request, "observations", ())
         provider_preference = getattr(request, "provider_preference")
-        target_value = target.wire()
+        target_value = _market_target_log_value(target)
         observation_values = [value.selector for value in observations]
-        preference_value = provider_preference.wire()
+        preference_value = {
+            "mode": provider_preference.mode,
+            "providers": list(provider_preference.providers),
+        }
         self._subscription_requests.add(request_id)
         self._log(
             f"market subscription requested request_id={request_id}",
@@ -1006,3 +1025,54 @@ class StrategyApplication:
 
     def _log(self, message: str, **data: object) -> None:
         self.logger.info(message, **data)
+
+
+def _market_target_log_value(target: object) -> dict[str, object]:
+    """Create a Strategy-owned diagnostic summary of a native Market target."""
+
+    kind = str(getattr(target, "kind"))
+    value: dict[str, object] = {"kind": kind}
+    for name in (
+        "market_id",
+        "instrument_id",
+        "network_id",
+        "underlying_market_id",
+        "underlying_instrument_id",
+    ):
+        field = getattr(target, name, None)
+        if field is not None:
+            value[name] = field
+    return value
+
+
+def _metadata_datetime(metadata: object) -> datetime | None:
+    value = getattr(metadata, "occurred_at", None)
+    if value is not None:
+        return value
+    nanos = getattr(metadata, "occurred_at_unix_nanos", None)
+    if nanos is None:
+        return None
+    return datetime.fromtimestamp(int(nanos) / 1_000_000_000, tz=timezone.utc)
+
+
+def _market_event_log_value(data: object) -> dict[str, object]:
+    """Build a Strategy-owned diagnostic summary without copying the owner DTO."""
+
+    value: dict[str, object] = {}
+    for name in ("instrument_id", "provider", "bar_spec_id"):
+        field = getattr(data, name, None)
+        if field is not None:
+            value[name] = field
+    scope = getattr(data, "scope", None)
+    if scope is not None:
+        value["scope"] = _scope_log_value(scope)
+    return value
+
+
+def _scope_log_value(scope: object) -> dict[str, object]:
+    value: dict[str, object] = {"kind": str(getattr(scope, "kind"))}
+    for name in ("market_id", "instrument_id", "network_id"):
+        field = getattr(scope, name, None)
+        if field is not None:
+            value[name] = field
+    return value

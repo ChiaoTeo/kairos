@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from kairospy.system.apps.components.application.clients import AccountSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace
 from kairospy.primitives.account import AccountId
-from kairospy.infrastructure.contracts.account.source import AeronAccountEventSource
+from kairospy.infrastructure.contracts.account import AccountClient
 
 from ..application.application import AccountApplication
 from ..application.models import AccountSegmentSnapshot
@@ -28,9 +28,12 @@ def build_strategy_access(
             account_id: client.current_view(account_id)
             for account_id, client in account_clients.items()
         },
-        AeronAccountEventSource(
-            aeron_dir=instance.workspace.paths.aeron_dir(),
-        ),
+        AccountClient(
+            next(iter(account_clients.values())).socket_path,
+            account_id=str(next(iter(account_clients))),
+            workspace_id=instance.workspace.workspace_id,
+            aeron_dir=str(instance.workspace.paths.aeron_dir()),
+        ).events,
         launch_id=instance.launch_id,
         instance_id=instance.instance_id,
         required_segments=required_segments,
@@ -52,6 +55,6 @@ def mark_backtest_account(
         raise ValueError("Account backtest result is missing segment_key")
     return (
         client.current_view(account_id)
-        .snapshot(account_id)
+        .snapshot()
         .segment(segment_key)
     )

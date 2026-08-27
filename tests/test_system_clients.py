@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,13 +29,19 @@ def test_account_system_client_keeps_only_control_and_reconciliation_queries() -
 
         def reconcile(self, request):
             self.calls.append(("reconcile", request))
-            return {"status": "ok"}
+            return SimpleNamespace(status="completed", account_id=None, segments=[])
 
     client = AccountSystemClient(Path("/tmp/account.sock"))
     control = RecordingAccountControl()
     object.__setattr__(client, "control", control)
-    client.reconcile()
-    assert control.calls == [("reconcile", {})]
+    assert client.reconcile() == {
+        "status": "completed",
+        "account_id": None,
+        "segments": [],
+    }
+    assert len(control.calls) == 1
+    assert control.calls[0][0] == "reconcile"
+    assert control.calls[0][1].segments == []
 
 
 def test_system_rpc_client_rejects_path_like_methods() -> None:
@@ -59,11 +66,13 @@ def test_execution_system_client_owns_intent_connection() -> None:
     client = ExecutionSystemClient(Path("/tmp/execution.sock"))
     control = RecordingExecutionControl()
     object.__setattr__(client, "control", control)
-    client.submit_intent({"intent_id": "i-1"})
-    client.routes({"account_id": "main", "order_type": "limit"})
+    submit_request = object()
+    routes_query = object()
+    client.submit_intent(submit_request)
+    client.routes(routes_query)
     assert control.calls == [
-        ("submit_intent", {"intent_id": "i-1"}),
-        ("routes", {"account_id": "main", "order_type": "limit"}),
+        ("submit_intent", submit_request),
+        ("routes", routes_query),
     ]
 
 
@@ -74,23 +83,27 @@ def test_execution_system_client_owns_backtest_market_dispatch(monkeypatch) -> N
         def __init__(self) -> None:
             self.calls: list[tuple[str, object]] = []
 
-        def backtest_market(self, payload):
-            self.calls.append(("backtest_market", payload))
-            return {"fills": []}
+        def backtest_market(self, request):
+            self.calls.append(("backtest_market", request))
+            return response
+
+    class Response:
+        fills: list[object] = []
+
+    request = object()
+    response = Response()
 
     monkeypatch.setattr(
         execution_mapping,
-        "backtest_market_payload",
-        lambda event: {"Quote": {"instrument_id": event}},
+        "backtest_market_request",
+        lambda event: request,
     )
     client = ExecutionSystemClient(Path("/tmp/execution.sock"))
     control = RecordingExecutionControl()
     object.__setattr__(client, "control", control)
 
-    assert client.backtest_market("instrument:BTCUSDT") == {"fills": []}
-    assert control.calls == [
-        ("backtest_market", {"Quote": {"instrument_id": "instrument:BTCUSDT"}})
-    ]
+    assert client.backtest_market("instrument:BTCUSDT") is response
+    assert control.calls == [("backtest_market", request)]
 
 
 def test_account_system_client_owns_mark_to_market_dispatch(monkeypatch) -> None:
@@ -102,15 +115,9 @@ def test_account_system_client_owns_mark_to_market_dispatch(monkeypatch) -> None
 
         def mark_to_market(self, request):
             self.calls.append(("mark_to_market", request))
-            return {"status": "accepted"}
+            return SimpleNamespace(status="applied")
 
-    request = {
-        "segment_key": "spot",
-        "instrument_id": "instrument:BTCUSDT",
-        "quote_asset": "USDT",
-        "mark_price": "100",
-        "observed_at_unix_nanos": 1,
-    }
+    request = SimpleNamespace(segment_key="spot")
     monkeypatch.setattr(
         account_mapping,
         "backtest_mark_to_market_request",
@@ -121,7 +128,7 @@ def test_account_system_client_owns_mark_to_market_dispatch(monkeypatch) -> None
     object.__setattr__(client, "control", control)
 
     assert client.mark_to_market_event("quote") == {
-        "result": {"status": "accepted"},
+        "result": {"status": "applied"},
         "segment_key": "spot",
     }
     assert client.mark_to_market_event("ignored") is None
@@ -133,14 +140,14 @@ def test_market_system_client_owns_current_data_route_query() -> None:
         def __init__(self) -> None:
             self.calls: list[tuple[str, object]] = []
 
-        def data_routes(self, query):
+        def data_routes(self, **query):
             self.calls.append(("data_routes", query))
-            return {"data_routes": []}
+            return type("Routes", (), {"routes": []})()
 
     client = MarketSystemClient(Path("/tmp/market.sock"))
     control = RecordingMarketControl()
     object.__setattr__(client, "control", control)
-    client.data_routes({"market_id": "market:btc", "observation_kind": "quote"})
+    client.data_routes(market_id="market:btc", observation_kind="quote")
     assert control.calls == [
         ("data_routes", {"market_id": "market:btc", "observation_kind": "quote"})
     ]

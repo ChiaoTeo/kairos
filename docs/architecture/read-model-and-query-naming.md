@@ -136,7 +136,7 @@ current storage 不承担无限历史。
 | `application/observations/order_book/projection.rs` | 单个 `ingest_orderbook_snapshot` command | 并入 `order_book/mod.rs` 或改 `snapshot.rs`；它不是投影 |
 | “current projection use cases” | observation ingestion 和当前状态读取 | `observation ingestion and current-view reads` |
 | Market observation key 的 “current market-data projection” | 一份带 scope/provider/kind 的当前视图资源 | `current market-data view` |
-| Python `MarketProjection` | 按 `MarketViewKey` 打开和解码 indexed entity | `MarketViewAccess` / `MarketIndexedViewQueries` |
+| Python `MarketProjection` | 按 `MarketViewKey` 打开和解码 indexed entity | owner-native `MarketCurrentView` |
 | composition 的 `current projection` | Strategy 侧 Market current-view access | `current views` |
 | `projected_markets` | Reference catalog 解析出的 Market runtime routes 数量 | `resolved_markets` |
 | “stable projection” | Actor 已确认的 provider/source current state | 按实际对象称 `current view`、`route state` 或 `source state` |
@@ -145,8 +145,8 @@ Rust 的两个同名文件职责可见
 [`observations/access.rs`](../../crates/modules/market/src/application/observations/access.rs)
 和
 [`order_book/snapshot.rs`](../../crates/modules/market/src/application/observations/order_book/snapshot.rs)。
-Python Market contract adapter 位于
-[`infrastructure/contracts/market/source.py`](../../kairospy/infrastructure/contracts/market/source.py)。
+Python Market current-view 实现在 owner companion
+[`market/contract/py/src/lib.rs`](../../crates/modules/market/contract/py/src/lib.rs)，Python facade 只做公开导出。
 
 ### Account：segment view 和 indexed reader 被混称
 
@@ -154,31 +154,30 @@ Python Market contract adapter 位于
 | --- | --- | --- |
 | `AccountActor::projection(segment_key)` | 从 Actor 当前状态生成一个 `AccountSegmentView` | `segment_view()` |
 | runtime 局部变量 `projection` | 用于 paper settlement / mark-to-market 的 segment view | `segment_view` |
-| Python `AccountCurrentProjection` | 读取、校验、解码 Account indexed current families，并返回 `AccountSnapshot` | `AccountCurrentViewReader` 或 `AccountCurrentSnapshots` |
-| Python `AccountObservedOrdersProjection` | 读取 indexed `observed_orders` family | `AccountObservedOrdersViewReader` |
+| Python `AccountCurrentProjection` | 读取、校验、解码 Account indexed current families | owner-native `AccountCurrentView` |
+| Python `AccountObservedOrdersProjection` | 读取 indexed `observed_orders` family | `AccountCurrentView.snapshot().observed_orders` |
 | Python `AccountApplication._projections` | 每个 AccountId 对应的 indexed current-view reader | `_current_views` |
 | `current_projection()`、`observed_orders_projection()` | System client 构造 indexed reader | `account_current()` / `current_view()`、`observed_orders()` |
 | “private-stream projections migrate” | provider private stream 产生的 Account 当前事实 | `private-stream ingestion` / `account current state` |
 
 Actor 已经公开准确的 `current_view()`，因此 `projection()` 没有提供额外含义，见
 [`account/src/services/actor.rs`](../../crates/modules/account/src/services/actor.rs)。Python reader
-位于
-[`contracts/account/runtime.py`](../../kairospy/infrastructure/contracts/account/runtime.py)。
+由 owner companion [`account/contract/py/src/lib.rs`](../../crates/modules/account/contract/py/src/lib.rs) 实现。
 
 ### Risk 和 Capital：Python query facade 及 contract model 文件被混称
 
 | 当前名称或位置 | 实际职责 | 目标名称或处理 |
 | --- | --- | --- |
-| Python `RiskProjection` | indexed Risk databases 上的查询便利方法 | `RiskIndexedViewQueries` |
+| Python `RiskProjection` | indexed Risk databases 上的查询便利方法 | owner-native `RiskCurrentView` |
 | `latest_projection()` | 创建 Risk indexed reader | `current_view()` |
-| Python `CapitalProjection` | indexed Capital databases 上的查询便利方法 | `CapitalIndexedViewQueries` |
+| Python `CapitalProjection` | indexed Capital databases 上的查询便利方法 | owner-native `CapitalCurrentView` |
 | `current_projection()` | 创建 Capital current-view reader | `current()` / `current_view()` |
 | Rust Capital contract `projection.rs` | `CapitalCurrentView` 及其组成的 contract-owned current models | `current.rs` 或 `current_view.rs` |
 | application 字段 `_projection` | current-view query object | `_current_view` / `_current_queries` |
 
-这些类没有从事件重建状态；它们只是读取已经发布的 view 并映射结果。对应实现为
-[`risk/view.py`](../../kairospy/infrastructure/contracts/risk/view.py)、
-[`capital/view.py`](../../kairospy/infrastructure/contracts/capital/view.py) 和
+这些类型没有从事件重建状态；它们只是读取已经发布的 view。对应实现为
+[`risk/contract/py/src/lib.rs`](../../crates/modules/risk/contract/py/src/lib.rs)、
+[`capital/contract/py/src/lib.rs`](../../crates/modules/capital/contract/py/src/lib.rs) 和
 [`capital/contract/src/current.rs`](../../crates/modules/capital/contract/src/current.rs)。
 
 ### Python Execution、Launch、Portfolio 和分析代码

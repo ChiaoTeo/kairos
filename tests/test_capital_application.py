@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +22,7 @@ from kairospy.investment.apps.capital.application import (
     FundingObjectiveStatus,
 )
 from kairospy.primitives.account import AccountId, SegmentKey
-from kairospy.infrastructure.contracts.capital.view import capital_indexed_environment_path
+from kairospy.infrastructure.contracts.capital import indexed_environment_path
 from kairospy.investment.apps.capital.application.mapping import map_capital_alert
 
 
@@ -74,27 +75,40 @@ def test_strategy_cannot_publish_an_objective_outside_its_group() -> None:
 
 def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
     class Commands:
-        def publish_funding_objective_request(self, request):
-            assert request["objective_id"] == _objective().objective_id
-            assert request["capital_group_id"] == "group-a"
-            assert request["strategy_id"] == "basis"
-            assert "source" not in request
+        def publish_funding_objective(self, request):
+            assert request.objective_id == _objective().objective_id
+            assert request.capital_group_id == "group-a"
+            assert request.strategy_id == "basis"
+            assert not hasattr(request, "source")
             return FundingObjectiveReceipt(
-                str(request["objective_id"]),
-                int(request["version"]),
+                str(request.objective_id),
+                int(request.version),
                 FundingObjectiveStatus.ACCEPTED,
             )
 
     class CurrentView:
         def availability(self, **query):
-            return CapitalAvailability(
-                query["capital_group_id"],
-                CapitalReadiness.READY,
-                location=query["location"],
-                observed_available=Decimal("50000"),
-                effective_target=Decimal("80000"),
-                deficit=Decimal("30000"),
+            location = query["location"]
+            return SimpleNamespace(
+                readiness="ready",
+                location=SimpleNamespace(
+                    broker=location.broker,
+                    account_id=str(location.account_id),
+                    segment=str(location.segment),
+                    asset=location.asset,
+                ),
+                policy_version=2,
+                active_objective_ids=("buffer-usdt",),
+                active_demand_ids=(),
+                funding_horizons=(),
+                desired_target="80000",
+                observed_available="50000",
+                effective_target="80000",
+                deficit="30000",
                 account_watermark=41,
+                risk_policy_version=3,
+                risk_watermark=4,
+                reason=None,
             )
 
     capital = CapitalApplication(
@@ -115,14 +129,14 @@ def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
 
 
 def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -> None:
-    captured: list[dict[str, object]] = []
+    captured: list[object] = []
 
     class Commands:
-        def publish_funding_objective_request(self, request):
+        def publish_funding_objective(self, request):
             captured.append(request)
             return FundingObjectiveReceipt(
-                str(request["objective_id"]),
-                int(request["version"]),
+                str(request.objective_id),
+                int(request.version),
                 FundingObjectiveStatus.ACCEPTED,
             )
 
@@ -154,15 +168,15 @@ def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -
 
     assert receipt.status is FundingObjectiveStatus.ACCEPTED
     assert forecast.source is FundingForecastSource.HISTORICAL_PEAK
-    assert captured[0]["desired_available"] == "90"
-    assert captured[0]["observed_at_unix_nanos"] == int(observed_at.timestamp() * 1_000_000_000)
-    assert captured[0]["strategy_decision_id"] == (
+    assert getattr(captured[0], "desired_available") == "90"
+    assert getattr(captured[0], "observed_at_unix_nanos") == int(observed_at.timestamp() * 1_000_000_000)
+    assert getattr(captured[0], "strategy_decision_id") == (
         "forecast:historical_peak:session-usdt-peak:3"
     )
-    assert "source_account" not in captured[0]
+    assert not hasattr(captured[0], "source_account")
 
 
-def test_availability_transport_failure_degrades_without_blocking_strategy() -> None:
+def test_availability_transport_failure_is_not_hidden_by_a_python_fallback() -> None:
     class CurrentView:
         def availability(self, **_query):
             raise RuntimeError("snapshot is warming up")
@@ -177,10 +191,8 @@ def test_availability_transport_failure_degrades_without_blocking_strategy() -> 
         account_ids=(AccountId("account-a"),),
     )
 
-    availability = capital.availability(_objective().destination)
-
-    assert availability.readiness is CapitalReadiness.DEGRADED
-    assert "warming up" in (availability.reason or "")
+    with pytest.raises(RuntimeError, match="warming up"):
+        capital.availability(_objective().destination)
 
 
 def test_funding_objective_requires_a_bounded_time_window() -> None:
@@ -198,12 +210,16 @@ def test_funding_objective_requires_a_bounded_time_window() -> None:
 
 
 def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
-    observed: list[dict[str, object]] = []
+    observed: list[object] = []
 
     class Commands:
-        def observe_capital_demand_request(self, request):
+        def observe_capital_demand(self, request):
             observed.append(request)
-            return {"demand_id": request["demand_id"], "status": "accepted"}
+            return SimpleNamespace(
+                demand_id=request.demand_id,
+                status="accepted",
+                error_message=None,
+            )
 
     now = datetime(2026, 8, 19, tzinfo=timezone.utc)
     demand = CapitalDemand(
@@ -233,9 +249,9 @@ def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
     receipt = capital.observe_demand(demand)
 
     assert receipt.status is FundingObjectiveStatus.ACCEPTED
-    assert observed[0]["demand_id"] == demand.demand_id
-    assert observed[0]["capital_group_id"] == "group-a"
-    assert "source" not in observed[0]
+    assert getattr(observed[0], "demand_id") == demand.demand_id
+    assert getattr(observed[0], "capital_group_id") == "group-a"
+    assert not hasattr(observed[0], "source")
 
     stale = CapitalApplication(
         Commands(),
@@ -252,7 +268,7 @@ def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
 
 
 def test_capital_view_key_matches_the_rust_resource_topology(tmp_path) -> None:
-    path = capital_indexed_environment_path(tmp_path, "group/../一")
+    path = indexed_environment_path(tmp_path, "group/../一", "workspace", None, None)
 
     assert path.parent.name == "epoch-1"
     assert path.name == "current.lmdb"
@@ -262,16 +278,16 @@ def test_capital_view_key_matches_the_rust_resource_topology(tmp_path) -> None:
 
 def test_capital_recovery_alert_decoder_preserves_operator_evidence() -> None:
     alert = map_capital_alert(
-        {
-            "alert_id": "capital-recovery:plan-a",
-            "plan_id": "plan-a",
-            "operation_id": "operation-a",
-            "kind": "manual_review",
-            "severity": "critical",
-            "recovery_action": "hold_and_review",
-            "message": "hold funds and review",
-            "opened_at_unix_nanos": 1_787_200_000_000_000_000,
-        }
+        SimpleNamespace(
+            alert_id="capital-recovery:plan-a",
+            plan_id="plan-a",
+            operation_id="operation-a",
+            kind="manual_review",
+            severity="critical",
+            recovery_action="hold_and_review",
+            message="hold funds and review",
+            opened_at_unix_nanos=1_787_200_000_000_000_000,
+        )
     )
 
     assert alert.plan_id == "plan-a"

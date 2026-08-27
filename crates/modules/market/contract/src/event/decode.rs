@@ -3,6 +3,11 @@ use kairos_protocol::generated::kairos::market::v_2 as fb;
 use crate::{ContractError, ContractResult, MarketEvent};
 
 pub fn decode_event(bytes: &[u8]) -> ContractResult<MarketEvent<'_>> {
+    if !kairos_protocol::flatbuffer::identifier_is_readable(bytes) {
+        return Err(ContractError::Invalid(
+            "Market v2 event payload is shorter than the FlatBuffers header".into(),
+        ));
+    }
     if fb::quote_updated_buffer_has_identifier(bytes) {
         return fb::root_as_quote_updated(bytes)
             .map(MarketEvent::QuoteUpdated)
@@ -71,4 +76,14 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<MarketEvent<'_>> {
     Err(ContractError::Invalid(
         "unknown Market v2 event identifier".into(),
     ))
+}
+
+#[cfg(test)]
+mod short_frame_tests {
+    use super::decode_event;
+
+    #[test]
+    fn short_event_frame_is_rejected_without_panicking() {
+        assert!(decode_event(b"invalid").is_err());
+    }
 }

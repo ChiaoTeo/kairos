@@ -1720,10 +1720,10 @@ fn decode_intent_admission_evidence(
     let Some(raw) = raw else {
         return Ok(None);
     };
+    let original_hash = canonical_typed_hash(&raw.original_intent)?;
+    let effective_hash = canonical_typed_hash(&raw.effective_intent)?;
     let original = decode_contract_intent(raw.original_intent)?;
     let effective = decode_contract_intent(raw.effective_intent)?;
-    let original_hash = canonical_typed_hash(&original)?;
-    let effective_hash = canonical_typed_hash(&effective)?;
     if raw.source != "decision_agent" {
         return Err(ExecutionError::Invalid(
             "unsupported Intent admission evidence source".into(),
@@ -1742,11 +1742,6 @@ fn decode_intent_admission_evidence(
     if raw.original_hash != original_hash || raw.effective_hash != effective_hash {
         return Err(ExecutionError::Invalid(
             "Intent admission evidence hash mismatch".into(),
-        ));
-    }
-    if canonical_typed_hash(submitted)? != effective_hash {
-        return Err(ExecutionError::Invalid(
-            "Intent admission evidence effective Intent differs from submission".into(),
         ));
     }
     if effective != *submitted {

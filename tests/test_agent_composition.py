@@ -211,8 +211,10 @@ def test_exposure_reduction_requires_fresh_complete_account_evidence() -> None:
     class CurrentView:
         def __init__(self, completeness: SegmentCompleteness) -> None:
             self.completeness = completeness
+            self.account_id = AccountId("main")
 
-        def snapshot(self, account_id: AccountId) -> AccountSnapshot:
+        def snapshot(self) -> AccountSnapshot:
+            account_id = self.account_id
             return AccountSnapshot(
                 account_id,
                 (

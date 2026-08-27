@@ -22,16 +22,16 @@ class PrintAaplOptions(Strategy):
         if not markets:
             raise RuntimeError("no active Massive AAPL option markets found")
         for market in markets:
-            context.market.subscribe_quotes(market)
+            context.market.subscribe_quotes(market.id)
 
     def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
         del context
         quote = event.data
         print(
             "AAPL option quote "
-            f"market={quote.market_id} "
+            f"market={quote.scope.market_id} "
             f"provider={quote.provider or 'unknown'} "
-            f"bid={quote.bid_price} "
-            f"ask={quote.ask_price}",
+            f"bid={quote.bid_price.value if quote.bid_price is not None else '-'} "
+            f"ask={quote.ask_price.value if quote.ask_price is not None else '-'}",
             flush=True,
         )

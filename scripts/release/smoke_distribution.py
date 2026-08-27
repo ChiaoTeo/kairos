@@ -29,6 +29,8 @@ NATIVE_BINARIES = (
     "kairos-account-server",
     "kairos-account-cli",
 )
+CURRENT_VIEW_OWNER_CONTRACTS = ("account", "capital", "execution", "market", "risk")
+NATIVE_OWNER_CONTRACTS = (*CURRENT_VIEW_OWNER_CONTRACTS, "reference")
 
 
 def _metadata_version(data: bytes) -> str:
@@ -78,6 +80,32 @@ def inspect_wheel(wheel: Path, expected_version: str) -> None:
             raise RuntimeError(
                 f"wheel is missing native binaries: {', '.join(missing)}"
             )
+        missing_contracts = [
+            owner
+            for owner in NATIVE_OWNER_CONTRACTS
+            if not any(
+                Path(name).name.startswith(f"_native_{owner}_contract.")
+                and Path(name).suffix in {".so", ".pyd"}
+                for name in names
+            )
+        ]
+        if missing_contracts:
+            raise RuntimeError(
+                "wheel is missing owner contract extensions: "
+                + ", ".join(missing_contracts)
+            )
+        missing_stubs = [
+            owner
+            for owner in NATIVE_OWNER_CONTRACTS
+            if f"kairospy/_native_{owner}_contract.pyi" not in names
+        ]
+        if missing_stubs:
+            raise RuntimeError(
+                "wheel is missing owner contract stubs: "
+                + ", ".join(missing_stubs)
+            )
+        if any("kairospy/infrastructure/protocol/generated/" in name for name in names):
+            raise RuntimeError("wheel contains the deleted Python generated protocol tree")
         stale = _stale_python_members(names)
         if stale:
             raise RuntimeError(
@@ -130,7 +158,28 @@ def install_and_smoke(wheel: Path) -> None:
         [
             sys.executable,
             "-c",
-            "import kairospy; import kairospy._native_transport",
+            """
+from importlib import import_module
+import kairospy
+import kairospy._native_transport
+
+for owner in ('account', 'capital', 'execution', 'market', 'risk'):
+    native = import_module(f'kairospy._native_{owner}_contract')
+    facade = import_module(f'kairospy.infrastructure.contracts.{owner}')
+    info = native.build_info()
+    assert info.owner.lower() == owner
+    assert info.api_version == 1
+    assert info.contract_fingerprint == f'kairos.{owner}.contract.v2'
+    client = f'{owner.title()}Client'
+    assert getattr(facade, client) is getattr(native, client)
+
+reference = import_module('kairospy._native_reference_contract')
+reference_info = reference.build_info()
+assert reference_info.owner == 'Reference'
+assert reference_info.api_version == 1
+assert reference.ReferenceCatalog is not None
+assert reference.ReferenceReadSession is not None
+""",
         ],
         check=True,
     )

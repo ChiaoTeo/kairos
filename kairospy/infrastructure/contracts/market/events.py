@@ -1,45 +1,27 @@
-"""Market v2 event decoding into generated FlatBuffers roots."""
+"""Market events backed only by the owner native contract."""
 
-from __future__ import annotations
+from typing import TYPE_CHECKING, Any
 
-from importlib import import_module
-import sys
-from typing import Any
+from kairospy.infrastructure.contracts._native import load_owner_contract
 
-
-_generated_kairos = import_module("kairospy.infrastructure.protocol.generated.kairos")
-sys.modules.setdefault("kairos", _generated_kairos)
-
-
-_EVENT_ROOTS: tuple[tuple[bytes, str], ...] = (
-    (b"MQU2", "QuoteUpdated"),
-    (b"MTO2", "TradeOccurred"),
-    (b"MBV2", "BarCompleted"),
-    (b"MGU2", "GreeksUpdated"),
-    (b"MRU2", "RateUpdated"),
-    (b"MTU2", "Ticker24hUpdated"),
-    (b"MMP2", "MarkPriceUpdated"),
-    (b"MFR2", "FundingRateUpdated"),
-    (b"MOI2", "OpenInterestUpdated"),
-    (b"MIP2", "IndexPriceUpdated"),
-    (b"MOS2", "OrderBookSnapshotReceived"),
-    (b"MOD2", "OrderBookDeltaReceived"),
-    (b"MOR2", "OrderBookResyncRequired"),
-)
+if TYPE_CHECKING:
+    from kairospy._native_market_contract import (
+        MarketEvent,
+        MarketInvalidEventError,
+    )
 
 
-def decode_event(payload: bytes) -> Any:
-    """Decode a Market v2 event and return its generated root object."""
-
-    for identifier, root_name in _EVENT_ROOTS:
-        if len(payload) < 8 or payload[4:8] != identifier:
-            continue
-        module = __import__(
-            f"kairospy.infrastructure.protocol.generated.kairos.market.v2.{root_name}",
-            fromlist=[root_name],
-        )
-        return getattr(module, root_name).GetRootAs(payload, 0)
-    raise ValueError("unknown Market v2 event identifier")
+def _native() -> Any:
+    return load_owner_contract("Market")
 
 
-__all__ = ["decode_event"]
+def decode_event(payload: bytes) -> MarketEvent:
+    return _native().decode_event(payload)
+
+
+if not TYPE_CHECKING:
+    MarketEvent = _native().MarketEvent
+    MarketInvalidEventError = _native().MarketInvalidEventError
+
+
+__all__ = ["MarketEvent", "MarketInvalidEventError", "decode_event"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import typer
@@ -122,9 +123,11 @@ def launch_instance_component_account_open_orders(
     from kairospy.primitives.account import AccountId
 
     account_key = AccountId(account_id)
+    orders = tuple(client.observed_orders_view(account_key).snapshot().observed_orders)
     _emit(
         {
-            **client.observed_orders_view(account_key).open_orders(account_key),
+            "account_id": account_id,
+            "open_orders": [_observed_order_payload(value) for value in orders],
             "launch_id": launch_id,
             "instance_id": resolved_instance,
             "mode": mode,
@@ -132,6 +135,30 @@ def launch_instance_component_account_open_orders(
         },
         output,
     )
+
+
+def _observed_order_payload(value: object) -> dict[str, object]:
+    return {
+        "observation_id": getattr(value, "observation_id"),
+        "source_id": getattr(value, "source_id"),
+        "execution_order_id": getattr(value, "execution_order_id"),
+        "remote_order_id": getattr(value, "remote_order_id"),
+        "instrument_id": getattr(value, "instrument_id"),
+        "market_id": getattr(value, "market_id"),
+        "side": getattr(value, "side"),
+        "quantity": _native_decimal(getattr(value, "quantity")),
+        "filled_quantity": _native_decimal(getattr(value, "filled_quantity")),
+        "status": getattr(value, "status"),
+        "observed_at_unix_nanos": getattr(value, "observed_at_unix_nanos"),
+        "segment_key": getattr(value, "segment_key"),
+    }
+
+
+def _native_decimal(value: object) -> Decimal:
+    result = getattr(value, "value")
+    if not isinstance(result, Decimal):
+        raise TypeError("Account native decimal value must be Decimal")
+    return result
 
 
 @instance_component_account_app.command("refresh")

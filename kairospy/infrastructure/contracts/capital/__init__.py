@@ -4,10 +4,24 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS = {
-    "CapitalContractClient": (".client", "CapitalContractClient"),
-    "CapitalIndexedViewQueries": (".view", "CapitalIndexedViewQueries"),
-    "capital_indexed_environment_path": (".view", "capital_indexed_environment_path"),
+    "CapitalContractClient": (".types", "CapitalClient"),
+    "CapitalClient": (".types", "CapitalClient"),
+    "CapitalCurrentView": (".types", "CapitalCurrentView"),
+    "indexed_environment_path": (".types", "indexed_environment_path"),
     "decode_event": (".events", "decode_event"),
+    "CapitalControlClient": (".types", "CapitalControlClient"),
+    "CapitalInvalidInputError": (".types", "CapitalInvalidInputError"),
+    "CapitalInvalidEventError": (".types", "CapitalInvalidEventError"),
+    "CapitalInvalidCurrentViewError": (".types", "CapitalInvalidCurrentViewError"),
+    "CapitalCurrentViewUnavailableError": (".types", "CapitalCurrentViewUnavailableError"),
+    "CapitalControlUnavailableError": (".types", "CapitalControlUnavailableError"),
+    "CapitalControlRejectedError": (".types", "CapitalControlRejectedError"),
+    "CancelFundingObjectiveRequest": (".types", "CancelFundingObjectiveRequest"),
+    "FundingLocation": (".types", "FundingLocation"),
+    "ObserveCapitalDemandRequest": (".types", "ObserveCapitalDemandRequest"),
+    "PublishFundingObjectiveRequest": (".types", "PublishFundingObjectiveRequest"),
+    "QueryCapitalAvailabilityRequest": (".types", "QueryCapitalAvailabilityRequest"),
+    "ReconcileCapitalPlanRequest": (".types", "ReconcileCapitalPlanRequest"),
 }
 
 

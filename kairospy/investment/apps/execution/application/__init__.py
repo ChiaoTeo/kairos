@@ -7,12 +7,7 @@ from .errors import (
     IntentNotFoundError,
     OrderNotFoundError,
 )
-from .events import (
-    ExecutionEvent,
-    FillEvent,
-    IntentUpdateEvent,
-    OrderUpdateEvent,
-)
+from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
 from .models import (
     ExecutionBacktestResult,
     ExecutionFundingRequirement,
@@ -73,12 +68,10 @@ __all__ = [
     "ExecutionIntent",
     "ExecutionLookupError",
     "Fill",
-    "FillEvent",
     "IntentId",
     "IntentReceipt",
     "IntentNotFoundError",
     "IntentStatus",
-    "IntentUpdateEvent",
     "HedgePolicy",
     "ImmediateAlgorithm",
     "LimitOrderRequest",
@@ -95,7 +88,6 @@ __all__ = [
     "OrderRequest",
     "OrderSide",
     "OrderStatus",
-    "OrderUpdateEvent",
     "PairArbitrageRequest",
     "PortfolioRebalanceRequest",
     "PortfolioRebalanceTarget",

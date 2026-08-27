@@ -1,0 +1,46 @@
+"""Read-only Strategy view of the owner-native Execution event contract."""
+
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class ExecutionEventMetadata(Protocol):
+    @property
+    def stream_id(self) -> str: ...
+    @property
+    def sequence(self) -> int: ...
+    @property
+    def producer(self) -> str: ...
+    @property
+    def occurred_at_unix_nanos(self) -> int: ...
+
+
+class ExecutionEvent(Protocol):
+    @property
+    def metadata(self) -> ExecutionEventMetadata: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def strategy_id(self) -> str | None: ...
+    @property
+    def account_id(self) -> str | None: ...
+    @property
+    def data(self) -> object: ...
+    @property
+    def payload(self) -> object: ...
+
+    @property
+    def stream_id(self) -> str: ...
+
+    @property
+    def sequence(self) -> int: ...
+
+    @property
+    def launch_id(self) -> str | None: ...
+
+    @property
+    def instance_id(self) -> str | None: ...
+
+
+__all__ = ["ExecutionEvent", "ExecutionEventMetadata"]

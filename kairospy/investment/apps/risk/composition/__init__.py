@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from kairospy.system.apps.components.application.clients import RiskSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace
-from kairospy.infrastructure.contracts.risk.source import AeronRiskEventSource
+from kairospy.infrastructure.contracts.risk import RiskClient
 from kairospy.primitives.account import AccountId
 
 from ..application.application import RiskApplication
@@ -24,9 +24,12 @@ def build_strategy_access(
         client.latest_view(actor_id=f"risk:{instance.instance_id}")
         if enabled
         else None,
-        AeronRiskEventSource(
-            aeron_dir=instance.workspace.paths.aeron_dir(),
-        )
+        RiskClient(
+            client.socket_path,
+            actor_id=f"risk:{instance.instance_id}",
+            workspace_id=instance.workspace.workspace_id,
+            aeron_dir=str(instance.workspace.paths.aeron_dir()),
+        ).events
         if enabled
         else None,
         account_ids=account_ids,

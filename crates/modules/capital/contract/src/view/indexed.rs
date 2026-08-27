@@ -232,6 +232,11 @@ capital_entity_accessors! {
 
 macro_rules! decode_capital_current {
     ($bytes:expr, $group_id:expr, $identifier:ident, $decode:ident, $variant:ident, $label:literal) => {{
+        if !kairos_protocol::flatbuffer::identifier_is_readable($bytes) {
+            return Err(ContractError::Invalid(
+                concat!("truncated ", $label, " FlatBuffers value").into(),
+            ));
+        }
         if !fb::$identifier($bytes) {
             return Err(ContractError::Invalid(concat!("expected ", $label).into()));
         }
@@ -263,6 +268,11 @@ impl CapitalIndexedSnapshot {
             ));
         }
         let (_, bytes) = &rows[0];
+        if !kairos_protocol::flatbuffer::identifier_is_readable(bytes) {
+            return Err(ContractError::Invalid(
+                "truncated CSM3 CapitalStateCurrent FlatBuffers value".into(),
+            ));
+        }
         if !fb::capital_state_current_buffer_has_identifier(bytes) {
             return Err(ContractError::Invalid(
                 "expected CSM3 CapitalStateCurrent".into(),
