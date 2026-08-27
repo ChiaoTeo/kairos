@@ -42,8 +42,17 @@ def build_strategy_access(
             account_ids=account_ids,
             cursor_checkpoint=cursor_checkpoint,
         )
+    owner = ExecutionClient(
+        client.socket_path,
+        workspace_id=instance.workspace.workspace_id,
+        view_root=instance.snapshot(),
+        launch_id=identity.launch_id,
+        instance_id=identity.instance_id,
+        aeron_dir=str(instance.workspace.paths.aeron_dir()),
+        timeout=client.timeout,
+    )
     commands = ExecutionCommandClient(
-        client.control,
+        owner.control,
         workspace_id=instance.workspace.workspace_id,
         allow_trading=policy.allow_trading,
         max_order_notional=policy.max_order_notional,
@@ -52,15 +61,13 @@ def build_strategy_access(
     )
     if decorate_commands is not None:
         commands = decorate_commands(commands)  # type: ignore[assignment]
-    current_views = client.current_view(instance)
+    current_views = owner.current
+    if current_views is None:
+        raise RuntimeError("Execution owner client is missing its current-view capability")
     return ExecutionApplication(
         commands,
         current_views,
-        ExecutionClient(
-            client.socket_path,
-            workspace_id=instance.workspace.workspace_id,
-            aeron_dir=str(instance.workspace.paths.aeron_dir()),
-        ).events,
+        owner.events,
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,
         launch_id=identity.launch_id,

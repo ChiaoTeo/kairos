@@ -1319,14 +1319,19 @@ impl CapitalCurrentSnapshot {
 #[pyclass(module = "kairospy._native_capital_contract")]
 struct CapitalCurrentView {
     creator_pid: u32,
+    root: PathBuf,
+    identity: InstanceIdentity,
+    group: CapitalGroupId,
+    path: PathBuf,
     reader: Mutex<Option<RustView>>,
+    closed: Mutex<bool>,
 }
 #[pymethods]
 impl CapitalCurrentView {
     #[new]
     #[pyo3(signature = (root, capital_group_id, workspace_id, launch_id=None, instance_id=None))]
     fn new(
-        py: Python<'_>,
+        _py: Python<'_>,
         root: PathBuf,
         capital_group_id: String,
         workspace_id: String,
@@ -1336,28 +1341,34 @@ impl CapitalCurrentView {
         let identity = identity(workspace_id, launch_id, instance_id)?;
         let group = CapitalGroupId::new(capital_group_id)
             .map_err(|error| CapitalInvalidInputError::new_err(error.to_string()))?;
-        let reader = py
-            .detach(move || RustView::open(root, &identity, group))
-            .map_err(contract_error)?;
+        let path =
+            kairos_capital_contract::capital_indexed_environment_path(&root, &identity, &group)
+                .map_err(contract_error)?;
         Ok(Self {
             creator_pid: std::process::id(),
-            reader: Mutex::new(Some(reader)),
+            root,
+            identity,
+            group,
+            path,
+            reader: Mutex::new(None),
+            closed: Mutex::new(false),
         })
     }
+
+    #[getter]
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
     fn snapshot(&self, py: Python<'_>) -> PyResult<CapitalCurrentSnapshot> {
-        self.ensure_process()?;
-        py.detach(|| {
-            let reader = self.reader.lock().map_err(|_| lock_error())?;
-            let snapshot = reader
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("Capital current-view reader is closed"))?
-                .snapshot()
-                .map_err(contract_error)?;
+        self.read(py, |reader| {
+            let snapshot = reader.snapshot().map_err(contract_error)?;
             project(snapshot).map_err(contract_error)
         })
     }
     fn close(&self) -> PyResult<()> {
         self.ensure_process()?;
+        *self.closed.lock().map_err(|_| lock_error())? = true;
         self.reader.lock().map_err(|_| lock_error())?.take();
         Ok(())
     }
@@ -1375,6 +1386,29 @@ impl CapitalCurrentView {
     }
 }
 impl CapitalCurrentView {
+    fn read<T: Send>(
+        &self,
+        py: Python<'_>,
+        operation: impl FnOnce(&RustView) -> PyResult<T> + Send,
+    ) -> PyResult<T> {
+        self.ensure_process()?;
+        py.detach(|| {
+            if *self.closed.lock().map_err(|_| lock_error())? {
+                return Err(PyRuntimeError::new_err(
+                    "Capital current-view reader is closed",
+                ));
+            }
+            let mut reader = self.reader.lock().map_err(|_| lock_error())?;
+            if reader.is_none() {
+                *reader = Some(
+                    RustView::open(self.root.clone(), &self.identity, self.group.clone())
+                        .map_err(contract_error)?,
+                );
+            }
+            operation(reader.as_ref().expect("reader initialized above"))
+        })
+    }
+
     fn ensure_process(&self) -> PyResult<()> {
         if std::process::id() != self.creator_pid {
             Err(PyRuntimeError::new_err(

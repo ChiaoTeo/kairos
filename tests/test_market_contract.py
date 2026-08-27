@@ -20,7 +20,6 @@ from kairospy.infrastructure.contracts.market import (
     StrikeRange,
     MarketViewKey,
     MarketViewKind,
-    indexed_environment_path,
 )
 
 
@@ -85,9 +84,9 @@ def test_market_view_key_matches_rust_contract_encoding() -> None:
     assert key.canonical_key() == (
         "scope=market:binance:spot:BTCUSDT;provider=binance;view=bar;qualifier=1m"
     )
-    assert str(
-        indexed_environment_path("/tmp/workspace", "workspace", None, None)
-    ) == ("/tmp/workspace/views/v3/Market/market-main/epoch-1/current.lmdb")
+    assert str(MarketCurrentView("/tmp/workspace", "workspace").path) == (
+        "/tmp/workspace/views/v3/Market/market-main/epoch-1/current.lmdb"
+    )
 
 
 def test_market_view_key_rejects_incomplete_identity() -> None:

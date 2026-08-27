@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import re
 import sys
 
 
@@ -24,6 +25,13 @@ CURRENT_VIEW_OWNERS = ("account", "capital", "execution", "market", "risk")
 OWNER_CONTRACT_PY_BINDINGS = (*CURRENT_VIEW_OWNERS, "reference")
 OWNER_NATIVE_MODULES = {
     f"kairospy._native_{owner}_contract" for owner in CURRENT_VIEW_OWNERS
+}
+OWNER_FACADE_FILES = frozenset({"__init__.py", "events.py", "types.py", "view.py"})
+OWNER_FACADE_FUNCTIONS = {
+    "__init__.py": frozenset({"__getattr__"}),
+    "events.py": frozenset({"_native", "decode_event"}),
+    "types.py": frozenset({"_native"}),
+    "view.py": frozenset(),
 }
 
 
@@ -142,11 +150,11 @@ def main() -> int:
             failures.append(f"owner contract extension is missing from pyproject.toml: {target}")
 
     forbidden_owner_files = {
-        "account": ("control.py", "runtime.py", "source.py", "view_contract.py"),
-        "capital": ("client.py", "source.py"),
-        "execution": ("control.py", "current.py", "source.py"),
-        "market": ("control.py", "source.py"),
-        "risk": ("control.py", "source.py"),
+        "account": ("control.py", "records.py", "runtime.py", "source.py", "view_contract.py"),
+        "capital": ("client.py", "records.py", "source.py"),
+        "execution": ("control.py", "current.py", "records.py", "source.py"),
+        "market": ("control.py", "records.py", "source.py"),
+        "risk": ("control.py", "records.py", "source.py"),
     }
     for owner, names in forbidden_owner_files.items():
         facade = PACKAGE / "infrastructure" / "contracts" / owner
@@ -165,6 +173,102 @@ def main() -> int:
             failures.append(
                 f"{owner} native companion delegates events back to Python source.py"
             )
+        if "fn path(&self) -> PathBuf" not in rust:
+            failures.append(
+                f"{owner} native current view does not expose its resolved path property"
+            )
+
+        facade_python = tuple(sorted(facade.glob("*.py")))
+        unexpected = sorted(path.name for path in facade_python if path.name not in OWNER_FACADE_FILES)
+        if unexpected:
+            failures.append(
+                f"{owner} owner facade contains implementation files: {', '.join(unexpected)}"
+            )
+        for path in facade_python:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    _failure(
+                        failures,
+                        path,
+                        node.lineno,
+                        "owner facade must not define a parallel contract class",
+                    )
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                    node.name not in OWNER_FACADE_FUNCTIONS.get(path.name, frozenset())
+                ):
+                    _failure(
+                        failures,
+                        path,
+                        node.lineno,
+                        f"owner facade contains implementation function {node.name}",
+                    )
+                elif isinstance(node, ast.ImportFrom) and node.module in {
+                    "collections.abc",
+                    "typing",
+                } and any(alias.name == "Mapping" for alias in node.names):
+                    _failure(
+                        failures,
+                        path,
+                        node.lineno,
+                        "owner facade reintroduced a generic Mapping contract",
+                    )
+            for forbidden in (
+                "dataclasses",
+                "flatbuffers",
+                "infrastructure.protocol.generated",
+                "indexed_environment_path",
+            ):
+                if forbidden in source:
+                    failures.append(
+                        f"{owner} owner facade contains forbidden implementation surface "
+                        f"{forbidden!r}: {path.relative_to(ROOT)}"
+                    )
+
+    owner_rpc_literals: set[str] = set()
+    for owner in CURRENT_VIEW_OWNERS:
+        composition = (
+            PACKAGE
+            / "investment"
+            / "apps"
+            / owner
+            / "composition"
+            / "__init__.py"
+        )
+        composition_source = composition.read_text(encoding="utf-8")
+        prefix = owner.title()
+        if f"{prefix}Client(" not in composition_source:
+            failures.append(
+                f"{owner} Strategy composition does not construct the unified owner client"
+            )
+        if f"{prefix}CurrentView(" in composition_source:
+            failures.append(
+                f"{owner} Strategy composition bypasses unified client.current"
+            )
+        contract_root = ROOT / "crates" / "modules" / owner / "contract" / "src"
+        for rust_path in contract_root.rglob("*.rs"):
+            source = rust_path.read_text(encoding="utf-8")
+            if "conflux_rpc" not in source:
+                continue
+            owner_rpc_literals.update(
+                f"{owner}_{method}"
+                for method in re.findall(r"async\s+fn\s+([a-zA-Z0-9_]+)", source)
+            )
+    for path in python_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value in owner_rpc_literals
+            ):
+                _failure(
+                    failures,
+                    path,
+                    node.lineno,
+                    f"Python production code redeclares owner RPC method {node.value!r}",
+                )
 
     scoped_owner_roots = tuple(
         PACKAGE / "infrastructure" / "contracts" / owner

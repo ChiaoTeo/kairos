@@ -7,7 +7,7 @@ from typing import Literal
 
 from kairospy.system.apps.components.application.clients import MarketSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace, Workspace
-from kairospy.infrastructure.contracts.market import MarketClient, MarketCurrentView
+from kairospy.infrastructure.contracts.market import MarketClient
 from kairospy.strategy import StrategyIdentity
 
 from ..application.application import MarketApplication
@@ -54,23 +54,26 @@ def build_strategy_access(
         view_launch_id = identity.launch_id
         view_instance_id = identity.instance_id
 
+    owner = MarketClient(
+        client.socket_path,
+        workspace_id=workspace.identity.workspace_id,
+        view_root=snapshot,
+        launch_id=view_launch_id,
+        instance_id=view_instance_id,
+        aeron_dir=str(workspace.paths.aeron_dir()),
+        timeout=client.timeout,
+    )
+    current_view = owner.current
+    if current_view is None:
+        raise RuntimeError("Market owner client is missing its current-view capability")
     event_source = (
         UnixMarketEventStream(event_socket)
         if config.replayable
-        else MarketClient(
-            client.socket_path,
-            workspace_id=workspace.identity.workspace_id,
-            aeron_dir=str(workspace.paths.aeron_dir()),
-        ).events
+        else owner.events
     )
     application = MarketApplication(
-        client.control,
-        MarketCurrentView(
-            snapshot,
-            workspace.identity.workspace_id,
-            view_launch_id,
-            view_instance_id,
-        ),
+        owner.control,
+        current_view,
         event_source,
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,

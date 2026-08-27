@@ -31,7 +31,6 @@ ReleaseReservationRequest = _native().ReleaseReservationRequest
 ConsumeReservationRequest = _native().ConsumeReservationRequest
 ResizeReservationRequest = _native().ResizeReservationRequest
 AdvanceRiskTimeRequest = _native().AdvanceRiskTimeRequest
-indexed_environment_path = _native().indexed_environment_path
 
 
 __all__ = [
@@ -43,5 +42,4 @@ __all__ = [
     "RiskControlUnavailableError", "RiskScope", "TradeRiskProposal",
     "RiskInvalidInputError", "RiskInvalidEventError",
     "RiskInvalidCurrentViewError", "RiskCurrentViewUnavailableError",
-    "indexed_environment_path",
 ]

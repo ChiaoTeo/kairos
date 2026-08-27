@@ -20,7 +20,6 @@ _EXPORTS = {
     "SimulatedCapitalMutation": (".types", "SimulatedCapitalMutation"),
     "SimulatedCapitalMutationQuery": (".types", "SimulatedCapitalMutationQuery"),
     "AccountCurrentView": (".types", "AccountCurrentView"),
-    "indexed_environment_path": (".types", "indexed_environment_path"),
     "decode_event": (".events", "decode_event"),
 }
 

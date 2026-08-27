@@ -23,17 +23,29 @@ def build_strategy_access(
 
     if not account_clients:
         return AccountApplication({})
-    return AccountApplication(
-        {
-            account_id: client.current_view(account_id)
-            for account_id, client in account_clients.items()
-        },
-        AccountClient(
-            next(iter(account_clients.values())).socket_path,
-            account_id=str(next(iter(account_clients))),
+    owner_clients = {
+        account_id: AccountClient(
+            client.socket_path,
+            account_id=str(account_id),
             workspace_id=instance.workspace.workspace_id,
+            view_root=client.require_view_root(),
+            launch_id=instance.launch_id,
+            instance_id=instance.instance_id,
             aeron_dir=str(instance.workspace.paths.aeron_dir()),
-        ).events,
+            timeout=client.timeout,
+        )
+        for account_id, client in account_clients.items()
+    }
+    current_views: dict[AccountId, object] = {}
+    for account_id, owner in owner_clients.items():
+        current = owner.current
+        if current is None:
+            raise RuntimeError("Account owner client is missing its current-view capability")
+        current_views[account_id] = current
+    first_owner = next(iter(owner_clients.values()))
+    return AccountApplication(
+        current_views,
+        first_owner.events,
         launch_id=instance.launch_id,
         instance_id=instance.instance_id,
         required_segments=required_segments,

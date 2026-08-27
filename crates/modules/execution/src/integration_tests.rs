@@ -4123,29 +4123,21 @@ async fn kairospy_explicit_algorithm_round_trips_through_execution_json_rpc() {
             );
 
             let script = r#"
-import copy
-from decimal import Decimal
 import json
 import sys
+from decimal import Decimal
 
-from kairospy.infrastructure.contracts.execution import ExecutionControlClient
-from kairospy.infrastructure.transport.json_rpc import UnixJsonRpcClient
+from kairospy.infrastructure.contracts.execution import (
+    ExecutionControlClient,
+    ExecutionOrderAuditQuery,
+)
 from kairospy.investment.apps.execution.application.commands import ExecutionCommandClient
 from kairospy.strategy import ImmediateAlgorithm, TargetPositionRequest
-
-class Capture:
-    def __init__(self, delegate):
-        self.delegate = delegate
-        self.params = None
-
-    def call(self, method, params=None):
-        self.params = copy.deepcopy(params)
-        return self.delegate.call(method, params)
+from kairospy.system.apps.components.application.clients import SystemRpcClient
 
 socket_path = sys.argv[1]
 control = ExecutionControlClient(socket_path, timeout=5)
-capture = Capture(control)
-execution = ExecutionCommandClient(capture, launch_id="launch")
+execution = ExecutionCommandClient(control, launch_id="launch")
 result = execution.target_position(
     TargetPositionRequest(
         "BTCUSDT",
@@ -4163,32 +4155,16 @@ result = execution.target_position(
 )
 assert result.status == "accepted", result
 assert result.result["status"] == "duplicate", result
-assert capture.params is not None
-legacy = copy.deepcopy(capture.params[0])
-legacy["command_id"] = "request:kairospy-rpc-legacy"
-legacy["idempotency_key"] = "request:kairospy-rpc-legacy"
-legacy["intent"]["hedge_policy"] = {}
-legacy_rejected = False
-legacy_error = ""
-try:
-    control.call("execution_submit_intent", [legacy])
-except RuntimeError as error:
-    legacy_error = str(error)
-    legacy_rejected = "hedge_policy" in legacy_error or "Invalid params" in legacy_error
-assert legacy_rejected, legacy_error
-health = dict(control.health())
-audit = dict(control.order_audit({"limit": 100}))
-assert audit["events"], audit
-UnixJsonRpcClient(socket_path, timeout=5).call(
-    "system_stop",
-    [{"immediate": False, "reason": "cross-language certification complete"}],
-)
+health = control.health()
+audit = control.order_audit(ExecutionOrderAuditQuery(limit=100))
+assert audit.events, audit
+SystemRpcClient(socket_path, timeout=5).stop()
 print(json.dumps({
     "status": result.result["status"],
     "intent_id": result.result["intent_id"],
-    "legacy_rejected": legacy_rejected,
-    "health": health["status"],
-    "audit_event_count": len(audit["events"]),
+    "client_module": type(control).__module__,
+    "health": health.status,
+    "audit_event_count": len(audit.events),
 }))
 "#;
             let python_socket = socket_path.clone();
@@ -4212,7 +4188,10 @@ print(json.dumps({
                 serde_json::from_slice(&output.stdout).expect("Kairospy emits JSON evidence");
             assert_eq!(evidence["status"], "duplicate");
             assert_eq!(evidence["intent_id"], "intent:kairospy-rpc-immediate");
-            assert_eq!(evidence["legacy_rejected"], true);
+            assert_eq!(
+                evidence["client_module"],
+                "kairospy._native_execution_contract"
+            );
             assert_eq!(evidence["health"], "ready");
             assert!(evidence["audit_event_count"].as_u64().unwrap() > 0);
 

@@ -27,7 +27,6 @@ _EXPORTS = {
     "TradeRiskProposal": (".types", "TradeRiskProposal"),
     "RiskCurrentView": (".types", "RiskCurrentView"),
     "decode_event": (".events", "decode_event"),
-    "indexed_environment_path": (".types", "indexed_environment_path"),
 }
 
 

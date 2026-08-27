@@ -22,7 +22,7 @@ from kairospy.investment.apps.capital.application import (
     FundingObjectiveStatus,
 )
 from kairospy.primitives.account import AccountId, SegmentKey
-from kairospy.infrastructure.contracts.capital import indexed_environment_path
+from kairospy.infrastructure.contracts.capital import CapitalCurrentView
 from kairospy.investment.apps.capital.application.mapping import map_capital_alert
 
 
@@ -268,7 +268,7 @@ def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
 
 
 def test_capital_view_key_matches_the_rust_resource_topology(tmp_path) -> None:
-    path = indexed_environment_path(tmp_path, "group/../一", "workspace", None, None)
+    path = CapitalCurrentView(tmp_path, "group/../一", "workspace").path
 
     assert path.parent.name == "epoch-1"
     assert path.name == "current.lmdb"

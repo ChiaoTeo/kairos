@@ -1277,14 +1277,19 @@ struct RiskCurrentSnapshot {
 #[pyclass(module = "kairospy._native_risk_contract")]
 struct RiskCurrentView {
     creator_pid: u32,
+    root: PathBuf,
+    identity: InstanceIdentity,
+    actor_id: ActorId,
+    path: PathBuf,
     reader: Mutex<Option<RustView>>,
+    closed: Mutex<bool>,
 }
 #[pymethods]
 impl RiskCurrentView {
     #[new]
     #[pyo3(signature = (root, actor_id, workspace_id, launch_id=None, instance_id=None))]
     fn new(
-        py: Python<'_>,
+        _py: Python<'_>,
         root: PathBuf,
         actor_id: String,
         workspace_id: String,
@@ -1294,28 +1299,33 @@ impl RiskCurrentView {
         let identity = identity(workspace_id, launch_id, instance_id)?;
         let actor = ActorId::new(actor_id)
             .map_err(|error| RiskInvalidInputError::new_err(error.to_string()))?;
-        let reader = py
-            .detach(move || RustView::open(root, &identity, actor))
+        let path = kairos_risk_contract::risk_indexed_environment_path(&root, &identity, &actor)
             .map_err(contract_error)?;
         Ok(Self {
             creator_pid: std::process::id(),
-            reader: Mutex::new(Some(reader)),
+            root,
+            identity,
+            actor_id: actor,
+            path,
+            reader: Mutex::new(None),
+            closed: Mutex::new(false),
         })
     }
+
+    #[getter]
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
     fn snapshot(&self, py: Python<'_>) -> PyResult<RiskCurrentSnapshot> {
-        self.ensure_process()?;
-        py.detach(|| {
-            let reader = self.reader.lock().map_err(|_| lock_error())?;
-            let snapshot = reader
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("Risk current-view reader is closed"))?
-                .snapshot()
-                .map_err(contract_error)?;
+        self.read(py, |reader| {
+            let snapshot = reader.snapshot().map_err(contract_error)?;
             project(snapshot).map_err(contract_error)
         })
     }
     fn close(&self) -> PyResult<()> {
         self.ensure_process()?;
+        *self.closed.lock().map_err(|_| lock_error())? = true;
         self.reader.lock().map_err(|_| lock_error())?.take();
         Ok(())
     }
@@ -1333,6 +1343,29 @@ impl RiskCurrentView {
     }
 }
 impl RiskCurrentView {
+    fn read<T: Send>(
+        &self,
+        py: Python<'_>,
+        operation: impl FnOnce(&RustView) -> PyResult<T> + Send,
+    ) -> PyResult<T> {
+        self.ensure_process()?;
+        py.detach(|| {
+            if *self.closed.lock().map_err(|_| lock_error())? {
+                return Err(PyRuntimeError::new_err(
+                    "Risk current-view reader is closed",
+                ));
+            }
+            let mut reader = self.reader.lock().map_err(|_| lock_error())?;
+            if reader.is_none() {
+                *reader = Some(
+                    RustView::open(self.root.clone(), &self.identity, self.actor_id.clone())
+                        .map_err(contract_error)?,
+                );
+            }
+            operation(reader.as_ref().expect("reader initialized above"))
+        })
+    }
+
     fn ensure_process(&self) -> PyResult<()> {
         if std::process::id() != self.creator_pid {
             Err(PyRuntimeError::new_err(

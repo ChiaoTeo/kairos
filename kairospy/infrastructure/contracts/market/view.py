@@ -1,6 +1,6 @@
 """Pure exports for the Market owner-native current-view boundary."""
 
-from .types import MarketCurrentView, _native, indexed_environment_path
+from .types import MarketCurrentView, _native
 
 _module = _native()
 MarketViewKind = _module.MarketViewKind
@@ -21,4 +21,3 @@ MarketOrderBookCurrent = _module.MarketOrderBookCurrent
 MarketFreshnessCurrent = _module.MarketFreshnessCurrent
 
 __all__ = [name for name in globals() if name.startswith("Market")]
-__all__.append("indexed_environment_path")

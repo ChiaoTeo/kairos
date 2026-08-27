@@ -48,7 +48,6 @@ if TYPE_CHECKING:
         ReplaceOrderRequest,
         SplitOrderPolicyRequest,
         SubmitIntentRequest,
-        indexed_environment_path,
     )
 
 
@@ -100,7 +99,6 @@ _NAMES = (
     "ReplaceOrderRequest",
     "SplitOrderPolicyRequest",
     "SubmitIntentRequest",
-    "indexed_environment_path",
 )
 if not TYPE_CHECKING:
     _module = _native()

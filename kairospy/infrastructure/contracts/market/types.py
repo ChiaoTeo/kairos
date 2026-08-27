@@ -33,7 +33,6 @@ if TYPE_CHECKING:
         Provider,
         ProviderPreference,
         StrikeRange,
-        indexed_environment_path,
     )
 
 
@@ -67,7 +66,6 @@ if not TYPE_CHECKING:
     MarketReleaseOwnerResponse = _native().MarketReleaseOwnerResponse
     MarketControlUnavailableError = _native().MarketControlUnavailableError
     MarketControlRejectedError = _native().MarketControlRejectedError
-indexed_environment_path = _native().indexed_environment_path
 
 
 __all__ = [
@@ -96,5 +94,4 @@ __all__ = [
     "ProviderPreference",
     "ExpiryRange",
     "StrikeRange",
-    "indexed_environment_path",
 ]

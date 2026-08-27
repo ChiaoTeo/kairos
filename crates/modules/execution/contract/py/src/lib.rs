@@ -755,7 +755,11 @@ struct ExecutionUnknownRemoteOrderCurrent {
 #[pyclass(module = "kairospy._native_execution_contract")]
 struct ExecutionCurrentView {
     creator_pid: u32,
+    root: PathBuf,
+    identity: InstanceIdentity,
+    path: PathBuf,
     reader: Mutex<Option<RustView>>,
+    closed: Mutex<bool>,
 }
 
 #[pymethods]
@@ -763,20 +767,28 @@ impl ExecutionCurrentView {
     #[new]
     #[pyo3(signature = (root, workspace_id, launch_id=None, instance_id=None))]
     fn new(
-        py: Python<'_>,
+        _py: Python<'_>,
         root: PathBuf,
         workspace_id: String,
         launch_id: Option<String>,
         instance_id: Option<String>,
     ) -> PyResult<Self> {
         let identity = identity(workspace_id, launch_id, instance_id)?;
-        let reader = py
-            .detach(move || RustView::open(root, &identity))
+        let path = kairos_execution_contract::execution_indexed_environment_path(&root, &identity)
             .map_err(contract_error)?;
         Ok(Self {
             creator_pid: std::process::id(),
-            reader: Mutex::new(Some(reader)),
+            root,
+            identity,
+            path,
+            reader: Mutex::new(None),
+            closed: Mutex::new(false),
         })
+    }
+
+    #[getter]
+    fn path(&self) -> PathBuf {
+        self.path.clone()
     }
 
     fn orders(&self, py: Python<'_>) -> PyResult<Vec<ExecutionOrderCurrent>> {
@@ -867,6 +879,7 @@ impl ExecutionCurrentView {
 
     fn close(&self) -> PyResult<()> {
         self.ensure_process()?;
+        *self.closed.lock().map_err(|_| lock_error())? = true;
         self.reader.lock().map_err(|_| lock_error())?.take();
         Ok(())
     }
@@ -893,10 +906,18 @@ impl ExecutionCurrentView {
     ) -> PyResult<T> {
         self.ensure_process()?;
         py.detach(|| {
-            let reader = self.reader.lock().map_err(|_| lock_error())?;
-            let reader = reader.as_ref().ok_or_else(|| {
-                PyRuntimeError::new_err("Execution current-view reader is closed")
-            })?;
+            if *self.closed.lock().map_err(|_| lock_error())? {
+                return Err(PyRuntimeError::new_err(
+                    "Execution current-view reader is closed",
+                ));
+            }
+            let mut reader = self.reader.lock().map_err(|_| lock_error())?;
+            if reader.is_none() {
+                *reader = Some(
+                    RustView::open(self.root.clone(), &self.identity).map_err(contract_error)?,
+                );
+            }
+            let reader = reader.as_ref().expect("reader initialized above");
             operation(reader).map_err(contract_error)
         })
     }

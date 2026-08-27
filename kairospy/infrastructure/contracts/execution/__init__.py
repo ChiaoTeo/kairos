@@ -15,7 +15,6 @@ _EXPORTS = {
     "decode_event": (".events", "decode_event"),
     "ExecutionEvent": (".events", "ExecutionEvent"),
     "ExecutionInvalidEventError": (".events", "ExecutionInvalidEventError"),
-    "indexed_environment_path": (".types", "indexed_environment_path"),
 }
 
 

@@ -3,8 +3,15 @@ from __future__ import annotations
 from importlib import import_module
 import subprocess
 
+import pytest
+
 
 def _rust_event(owner: str, example: str) -> object:
+    native = import_module(f"kairospy._native_{owner}_contract")
+    return native.decode_event(_rust_event_bytes(owner, example))
+
+
+def _rust_event_bytes(owner: str, example: str) -> bytes:
     completed = subprocess.run(
         [
             "cargo",
@@ -19,8 +26,28 @@ def _rust_event(owner: str, example: str) -> object:
         capture_output=True,
         text=True,
     )
+    return bytes.fromhex(completed.stdout.strip())
+
+
+@pytest.mark.parametrize(
+    ("owner", "example"),
+    (
+        ("account", "emit_status_event_fixture"),
+        ("capital", "emit_policy_event_fixture"),
+        ("execution", "emit_lifecycle_event_fixture"),
+        ("market", "emit_quote_event_fixture"),
+        ("risk", "emit_circuit_event_fixture"),
+    ),
+)
+def test_rust_owner_fixture_corruption_has_stable_python_error_code(
+    owner: str, example: str
+) -> None:
     native = import_module(f"kairospy._native_{owner}_contract")
-    return native.decode_event(bytes.fromhex(completed.stdout.strip()))
+    payload = _rust_event_bytes(owner, example)
+
+    with pytest.raises(getattr(native, f"{owner.title()}InvalidEventError")) as error:
+        native.decode_event(payload[:8])
+    assert error.value.code == "invalid_wire_data"
 
 
 def test_rust_account_event_fixture_has_the_same_python_typed_fields() -> None:

@@ -7,7 +7,6 @@ _EXPORTS = {
     "CapitalContractClient": (".types", "CapitalClient"),
     "CapitalClient": (".types", "CapitalClient"),
     "CapitalCurrentView": (".types", "CapitalCurrentView"),
-    "indexed_environment_path": (".types", "indexed_environment_path"),
     "decode_event": (".events", "decode_event"),
     "CapitalControlClient": (".types", "CapitalControlClient"),
     "CapitalInvalidInputError": (".types", "CapitalInvalidInputError"),

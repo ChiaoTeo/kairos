@@ -432,7 +432,7 @@ class RiskSystemClient(SystemRpcClient):
             "actor_id": snapshot.actor_id,
             "kind": "latest",
             "generation": snapshot.generation,
-            "path": str(self._risk_view_path(actor_id)),
+            "path": str(current_view.path),
             "policy_version": snapshot.policy_version,
             "limits": limits,
             "active_reservations": reservations,
@@ -482,17 +482,6 @@ class RiskSystemClient(SystemRpcClient):
             self.launch_id,
             self.instance_id,
         )
-
-    def _risk_view_path(self, actor_id: str) -> Path:
-        from kairospy.infrastructure.contracts.risk import indexed_environment_path
-
-        if self.workspace_id is None:
-            raise RuntimeError("Risk indexed current view requires workspace identity")
-        return Path(indexed_environment_path(
-            self.require_view_root(), actor_id, self.workspace_id,
-            self.launch_id, self.instance_id,
-        ))
-
 
 def _risk_scope(value: Any) -> dict[str, str | None]:
     return {

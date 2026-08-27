@@ -2,8 +2,8 @@ from base64 import b64decode
 from pathlib import Path
 
 from kairospy.infrastructure.contracts.execution import (
+    ExecutionCurrentView,
     decode_event,
-    indexed_environment_path,
 )
 
 
@@ -16,7 +16,7 @@ INTENT_LIFECYCLE_CHANGED = b64decode(
 
 
 def test_execution_indexed_path_matches_rust_contract() -> None:
-    assert indexed_environment_path("/tmp/workspace", "workspace", None, None) == Path(
+    assert ExecutionCurrentView("/tmp/workspace", "workspace").path == Path(
         "/tmp/workspace/views/v3/Execution/execution-main/epoch-1/current.lmdb"
     )
 

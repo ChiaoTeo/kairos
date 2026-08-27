@@ -58,7 +58,6 @@ else:
     AccountControlRejectedError = _module.AccountControlRejectedError
 ACCOUNT_EVENT_STREAM_ID = _native().ACCOUNT_EVENT_STREAM_ID
 DEFAULT_AERON_CHANNEL = _native().DEFAULT_AERON_CHANNEL
-indexed_environment_path = _native().indexed_environment_path
 
 
 __all__ = [
@@ -84,5 +83,4 @@ __all__ = [
     "SimulatedSettlement",
     "ACCOUNT_EVENT_STREAM_ID",
     "DEFAULT_AERON_CHANNEL",
-    "indexed_environment_path",
 ]

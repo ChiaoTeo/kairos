@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 import pytest
 
-from kairospy.infrastructure.contracts.market import indexed_environment_path
 from kairospy.system.apps.launch import StrategyProcessController
 from kairospy.system.apps.launch.composition import compose_strategy_process
 from kairospy.system.apps.launch import LaunchControlApplication
@@ -191,9 +190,9 @@ def test_strategy_composition_uses_instance_market_and_account_resources(
     assert type(composition.application.context.market._snapshots).__module__ == (
         "kairospy._native_market_contract"
     )
-    assert indexed_environment_path(
-        instance.snapshot(), "sp-resources", "launch", "run-1"
-    ).is_relative_to(instance.snapshot())
+    assert composition.application.context.market._snapshots.path.is_relative_to(
+        instance.snapshot()
+    )
     assert (
         composition.application.context.execution._commands.client.socket_path
         == instance.paths.process_socket("execution")

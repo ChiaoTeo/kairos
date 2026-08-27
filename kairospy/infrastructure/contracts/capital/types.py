@@ -33,7 +33,6 @@ if TYPE_CHECKING:
         QueryCapitalAvailabilityRequest,
         ReconcileCapitalPlanRequest,
         ReconcileCapitalPlanResponse,
-        indexed_environment_path,
     )
 else:
     _module = _native()
@@ -57,7 +56,6 @@ else:
     CapitalAvailabilityResponse = _module.CapitalAvailabilityResponse
     ReconcileCapitalPlanResponse = _module.ReconcileCapitalPlanResponse
     FundingLocation = _module.FundingLocation
-indexed_environment_path = _native().indexed_environment_path
 
 
 __all__ = [
@@ -81,5 +79,4 @@ __all__ = [
     "QueryCapitalAvailabilityRequest",
     "ReconcileCapitalPlanRequest",
     "ReconcileCapitalPlanResponse",
-    "indexed_environment_path",
 ]

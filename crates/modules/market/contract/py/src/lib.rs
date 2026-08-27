@@ -2209,6 +2209,7 @@ struct MarketCurrentView {
     creator_pid: u32,
     root: PathBuf,
     identity: InstanceIdentity,
+    path: PathBuf,
     reader: Mutex<Option<RustView>>,
     closed: Mutex<bool>,
 }
@@ -2225,13 +2226,21 @@ impl MarketCurrentView {
         instance_id: Option<String>,
     ) -> PyResult<Self> {
         let identity = identity(workspace_id, launch_id, instance_id)?;
+        let path = kairos_market_contract::market_indexed_environment_path(&root, &identity)
+            .map_err(contract_error)?;
         Ok(Self {
             creator_pid: std::process::id(),
             root,
             identity,
+            path,
             reader: Mutex::new(None),
             closed: Mutex::new(false),
         })
+    }
+
+    #[getter]
+    fn path(&self) -> PathBuf {
+        self.path.clone()
     }
 
     fn get(

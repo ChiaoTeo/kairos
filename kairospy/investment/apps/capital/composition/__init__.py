@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from kairospy.system.apps.components.application.clients import CapitalSystemClient
+from kairospy.infrastructure.contracts.capital import CapitalClient
 from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
 
@@ -21,14 +22,6 @@ def build_strategy_access(
 ) -> CapitalApplication:
     """Build one Strategy facade; transport adapters are injected by composition."""
 
-    if client is not None and commands is None:
-        commands = client.control
-    if (
-        client is not None
-        and current_view is None
-        and capital_group_id is not None
-    ):
-        current_view = client.current_view(capital_group_id)
     if client is None:
         return CapitalApplication.disabled(
             strategy_id=identity.strategy_id,
@@ -36,6 +29,25 @@ def build_strategy_access(
             instance_id=identity.instance_id,
             account_ids=account_ids,
         )
+    if capital_group_id is None:
+        raise ValueError("enabled Capital requires capital_group_id")
+    if client.workspace_id is None:
+        raise RuntimeError("Capital owner client requires workspace identity")
+    owner = CapitalClient(
+        client.socket_path,
+        capital_group_id=capital_group_id,
+        workspace_id=client.workspace_id,
+        view_root=client.require_view_root(),
+        launch_id=identity.launch_id,
+        instance_id=identity.instance_id,
+        timeout=client.timeout,
+    )
+    if commands is None:
+        commands = owner.control
+    if current_view is None:
+        current_view = owner.current
+    if current_view is None:
+        raise RuntimeError("Capital owner client is missing its current-view capability")
     return CapitalApplication(
         commands,
         current_view,

@@ -10,7 +10,6 @@ _EXPORTS = {
     "MarketQuoteCurrent": (".view", "MarketQuoteCurrent"),
     "MarketViewKey": (".view", "MarketViewKey"),
     "MarketViewKind": (".view", "MarketViewKind"),
-    "indexed_environment_path": (".types", "indexed_environment_path"),
     "decode_event": (".events", "decode_event"),
     "MarketSubscriptionRequest": (".types", "MarketSubscriptionRequest"),
     "MarketTarget": (".types", "MarketTarget"),

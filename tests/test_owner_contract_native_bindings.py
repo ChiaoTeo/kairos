@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -113,6 +114,35 @@ def test_public_owner_facades_export_the_native_owner_named_client() -> None:
         native = import_module(f"kairospy._native_{owner}_contract")
         name = f"{owner.title()}Client"
         assert getattr(facade, name) is getattr(native, name)
+        assert not hasattr(facade, "indexed_environment_path")
+
+
+@pytest.mark.parametrize(
+    ("owner", "reader", "identity", "method", "arguments"),
+    (
+        ("account", "AccountCurrentView", ("main", "workspace-a"), "snapshot", ()),
+        ("capital", "CapitalCurrentView", ("group-a", "workspace-a"), "snapshot", ()),
+        ("execution", "ExecutionCurrentView", ("workspace-a",), "orders", ()),
+        ("market", "MarketCurrentView", ("workspace-a",), "quote", ("market:a", "test")),
+        ("risk", "RiskCurrentView", ("risk-main", "workspace-a"), "snapshot", ()),
+    ),
+)
+def test_native_current_views_own_lazy_path_and_closed_lifecycle(
+    tmp_path: Path,
+    owner: str,
+    reader: str,
+    identity: tuple[str, ...],
+    method: str,
+    arguments: tuple[str, ...],
+) -> None:
+    native = import_module(f"kairospy._native_{owner}_contract")
+    view = getattr(native, reader)(tmp_path, *identity)
+
+    assert view.path.is_relative_to(tmp_path)
+    assert view.path.name == "current.lmdb"
+    view.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        getattr(view, method)(*arguments)
 
 
 def test_owner_native_loader_rejects_a_fingerprint_mismatch(monkeypatch) -> None:

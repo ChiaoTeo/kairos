@@ -84,6 +84,29 @@ def main() -> int:
             continue
         for class_name, node in stubs.items():
             runtime_class = classes[class_name]
+            if not issubclass(runtime_class, Exception):
+                runtime_members = {
+                    name
+                    for name, value in inspect.getmembers(runtime_class)
+                    if not name.startswith("_")
+                    and (
+                        inspect.isgetsetdescriptor(value)
+                        or inspect.ismethoddescriptor(value)
+                        or inspect.isbuiltin(value)
+                    )
+                }
+                stub_members = {
+                    member.name
+                    for member in node.body
+                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and member.name != "__init__"
+                }
+                if runtime_members != stub_members:
+                    failures.append(
+                        f"{owner}.{class_name}: member surface differs; "
+                        f"missing={sorted(runtime_members - stub_members)}, "
+                        f"extra={sorted(stub_members - runtime_members)}"
+                    )
             for member in node.body:
                 if not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
