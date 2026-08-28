@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,8 @@ def test_activity_stream_retains_typed_terminal_records() -> None:
                 title="下载历史行情 · AAPL",
                 copy_text="保存位置 market-history/AAPL.jsonl",
                 audit_summary="download AAPL history",
+                scope_label="trader / 行情 / AAPL",
+                created_at=datetime(2026, 8, 28, 2, 30, tzinfo=timezone.utc),
                 artifact_path=Path("market-history/AAPL.jsonl"),
                 equivalent_command=(
                     "kairos-market-cli",
@@ -79,6 +82,9 @@ def test_activity_stream_retains_typed_terminal_records() -> None:
     assert activities[0].activity_id == "operation-1"
     assert "下载历史行情 · AAPL" in exported
     assert "market-history/AAPL.jsonl" in exported
+    assert "产物" in exported
+    assert "范围：trader / 行情 / AAPL" in exported
+    assert "时间：" in exported
     assert "重新执行" in exported
     assert "kairos-market-cli standalone download --symbol AAPL" in exported
 
@@ -479,29 +485,11 @@ def test_activity_stream_resize_preserves_semantic_browsing_anchor() -> None:
     assert after == before
 
 
-def test_live_stream_rebuilds_from_retained_lines_after_resize() -> None:
-    async def run() -> tuple[str, str]:
-        app = _ActivityApp()
-        async with app.run_test(size=(100, 18)) as pilot:
-            stream = app.query_one(ActivityStream)
-            stream.begin_live_stream("service logs")
-            stream.append_live_lines(
-                ("first retained line", "second retained line"),
-                retained_lines=("first retained line", "second retained line"),
-            )
-            await pilot.pause()
-            await pilot.resize_terminal(50, 14)
-            await pilot.pause(0.1)
-            narrow = stream.plain_text
-            await pilot.resize_terminal(100, 18)
-            await pilot.pause(0.1)
-            return narrow, stream.plain_text
+def test_activity_stream_does_not_own_live_output() -> None:
+    stream = ActivityStream()
 
-    narrow, restored = asyncio.run(run())
-
-    for visible in (narrow, restored):
-        assert visible.count("first retained line") == 1
-        assert visible.count("second retained line") == 1
+    assert not hasattr(stream, "begin_live_stream")
+    assert not hasattr(stream, "append_live_lines")
 
 
 def test_live_buffer_is_bounded_and_tracks_hidden_lines() -> None:
@@ -525,47 +513,30 @@ def test_live_buffer_rejects_non_positive_capacity() -> None:
         LiveBuffer("invalid", capacity=0)
 
 
-def test_transient_live_stream_is_redacted_and_not_exported() -> None:
-    async def run() -> tuple[str, str, str, str, tuple[ActivityRecord, ...]]:
+def test_live_buffer_redacts_before_retaining_lines() -> None:
+    buffer = LiveBuffer("service/market")
+
+    buffer.append("request api_key=private-value")
+
+    assert "private-value" not in buffer.copy_text()
+
+
+def test_live_output_is_not_part_of_activity_export() -> None:
+    async def run() -> tuple[str, tuple[ActivityRecord, ...]]:
         app = _ActivityApp()
-        async with app.run_test(size=(60, 12)) as pilot:
+        async with app.run_test(size=(60, 12)):
             stream = app.query_one(ActivityStream)
             stream.append_activity(
                 ActivityRecord(
-                    activity_id="before-live",
+                    activity_id="terminal-only",
                     kind=ActivityKind.QUERY,
                     outcome=ActivityOutcome.SUCCESS,
-                    title="market 状态",
+                    title="Market 状态",
                     body=Text("已停止"),
                 )
             )
-            stream.begin_live_stream("market 日志 · 跟随中")
-            stream.append_live_lines(
-                ("line-one", "api_key=private-value"),
-                retained_lines=("line-one", "api_key=private-value"),
-            )
-            stream.append_live_lines(
-                ("line-three",),
-                retained_lines=("api_key=private-value", "line-three"),
-            )
-            await pilot.pause()
-            visible = stream.plain_text
-            exported = stream.export_plain_text()
-            stream.clear_live_stream()
-            await pilot.pause()
-            after_clear = stream.plain_text
-            stream.append_live_lines(
-                ("line-after-clear",), retained_lines=("line-after-clear",)
-            )
-            stream.end_live_stream()
-            await pilot.pause()
-            return visible, exported, after_clear, stream.plain_text, stream.activities
+            return stream.export_plain_text(), stream.activities
 
-    visible, exported, after_clear, after_end, activities = asyncio.run(run())
-    assert "line-one" not in visible
-    assert "line-three" in visible
-    assert "private-value" not in visible
-    assert "line-one" not in exported
-    assert "line-three" not in after_clear
-    assert "line-one" not in after_end
+    exported, activities = asyncio.run(run())
+    assert "Market 状态" in exported
     assert len(activities) == 1

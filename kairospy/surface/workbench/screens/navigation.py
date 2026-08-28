@@ -69,6 +69,7 @@ def go_back(session: GuidedSession) -> bool:
 
     if not session.context:
         return False
+    session.navigation_generation += 1
     if session.context == ("project",):
         session.home()
     elif session.context == ("operations", "overview"):

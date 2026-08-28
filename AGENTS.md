@@ -424,6 +424,23 @@ The Workbench is a keyboard-first Textual command line. Its normal layout is a
 `RichLog` output region above one guided `Input`; do not reintroduce a button
 menu, a chat transcript, a second App, or a UI-specific business facade.
 
+Before adding a Workbench feature or result presentation, classify it against
+the existing product vocabulary. First identify the business owner, user
+question, one of the six result templates, and any of the five state overlays.
+Then reuse an existing production flow, renderer, or business-neutral
+presentation primitive. If the fit is incomplete, make the smallest change to
+the owning flow or shared primitive that preserves those semantics. Propose a
+new pattern only when the existing templates and overlays cannot truthfully
+express the current user question; visual difference or a hypothetical future
+caller is not sufficient.
+
+A change that adds a Workbench pattern must state the concrete current problem
+and caller, why reuse or adaptation is insufficient, the smallest new semantic
+addition, how it composes with Activity and Live Control boundaries, and which
+behavior, copy, accessibility, and snapshot tests prove it. Do not introduce a
+generic renderer, registry, or compatibility facade merely to make unlike
+business results look structurally uniform.
+
 For UI work, create the ignored, credential-free fixture with:
 
 ```text

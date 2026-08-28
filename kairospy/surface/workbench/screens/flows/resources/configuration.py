@@ -24,6 +24,7 @@ from ....widgets import (
     ActionToken,
     ActionItem,
     ChoiceInteraction,
+    ControlInteraction,
     Feature,
     InputInteraction,
     renderable_plain_text,
@@ -212,9 +213,16 @@ def handle_command(
         if record is None:
             return None
         model = identity("models", record)
+        if session.resources.model_chat is None:
+            session.resources.start_model_chat(model)
+        chat = session.resources.model_chat
+        assert chat is not None
+        chat.append(f"你\n{value}")
+        interaction = _model_chat_interaction(session, model)
+        session.interaction = interaction
         run = _model_conversation_run(state, session, model, value)
         return (
-            _chat_activity("你", value, outcome=ActivityOutcome.NOTICE),
+            SetInteraction(interaction),
             run,
         )
     return None
@@ -376,14 +384,14 @@ def handle_context(
             model_id = identity(kind, record)
             session.context = ("resources", "model-chat")
             session.resources.action = "chat"
-            interaction = ChoiceInteraction(title="", summary=None, actions=())
+            session.resources.start_model_chat(model_id)
+            assert session.resources.model_chat is not None
+            session.resources.model_chat.append(
+                f"系统\n已进入 {model_id} 对话。直接输入消息；/back 返回模型操作。"
+            )
+            interaction = _model_chat_interaction(session, model_id)
             session.interaction = interaction
             return (
-                _chat_activity(
-                    "系统",
-                    f"已进入 {model_id} 对话。直接输入消息；/back 返回模型操作。",
-                    outcome=ActivityOutcome.NOTICE,
-                ),
                 SetInteraction(interaction),
                 SetStatus(f"正在与 {model_id} 对话"),
             )
@@ -470,18 +478,16 @@ def handle_success(
                 response = str(result.get("response") or result.get("detail") or "")
             else:
                 response = _model_chat_failure_message(result)
-            interaction = ChoiceInteraction(title="", summary=None, actions=())
+            if session.resources.model_chat is None:
+                session.resources.start_model_chat(model_id)
+            assert session.resources.model_chat is not None
+            session.resources.model_chat.append(f"{model_id}\n{response}")
+            session.resources.model_chat_turns += 1
+            if not succeeded:
+                session.resources.model_chat_failures += 1
+            interaction = _model_chat_interaction(session, model_id)
             session.interaction = interaction
             return (
-                _chat_activity(
-                    model_id,
-                    response,
-                    outcome=(
-                        ActivityOutcome.SUCCESS
-                        if succeeded
-                        else ActivityOutcome.FAILURE
-                    ),
-                ),
                 SetInteraction(interaction),
                 SetStatus(
                     f"正在与 {model_id} 对话"
@@ -669,10 +675,18 @@ def handle_failure(
         and spec.route.qualifier == "model-chat"
         and session.context == ("resources", "model-chat")
     ):
-        interaction = ChoiceInteraction(title="", summary=None, actions=())
+        record = session.resources.selected
+        model_id = identity("models", record) if record is not None else "模型"
+        if session.resources.model_chat is None:
+            session.resources.start_model_chat(model_id)
+        chat = session.resources.model_chat
+        assert chat is not None
+        chat.append(f"{model_id}\n{error}")
+        session.resources.model_chat_turns += 1
+        session.resources.model_chat_failures += 1
+        interaction = _model_chat_interaction(session, model_id)
         session.interaction = interaction
         return (
-            _chat_activity("错误", error, outcome=ActivityOutcome.FAILURE),
             SetInteraction(interaction),
             SetStatus("模型调用失败 · 可继续重试或 /back 返回"),
         )
@@ -1897,29 +1911,48 @@ def _activity(
             spec.operation_id,
             ActivityKind.OPERATION,
             outcome,
-            spec.audit_summary,
+            spec.display_title,
             body,
             renderable_plain_text(body),
             spec.audit_summary,
+            scope_label=spec.scope_label,
         )
     )
 
 
-def _chat_activity(
-    speaker: str,
-    message: str,
-    *,
-    outcome: ActivityOutcome = ActivityOutcome.SUCCESS,
-) -> AppendActivity:
+def _model_chat_interaction(
+    session: GuidedSession, model_id: str
+) -> ControlInteraction:
+    buffer = session.resources.model_chat
+    transcript = "\n\n".join(buffer.lines) if buffer is not None else "等待消息…"
+    return ControlInteraction(
+        title=f"与 {model_id} 对话",
+        snapshot=Text(transcript),
+        actions=(),
+        refreshing=False,
+    )
+
+
+def finish_model_chat(session: GuidedSession) -> AppendActivity | None:
+    buffer = session.resources.model_chat
+    record = session.resources.selected
+    if buffer is None or record is None:
+        session.resources.reset_model_chat()
+        return None
+    model_id = identity("models", record)
+    turns = session.resources.model_chat_turns
+    failures = session.resources.model_chat_failures
+    body = Text(f"完成 {turns} 轮模型调用 · 失败 {failures} 轮")
+    session.resources.reset_model_chat()
     return AppendActivity(
         ActivityRecord(
             str(uuid4()),
             ActivityKind.QUERY,
-            outcome,
-            speaker,
-            Text(message),
-            message,
-            f"模型对话 · {speaker}",
+            ActivityOutcome.ATTENTION if failures else ActivityOutcome.SUCCESS,
+            f"与 {model_id} 的对话已结束",
+            body,
+            renderable_plain_text(body),
+            f"结束模型对话 · {model_id}",
         )
     )
 

@@ -17,6 +17,7 @@ from rich.text import Text
 from kairospy.investment.apps.market.application.cli import MarketCliApplication
 
 from ....widgets import ActionItem
+from ...presentation import ResultTone, conclusion, count, facts
 
 
 @dataclass(slots=True)
@@ -245,9 +246,34 @@ def file_result_renderable(
         provider = str(prompt.values.get("provider") or "—")
         details.add_row("来源", f"{provider} · Provider 直连")
         details.add_row("产物", str(prompt.values.get("destination") or "—"))
-    return Panel(
-        Group(Pretty(result, expand_all=True), Text(""), details),
-        title="Market 文件操作结果",
+    result_rows: list[tuple[str, RenderableType]] = []
+    if isinstance(result, Mapping):
+        result_labels = {
+            "status": "状态",
+            "record_count": "记录数",
+            "written_count": "已写入",
+            "replayed_count": "已回放",
+            "market_id": "Market ID",
+            "provider": "Provider",
+            "detail": "说明",
+        }
+        for key, label in result_labels.items():
+            if key in result and result[key] is not None:
+                value = result[key]
+                result_rows.append(
+                    (label, count(value) if isinstance(value, int) else str(value))
+                )
+    preview = isinstance(result, Mapping) and result.get("status") == "preview"
+    return Group(
+        conclusion(
+            "Market 文件操作预演完成，未执行任何修改"
+            if preview
+            else "Market 文件操作已完成",
+            tone=ResultTone.PREVIEW if preview else ResultTone.SUCCESS,
+        ),
+        facts(result_rows) if result_rows else Text("没有更多业务字段", style="dim"),
+        Text(""),
+        details,
     )
 
 

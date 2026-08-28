@@ -214,9 +214,11 @@ Workbench 使用一个垂直布局，从上到下包含：
 成功、失败或执行后取消时最多形成一个 `ActivityRecord`；导航、候选、参数校验、确认请求、Running
 提示和自动刷新不进入 Activity Stream。空内容区只显示一个不参与复制和 transcript 的弱提示。
 
-`ActivityRecord` 使用关闭的 `kind` 和 `outcome`，并显式保存脱敏后的 `copy_text`、审计摘要及可选
-Artifact 路径。产品 flow 只能返回 `AppendActivity` effect；只有 `ActivityStream` renderer 可以调用
-底层 `RichLog.write()`。`/clear` 只清当前可见 Activity，不删除 transcript、Artifact 或业务状态。
+`ActivityRecord` 使用关闭的 `kind` 和 `outcome`，并冻结展示标题、创建时间、业务作用域、脱敏后的
+`copy_text`、审计摘要及可选 Artifact 路径。展示标题回答“哪个对象执行了什么动作”，审计摘要记录完整
+操作意图，二者不得共用一个字段。`outcome` 表达本次用户交互怎样结束，不表达被查询业务对象是否健康；
+业务结论由正文单独呈现。产品 flow 只能返回 `AppendActivity` effect；只有 `ActivityStream` renderer 可以
+调用底层 `RichLog.write()`。`/clear` 只清当前可见 Activity，不删除 transcript、Artifact 或业务状态。
 
 每条可见 Activity 在一个 Workbench 会话内获得单调递增的显示编号 `A001`、`A002`……。该编号是
 Activity identity 的 UI 投影，不是业务序列；`/clear` 后不重用。内容区可通过 Tab 或鼠标单击聚焦，
@@ -237,11 +239,11 @@ Workspace Header 使用品牌、工作区和运行状态三段信息，底部以
 用户位于底部时新 Activity 自动跟随；用户上滚查看旧结果时保持视口，并由状态栏提示未读数量，执行
 `/bottom` 或 `Ctrl+End` 后回到底部。
 
-Activity Stream 必须把 `ActivityRecord` 和当前 bounded live snapshot 作为展示事实源；RichLog 已经生成的
-字符行只是可丢弃的渲染缓存。终端内容宽度变化后，Workbench 等待短暂的 resize quiet period，再按
-新宽度从事实源重建可见历史。高度变化只调整视口，不重建内容。跟随状态在重建后回到底部；浏览状态
-按 Activity identity 和 Activity 内偏移恢复，不能复用宽度变化前的绝对终端行号。流式输出期间发生过
-宽度变化时，当前 tail 可从 `LiveBuffer` 重建，结束时仍需以最终 bounded snapshot 完成一次稳定渲染。
+Activity Stream 必须只把 `ActivityRecord` 作为展示事实源；RichLog 已经生成的字符行只是可丢弃的渲染
+缓存。终端内容宽度变化后，Workbench 等待短暂的 resize quiet period，再按新宽度从事实源重建可见
+历史。高度变化只调整视口，不重建内容。跟随状态在重建后回到底部；浏览状态按 Activity identity 和
+Activity 内偏移恢复，不能复用宽度变化前的绝对终端行号。持续输出由 Interaction Region 的 Control 和
+`LiveBuffer` 重建，不进入 Activity Stream 的 retained ranges。
 
 Workbench 正常支持不小于 60 列、20 行的终端。低于 68 列使用窄屏 chrome，低于 24 行使用矮屏
 chrome；低于正常支持尺寸时隐藏非必要内容并显示明确提示，但必须保留共享命令输入、帮助和退出能力。
@@ -251,11 +253,14 @@ chrome；低于正常支持尺寸时隐藏非必要内容并显示明确提示�
 
 Interaction Region 是当前 `InteractionState` 的被动投影，承载动作列表、参数说明、确认摘要、运行状态和
 持续控制。它不保存另一份产品状态，也不直接启动 Worker。快照类 Control 原地替换最新值；日志类
-Control 使用容量为 500 行的 `LiveBuffer`，显示 following、unseen、dropped 和完整日志路径。
+Control 使用容量为 500 行的 `LiveBuffer`，显示等待首帧、跟随中、已暂停、刷新失败或已结束，以及
+visible、unseen、dropped 和完整日志路径。同一时刻只有当前上下文拥有一个 Live Control；离开上下文必须
+取消其 Worker，迟到的旧 generation 结果不得更新新上下文。
 
 Market 自动刷新不产生 Activity；用户明确选择“保存当前快照”时才追加一条 Activity。Launch attach 的
 暂停/继续只改变跟随状态，清空窗口不删除日志源，`/copy` 复制当前窗口；完整日志仍由 Launch 日志 owner
-持有并在 Control 中显示路径。
+持有并在 Control 中显示路径。服务日志、Launch attach 和模型验证都使用这一 Control 规则，不得把每次
+刷新、每行日志或每轮模型消息追加为 Activity。显式日志/Attach 会话结束时只追加一条终态摘要 Activity。
 
 ### 4.3 动作列表
 
@@ -454,26 +459,46 @@ Secret 输入必须满足：
 
 ### 9.1 结果呈现
 
-结果按用户问题选择最小合适形式：
+Activity 正文统一按“对象、结论、关键事实、影响、下一步动作”组织；没有内容的区块省略。Activity 自身
+已经是结果容器，正文不得再用一组嵌套彩色 Panel 制造卡片中的卡片。结果按用户问题选择以下六类最小
+合适形式：
 
-- 单一结论使用短文本或状态行；
-- 多记录比较使用表格；
-- 对象详情使用分组字段；
-- 系统状态使用摘要加组件表；
-- 配置、诊断和计划使用结构化面板；
-- 持续输出使用可暂停和刷新的日志视图。
+1. 状态概览：一句整体结论、一组关键事实和必要的异常组件表；
+2. 对象详情：对象摘要和业务字段；
+3. 集合列表：总数、稳定排序和多记录表格；
+4. 操作结果：目标效果的最终状态，而不是仅说明请求已发出；
+5. 检查与诊断：结论、原因、影响、恢复动作和技术入口；
+6. 持续控制：Interaction Region 中可暂停、刷新、清空和复制的 Live Control。
+
+空结果、等待/已受理、部分成功/需要注意、失败/结果未知和 Artifact 是覆盖上述模板的五种状态，不是新的
+页面类型。Market Quote、Order Book、Account 费率等业务专属 renderer 可以保留自己的布局，但仍必须
+满足相同的标题、结论、证据、复制和可访问性规则。
 
 结果标题必须表达业务对象和作用域，不能只写“完成”或暴露内部 result kind。
 
+Activity 头部使用关闭语义：`✓` 表示用户意图已经可靠完成，`×` 表示明确失败，`■` 表示确定未产生目标
+效果的取消，黄色 `!` 表示部分成功、已受理、结果未知或其他需要注意的终态，`•` 只用于非操作性的产品
+提示。查询成功返回“服务已降级”时，头部可以表示查询完成，正文仍必须明确显示降级；不得用头部标记
+代替业务结论。取消时如果外部效果可能已经发生，必须使用结果未知而不是取消。
+
+单对象事实使用无表头两列 grid，默认只保留支持结论的关键字段。多对象比较使用带表头表格；默认最多
+展示 20 行，超过时同时显示完整总数、当前可见数和剩余数量，不得静默截断。排序不随终端宽度改变，
+Provider 数、route 数、记录数等不同粒度必须明确命名。
+
 ### 9.2 错误信息
 
-错误信息回答三个问题：
+错误信息回答五个问题：
 
 1. 哪个操作失败？
 2. 用户可理解的原因是什么？
-3. 现在可以执行什么恢复动作？
+3. 哪些范围受到影响？
+4. 现在可以执行什么恢复动作？
+5. 重试是否安全？
 
 恢复建议必须与当前错误相关。固定的 `/back`、`/home`、`/help` 不应在每条结果后重复。
+订单、资金划转、通知发布和配置写入等操作在结果未知时不得给出通用重试建议；应提供 owner 已定义的
+幂等状态查询。Preview/dry-run 必须明确“未执行任何修改”，accepted/submitted 必须明确“尚未确认生效”，
+partial 必须同时列出成功与失败范围。
 
 ### 9.3 异步任务与结果路由
 
@@ -484,11 +509,40 @@ Secret 输入必须满足：
 - `Ctrl+C` 只取消当前可取消操作，不退出整个 Workbench；
 - worker 成功、失败和取消都必须回到稳定的 Navigation 状态；
 - 自动刷新只更新对应视图，不重复追加相同结果和操作记录；
+- 每个操作和 Live Control 绑定稳定 operation ID 或 generation；离开上下文后取消 Worker，无法取消而迟到的
+  结果因 Workspace、上下文或 generation 不匹配被丢弃；旧失败不得覆盖更新的成功；
 - 用户在任务运行时提交新输入，才显示一次“任务仍在运行”的针对性反馈。
 
 产品 vertical flow 同时拥有 dispatch、success、failure 和 cancel。它返回关闭的 presentation effects：
 `AppendActivity`、`SetInteraction`、`RunOperation`、`SetStatus`，以及两个仅用于启动 Market/Launch 刷新的
 Control adapter effect。Screen 负责应用 effect 和管理 Textual Worker，不推断产品结果含义。
+
+### 9.4 证据、格式与 Artifact
+
+业务观测和状态结果在 owner 提供事实时统一展示来源、业务时间、获取时间、新鲜度和完整性。默认页面优先
+显示“3 秒前”“数据已过期”“部分完整”等决策信息；精确纳秒、source sequence 和原始 UTC 时间属于技术
+证据。不得把 `_nanos`、`_ms`、`NS` 等实现字段名作为默认产品标签。
+
+Workbench presentation 可以共享时间、duration、count 和 percentage 等纯机械 formatter：用户时间使用
+本地时区并带 offset，技术证据保留 UTC；计数使用千位分隔；百分比说明分母，零分母显示“暂无样本”；
+Price、Quantity、Money 和费率保持 owner 语义类型的十进制精度，不经 `float` 往返。格式化函数不得接受
+任意整数并猜测时间或 duration 单位。
+
+Artifact 结果必须区分“操作结束”和“产物可用”。只有已确认存在且属于当前操作的文件才设置
+`artifact_path`；默认展示 Workspace 相对路径，并在 owner 提供时展示格式、记录数、文件大小、生成时间和
+部分写入范围。`/clear` 不删除 Artifact，删除必须调用 owner 的明确动作。
+
+### 9.5 复制、留存与线性化
+
+单条 Activity 复制包含冻结的 display title、scope、created-at、正文和等价命令，不依赖复制时的当前
+Workspace。二维 Rich 布局必须能转换为不依赖颜色和位置的纯文本；视觉截断值在复制时提供完整安全值或
+明确标记同样被截断。`/copy-history` 不包含 Live Control；Live Control 只复制当前安全窗口，完整日志由
+owner 路径定位。
+
+Activity 显示编号不复用，旧 Activity 不得被静默淘汰。若后续根据长会话 reflow、内存和渲染测量引入
+容量上限，界面必须明确提示更早记录只保留在 Transcript；不得无证据增加缓存或淘汰策略。模型验证每轮
+消息不进入 Activity 或 `/copy-history`，结束时只保留验证摘要；需要完整对话时必须由明确的会话 Artifact
+owner 持有。
 
 ## 10. 七个首页入口
 
@@ -688,19 +742,26 @@ RichLog 的屏幕行。macOS 同时使用系统 `pbcopy` 兜底。Terminal 和 i
 
 ## 13. 产品扩展规则
 
-新增 Workbench 能力时按以下顺序判断：
+新增 Workbench 能力必须遵循“归类 → 复用 → 改造 → 新增模式”的顺序：
 
-1. 确认业务所有者和调用边界。
-2. 判断它属于现有六个用户任务中的哪一个。
-3. 判断它是导航分组、对象选择还是叶子操作。
-4. 定义所需参数、Secret、确认条件和结果形式。
-5. 提供语义化操作名称以及可能时的等价 CLI。
-6. 在同一个产品 flow 中实现 dispatch、success、failure 和 cancel，并返回类型化 effect。
-7. 直接调用所属 Application 或 Contract。
+1. 确认业务所有者、调用边界，以及用户实际要回答的问题。
+2. 判断它属于现有六个用户任务中的哪一个，并为结果选择六类结果模板之一和所需的五种状态覆盖；
+   空结果、等待、部分成功、失败和 Artifact 不得被包装成新的页面类型。
+3. 判断它是导航分组、对象选择还是叶子操作，并查找当前生产代码中可复用的 flow、业务 renderer 和
+   presentation primitive。
+4. 能复用时直接复用；不能完整表达时，优先对所属 flow、业务 renderer 或无业务语义的共享 primitive
+   做最小改造，不能因为字段或视觉略有差异就复制一套模式。
+5. 只有现有六类模板和五种状态覆盖无法真实表达当前用户问题时，才可以提出新模式。新增模式必须在变更
+   说明或 Decision 中回答：当前具体问题和调用者是什么、为什么复用或改造不成立、最小新增语义是什么、
+   如何与终态 Activity 和 Live Control 边界组合，以及哪些行为、文案、无障碍和快照测试证明其必要性。
+6. 定义所需参数、Secret、确认条件和结果形式，提供语义化操作名称以及可能时的等价 CLI。
+7. 在同一个产品 flow 中实现 dispatch、success、failure 和 cancel，返回类型化 effect，并直接调用所属
+   Application 或 Contract。
 8. 添加行为、边界、错误、Secret、Activity 保留策略和快照测试。
 
 不得仅为了新增能力而创建新的 App、首页入口、顶层 UI layer、manager、router、registry 或 UI-owned
-port。只有用户任务确实无法归入现有产品入口时，才讨论增加首页分组。
+port，也不得为了表面统一而引入接受任意业务数据的通用 renderer。只有用户任务确实无法归入现有产品
+入口时，才讨论增加首页分组；视觉差异或假设的未来调用者不足以证明新模式成立。
 
 ## 14. 验收标准
 

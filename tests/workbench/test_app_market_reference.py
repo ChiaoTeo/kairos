@@ -272,7 +272,8 @@ def test_reference_runtime_status_has_structured_owner_sections() -> None:
         console.print(runtime_status_renderable(_reference_runtime_status()))
     output = console.export_text()
 
-    assert "Reference Runtime" in output
+    assert "Reference 可访问，但存在需要处理的状态" in output
+    assert "运行时" in output
     assert "generation 42 · sequence 9810" in output
     assert "binance-spot" in output
     assert "massive-options" in output
@@ -304,7 +305,7 @@ def test_reference_status_runs_from_existing_reference_menu(
             )
 
     output, status, focused = asyncio.run(run())
-    assert "Reference Runtime" in output
+    assert "Reference 可访问，但存在需要处理的状态" in output
     assert "binance-spot" in output
     assert status == "Reference 运行状态已就绪"
     assert focused
@@ -337,12 +338,13 @@ def test_workspace_market_status_visualizes_process_and_data_plane() -> None:
         console.print(rendered)
     output = console.export_text()
 
-    assert "Market Runtime" in output
-    assert "Market Data Plane" in output
+    assert "Market 服务与数据面均已就绪" in output
+    assert "进程" in output
+    assert "数据面" in output
     assert "market-actor" in output
-    assert "input 90 · commit 80 · encoded 79 · order-book 8" in output
+    assert "输入 90 · 提交 80 · 编码 79 · 订单簿 8" in output
     assert "2.500 ms" in output
-    assert "failures 1" in output
+    assert "失败 1" in output
 
 
 def test_workspace_market_routes_are_aggregated_by_provider_and_state() -> None:
@@ -377,10 +379,11 @@ def test_workspace_market_routes_are_aggregated_by_provider_and_state() -> None:
         console.print(rendered)
     output = console.export_text()
 
-    assert "Market Provider Routes · 3" in output
+    assert "已配置 3 条数据路由，覆盖 2 个 Provider" in output
+    assert "Provider 路由" in output
     assert "binance" in output
     assert "ready" in output
-    assert "quote, trade · selected 1" in output
+    assert "quote, trade · 已选 1" in output
     assert "massive" in output
     assert "degraded" in output
 
@@ -786,7 +789,7 @@ def test_market_history_download_is_a_single_input_redacted_scope_preview(
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert context == "trader / 市场行情 / 已选标的 · AAPL · nasdaq · equity  ›"
-    assert "Market 文件操作结果" in output
+    assert "Market 文件操作预演完成，未执行任何修改" in output
     assert "history/aapl.jsonl" in output
     assert "preview" in output
     assert focused

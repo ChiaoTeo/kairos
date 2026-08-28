@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from rich.console import Group, RenderableType
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from kairospy.system.apps.observe.application import ObserveSnapshot
+from ...presentation import ResultTone, conclusion, section
 
 
 _SHARED_SERVICES = ("reference", "market")
@@ -29,13 +29,19 @@ def observe_renderable(snapshot: ObserveSnapshot) -> RenderableType:
             _freshness(value),
             str(value.get("error") or _detail(value)),
         )
+    ready = snapshot.overall_status in {"ready", "healthy"}
     summary = Text(
-        f"{snapshot.workspace_id} · {snapshot.overall_status} · "
-        f"{len(snapshot.active_instances)} 个活动实例\n",
-        style="bold",
+        f"{snapshot.workspace_id} · {len(snapshot.active_instances)} 个活动实例"
     )
-    summary.append(f"建议：{_next_step(snapshot)}", style="dim")
-    return Panel(Group(summary, table), title="系统状态", border_style="cyan")
+    summary.append(f"\n建议：{_next_step(snapshot)}", style="dim")
+    return Group(
+        conclusion(
+            "系统运行状态已就绪" if ready else "系统存在需要处理的运行状态",
+            tone=ResultTone.SUCCESS if ready else ResultTone.WARNING,
+        ),
+        summary,
+        section("组件状态", table),
+    )
 
 
 def _next_step(snapshot: ObserveSnapshot) -> str:

@@ -11,6 +11,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from ...presentation import conclusion, section
+
 
 def records_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
     if not records:
@@ -22,7 +24,7 @@ def records_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
     table.add_column("状态")
     table.add_column("实例")
     table.add_column("配置")
-    for index, item in enumerate(records, 1):
+    for index, item in enumerate(records[:20], 1):
         table.add_row(
             str(index),
             str(item["launch_id"]),
@@ -31,7 +33,7 @@ def records_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
             str(item.get("instance_id") or "—"),
             "已配置" if item.get("config") else "未找到",
         )
-    return Panel(table, title=f"{len(records)} 个运行方案", border_style="cyan")
+    return _collection("运行方案", records, table)
 
 
 def instances_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
@@ -44,7 +46,7 @@ def instances_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
     table.add_column("状态")
     table.add_column("创建时间")
     table.add_column("更新时间")
-    for index, record in enumerate(records, 1):
+    for index, record in enumerate(records[:20], 1):
         table.add_row(
             str(index),
             str(record.get("instance_id") or "—"),
@@ -53,7 +55,7 @@ def instances_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
             str(record.get("created_at") or "—"),
             str(record.get("updated_at") or "—"),
         )
-    return Panel(table, title=f"{len(records)} 个运行实例", border_style="cyan")
+    return _collection("运行实例", records, table)
 
 
 def components_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType:
@@ -66,7 +68,7 @@ def components_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType
     table.add_column("PID")
     table.add_column("Socket")
     table.add_column("详情")
-    for index, record in enumerate(records, 1):
+    for index, record in enumerate(records[:20], 1):
         table.add_row(
             str(index),
             str(record.get("component") or "—"),
@@ -75,7 +77,21 @@ def components_renderable(records: tuple[dict[str, Any], ...]) -> RenderableType
             str(record.get("control_socket") or record.get("socket") or "—"),
             str(record.get("error") or record.get("detail") or "—"),
         )
-    return Panel(table, title=f"{len(records)} 个实例组件", border_style="cyan")
+    return _collection("实例组件", records, table)
+
+
+def _collection(title: str, records: tuple[dict[str, Any], ...], table: Table) -> Group:
+    visible = min(len(records), 20)
+    return Group(
+        conclusion(f"{title}共 {len(records)} 条记录"),
+        section(title, table),
+        Text(
+            f"显示 {visible} 条 · 其余 {len(records) - visible} 条"
+            if len(records) > visible
+            else f"共 {len(records)} 条",
+            style="dim",
+        ),
+    )
 
 
 def attach_renderable(value: Mapping[str, object]) -> RenderableType:
@@ -204,11 +220,12 @@ def attach_renderable(value: Mapping[str, object]) -> RenderableType:
         )
     )
     return Group(
-        Panel(summary, title="Strategy Runtime", border_style="cyan"),
-        Panel(components, title="内置连接", border_style="blue"),
-        Panel(subscriptions, title="Market 订阅", border_style="green"),
-        Panel(streams, title="数据流", border_style="magenta"),
-        Panel(recent, title="最近数据", border_style="yellow"),
+        conclusion("Strategy 运行输出已刷新"),
+        section("Strategy Runtime", summary),
+        section("内置连接", components),
+        section("Market 订阅", subscriptions),
+        section("数据流", streams),
+        section("最近数据", recent),
         notification_text,
     )
 

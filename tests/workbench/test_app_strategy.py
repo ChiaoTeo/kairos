@@ -312,7 +312,7 @@ def test_launch_market_snapshot_and_replay_pause_use_one_input(
     assert [action for action, _ in calls] == ["quote", "pause-replay"]
     assert calls[0][1]["market-id"] == "market:btc-usdt"
     assert context == "trader / 策略管理 / Market 组件  ›"
-    assert "Market 组件结果" in output
+    assert "Market quote 已返回当前实例结果" in output
 
 
 def test_launch_timeline_export_uses_argument_and_inline_confirmation(
@@ -371,7 +371,7 @@ def test_launch_timeline_export_uses_argument_and_inline_confirmation(
     context, output = asyncio.run(run())
     assert exports == ["timeline.jsonl"]
     assert context == "trader / 策略管理 / 实例时间线  ›"
-    assert "时间线导出结果" in output
+    assert "时间线导出结果已完成" in output
 
 
 def test_launch_attach_python_uses_same_input_and_inline_confirmation(
@@ -551,6 +551,62 @@ def test_launch_attach_clear_only_removes_visible_window(
     assert "/workspace/logs/strategy/process.log" in control_text
 
 
+def test_launch_attach_drops_result_from_an_older_navigation_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+    monkeypatch.setattr(
+        strategy,
+        "load_launches",
+        lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
+    )
+
+    def snapshot(state: object, launch_id: str) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        marker = "fresh-result"
+        if calls == 1:
+            started.set()
+            release.wait(timeout=2)
+            marker = "stale-result"
+        return {
+            "instance": {"instance_id": "run-1"},
+            "status": {"state": "running", "marker": marker},
+            "logs": {"lines": [marker]},
+        }
+
+    monkeypatch.setattr(strategy, "load_launch_attach_snapshot", snapshot)
+
+    async def run() -> tuple[int, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("3", "1", "1", "/a"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            for _ in range(20):
+                if started.is_set():
+                    break
+                await pilot.pause(0.05)
+            screen.submit("/back")
+            screen.submit("1")
+            await pilot.pause(0.1)
+            screen.submit("/a")
+            release.set()
+            await pilot.pause(1.3)
+            return calls, interaction_copy_text(screen.session.interaction)
+
+    refresh_count, control_text = asyncio.run(run())
+    release.set()
+
+    assert refresh_count >= 2
+    assert "fresh-result" in control_text
+    assert "stale-result" not in control_text
+
+
 def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -611,7 +667,7 @@ def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
     assert saved == [("backtest-demo", False)]
     assert context == "trader / 策略管理 / 已选运行方案  ›"
     assert "Launch 脱敏摘要" not in output
-    assert "Launch 配置结果" in output
+    assert "Launch 配置已就绪" in output
     assert focused
 
 

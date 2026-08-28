@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
+from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 
@@ -24,6 +25,7 @@ class ActivityOutcome(StrEnum):
     SUCCESS = "success"
     FAILURE = "failure"
     CANCELLED = "cancelled"
+    ATTENTION = "attention"
     NOTICE = "notice"
 
 
@@ -40,6 +42,10 @@ class ActivityRecord:
     audit_summary: str | None = None
     artifact_path: Path | None = None
     equivalent_command: tuple[str, ...] | None = None
+    scope_label: str | None = None
+    created_at: datetime = dataclass_field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 __all__ = ["ActivityKind", "ActivityOutcome", "ActivityRecord"]

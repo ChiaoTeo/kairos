@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any, Callable
 from uuid import uuid4
 
+from rich.console import Group
 from rich.panel import Panel
 from rich.pretty import Pretty
 from rich.text import Text
@@ -36,6 +37,7 @@ from .business import (
 )
 from ...catalog import SECTION_ACTIONS
 from ...session import GuidedSession
+from ...presentation import ResultTone, conclusion, count, facts
 from .actions import (
     BUSINESS_ACTIONS,
     CONFIG_ACTIONS,
@@ -315,8 +317,13 @@ def handle_success(
             else Text("支撑进程上下文已经失效。", style="yellow")
         )
     else:
-        body = Panel(Pretty(result, expand_all=True), title=title)
-    return _activity(spec, body), *_choice(state, session, status="操作已完成")
+        body = _operations_result(title, result)
+    outcome = (
+        ActivityOutcome.ATTENTION
+        if isinstance(result, Mapping) and result.get("status") == "preview"
+        else ActivityOutcome.SUCCESS
+    )
+    return _activity(spec, body, outcome), *_choice(state, session, status="操作已完成")
 
 
 def handle_failure(
@@ -333,9 +340,9 @@ def handle_failure(
         "support-diagnostics",
     }:
         current = session.operations.selected_service_status
-        if spec.route.qualifier == "service-status" and spec.action_name.rsplit(
-            ".", 1
-        )[-1] in {"start", "restart", "repair-start"}:
+        if spec.route.qualifier == "service-status" and spec.action_name.rsplit(".", 1)[
+            -1
+        ] in {"start", "restart", "repair-start"}:
             raw = dict(current.raw) if current is not None else {}
             raw.update(
                 {
@@ -892,6 +899,40 @@ def service_log_operation(
     return lambda: execute_service(state, component, "log-tail")
 
 
+def _operations_result(title: str, result: Any) -> Any:
+    if not isinstance(result, Mapping):
+        return conclusion(str(result) or f"{title}已完成")
+    preview = str(result.get("status") or "").lower() == "preview"
+    labels = {
+        "status": "状态",
+        "component": "组件",
+        "action": "操作",
+        "pid": "PID",
+        "project": "项目",
+        "workspace": "Workspace",
+        "profile": "Profile",
+        "created": "已创建",
+        "updated": "已更新",
+        "record_count": "记录数",
+        "path": "路径",
+        "detail": "说明",
+        "reason": "原因",
+    }
+    rows = []
+    for key, label in labels.items():
+        if key not in result or result[key] is None:
+            continue
+        value = result[key]
+        rows.append((label, count(value) if isinstance(value, int) else str(value)))
+    return Group(
+        conclusion(
+            f"{title}预演完成，未执行任何修改" if preview else f"{title}已完成",
+            tone=ResultTone.PREVIEW if preview else ResultTone.SUCCESS,
+        ),
+        facts(rows) if rows else Text("没有更多业务字段", style="dim"),
+    )
+
+
 def log_control_effects(
     session: GuidedSession, status: str
 ) -> tuple[ScreenEffect, ...]:
@@ -901,11 +942,18 @@ def log_control_effects(
         detail = Text("等待首次日志刷新…", style="dim")
         refreshing = False
     else:
-        detail = Text(
-            f"可见 {len(buffer.lines)} 行 · 未读 {buffer.unseen_lines}"
-            f" · 已丢弃 {buffer.dropped_lines}\n"
-            f"完整日志 {buffer.full_log_path or '尚未生成'}",
-            style="dim",
+        detail = Group(
+            (
+                Text("\n".join(buffer.lines))
+                if buffer.lines
+                else Text("当前窗口没有日志", style="dim")
+            ),
+            Text(
+                f"可见 {len(buffer.lines)} 行 · 未读 {buffer.unseen_lines}"
+                f" · 已丢弃 {buffer.dropped_lines} · 轮转 {buffer.rotations}\n"
+                f"完整日志 {buffer.full_log_path or '尚未生成'}",
+                style="dim",
+            ),
         )
         refreshing = buffer.following
     session.control(
@@ -930,7 +978,8 @@ def finish_log_follow(session: GuidedSession) -> AppendActivity | None:
     path = str(buffer.full_log_path) if buffer.full_log_path is not None else "尚未生成"
     body = Text(
         f"持续 {duration:.1f} 秒 · 接收 {session.operations.received_lines} 行"
-        f" · 警告 {session.operations.warning_lines} 行\n完整日志 {path}",
+        f" · 警告 {session.operations.warning_lines} 行"
+        f" · 轮转 {buffer.rotations} 次\n完整日志 {path}",
         style="dim",
     )
     session.operations.reset_logs()
@@ -953,10 +1002,11 @@ def _activity(
             spec.operation_id,
             ActivityKind.OPERATION,
             outcome,
-            spec.audit_summary,
+            spec.display_title,
             body,
             renderable_plain_text(body),
             spec.audit_summary,
+            scope_label=spec.scope_label,
         )
     )
 

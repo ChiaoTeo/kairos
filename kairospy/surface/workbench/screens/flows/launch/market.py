@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Callable
 
-from rich.panel import Panel
+from rich.console import Group, RenderableType
 from rich.pretty import Pretty
+from rich.table import Table
 from rich.text import Text
 
 from ....widgets import (
@@ -33,6 +35,7 @@ from ...session import GuidedSession
 from ...navigation import action_id, context_items, context_label
 from ...operation import OperationSpec
 from ...results import ResultKind, ResultRoute
+from ...presentation import ResultTone, conclusion, count, facts, section
 
 
 def handle_input(
@@ -100,8 +103,13 @@ def handle_success(
     if spec.route.kind is not ResultKind.LAUNCH_MARKET:
         return None
     session.launch_market.reset()
-    body = Panel(Pretty(result, expand_all=True), title="Market 组件结果")
-    return _activity(spec, body), *_choice(state, session, status="操作已完成")
+    body = _market_result(spec.action_name, result)
+    outcome = (
+        ActivityOutcome.ATTENTION
+        if isinstance(result, Mapping) and result.get("status") == "preview"
+        else ActivityOutcome.SUCCESS
+    )
+    return _activity(spec, body, outcome), *_choice(state, session, status="操作已完成")
 
 
 def handle_failure(
@@ -209,6 +217,69 @@ def _choice(
     return SetInteraction(interaction), SetStatus(status)
 
 
+def _market_result(action_name: str, result: Any) -> RenderableType:
+    action = action_name.rsplit(".", 1)[-1]
+    labels = {
+        "status": "状态",
+        "state": "运行状态",
+        "feed_status": "Feed",
+        "market_id": "Market ID",
+        "provider": "Provider",
+        "observation": "Observation",
+        "data_type": "数据类型",
+        "timeframe": "周期",
+        "bid_price": "买价",
+        "ask_price": "卖价",
+        "last_price": "最新价",
+        "age_nanos": "数据年龄（ns）",
+        "stale": "已过期",
+        "launch_id": "Launch",
+        "instance_id": "实例",
+        "mode": "模式",
+        "detail": "说明",
+    }
+    if isinstance(result, Mapping):
+        preview = str(result.get("status") or "").lower() == "preview"
+        rows = tuple(
+            (label, _market_value(result[key]))
+            for key, label in labels.items()
+            if key in result and result[key] is not None
+        )
+        return Group(
+            conclusion(
+                f"Market {action} 预演完成，未执行任何修改"
+                if preview
+                else f"Market {action} 已返回当前实例结果",
+                tone=ResultTone.PREVIEW if preview else ResultTone.SUCCESS,
+            ),
+            facts(rows) if rows else Text("没有更多业务字段", style="dim"),
+        )
+    if isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
+        table = Table("序号", "记录", show_header=True, header_style="bold")
+        for index, item in enumerate(result[:20], 1):
+            table.add_row(str(index), _market_value(item))
+        return Group(
+            conclusion(f"Market {action} 返回 {count(len(result))} 条记录"),
+            section("结果", table),
+            Text(
+                f"显示 {count(min(len(result), 20))} 条 · 其余 {count(max(len(result) - 20, 0))} 条",
+                style="dim",
+            ),
+        )
+    return conclusion(str(result) or f"Market {action} 已完成")
+
+
+def _market_value(value: Any) -> str:
+    if isinstance(value, Mapping):
+        identity_value = (
+            value.get("market_id") or value.get("provider") or value.get("state")
+        )
+        return str(identity_value or "结构化记录")
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return f"{count(len(value))} 项"
+    return str(value)
+
+
 def _activity(
     spec: OperationSpec,
     body: Any,
@@ -219,10 +290,11 @@ def _activity(
             spec.operation_id,
             ActivityKind.OPERATION,
             outcome,
-            spec.audit_summary,
+            spec.display_title,
             body,
             renderable_plain_text(body),
             spec.audit_summary,
+            scope_label=spec.scope_label,
         )
     )
 

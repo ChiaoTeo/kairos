@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.pretty import Pretty
+from rich.table import Table
 from rich.text import Text
 
 from kairospy.investment.apps.account.application import AccountConfigurationApplication
@@ -26,6 +28,7 @@ from ....widgets import (
     renderable_plain_text,
 )
 from ...activity import ActivityKind, ActivityOutcome, ActivityRecord
+from ...presentation import ResultTone, conclusion, count, facts, section
 from ...effects import (
     AppendActivity,
     RefreshLaunchControl,
@@ -366,10 +369,7 @@ def handle_context(
         name = str(component.get("component") or "")
         if name in {"market", "execution"}:
             session.context = ("strategy", name)
-        body = Panel(
-            Pretty(component, expand_all=True),
-            title=name.title() if name else "实例组件",
-        )
+        body = _launch_detail(name.title() if name else "实例组件", component)
         return _standalone(f"实例组件 · {name or 'detail'}", body), *_choice(
             state, session
         )
@@ -381,7 +381,7 @@ def handle_context(
         session.strategy.selected_record = selected
         session.strategy.instance_entered_from_operations = False
         session.context = ("strategy", "instance")
-        body = Panel(Pretty(instance, expand_all=True), title="运行实例")
+        body = _launch_detail("运行实例", instance)
         return _standalone(f"运行实例 · {instance['instance_id']}", body), *_choice(
             state, session
         )
@@ -492,7 +492,7 @@ def enter_selected_instance(
     return _choice(
         state,
         session,
-        Panel(Pretty(selected, expand_all=True), title="活动运行实例"),
+        _launch_detail("活动运行实例", selected),
     )
 
 
@@ -543,13 +543,11 @@ def handle_success(
     }
     if kind is ResultKind.STRATEGY_TIMELINE:
         records = tuple(result or ())
-        body = Panel(
-            Pretty(records, expand_all=True), title=f"实例时间线 · {len(records)} 条"
-        )
+        body = _launch_collection("实例时间线", records)
         session.context = ("strategy", "timeline")
     elif kind is ResultKind.STRATEGY_WIZARD:
         wizard = session.strategy.wizard
-        body = Panel(Pretty(result, expand_all=True), title="Launch 配置结果")
+        body = _launch_result("Launch 配置", result)
         if isinstance(wizard, LaunchWizardState):
             record = LaunchRecordView(
                 {
@@ -573,12 +571,91 @@ def handle_success(
         title = titles.get(kind)
         if title is None:
             return None
-        body = Panel(Pretty(result, expand_all=True), title=title)
+        body = _launch_result(title, result)
         if kind is ResultKind.STRATEGY_TIMELINE_EXPORT:
             session.context = ("strategy", "timeline")
         elif kind is ResultKind.STRATEGY_ATTACH:
             session.context = ("strategy", "attach")
-    return _activity(spec, body), *_choice(state, session, status="操作已完成")
+    outcome = (
+        ActivityOutcome.ATTENTION
+        if isinstance(result, Mapping) and result.get("status") == "preview"
+        else ActivityOutcome.SUCCESS
+    )
+    return _activity(spec, body, outcome), *_choice(state, session, status="操作已完成")
+
+
+def _launch_detail(title: str, value: Mapping[str, Any]) -> RenderableType:
+    labels = {
+        "launch_id": "Launch",
+        "instance_id": "实例",
+        "component": "组件",
+        "mode": "模式",
+        "status": "状态",
+        "state": "生命周期",
+        "pid": "PID",
+        "started_at": "启动时间",
+        "stopped_at": "停止时间",
+        "config": "配置",
+        "socket": "控制连接",
+        "path": "路径",
+        "detail": "说明",
+    }
+    rows = tuple(
+        (label, _launch_value(value[key]))
+        for key, label in labels.items()
+        if key in value and value[key] is not None
+    )
+    return Group(
+        conclusion(f"{title}已就绪"),
+        facts(rows) if rows else Text("没有更多业务字段", style="dim"),
+    )
+
+
+def _launch_collection(title: str, records: Sequence[Any]) -> RenderableType:
+    table = Table("实例", "状态", "模式", show_header=True, header_style="bold")
+    for item in records[:20]:
+        value = item if isinstance(item, Mapping) else {}
+        table.add_row(
+            str(value.get("instance_id") or value.get("launch_id") or "—"),
+            str(value.get("state") or value.get("status") or "—"),
+            str(value.get("mode") or "—"),
+        )
+    return Group(
+        conclusion(f"{title}共 {count(len(records))} 条记录"),
+        section(title, table),
+        Text(
+            f"显示 {count(min(len(records), 20))} 条 · 其余 {count(max(len(records) - 20, 0))} 条",
+            style="dim",
+        ),
+    )
+
+
+def _launch_result(title: str, result: Any) -> RenderableType:
+    if isinstance(result, Mapping):
+        preview = str(result.get("status") or "").lower() == "preview"
+        body = _launch_detail(title, result)
+        if not preview:
+            return body
+        return Group(
+            conclusion(f"{title}预演完成，未执行任何修改", tone=ResultTone.PREVIEW),
+            body,
+        )
+    if isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
+        return _launch_collection(title, result)
+    return conclusion(f"{title}已完成" + (f" · {result}" if result else ""))
+
+
+def _launch_value(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return str(
+            value.get("instance_id")
+            or value.get("component")
+            or value.get("state")
+            or "结构化记录"
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return f"{count(len(value))} 项"
+    return str(value)
 
 
 def handle_failure(
@@ -1050,10 +1127,11 @@ def _activity(
             spec.operation_id,
             ActivityKind.OPERATION,
             outcome,
-            spec.audit_summary,
+            spec.display_title,
             body,
             renderable_plain_text(body),
             spec.audit_summary,
+            scope_label=spec.scope_label,
         )
     )
 

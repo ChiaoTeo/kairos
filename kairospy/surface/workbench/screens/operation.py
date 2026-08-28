@@ -17,7 +17,9 @@ class OperationSpec:
 
     operation_id: str
     action_name: str
+    display_title: str
     audit_summary: str
+    scope_label: str | None
     route: ResultRoute
     operation: Callable[[], Any]
     running_status: str
@@ -29,6 +31,8 @@ class OperationSpec:
         *,
         action_name: str,
         audit_summary: str,
+        display_title: str | None = None,
+        scope_label: str | None = None,
         route: ResultRoute,
         operation: Callable[[], Any],
         running_status: str,
@@ -37,7 +41,9 @@ class OperationSpec:
         return cls(
             operation_id=f"operation-{uuid4().hex[:12]}",
             action_name=action_name,
+            display_title=display_title or audit_summary,
             audit_summary=audit_summary,
+            scope_label=scope_label,
             route=route,
             operation=operation,
             running_status=running_status,

@@ -316,10 +316,11 @@ def _activity(
             activity_id=spec.operation_id,
             kind=ActivityKind.QUERY,
             outcome=outcome,
-            title=spec.audit_summary,
+            title=spec.display_title,
             body=body,
             copy_text=renderable_plain_text(body),
             audit_summary=spec.audit_summary,
+            scope_label=spec.scope_label,
         )
     )
 

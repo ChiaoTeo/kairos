@@ -168,6 +168,19 @@ class ResourcesSession:
     action: str | None = None
     wizard: ResourceWizardState | None = None
     parent_wizard: ResourceWizardState | None = None
+    model_chat: LiveBuffer | None = None
+    model_chat_turns: int = 0
+    model_chat_failures: int = 0
+
+    def start_model_chat(self, model_id: str) -> None:
+        self.model_chat = LiveBuffer(f"model/{model_id}")
+        self.model_chat_turns = 0
+        self.model_chat_failures = 0
+
+    def reset_model_chat(self) -> None:
+        self.model_chat = None
+        self.model_chat_turns = 0
+        self.model_chat_failures = 0
 
     def reset(self) -> None:
         if self.wizard is not None:
@@ -179,6 +192,7 @@ class ResourcesSession:
         self.action = None
         self.wizard = None
         self.parent_wizard = None
+        self.reset_model_chat()
 
 
 @dataclass(slots=True)
@@ -268,6 +282,7 @@ class GuidedSession:
 
     root_label: str = "首页"
     context: tuple[str, ...] = ()
+    navigation_generation: int = 0
     interaction: InteractionState = ChoiceInteraction()
     suspended_interaction: (
         ChoiceInteraction | InputInteraction | ControlInteraction | None
@@ -284,6 +299,7 @@ class GuidedSession:
     launch_market: LaunchMarketSession = field(default_factory=LaunchMarketSession)
 
     def home(self) -> None:
+        self.navigation_generation += 1
         self.context = ()
         self.market.reset()
         self.reference.reset()
@@ -297,10 +313,12 @@ class GuidedSession:
         self.reset_prompt()
 
     def enter(self, *parts: str) -> None:
+        self.navigation_generation += 1
         self.context = tuple(parts)
         self.reset_prompt()
 
     def back(self) -> None:
+        self.navigation_generation += 1
         self.context = self.context[:-1]
         self.reset_prompt()
 

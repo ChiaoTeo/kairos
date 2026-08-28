@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from time import time_ns
 from typing import Any
 from uuid import uuid4
 
+from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.pretty import Pretty
+from rich.table import Table
 from rich.text import Text
 
 from ....widgets import (
@@ -31,6 +34,7 @@ from ...effects import (
     SetStatus,
 )
 from ...catalog import MARKET_ADVANCED_ACTIONS, SECTION_ACTIONS
+from ...presentation import ResultTone, conclusion, count, facts, section
 from .actions import (
     MARKET_CONTROL_ACTIONS,
     MarketFilePromptState,
@@ -262,10 +266,11 @@ def handle_success(
             activity_id=spec.operation_id,
             kind=ActivityKind.QUERY,
             outcome=ActivityOutcome.SUCCESS,
-            title=spec.audit_summary,
+            title=spec.display_title,
             body=body,
             copy_text=renderable_plain_text(body),
             audit_summary=spec.audit_summary,
+            scope_label=spec.scope_label,
         )
         return (
             AppendActivity(activity),
@@ -311,14 +316,20 @@ def handle_success(
         return _choice(state, session, status="请选择行情数据源")
 
     if kind is ResultKind.MARKET_DATASETS:
-        body = Panel(Pretty(result, expand_all=True), title="本地行情数据")
-        return (_activity(spec, body), *_choice(state, session, status="数据集已就绪"))
+        body = _market_result("本地行情数据", result)
+        return (
+            _activity(spec, body, _result_outcome(result)),
+            *_choice(state, session, status="数据集已就绪"),
+        )
 
     if kind is ResultKind.MARKET_DIAGNOSTIC:
         session.context = ("market", "selected")
         session.visible_records = session.market.records
-        body = Panel(Pretty(result, expand_all=True), title="Market 诊断")
-        return (_activity(spec, body), *_choice(state, session, status="诊断已完成"))
+        body = _market_result("Market 诊断", result, diagnostic=True)
+        return (
+            _activity(spec, body, _result_outcome(result)),
+            *_choice(state, session, status="诊断已完成"),
+        )
 
     if kind is ResultKind.MARKET_FILE:
         prompt = session.market.file_prompt
@@ -328,10 +339,23 @@ def handle_success(
         body = (
             file_result_renderable(result, prompt)
             if isinstance(prompt, MarketFilePromptState)
-            else Panel(Pretty(result, expand_all=True), title="Market 文件操作结果")
+            else _market_result("Market 文件操作", result)
         )
+        artifact_path: Path | None = None
+        if isinstance(prompt, MarketFilePromptState) and prompt.action != "replay":
+            destination = Path(str(prompt.values.get("destination") or ""))
+            candidates = [destination]
+            if state.owner is not None and not destination.is_absolute():
+                candidates.append(state.owner.paths.root / destination)
+            if any(path.is_file() for path in candidates):
+                artifact_path = destination
         return (
-            _activity(spec, body),
+            _activity(
+                spec,
+                body,
+                _result_outcome(result),
+                artifact_path=artifact_path,
+            ),
             *_choice(state, session, status="文件操作已完成"),
         )
 
@@ -339,7 +363,9 @@ def handle_success(
         prompt = session.market.workspace_prompt
         session.market.workspace_prompt = None
         session.context = ("market", "connected")
-        if (
+        if isinstance(result, Mapping) and result.get("status") == "preview":
+            body = _market_result(spec.display_title, result)
+        elif (
             isinstance(prompt, WorkspaceMarketPromptState)
             and prompt.action == "snapshot"
             and isinstance(result, Mapping)
@@ -373,8 +399,11 @@ def handle_success(
                 current_session=prompt.action == "session-subscriptions",
             )
         else:
-            body = Panel(Pretty(result, expand_all=True), title="Workspace Market 结果")
-        return (_activity(spec, body), *_choice(state, session, status="操作已完成"))
+            body = _market_result("Workspace Market", result)
+        return (
+            _activity(spec, body, _result_outcome(result)),
+            *_choice(state, session, status="操作已完成"),
+        )
 
     return None
 
@@ -414,7 +443,6 @@ def handle_failure(
         *_choice(
             state,
             session,
-            summary=Text(error, style="red"),
             status="操作失败 · 可重试、返回或查看帮助",
         ),
     )
@@ -775,6 +803,7 @@ def _advance_workspace_prompt(
     spec = _spec(
         action_name=f"workspace.market.{prompt.action}",
         summary=f"Workspace Market {prompt.action}",
+        display_title=_workspace_display_title(prompt),
         route=ResultRoute(ResultKind.WORKSPACE_MARKET),
         operation=operation,
         status=f"正在执行 Workspace Market {prompt.action}…",
@@ -843,10 +872,84 @@ def _record_choice(records: tuple[SelectionRecord, ...], value: str) -> object |
     return selected_value(records, value)
 
 
+def _market_result(
+    title: str, result: Any, *, diagnostic: bool = False
+) -> RenderableType:
+    labels = {
+        "status": "状态",
+        "state": "运行状态",
+        "market_id": "Market ID",
+        "instrument_id": "Instrument ID",
+        "provider": "Provider",
+        "data_type": "数据类型",
+        "dataset_id": "Dataset ID",
+        "record_count": "记录数",
+        "path": "路径",
+        "destination": "产物",
+        "freshness": "新鲜度",
+        "stale": "已过期",
+        "complete": "完整",
+        "reason": "原因",
+        "detail": "说明",
+        "error": "错误",
+    }
+    if isinstance(result, Mapping):
+        preview = str(result.get("status") or "").lower() == "preview"
+        rows = tuple(
+            (label, _market_result_value(result[key]))
+            for key, label in labels.items()
+            if key in result and result[key] is not None
+        )
+        return Group(
+            conclusion(
+                f"{title}预演完成，未执行任何修改" if preview else f"{title}已返回结果",
+                tone=(
+                    ResultTone.PREVIEW
+                    if preview
+                    else ResultTone.WARNING
+                    if diagnostic and result.get("error")
+                    else ResultTone.SUCCESS
+                ),
+            ),
+            facts(rows) if rows else Text("没有更多业务字段", style="dim"),
+        )
+    if isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
+        table = Table("序号", "记录", show_header=True, header_style="bold")
+        for index, item in enumerate(result[:20], 1):
+            table.add_row(str(index), _market_result_value(item))
+        return Group(
+            conclusion(f"{title}共 {count(len(result))} 条记录"),
+            section("结果", table),
+            Text(
+                f"显示 {count(min(len(result), 20))} 条 · 其余 {count(max(len(result) - 20, 0))} 条",
+                style="dim",
+            ),
+        )
+    return conclusion(str(result) or f"{title}已完成")
+
+
+def _market_result_value(value: Any) -> str:
+    if isinstance(value, Mapping):
+        identity_value = (
+            value.get("market_id") or value.get("dataset_id") or value.get("provider")
+        )
+        return str(identity_value or "结构化记录")
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return f"{count(len(value))} 项"
+    return str(value)
+
+
+def _result_outcome(result: Any) -> ActivityOutcome:
+    if isinstance(result, Mapping) and result.get("status") == "preview":
+        return ActivityOutcome.ATTENTION
+    return ActivityOutcome.SUCCESS
+
+
 def _spec(
     *,
     action_name: str,
     summary: str,
+    display_title: str | None = None,
     route: ResultRoute,
     operation: Any,
     status: str,
@@ -855,6 +958,7 @@ def _spec(
     return OperationSpec.create(
         action_name=action_name,
         audit_summary=summary,
+        display_title=display_title,
         route=route,
         operation=operation,
         running_status=status,
@@ -862,20 +966,44 @@ def _spec(
     )
 
 
+def _workspace_display_title(prompt: WorkspaceMarketPromptState) -> str:
+    titles = {
+        "status": "Market 运行状态",
+        "routes": "Market 数据路由",
+        "session-subscriptions": "当前 Kairos I Market 订阅",
+        "subscriptions": "Market 全部订阅",
+        "subscribe": "添加 Market 订阅",
+        "unsubscribe": "退出 Market 订阅",
+        "snapshot": "Market 行情快照",
+        "freshness": "Market 行情新鲜度",
+        "start": "启动 Market 服务",
+        "stop": "停止 Market 服务",
+        "restart": "重启 Market 服务",
+        "logs": "Market 最近日志",
+        "pause": "暂停 Market 行情回放",
+        "resume": "继续 Market 行情回放",
+    }
+    return titles.get(prompt.action, "Market 操作结果")
+
+
 def _activity(
     spec: OperationSpec,
     body: Any,
     outcome: ActivityOutcome = ActivityOutcome.SUCCESS,
+    *,
+    artifact_path: Path | None = None,
 ) -> AppendActivity:
     return AppendActivity(
         ActivityRecord(
             activity_id=spec.operation_id,
             kind=ActivityKind.QUERY,
             outcome=outcome,
-            title=spec.audit_summary,
+            title=spec.display_title,
             body=body,
             copy_text=renderable_plain_text(body),
             audit_summary=spec.audit_summary,
+            scope_label=spec.scope_label,
+            artifact_path=artifact_path,
         )
     )
 

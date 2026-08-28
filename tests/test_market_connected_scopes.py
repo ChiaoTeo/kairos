@@ -86,7 +86,7 @@ def test_system_market_routes_uses_owner_connected_cli_with_typed_filters(
                 "--socket",
                 str(socket),
                 "--view-root",
-                str(workspace.paths.child("snapshots", "market", "market-shared")),
+                str(workspace.paths.snapshots),
                 "--market-id",
                 "market:binance:spot:BTCUSDT",
                 "--observation-kind",

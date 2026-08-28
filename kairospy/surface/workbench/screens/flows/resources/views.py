@@ -184,7 +184,7 @@ def records_renderable(
     table.add_column("启用")
     table.add_column("验证")
     table.add_column("问题")
-    for index, record in enumerate(records, 1):
+    for index, record in enumerate(records[:20], 1):
         issues = record.get("issues") or ()
         row = [
             str(index),
@@ -206,7 +206,17 @@ def records_renderable(
             )
         )
         table.add_row(*row)
-    return Panel(table, title=f"{len(records)} 个{label}", border_style="cyan")
+    visible = min(len(records), 20)
+    return Group(
+        Text(f"{len(records)} 个{label}", style="bold"),
+        table,
+        Text(
+            f"显示 {visible} 条 · 其余 {len(records) - visible} 条"
+            if len(records) > visible
+            else f"共 {len(records)} 条",
+            style="dim",
+        ),
+    )
 
 
 def summary_renderable(values: Mapping[str, tuple[int, int]]) -> RenderableType:
@@ -335,8 +345,10 @@ def action_result_renderable(
 ) -> RenderableType:
     """Render the outcome a person needs; reserve raw records for Advanced."""
 
-    if action == "advanced" or not isinstance(result, Mapping):
+    if action == "advanced":
         return Panel(Pretty(result, expand_all=True), title=title)
+    if not isinstance(result, Mapping):
+        return Text(str(result) or "资源操作已完成")
     if kind == "data" and action == "test":
         return _data_test_renderable(result, title=title)
     if kind == "notifications" and action == "test":

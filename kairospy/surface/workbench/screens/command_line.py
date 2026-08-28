@@ -153,6 +153,9 @@ class CommandLineScreen(Screen[None]):
         self._attach_refresh_worker: Worker[Any] | None = None
         self._market_refresh_worker: Worker[Any] | None = None
         self._operations_log_worker: Worker[Any] | None = None
+        self._attach_refresh_generation: int | None = None
+        self._market_refresh_generation: int | None = None
+        self._operations_log_generation: int | None = None
         self.session = GuidedSession()
         self._primary_hint = "数字选择  ·  /b 或 /back 返回  ·  /help 帮助"
         self._back_preview_interaction: InteractionState | None = None
@@ -561,10 +564,12 @@ class CommandLineScreen(Screen[None]):
                 return
         if command in {"home", "/"}:
             self._finish_operations_logs()
+            self._finish_model_chat()
             self.session.home()
             self._show_context()
         elif command in {"exit", "quit", "q"}:
             self._finish_operations_logs()
+            self._finish_model_chat()
             self.workbench_app.action_quit()
         elif command == "back":
             self._dispatch_back(arguments)
@@ -916,10 +921,17 @@ class CommandLineScreen(Screen[None]):
         self._discard_back_preview()
         if self.session.context[:2] == ("operations", "service-logs"):
             self._finish_operations_logs()
+        if self.session.context == ("resources", "model-chat"):
+            self._finish_model_chat()
         for _ in range(steps):
             if not go_back(self.session):
                 break
         self._show_context()
+
+    def _finish_model_chat(self) -> None:
+        activity = resources_flow.finish_model_chat(self.session)
+        if activity is not None:
+            self._apply_effects((activity,))
 
     def action_clear(self) -> None:
         self._output().clear_visible_history()
@@ -1310,6 +1322,8 @@ class CommandLineScreen(Screen[None]):
         self._start_operation(operation)
 
     def _start_operation(self, spec: OperationSpec) -> None:
+        if spec.scope_label is None:
+            spec = replace(spec, scope_label=self._context_label())
         equivalent = spec.equivalent_command
         safe_equivalent = redact_cli_arguments(equivalent) if equivalent else None
         arguments = (
@@ -1323,7 +1337,8 @@ class CommandLineScreen(Screen[None]):
                 screen=type(self).__name__,
                 operation_id=spec.operation_id,
                 action=spec.action_name,
-                display=spec.audit_summary,
+                display=spec.display_title,
+                scope=spec.scope_label,
                 arguments=list(arguments),
                 equivalent_command=(
                     shlex.join(safe_equivalent) if safe_equivalent else None
@@ -1334,14 +1349,15 @@ class CommandLineScreen(Screen[None]):
                 operation_id=spec.operation_id,
                 action=spec.action_name,
                 summary=spec.audit_summary,
+                scope=spec.scope_label,
                 route=spec.route.kind.value,
                 qualifier=spec.route.qualifier,
             )
+        previous_interaction = self.session.interaction
         self.session.busy(spec.route, message=spec.running_status)
         if spec.route == ResultRoute(ResultKind.RESOURCE_ACTION, "model-chat"):
-            self.session.interaction = ChoiceInteraction(
-                title="", summary=None, actions=()
-            )
+            if isinstance(previous_interaction, ControlInteraction):
+                self.session.interaction = previous_interaction
         self._interaction().present(self.session.interaction)
         self._input().disabled = True
         self._set_status(spec.running_status)
@@ -1366,11 +1382,13 @@ class CommandLineScreen(Screen[None]):
                 if (
                     operation is not None
                     and activity.activity_id == operation.operation_id
-                    and activity.equivalent_command is None
                 ):
                     activity = replace(
                         activity,
-                        equivalent_command=operation.equivalent_command,
+                        equivalent_command=(
+                            activity.equivalent_command or operation.equivalent_command
+                        ),
+                        scope_label=activity.scope_label or operation.scope_label,
                     )
                 self._output().append_activity(activity)
                 self.query_one("#activity-empty", Static).display = False
@@ -1397,19 +1415,10 @@ class CommandLineScreen(Screen[None]):
                 self._sync_context_chrome()
                 self._refresh_launch_attach(force=effect.force)
             elif isinstance(effect, RefreshOperationsLogs):
-                component = self.session.operations.selected_service or "服务"
-                output = self._output()
                 if effect.reset_view:
-                    if output.live_title is None:
-                        output.begin_live_stream(f"{component} 日志 · 跟随中")
-                    else:
-                        output.clear_live_stream()
-                    self.query_one("#activity-empty", Static).display = False
-                buffer = self.session.operations.live_buffer
-                if buffer is not None and buffer.following:
-                    output.resume_follow()
-                else:
-                    output.pause_follow()
+                    buffer = self.session.operations.live_buffer
+                    if buffer is not None:
+                        buffer.clear_visible()
                 if effect.force:
                     self._refresh_operations_logs(force=True)
         self._report_unseen_activity()
@@ -1500,6 +1509,7 @@ class CommandLineScreen(Screen[None]):
         )
         if operation is None:
             return
+        self._market_refresh_generation = self.session.navigation_generation
         self._market_refresh_worker = self.run_worker(
             operation,
             name="market-control-stream",
@@ -1532,6 +1542,7 @@ class CommandLineScreen(Screen[None]):
         operation = launch_flow.attach_operation(self.workbench_app.state, self.session)
         if operation is None:
             return
+        self._attach_refresh_generation = self.session.navigation_generation
         self._attach_refresh_worker = self.run_worker(
             operation,
             name="launch-attach-stream",
@@ -1551,6 +1562,7 @@ class CommandLineScreen(Screen[None]):
         )
         if operation is None:
             return
+        self._operations_log_generation = self.session.navigation_generation
         self._operations_log_worker = self.run_worker(
             operation,
             name="operations-service-logs",
@@ -1580,6 +1592,8 @@ class CommandLineScreen(Screen[None]):
             and generation != self.session.operations.log_generation
         )
         truncated = byte_size < self.session.operations.log_size
+        if rotated or truncated:
+            buffer.mark_rotation()
         seen = () if rotated or truncated else self.session.operations.source_tail
         overlap = 0
         for size in range(min(len(seen), len(lines)), 0, -1):
@@ -1600,11 +1614,6 @@ class CommandLineScreen(Screen[None]):
         self.session.operations.warning_lines += sum(
             1 for line in new_lines if "warn" in line.lower() or "error" in line.lower()
         )
-        output = self._output()
-        if output.live_title is None:
-            component = self.session.operations.selected_service or "服务"
-            output.begin_live_stream(f"{component} 日志 · 跟随中")
-        output.append_live_lines(new_lines, retained_lines=tuple(buffer.lines))
         self._apply_effects(
             product_flows.operations.log_control_effects(
                 self.session,
@@ -1619,7 +1628,6 @@ class CommandLineScreen(Screen[None]):
             self._operations_log_worker.cancel()
             self._operations_log_worker = None
         activity = product_flows.operations.finish_log_follow(self.session)
-        self._output().end_live_stream()
         if activity is not None:
             self._apply_effects((activity,))
 
@@ -1627,7 +1635,9 @@ class CommandLineScreen(Screen[None]):
         if not isinstance(result, Mapping):
             self.session.strategy.attach_snapshot = Pretty(result, expand_all=True)
         else:
-            self.session.strategy.attach_snapshot = launch_flow.attach_renderable(result)
+            self.session.strategy.attach_snapshot = launch_flow.attach_renderable(
+                result
+            )
         self._present_launch_control()
         if not isinstance(result, Mapping):
             return
@@ -1703,7 +1713,13 @@ class CommandLineScreen(Screen[None]):
         if event.worker.group == "market-control-stream":
             if event.worker is not self._market_refresh_worker:
                 return
+            if event.state.name not in {"SUCCESS", "ERROR", "CANCELLED"}:
+                return
             self._market_refresh_worker = None
+            if self._market_refresh_generation != self.session.navigation_generation:
+                self._market_refresh_generation = None
+                return
+            self._market_refresh_generation = None
             if self.session.context != ("market", "selected"):
                 return
             if event.state.name == "SUCCESS":
@@ -1728,6 +1744,13 @@ class CommandLineScreen(Screen[None]):
         if event.worker.group == "launch-attach-stream":
             if event.worker is not self._attach_refresh_worker:
                 return
+            if event.state.name not in {"SUCCESS", "ERROR", "CANCELLED"}:
+                return
+            if self._attach_refresh_generation != self.session.navigation_generation:
+                self._attach_refresh_worker = None
+                self._attach_refresh_generation = None
+                return
+            self._attach_refresh_generation = None
             if event.state.name == "SUCCESS":
                 self._attach_refresh_worker = None
                 if self.session.context == ("strategy", "attach"):
@@ -1749,6 +1772,13 @@ class CommandLineScreen(Screen[None]):
         if event.worker.group == "operations-service-logs":
             if event.worker is not self._operations_log_worker:
                 return
+            if event.state.name not in {"SUCCESS", "ERROR", "CANCELLED"}:
+                return
+            if self._operations_log_generation != self.session.navigation_generation:
+                self._operations_log_worker = None
+                self._operations_log_generation = None
+                return
+            self._operations_log_generation = None
             if event.state.name == "SUCCESS":
                 self._operations_log_worker = None
                 self._render_operations_logs(event.worker.result)
@@ -1944,11 +1974,12 @@ class CommandLineScreen(Screen[None]):
                 activity_id=spec.operation_id,
                 kind=_activity_kind(spec.route.kind),
                 outcome=outcome,
-                title=spec.audit_summary,
+                title=spec.display_title,
                 body=body,
                 copy_text=redact_text(rendered_text),
                 audit_summary=spec.audit_summary,
                 equivalent_command=spec.equivalent_command,
+                scope_label=spec.scope_label,
             )
         )
 

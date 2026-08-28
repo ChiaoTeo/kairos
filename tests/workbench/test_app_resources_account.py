@@ -51,8 +51,10 @@ from kairospy.surface.workbench.widgets import (
     ActionList,
     ChoiceInteraction,
     ConfirmInteraction,
+    ControlInteraction,
     InputInteraction,
     WorkbenchCommandInput,
+    interaction_copy_text,
     renderable_plain_text,
 )
 from textual.app import App
@@ -1560,7 +1562,7 @@ def test_saved_model_can_send_message_and_show_reply(
         },
     )
 
-    async def run() -> tuple[str, str]:
+    async def run() -> tuple[str, str, str]:
         app = KairosWorkbenchApp(state)
         async with app.run_test(size=(120, 36)) as pilot:
             screen = app.screen
@@ -1569,11 +1571,10 @@ def test_saved_model_can_send_message_and_show_reply(
                 screen.submit(value)
                 await pilot.pause(0.1)
             interaction = screen.session.interaction
-            assert isinstance(interaction, ChoiceInteraction)
+            assert isinstance(interaction, ControlInteraction)
             assert interaction.actions == ()
-            assert interaction.summary is None
             assert screen.session.context == ("resources", "model-chat")
-            assert screen.query_one("#interaction-content", Static).display is False
+            assert screen.query_one("#interaction-content", Static).display is True
             assert screen.query_one("#guided-actions", ActionList).display is False
             screen.submit("你好，请介绍自己")
             command_input = screen.query_one("#command-input", WorkbenchCommandInput)
@@ -1582,6 +1583,7 @@ def test_saved_model_can_send_message_and_show_reply(
                     break
                 await pilot.pause(0.05)
             assert command_input.disabled is False
+            control_text = interaction_copy_text(screen.session.interaction)
             screen.submit("/back")
             screen.submit("1")
             await pilot.pause(0.1)
@@ -1595,12 +1597,14 @@ def test_saved_model_can_send_message_and_show_reply(
             )
             return (
                 _log_text(screen.query_one("#command-output", RichLog)),
+                control_text,
                 command_input.placeholder,
             )
 
-    output, placeholder = asyncio.run(run())
-    assert "你好，请介绍自己" in output
-    assert "你好，我是 Qwen。" in output
+    output, control_text, placeholder = asyncio.run(run())
+    assert "你好，请介绍自己" in control_text
+    assert "你好，我是 Qwen。" in control_text
+    assert "完成 1 轮模型调用" in output
     assert placeholder == "输入编号或命令；Enter 提交"
 
 
@@ -1644,7 +1648,7 @@ def test_saved_model_conversation_shows_failure_detail(
                     break
                 await pilot.pause(0.05)
             return (
-                _log_text(screen.query_one("#command-output", RichLog)),
+                interaction_copy_text(screen.session.interaction),
                 str(screen.query_one("#command-status", Static).render()),
             )
 

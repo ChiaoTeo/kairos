@@ -6,6 +6,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from kairospy.surface.presentation import redact_text
+
 
 @dataclass(slots=True)
 class LiveBuffer:
@@ -16,6 +18,7 @@ class LiveBuffer:
     following: bool = True
     unseen_lines: int = 0
     dropped_lines: int = 0
+    rotations: int = 0
     full_log_path: Path | None = None
     lines: deque[str] = field(init=False)
 
@@ -27,7 +30,7 @@ class LiveBuffer:
     def append(self, line: str) -> None:
         if len(self.lines) == self.capacity:
             self.dropped_lines += 1
-        self.lines.append(line)
+        self.lines.append(redact_text(line))
         if not self.following:
             self.unseen_lines += 1
 
@@ -45,6 +48,9 @@ class LiveBuffer:
     def clear_visible(self) -> None:
         self.lines.clear()
         self.unseen_lines = 0
+
+    def mark_rotation(self) -> None:
+        self.rotations += 1
 
     def copy_text(self) -> str:
         return "\n".join(self.lines)

@@ -90,9 +90,6 @@ class ActivityStream(RichLog):
         self._activities: list[ActivityRecord] = []
         self._new_activity_count = 0
         self._following = True
-        self._live_title: str | None = None
-        self._live_lines: tuple[str, ...] = ()
-        self._live_line_count = 0
         self._rendered_ranges: list[_RenderedRange] = []
         self._rendered_width: int | None = None
         self._reflow_timer: Timer | None = None
@@ -171,6 +168,8 @@ class ActivityStream(RichLog):
                 kind=activity.kind.value,
                 outcome=activity.outcome.value,
                 title=activity.title,
+                scope=activity.scope_label,
+                created_at=activity.created_at.isoformat(),
                 summary=activity.audit_summary or activity.copy_text,
                 artifact_path=(
                     str(activity.artifact_path) if activity.artifact_path else None
@@ -194,67 +193,8 @@ class ActivityStream(RichLog):
         self._rendered_ranges.clear()
         self._new_activity_count = 0
         self.clear()
-        if self._live_title is not None:
-            self._live_lines = ()
-            self._live_line_count = 0
-            self._append_rendered_live((), separated=False)
-
-    @property
-    def live_title(self) -> str | None:
-        return self._live_title
-
-    def begin_live_stream(self, title: str) -> None:
-        """Open one transient stream without adding it to Activity history."""
-
-        self._live_title = redact_text(title)
-        self._live_lines = ()
-        self._live_line_count = 0
-        self._append_rendered_live(
-            (),
-            separated=False,
-            scroll_end=self._following,
-        )
-
-    def append_live_lines(
-        self, lines: tuple[str, ...], *, retained_lines: tuple[str, ...]
-    ) -> None:
-        """Append deltas and rebuild only when the bounded tail drops old lines."""
-
-        if self._live_title is None or not lines:
-            return
-        safe_lines = tuple(redact_text(line) for line in lines)
-        safe_retained = tuple(redact_text(line) for line in retained_lines)
-        self._live_lines = safe_retained
-        if self._live_line_count + len(safe_lines) > len(safe_retained):
-            self._rebuild_visible()
-            return
-        for line in safe_lines:
-            super().write(
-                Text(line),
-                scroll_end=self._following,
-            )
-        self._live_line_count += len(safe_lines)
-        self._refresh_live_range()
-
-    def clear_live_stream(self) -> None:
-        """Clear the transient window while preserving completed activities."""
-
-        if self._live_title is not None:
-            self._live_lines = ()
-            self._rebuild_visible()
-
-    def end_live_stream(self) -> None:
-        """Remove transient lines; callers may then append one terminal summary."""
-
-        if self._live_title is None:
-            return
-        self._live_title = None
-        self._live_lines = ()
-        self._live_line_count = 0
-        self._rebuild_visible()
 
     def _rebuild_visible(self) -> None:
-        title = self._live_title
         anchor = self._capture_viewport_anchor()
         self.clear()
         self._rendered_ranges.clear()
@@ -263,13 +203,6 @@ class ActivityStream(RichLog):
                 activity,
                 scroll_end=False,
             )
-        if title is not None:
-            self._append_rendered_live(
-                self._live_lines,
-                separated=False,
-                scroll_end=False,
-            )
-        self._live_line_count = len(self._live_lines)
         self._rendered_width = self.scrollable_content_region.width
         if self._following:
             self.call_after_refresh(self._scroll_to_latest)
@@ -309,36 +242,6 @@ class ActivityStream(RichLog):
             _RenderedRange(activity.activity_id, start, len(self.lines))
         )
 
-    def _append_rendered_live(
-        self,
-        lines: tuple[str, ...],
-        *,
-        separated: bool = True,
-        scroll_end: bool = False,
-    ) -> None:
-        title = self._live_title
-        if title is None:
-            return
-        start = len(self.lines)
-        super().write(
-            _live_header(
-                title,
-                separated=separated,
-                colors=self._theme_colors(),
-            ),
-            scroll_end=False,
-        )
-        for line in lines:
-            super().write(Text(line), scroll_end=False)
-        self._rendered_ranges.append(_RenderedRange(None, start, len(self.lines)))
-        if scroll_end:
-            self.scroll_end(animate=False, immediate=False, x_axis=False)
-
-    def _refresh_live_range(self) -> None:
-        if self._rendered_ranges and self._rendered_ranges[-1].activity_id is None:
-            current = self._rendered_ranges[-1]
-            self._rendered_ranges[-1] = replace(current, end=len(self.lines))
-
     def _capture_viewport_anchor(self) -> _ViewportAnchor:
         top = int(self.scroll_y)
         for rendered_range in self._rendered_ranges:
@@ -377,8 +280,18 @@ class ActivityStream(RichLog):
             )
             sequence = self._display_sequence_by_id[activity.activity_id]
             values = [f"[A{sequence:03d}] {activity.title}"]
+            evidence = []
+            if activity.scope_label:
+                evidence.append(f"范围：{activity.scope_label}")
+            evidence.append(
+                "时间："
+                + activity.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+            )
+            values.append(" · ".join(evidence))
             if body:
                 values.append(body)
+            if activity.artifact_path is not None:
+                values.append(f"产物\n{activity.artifact_path}")
             if activity.equivalent_command:
                 values.append("重新执行\n$ " + shlex.join(activity.equivalent_command))
             sections.append("\n\n".join(values))
@@ -751,6 +664,7 @@ def _activity_renderable(
         ActivityOutcome.SUCCESS: ("✓", colors.success),
         ActivityOutcome.FAILURE: ("×", colors.error),
         ActivityOutcome.CANCELLED: ("■", colors.warning),
+        ActivityOutcome.ATTENTION: ("!", colors.warning),
         ActivityOutcome.NOTICE: ("•", colors.primary),
     }[activity.outcome]
     header = Text()
@@ -761,6 +675,11 @@ def _activity_renderable(
     body = activity.body or Text(activity.copy_text or activity.audit_summary or "")
     if body:
         activity_values.extend((Text(""), _content_renderable(body)))
+    if activity.artifact_path is not None:
+        artifact = Text()
+        artifact.append("产物\n", style="dim")
+        artifact.append(str(activity.artifact_path))
+        activity_values.extend((Text(""), artifact))
     if activity.equivalent_command:
         command = Text()
         command_text, compacted = _display_equivalent_command(
@@ -788,22 +707,6 @@ def _activity_renderable(
     return Group(activity_renderable, Rule(style="grey37"), Text(""))
 
 
-def _live_header(
-    title: str,
-    *,
-    separated: bool = True,
-    colors: RichThemeColors = NORD_COLORS,
-) -> RenderableType:
-    values: list[RenderableType] = []
-    if separated:
-        values.append(Rule(style="grey37"))
-    header = Text()
-    header.append("●", style=f"bold {colors.primary}")
-    header.append(f" {title}", style="bold")
-    values.append(header)
-    return Group(*values)
-
-
 def _content_renderable(body: RenderableType) -> RenderableType:
     """Remove a redundant result Panel inside the divided activity stream."""
 
@@ -823,6 +726,9 @@ def _redact_activity(activity: ActivityRecord) -> ActivityRecord:
         copy_text=(redact_text(activity.copy_text) if activity.copy_text else None),
         audit_summary=(
             redact_text(activity.audit_summary) if activity.audit_summary else None
+        ),
+        scope_label=(
+            redact_text(activity.scope_label) if activity.scope_label else None
         ),
         equivalent_command=(
             redact_cli_arguments(activity.equivalent_command)
@@ -846,9 +752,7 @@ def _display_equivalent_command(command: tuple[str, ...]) -> tuple[str, bool]:
     full_command = shlex.join(command)
     if len(full_command) <= 88 or len(command) <= 4:
         return full_command, False
-    compact_command = " ".join(
-        (shlex.join(command[:2]), "…", shlex.join(command[-2:]))
-    )
+    compact_command = " ".join((shlex.join(command[:2]), "…", shlex.join(command[-2:])))
     return compact_command, True
 
 

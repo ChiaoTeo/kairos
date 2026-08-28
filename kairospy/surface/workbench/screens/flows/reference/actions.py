@@ -16,6 +16,7 @@ from kairospy.investment.apps.reference.application import ReferenceApplication
 from kairospy.system.apps.components.application.clients import ReferenceSystemClient
 
 from ....widgets import ActionItem
+from ...presentation import ResultTone, conclusion, section
 
 
 INSTRUMENT_TYPE_ACTIONS = (
@@ -157,11 +158,18 @@ def runtime_status_renderable(value: Mapping[str, Any]) -> RenderableType:
     else:
         publication_table.add_row("诊断", "无")
 
+    ready = str(app_runtime.get("status") or "").lower() in {"ready", "running"}
     return Group(
-        Panel(runtime, title="Reference Runtime", border_style="cyan"),
-        Panel(catalog_table, title="Catalog", border_style="cyan"),
-        Panel(source_table, title=f"Sources · {len(sources)}", border_style="cyan"),
-        Panel(publication_table, title="Publication", border_style="cyan"),
+        conclusion(
+            "Reference 运行状态已就绪"
+            if ready
+            else "Reference 可访问，但存在需要处理的状态",
+            tone=ResultTone.SUCCESS if ready else ResultTone.WARNING,
+        ),
+        section("运行时", runtime),
+        section("Catalog", catalog_table),
+        section(f"数据源 · {len(sources)}", source_table),
+        section("Publication", publication_table),
     )
 
 
@@ -334,14 +342,21 @@ def records_renderable(kind: str, records: tuple[Any, ...]) -> RenderableType:
     table.add_column("名称")
     table.add_column("说明")
     table.add_column("ID", style="dim")
-    for index, record in enumerate(records, 1):
+    for index, record in enumerate(records[:20], 1):
         table.add_row(
             str(index), record_label(record), record_description(record), str(record.id)
         )
-    return Panel(
-        table,
-        title=f"找到 {len(records)} 条{titles.get(kind, 'Reference')}记录",
-        border_style="cyan",
+    visible = min(len(records), 20)
+    title = titles.get(kind, "Reference")
+    return Group(
+        conclusion(f"找到 {len(records)} 条{title}记录"),
+        section(title, table),
+        Text(
+            f"显示 {visible} 条 · 其余 {len(records) - visible} 条"
+            if len(records) > visible
+            else f"共 {len(records)} 条",
+            style="dim",
+        ),
     )
 
 

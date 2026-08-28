@@ -444,27 +444,40 @@ fn connected_market_app(
     workspace_root: Option<&PathBuf>,
     require_views: bool,
 ) -> Result<ConnectedMarketApplication, Box<dyn std::error::Error>> {
-    let workspace_root = workspace_root.ok_or(
-        "connected mode requires --workspace, --launch-id, and --instance-id to select an instance",
-    )?;
+    let workspace_root = workspace_root.ok_or("connected mode requires --workspace")?;
     let workspace = Workspace::open(workspace_root)?;
-    let instance =
-        workspace.instance(&target.launch_mode, &target.launch_id, &target.instance_id)?;
+    let instance = match (&target.launch_id, &target.instance_id) {
+        (Some(launch_id), Some(instance_id)) => {
+            Some(workspace.instance(&target.launch_mode, launch_id, instance_id)?)
+        },
+        (None, None) => None,
+        _ => return Err("--launch-id and --instance-id must be provided together".into()),
+    };
     let socket = match target.socket {
         Some(socket) => socket,
-        None => instance.socket("market")?,
+        None => match &instance {
+            Some(instance) => instance.socket("market")?,
+            None => workspace.process_socket("market")?,
+        },
     };
     let connection = MarketConnection::control_only(socket);
     let connection = if require_views {
         match target.view_root {
             Some(view_root) => connection.with_view_root(view_root),
-            None => connection.with_view_root(instance.snapshot(&[])?),
+            None => connection.with_view_root(match &instance {
+                Some(instance) => instance.snapshot(&[])?,
+                None => workspace.paths().snapshots_root(),
+            }),
         }
     } else {
         connection
     };
-    let identity =
-        InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id())?;
+    let identity = match &instance {
+        Some(instance) => {
+            InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id())?
+        },
+        None => InstanceIdentity::unscoped(workspace.id())?,
+    };
     Ok(ConnectedMarketApplication::connect(
         MarketClient::connect(connection),
         identity,
@@ -640,10 +653,10 @@ enum ConnectedCommand {
 struct ConnectedTargetArgs {
     #[arg(long, default_value = "live")]
     launch_mode: String,
-    #[arg(long)]
-    launch_id: String,
-    #[arg(long)]
-    instance_id: String,
+    #[arg(long, requires = "instance_id")]
+    launch_id: Option<String>,
+    #[arg(long, requires = "launch_id")]
+    instance_id: Option<String>,
     #[arg(long)]
     socket: Option<PathBuf>,
     #[arg(long)]
@@ -1157,6 +1170,45 @@ mod tests {
         );
         assert!(query.configured_only);
         assert!(query.ready_only);
+    }
+
+    #[test]
+    fn connected_workspace_target_does_not_require_launch_identity() {
+        let cli = Cli::try_parse_from([
+            "kairos-market-cli",
+            "--workspace",
+            "/tmp/workspace",
+            "connected",
+            "snapshot",
+            "quote",
+            "--market-id",
+            "market:binance:spot:BTCUSDT",
+        ])
+        .unwrap();
+        let Command::Connected(ConnectedCommand::Snapshot(command)) = cli.command else {
+            panic!("expected connected snapshot command");
+        };
+
+        assert!(command.target.launch_id.is_none());
+        assert!(command.target.instance_id.is_none());
+    }
+
+    #[test]
+    fn connected_target_rejects_partial_launch_identity() {
+        let result = Cli::try_parse_from([
+            "kairos-market-cli",
+            "--workspace",
+            "/tmp/workspace",
+            "connected",
+            "snapshot",
+            "--launch-id",
+            "launch",
+            "quote",
+            "--market-id",
+            "market:binance:spot:BTCUSDT",
+        ]);
+
+        assert!(result.is_err());
     }
 
     #[test]

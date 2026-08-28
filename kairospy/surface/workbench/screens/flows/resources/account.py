@@ -19,6 +19,7 @@ from ....widgets import (
     renderable_plain_text,
 )
 from ...activity import ActivityKind, ActivityOutcome, ActivityRecord
+from ...presentation import ResultTone, conclusion, facts
 from ...effects import (
     AppendActivity,
     RunOperation,
@@ -300,7 +301,10 @@ def handle_success(
     )
     if kind is ResultKind.ORDER:
         session.account.order_prompt = None
-    if kind is ResultKind.TRANSFER and spec.action_name != "account.transfer.unavailable":
+    if (
+        kind is ResultKind.TRANSFER
+        and spec.action_name != "account.transfer.unavailable"
+    ):
         session.context = ("resources", "account-transfer-result")
         unknown = isinstance(result, Mapping) and bool(result.get("result_unknown"))
         status = "划转结果未知 · 请查询本次状态" if unknown else "资金划转操作已完成"
@@ -510,10 +514,11 @@ def _activity(
             spec.operation_id,
             ActivityKind.OPERATION,
             outcome,
-            spec.audit_summary,
+            spec.display_title,
             body,
             renderable_plain_text(body),
             spec.audit_summary,
+            scope_label=spec.scope_label,
         )
     )
 
@@ -537,7 +542,27 @@ def _account_result_renderable(
         return _earn_renderable(result, title=title)
     if action == "account.fees" and isinstance(result, Mapping):
         return _fees_renderable(result, title=title)
-    return Panel(Pretty(result, expand_all=True), title=title)
+    if isinstance(result, Mapping):
+        rows = tuple(
+            (label, str(result[key]))
+            for key, label in (
+                ("status", "状态"),
+                ("account_id", "Account ID"),
+                ("segment_key", "Segment"),
+                ("detail", "说明"),
+                ("reason", "原因"),
+            )
+            if key in result and result[key] is not None
+        )
+        preview = str(result.get("status") or "").lower() == "preview"
+        return Group(
+            conclusion(
+                f"{title}预演完成，未执行任何修改" if preview else f"{title}已完成",
+                tone=ResultTone.PREVIEW if preview else ResultTone.SUCCESS,
+            ),
+            facts(rows) if rows else Text("没有更多业务字段", style="dim"),
+        )
+    return conclusion(str(result) or f"{title}已完成")
 
 
 def _transfer_result_renderable(
@@ -568,7 +593,9 @@ def _transfer_result_renderable(
                 _localized(plan.get("status")),
                 _localized(operation.get("status")),
             )
-        body: RenderableType = table if transfers else Text("尚无资金划转记录。", style="dim")
+        body: RenderableType = (
+            table if transfers else Text("尚无资金划转记录。", style="dim")
+        )
         return Panel(body, title=title, border_style="cyan")
     preview = _mapping(result.get("preview"))
     plan = _mapping(result.get("plan"))
@@ -614,7 +641,10 @@ def _transfer_result_renderable(
         content.extend(
             (
                 Text(),
-                Text("结果未知：请使用“查询本次状态”，不要重新提交。", style="bold yellow"),
+                Text(
+                    "结果未知：请使用“查询本次状态”，不要重新提交。",
+                    style="bold yellow",
+                ),
             )
         )
     failure = operation.get("failure_reason")

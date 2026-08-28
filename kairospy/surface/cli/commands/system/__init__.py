@@ -51,7 +51,7 @@ def _run_workspace_market_connected_command(
             "--socket",
             str(socket),
             "--view-root",
-            str(owner.paths.child("snapshots", "market", "market-shared")),
+            str(owner.paths.snapshots),
             *arguments,
         ],
     )

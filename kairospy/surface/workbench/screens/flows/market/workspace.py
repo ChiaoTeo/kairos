@@ -18,6 +18,15 @@ from kairospy.system.apps.components.application.clients import MarketSystemClie
 from kairospy.system.apps.launch.application import (
     WorkspaceComponentDependencyApplication,
 )
+from ...presentation import (
+    ResultTone,
+    conclusion,
+    count,
+    duration_from_nanos,
+    facts,
+    percentage,
+    section,
+)
 
 from ....widgets import ActionItem
 
@@ -25,8 +34,12 @@ from ....widgets import ActionItem
 WORKSPACE_MARKET_ACTIONS = (
     ActionItem("status", "查看状态", "读取服务健康与运行资源", "1"),
     ActionItem("routes", "查看数据路由", "读取已配置 Provider route", "2"),
-    ActionItem("session-subscriptions", "当前 Kairos I 订阅", "查看本会话拥有的订阅", "3"),
-    ActionItem("subscriptions", "Market 全部订阅", "查看所有策略、操作员和系统订阅", "4"),
+    ActionItem(
+        "session-subscriptions", "当前 Kairos I 订阅", "查看本会话拥有的订阅", "3"
+    ),
+    ActionItem(
+        "subscriptions", "Market 全部订阅", "查看所有策略、操作员和系统订阅", "4"
+    ),
     ActionItem("subscribe", "添加订阅", "为当前 Kairos I 会话添加行情订阅", "s"),
     ActionItem("unsubscribe", "退出订阅", "退出当前 Kairos I 会话拥有的订阅", "u"),
     ActionItem("snapshot", "查看行情快照", "读取 Quote、K 线或 Greeks", "5"),
@@ -75,13 +88,17 @@ class WorkspaceMarketPromptState:
             default for field, _label, default in self._steps() if field == name
         )
         value = raw.strip() or default
-        if name in {
-            "kind",
-            "market-id",
-            "timeframe",
-            "observations",
-            "subscription-id",
-        } and not value:
+        if (
+            name
+            in {
+                "kind",
+                "market-id",
+                "timeframe",
+                "observations",
+                "subscription-id",
+            }
+            and not value
+        ):
             raise ValueError(f"{name} 不能为空")
         if name == "kind" and value not in {"quote", "bar", "greeks"}:
             raise ValueError("快照类型必须是 quote、bar 或 greeks")
@@ -214,53 +231,64 @@ def release_operator_owner(state: Any, owner_id: str) -> tuple[str, ...]:
 def status_renderable(result: Mapping[str, Any]) -> RenderableType:
     process = _mapping(result.get("process"))
     health = _mapping(result.get("health"))
-    process_table = Table.grid(padding=(0, 2))
-    process_table.add_column(style="dim", no_wrap=True)
-    process_table.add_column()
-    process_table.add_row("进程状态", _status_text(process.get("status")))
-    process_table.add_row(
-        "控制连接", "可用" if process.get("control_reachable") else "不可用"
-    )
-    process_table.add_row("PID", str(process.get("pid") or "—"))
+    process_rows: list[tuple[str, RenderableType]] = [
+        ("进程", _status_text(process.get("status"))),
+        ("控制连接", "可用" if process.get("control_reachable") else "不可用"),
+        ("PID", str(process.get("pid") or "—")),
+    ]
     if process.get("probe_error"):
-        process_table.add_row("探测错误", str(process["probe_error"]))
+        process_rows.append(("探测错误", str(process["probe_error"])))
 
     if not health:
-        return Panel(process_table, title="Market Runtime", border_style="yellow")
+        return Group(
+            conclusion(
+                "Market 进程可见，但数据面健康状态不可用", tone=ResultTone.WARNING
+            ),
+            facts(process_rows),
+        )
 
-    owner_table = Table.grid(padding=(0, 2))
-    owner_table.add_column(style="dim", no_wrap=True)
-    owner_table.add_column()
-    owner_table.add_row("Owner 状态", _status_text(health.get("status")))
-    owner_table.add_row("Feed", _status_text(health.get("feed_status")))
-    owner_table.add_row("Actor", str(health.get("actor_id") or "—"))
-    owner_table.add_row("Event sequence", str(health.get("event_sequence") or 0))
-    owner_table.add_row(
-        "Current view",
-        " · ".join(
-            (
-                f"input {health.get('current_view_input_update_count', 0)}",
-                f"commit {health.get('current_view_commit_count', 0)}",
-                f"encoded {health.get('current_view_encoded_update_count', 0)}",
-                f"order-book {health.get('current_view_order_book_encode_count', 0)}",
-            )
-        ),
-    )
-    latency_nanos = health.get("last_current_view_commit_latency_nanos")
-    owner_table.add_row(
-        "最近提交耗时",
-        "—" if latency_nanos is None else f"{int(latency_nanos) / 1_000_000:.3f} ms",
+    ready = (
+        str(health.get("status") or "").lower() == "ready"
+        and str(health.get("feed_status") or "").lower() == "ready"
+        and bool(process.get("control_reachable"))
     )
     attempts = int(health.get("notification_attempt_count") or 0)
     failures = int(health.get("notification_failure_count") or 0)
-    owner_table.add_row(
-        "通知",
-        f"attempts {attempts} · failures {failures}"
-        + (f" · error-rate {failures / attempts:.1%}" if attempts else ""),
-    )
+    latency_nanos = health.get("last_current_view_commit_latency_nanos")
+    owner_rows: list[tuple[str, RenderableType]] = [
+        ("数据面", _status_text(health.get("status"))),
+        ("Feed", _status_text(health.get("feed_status"))),
+        ("Actor", str(health.get("actor_id") or "—")),
+        ("事件序号", count(int(health.get("event_sequence") or 0))),
+        (
+            "当前视图",
+            " · ".join(
+                (
+                    f"输入 {count(int(health.get('current_view_input_update_count') or 0))}",
+                    f"提交 {count(int(health.get('current_view_commit_count') or 0))}",
+                    f"编码 {count(int(health.get('current_view_encoded_update_count') or 0))}",
+                    f"订单簿 {count(int(health.get('current_view_order_book_encode_count') or 0))}",
+                )
+            ),
+        ),
+        (
+            "最近提交耗时",
+            "—" if latency_nanos is None else duration_from_nanos(int(latency_nanos)),
+        ),
+        (
+            "通知",
+            f"尝试 {count(attempts)} · 失败 {count(failures)} · "
+            f"错误率 {percentage(failures, attempts)}",
+        ),
+    ]
     return Group(
-        Panel(process_table, title="Market Runtime", border_style="cyan"),
-        Panel(owner_table, title="Market Data Plane", border_style="cyan"),
+        conclusion(
+            "Market 服务与数据面均已就绪"
+            if ready
+            else "Market 可访问，但存在需要处理的运行状态",
+            tone=ResultTone.SUCCESS if ready else ResultTone.WARNING,
+        ),
+        facts((*process_rows, *owner_rows)),
     )
 
 
@@ -277,12 +305,11 @@ def routes_renderable(result: Mapping[str, Any]) -> RenderableType:
     table = Table(show_header=True, header_style="bold")
     table.add_column("Provider")
     table.add_column("状态")
-    table.add_column("Routes", justify="right")
+    table.add_column("路由数", justify="right")
     table.add_column("说明")
-    if summary:
-        for (provider, state), count in sorted(
-            summary.items(), key=lambda item: (item[0][0], item[0][1])
-        ):
+    summary_rows = sorted(summary.items(), key=lambda item: (item[0][0], item[0][1]))
+    if summary_rows:
+        for (provider, state), route_count in summary_rows[:20]:
             selected = sum(
                 1
                 for route in routes
@@ -301,12 +328,28 @@ def routes_renderable(result: Mapping[str, Any]) -> RenderableType:
             )
             detail = ", ".join(observations) or "—"
             if selected:
-                detail += f" · selected {selected}"
-            table.add_row(provider, state, str(count), detail)
+                detail += f" · 已选 {count(selected)}"
+            table.add_row(provider, _status_text(state), count(route_count), detail)
     else:
         table.add_row("—", "无路由", "0", "—")
-    return Panel(
-        table, title=f"Market Provider Routes · {len(routes)}", border_style="cyan"
+    visible = min(len(summary_rows), 20)
+    return Group(
+        conclusion(
+            (
+                f"已配置 {count(len(routes))} 条数据路由，覆盖 "
+                f"{count(len({provider for provider, _state in summary}))} 个 Provider"
+                if routes
+                else "当前没有已配置的数据路由"
+            ),
+            tone=ResultTone.SUCCESS if routes else ResultTone.WARNING,
+        ),
+        section("Provider 路由", table),
+        Text(
+            f"显示 {count(visible)} 组 · 其余 {count(len(summary_rows) - visible)} 组"
+            if len(summary_rows) > visible
+            else f"共 {count(len(summary_rows))} 组 Provider 状态",
+            style="dim",
+        ),
     )
 
 
@@ -314,9 +357,7 @@ def subscriptions_renderable(
     result: Mapping[str, Any], *, current_session: bool
 ) -> RenderableType:
     subscriptions = tuple(
-        value
-        for value in result.get("subscriptions", ())
-        if isinstance(value, Mapping)
+        value for value in result.get("subscriptions", ()) if isinstance(value, Mapping)
     )
     table = Table(show_header=True, header_style="bold")
     table.add_column("Subscription")
@@ -326,7 +367,7 @@ def subscriptions_renderable(
     table.add_column("Provider")
     table.add_column("状态")
     table.add_column("Pending")
-    for subscription in subscriptions:
+    for subscription in subscriptions[:20]:
         table.add_row(
             str(subscription.get("subscription_id") or "—"),
             str(subscription.get("owner_id") or "—"),
@@ -343,10 +384,20 @@ def subscriptions_renderable(
         )
     if not subscriptions:
         table.add_row("—", "—", "—", "—", "—", "无订阅", "—")
-    return Panel(
-        table,
-        title="当前 Kairos I 订阅" if current_session else "Market 全部订阅",
-        border_style="cyan",
+    visible = min(len(subscriptions), 20)
+    title = "当前 Kairos I 订阅" if current_session else "Market 全部订阅"
+    return Group(
+        conclusion(
+            f"{title}共 {count(len(subscriptions))} 条",
+            tone=ResultTone.SUCCESS if subscriptions else ResultTone.WARNING,
+        ),
+        section(title, table),
+        Text(
+            f"显示 {count(visible)} 条 · 其余 {count(len(subscriptions) - visible)} 条"
+            if len(subscriptions) > visible
+            else f"共 {count(len(subscriptions))} 条",
+            style="dim",
+        ),
     )
 
 
@@ -374,18 +425,17 @@ def preview(prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
 def equivalent_command(
     state: Any, prompt: WorkspaceMarketPromptState
 ) -> tuple[str, ...] | None:
-    """Return a stable CLI equivalent for connected read operations."""
+    """Return the public Workspace CLI equivalent for connected reads."""
 
     if state.owner is None or prompt.action not in {"snapshot", "freshness"}:
         return None
     owner = state.owner
     arguments = [
-        "connected",
+        "kairos",
+        "system",
+        "component",
+        "market",
         prompt.action,
-        "--socket",
-        str(owner.paths.process_socket("market")),
-        "--view-root",
-        str(owner.paths.child("snapshots", "market", "market-shared")),
     ]
     if prompt.action == "snapshot":
         arguments.extend(
@@ -409,9 +459,8 @@ def equivalent_command(
                 prompt.values["provider"],
             )
         )
-    return tuple(
-        MarketCliApplication(owner, binary="kairos-market-cli").command(arguments)
-    )
+    arguments.extend(("--workspace", str(owner.paths.root), "--format", "json"))
+    return tuple(arguments)
 
 
 __all__ = [
