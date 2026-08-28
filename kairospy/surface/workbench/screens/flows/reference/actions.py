@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from typing import Any
 
-from rich.console import RenderableType
+from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.pretty import Pretty
 from rich.table import Table
+from rich.text import Text
 
 from kairospy.investment.apps.reference.application import ReferenceApplication
+from kairospy.system.apps.components.application.clients import ReferenceSystemClient
 
 from ....widgets import ActionItem
 
@@ -23,6 +26,143 @@ INSTRUMENT_TYPE_ACTIONS = (
     ActionItem("option", "期权", "看涨与看跌期权合约", "5"),
     ActionItem("index", "指数", "市场指数与基准", "6"),
 )
+
+
+def load_runtime_status(state: Any) -> dict[str, Any]:
+    """Read detailed status through the Reference-owned control contract."""
+
+    if state.owner is None:
+        raise RuntimeError(state.load_error or "当前没有可用的 workspace")
+    owner = state.owner
+    client = ReferenceSystemClient(
+        owner.paths.process_socket("reference"),
+        database_path=owner.paths.reference_database(),
+        workspace_id=str(owner.workspace_id),
+    )
+    return client.reference_status()
+
+
+def runtime_status_renderable(value: Mapping[str, Any]) -> RenderableType:
+    """Render one Reference runtime snapshot without recomputing owner health."""
+
+    app_runtime = _mapping(value.get("app_runtime"))
+    catalog = _mapping(value.get("catalog"))
+    publication = _mapping(value.get("publication"))
+    diagnostics = _mapping_rows(value.get("diagnostics"))
+    sources = sorted(
+        _mapping_rows(value.get("sources")),
+        key=lambda source: (
+            0 if _source_needs_attention(source) else 1,
+            str(source.get("source_id") or ""),
+        ),
+    )
+
+    runtime = Table.grid(padding=(0, 2))
+    runtime.add_column(style="dim", no_wrap=True)
+    runtime.add_column()
+    runtime.add_row("整体状态", _status_text(value.get("status")))
+    runtime.add_row("运行阶段", _status_text(app_runtime.get("phase")))
+    runtime.add_row(
+        "工作队列",
+        f"active {app_runtime.get('active_work_item_count', 0)}"
+        f" · queued {app_runtime.get('queued_work_item_count', 0)}",
+    )
+    runtime.add_row(
+        "最近 Tick",
+        _time_value(app_runtime.get("last_tick_finished_unix_nanos")),
+    )
+    runtime.add_row(
+        "Tick 耗时", _duration_value(app_runtime.get("last_tick_duration_millis"))
+    )
+    runtime.add_row(
+        "下次 Tick", _time_value(app_runtime.get("next_tick_due_unix_nanos"))
+    )
+    runtime_error = _mapping(app_runtime.get("last_error"))
+    if runtime_error:
+        runtime.add_row("最近错误", _error_text(runtime_error))
+
+    catalog_table = Table.grid(padding=(0, 2))
+    catalog_table.add_column(style="dim", no_wrap=True)
+    catalog_table.add_column()
+    catalog_table.add_row("Readiness", _status_text(catalog.get("readiness")))
+    catalog_table.add_row(
+        "Watermark",
+        f"generation {catalog.get('generation', '—')}"
+        f" · sequence {catalog.get('event_sequence', '—')}",
+    )
+    catalog_table.add_row(
+        "目录规模",
+        " · ".join(
+            (
+                f"exchange {catalog.get('exchange_count', 0)}",
+                f"asset {catalog.get('asset_count', 0)}",
+                f"instrument {catalog.get('instrument_count', 0)}",
+                f"listing {catalog.get('listing_count', 0)}",
+                f"market {catalog.get('market_count', 0)}",
+                f"active {catalog.get('active_market_count', 0)}",
+            )
+        ),
+    )
+    integrity = _mapping(catalog.get("integrity"))
+    catalog_table.add_row(
+        "完整性",
+        _integrity_summary(integrity),
+    )
+
+    source_table = Table(show_header=True, header_style="bold")
+    source_table.add_column("Source")
+    source_table.add_column("Provider")
+    source_table.add_column("状态")
+    source_table.add_column("进度")
+    source_table.add_column("最近成功")
+    source_table.add_column("错误")
+    if sources:
+        for source in sources:
+            source_table.add_row(
+                str(source.get("source_id") or "—"),
+                str(source.get("provider_id") or "—"),
+                _source_state(source),
+                _progress_summary(_mapping(source.get("progress"))),
+                _time_value(source.get("last_success_unix_nanos")),
+                _error_text(_mapping(source.get("last_error"))),
+            )
+    else:
+        source_table.add_row("—", "—", "无数据源", "—", "—", "—")
+
+    publication_table = Table.grid(padding=(0, 2))
+    publication_table.add_column(style="dim", no_wrap=True)
+    publication_table.add_column()
+    publication_table.add_row(
+        "待发布", str(publication.get("pending_publication_count", 0))
+    )
+    publication_table.add_row(
+        "积压状态",
+        "degraded" if publication.get("backlog_degraded") else "正常",
+    )
+    publication_table.add_row(
+        "最早事件", str(publication.get("oldest_pending_event_id") or "—")
+    )
+    publication_error = _mapping(publication.get("last_error"))
+    if publication_error:
+        publication_table.add_row("最近错误", _error_text(publication_error))
+    if diagnostics:
+        publication_table.add_row(
+            "诊断",
+            "\n".join(
+                f"[{item.get('severity', 'unknown')}] {item.get('code', '—')}: "
+                f"{item.get('message', '—')}"
+                for item in diagnostics
+            ),
+        )
+    else:
+        publication_table.add_row("诊断", "无")
+
+    return Group(
+        Panel(runtime, title="Reference Runtime", border_style="cyan"),
+        Panel(catalog_table, title="Catalog", border_style="cyan"),
+        Panel(source_table, title=f"Sources · {len(sources)}", border_style="cyan"),
+        Panel(publication_table, title="Publication", border_style="cyan"),
+    )
 
 
 def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
@@ -266,6 +406,115 @@ def _application(state: Any) -> ReferenceApplication:
     return ReferenceApplication.from_database(state.owner.paths.reference_database())
 
 
+def _mapping(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _mapping_rows(value: object) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(item for item in value if isinstance(item, Mapping))
+
+
+def _status_text(value: object) -> Text:
+    label = str(value or "unknown")
+    normalized = label.lower()
+    style = (
+        "green"
+        if normalized in {"ready", "healthy", "running", "active", "idle"}
+        else "red"
+        if normalized in {"failed", "unavailable", "not_ready"}
+        else "yellow"
+    )
+    return Text(label, style=style)
+
+
+def _time_value(value: object) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return str(value)
+    try:
+        unix_nanos = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    from datetime import datetime, timezone
+
+    rendered = datetime.fromtimestamp(unix_nanos / 1_000_000_000, tz=timezone.utc)
+    return rendered.astimezone().isoformat(timespec="seconds")
+
+
+def _duration_value(value: object) -> str:
+    return "—" if value is None else f"{value} ms"
+
+
+def _error_text(value: Mapping[str, Any]) -> str:
+    if not value:
+        return "—"
+    code = str(value.get("code") or "error")
+    message = str(value.get("message") or "—")
+    retryable = " · 可重试" if value.get("retryable") else ""
+    return f"{code}: {message}{retryable}"
+
+
+def _source_needs_attention(source: Mapping[str, Any]) -> bool:
+    phase = str(source.get("phase") or "").lower()
+    return bool(
+        source.get("paused")
+        or source.get("stale")
+        or source.get("last_error")
+        or phase in {"failed", "retrying", "degraded", "unavailable"}
+    )
+
+
+def _source_state(source: Mapping[str, Any]) -> str:
+    labels = [str(source.get("phase") or "unknown")]
+    if not source.get("enabled", False):
+        labels.append("disabled")
+    if source.get("paused"):
+        labels.append("paused")
+    if source.get("stale"):
+        labels.append("stale")
+    failures = source.get("consecutive_failures")
+    if failures:
+        labels.append(f"failures={failures}")
+    return " · ".join(labels)
+
+
+def _progress_summary(progress: Mapping[str, Any]) -> str:
+    if not progress:
+        return "—"
+    values = [str(progress.get("kind") or "unknown")]
+    pages_done = progress.get("pages_done")
+    pages_total = progress.get("pages_total")
+    if pages_done is not None:
+        values.append(
+            f"pages {pages_done}/{pages_total}"
+            if pages_total is not None
+            else f"pages {pages_done}"
+        )
+    records_seen = progress.get("records_seen")
+    records_changed = progress.get("records_changed")
+    if records_seen is not None:
+        values.append(f"records {records_seen}")
+    if records_changed is not None:
+        values.append(f"changed {records_changed}")
+    return " · ".join(values)
+
+
+def _integrity_summary(integrity: Mapping[str, Any]) -> str:
+    if not integrity:
+        return "未报告"
+    issues = [
+        f"{key.removesuffix('_count')}={value}"
+        for key, value in integrity.items()
+        if key != "degraded" and isinstance(value, int) and value > 0
+    ]
+    if not integrity.get("degraded") and not issues:
+        return "正常"
+    return "degraded" + (f" · {' · '.join(issues)}" if issues else "")
+
+
 def _search_values(kind: str, record: Any) -> tuple[str, ...]:
     if kind == "asset":
         return str(record.code), str(record.name or ""), str(record.id)
@@ -299,7 +548,9 @@ __all__ = [
     "load_instrument_markets",
     "load_records",
     "load_related",
+    "load_runtime_status",
     "record_description",
     "record_label",
     "records_renderable",
+    "runtime_status_renderable",
 ]

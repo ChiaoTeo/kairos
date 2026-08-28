@@ -65,12 +65,8 @@ class ReferenceReadSession:
             },
             "integrity": {
                 "missing_equity_markets": int(status.missing_equity_markets),
-                "legacy_exchange_market_ids": int(
-                    status.legacy_exchange_market_ids
-                ),
-                "legacy_exchange_listing_ids": int(
-                    status.legacy_exchange_listing_ids
-                ),
+                "legacy_exchange_market_ids": int(status.legacy_exchange_market_ids),
+                "legacy_exchange_listing_ids": int(status.legacy_exchange_listing_ids),
                 "option_listings": int(status.option_listings),
                 "option_markets": int(status.option_markets),
             },
@@ -318,6 +314,11 @@ class ReferenceClient:
 
     def health(self) -> dict[str, Any]:
         return self.request("reference_health")
+
+    def runtime_status(self) -> dict[str, Any]:
+        """Read source, catalog, and publication status from Reference."""
+
+        return self.request("reference_status")
 
     def providers(self) -> dict[str, Any]:
         health = self.health()

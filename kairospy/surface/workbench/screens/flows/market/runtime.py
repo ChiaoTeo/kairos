@@ -58,6 +58,8 @@ from .workspace import (
     equivalent_command as workspace_market_command,
     execute as execute_workspace_market,
     preview as preview_workspace_market,
+    routes_renderable as workspace_routes_renderable,
+    status_renderable as workspace_status_renderable,
 )
 from ...navigation import (
     action_id,
@@ -340,6 +342,18 @@ def handle_success(
             snapshot["_source_mode"] = "workspace-view"
             snapshot["_fetched_at_unix_nanos"] = time_ns()
             body = observation_renderable(snapshot)
+        elif (
+            isinstance(prompt, WorkspaceMarketPromptState)
+            and prompt.action == "status"
+            and isinstance(result, Mapping)
+        ):
+            body = workspace_status_renderable(result)
+        elif (
+            isinstance(prompt, WorkspaceMarketPromptState)
+            and prompt.action == "routes"
+            and isinstance(result, Mapping)
+        ):
+            body = workspace_routes_renderable(result)
         else:
             body = Panel(Pretty(result, expand_all=True), title="Workspace Market 结果")
         return (_activity(spec, body), *_choice(state, session, status="操作已完成"))

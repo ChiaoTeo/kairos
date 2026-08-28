@@ -52,10 +52,11 @@ pub struct ReferenceApplication {
 impl ReferenceApplication {
     pub(crate) async fn new(
         actor_id: impl Into<String>,
+        workspace_id: impl Into<String>,
         source_plan: ReferenceSourcePlan,
         store: SqlxCatalogStore,
     ) -> ReferenceResult<Self> {
-        let actor = ReferenceActor::new(actor_id, source_plan, store).await?;
+        let actor = ReferenceActor::new(actor_id, workspace_id, source_plan, store).await?;
         let runtime = ReferenceApplicationRuntime::new(actor.actor_id.as_str());
         Ok(Self {
             actor,

@@ -35,6 +35,7 @@ from kairospy.investment.apps.reference.application import (
     InstrumentRef,
     Market,
     MarketStatus,
+    ReferenceApplication,
 )
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.decimal import Money, Quantity
@@ -58,6 +59,8 @@ from kairospy.strategy import (
     StrikeRange,
     Strategy,
     StrategyCommand,
+    Subscription,
+    SubscriptionGroup,
     SystemEvent,
     SystemNotice,
     Timeframe,
@@ -76,6 +79,7 @@ from kairospy.investment.apps.market.application import EventStreamGap
 from kairospy.system.apps.components.application import UnixRestClient
 from kairospy.strategy import StrategyLogger, StrategyOutput
 from kairospy.strategy import CommandResult
+from kairospy.strategy.api.interactive import InteractiveStrategy
 
 
 _MARKET = Market(
@@ -87,6 +91,25 @@ _MARKET = Market(
     "spot",
     status=MarketStatus.ACTIVE,
 )
+
+
+class _AcceptanceReferenceSnapshot:
+    generation = 42
+    event_sequence = 9810
+
+    def __enter__(self) -> _AcceptanceReferenceSnapshot:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def markets(self, **_filters: object) -> list[Market]:
+        return [_MARKET]
+
+
+class _AcceptanceReferenceClient:
+    def snapshot(self) -> _AcceptanceReferenceSnapshot:
+        return _AcceptanceReferenceSnapshot()
 
 
 def EventEnvelope(
@@ -176,6 +199,22 @@ class UserStrategy(Strategy):
         )
 
 
+class ReferenceSubscriptionAcceptanceStrategy(Strategy):
+    strategy_id = "reference-subscription-acceptance"
+
+    def __init__(self) -> None:
+        self.subscription: Subscription | SubscriptionGroup | None = None
+
+    def on_start(self, context) -> None:
+        with context.reference.snapshot() as reference:
+            market = reference.require_market(
+                symbol="BTCUSDT",
+                exchange="test",
+                instrument_kind="spot",
+            )
+        self.subscription = context.market.subscribe_quotes(market)
+
+
 class InvalidTypedHookStrategy(Strategy):
     strategy_id = "invalid-typed-hook"
 
@@ -232,7 +271,6 @@ class TimerStrategy(Strategy):
 
 
 class FiniteReplayStream(InMemoryMarketReplaySource):
-
     async def replay_from(self, after_sequence: int = 0):
         while self._events:
             event = self._events.popleft()
@@ -368,6 +406,45 @@ def _host(
         params=params,
     )
     return host, strategy, bus, stream
+
+
+def test_reference_market_subscription_is_observed_without_strategy_state_stats(
+    tmp_path: Path,
+) -> None:
+    strategy = ReferenceSubscriptionAcceptanceStrategy()
+    host, _, bus, _stream = _host(tmp_path, strategy=strategy)
+    host.context.reference = ReferenceApplication(_AcceptanceReferenceClient())
+
+    waiting = host.start()
+    assert waiting.state is StrategyLifecycle.WAITING_FOR_DEPENDENCIES
+    subscribe = next(
+        request for request in bus.requests if request.operation == "market.subscribe"
+    )
+    assert subscribe.payload.target.market_id == "market:test:BTCUSDT"
+    bus.resolve(
+        subscribe.request_id,
+        status="active",
+        result={"resolved_providers": ["test"]},
+    )
+    assert host.refresh().state is StrategyLifecycle.READY
+    host.enable()
+
+    host.dispatch(EventEnvelope("market.events", 1, "data", "quote", {}))
+
+    assert host.status.event_count == 1
+    assert host.status.streams[0]["kind"] == "quote_updated"
+    assert host.status.recent_events[-1]["source_sequence"] == 1
+    assert tuple(host.context.state.keys()) == ()
+
+    assert strategy.subscription is not None
+    host.context.market.unsubscribe(strategy.subscription)
+    assert host.status.active_subscription_count == 0
+    assert host.status.subscriptions[0]["status"] == "removed"
+
+    host.stop()
+    assert [request.operation for request in bus.requests].count(
+        "market.release_owner"
+    ) == 1
 
 
 def _timer_host(tmp_path: Path):
@@ -687,6 +764,53 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     assert bus.requests[1].payload.instrument_id == "instrument:test:BTCUSDT"
     assert bus.requests[1].payload.source_event_sequence == 1
     assert bus.requests[1].payload.source_event_time_unix_nanos is not None
+
+
+def test_interactive_dynamic_subscriptions_are_reflected_and_removed(
+    tmp_path: Path,
+) -> None:
+    host, _, bus, _stream = _host(tmp_path, strategy=InteractiveStrategy())
+    host.start()
+    host.enable()
+
+    subscribed = asyncio.run(
+        host.command(
+            StrategyCommand(
+                "subscribe-1",
+                "interactive.python",
+                "from kairospy.strategy import MarketId\n"
+                "sub = market.subscribe_quotes(MarketId('market:test:BTCUSDT'))\n"
+                "sub.subscription_id",
+            )
+        )
+    )
+    assert subscribed.status == "completed"
+    assert host.status.subscription_count == 1
+    assert host.status.subscriptions[0]["status"] == "resolving"
+
+    subscribe_request = next(
+        request for request in bus.requests if request.operation == "market.subscribe"
+    )
+    bus.resolve(
+        subscribe_request.request_id,
+        status="active",
+        result={"resolved_providers": ["test"]},
+    )
+    assert host.status.active_subscription_count == 1
+
+    unsubscribed = asyncio.run(
+        host.command(
+            StrategyCommand(
+                "unsubscribe-1",
+                "interactive.python",
+                "market.unsubscribe(sub)",
+            )
+        )
+    )
+    assert unsubscribed.status == "completed"
+    assert host.status.subscription_count == 0
+    assert host.status.active_subscription_count == 0
+    assert host.status.subscriptions[0]["status"] == "removed"
 
 
 def test_market_subscription_uses_reference_market_route(tmp_path: Path) -> None:
@@ -1158,6 +1282,33 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
     assert host.status.last_event_time == event_time
     assert host.status.event_count == 1
     assert host.status.last_event_kind == "quote_updated"
+    assert host.status.market_notification == {
+        "cursor": None,
+        "producer": None,
+        "producer_incarnation": None,
+        "gap_count": 0,
+        "incarnation_change_count": 0,
+    }
+    assert host.status.streams == (
+        {
+            "domain": "market",
+            "kind": "quote_updated",
+            "scope": "market:test:BTCUSDT",
+            "provider": "test",
+            "event_count": 1,
+            "first_event_time": event_time.isoformat(),
+            "last_event_time": event_time.isoformat(),
+            "last_source_sequence": 1,
+        },
+    )
+    assert host.status.recent_events[-1]["summary"] == {
+        "instrument_id": "instrument:test:BTCUSDT",
+        "provider": "test",
+        "bid_price": "100",
+        "ask_price": "101",
+        "scope": "market:test:BTCUSDT",
+    }
+    assert tuple(host.context.state.keys()) == ()
 
     records = [json.loads(line) for line in output.getvalue().splitlines()]
     dispatch = next(
@@ -1266,6 +1417,15 @@ def test_strategy_control_uses_instance_unix_rest_socket(
             assert status["data_health"] == "not_started"
             assert status["subscription_count"] == 1
             assert status["subscriptions"][0]["status"] == "active"
+            assert status["streams"] == []
+            assert status["recent_events"] == []
+            assert status["market_notification"] == {
+                "cursor": None,
+                "producer": None,
+                "producer_incarnation": None,
+                "gap_count": 0,
+                "incarnation_change_count": 0,
+            }
             assert status["decisions"]["decision_count"] == 1
             assert status["agent"] == {
                 "enabled": False,
@@ -1343,7 +1503,7 @@ def test_decision_trace_joins_authoritative_execution_and_delivery_facts(
     assert trace["notification_deliveries"][0]["outcome"] == "delivered"
 
 
-def test_strategy_control_dispatches_command_to_optional_strategy_hook(
+def test_strategy_control_executes_runtime_python_without_strategy_hook(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -1365,8 +1525,8 @@ def test_strategy_control_dispatches_command_to_optional_strategy_hook(
                     "source": "print('not supported by this strategy')",
                 },
             )
-            assert result["status"] == "rejected"
-            assert result["error_code"] == "unsupported_command"
+            assert result["status"] == "completed"
+            assert result["stdout"] == "not supported by this strategy\n"
             assert result["request_id"] == "command-1"
         finally:
             await server.close()

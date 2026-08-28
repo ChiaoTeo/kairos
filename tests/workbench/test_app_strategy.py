@@ -498,6 +498,11 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
     assert "strategy-log" not in output
     assert "strategy-log" in control_text
     assert "/workspace/logs/strategy/process.log" in control_text
+    assert "Strategy Runtime" in control_text
+    assert "内置连接" in control_text
+    assert "Market 订阅" in control_text
+    assert "数据流" in control_text
+    assert "最近数据" in control_text
     assert "Launch 状态刷新" not in output
     assert interaction.refreshing
 

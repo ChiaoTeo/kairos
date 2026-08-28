@@ -22,6 +22,11 @@ class ReferenceControlClient:
     def health(self) -> Mapping[str, Any]:
         return self.call("reference_health")
 
+    def status(self) -> Mapping[str, Any]:
+        """Read the Reference-owned detailed runtime status."""
+
+        return self.call("reference_status")
+
     def refresh(self, *, source: str | None = None) -> Mapping[str, Any]:
         return self.call("reference_refresh", [source])
 

@@ -1,5 +1,6 @@
 //! Single-owner Reference actor.
 
+use kairos_primitives::runtime::InstanceIdentity;
 use tracing::info;
 
 use super::providers::ReferenceSourcePlan;
@@ -34,6 +35,7 @@ pub struct ReferenceActor {
     provider_sync_store: SqlxProviderSyncStore,
     publication_outbox: SqlxPublicationOutbox,
     producer_incarnation: u64,
+    identity: InstanceIdentity,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -185,6 +187,7 @@ fn log_reconcile_apply_completed(
 impl ReferenceActor {
     pub async fn new(
         actor_id: impl Into<String>,
+        workspace_id: impl Into<String>,
         source_plan: ReferenceSourcePlan,
         mut store: SqlxCatalogStore,
     ) -> ReferenceResult<Self> {
@@ -208,6 +211,7 @@ impl ReferenceActor {
             provider_sync_store: SqlxProviderSyncStore::from_pool(store.pool.clone()),
             publication_outbox: SqlxPublicationOutbox::from_pool(store.pool.clone()),
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
+            identity: InstanceIdentity::unscoped(workspace_id)?,
             store,
         })
     }
@@ -232,6 +236,7 @@ impl ReferenceActor {
             provider_sync_store: SqlxProviderSyncStore::from_pool(store.pool.clone()),
             publication_outbox: SqlxPublicationOutbox::from_pool(store.pool.clone()),
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
+            identity: InstanceIdentity::unscoped("workspace:test")?,
             store,
         })
     }
@@ -467,7 +472,12 @@ impl ReferenceActor {
         let changed = previous_generation != candidate.generation || !events.is_empty();
         let mut save_outcome = None;
         if changed || commit_provider_promotions {
-            let publications = encode_publications(&candidate, &events, self.producer_incarnation)?;
+            let publications = encode_publications(
+                &candidate,
+                &events,
+                self.producer_incarnation,
+                &self.identity,
+            )?;
             save_outcome = Some(
                 self.store
                     .save_refresh(&candidate, &events, &publications)
@@ -507,6 +517,7 @@ impl ReferenceActor {
             &catalog,
             std::slice::from_ref(&event),
             self.producer_incarnation,
+            &self.identity,
         )?;
         self.store
             .save_refresh(&catalog, std::slice::from_ref(&event), &publications)

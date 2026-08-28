@@ -494,12 +494,13 @@ pub async fn build_application(
             "reference startup stage completed"
         );
     }
-    let runtime_config = config
+    let workspace = config
         .workspace
         .as_ref()
         .map(kairos_workspace::workspace::Workspace::open)
         .transpose()
-        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+    let runtime_config = workspace
         .as_ref()
         .map(ReferenceConfig::load)
         .transpose()
@@ -507,7 +508,12 @@ pub async fn build_application(
         .map(|reference| reference.runtime)
         .unwrap_or_default();
     let tick_budget = runtime_config.tick_budget.to_domain()?;
-    let mut application = ReferenceApplication::new("reference-actor", source_plan, store).await?;
+    let workspace_id = workspace
+        .as_ref()
+        .map(kairos_workspace::workspace::Workspace::id)
+        .unwrap_or("workspace:standalone");
+    let mut application =
+        ReferenceApplication::new("reference-actor", workspace_id, source_plan, store).await?;
     application.configure_conflux(runtime_config.refresh_interval(), true);
     application.configure_tick_budget(tick_budget);
     Ok(ReferenceComposition {

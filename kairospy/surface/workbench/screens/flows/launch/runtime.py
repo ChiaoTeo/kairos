@@ -56,6 +56,7 @@ from .actions import (
     save_launch_wizard,
     send_python,
 )
+from .views import attach_renderable
 from ...navigation import (
     action_id,
     context_items,

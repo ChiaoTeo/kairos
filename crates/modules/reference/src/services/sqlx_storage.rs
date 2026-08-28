@@ -41,7 +41,9 @@ mod tests {
             changed: catalog.generation != previous_generation,
             event_count: events.len(),
         };
-        let publications = crate::services::publication::encode_publications(&catalog, &events, 1)?;
+        let identity = kairos_primitives::runtime::InstanceIdentity::unscoped("workspace:test")?;
+        let publications =
+            crate::services::publication::encode_publications(&catalog, &events, 1, &identity)?;
         catalog_store
             .save_refresh(&catalog, &events, &publications)
             .await?;
@@ -175,8 +177,11 @@ mod tests {
             },
             10.into(),
         );
+        let identity =
+            kairos_primitives::runtime::InstanceIdentity::unscoped("workspace:test").unwrap();
         let first_publication =
-            crate::services::publication::encode_publications(&catalog, &first, 1).unwrap();
+            crate::services::publication::encode_publications(&catalog, &first, 1, &identity)
+                .unwrap();
         let mut store = SqlxCatalogStore::open(&path).await.unwrap();
         store
             .save_refresh(&catalog, &first, &first_publication)
@@ -193,7 +198,8 @@ mod tests {
             20.into(),
         );
         let second_publication =
-            crate::services::publication::encode_publications(&catalog, &second, 1).unwrap();
+            crate::services::publication::encode_publications(&catalog, &second, 1, &identity)
+                .unwrap();
         store
             .save_refresh(&catalog, &second, &second_publication)
             .await
@@ -205,6 +211,9 @@ mod tests {
         match kairos_reference_contract::decode_event(&pending[0].payload).unwrap() {
             kairos_reference_contract::ReferenceEvent::AssetUpserted(event) => {
                 assert_eq!(event.asset().status().variant_name(), Some("ACTIVE"));
+                assert_eq!(event.metadata().workspace_id(), "workspace:test");
+                assert_eq!(event.metadata().launch_id(), None);
+                assert_eq!(event.metadata().instance_id(), None);
             },
             _ => panic!("unexpected first event kind"),
         }

@@ -16,6 +16,7 @@ class ResultKind(StrEnum):
     MARKET_FILE = "market-file-result"
     WORKSPACE_MARKET = "workspace-market-result"
     REFERENCE_RELATED = "reference-related"
+    REFERENCE_STATUS = "reference-status"
     KAIROS_COMMAND = "kairos-command"
     OPERATIONS_SERVICES = "operations-services"
     OPERATIONS_OVERVIEW = "operations-overview"

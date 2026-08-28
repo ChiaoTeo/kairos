@@ -246,9 +246,7 @@ class ExecutionSystemClient(SystemRpcClient):
     def routes(self, query: "ExecutionRoutesQuery") -> "ExecutionRoutesResponse":
         return self.control.routes(query)
 
-    def submit_intent(
-        self, request: "SubmitIntentRequest"
-    ) -> "ExecutionCommandStatus":
+    def submit_intent(self, request: "SubmitIntentRequest") -> "ExecutionCommandStatus":
         return self.control.submit_intent(request)
 
     def cancel_intent(self, intent_id: str, *, reason: str = "") -> dict[str, Any]:
@@ -266,7 +264,9 @@ class ExecutionSystemClient(SystemRpcClient):
             )
         return self.control.submit_intent(request)
 
-    def cancel(self, order_id: str, reason: str = "system cancel") -> "ExecutionCommandStatus":
+    def cancel(
+        self, order_id: str, reason: str = "system cancel"
+    ) -> "ExecutionCommandStatus":
         from kairospy.contracts.execution.types import CancelOrderRequest
 
         return self.control.cancel_order(order_id, CancelOrderRequest(reason=reason))
@@ -320,6 +320,28 @@ class MarketSystemClient(SystemRpcClient):
             "control",
             MarketControlClient(self.socket_path, timeout=self.timeout),
         )
+
+    def health(self) -> dict[str, Any]:
+        """Project the Market-owned health contract for operator views."""
+
+        value = self.control.health()
+        return {
+            "status": value.status,
+            "actor_id": value.actor_id,
+            "event_sequence": value.event_sequence,
+            "feed_status": value.feed_status,
+            "current_view_commit_count": value.current_view_commit_count,
+            "current_view_input_update_count": value.current_view_input_update_count,
+            "current_view_encoded_update_count": value.current_view_encoded_update_count,
+            "current_view_order_book_encode_count": (
+                value.current_view_order_book_encode_count
+            ),
+            "last_current_view_commit_latency_nanos": (
+                value.last_current_view_commit_latency_nanos
+            ),
+            "notification_attempt_count": value.notification_attempt_count,
+            "notification_failure_count": value.notification_failure_count,
+        }
 
     def data_routes(
         self,
@@ -467,7 +489,8 @@ class RiskSystemClient(SystemRpcClient):
         return {
             "actor_id": actor_id,
             "active_reservations": [
-                _risk_reservation(value) for value in current_view.snapshot().reservations
+                _risk_reservation(value)
+                for value in current_view.snapshot().reservations
             ],
         }
 
@@ -475,7 +498,9 @@ class RiskSystemClient(SystemRpcClient):
         current_view = self.latest_view(actor_id=actor_id)
         return {
             "actor_id": actor_id,
-            "circuits": [_risk_circuit(value) for value in current_view.snapshot().circuits],
+            "circuits": [
+                _risk_circuit(value) for value in current_view.snapshot().circuits
+            ],
         }
 
     def latest_view(self, *, actor_id: str):
@@ -490,6 +515,7 @@ class RiskSystemClient(SystemRpcClient):
             self.launch_id,
             self.instance_id,
         )
+
 
 def _risk_scope(value: Any) -> dict[str, str | None]:
     return {
@@ -646,16 +672,12 @@ class CapitalSystemClient(SystemRpcClient):
             plan_id,
             time.time_ns(),
         )
-        return _capital_reconcile_response(
-            self.control.reconcile_capital_plan(request)
-        )
+        return _capital_reconcile_response(self.control.reconcile_capital_plan(request))
 
     def reconcile_plan_request(
         self, request: ReconcileCapitalPlanRequest
     ) -> dict[str, Any]:
-        return _capital_reconcile_response(
-            self.control.reconcile_capital_plan(request)
-        )
+        return _capital_reconcile_response(self.control.reconcile_capital_plan(request))
 
     def current_view(self, capital_group_id: str):
         from kairospy.contracts.capital import CapitalCurrentView
@@ -773,6 +795,11 @@ class ReferenceSystemClient(SystemRpcClient):
 
     def health(self) -> dict[str, Any]:
         return self.reader.health()
+
+    def reference_status(self) -> dict[str, Any]:
+        """Read the Reference-owned runtime status, not generic process health."""
+
+        return self.reader.runtime_status()
 
     def providers(self) -> dict[str, Any]:
         return self.reader.providers()

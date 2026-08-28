@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from kairospy.system.apps.launch.application import (
     LaunchConfigurationApplication,
@@ -235,7 +236,7 @@ def send_python(state: Any, launch_id: str, source: str) -> dict[str, Any]:
             "/v1/command",
             json.dumps(
                 {
-                    "request_id": f"workbench:{instance_id}",
+                    "request_id": f"workbench:{instance_id}:{uuid4().hex}",
                     "kind": "interactive.python",
                     "source": source,
                 },

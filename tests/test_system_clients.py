@@ -153,6 +153,41 @@ def test_market_system_client_owns_current_data_route_query() -> None:
     ]
 
 
+def test_market_system_client_projects_owner_health() -> None:
+    class RecordingMarketControl:
+        def health(self):
+            return SimpleNamespace(
+                status="ready",
+                actor_id="market-actor",
+                event_sequence=91,
+                feed_status="ready",
+                current_view_commit_count=80,
+                current_view_input_update_count=90,
+                current_view_encoded_update_count=79,
+                current_view_order_book_encode_count=8,
+                last_current_view_commit_latency_nanos=2_500_000,
+                notification_attempt_count=90,
+                notification_failure_count=1,
+            )
+
+    client = MarketSystemClient(Path("/tmp/market.sock"))
+    object.__setattr__(client, "control", RecordingMarketControl())
+
+    assert client.health() == {
+        "status": "ready",
+        "actor_id": "market-actor",
+        "event_sequence": 91,
+        "feed_status": "ready",
+        "current_view_commit_count": 80,
+        "current_view_input_update_count": 90,
+        "current_view_encoded_update_count": 79,
+        "current_view_order_book_encode_count": 8,
+        "last_current_view_commit_latency_nanos": 2_500_000,
+        "notification_attempt_count": 90,
+        "notification_failure_count": 1,
+    }
+
+
 def test_system_process_factory_returns_typed_business_clients() -> None:
     socket = Path("/tmp/component.sock")
     factory = ComponentProcessApplication.client
@@ -164,6 +199,17 @@ def test_system_process_factory_returns_typed_business_clients() -> None:
     assert isinstance(factory("capital", socket), CapitalSystemClient)
     assert isinstance(factory("reference", socket), ReferenceSystemClient)
     assert isinstance(factory("control", socket), ComponentControlApplication)
+
+
+def test_reference_system_client_exposes_owner_runtime_status() -> None:
+    class RecordingReferenceReader:
+        def runtime_status(self) -> dict[str, object]:
+            return {"status": "ready", "sources": []}
+
+    client = ReferenceSystemClient(Path("/tmp/reference.sock"))
+    object.__setattr__(client, "reader", RecordingReferenceReader())
+
+    assert client.reference_status() == {"status": "ready", "sources": []}
 
 
 def test_instance_system_clients_are_built_from_connection_manifest_facts() -> None:

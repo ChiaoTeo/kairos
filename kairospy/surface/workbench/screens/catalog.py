@@ -33,6 +33,7 @@ MARKET_ADVANCED_ACTIONS = (
 )
 
 REFERENCE_ACTIONS = (
+    ActionItem("status", "Reference 运行状态", "查看目录同步、数据源和发布状态", "s"),
     ActionItem("assets", "查找资产", "货币、股票及其他可计价资产", "1"),
     ActionItem("exchanges", "查找交易所", "浏览交易场所及其状态", "2"),
     ActionItem("instruments", "查找合约", "股票、现货、期货、期权与指数", "3"),

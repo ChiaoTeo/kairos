@@ -214,6 +214,13 @@ class StrategyControlServer:
             "subscriptions": [
                 dict(subscription) for subscription in status.subscriptions
             ],
+            "market_notification": (
+                None
+                if status.market_notification is None
+                else dict(status.market_notification)
+            ),
+            "streams": [dict(stream) for stream in status.streams],
+            "recent_events": [dict(event) for event in status.recent_events],
             "equity_curve": list(self.application.equity_curve),
             "notifications": self.application.context.notifications.health(),
             "decisions": self.application.decisions.health(),

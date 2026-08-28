@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Any, cast
+
+from rich.console import Group, RenderableType
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from kairospy.investment.apps.market.application.cli import MarketCliApplication
 from kairospy.system.apps.components.application import ComponentProcessApplication
@@ -90,7 +96,14 @@ def execute(state: Any, prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
     action = prompt.action
     processes = ComponentProcessApplication(owner)
     if action == "status":
-        return processes.status("market")
+        process = processes.status("market")
+        if not process.get("control_reachable"):
+            return {"process": process, "health": None}
+        client = cast(
+            MarketSystemClient,
+            processes.client("market", owner.paths.process_socket("market")),
+        )
+        return {"process": process, "health": client.health()}
     if action == "start":
         return processes.ensure_running("market").status()
     if action in {"stop", "restart"}:
@@ -124,6 +137,122 @@ def execute(state: Any, prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
     if action == "pause":
         return client.pause_replay()
     return client.resume_replay()
+
+
+def status_renderable(result: Mapping[str, Any]) -> RenderableType:
+    process = _mapping(result.get("process"))
+    health = _mapping(result.get("health"))
+    process_table = Table.grid(padding=(0, 2))
+    process_table.add_column(style="dim", no_wrap=True)
+    process_table.add_column()
+    process_table.add_row("进程状态", _status_text(process.get("status")))
+    process_table.add_row(
+        "控制连接", "可用" if process.get("control_reachable") else "不可用"
+    )
+    process_table.add_row("PID", str(process.get("pid") or "—"))
+    if process.get("probe_error"):
+        process_table.add_row("探测错误", str(process["probe_error"]))
+
+    if not health:
+        return Panel(process_table, title="Market Runtime", border_style="yellow")
+
+    owner_table = Table.grid(padding=(0, 2))
+    owner_table.add_column(style="dim", no_wrap=True)
+    owner_table.add_column()
+    owner_table.add_row("Owner 状态", _status_text(health.get("status")))
+    owner_table.add_row("Feed", _status_text(health.get("feed_status")))
+    owner_table.add_row("Actor", str(health.get("actor_id") or "—"))
+    owner_table.add_row("Event sequence", str(health.get("event_sequence") or 0))
+    owner_table.add_row(
+        "Current view",
+        " · ".join(
+            (
+                f"input {health.get('current_view_input_update_count', 0)}",
+                f"commit {health.get('current_view_commit_count', 0)}",
+                f"encoded {health.get('current_view_encoded_update_count', 0)}",
+                f"order-book {health.get('current_view_order_book_encode_count', 0)}",
+            )
+        ),
+    )
+    latency_nanos = health.get("last_current_view_commit_latency_nanos")
+    owner_table.add_row(
+        "最近提交耗时",
+        "—" if latency_nanos is None else f"{int(latency_nanos) / 1_000_000:.3f} ms",
+    )
+    attempts = int(health.get("notification_attempt_count") or 0)
+    failures = int(health.get("notification_failure_count") or 0)
+    owner_table.add_row(
+        "通知",
+        f"attempts {attempts} · failures {failures}"
+        + (f" · error-rate {failures / attempts:.1%}" if attempts else ""),
+    )
+    return Group(
+        Panel(process_table, title="Market Runtime", border_style="cyan"),
+        Panel(owner_table, title="Market Data Plane", border_style="cyan"),
+    )
+
+
+def routes_renderable(result: Mapping[str, Any]) -> RenderableType:
+    routes = tuple(
+        value for value in result.get("routes", ()) if isinstance(value, Mapping)
+    )
+    summary: dict[tuple[str, str], int] = {}
+    for route in routes:
+        provider = str(route.get("provider") or "—")
+        state = str(route.get("state") or "unknown")
+        summary[(provider, state)] = summary.get((provider, state), 0) + 1
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Provider")
+    table.add_column("状态")
+    table.add_column("Routes", justify="right")
+    table.add_column("说明")
+    if summary:
+        for (provider, state), count in sorted(
+            summary.items(), key=lambda item: (item[0][0], item[0][1])
+        ):
+            selected = sum(
+                1
+                for route in routes
+                if str(route.get("provider") or "—") == provider
+                and str(route.get("state") or "unknown") == state
+                and route.get("selected")
+            )
+            observations = sorted(
+                {
+                    str(observation)
+                    for route in routes
+                    if str(route.get("provider") or "—") == provider
+                    and str(route.get("state") or "unknown") == state
+                    for observation in route.get("observation_kinds", ())
+                }
+            )
+            detail = ", ".join(observations) or "—"
+            if selected:
+                detail += f" · selected {selected}"
+            table.add_row(provider, state, str(count), detail)
+    else:
+        table.add_row("—", "无路由", "0", "—")
+    return Panel(
+        table, title=f"Market Provider Routes · {len(routes)}", border_style="cyan"
+    )
+
+
+def _mapping(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _status_text(value: object) -> Text:
+    label = str(value or "unknown")
+    normalized = label.lower()
+    style = (
+        "green"
+        if normalized in {"ready", "running", "active"}
+        else "red"
+        if normalized in {"degraded", "failed", "not_running", "disconnected"}
+        else "yellow"
+    )
+    return Text(label, style=style)
 
 
 def preview(prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
@@ -179,4 +308,6 @@ __all__ = [
     "execute",
     "equivalent_command",
     "preview",
+    "routes_renderable",
+    "status_renderable",
 ]

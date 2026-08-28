@@ -27,7 +27,10 @@ from kairospy.investment.apps.execution.application import (
     Fill,
 )
 from kairospy.strategy.api.execution import ExecutionEvent
-from kairospy.investment.apps.market.application import MarketApplication
+from kairospy.investment.apps.market.application import (
+    MarketApplication,
+    SubscriptionStatus,
+)
 from kairospy.strategy.apps.notification.application import NotificationApplication
 from kairospy.investment.apps.portfolio.application import PortfolioApplication
 from kairospy.investment.apps.reference.application import ReferenceApplication
@@ -41,6 +44,7 @@ from kairospy.primitives.time import Sequence
 from ..services.context import StrategyContext
 from ..services.callbacks import StrategyCallbackHost
 from ..services.ingress import StrategyEventIngress, StrategySourceError
+from ..services.python_control import StrategyPythonControl
 from kairospy.strategy.api import (
     EventMetadata,
     MarketEvent,
@@ -76,6 +80,9 @@ class StrategyStatus:
     last_event_kind: str | None = None
     event_count: int = 0
     subscriptions: tuple[Mapping[str, object], ...] = ()
+    streams: tuple[Mapping[str, object], ...] = ()
+    recent_events: tuple[Mapping[str, object], ...] = ()
+    market_notification: Mapping[str, object] | None = None
 
 
 class StrategyApplication:
@@ -173,6 +180,7 @@ class StrategyApplication:
         self._system_sequence = 0
         self._clock = StrategyClock(self._timers.schedule, self._timers.cancel)
         self.context.clock = self._clock
+        self.python_control = StrategyPythonControl(strategy, self.context)
         self.decisions = StrategyDecisionApplication(
             strategy_id=strategy.strategy_id,
             instance_id=instance_id,
@@ -195,6 +203,10 @@ class StrategyApplication:
         self._last_data_event: MarketEvent | None = None
         self.clock_events: list[dict[str, object]] = []
         self.event_trace: list[dict[str, object]] = []
+        self._stream_diagnostics: dict[
+            tuple[str, str, str | None, str | None], dict[str, object]
+        ] = {}
+        self._recent_events: deque[dict[str, object]] = deque(maxlen=50)
         self._trace_sequence = 0
         self._stream_sequences: dict[str, int] = {}
         self.backtest_fills: list[Fill] = []
@@ -202,6 +214,12 @@ class StrategyApplication:
 
     @property
     def status(self) -> StrategyStatus:
+        if self._status.state in {
+            StrategyLifecycle.READY,
+            StrategyLifecycle.RUNNING,
+            StrategyLifecycle.PAUSED,
+        }:
+            self._sync_market_diagnostics()
         return self._status
 
     @property
@@ -454,6 +472,7 @@ class StrategyApplication:
                 "source_stream_id": metadata.stream_id,
             }
         )
+        self._observe_stream_diagnostics(event, domain, metadata)
 
         # Source continuity belongs to the Market event contract. Strategy
         # records received source metadata but never reads a snapshot to join
@@ -572,9 +591,7 @@ class StrategyApplication:
             occurred_at_unix_nanos / 1_000_000_000,
             tz=timezone.utc,
         )
-        demand_id = CapitalDemandId(
-            f"risk:{requirement.risk_decision_id}:{order_id}"
-        )
+        demand_id = CapitalDemandId(f"risk:{requirement.risk_decision_id}:{order_id}")
         try:
             receipt = self.context.capital.observe_demand(
                 CapitalDemand(
@@ -590,9 +607,7 @@ class StrategyApplication:
                     observed_at=observed_at,
                     required_by=observed_at,
                     expires_at=observed_at + timedelta(seconds=60),
-                    account_watermark=Sequence(
-                        requirement.account_snapshot_watermark
-                    ),
+                    account_watermark=Sequence(requirement.account_snapshot_watermark),
                     risk_watermark=Sequence(
                         max(
                             reservation.risk_generation,
@@ -694,6 +709,10 @@ class StrategyApplication:
         self._command_active = True
         try:
             try:
+                if command.kind == "interactive.python":
+                    return await asyncio.wait_for(
+                        self.python_control.command(command), timeout=30.0
+                    )
                 return await self.callbacks.command(command)
             except Exception as error:
                 self._log(
@@ -711,6 +730,12 @@ class StrategyApplication:
                 )
         finally:
             self._command_active = False
+            if self._status.state in {
+                StrategyLifecycle.READY,
+                StrategyLifecycle.RUNNING,
+                StrategyLifecycle.PAUSED,
+            }:
+                self._sync_market_diagnostics()
             while (
                 self._queued_events and self._status.state is StrategyLifecycle.RUNNING
             ):
@@ -901,7 +926,13 @@ class StrategyApplication:
             return
         result = self.context.market.release_strategy_subscriptions()
         request_id = result.request_id
-        if result.status not in {"accepted", "applied", "completed", "removed", "ready"}:
+        if result.status not in {
+            "accepted",
+            "applied",
+            "completed",
+            "removed",
+            "ready",
+        }:
             raise RuntimeError(
                 result.error
                 or f"Market rejected subscription owner release: {result.status}"
@@ -937,28 +968,26 @@ class StrategyApplication:
                 error=str(error),
             )
 
-    def _refresh_dependencies(self) -> bool:
-        # Readiness belongs to each concrete business Application. Strategy
-        # neither opens Aeron itself nor consults indexed-view metadata.
-        self.context.account._check_event_source_ready()
-        self.context.portfolio.rebuild()
-        if self.context.account.account_ids:
-            self.context.portfolio.require_current()
-        self.context.risk.check_event_source_ready()
-        self.context.execution.check_event_source_ready()
+    def _sync_market_diagnostics(
+        self, *, log_status: bool = False, update_readiness: bool = False
+    ) -> dict[RequestId, SubscriptionStatus]:
         statuses = self.context.market.subscription_statuses()
         results = {status.request_id: status for status in statuses}
-        # A Market event stream is enabled only when this Strategy owns Market
-        # demand. Strategies with no Market subscription do not open a
-        # decorative stream merely for interface symmetry.
-        if results:
-            self.context.market.check_event_source_ready()
+        current_ids = set(results)
+        for request_id in self._subscription_requests - current_ids:
+            subscription = self._subscriptions.get(request_id)
+            if subscription is not None and subscription.get("status") != "removed":
+                subscription["status"] = "removed"
+        self._subscription_requests.intersection_update(current_ids)
+
         for request_id, result in results.items():
-            if request_id not in self._subscription_requests:
+            is_new = request_id not in self._subscription_requests
+            if is_new:
                 self._observe_subscription(result)
             subscription = self._subscriptions.setdefault(
                 request_id, {"request_id": str(request_id)}
             )
+            previous_status = subscription.get("status")
             response = cast(MarketSubscriptionResponse, result.response)
             response_summary = {
                 "subscription_id": str(response.subscription_id),
@@ -976,29 +1005,109 @@ class StrategyApplication:
                     "response": response_summary,
                 }
             )
-            self._log(
-                "market subscription status observed",
-                event="market_subscription_status",
-                request_id=request_id,
-                subscription_status=result.status,
-                error=result.error,
-                response=response_summary,
+            if log_status or is_new or previous_status != result.status:
+                self._log(
+                    "market subscription status observed",
+                    event="market_subscription_status",
+                    request_id=request_id,
+                    subscription_status=result.status,
+                    error=result.error,
+                    response=response_summary,
+                )
+
+        pending = sum(1 for result in results.values() if result.status != "active")
+        active = len(results) - pending
+        readiness = self._status.readiness
+        if update_readiness:
+            readiness = (
+                StrategyReadiness.WAITING_FOR_DEPENDENCIES
+                if pending
+                else StrategyReadiness.SUBSCRIPTIONS_ACTIVE
             )
+        self._status = replace(
+            self._status,
+            readiness=readiness,
+            subscription_count=len(results),
+            active_subscription_count=active,
+            subscriptions=tuple(dict(value) for value in self._subscriptions.values()),
+            market_notification=dict(self.context.market.notification_health()),
+        )
+        return results
+
+    def _observe_stream_diagnostics(
+        self, event: object, domain: str, metadata: object
+    ) -> None:
+        kind = str(getattr(event, "kind", "unknown"))
+        data = getattr(event, "data", None)
+        summary = _market_event_diagnostic_value(data) if domain == "market" else {}
+        scope_value = summary.get("scope")
+        scope = str(scope_value) if scope_value is not None else None
+        provider_value = summary.get("provider")
+        provider = str(provider_value) if provider_value is not None else None
+        key = (domain, kind, scope, provider)
+        occurred_at = _metadata_datetime(metadata)
+        occurred_at_value = None if occurred_at is None else occurred_at.isoformat()
+        diagnostic = self._stream_diagnostics.setdefault(
+            key,
+            {
+                "domain": domain,
+                "kind": kind,
+                "scope": scope,
+                "provider": provider,
+                "event_count": 0,
+                "first_event_time": occurred_at_value,
+            },
+        )
+        previous_count = diagnostic.get("event_count")
+        diagnostic["event_count"] = (
+            previous_count + 1
+            if isinstance(previous_count, int) and not isinstance(previous_count, bool)
+            else 1
+        )
+        diagnostic["last_event_time"] = occurred_at_value
+        diagnostic["last_source_sequence"] = int(getattr(metadata, "sequence"))
+        recent = {
+            "trace_sequence": self._trace_sequence,
+            "domain": domain,
+            "kind": kind,
+            "event_time": occurred_at_value,
+            "source_stream_id": str(getattr(metadata, "stream_id")),
+            "source_sequence": int(getattr(metadata, "sequence")),
+            "summary": summary,
+        }
+        self._recent_events.append(recent)
+        self._status = replace(
+            self._status,
+            streams=tuple(
+                dict(value)
+                for _, value in sorted(
+                    self._stream_diagnostics.items(),
+                    key=lambda item: tuple(str(part or "") for part in item[0]),
+                )
+            ),
+            recent_events=tuple(dict(value) for value in self._recent_events),
+        )
+
+    def _refresh_dependencies(self) -> bool:
+        # Readiness belongs to each concrete business Application. Strategy
+        # neither opens Aeron itself nor consults indexed-view metadata.
+        self.context.account._check_event_source_ready()
+        self.context.portfolio.rebuild()
+        if self.context.account.account_ids:
+            self.context.portfolio.require_current()
+        self.context.risk.check_event_source_ready()
+        self.context.execution.check_event_source_ready()
+        results = self._sync_market_diagnostics(log_status=True, update_readiness=True)
+        # A Market event stream is enabled only when this Strategy owns Market
+        # demand. Strategies with no Market subscription do not open a
+        # decorative stream merely for interface symmetry.
+        if results:
+            self.context.market.check_event_source_ready()
         pending = [
             request_id
             for request_id, result in results.items()
             if result.status != "active"
         ]
-        active = len(results) - len(pending)
-        self._status = replace(
-            self._status,
-            readiness=StrategyReadiness.WAITING_FOR_DEPENDENCIES
-            if pending
-            else StrategyReadiness.SUBSCRIPTIONS_ACTIVE,
-            subscription_count=len(results),
-            active_subscription_count=active,
-            subscriptions=tuple(dict(value) for value in self._subscriptions.values()),
-        )
         if pending:
             self._status = replace(
                 self._status,
@@ -1110,6 +1219,56 @@ def _market_event_log_value(data: object) -> dict[str, object]:
     if scope is not None:
         value["scope"] = _scope_log_value(scope)
     return value
+
+
+def _market_event_diagnostic_value(data: object) -> dict[str, object]:
+    """Create a bounded, JSON-safe summary of a typed Market observation."""
+
+    value: dict[str, object] = {}
+    for name in (
+        "instrument_id",
+        "provider",
+        "bar_spec_id",
+        "side",
+        "bid_price",
+        "ask_price",
+        "bid_quantity",
+        "ask_quantity",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "price",
+        "quantity",
+        "delta",
+        "gamma",
+        "theta",
+        "vega",
+    ):
+        field = getattr(data, name, None)
+        if field is not None:
+            value[name] = _diagnostic_scalar(field)
+    scope = getattr(data, "scope", None)
+    if scope is not None:
+        value["scope"] = _scope_diagnostic_value(scope)
+    return value
+
+
+def _diagnostic_scalar(value: object) -> object:
+    raw = getattr(value, "value", value)
+    if raw is None or isinstance(raw, (str, int, float, bool)):
+        return raw
+    return str(raw)
+
+
+def _scope_diagnostic_value(scope: object) -> str:
+    market_id = getattr(scope, "market_id", None)
+    if market_id is not None:
+        return str(market_id)
+    instrument_id = getattr(scope, "instrument_id", None)
+    network_id = getattr(scope, "network_id", None)
+    return f"consolidated:{instrument_id}:{network_id or '*'}"
 
 
 def _scope_log_value(scope: object) -> dict[str, object]:

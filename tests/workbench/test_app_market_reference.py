@@ -26,6 +26,13 @@ from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
 from kairospy.surface.workbench.screens.flows import market, reference
+from kairospy.surface.workbench.screens.flows.reference.actions import (
+    runtime_status_renderable,
+)
+from kairospy.surface.workbench.screens.flows.market.workspace import (
+    routes_renderable as workspace_routes_renderable,
+    status_renderable as workspace_status_renderable,
+)
 from kairospy.surface.workbench.screens.flows.market.actions import (
     MarketFilePromptState,
     file_result_renderable,
@@ -185,6 +192,197 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream(
     assert input_focused
     assert "找到 1 条交易标的记录" not in output
     assert status == "找到 1 个结果 · 请选择"
+
+
+def _reference_runtime_status() -> dict[str, object]:
+    return {
+        "status": "ready",
+        "app_runtime": {
+            "phase": "idle",
+            "active_work_item_count": 0,
+            "queued_work_item_count": 1,
+            "last_tick_finished_unix_nanos": 1_777_777_777_000_000_000,
+            "last_tick_duration_millis": 18,
+            "next_tick_due_unix_nanos": 1_777_777_837_000_000_000,
+        },
+        "catalog": {
+            "readiness": "ready",
+            "generation": 42,
+            "event_sequence": 9810,
+            "exchange_count": 4,
+            "asset_count": 20,
+            "instrument_count": 30,
+            "listing_count": 31,
+            "market_count": 32,
+            "active_market_count": 29,
+            "integrity": {"degraded": False},
+        },
+        "sources": [
+            {
+                "source_id": "binance-spot",
+                "provider_id": "binance",
+                "enabled": True,
+                "paused": False,
+                "phase": "ready",
+                "progress": {
+                    "kind": "completed",
+                    "pages_done": 2,
+                    "pages_total": 2,
+                    "records_seen": 1200,
+                    "records_changed": 3,
+                },
+                "last_success_unix_nanos": 1_777_777_777_000_000_000,
+                "consecutive_failures": 0,
+                "stale": False,
+            },
+            {
+                "source_id": "massive-options",
+                "provider_id": "massive",
+                "enabled": True,
+                "paused": False,
+                "phase": "retrying",
+                "progress": {"kind": "waiting"},
+                "last_success_unix_nanos": None,
+                "consecutive_failures": 2,
+                "stale": True,
+                "last_error": {
+                    "code": "reference.provider_failed",
+                    "retryable": True,
+                    "message": "HTTP 429",
+                },
+            },
+        ],
+        "publication": {
+            "pending_publication_count": 2,
+            "backlog_degraded": False,
+            "oldest_pending_event_id": "reference:42",
+        },
+        "diagnostics": [
+            {
+                "severity": "warning",
+                "code": "reference.source_retrying",
+                "message": "Massive source is retrying",
+            }
+        ],
+    }
+
+
+def test_reference_runtime_status_has_structured_owner_sections() -> None:
+    with Console(width=120, record=True) as console:
+        console.print(runtime_status_renderable(_reference_runtime_status()))
+    output = console.export_text()
+
+    assert "Reference Runtime" in output
+    assert "generation 42 · sequence 9810" in output
+    assert "binance-spot" in output
+    assert "massive-options" in output
+    assert output.index("massive-options") < output.index("binance-spot")
+    assert "HTTP 429 · 可重试" in output
+    assert "reference.source_retrying" in output
+
+
+def test_reference_status_runs_from_existing_reference_menu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        reference, "load_runtime_status", lambda _state: _reference_runtime_status()
+    )
+
+    async def run() -> tuple[str, str, bool]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(120, 34)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("2")
+            await pilot.pause()
+            screen.submit("/s")
+            await pilot.pause(0.1)
+            return (
+                _log_text(screen.query_one("#command-output", RichLog)),
+                str(screen.query_one("#command-status", Static).render()),
+                screen.query_one("#command-input", WorkbenchCommandInput).has_focus,
+            )
+
+    output, status, focused = asyncio.run(run())
+    assert "Reference Runtime" in output
+    assert "binance-spot" in output
+    assert status == "Reference 运行状态已就绪"
+    assert focused
+
+
+def test_workspace_market_status_visualizes_process_and_data_plane() -> None:
+    rendered = workspace_status_renderable(
+        {
+            "process": {
+                "status": "running",
+                "control_reachable": True,
+                "pid": 42,
+            },
+            "health": {
+                "status": "ready",
+                "feed_status": "ready",
+                "actor_id": "market-actor",
+                "event_sequence": 91,
+                "current_view_input_update_count": 90,
+                "current_view_commit_count": 80,
+                "current_view_encoded_update_count": 79,
+                "current_view_order_book_encode_count": 8,
+                "last_current_view_commit_latency_nanos": 2_500_000,
+                "notification_attempt_count": 90,
+                "notification_failure_count": 1,
+            },
+        }
+    )
+    with Console(width=110, record=True) as console:
+        console.print(rendered)
+    output = console.export_text()
+
+    assert "Market Runtime" in output
+    assert "Market Data Plane" in output
+    assert "market-actor" in output
+    assert "input 90 · commit 80 · encoded 79 · order-book 8" in output
+    assert "2.500 ms" in output
+    assert "failures 1" in output
+
+
+def test_workspace_market_routes_are_aggregated_by_provider_and_state() -> None:
+    rendered = workspace_routes_renderable(
+        {
+            "routes": [
+                {
+                    "market_id": "market:btc-usdt",
+                    "provider": "binance",
+                    "state": "ready",
+                    "selected": True,
+                    "observation_kinds": ["quote", "trade"],
+                },
+                {
+                    "market_id": "market:eth-usdt",
+                    "provider": "binance",
+                    "state": "ready",
+                    "selected": False,
+                    "observation_kinds": ["quote"],
+                },
+                {
+                    "market_id": "market:aapl",
+                    "provider": "massive",
+                    "state": "degraded",
+                    "selected": False,
+                    "observation_kinds": ["quote"],
+                },
+            ]
+        }
+    )
+    with Console(width=100, record=True) as console:
+        console.print(rendered)
+    output = console.export_text()
+
+    assert "Market Provider Routes · 3" in output
+    assert "binance" in output
+    assert "ready" in output
+    assert "quote, trade · selected 1" in output
+    assert "massive" in output
+    assert "degraded" in output
 
 
 def test_market_search_owns_action_area_until_results_are_ready(

@@ -24,41 +24,138 @@ from kairospy.contracts.reference import (
 )
 
 
-def test_reference_live_events_follow_the_single_synchronous_poll_path() -> None:
-    event = SimpleNamespace(
+def _reference_event(
+    sequence: int,
+    revision: int,
+    *,
+    incarnation: int = 2,
+    workspace_id: str = "workspace-a",
+    launch_id: str | None = None,
+    instance_id: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        catalog_revision=revision,
         metadata=SimpleNamespace(
             stream_id="reference.events",
             producer="reference",
-            producer_incarnation=2,
-            sequence=11,
-            launch_id="launch-a",
-            instance_id="instance-a",
-        )
+            producer_incarnation=incarnation,
+            sequence=sequence,
+            workspace_id=workspace_id,
+            launch_id=launch_id,
+            instance_id=instance_id,
+        ),
     )
+
+
+class _ReferenceSnapshot:
+    def __init__(self, generation: int, event_sequence: int) -> None:
+        self.generation = generation
+        self.event_sequence = event_sequence
+
+    def __enter__(self) -> _ReferenceSnapshot:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+class _ReferenceCatalogClient:
+    def __init__(self, snapshots: list[tuple[int, int]]) -> None:
+        self._snapshots = snapshots
+
+    def snapshot(self) -> _ReferenceSnapshot:
+        generation, event_sequence = self._snapshots.pop(0)
+        return _ReferenceSnapshot(generation, event_sequence)
+
+
+def test_reference_live_notifications_resync_the_workspace_catalog() -> None:
+    batches = [
+        [_reference_event(10, 4)],
+        [_reference_event(11, 5)],
+        [_reference_event(13, 6)],
+        [_reference_event(14, 7, incarnation=3)],
+    ]
 
     class LiveSource:
         closed = False
 
         def poll_visit(self, visitor, *, fragment_limit=64):
-            visitor(event)
-            return 1
+            batch = batches.pop(0)
+            for event in batch:
+                visitor(event)
+            return len(batch)
 
         def close(self):
             self.closed = True
 
     source = LiveSource()
     reference = ReferenceApplication(
+        _ReferenceCatalogClient([(4, 10), (6, 13), (7, 14)]),
         live_source=source,
-        launch_id="launch-a",
-        instance_id="instance-a",
+        workspace_id="workspace-a",
     )
     observed: list[object] = []
 
     assert reference.visit_live(observed.append) == 1
-    assert observed == [event]
-    assert reference.notification_health()["cursor"] == 11
+    assert observed == []  # The pinned snapshot covers the subscription race.
+    assert reference.visit_live(observed.append) == 1
+    assert [event.metadata.sequence for event in observed] == [11]
+    assert reference.visit_live(observed.append) == 1
+    assert reference.visit_live(observed.append) == 1
+    assert [event.metadata.sequence for event in observed] == [11]
+    assert reference.notification_health() == {
+        "cursor": 14,
+        "catalog_revision": 7,
+        "gap_count": 1,
+        "incarnation_change_count": 1,
+        "resync_count": 3,
+        "catalog_stale": False,
+    }
     reference.close_live()
     assert source.closed
+
+
+def test_reference_live_notifications_reject_instance_scope() -> None:
+    event = _reference_event(1, 1, launch_id="launch-a", instance_id="instance-a")
+
+    class LiveSource:
+        def poll_visit(self, visitor, *, fragment_limit=64):
+            visitor(event)
+            return 1
+
+        def close(self):
+            pass
+
+    reference = ReferenceApplication(
+        _ReferenceCatalogClient([(1, 1)]),
+        live_source=LiveSource(),
+        workspace_id="workspace-a",
+    )
+
+    with pytest.raises(RuntimeError, match="workspace-scoped"):
+        reference.visit_live(lambda _event: None)
+
+
+def test_reference_live_notifications_reject_a_trailing_catalog_snapshot() -> None:
+    event = _reference_event(8, 3)
+
+    class LiveSource:
+        def poll_visit(self, visitor, *, fragment_limit=64):
+            visitor(event)
+            return 1
+
+        def close(self):
+            pass
+
+    reference = ReferenceApplication(
+        _ReferenceCatalogClient([(2, 7)]),
+        live_source=LiveSource(),
+        workspace_id="workspace-a",
+    )
+
+    with pytest.raises(RuntimeError, match="trails its change notification"):
+        reference.visit_live(lambda _event: None)
+    assert reference.notification_health()["catalog_stale"] is True
 
 
 def _reference_database(tmp_path: Path) -> Path:

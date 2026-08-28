@@ -1627,11 +1627,7 @@ class CommandLineScreen(Screen[None]):
         if not isinstance(result, Mapping):
             self.session.strategy.attach_snapshot = Pretty(result, expand_all=True)
         else:
-            runtime = result.get("status")
-            instance = result.get("instance")
-            self.session.strategy.attach_snapshot = Pretty(
-                {"instance": instance, "status": runtime}, expand_all=True
-            )
+            self.session.strategy.attach_snapshot = launch_flow.attach_renderable(result)
         self._present_launch_control()
         if not isinstance(result, Mapping):
             return
@@ -2009,6 +2005,7 @@ def _activity_kind(kind: ResultKind) -> ActivityKind:
         ResultKind.MARKET_DATASETS,
         ResultKind.REFERENCE_RECORDS,
         ResultKind.REFERENCE_RELATED,
+        ResultKind.REFERENCE_STATUS,
         ResultKind.RESOURCES_SUMMARY,
         ResultKind.RESOURCE_LIST,
         ResultKind.OPERATIONS_SERVICES,

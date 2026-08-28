@@ -31,7 +31,9 @@ from .actions import (
     load_instrument_markets,
     load_records,
     load_related,
+    load_runtime_status,
     records_renderable,
+    runtime_status_renderable,
 )
 from ...navigation import (
     action_id,
@@ -70,6 +72,8 @@ def handle_command(
     if not command.startswith("reference:"):
         return None
     kind = command.removeprefix("reference:")
+    if kind == "status":
+        return (_run_status(state),)
     if kind not in {
         "assets",
         "exchanges",
@@ -149,6 +153,8 @@ def handle_context(
     action = action_id(SECTION_ACTIONS["reference"], command)
     if action is None:
         return None
+    if action == "status":
+        return (_run_status(state),)
     if action == "instruments":
         session.reference.kind = action
         session.reference.instrument_type = None
@@ -174,6 +180,12 @@ def handle_success(
     state: Any, session: GuidedSession, spec: OperationSpec, result: Any
 ) -> tuple[ScreenEffect, ...] | None:
     kind = spec.route.kind
+    if kind is ResultKind.REFERENCE_STATUS:
+        body = runtime_status_renderable(result)
+        return (
+            _activity(spec, body),
+            *_choice(state, session, status="Reference 运行状态已就绪"),
+        )
     if kind is ResultKind.REFERENCE_RECORDS:
         reference_kind = spec.route.qualifier
         assert reference_kind is not None
@@ -241,6 +253,18 @@ def _run_search(
                 state, kind, query, instrument_type=instrument_type
             ),
             status="正在查找 Reference 记录…",
+        )
+    )
+
+
+def _run_status(state: Any) -> RunOperation:
+    return RunOperation(
+        _spec(
+            action_name="reference.status",
+            summary="查看 Reference 运行状态",
+            route=ResultRoute(ResultKind.REFERENCE_STATUS),
+            operation=lambda: load_runtime_status(state),
+            status="正在读取 Reference 运行状态…",
         )
     )
 
@@ -342,7 +366,13 @@ def _show_record_choices(
     )
 
 
-_RESULT_KINDS = frozenset({ResultKind.REFERENCE_RECORDS, ResultKind.REFERENCE_RELATED})
+_RESULT_KINDS = frozenset(
+    {
+        ResultKind.REFERENCE_RECORDS,
+        ResultKind.REFERENCE_RELATED,
+        ResultKind.REFERENCE_STATUS,
+    }
+)
 
 
 __all__ = [

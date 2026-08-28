@@ -98,21 +98,26 @@ class ReferenceApplication:
         client: Any | None = None,
         *,
         live_source: LiveEventSource[ReferenceEventVariant] | None = None,
-        launch_id: str | None = None,
-        instance_id: str | None = None,
+        workspace_id: str | None = None,
         generation: int | None = None,
         event_sequence: int | None = None,
     ) -> None:
+        if live_source is not None and client is None:
+            raise ValueError("Live Reference notifications require a catalog client")
+        if live_source is not None and not workspace_id:
+            raise ValueError("Live Reference notifications require a workspace_id")
         self._client = client
         self._live_source = live_source
-        self._launch_id = launch_id
-        self._instance_id = instance_id
+        self._workspace_id = workspace_id
         self._generation = generation
         self._event_sequence = event_sequence
-        self._live_cursor = 0
+        self._live_cursor = 0 if event_sequence is None else event_sequence
         self._live_cursor_key: tuple[str, str, int] | None = None
+        self._live_initialized = False
         self._notification_gap_count = 0
         self._notification_incarnation_change_count = 0
+        self._notification_resync_count = 0
+        self._catalog_stale = False
 
     def visit_live(
         self,
@@ -125,46 +130,107 @@ class ReferenceApplication:
         if self._live_source is None:
             return 0
         cursor = self._live_cursor
+        generation = 0 if self._generation is None else self._generation
+        observed_sequence = cursor
+        observed_generation = generation
+        observed_cursor_key = self._live_cursor_key
+        requires_resync = False
 
         def accept(event: ReferenceEventVariant) -> None:
-            nonlocal cursor
+            nonlocal cursor, generation, requires_resync
+            nonlocal observed_sequence, observed_generation, observed_cursor_key
             metadata = event.metadata
             if metadata.stream_id != "reference.events":
                 raise RuntimeError(
                     f"Reference event stream identity is invalid: {metadata.stream_id}"
                 )
-            if self._launch_id is not None and metadata.launch_id != self._launch_id:
-                raise RuntimeError("Reference event belongs to another launch")
-            if self._instance_id is not None and metadata.instance_id != self._instance_id:
-                raise RuntimeError("Reference event belongs to another launch instance")
+            if str(metadata.workspace_id) != self._workspace_id:
+                raise RuntimeError("Reference event belongs to another workspace")
+            if metadata.launch_id is not None or metadata.instance_id is not None:
+                raise RuntimeError("Reference event must be workspace-scoped")
             cursor_key = (
                 metadata.stream_id,
                 str(metadata.producer),
                 int(metadata.producer_incarnation),
             )
             sequence = int(metadata.sequence)
-            if self._live_cursor_key is not None and cursor_key != self._live_cursor_key:
+            catalog_revision = int(event.catalog_revision)
+            observed_sequence = max(observed_sequence, sequence)
+            observed_generation = max(observed_generation, catalog_revision)
+            observed_cursor_key = cursor_key
+            if not self._live_initialized or requires_resync:
+                return
+            if (
+                self._live_cursor_key is not None
+                and cursor_key != self._live_cursor_key
+            ):
                 self._notification_incarnation_change_count += 1
-                cursor = sequence - 1
-            elif self._live_cursor_key is None:
-                cursor = sequence - 1
-            self._live_cursor_key = cursor_key
+                requires_resync = True
+                return
             if sequence <= cursor:
+                if catalog_revision > generation:
+                    requires_resync = True
                 return
             if sequence != cursor + 1:
                 self._notification_gap_count += 1
+                requires_resync = True
+                return
+            if catalog_revision not in (generation, generation + 1):
+                requires_resync = True
+                return
             cursor = sequence
+            generation = catalog_revision
             self._live_cursor = sequence
+            self._event_sequence = sequence
+            self._generation = catalog_revision
+            self._live_cursor_key = cursor_key
             visitor(event)
 
-        return self._live_source.poll_visit(accept, fragment_limit=fragment_limit)
+        count = self._live_source.poll_visit(accept, fragment_limit=fragment_limit)
+        if not self._live_initialized or requires_resync:
+            self._resync_live_catalog(
+                observed_sequence=observed_sequence,
+                observed_generation=observed_generation,
+                cursor_key=observed_cursor_key,
+            )
+            self._live_initialized = True
+        return count
 
-    def notification_health(self) -> dict[str, int]:
+    def notification_health(self) -> dict[str, int | bool]:
         return {
             "cursor": self._live_cursor,
+            "catalog_revision": 0 if self._generation is None else self._generation,
             "gap_count": self._notification_gap_count,
             "incarnation_change_count": self._notification_incarnation_change_count,
+            "resync_count": self._notification_resync_count,
+            "catalog_stale": self._catalog_stale,
         }
+
+    def _resync_live_catalog(
+        self,
+        *,
+        observed_sequence: int,
+        observed_generation: int,
+        cursor_key: tuple[str, str, int] | None,
+    ) -> None:
+        client = self._require_client()
+        snapshot_factory = getattr(client, "snapshot", None)
+        if snapshot_factory is None:
+            raise RuntimeError("Reference client does not support snapshot reads")
+        with snapshot_factory() as query:
+            generation = int(query.generation)
+            event_sequence = int(query.event_sequence)
+        if generation < observed_generation or event_sequence < observed_sequence:
+            self._catalog_stale = True
+            raise RuntimeError(
+                "Reference catalog snapshot trails its change notification"
+            )
+        self._generation = generation
+        self._event_sequence = event_sequence
+        self._live_cursor = event_sequence
+        self._live_cursor_key = cursor_key
+        self._notification_resync_count += 1
+        self._catalog_stale = False
 
     def close_live(self) -> None:
         if self._live_source is not None:
@@ -211,6 +277,9 @@ class ReferenceApplication:
     def health(self) -> dict[str, Any]:
         return dict(self._require_client().health())
 
+    def runtime_status(self) -> dict[str, Any]:
+        return dict(self._require_client().runtime_status())
+
     def providers(self) -> dict[str, Any]:
         return dict(self._require_client().providers())
 
@@ -226,9 +295,7 @@ class ReferenceApplication:
     def option_coverage(self) -> dict[str, Any]:
         return dict(self._require_client().option_coverage())
 
-    def set_option_underlying(
-        self, underlying: str, enabled: bool
-    ) -> dict[str, Any]:
+    def set_option_underlying(self, underlying: str, enabled: bool) -> dict[str, Any]:
         return dict(self._require_client().set_option_underlying(underlying, enabled))
 
     @contextmanager
@@ -268,7 +335,9 @@ class ReferenceApplication:
 
     def exchange(self, exchange_id: str) -> ReferenceExchange | None:
         return _optional_one(
-            self.find_exchanges(exchange_ids=(exchange_id,), limit=2), "exchange", exchange_id
+            self.find_exchanges(exchange_ids=(exchange_id,), limit=2),
+            "exchange",
+            exchange_id,
         )
 
     def require_exchange(self, exchange_id: str) -> ReferenceExchange:
