@@ -9,6 +9,7 @@ from .api import (
     Bar,
     BarEvent,
     MarketEvent,
+    PriceLike,
     Quote,
     QuoteEvent,
     SPOT,

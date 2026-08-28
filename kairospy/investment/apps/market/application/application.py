@@ -12,6 +12,7 @@ from kairospy.investment.apps.reference.application import (
     Market,
 )
 from kairospy.primitives.reference import InstrumentId, MarketId
+from kairospy.primitives.decimal import DecimalValue
 
 from kairospy.infrastructure.contracts.market.events import (
     MarketEvent as NativeMarketEvent,
@@ -38,7 +39,6 @@ if TYPE_CHECKING:
         MarketEvent,
         OptionGreeks,
         Quote,
-        Trade,
     )
 
 
@@ -135,7 +135,8 @@ class MarketApplication:
         self._launch_id = launch_id
         self._event_sequence: int | None = None
         self._event_occurred_at_unix_nanos: int | None = None
-        self._latest_trades: dict[str, object] = {}
+        self._notification_gap_count = 0
+        self._notification_incarnation_change_count = 0
         self._event_source_ready = event_source is None
         self._request_counter = 0
         self._handles: dict[str, Any] = {}
@@ -188,9 +189,7 @@ class MarketApplication:
             if self._launch_id is not None and record.instance_id != self._instance_id:
                 raise RuntimeError("Market event belongs to another launch instance")
             if self._event_cursor_key is not None and cursor_key != self._event_cursor_key:
-                # Market current values are read through the owner view. Drop the
-                # only event-derived cache before accepting the restarted producer.
-                self._latest_trades.clear()
+                self._notification_incarnation_change_count += 1
                 cursor = sequence - 1
             elif self._event_cursor_key is None:
                 cursor = sequence - 1 if live else cursor
@@ -201,17 +200,31 @@ class MarketApplication:
                 continue
             expected = cursor + 1
             if sequence != expected:
-                raise EventStreamGap(stream_id, expected, sequence)
+                if not live:
+                    raise EventStreamGap(stream_id, expected, sequence)
+                self._notification_gap_count += 1
             cursor = sequence
             self._event_cursor = cursor
             if record.kind not in {"bar", "quote", "trade", "greeks"}:
                 continue
             event = cast("MarketEvent", record)
-            if event.kind == "trade":
-                trade = cast("Trade", event.data)
-                self._latest_trades[_scope_key(trade.scope)] = trade
             if self._matches_subscription(event):
                 yield event
+
+    def notification_health(self) -> dict[str, object]:
+        """Return diagnostics for the non-authoritative live notification path."""
+
+        return {
+            "cursor": self._event_cursor,
+            "producer": None
+            if self._event_cursor_key is None
+            else self._event_cursor_key[1],
+            "producer_incarnation": None
+            if self._event_cursor_key is None
+            else self._event_cursor_key[2],
+            "gap_count": self._notification_gap_count,
+            "incarnation_change_count": self._notification_incarnation_change_count,
+        }
 
     @property
     def events_replayable(self) -> bool:
@@ -413,16 +426,6 @@ class MarketApplication:
             raise TypeError("Market quote view returned a non-native value")
         return cast("Quote", value)
 
-    def latest_trade(self, market: Market | MarketId) -> Trade | None:
-        """Return the latest consumed trade event.
-
-        Trade is event-only in Market v2 and has no indexed current-view
-        resource. The result is therefore available after the event stream has
-        delivered a trade, rather than through an aggregate snapshot read.
-        """
-
-        return cast("Trade | None", self._latest_trades.get(str(_market_id(market))))
-
     def latest_greeks(
         self,
         market: Market | MarketId,
@@ -596,8 +599,8 @@ def _market_id(value: Market | MarketId) -> MarketId:
 
 
 def _quote_midpoint(quote: Quote) -> Decimal:
-    bid = _native_decimal(quote.bid_price)
-    ask = _native_decimal(quote.ask_price)
+    bid = _decimal_value(quote.bid_price)
+    ask = _decimal_value(quote.ask_price)
     if bid is not None and ask is not None:
         return (bid + ask) / Decimal("2")
     if bid is not None:
@@ -607,12 +610,10 @@ def _quote_midpoint(quote: Quote) -> Decimal:
     raise RuntimeError("around_spot option subscription requires a priced quote")
 
 
-def _native_decimal(value: object | None) -> Decimal | None:
+def _decimal_value(value: DecimalValue | None) -> Decimal | None:
     if value is None:
         return None
-    return Decimal(int(getattr(value, "mantissa"))).scaleb(
-        -int(getattr(value, "scale"))
-    )
+    return value.value
 
 
 def _request_accepts_scope(

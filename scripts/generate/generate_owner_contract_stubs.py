@@ -35,6 +35,173 @@ RETURN_TYPES = {
     ("capital", "CapitalControlClient", "query_capital_availability"): "CapitalAvailabilityResponse",
     ("capital", "CapitalControlClient", "reconcile_capital_plan"): "ReconcileCapitalPlanResponse",
 }
+STUB_IMPORTS = {
+    "account": (
+        "from kairospy.primitives.decimal import MoneyLike, PriceLike, QuantityLike, SignedQuantityLike",
+        "from kairospy.primitives.account import AccountIdRead, SegmentKeyRead",
+        "from kairospy.primitives.execution import OrderIdRead",
+        "from kairospy.primitives.reference import AssetIdRead, InstrumentIdRead, MarketIdRead",
+        "from kairospy.primitives.runtime import RequestIdRead",
+    ),
+    "capital": (
+        "from kairospy.primitives.decimal import QuantityLike",
+        "from kairospy.primitives.account import AccountIdRead, BrokerIdRead, SegmentKeyRead",
+        "from kairospy.primitives.capital import CapitalDemandIdRead, CapitalGroupIdRead, CapitalPlanIdRead, CapitalReservationIdRead, FundingObjectiveIdRead",
+        "from kairospy.primitives.runtime import RequestIdRead, StrategyIdRead",
+    ),
+    "reference": (
+        "from kairospy.primitives.decimal import MoneyLike, PriceLike, QuantityLike, RateLike",
+        "from kairospy.primitives.reference import AssetIdRead, ExchangeIdRead, InstrumentIdRead, ListingIdRead, MarketIdRead, SymbolRead",
+    ),
+}
+IDENTITY_PROPERTY_TYPES = {
+    "account": {
+        "account_id": "AccountIdRead",
+        "segment_key": "SegmentKeyRead",
+        "instrument_id": "InstrumentIdRead",
+        "order_id": "OrderIdRead",
+        "asset": "AssetIdRead",
+        "asset_id": "AssetIdRead",
+        "market_id": "MarketIdRead | None",
+        "request_id": "RequestIdRead",
+    },
+    "capital": {
+        "account_id": "AccountIdRead",
+        "broker": "BrokerIdRead",
+        "segment": "SegmentKeyRead",
+        "capital_group_id": "CapitalGroupIdRead",
+        "objective_id": "FundingObjectiveIdRead",
+        "demand_id": "CapitalDemandIdRead",
+        "plan_id": "CapitalPlanIdRead",
+        "reservation_id": "CapitalReservationIdRead",
+        "request_id": "RequestIdRead",
+        "strategy_id": "StrategyIdRead",
+    },
+    "reference": {
+        "asset_id": "AssetIdRead",
+        "base_asset_id": "AssetIdRead | None",
+        "quote_asset_id": "AssetIdRead | None",
+        "exchange_id": "ExchangeIdRead",
+        "instrument_id": "InstrumentIdRead",
+        "underlying_instrument_id": "InstrumentIdRead | None",
+        "listing_id": "ListingIdRead | None",
+        "market_id": "MarketIdRead | None",
+        "symbol": "SymbolRead",
+    },
+}
+PROPERTY_TYPES = {
+    ("account", class_name, field): value_type
+    for class_name, fields in {
+        "AccountBalanceCurrent": {
+            "available": "QuantityLike",
+            "reserved": "QuantityLike",
+            "total": "QuantityLike",
+        },
+        "AccountBalanceEvent": {
+            "available": "QuantityLike",
+            "borrowed": "QuantityLike",
+            "interest": "QuantityLike",
+            "locked": "QuantityLike",
+            "total": "QuantityLike",
+        },
+        "AccountCollateralCurrent": {
+            "available": "QuantityLike",
+            "borrowed": "QuantityLike",
+            "interest": "QuantityLike",
+            "locked": "QuantityLike",
+            "total": "QuantityLike",
+        },
+        "AccountEarnHoldingCurrent": {
+            "principal": "QuantityLike",
+            "redeemable": "QuantityLike",
+        },
+        "AccountEarnHoldingEvent": {
+            "principal": "QuantityLike",
+            "redeemable": "QuantityLike",
+        },
+        "AccountObservedOrderCurrent": {
+            "filled_quantity": "QuantityLike",
+            "quantity": "QuantityLike",
+        },
+        "AccountObservedOrderEvent": {
+            "filled_quantity": "QuantityLike",
+            "quantity": "QuantityLike",
+        },
+        "AccountPositionCurrent": {
+            "average_price": "PriceLike | None",
+            "quantity": "SignedQuantityLike",
+            "unrealized_pnl": "MoneyLike | None",
+        },
+        "AccountPositionEvent": {
+            "average_price": "PriceLike | None",
+            "mark_price": "PriceLike | None",
+            "quantity": "SignedQuantityLike",
+            "realized_pnl": "MoneyLike",
+            "unrealized_pnl": "MoneyLike",
+        },
+        "AccountSegmentCurrent": {"equity": "MoneyLike"},
+        "AccountValuationEvent": {"equity": "MoneyLike"},
+    }.items()
+    for field, value_type in fields.items()
+}
+PROPERTY_TYPES.update(
+    {
+        ("capital", class_name, field): "QuantityLike" + optional
+        for class_name, fields in {
+            "PublishFundingObjectiveRequest": {"desired_available": ""},
+            "ObserveCapitalDemandRequest": {"observed_shortfall": ""},
+            "CapitalAvailabilityResponse": {
+                "policy_minimum": "",
+                "policy_default_target": "",
+                "policy_maximum": "",
+                "desired_target": "",
+                "observed_available": "",
+                "effective_target": "",
+                "deficit": "",
+            },
+            "FundingHorizon": {"desired_available": ""},
+            "CapitalAvailability": {
+                "desired_target": "",
+                "observed_available": "",
+                "effective_target": "",
+                "deficit": "",
+            },
+            "FundingObjective": {"desired_available": ""},
+            "CapitalDemand": {"observed_shortfall": ""},
+            "CapitalPolicy": {
+                "minimum": "",
+                "default_target": "",
+                "maximum": "",
+                "stress_buffer": "",
+                "minimum_movement": "",
+                "hysteresis": "",
+            },
+            "CapitalEarnHolding": {"principal": "", "redeemable_amount": ""},
+            "CapitalFacts": {"observed_available": "", "risk_capacity": ""},
+            "CapitalPlan": {
+                "amount": "",
+                "source_observed_available": "",
+                "destination_observed_available": "",
+                "redemption_observed_available": " | None",
+                "earn_principal_before": "",
+            },
+            "CapitalRoute": {"per_operation_limit": "", "daily_limit": ""},
+            "CapitalReservation": {"amount": ""},
+        }.items()
+        for field, optional in fields.items()
+    }
+)
+PROPERTY_TYPES.update(
+    {
+        ("reference", "ReferenceInstrument", "strike"): "PriceLike | None",
+        ("reference", "ReferenceListing", "listing_id"): "ListingIdRead",
+        ("reference", "ReferenceMarket", "price_tick"): "PriceLike | None",
+        ("reference", "ReferenceMarket", "quantity_tick"): "QuantityLike | None",
+        ("reference", "ReferenceMarket", "minimum_quantity"): "QuantityLike | None",
+        ("reference", "ReferenceMarket", "minimum_notional"): "MoneyLike | None",
+        ("reference", "ReferenceMarket", "contract_size"): "RateLike | None",
+    }
+)
 
 
 def _signature(value: object) -> str:
@@ -77,10 +244,14 @@ def _render_class(owner: str, name: str, value: type[object]) -> list[str]:
             if member_name.startswith("_"):
                 continue
             if inspect.isgetsetdescriptor(member):
+                result = PROPERTY_TYPES.get(
+                    (owner, name, member_name),
+                    IDENTITY_PROPERTY_TYPES.get(owner, {}).get(member_name, "object"),
+                )
                 members.extend(
                     (
                         "    @property",
-                        f"    def {member_name}(self) -> object: ...",
+                        f"    def {member_name}(self) -> {result}: ...",
                     )
                 )
             elif inspect.ismethoddescriptor(member):
@@ -104,6 +275,7 @@ def render(owner: str) -> str:
     lines = [
         "# Generated by scripts/generate/generate_owner_contract_stubs.py.",
         "# Do not edit by hand.",
+        *STUB_IMPORTS.get(owner, ()),
         "",
     ]
     for name, value in _classes(module):

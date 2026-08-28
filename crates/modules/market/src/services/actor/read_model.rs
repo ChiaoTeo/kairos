@@ -5,6 +5,14 @@ use crate::domain::source::derive_readiness;
 use crate::domain::view::MarketView;
 
 impl MarketActor {
+    pub(crate) fn actor_id(&self) -> &str {
+        &self.actor_id
+    }
+
+    pub(crate) fn order_books(&self) -> &std::collections::BTreeMap<String, crate::OrderBook> {
+        &self.order_books
+    }
+
     pub fn current_view(&self) -> MarketView {
         MarketView {
             actor_id: ActorId::new(self.actor_id.clone()).expect("validated actor ID"),

@@ -5,6 +5,6 @@ pub use indexed::{
     ACCOUNT_MAP_SIZE, ACCOUNT_OBSERVED_ORDERS_DATABASE, ACCOUNT_POSITIONS_DATABASE,
     ACCOUNT_RESOURCE_EPOCH, ACCOUNT_SEGMENTS_DATABASE, ACCOUNT_VALUATIONS_DATABASE,
     AccountIndexedSnapshot, AccountIndexedView, AccountIndexedViewValue,
-    account_indexed_environment_path, account_indexed_identity, account_indexed_key,
-    account_indexed_schema_set,
+    AccountIndexedViewValueRef, account_indexed_environment_path, account_indexed_identity,
+    account_indexed_key, account_indexed_schema_set,
 };

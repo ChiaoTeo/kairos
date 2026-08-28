@@ -4,6 +4,10 @@ use super::{OrderBook, OrderBookDelta, PriceLevel};
 
 impl OrderBook {
     pub fn apply_delta(&mut self, delta: OrderBookDelta) -> Result<(), String> {
+        self.apply_delta_ref(&delta)
+    }
+
+    pub(crate) fn apply_delta_ref(&mut self, delta: &OrderBookDelta) -> Result<(), String> {
         if !self.synchronized {
             return Err("order book is not synchronized; snapshot is required".into());
         }
@@ -30,24 +34,27 @@ impl OrderBook {
                 expected, delta.last_sequence
             ));
         }
-        apply_levels(&mut self.bids, delta.bids);
-        apply_levels(&mut self.asks, delta.asks);
+        apply_levels(&mut self.bids, &delta.bids);
+        apply_levels(&mut self.asks, &delta.asks);
         self.apply_depth_policy();
         self.sequence = delta.last_sequence;
         self.cursor.last_sequence = delta.last_sequence;
-        self.checksum = delta.checksum.or_else(|| Some(self.canonical_checksum()));
+        self.checksum = delta
+            .checksum
+            .clone()
+            .or_else(|| Some(self.canonical_checksum()));
         self.cursor.checksum = self.checksum.clone();
         self.event_time_unix_nanos = delta.event_time_unix_nanos;
         Ok(())
     }
 }
 
-fn apply_levels(levels: &mut Vec<PriceLevel>, updates: Vec<PriceLevel>) {
+fn apply_levels(levels: &mut Vec<PriceLevel>, updates: &[PriceLevel]) {
     for update in updates {
         if let Some(existing) = levels.iter_mut().find(|level| level.price == update.price) {
             existing.quantity = update.quantity;
         } else if !update.quantity.is_zero() {
-            levels.push(update);
+            levels.push(update.clone());
         }
     }
     levels.retain(|level| !level.quantity.is_zero());

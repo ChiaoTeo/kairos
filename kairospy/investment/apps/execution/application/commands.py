@@ -5,6 +5,14 @@ from __future__ import annotations
 from decimal import Decimal
 import time
 
+from kairospy.primitives.decimal import (
+    Money,
+    PriceLike,
+    Quantity,
+    QuantityLike,
+    SignedQuantityLike,
+)
+
 from kairospy.infrastructure.contracts.execution import (
     ExecutionControlClient,
     ExecutionControlRejectedError,
@@ -59,7 +67,7 @@ class ExecutionCommandClient:
         launch_id: str,
         default_segment: str = "spot",
         allow_trading: bool = True,
-        max_order_notional: Decimal | None = None,
+        max_order_notional: Money | None = None,
         require_limit_orders: bool = False,
     ) -> None:
         if not workspace_id.strip() or not launch_id.strip():
@@ -69,7 +77,9 @@ class ExecutionCommandClient:
         self.launch_id = launch_id
         self.default_segment = default_segment
         self.allow_trading = allow_trading
-        self.max_order_notional = max_order_notional
+        self.max_order_notional = (
+            None if max_order_notional is None else Money(max_order_notional)
+        )
         self.require_limit_orders = require_limit_orders
 
     def target_position(
@@ -139,8 +149,8 @@ class ExecutionCommandClient:
             instrument_id=instrument_id,
             market_id=instrument_id,
             side=request.side.value,
-            quantity=_decimal(request.quantity),
-            limit_price=None if limit_price is None else _decimal(limit_price),
+            quantity=request.quantity,
+            limit_price=limit_price,
             options=options,
         )
         intent = ExecutionIntentRequest(
@@ -151,7 +161,7 @@ class ExecutionCommandClient:
             instrument_id=instrument_id,
             account_ids=[account_id],
             segment_key=segment_key,
-            target_quantity="0",
+            target_quantity=Quantity("0"),
             reason=request.reason,
             intent_type="single_order",
             algorithm=ExecutionAlgorithmPolicyRequest.immediate(),
@@ -215,10 +225,8 @@ class ExecutionCommandClient:
             )
         )
         contract = ContractReplaceOrderRequest(
-            quantity=None if request.quantity is None else _decimal(request.quantity),
-            limit_price=(
-                None if request.limit_price is None else _decimal(request.limit_price)
-            ),
+            quantity=request.quantity,
+            limit_price=request.limit_price,
             options=options,
             reason=request.reason,
         )
@@ -381,8 +389,8 @@ class ExecutionCommandClient:
         request_id: str,
         instance_id: str,
         *,
-        quantity: Decimal | None = None,
-        limit_price: Decimal | None = None,
+        quantity: QuantityLike | SignedQuantityLike | None = None,
+        limit_price: PriceLike | None = None,
     ) -> CommandHandle | None:
         if not instance_id.strip():
             return CommandHandle(
@@ -406,7 +414,8 @@ class ExecutionCommandClient:
             self.max_order_notional is not None
             and quantity is not None
             and limit_price is not None
-            and abs(quantity * limit_price) > self.max_order_notional
+            and abs(quantity.value * limit_price.value)
+            > self.max_order_notional.value
         ):
             return CommandHandle(
                 request_id,
@@ -496,8 +505,8 @@ def _target_intent(
         execution_route_id=request.execution_route_id,
         account_ids=account_ids,
         segment_key=request.segment_key,
-        target_quantity=_decimal(request.quantity),
-        limit_price=None if request.limit_price is None else _decimal(request.limit_price),
+        target_quantity=request.quantity,
+        limit_price=request.limit_price,
         source_snapshot_id=request.source_snapshot_id,
         source_event_sequence=request.source_event_sequence,
         source_event_time_unix_nanos=request.source_event_time_unix_nanos,
@@ -530,8 +539,8 @@ def _pair_intent(
                 instrument_id=leg.instrument_id,
                 execution_route_id=leg.execution_route_id,
                 side=leg.side,
-                quantity=_decimal(leg.quantity),
-                limit_price=None if leg.limit_price is None else _decimal(leg.limit_price),
+                quantity=leg.quantity,
+                limit_price=leg.limit_price,
                 options=_options(leg.split, leg.maker),
             )
         )
@@ -544,7 +553,7 @@ def _pair_intent(
         instrument_id=request.first.instrument_id,
         account_ids=account_ids,
         segment_key=request.first.segment_key,
-        target_quantity="0",
+        target_quantity=Quantity("0"),
         reason=request.reason,
         intent_type="pair_arbitrage",
         algorithm=_algorithm(request.algorithm),
@@ -579,8 +588,8 @@ def _option_intent(
             market_id=leg.market_id,
             execution_route_id=leg.execution_route_id,
             side=leg.side,
-            quantity=_decimal(leg.quantity),
-            limit_price=None if leg.limit_price is None else _decimal(leg.limit_price),
+            quantity=leg.quantity,
+            limit_price=leg.limit_price,
             options=_options(None, None),
         )
         for leg in (request.short_leg, request.long_leg)
@@ -596,7 +605,7 @@ def _option_intent(
         execution_route_id=request.short_leg.execution_route_id,
         account_ids=[request.account_id],
         segment_key="options",
-        target_quantity="0",
+        target_quantity=Quantity("0"),
         source_snapshot_id=request.source_snapshot_id,
         source_event_sequence=request.source_event_sequence,
         source_event_time_unix_nanos=request.source_event_time_unix_nanos,
@@ -609,8 +618,8 @@ def _option_intent(
         legs=legs,
         execution_benchmarks=_benchmarks(request.execution_benchmarks),
         deadline_unix_nanos=request.deadline_unix_nanos,
-        minimum_net_credit=_decimal(request.minimum_net_credit),
-        maximum_loss=_decimal(request.maximum_loss),
+        minimum_net_credit=request.minimum_net_credit,
+        maximum_loss=request.maximum_loss,
     )
 
 
@@ -635,8 +644,8 @@ def _portfolio_intent(
                 instrument_id=target.instrument_id,
                 execution_route_id=target.execution_route_id,
                 side="buy",
-                quantity=_decimal(target.quantity),
-                limit_price=None if target.limit_price is None else _decimal(target.limit_price),
+                quantity=target.quantity,
+                limit_price=target.limit_price,
                 target_position=True,
                 options=_options(target.split, target.maker),
             )
@@ -651,7 +660,7 @@ def _portfolio_intent(
         instrument_id=first.instrument_id,
         account_ids=account_ids,
         segment_key=first.segment_key,
-        target_quantity="0",
+        target_quantity=Quantity("0"),
         reason=request.reason,
         intent_type="portfolio_rebalance",
         algorithm=_algorithm(request.algorithm),
@@ -681,8 +690,8 @@ def _quote_intent(
             market_id=request.market_id,
             execution_route_id=request.execution_route_id,
             side="buy",
-            quantity=_decimal(request.bid_quantity),
-            limit_price=_decimal(request.bid_price),
+            quantity=request.bid_quantity,
+            limit_price=request.bid_price,
             options=options,
         ),
         IntentLegRequest(
@@ -693,8 +702,8 @@ def _quote_intent(
             market_id=request.market_id,
             execution_route_id=request.execution_route_id,
             side="sell",
-            quantity=_decimal(request.ask_quantity),
-            limit_price=_decimal(request.ask_price),
+            quantity=request.ask_quantity,
+            limit_price=request.ask_price,
             options=options,
         ),
     ]
@@ -709,7 +718,7 @@ def _quote_intent(
         execution_route_id=request.execution_route_id,
         account_ids=[request.account_id],
         segment_key=request.segment_key,
-        target_quantity="0",
+        target_quantity=Quantity("0"),
         reason=request.reason,
         intent_type="quote_provisioning",
         algorithm=_algorithm(request.algorithm),
@@ -732,11 +741,15 @@ def _options(
         if split is None
         else SplitOrderPolicyRequest(
             max_child_quantity=(
-                None if split.max_child_quantity is None else _decimal(split.max_child_quantity)
+                None
+                if split.max_child_quantity is None
+                else split.max_child_quantity
             ),
             child_count=split.child_count,
             min_child_quantity=(
-                None if split.min_child_quantity is None else _decimal(split.min_child_quantity)
+                None
+                if split.min_child_quantity is None
+                else split.min_child_quantity
             ),
         )
     )
@@ -745,10 +758,14 @@ def _options(
         if maker is None
         else MakerExecutionPolicyRequest(
             max_inventory_abs=(
-                None if maker.max_inventory_abs is None else _decimal(maker.max_inventory_abs)
+                None
+                if maker.max_inventory_abs is None
+                else maker.max_inventory_abs
             ),
             target_inventory=(
-                None if maker.target_inventory is None else _decimal(maker.target_inventory)
+                None
+                if maker.target_inventory is None
+                else maker.target_inventory
             ),
             max_quote_age_nanos=(
                 None if maker.max_quote_age_millis is None else maker.max_quote_age_millis * 1_000_000
@@ -783,7 +800,7 @@ def _algorithm(policy: ExecutionAlgorithmPolicy) -> ExecutionAlgorithmPolicyRequ
                 Decimal(hedge.contract_multiplier_numerator)
                 / hedge.contract_multiplier_denominator
             ),
-            max_unhedged_quantity=_decimal(hedge.max_unhedged_quantity),
+            max_unhedged_quantity=hedge.max_unhedged_quantity,
             max_unhedged_duration_nanos=hedge.max_unhedged_duration_nanos,
             fallback_execution_route_ids=list(hedge.fallback_execution_route_ids),
             compensate_on_failure=hedge.compensate_on_failure,
@@ -801,15 +818,11 @@ def _benchmarks(
             leg_id=value.leg_id,
             instrument_id=value.instrument_id,
             market_id=value.market_id,
-            price=_decimal(value.price),
+            price=value.price,
             observed_at_unix_nanos=value.observed_at_unix_nanos,
         )
         for value in values
     ]
-
-
-def _decimal(value: Decimal) -> str:
-    return format(value, "f")
 
 
 def _handle(request_id: str, value: object) -> CommandHandle:

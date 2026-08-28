@@ -1060,10 +1060,11 @@ impl ExecutionApplication {
     fn publish(&mut self, context: &mut Context<'_, Self>) -> Result<(), ExecutionError> {
         self.flush_durable_events()?;
         let actor_id = self.snapshot().actor_id.to_string();
+        self.publish_views(context, &actor_id)?;
         while let Some(event) = self.pending_business_event().cloned() {
             let resource_key = "execution-events".to_owned();
             for (index, change) in event.changes.iter().enumerate() {
-                for bytes in crate::services::publication::encode_business_change(
+                let payloads = match crate::services::publication::encode_business_change(
                     &actor_id,
                     self.conflux.producer_incarnation,
                     &self.conflux.identity,
@@ -1071,19 +1072,30 @@ impl ExecutionApplication {
                     event.occurred_at_unix_nanos.get(),
                     index,
                     change,
-                )
-                .map_err(ExecutionError::Gateway)?
-                {
-                    context
-                        .outputs()
-                        .aeron
-                        .publish(&resource_key, &bytes)
-                        .map_err(|error| ExecutionError::Gateway(error.to_string()))?;
+                ) {
+                    Ok(payloads) => payloads,
+                    Err(error) => {
+                        tracing::warn!(
+                            event = "execution_notification_encode_failed",
+                            sequence = event.sequence.get(),
+                            error = %error,
+                        );
+                        continue;
+                    },
+                };
+                for bytes in payloads {
+                    if let Err(error) = context.outputs().aeron.publish(&resource_key, &bytes) {
+                        tracing::warn!(
+                            event = "execution_notification_publish_failed",
+                            sequence = event.sequence.get(),
+                            error = %error,
+                        );
+                    }
                 }
             }
             self.acknowledge_business_event();
         }
-        self.publish_views(context, &actor_id)
+        Ok(())
     }
 
     fn flush_durable_events(&mut self) -> Result<(), ExecutionError> {

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Sequence
+
+from kairospy.primitives.decimal import (
+    Money,
+    Price,
+    Quantity,
+    SignedQuantity,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,20 +17,19 @@ class ExecutionBenchmark:
 
     instrument_id: str
     market_id: str
-    price: Decimal
+    price: Price
     observed_at_unix_nanos: int
     leg_id: str | None = None
     kind: str = "arrival"
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "price", Price(self.price))
         if self.kind != "arrival":
             raise ValueError("execution benchmark kind must be arrival")
         if not self.instrument_id.strip() or not self.market_id.strip():
             raise ValueError("execution benchmark instrument_id and market_id are required")
         if self.leg_id is not None and not self.leg_id.strip():
             raise ValueError("execution benchmark leg_id cannot be blank")
-        if self.price <= 0:
-            raise ValueError("execution benchmark price must be positive")
         if self.observed_at_unix_nanos < 0:
             raise ValueError("execution benchmark observed_at_unix_nanos cannot be negative")
 
@@ -50,12 +55,12 @@ class TargetPositionRequest:
     """A strategy target translated into an Execution-owned Intent."""
 
     instrument_id: str
-    quantity: Decimal
+    quantity: Quantity
     algorithm: "ExecutionAlgorithmPolicy" = field(kw_only=True)
     account_id: str | None = None
     account_ids: tuple[str, ...] = ()
     segment_key: str = "spot"
-    limit_price: Decimal | None = None
+    limit_price: Price | None = None
     reason: str = ""
     intent_id: str | None = None
     strategy_decision_id: str | None = None
@@ -68,6 +73,9 @@ class TargetPositionRequest:
     execution_benchmarks: tuple[ExecutionBenchmark, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "quantity", Quantity(self.quantity))
+        if self.limit_price is not None:
+            object.__setattr__(self, "limit_price", Price(self.limit_price))
         if isinstance(self.algorithm, MakerTakerHedgeAlgorithm):
             raise ValueError("maker-taker hedge requires a pair arbitrage Intent")
         if isinstance(self.algorithm, PassiveLimitAlgorithm):
@@ -111,15 +119,18 @@ class TargetPositionRequest:
 class ArbitrageLegRequest:
     instrument_id: str
     side: str
-    quantity: Decimal
+    quantity: Quantity
     account_id: str
     segment_key: str = "spot"
-    limit_price: Decimal | None = None
+    limit_price: Price | None = None
     split: "SplitOrderPolicy | None" = None
     maker: "MakerExecutionPolicy | None" = None
     execution_route_id: str | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "quantity", Quantity.positive(self.quantity))
+        if self.limit_price is not None:
+            object.__setattr__(self, "limit_price", Price(self.limit_price))
         if (
             not self.instrument_id.strip()
             or not self.account_id.strip()
@@ -128,8 +139,6 @@ class ArbitrageLegRequest:
             raise ValueError("arbitrage leg identity is required")
         if self.side not in {"Buy", "Sell", "buy", "sell"}:
             raise ValueError("arbitrage leg side must be Buy or Sell")
-        if self.quantity <= 0:
-            raise ValueError("arbitrage leg quantity must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,22 +183,21 @@ class OptionSpreadLegRequest:
     leg_id: str
     instrument_id: str
     side: str
-    quantity: Decimal
+    quantity: Quantity
     market_id: str | None = None
-    limit_price: Decimal | None = None
+    limit_price: Price | None = None
     execution_route_id: str | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "quantity", Quantity.positive(self.quantity))
+        if self.limit_price is not None:
+            object.__setattr__(self, "limit_price", Price(self.limit_price))
         if not self.leg_id.strip() or not self.instrument_id.strip():
             raise ValueError("option spread leg identity is required")
         normalized_side = self.side.lower()
         if normalized_side not in {"buy", "sell"}:
             raise ValueError("option spread leg side must be Buy or Sell")
         object.__setattr__(self, "side", normalized_side.capitalize())
-        if self.quantity <= 0:
-            raise ValueError("option spread leg quantity must be positive")
-        if self.limit_price is not None and self.limit_price <= 0:
-            raise ValueError("option spread leg limit price must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,8 +206,8 @@ class OptionSpreadRequest:
 
     short_leg: OptionSpreadLegRequest
     long_leg: OptionSpreadLegRequest
-    minimum_net_credit: Decimal
-    maximum_loss: Decimal
+    minimum_net_credit: Money
+    maximum_loss: Money
     algorithm: "ExecutionAlgorithmPolicy" = field(kw_only=True)
     account_id: str = "main"
     reason: str = ""
@@ -215,6 +223,8 @@ class OptionSpreadRequest:
     execution_benchmarks: tuple[ExecutionBenchmark, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "minimum_net_credit", Money(self.minimum_net_credit))
+        object.__setattr__(self, "maximum_loss", Money(self.maximum_loss))
         if not isinstance(self.algorithm, ImmediateAlgorithm):
             raise ValueError("option spread currently requires Immediate algorithm")
         if not self.account_id.strip():
@@ -225,9 +235,9 @@ class OptionSpreadRequest:
             raise ValueError("credit spread requires a Sell short leg and Buy long leg")
         if self.short_leg.quantity != self.long_leg.quantity:
             raise ValueError("package option spread legs must have equal quantity")
-        if self.minimum_net_credit < 0:
+        if self.minimum_net_credit.value < 0:
             raise ValueError("minimum_net_credit cannot be negative")
-        if self.maximum_loss <= 0:
+        if self.maximum_loss.value <= 0:
             raise ValueError("maximum_loss must be positive")
         if self.maximum_quote_age_nanos <= 0:
             raise ValueError("maximum_quote_age_nanos must be positive")
@@ -263,15 +273,19 @@ class OptionSpreadRequest:
 class SplitOrderPolicy:
     """Deterministic child-order sizing for one execution leg."""
 
-    max_child_quantity: Decimal | None = None
+    max_child_quantity: Quantity | None = None
     child_count: int | None = None
-    min_child_quantity: Decimal | None = None
+    min_child_quantity: Quantity | None = None
 
     def __post_init__(self) -> None:
-        if self.max_child_quantity is not None and self.max_child_quantity <= 0:
-            raise ValueError("max_child_quantity must be positive")
-        if self.min_child_quantity is not None and self.min_child_quantity <= 0:
-            raise ValueError("min_child_quantity must be positive")
+        if self.max_child_quantity is not None:
+            object.__setattr__(
+                self, "max_child_quantity", Quantity.positive(self.max_child_quantity)
+            )
+        if self.min_child_quantity is not None:
+            object.__setattr__(
+                self, "min_child_quantity", Quantity.positive(self.min_child_quantity)
+            )
         if self.child_count is not None and self.child_count <= 0:
             raise ValueError("child_count must be positive")
 
@@ -280,13 +294,15 @@ class SplitOrderPolicy:
 class MakerExecutionPolicy:
     """Admission-only inventory and quote-freshness maker guardrails."""
 
-    max_inventory_abs: Decimal | None = None
-    target_inventory: Decimal | None = None
+    max_inventory_abs: Quantity | None = None
+    target_inventory: SignedQuantity | None = None
     max_quote_age_millis: int | None = None
 
     def __post_init__(self) -> None:
-        if self.max_inventory_abs is not None and self.max_inventory_abs < 0:
-            raise ValueError("max_inventory_abs cannot be negative")
+        if self.max_inventory_abs is not None:
+            object.__setattr__(self, "max_inventory_abs", Quantity(self.max_inventory_abs))
+        if self.target_inventory is not None:
+            object.__setattr__(self, "target_inventory", SignedQuantity(self.target_inventory))
         if self.max_quote_age_millis is not None and self.max_quote_age_millis <= 0:
             raise ValueError("max_quote_age_millis must be positive")
 
@@ -299,13 +315,16 @@ class HedgePolicy:
     ratio_denominator: int = 1
     contract_multiplier_numerator: int = 1
     contract_multiplier_denominator: int = 1
-    max_unhedged_quantity: Decimal = Decimal("0")
+    max_unhedged_quantity: Quantity = field(default_factory=lambda: Quantity("0"))
     max_unhedged_duration_nanos: int | None = None
     fallback_execution_route_ids: tuple[str, ...] = ()
     compensate_on_failure: bool = True
     max_compensation_attempts: int = 3
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "max_unhedged_quantity", Quantity(self.max_unhedged_quantity)
+        )
         if not self.leader_leg_id.strip() or not self.hedge_leg_id.strip():
             raise ValueError("hedge leg ids are required")
         if self.leader_leg_id == self.hedge_leg_id:
@@ -317,8 +336,6 @@ class HedgePolicy:
             or self.contract_multiplier_denominator <= 0
         ):
             raise ValueError("contract multiplier must be positive")
-        if self.max_unhedged_quantity < 0:
-            raise ValueError("max_unhedged_quantity cannot be negative")
         if (
             self.max_unhedged_duration_nanos is not None
             and self.max_unhedged_duration_nanos <= 0
@@ -386,10 +403,10 @@ class QuoteProvisioningRequest:
     """Two-sided maker quote controlled by Execution's cadence and inventory guards."""
 
     instrument_id: str
-    bid_price: Decimal
-    bid_quantity: Decimal
-    ask_price: Decimal
-    ask_quantity: Decimal
+    bid_price: Price
+    bid_quantity: Quantity
+    ask_price: Price
+    ask_quantity: Quantity
     algorithm: "ExecutionAlgorithmPolicy" = field(kw_only=True)
     account_id: str = ""
     segment_key: str = "spot"
@@ -402,6 +419,10 @@ class QuoteProvisioningRequest:
     execution_benchmarks: tuple[ExecutionBenchmark, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "bid_price", Price(self.bid_price))
+        object.__setattr__(self, "bid_quantity", Quantity.positive(self.bid_quantity))
+        object.__setattr__(self, "ask_price", Price(self.ask_price))
+        object.__setattr__(self, "ask_quantity", Quantity.positive(self.ask_quantity))
         if not isinstance(self.algorithm, PassiveLimitAlgorithm):
             raise ValueError(
                 "quote provisioning requires PassiveLimit algorithm"
@@ -412,15 +433,6 @@ class QuoteProvisioningRequest:
             or not self.account_id.strip()
         ):
             raise ValueError("quote provisioning identity is required")
-        if (
-            self.bid_price <= 0
-            or self.ask_price <= 0
-            or self.bid_quantity <= 0
-            or self.ask_quantity <= 0
-        ):
-            raise ValueError(
-                "quote provisioning prices and quantities must be positive"
-            )
         if self.bid_price >= self.ask_price:
             raise ValueError("quote provisioning bid must be below ask")
         if (
@@ -440,19 +452,17 @@ class QuoteRefreshRequest:
     """Fresh prices for an existing Execution-owned two-sided quote."""
 
     intent_id: str
-    bid_price: Decimal
-    ask_price: Decimal
+    bid_price: Price
+    ask_price: Price
     quote_observed_at_unix_nanos: int
     reason: str = ""
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "bid_price", Price(self.bid_price))
+        object.__setattr__(self, "ask_price", Price(self.ask_price))
         if not self.intent_id.strip():
             raise ValueError("intent_id is required")
-        if (
-            self.bid_price <= 0
-            or self.ask_price <= 0
-            or self.bid_price >= self.ask_price
-        ):
+        if self.bid_price >= self.ask_price:
             raise ValueError("quote refresh requires positive bid below ask")
         if self.quote_observed_at_unix_nanos < 0:
             raise ValueError("quote observation timestamp cannot be negative")
@@ -461,15 +471,18 @@ class QuoteRefreshRequest:
 @dataclass(frozen=True, slots=True)
 class PortfolioRebalanceTarget:
     instrument_id: str
-    quantity: Decimal
+    quantity: Quantity
     account_id: str
     segment_key: str = "spot"
-    limit_price: Decimal | None = None
+    limit_price: Price | None = None
     split: "SplitOrderPolicy | None" = None
     maker: "MakerExecutionPolicy | None" = None
     execution_route_id: str | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "quantity", Quantity(self.quantity))
+        if self.limit_price is not None:
+            object.__setattr__(self, "limit_price", Price(self.limit_price))
         if (
             not self.instrument_id.strip()
             or not self.account_id.strip()

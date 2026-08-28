@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
 from enum import StrEnum
 
 from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.decimal import Quantity, QuantityLike, Rate
 
 
 class FundingPriority(StrEnum):
@@ -82,11 +82,11 @@ class FundingObjective:
     objective_id: str
     version: int
     destination: FundingLocation
-    desired_available: Decimal
+    desired_available: Quantity
     required_by: datetime
     expires_at: datetime
     priority: FundingPriority = FundingPriority.NORMAL
-    confidence: Decimal = Decimal("1")
+    confidence: Rate = Rate("1")
     strategy_decision_id: str | None = None
     observed_at: datetime | None = None
 
@@ -96,8 +96,7 @@ class FundingObjective:
             raise ValueError("Funding objective id is required")
         if self.version <= 0:
             raise ValueError("Funding objective version must be positive")
-        if self.desired_available < 0:
-            raise ValueError("Funding objective desired_available cannot be negative")
+        desired_available = Quantity(self.desired_available)
         required_by = _utc(self.required_by, "required_by")
         expires_at = _utc(self.expires_at, "expires_at")
         if expires_at < required_by:
@@ -109,12 +108,15 @@ class FundingObjective:
         )
         if observed_at is not None and observed_at > required_by:
             raise ValueError("Funding objective cannot be observed after required_by")
-        if not Decimal("0") <= self.confidence <= Decimal("1"):
+        confidence = Rate(self.confidence)
+        if not Rate("0") <= confidence <= Rate("1"):
             raise ValueError("Funding objective confidence must be between 0 and 1")
         decision_id = self.strategy_decision_id
         if decision_id is not None and not decision_id.strip():
             raise ValueError("strategy_decision_id cannot be blank")
         object.__setattr__(self, "objective_id", objective_id)
+        object.__setattr__(self, "desired_available", desired_available)
+        object.__setattr__(self, "confidence", confidence)
         object.__setattr__(self, "required_by", required_by)
         object.__setattr__(self, "expires_at", expires_at)
         object.__setattr__(self, "observed_at", observed_at)
@@ -128,12 +130,12 @@ class FundingForecastObservation:
     version: int
     source: FundingForecastSource
     destination: FundingLocation
-    predicted_required_available: Decimal
+    predicted_required_available: Quantity
     observed_at: datetime
     required_by: datetime
     expires_at: datetime
     priority: FundingPriority = FundingPriority.NORMAL
-    confidence: Decimal = Decimal("1")
+    confidence: Rate = Rate("1")
     evidence_references: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -142,8 +144,7 @@ class FundingForecastObservation:
             raise ValueError("Funding forecast id is required")
         if self.version <= 0:
             raise ValueError("Funding forecast version must be positive")
-        if self.predicted_required_available < 0:
-            raise ValueError("Funding forecast predicted availability cannot be negative")
+        predicted = Quantity(self.predicted_required_available)
         source = FundingForecastSource(self.source)
         observed_at = _utc(self.observed_at, "observed_at")
         required_by = _utc(self.required_by, "required_by")
@@ -152,12 +153,15 @@ class FundingForecastObservation:
             raise ValueError(
                 "Funding forecast requires observed_at <= required_by <= expires_at"
             )
-        if not Decimal("0") <= self.confidence <= Decimal("1"):
+        confidence = Rate(self.confidence)
+        if not Rate("0") <= confidence <= Rate("1"):
             raise ValueError("Funding forecast confidence must be between 0 and 1")
         references = tuple(value.strip() for value in self.evidence_references)
         if any(not value for value in references):
             raise ValueError("Funding forecast evidence references cannot be blank")
         object.__setattr__(self, "forecast_id", forecast_id)
+        object.__setattr__(self, "predicted_required_available", predicted)
+        object.__setattr__(self, "confidence", confidence)
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "observed_at", observed_at)
         object.__setattr__(self, "required_by", required_by)
@@ -171,25 +175,25 @@ class FundingForecastObservation:
         forecast_id: str,
         version: int,
         destination: FundingLocation,
-        observed_samples: tuple[Decimal, ...],
+        observed_samples: tuple[Quantity, ...],
         observed_at: datetime,
         required_by: datetime,
         expires_at: datetime,
-        safety_buffer: Decimal = Decimal("0"),
+        safety_buffer: Quantity = Quantity("0"),
         priority: FundingPriority = FundingPriority.NORMAL,
-        confidence: Decimal = Decimal("1"),
+        confidence: Rate = Rate("1"),
         evidence_references: tuple[str, ...] = (),
     ) -> "FundingForecastObservation":
         if not observed_samples:
             raise ValueError("Historical funding forecast requires observed samples")
-        if any(value < 0 for value in observed_samples) or safety_buffer < 0:
-            raise ValueError("Historical funding samples and safety buffer cannot be negative")
+        samples = tuple(Quantity(value) for value in observed_samples)
+        buffer = Quantity(safety_buffer)
         return cls(
             forecast_id=forecast_id,
             version=version,
             source=FundingForecastSource.HISTORICAL_PEAK,
             destination=destination,
-            predicted_required_available=max(observed_samples) + safety_buffer,
+            predicted_required_available=max(samples) + buffer,
             observed_at=observed_at,
             required_by=required_by,
             expires_at=expires_at,
@@ -228,7 +232,7 @@ class CapitalDemand:
     demand_id: str
     idempotency_key: str
     destination: FundingLocation
-    observed_shortfall: Decimal
+    observed_shortfall: Quantity
     observed_at: datetime
     required_by: datetime
     expires_at: datetime
@@ -236,13 +240,14 @@ class CapitalDemand:
     risk_watermark: int
     destination_lease_fence: str
     priority: FundingPriority = FundingPriority.NORMAL
-    confidence: Decimal = Decimal("1")
+    confidence: Rate = Rate("1")
     causal_references: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.demand_id.strip() or not self.idempotency_key.strip():
             raise ValueError("Capital demand identity is required")
-        if self.observed_shortfall <= 0:
+        observed_shortfall = Quantity(self.observed_shortfall)
+        if observed_shortfall.is_zero:
             raise ValueError("Capital demand shortfall must be positive")
         observed_at = _utc(self.observed_at, "observed_at")
         required_by = _utc(self.required_by, "required_by")
@@ -255,8 +260,11 @@ class CapitalDemand:
             raise ValueError("Capital demand requires Account and Risk watermarks")
         if not self.destination_lease_fence.strip():
             raise ValueError("Capital demand destination lease fence is required")
-        if not Decimal("0") <= self.confidence <= Decimal("1"):
+        confidence = Rate(self.confidence)
+        if not Rate("0") <= confidence <= Rate("1"):
             raise ValueError("Capital demand confidence must be between 0 and 1")
+        object.__setattr__(self, "observed_shortfall", observed_shortfall)
+        object.__setattr__(self, "confidence", confidence)
         object.__setattr__(self, "observed_at", observed_at)
         object.__setattr__(self, "required_by", required_by)
         object.__setattr__(self, "expires_at", expires_at)
@@ -274,7 +282,7 @@ class CapitalFundingHorizon:
     required_by: datetime
     objective_ids: tuple[str, ...]
     demand_ids: tuple[str, ...]
-    desired_available: Decimal
+    desired_available: QuantityLike
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,17 +290,17 @@ class CapitalAvailability:
     capital_group_id: str | None
     readiness: CapitalReadiness
     location: FundingLocation | None = None
-    policy_minimum: Decimal | None = None
-    policy_default_target: Decimal | None = None
-    policy_maximum: Decimal | None = None
+    policy_minimum: QuantityLike | None = None
+    policy_default_target: QuantityLike | None = None
+    policy_maximum: QuantityLike | None = None
     policy_version: int | None = None
     active_objective_ids: tuple[str, ...] = ()
     active_demand_ids: tuple[str, ...] = ()
     funding_horizons: tuple[CapitalFundingHorizon, ...] = ()
-    desired_target: Decimal | None = None
-    observed_available: Decimal | None = None
-    effective_target: Decimal | None = None
-    deficit: Decimal | None = None
+    desired_target: QuantityLike | None = None
+    observed_available: QuantityLike | None = None
+    effective_target: QuantityLike | None = None
+    deficit: QuantityLike | None = None
     account_watermark: int | None = None
     risk_policy_version: int | None = None
     risk_watermark: int | None = None

@@ -1,10 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.primitives.reference import ExchangeId, InstrumentId, ListingId, MarketId
+from kairospy.primitives.decimal import (
+    Money,
+    MoneyLike,
+    Price,
+    PriceLike,
+    Quantity,
+    QuantityLike,
+    Rate,
+    RateLike,
+)
+from kairospy.primitives.reference import (
+    AssetId,
+    ExchangeId,
+    InstrumentId,
+    ListingId,
+    MarketId,
+)
 
 
 class MarketStatus(StrEnum):
@@ -37,14 +53,14 @@ class Exchange:
 
 @dataclass(frozen=True, slots=True)
 class Asset:
-    id: str
+    id: AssetId
     code: str
     name: str | None
     asset_class: str
     status: ReferenceStatus = ReferenceStatus.UNKNOWN
 
     def __post_init__(self) -> None:
-        if not self.id.strip() or not self.code.strip() or not self.asset_class.strip():
+        if not str(self.id).strip() or not self.code.strip() or not self.asset_class.strip():
             raise ValueError("asset id, code, and class are required")
 
 
@@ -67,14 +83,15 @@ class Instrument:
     product_family: str | None = None
     issuer_id: str | None = None
     share_class: str | None = None
-    primary_currency_asset_id: str | None = None
+    primary_currency_asset_id: AssetId | None = None
     underlying_instrument_id: InstrumentId | None = None
     expiry_unix_nanos: int | None = None
-    strike: Decimal | None = None
+    strike: PriceLike | None = None
     option_right: str | None = None
     status: ReferenceStatus = ReferenceStatus.UNKNOWN
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "strike", _price(self.strike))
         if not self.symbol.strip() or not self.instrument_type.strip():
             raise ValueError("instrument symbol and type are required")
 
@@ -100,11 +117,24 @@ class Listing:
 
 @dataclass(frozen=True, slots=True)
 class TradingRules:
-    price_increment: Decimal | None = None
-    quantity_increment: Decimal | None = None
-    minimum_quantity: Decimal | None = None
-    minimum_notional: Decimal | None = None
-    contract_multiplier: Decimal | None = None
+    price_increment: PriceLike | None = None
+    quantity_increment: QuantityLike | None = None
+    minimum_quantity: QuantityLike | None = None
+    minimum_notional: MoneyLike | None = None
+    contract_multiplier: RateLike | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "price_increment", _price(self.price_increment))
+        object.__setattr__(
+            self, "quantity_increment", _quantity(self.quantity_increment)
+        )
+        object.__setattr__(
+            self, "minimum_quantity", _quantity(self.minimum_quantity)
+        )
+        object.__setattr__(self, "minimum_notional", _money(self.minimum_notional))
+        object.__setattr__(
+            self, "contract_multiplier", _rate(self.contract_multiplier)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,13 +145,37 @@ class Market:
     exchange_id: ExchangeId
     instrument_kind: str
     venue_symbol: str | None = None
-    base_asset: str | None = None
-    quote_asset: str | None = None
+    base_asset: AssetId | None = None
+    quote_asset: AssetId | None = None
     status: MarketStatus = MarketStatus.UNKNOWN
-    trading_rules: TradingRules = TradingRules()
+    trading_rules: TradingRules = field(default_factory=TradingRules)
 
     def __post_init__(self) -> None:
         if not self.instrument_kind.strip():
             raise ValueError("market instrument_kind is required")
         if self.venue_symbol is not None and not self.venue_symbol.strip():
             raise ValueError("market venue_symbol must be a non-empty string")
+
+
+def _price(value: object | None) -> PriceLike | None:
+    return _semantic(value, PriceLike, Price, "price")
+
+
+def _quantity(value: object | None) -> QuantityLike | None:
+    return _semantic(value, QuantityLike, Quantity, "quantity")
+
+
+def _money(value: object | None) -> MoneyLike | None:
+    return _semantic(value, MoneyLike, Money, "money")
+
+
+def _rate(value: object | None) -> RateLike | None:
+    return _semantic(value, RateLike, Rate, "rate")
+
+
+def _semantic(value: object | None, protocol, concrete, name: str):
+    if value is None or isinstance(value, protocol):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return concrete(value)
+    raise TypeError(f"Reference {name} is invalid")

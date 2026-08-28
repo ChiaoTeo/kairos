@@ -33,6 +33,7 @@ from kairospy.investment.apps.portfolio.application import PortfolioApplication
 from kairospy.investment.apps.reference.application import ReferenceApplication
 from kairospy.investment.apps.risk.application import RiskApplication
 from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.decimal import Quantity
 from ..services.context import StrategyContext
 from ..services.callbacks import StrategyCallbackHost
 from ..services.ingress import StrategyEventIngress
@@ -570,7 +571,7 @@ class StrategyApplication:
                         requirement.collateral_asset,
                         requirement.broker,
                     ),
-                    observed_shortfall=requirement.shortfall,
+                    observed_shortfall=Quantity(requirement.shortfall),
                     observed_at=observed_at,
                     required_by=observed_at,
                     expires_at=observed_at + timedelta(seconds=60),

@@ -7,7 +7,23 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, TypeVar, overload
 
-from kairospy.primitives.reference import ExchangeId, InstrumentId, ListingId, MarketId
+from kairospy.primitives.decimal import (
+    Money,
+    MoneyLike,
+    Price,
+    PriceLike,
+    Quantity,
+    QuantityLike,
+    Rate,
+    RateLike,
+)
+from kairospy.primitives.reference import (
+    AssetId,
+    ExchangeId,
+    InstrumentId,
+    ListingId,
+    MarketId,
+)
 
 from .models import (
     Asset,
@@ -480,8 +496,36 @@ def _optional_int(value: object) -> int | None:
     raise ValueError(f"Reference integer field has invalid value: {value!r}")
 
 
-def _optional_decimal(value: object) -> Decimal | None:
-    return None if value is None else Decimal(str(value))
+def _optional_price(value: object) -> PriceLike | None:
+    if value is None or isinstance(value, PriceLike):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return Price(value)
+    raise ValueError("Reference price is invalid")
+
+
+def _optional_quantity(value: object) -> QuantityLike | None:
+    if value is None or isinstance(value, QuantityLike):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return Quantity(value)
+    raise ValueError("Reference quantity is invalid")
+
+
+def _optional_money(value: object) -> MoneyLike | None:
+    if value is None or isinstance(value, MoneyLike):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return Money(value)
+    raise ValueError("Reference money is invalid")
+
+
+def _optional_rate(value: object) -> RateLike | None:
+    if value is None or isinstance(value, RateLike):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return Rate(value)
+    raise ValueError("Reference rate is invalid")
 
 
 def _status(row: Mapping[str, object]) -> ReferenceStatus:
@@ -503,7 +547,7 @@ def _exchange_from_row(row: Mapping[str, object]) -> Exchange:
 
 def _asset_from_row(row: Mapping[str, object]) -> Asset:
     return Asset(
-        id=_required(row, "assetId", "asset_id"),
+        id=AssetId(_required(row, "assetId", "asset_id")),
         code=_required(row, "code"),
         name=_optional_text(row.get("name")),
         asset_class=_required(row, "assetClass", "asset_class"),
@@ -523,8 +567,19 @@ def _instrument_from_row(row: Mapping[str, object]) -> Instrument:
         product_family=_optional_text(_value(row, "productFamily", "product_family")),
         issuer_id=_optional_text(_value(row, "issuerId", "issuer_id")),
         share_class=_optional_text(_value(row, "shareClass", "share_class")),
-        primary_currency_asset_id=_optional_text(
-            _value(row, "primaryCurrencyAssetId", "primary_currency_asset_id")
+        primary_currency_asset_id=(
+            AssetId(primary_currency)
+            if (
+                primary_currency := _optional_text(
+                    _value(
+                        row,
+                        "primaryCurrencyAssetId",
+                        "primary_currency_asset_id",
+                    )
+                )
+            )
+            is not None
+            else None
         ),
         underlying_instrument_id=(
             InstrumentId(underlying) if underlying is not None else None
@@ -532,7 +587,7 @@ def _instrument_from_row(row: Mapping[str, object]) -> Instrument:
         expiry_unix_nanos=_optional_int(
             _value(row, "expiryUnixNanos", "expiry_unix_nanos")
         ),
-        strike=_optional_decimal(row.get("strike")),
+        strike=_optional_price(row.get("strike")),
         option_right=_optional_text(_value(row, "optionRight", "option_right")),
         status=_status(row),
     )
@@ -558,9 +613,6 @@ def _listing_from_row(row: Mapping[str, object]) -> Listing:
 
 
 def _market_from_row(row: Mapping[str, object]) -> Market:
-    def optional_decimal(*names: str) -> Decimal | None:
-        return _optional_decimal(_value(row, *names))
-
     instrument_id = _required(row, "instrument_id", "instrumentId")
     venue_symbol = _optional_text(_value(row, "venue_symbol", "venueSymbol"))
     raw_status = str(row.get("status", "unknown")).lower()
@@ -577,14 +629,34 @@ def _market_from_row(row: Mapping[str, object]) -> Market:
         exchange_id=ExchangeId(_required(row, "exchange_id", "exchangeId")),
         instrument_kind=_required(row, "instrument_kind", "instrumentKind"),
         venue_symbol=venue_symbol,
-        base_asset=_optional_text(_value(row, "base_asset", "base_asset_id")),
-        quote_asset=_optional_text(_value(row, "quote_asset", "quote_asset_id")),
+        base_asset=(
+            AssetId(base_asset)
+            if (base_asset := _optional_text(_value(row, "base_asset", "base_asset_id")))
+            is not None
+            else None
+        ),
+        quote_asset=(
+            AssetId(quote_asset)
+            if (quote_asset := _optional_text(_value(row, "quote_asset", "quote_asset_id")))
+            is not None
+            else None
+        ),
         status=status,
         trading_rules=TradingRules(
-            price_increment=optional_decimal("price_increment", "tick_size"),
-            quantity_increment=optional_decimal("quantity_increment", "step_size"),
-            minimum_quantity=optional_decimal("minimum_quantity", "min_quantity"),
-            minimum_notional=optional_decimal("minimum_notional", "min_notional"),
-            contract_multiplier=optional_decimal("contract_multiplier"),
+            price_increment=_optional_price(
+                _value(row, "price_increment", "tick_size")
+            ),
+            quantity_increment=_optional_quantity(
+                _value(row, "quantity_increment", "step_size")
+            ),
+            minimum_quantity=_optional_quantity(
+                _value(row, "minimum_quantity", "min_quantity")
+            ),
+            minimum_notional=_optional_money(
+                _value(row, "minimum_notional", "min_notional")
+            ),
+            contract_multiplier=_optional_rate(
+                _value(row, "contract_multiplier")
+            ),
         ),
     )

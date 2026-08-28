@@ -127,14 +127,16 @@ class PortfolioApplication:
                 )
                 equities.append(
                     PortfolioEquity(
-                        account.account_id, segment.segment_key, segment.equity
+                        account.account_id,
+                        segment.segment_key,
+                        None if segment.equity is None else segment.equity.value,
                     )
                 )
                 for balance in segment.balances:
                     totals = cash[balance.asset]
-                    totals[0] += balance.total
-                    totals[1] += balance.available
-                    totals[2] += balance.reserved
+                    totals[0] += balance.total.value
+                    totals[1] += balance.available.value
+                    totals[2] += balance.reserved.value
                 earn_holdings.extend(
                     PortfolioEarnHolding(
                         account.account_id,
@@ -142,8 +144,8 @@ class PortfolioApplication:
                         holding.holding_key,
                         holding.product_id,
                         holding.asset,
-                        holding.principal,
-                        holding.redeemable,
+                        holding.principal.value,
+                        None if holding.redeemable is None else holding.redeemable.value,
                         holding.state,
                         holding.liquidity,
                         holding.observed_at_unix_nanos,
@@ -165,7 +167,8 @@ class PortfolioApplication:
                             "missing_pnl": False,
                         },
                     )
-                    quantity = abs(position.quantity)
+                    signed_quantity = position.quantity.value
+                    quantity = abs(signed_quantity)
                     if position.position_side is PositionSide.SHORT:
                         value["short"] = cast(Decimal, value["short"]) + quantity
                         value["net"] = cast(Decimal, value["net"]) - quantity
@@ -173,26 +176,26 @@ class PortfolioApplication:
                         value["long"] = cast(Decimal, value["long"]) + quantity
                         value["net"] = cast(Decimal, value["net"]) + quantity
                     else:
-                        value["net"] = cast(Decimal, value["net"]) + position.quantity
-                        if position.quantity >= 0:
+                        value["net"] = cast(Decimal, value["net"]) + signed_quantity
+                        if signed_quantity >= 0:
                             value["long"] = (
-                                cast(Decimal, value["long"]) + position.quantity
+                                cast(Decimal, value["long"]) + signed_quantity
                             )
                         else:
                             value["short"] = cast(Decimal, value["short"]) + abs(
-                                position.quantity
+                                signed_quantity
                             )
                     if position.market_value is None:
                         value["missing_market_value"] = True
                     else:
                         cast(list[Decimal], value["market_values"]).append(
-                            position.market_value
+                            position.market_value.value
                         )
                     if position.unrealized_pnl is None:
                         value["missing_pnl"] = True
                     else:
                         cast(list[Decimal], value["pnls"]).append(
-                            position.unrealized_pnl
+                            position.unrealized_pnl.value
                         )
             account_watermarks.append(
                 AccountWatermark(

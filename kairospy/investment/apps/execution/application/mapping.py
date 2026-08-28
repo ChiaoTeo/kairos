@@ -23,16 +23,20 @@ from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.primitives.execution import FillId, IntentId, OrderId
 from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.decimal import (
+    DecimalValue,
+    Money,
+    MoneyLike,
+    Price,
+    PriceLike,
+    Quantity,
+    QuantityLike,
+)
 from kairospy.primitives.time import datetime_from_unix_nanos
 from kairospy.infrastructure.contracts.market.events import MarketEvent
 from kairospy.infrastructure.contracts.execution.types import (
     ExecutionBacktestMarketRequest,
 )
-
-
-class _MarketDecimal(Protocol):
-    mantissa: int
-    scale: int
 
 
 class _MarketScope(Protocol):
@@ -47,19 +51,19 @@ class _MarketObservation(Protocol):
 
 
 class _MarketQuote(_MarketObservation, Protocol):
-    bid_price: _MarketDecimal | None
-    bid_quantity: _MarketDecimal | None
-    ask_price: _MarketDecimal | None
-    ask_quantity: _MarketDecimal | None
+    bid_price: PriceLike | None
+    bid_quantity: QuantityLike | None
+    ask_price: PriceLike | None
+    ask_quantity: QuantityLike | None
 
 
 class _MarketBar(_MarketObservation, Protocol):
     bar_spec_id: str
-    open: _MarketDecimal
-    high: _MarketDecimal
-    low: _MarketDecimal
-    close: _MarketDecimal
-    volume: _MarketDecimal | None
+    open: PriceLike
+    high: PriceLike
+    low: PriceLike
+    close: PriceLike
+    volume: QuantityLike | None
 
 
 def backtest_market_request(event: object) -> ExecutionBacktestMarketRequest | None:
@@ -119,10 +123,8 @@ def backtest_market_request(event: object) -> ExecutionBacktestMarketRequest | N
     return None
 
 
-def _market_decimal(value: object) -> Decimal:
-    return Decimal(int(getattr(value, "mantissa"))).scaleb(
-        -int(getattr(value, "scale"))
-    )
+def _market_decimal(value: DecimalValue) -> Decimal:
+    return value.value
 
 
 def map_execution_intent(value: object) -> ExecutionIntent:
@@ -143,7 +145,7 @@ def map_execution_intent(value: object) -> ExecutionIntent:
             AccountId(str(item))
             for item in _sequence(_field(intent, "account_ids", ()), "account_ids")
         ),
-        target_quantity=_decimal(_field(intent, "target_quantity")),
+        target_quantity=_quantity(_field(intent, "target_quantity")),
         status=status,
         reason=str(_field(intent, "reason", "")),
         order_ids=tuple(
@@ -174,6 +176,10 @@ def map_execution_order(value: object) -> Order:
         else None
     )
     raw_intent_id = _field(row, "intent_id")
+    quantity = _required_quantity(_field(row, "quantity"), "quantity")
+    filled_quantity = _required_quantity(
+        _field(row, "filled_quantity"), "filled_quantity"
+    )
     return Order(
         id=OrderId(_required(row, "order_id")),
         strategy_id=_required(row, "strategy_id"),
@@ -183,9 +189,9 @@ def map_execution_order(value: object) -> Order:
         instrument=_instrument(instrument_id),
         account_id=AccountId(_required(row, "account_id")),
         side=_enum(OrderSide, _field(row, "side"), OrderSide.BUY),
-        quantity=_decimal(_field(row, "quantity")) or Decimal("0"),
-        filled_quantity=_decimal(_field(row, "filled_quantity")) or Decimal("0"),
-        limit_price=_decimal(_field(row, "limit_price")),
+        quantity=quantity,
+        filled_quantity=filled_quantity,
+        limit_price=_price(_field(row, "limit_price")),
         status=_enum(OrderStatus, _field(row, "status"), OrderStatus.UNKNOWN),
         updated_at=updated_at,
     )
@@ -197,12 +203,14 @@ def map_execution_fill(value: object) -> Fill:
     if not isinstance(nanos, int):
         raise ValueError("Execution fill occurred_at_unix_nanos must be an integer")
     instrument_id = _required(row, "instrument_id")
+    quantity = _required_quantity(_field(row, "quantity"), "quantity")
+    price = _required_price(_field(row, "price"), "price")
     return Fill(
         id=FillId(_required(row, "fill_id")),
         order_id=OrderId(_required(row, "order_id")),
         instrument=_instrument(instrument_id),
-        quantity=_decimal(_field(row, "quantity")) or Decimal("0"),
-        price=_decimal(_field(row, "price")) or Decimal("0"),
+        quantity=quantity,
+        price=price,
         occurred_at=datetime_from_unix_nanos(nanos),
         intent_id=(
             IntentId(str(_field(row, "intent_id")))
@@ -222,6 +230,9 @@ def map_execution_backtest_result(value: object) -> ExecutionBacktestResult:
 
 def map_order_commitment(value: object) -> OrderCommitment:
     row = value
+    remaining_quantity = _required_quantity(
+        _field(row, "remaining_quantity"), "remaining_quantity"
+    )
     return OrderCommitment(
         order_id=OrderId(_required(row, "order_id")),
         account_id=AccountId(_required(row, "account_id")),
@@ -229,8 +240,8 @@ def map_order_commitment(value: object) -> OrderCommitment:
         instrument_id=InstrumentId(_required(row, "instrument_id")),
         resource_kind=_required(row, "resource_kind"),
         resource_id=_required(row, "resource_id"),
-        amount=_decimal(_field(row, "amount")) or Decimal("0"),
-        remaining_quantity=_decimal(_field(row, "remaining_quantity")) or Decimal("0"),
+        amount=_exact_decimal(_field(row, "amount")),
+        remaining_quantity=remaining_quantity,
         status=CommitmentStatus(str(_field(row, "status", "uncertain"))),
         basis_kind=_required(row, "basis_kind"),
         updated_at_unix_nanos=_required_int(
@@ -242,12 +253,13 @@ def map_order_commitment(value: object) -> OrderCommitment:
 def map_risk_reservation(value: object) -> RiskReservationSaga:
     row = value
     funding_row = _field(row, "funding_requirement")
+    amount = _required_money(_field(row, "amount"), "amount")
     return RiskReservationSaga(
         order_id=OrderId(_required(row, "order_id")),
         reservation_id=_required(row, "reservation_id"),
         idempotency_key=_required(row, "idempotency_key"),
         account_id=AccountId(_required(row, "account_id")),
-        amount=_decimal(_field(row, "amount")) or Decimal("0"),
+        amount=amount,
         status=RiskReservationSagaStatus(str(_field(row, "status", "uncertain"))),
         risk_generation=_required_int(
             _field(row, "risk_generation"), "risk_generation"
@@ -266,11 +278,15 @@ def map_risk_reservation(value: object) -> RiskReservationSaga:
             None
             if funding_row is None
             else ExecutionFundingRequirement(
-                required_margin=_decimal(_field(funding_row, "required_margin"))
-                or Decimal("0"),
-                available_margin=_decimal(_field(funding_row, "available_margin"))
-                or Decimal("0"),
-                shortfall=_decimal(_field(funding_row, "shortfall")) or Decimal("0"),
+                required_margin=_required_money(
+                    _field(funding_row, "required_margin"), "required_margin"
+                ),
+                available_margin=_required_money(
+                    _field(funding_row, "available_margin"), "available_margin"
+                ),
+                shortfall=_required_money(
+                    _field(funding_row, "shortfall"), "shortfall"
+                ),
                 margin_rule_id=_required(funding_row, "margin_rule_id"),
                 risk_decision_id=_required(funding_row, "risk_decision_id"),
                 risk_policy_version=_required_int(
@@ -310,15 +326,55 @@ def _required(value: object, name: str) -> str:
     return raw
 
 
-def _decimal(value: object) -> Decimal | None:
+def _quantity(value: object) -> QuantityLike | None:
+    return _semantic_decimal(value, QuantityLike, Quantity)
+
+
+def _price(value: object) -> PriceLike | None:
+    return _semantic_decimal(value, PriceLike, Price)
+
+
+def _money(value: object) -> MoneyLike | None:
+    return _semantic_decimal(value, MoneyLike, Money)
+
+
+def _required_quantity(value: object, name: str) -> QuantityLike:
+    result = _quantity(value)
+    if result is None:
+        raise ValueError(f"Execution value is missing {name}")
+    return result
+
+
+def _required_price(value: object, name: str) -> PriceLike:
+    result = _price(value)
+    if result is None:
+        raise ValueError(f"Execution value is missing {name}")
+    return result
+
+
+def _required_money(value: object, name: str) -> MoneyLike:
+    result = _money(value)
+    if result is None:
+        raise ValueError(f"Execution value is missing {name}")
+    return result
+
+
+def _exact_decimal(value: object) -> DecimalValue:
+    if isinstance(value, DecimalValue):
+        return value
+    raise ValueError("commitment amount must satisfy DecimalValue")
+
+
+def _semantic_decimal(value: object, protocol, concrete):
     if value is None:
         return None
-    if isinstance(value, str):
-        return Decimal(value)
-    native_value = getattr(value, "value", None)
-    if isinstance(native_value, Decimal):
-        return native_value
-    raise ValueError("decimal value is not an Execution contract decimal")
+    if isinstance(value, protocol):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return concrete(value)
+    raise ValueError(
+        f"Execution contract decimal value must satisfy {protocol.__name__}"
+    )
 
 
 def _required_int(value: object, name: str) -> int:

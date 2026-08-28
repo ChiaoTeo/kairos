@@ -151,6 +151,159 @@ impl ExecutionIndexedView {
             .map_err(|error| ContractError::Transport(error.to_string()))?
     }
 
+    pub fn with_intent<R>(
+        &self,
+        intent_id: &str,
+        read: impl FnOnce(Option<fb::ExecutionIntentCurrent<'_>>) -> ContractResult<R>,
+    ) -> ContractResult<R> {
+        let key = indexed_entity_key(intent_id)?;
+        self.reader
+            .with_value_snapshot(INTENTS_DATABASE, &key, |metadata, bytes| {
+                ensure_ready_metadata(&metadata)?;
+                let value = bytes
+                    .map(|bytes| {
+                        decode(
+                            bytes,
+                            fb::execution_intent_current_buffer_has_identifier,
+                            fb::root_as_execution_intent_current,
+                            "EIN3 ExecutionIntentCurrent",
+                        )
+                    })
+                    .transpose()?;
+                if let Some(value) = value {
+                    validate_semantic_identity(
+                        intent_id,
+                        value.state().intent().intent_id(),
+                        "intent_id",
+                    )?;
+                    read(Some(value))
+                } else {
+                    read(None)
+                }
+            })
+            .map_err(|error| ContractError::Transport(error.to_string()))?
+    }
+
+    pub fn map_orders<R>(
+        &self,
+        mut map: impl FnMut(fb::ExecutionOrderCurrent<'_>) -> ContractResult<R>,
+    ) -> ContractResult<Vec<R>> {
+        self.map_values(ORDERS_DATABASE, |key, bytes| {
+            let value = decode(
+                bytes,
+                fb::execution_order_current_buffer_has_identifier,
+                fb::root_as_execution_order_current,
+                "EOR3 ExecutionOrderCurrent",
+            )?;
+            validate_semantic_identity(
+                indexed_entity_identity(key)?,
+                value.state().order_id(),
+                "order_id",
+            )?;
+            map(value)
+        })
+    }
+
+    pub fn map_intents<R>(
+        &self,
+        mut map: impl FnMut(fb::ExecutionIntentCurrent<'_>) -> ContractResult<R>,
+    ) -> ContractResult<Vec<R>> {
+        self.map_values(INTENTS_DATABASE, |key, bytes| {
+            let value = decode(
+                bytes,
+                fb::execution_intent_current_buffer_has_identifier,
+                fb::root_as_execution_intent_current,
+                "EIN3 ExecutionIntentCurrent",
+            )?;
+            validate_semantic_identity(
+                indexed_entity_identity(key)?,
+                value.state().intent().intent_id(),
+                "intent_id",
+            )?;
+            map(value)
+        })
+    }
+
+    pub fn map_algorithm_runs<R>(
+        &self,
+        mut map: impl FnMut(fb::ExecutionAlgorithmRunCurrent<'_>) -> ContractResult<R>,
+    ) -> ContractResult<Vec<R>> {
+        self.map_values(ALGORITHM_RUNS_DATABASE, |key, bytes| {
+            let value = decode(
+                bytes,
+                fb::execution_algorithm_run_current_buffer_has_identifier,
+                fb::root_as_execution_algorithm_run_current,
+                "EAR3 ExecutionAlgorithmRunCurrent",
+            )?;
+            validate_semantic_identity(
+                indexed_entity_identity(key)?,
+                value.state().algorithm_run_id(),
+                "algorithm_run_id",
+            )?;
+            map(value)
+        })
+    }
+
+    pub fn map_commitments<R>(
+        &self,
+        mut map: impl FnMut(fb::ExecutionCommitmentCurrent<'_>) -> ContractResult<R>,
+    ) -> ContractResult<Vec<R>> {
+        self.map_values(COMMITMENTS_DATABASE, |key, bytes| {
+            let value = decode(
+                bytes,
+                fb::execution_commitment_current_buffer_has_identifier,
+                fb::root_as_execution_commitment_current,
+                "ECO3 ExecutionCommitmentCurrent",
+            )?;
+            validate_semantic_identity(
+                indexed_entity_identity(key)?,
+                value.state().order_id(),
+                "order_id",
+            )?;
+            map(value)
+        })
+    }
+
+    pub fn map_risk_reservations<R>(
+        &self,
+        mut map: impl FnMut(fb::ExecutionRiskReservationCurrent<'_>) -> ContractResult<R>,
+    ) -> ContractResult<Vec<R>> {
+        self.map_values(RISK_RESERVATIONS_DATABASE, |key, bytes| {
+            let value = decode(
+                bytes,
+                fb::execution_risk_reservation_current_buffer_has_identifier,
+                fb::root_as_execution_risk_reservation_current,
+                "ERR3 ExecutionRiskReservationCurrent",
+            )?;
+            validate_semantic_identity(
+                indexed_entity_identity(key)?,
+                value.state().reservation_id(),
+                "reservation_id",
+            )?;
+            map(value)
+        })
+    }
+
+    pub fn map_unknown_remote_orders<R>(
+        &self,
+        mut map: impl FnMut(fb::ExecutionUnknownRemoteOrderCurrent<'_>) -> ContractResult<R>,
+    ) -> ContractResult<Vec<R>> {
+        self.map_values(UNKNOWN_REMOTE_ORDERS_DATABASE, |key, bytes| {
+            let value = decode(
+                bytes,
+                fb::execution_unknown_remote_order_current_buffer_has_identifier,
+                fb::root_as_execution_unknown_remote_order_current,
+                "EUR3 ExecutionUnknownRemoteOrderCurrent",
+            )?;
+            validate_semantic_identity(
+                indexed_entity_identity(key)?,
+                value.state().remote_order_id(),
+                "remote_order_id",
+            )?;
+            map(value)
+        })
+    }
+
     pub fn orders(&self) -> ContractResult<Vec<ExecutionIndexedViewValue>> {
         self.values(ORDERS_DATABASE)
     }
@@ -221,6 +374,38 @@ impl ExecutionIndexedView {
             .map(|(key, value)| ExecutionIndexedViewValue::new(key, value))
             .collect())
     }
+
+    fn map_values<R>(
+        &self,
+        database: &str,
+        mut map: impl FnMut(&[u8], &[u8]) -> ContractResult<R>,
+    ) -> ContractResult<Vec<R>> {
+        let (metadata, rows) = self
+            .reader
+            .map_prefix_snapshot(
+                database,
+                &ENTITY_PREFIX,
+                MAX_EXECUTION_INDEXED_VALUES_PER_DATABASE + 1,
+                |_metadata, key, value| map(key, value),
+            )
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        ensure_ready_metadata(&metadata)?;
+        if rows.len() > MAX_EXECUTION_INDEXED_VALUES_PER_DATABASE {
+            return Err(ContractError::Invalid(format!(
+                "Execution indexed database `{database}` exceeds its read bound"
+            )));
+        }
+        rows.into_iter().collect()
+    }
+}
+
+fn ensure_ready_metadata(metadata: &MetadataSnapshot) -> ContractResult<()> {
+    if metadata.rebuild_state != kairos_indexed_view::RebuildState::Ready {
+        return Err(ContractError::Transport(
+            "Execution indexed current view is not ready".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub struct ExecutionIndexedViewValue {

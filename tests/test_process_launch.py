@@ -34,6 +34,8 @@ def test_component_process_application_starts_bin_and_waits_for_health(
     workspace = WorkspaceApplication().init(
         short_root / "w", workspace_id="launch-test"
     )
+    instance = workspace.instance("paper", "launch", "one")
+    instance.prepare()
     binary = short_root / "fake-execution"
     binary.write_text(
         textwrap.dedent(
@@ -43,12 +45,17 @@ def test_component_process_application_starts_bin_and_waits_for_health(
             from pathlib import Path
             parser = argparse.ArgumentParser()
             parser.add_argument('--workspace', required=True)
+            parser.add_argument('--launch-mode', required=True)
+            parser.add_argument('--launch-id', required=True)
+            parser.add_argument('--instance-id', required=True)
+            parser.add_argument('--aeron-dir', required=True)
             parser.add_argument('--aeron-channel', required=True)
             args = parser.parse_args()
-            path = Path(args.workspace) / 'run' / 'execution' / 'control.sock'
+            path = Path({str(instance.socket("execution"))!r})
             path.parent.mkdir(parents=True, exist_ok=True)
             path.unlink(missing_ok=True)
-            lock_path = path.parent / 'process.lock'
+            lock_path = Path({str(instance.lock("execution"))!r})
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
             lock = lock_path.open('w')
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             lock.write(str(os.getpid()))
@@ -83,11 +90,19 @@ def test_component_process_application_starts_bin_and_waits_for_health(
     application = ComponentProcessApplication(
         workspace, binaries={"execution": str(binary)}
     )
-    control = application.ensure_running("execution")
+    control = application.ensure_running("execution", instance_workspace=instance)
     assert control.status()["status"] == "ready"
+    assert (
+        application.ensure_running("execution", instance_workspace=instance).status()[
+            "status"
+        ]
+        == "ready"
+    )
     started = time.monotonic()
     progress: list[str] = []
-    control = application.restart("execution", progress=progress.append)
+    control = application.restart(
+        "execution", progress=progress.append, instance_workspace=instance
+    )
     assert time.monotonic() - started >= 0.15
     assert control.status()["status"] == "ready"
     assert progress == [
@@ -96,8 +111,11 @@ def test_component_process_application_starts_bin_and_waits_for_health(
         "execution stopped; starting replacement...",
         "execution restarted.",
     ]
-    assert application.stop("execution")["status"] == "stopping"
-    application._wait_stopped("execution")
+    assert (
+        application.stop("execution", instance_workspace=instance)["status"]
+        == "stopping"
+    )
+    application._wait_stopped("execution", instance_workspace=instance)
     import shutil
 
     shutil.rmtree(short_root, ignore_errors=True)
@@ -112,6 +130,8 @@ def test_component_start_reports_early_exit_and_log_detail(
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="failed-start"
     )
+    instance = workspace.instance("paper", "launch", "one")
+    instance.prepare()
     binary = tmp_path / "fail-execution"
     binary.write_text(
         textwrap.dedent(
@@ -131,13 +151,13 @@ def test_component_start_reports_early_exit_and_log_detail(
     started = time.monotonic()
 
     with pytest.raises(RuntimeError) as captured:
-        application.ensure_running("execution")
+        application.ensure_running("execution", instance_workspace=instance)
 
     assert time.monotonic() - started < 5
     message = str(captured.value)
     assert "exited during startup with code 23" in message
     assert "database migration failed" in message
-    assert "kairos system logs --component execution" in message
+    assert "kairos launch artifacts launch --instance one" in message
 
 
 def test_reference_startup_logs_support_redirected_text_output(tmp_path: Path) -> None:
@@ -176,7 +196,7 @@ def test_reference_startup_logs_support_redirected_text_output(tmp_path: Path) -
     assert "unexpected argument --legacy" in str(captured.value)
 
 
-def test_component_start_reuses_responsive_degraded_process(
+def test_component_start_rejects_responsive_process_without_route_declaration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
@@ -200,9 +220,8 @@ def test_component_start_reuses_responsive_degraded_process(
         lambda _self, _component, _socket, *, timeout: control,
     )
 
-    result = ComponentProcessApplication(workspace).ensure_running("reference")
-
-    assert result is control
+    with pytest.raises(RuntimeError, match="event-route declaration is missing"):
+        ComponentProcessApplication(workspace).ensure_running("reference")
 
 
 def test_component_restart_times_out_while_process_lock_is_held(

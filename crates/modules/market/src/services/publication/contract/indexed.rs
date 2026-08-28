@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use flatbuffers::FlatBufferBuilder;
 use kairos_market_contract::{MarketViewKey, MarketViewKind};
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
@@ -9,6 +11,14 @@ use crate::domain::freshness::MarketFreshness;
 pub(crate) struct EncodedMarketView {
     pub(crate) key: MarketViewKey,
     pub(crate) bytes: Vec<u8>,
+}
+
+pub(crate) struct EncodedMarketViewBatch {
+    pub(crate) mutations: Vec<kairos_conflux::IndexedMutation>,
+    pub(crate) applied_state_sequence: u64,
+    pub(crate) input_update_count: usize,
+    pub(crate) encoded_update_count: usize,
+    pub(crate) encoded_order_book_count: usize,
 }
 
 impl EncodedMarketView {
@@ -54,146 +64,231 @@ macro_rules! finish_current {
     }};
 }
 
-pub(crate) fn encode_change_view(
-    change: &MarketChange,
-) -> Result<Option<EncodedMarketView>, String> {
-    let sequence = change.sequence.get();
-    let Some(view) = change.view.as_ref() else {
+/// Coalesce one drained Market publication batch before encoding current
+/// values. Aeron notifications retain every admitted event; the authoritative
+/// current view retains only the newest state for each canonical key.
+pub(crate) fn encode_latest_change_views(
+    changes: &[MarketChange],
+    order_books: &BTreeMap<String, crate::OrderBook>,
+) -> Result<Option<EncodedMarketViewBatch>, String> {
+    let mut latest = BTreeMap::<MarketViewKey, &MarketChange>::new();
+    let mut input_update_count = 0;
+    for change in changes {
+        let Some(view) = change.view.as_ref() else {
+            continue;
+        };
+        let Some(key) = market_view_key(view)? else {
+            continue;
+        };
+        input_update_count += 1;
+        latest.insert(key, change);
+    }
+    if latest.is_empty() {
         return Ok(None);
-    };
-    let encoded = match view {
+    }
+
+    let applied_state_sequence = latest
+        .values()
+        .map(|change| change.sequence.get())
+        .max()
+        .expect("non-empty latest current-view updates have a sequence");
+    let encoded_update_count = latest.len();
+    let encoded_order_book_count = latest
+        .values()
+        .filter(|change| matches!(change.view.as_ref(), Some(MarketViewUpdate::OrderBook(_))))
+        .count();
+    let mut mutations = Vec::with_capacity(encoded_update_count);
+    for (key, change) in latest {
+        let view = change
+            .view
+            .as_ref()
+            .expect("coalesced current-view update retains its view");
+        mutations
+            .extend(encode_view(change.sequence.get(), view, key, order_books)?.into_mutations()?);
+    }
+    Ok(Some(EncodedMarketViewBatch {
+        mutations,
+        applied_state_sequence,
+        input_update_count,
+        encoded_update_count,
+        encoded_order_book_count,
+    }))
+}
+
+fn market_view_key(view: &MarketViewUpdate) -> Result<Option<MarketViewKey>, String> {
+    let key = match view {
         MarketViewUpdate::Observation(crate::MarketObservation::Quote(value)) => {
-            let key = MarketViewKey::new(
+            MarketViewKey::new(
                 value.scope.key(),
                 value.provider.clone(),
                 MarketViewKind::Quote,
                 None::<String>,
             )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_quote(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
         },
-        MarketViewUpdate::Observation(crate::MarketObservation::Rate(value)) => {
-            let key = MarketViewKey::new(
-                value.scope.key(),
-                value.provider.clone(),
-                MarketViewKind::Rate,
-                Some(value.rate_id.clone()),
-            )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_rate_view(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
-        },
+        MarketViewUpdate::Observation(crate::MarketObservation::Rate(value)) => MarketViewKey::new(
+            value.scope.key(),
+            value.provider.clone(),
+            MarketViewKind::Rate,
+            Some(value.rate_id.clone()),
+        ),
         MarketViewUpdate::Observation(crate::MarketObservation::Ticker24h(value)) => {
-            let key = MarketViewKey::new(
+            MarketViewKey::new(
                 value.scope.key(),
                 value.provider.clone(),
                 MarketViewKind::Ticker24h,
                 None::<String>,
             )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_ticker_view(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
         },
         MarketViewUpdate::Observation(crate::MarketObservation::MarkPrice(value)) => {
-            let key = MarketViewKey::new(
+            MarketViewKey::new(
                 value.scope.key(),
                 value.provider.clone(),
                 MarketViewKind::MarkPrice,
                 None::<String>,
             )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_mark_price_view(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
         },
         MarketViewUpdate::Observation(crate::MarketObservation::FundingRate(value)) => {
-            let key = MarketViewKey::new(
+            MarketViewKey::new(
                 value.scope.key(),
                 value.provider.clone(),
                 MarketViewKind::FundingRate,
                 None::<String>,
             )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_funding_view(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
         },
         MarketViewUpdate::Observation(crate::MarketObservation::OpenInterest(value)) => {
-            let key = MarketViewKey::new(
+            MarketViewKey::new(
                 value.scope.key(),
                 value.provider.clone(),
                 MarketViewKind::OpenInterest,
                 None::<String>,
             )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_open_interest_view(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
         },
         MarketViewUpdate::Observation(crate::MarketObservation::IndexPrice(value)) => {
-            let key = MarketViewKey::new(
+            MarketViewKey::new(
                 value.scope.key(),
                 value.provider.clone(),
                 MarketViewKind::IndexPrice,
                 None::<String>,
             )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_index_price_view(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
         },
         MarketViewUpdate::Observation(crate::MarketObservation::Bar(value)) => {
-            Some(encode_bar(sequence, value, "unspecified")?)
+            market_bar_view_key(value)
         },
         MarketViewUpdate::Observation(crate::MarketObservation::TradeBar(value)) => {
-            Some(encode_bar(sequence, &value.bar, "trades")?)
+            market_bar_view_key(&value.bar)
         },
         MarketViewUpdate::Observation(crate::MarketObservation::QuoteBar(value)) => {
-            Some(encode_bar(sequence, &value.bar, "quotes")?)
+            market_bar_view_key(&value.bar)
         },
         MarketViewUpdate::Observation(crate::MarketObservation::OptionGreeks(value)) => {
-            let key = MarketViewKey::new(
+            MarketViewKey::new(
                 value.scope.key(),
                 value.provider.clone(),
                 MarketViewKind::Greeks,
                 None::<String>,
             )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_greeks_view(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
         },
-        MarketViewUpdate::OrderBook(value) => {
-            let key = MarketViewKey::new(
-                value.market_id.to_string(),
-                value.provider.clone(),
-                MarketViewKind::OrderBook,
-                Some(value.instrument_id.to_string()),
-            )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_orderbook_view(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
-        },
-        MarketViewUpdate::Freshness(value) => {
-            let key = MarketViewKey::new(
-                value.scope.key(),
-                value.provider.clone(),
-                MarketViewKind::Freshness,
-                Some(value.data_kind.as_str()),
-            )
-            .map_err(|error| error.to_string())?;
-            let bytes = encode_freshness(sequence, &key, value)?;
-            Some(EncodedMarketView { key, bytes })
-        },
-        _ => None,
+        MarketViewUpdate::OrderBook(value) => MarketViewKey::new(
+            value.market_id.to_string(),
+            value.provider.clone(),
+            MarketViewKind::OrderBook,
+            Some(value.instrument_id.to_string()),
+        ),
+        MarketViewUpdate::Freshness(value) => MarketViewKey::new(
+            value.scope.key(),
+            value.provider.clone(),
+            MarketViewKind::Freshness,
+            Some(value.data_kind.as_str()),
+        ),
+        _ => return Ok(None),
     };
-    Ok(encoded)
+    key.map(Some).map_err(|error| error.to_string())
 }
 
-fn encode_bar(sequence: u64, value: &crate::Bar, kind: &str) -> Result<EncodedMarketView, String> {
-    let key = MarketViewKey::new(
+fn market_bar_view_key(
+    value: &crate::Bar,
+) -> kairos_market_contract::ContractResult<MarketViewKey> {
+    MarketViewKey::new(
         value.scope.key(),
         value.provider.clone(),
         MarketViewKind::Bar,
         Some(value.timeframe.clone()),
     )
-    .map_err(|error| error.to_string())?;
+}
+
+fn encode_view(
+    sequence: u64,
+    view: &MarketViewUpdate,
+    key: MarketViewKey,
+    order_books: &BTreeMap<String, crate::OrderBook>,
+) -> Result<EncodedMarketView, String> {
+    let encoded = match view {
+        MarketViewUpdate::Observation(crate::MarketObservation::Quote(value)) => {
+            let bytes = encode_quote(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::Rate(value)) => {
+            let bytes = encode_rate_view(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::Ticker24h(value)) => {
+            let bytes = encode_ticker_view(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::MarkPrice(value)) => {
+            let bytes = encode_mark_price_view(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::FundingRate(value)) => {
+            let bytes = encode_funding_view(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::OpenInterest(value)) => {
+            let bytes = encode_open_interest_view(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::IndexPrice(value)) => {
+            let bytes = encode_index_price_view(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::Bar(value)) => {
+            encode_bar_view_for_key(sequence, value, "unspecified", key)?
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::TradeBar(value)) => {
+            encode_bar_view_for_key(sequence, &value.bar, "trades", key)?
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::QuoteBar(value)) => {
+            encode_bar_view_for_key(sequence, &value.bar, "quotes", key)?
+        },
+        MarketViewUpdate::Observation(crate::MarketObservation::OptionGreeks(value)) => {
+            let bytes = encode_greeks_view(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::OrderBook(identity) => {
+            let value = order_books
+                .get(&format!("{}:{}", identity.provider, identity.market_id))
+                .ok_or_else(|| "Market current order book is unavailable at flush".to_owned())?;
+            if value.instrument_id != identity.instrument_id {
+                return Err("Market current order-book identity changed before flush".into());
+            }
+            let bytes = encode_orderbook_view(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        MarketViewUpdate::Freshness(value) => {
+            let bytes = encode_freshness(sequence, &key, value)?;
+            EncodedMarketView { key, bytes }
+        },
+        _ => return Err("Market current-view update has no encodable value".into()),
+    };
+    Ok(encoded)
+}
+
+fn encode_bar_view_for_key(
+    sequence: u64,
+    value: &crate::Bar,
+    kind: &str,
+    key: MarketViewKey,
+) -> Result<EncodedMarketView, String> {
     let bytes = encode_bar_view(sequence, &key, value, kind)?;
     Ok(EncodedMarketView { key, bytes })
 }
@@ -828,4 +923,149 @@ fn encode_freshness(
         None,
         false
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use kairos_conflux::IndexedMutation;
+    use kairos_primitives::market::Provider;
+    use kairos_primitives::reference::InstrumentId;
+    use kairos_primitives::time::{Sequence, UnixNanos};
+    use kairos_protocol::generated::kairos::market::v_2 as market_fb;
+
+    use super::encode_latest_change_views;
+    use crate::domain::events::{MarketChange, MarketViewUpdate};
+    use crate::{MarketEvent, MarketObservation, ObservationScope, OrderBook, PriceLevel, Quote};
+
+    fn quote_change(sequence: u64, market_id: &str, bid_price: &str) -> MarketChange {
+        let quote = Quote {
+            scope: ObservationScope::market(market_id).unwrap(),
+            instrument_id: InstrumentId::new(format!("instrument:{market_id}")).unwrap(),
+            bid_price: Some(bid_price.parse().unwrap()),
+            bid_quantity: Some("1".parse().unwrap()),
+            ask_price: None,
+            ask_quantity: None,
+            bid_venue_code: None,
+            ask_venue_code: None,
+            tape: None,
+            observed_at_unix_nanos: UnixNanos::new(sequence),
+            provider: Provider::new("test").unwrap(),
+        };
+        MarketChange {
+            sequence: Sequence::new(sequence),
+            event: Some(MarketEvent::Observation(MarketObservation::Quote(
+                quote.clone(),
+            ))),
+            view: Some(MarketViewUpdate::Observation(MarketObservation::Quote(
+                quote,
+            ))),
+        }
+    }
+
+    fn put_value(mutation: &IndexedMutation) -> &[u8] {
+        match mutation {
+            IndexedMutation::Put { value, .. } => value,
+            other => panic!("expected current-view put, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn coalesces_same_key_before_encoding_and_keeps_latest_value() {
+        let batch = encode_latest_change_views(
+            &[
+                quote_change(1, "market:btc", "100"),
+                quote_change(2, "market:btc", "101"),
+            ],
+            &BTreeMap::new(),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(batch.input_update_count, 2);
+        assert_eq!(batch.encoded_update_count, 1);
+        assert_eq!(batch.encoded_order_book_count, 0);
+        assert_eq!(batch.applied_state_sequence, 2);
+        assert_eq!(batch.mutations.len(), 1);
+
+        let root = market_fb::root_as_market_quote_current(put_value(&batch.mutations[0])).unwrap();
+        assert_eq!(root.identity().source_event_id(), Some("market:2"));
+        assert_eq!(root.value().bid_price().unwrap().mantissa(), 101);
+    }
+
+    #[test]
+    fn keeps_distinct_keys_in_one_batch_and_uses_highest_sequence_watermark() {
+        let batch = encode_latest_change_views(
+            &[
+                quote_change(9, "market:btc", "100"),
+                quote_change(4, "market:eth", "10"),
+            ],
+            &BTreeMap::new(),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(batch.input_update_count, 2);
+        assert_eq!(batch.encoded_update_count, 2);
+        assert_eq!(batch.applied_state_sequence, 9);
+        assert_eq!(batch.mutations.len(), 2);
+    }
+
+    #[test]
+    fn event_only_change_does_not_create_a_current_view_mutation() {
+        let mut change = quote_change(1, "market:btc", "100");
+        change.view = None;
+
+        assert!(
+            encode_latest_change_views(&[change], &BTreeMap::new())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn order_book_markers_encode_only_the_final_actor_book() {
+        let provider = Provider::new("test").unwrap();
+        let book = OrderBook::snapshot_with_provider(
+            provider.clone(),
+            "market:btc",
+            "instrument:btc",
+            12_u64,
+            12_u64,
+            vec![PriceLevel {
+                price: "102".parse().unwrap(),
+                quantity: "3".parse().unwrap(),
+            }],
+            vec![],
+        )
+        .unwrap();
+        let marker = MarketViewUpdate::OrderBook((&book).into());
+        let changes = [
+            MarketChange {
+                sequence: Sequence::new(10),
+                event: None,
+                view: Some(marker.clone()),
+            },
+            MarketChange {
+                sequence: Sequence::new(12),
+                event: None,
+                view: Some(marker),
+            },
+        ];
+        let books = BTreeMap::from([(book.key(), book)]);
+
+        let batch = encode_latest_change_views(&changes, &books)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(batch.input_update_count, 2);
+        assert_eq!(batch.encoded_update_count, 1);
+        assert_eq!(batch.encoded_order_book_count, 1);
+        let root =
+            market_fb::root_as_market_order_book_current(put_value(&batch.mutations[0])).unwrap();
+        assert_eq!(root.identity().source_event_id(), Some("market:12"));
+        assert_eq!(root.value().sequence(), 12);
+        assert_eq!(root.value().bids().get(0).price().mantissa(), 102);
+    }
 }

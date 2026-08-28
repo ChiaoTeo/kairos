@@ -34,6 +34,8 @@ class RiskApplication:
         self._instance_id = instance_id
         self._event_cursor = 0
         self._event_cursor_key: tuple[str, str, int] | None = None
+        self._notification_gap_count = 0
+        self._notification_incarnation_change_count = 0
         self._event_source_ready = event_source is None
 
     def check_event_source_ready(self) -> None:
@@ -67,11 +69,7 @@ class RiskApplication:
                 int(record.producer_incarnation),
             )
             if self._event_cursor_key is not None and cursor_key != self._event_cursor_key:
-                if self._latest_view is None:
-                    raise RuntimeError(
-                        "Risk producer restarted but current view is unavailable for resync"
-                    )
-                self._latest_view.snapshot()
+                self._notification_incarnation_change_count += 1
                 cursor = record.sequence - 1
             elif self._event_cursor_key is None:
                 cursor = record.sequence - 1
@@ -80,12 +78,8 @@ class RiskApplication:
                 cursor = record.sequence - 1
             if record.sequence <= cursor:
                 continue
-            expected = cursor + 1
-            if record.sequence != expected:
-                raise RuntimeError(
-                    "Risk event stream is not contiguous: "
-                    f"expected {expected}, received {record.sequence}"
-                )
+            if record.sequence != cursor + 1:
+                self._notification_gap_count += 1
             cursor = record.sequence
             self._event_cursor = cursor
             if record.kind == "policy_activated":
@@ -103,6 +97,21 @@ class RiskApplication:
             ):
                 continue
             yield cast("RiskEvent", record)
+
+    def notification_health(self) -> dict[str, object]:
+        """Return diagnostics for best-effort Risk notifications."""
+
+        return {
+            "cursor": self._event_cursor,
+            "producer": None
+            if self._event_cursor_key is None
+            else self._event_cursor_key[1],
+            "producer_incarnation": None
+            if self._event_cursor_key is None
+            else self._event_cursor_key[2],
+            "gap_count": self._notification_gap_count,
+            "incarnation_change_count": self._notification_incarnation_change_count,
+        }
 
     def status(self, *, account: AccountId | str) -> RiskStatus:
         if self._latest_view is None:

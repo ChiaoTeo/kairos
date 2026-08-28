@@ -160,7 +160,7 @@ def test_accounts_chain_reads_each_account_current_view_once_and_preserves_order
     balance = accounts[0].segment(SPOT).require_balance("USDT")
 
     assert [str(value.account_id) for value in accounts] == ["main", "secondary"]
-    assert balance.available == Decimal("90")
+    assert balance.available.value == Decimal("90")
     assert main.reads == 1
     assert secondary.reads == 1
     assert accounts[0].generation == 7

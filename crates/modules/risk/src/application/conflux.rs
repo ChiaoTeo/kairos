@@ -247,32 +247,42 @@ impl RiskApplication {
                 ) {
                     Ok(()) => self.published_indexed_values = next,
                     Err(error) => {
-                        tracing::error!(event = "snapshot_publish_failed", component = "risk", error = %error)
+                        tracing::error!(event = "current_view_publish_failed", component = "risk", error = %error);
+                        return;
                     },
                 }
             },
             Err(error) => {
-                tracing::error!(event = "snapshot_encode_failed", component = "risk", error = %error)
+                tracing::error!(event = "current_view_encode_failed", component = "risk", error = %error);
+                return;
             },
         }
 
         while let Some(event) = self.pending_event().cloned() {
             let event = super::contract::event(&event);
             if !context.outputs().aeron.contains("risk-events") {
-                break;
+                self.acknowledge_event();
+                continue;
             }
             let mut encoder = FlatbuffersRiskEventWriter::new_with_incarnation(
                 view.actor_id.to_string(),
                 self.publication_identity.clone(),
                 self.producer_incarnation,
             );
-            if encoder.publish(&event).is_err() {
-                break;
+            if let Err(error) = encoder.publish(&event) {
+                tracing::error!(
+                    event = "risk_notification_encode_failed",
+                    error = %error,
+                );
+                self.acknowledge_event();
+                continue;
             }
             if let Some(payload) = encoder.last_payload.as_deref() {
                 if let Err(error) = context.outputs().aeron.publish("risk-events", payload) {
-                    tracing::error!(event = "event_publish_failed", component = "risk", error = %error);
-                    break;
+                    tracing::warn!(
+                        event = "risk_notification_publish_failed",
+                        error = %error,
+                    );
                 }
             }
             self.acknowledge_event();

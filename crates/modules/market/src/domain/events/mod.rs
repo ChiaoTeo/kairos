@@ -37,8 +37,25 @@ pub struct MarketChange {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OrderBookViewIdentity {
+    pub provider: Provider,
+    pub market_id: kairos_primitives::reference::MarketId,
+    pub instrument_id: kairos_primitives::reference::InstrumentId,
+}
+
+impl From<&OrderBook> for OrderBookViewIdentity {
+    fn from(value: &OrderBook) -> Self {
+        Self {
+            provider: value.provider.clone(),
+            market_id: value.market_id.clone(),
+            instrument_id: value.instrument_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MarketViewUpdate {
     Observation(MarketObservation),
-    OrderBook(OrderBook),
+    OrderBook(OrderBookViewIdentity),
     Freshness(MarketFreshness),
 }

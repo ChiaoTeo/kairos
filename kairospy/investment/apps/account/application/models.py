@@ -6,6 +6,16 @@ from enum import StrEnum
 
 from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.decimal import (
+    Money,
+    MoneyLike,
+    Price,
+    PriceLike,
+    Quantity,
+    QuantityLike,
+    SignedQuantity,
+    SignedQuantityLike,
+)
 from kairospy.primitives.reference import InstrumentId
 
 from .errors import (
@@ -85,9 +95,14 @@ class Balance:
     account_id: AccountId
     segment_key: SegmentKey
     asset: str
-    total: Decimal
-    available: Decimal
-    reserved: Decimal
+    total: QuantityLike
+    available: QuantityLike
+    reserved: QuantityLike
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "total", _quantity(self.total))
+        object.__setattr__(self, "available", _quantity(self.available))
+        object.__setattr__(self, "reserved", _quantity(self.reserved))
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,11 +110,17 @@ class Position:
     account_id: AccountId
     segment_key: SegmentKey
     instrument: InstrumentRef
-    quantity: Decimal
+    quantity: SignedQuantityLike
     position_side: PositionSide = PositionSide.NET
-    average_price: Decimal | None = None
-    market_value: Decimal | None = None
-    unrealized_pnl: Decimal | None = None
+    average_price: PriceLike | None = None
+    market_value: MoneyLike | None = None
+    unrealized_pnl: MoneyLike | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "quantity", _signed_quantity(self.quantity))
+        object.__setattr__(self, "average_price", _optional_price(self.average_price))
+        object.__setattr__(self, "market_value", _optional_money(self.market_value))
+        object.__setattr__(self, "unrealized_pnl", _optional_money(self.unrealized_pnl))
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,8 +132,8 @@ class EarnHolding:
     holding_key: str
     product_id: str
     asset: str
-    principal: Decimal
-    redeemable: Decimal | None
+    principal: QuantityLike
+    redeemable: QuantityLike | None
     state: EarnHoldingState
     liquidity: EarnLiquidity
     participant_position_id: str | None = None
@@ -120,6 +141,14 @@ class EarnHolding:
     notice_seconds: int | None = None
     matures_at_unix_nanos: int | None = None
     observed_at_unix_nanos: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "principal", _quantity(self.principal))
+        object.__setattr__(
+            self,
+            "redeemable",
+            None if self.redeemable is None else _quantity(self.redeemable),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,16 +159,23 @@ class ObservedOrder:
     remote_order_id: str | None
     instrument: InstrumentRef
     market_id: str
-    quantity: Decimal
-    filled_quantity: Decimal
+    quantity: QuantityLike
+    filled_quantity: QuantityLike
     status: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "quantity", _quantity(self.quantity))
+        object.__setattr__(self, "filled_quantity", _quantity(self.filled_quantity))
 
 
 @dataclass(frozen=True, slots=True)
 class EquityChange:
     account_id: AccountId
     segment_key: SegmentKey
-    equity: Decimal | None
+    equity: MoneyLike | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "equity", _optional_money(self.equity))
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +196,7 @@ class AccountSegmentSnapshot:
     broker: str
     environment: str
     account_model: str | None
-    equity: Decimal | None
+    equity: MoneyLike | None
     balances: tuple[Balance, ...]
     positions: tuple[Position, ...]
     freshness: DataFreshness
@@ -177,6 +213,9 @@ class AccountSegmentSnapshot:
     last_success_at_unix_nanos: int | None = None
     last_error: str | None = None
     recovery_buffer_depth: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "equity", _optional_money(self.equity))
 
     @property
     def is_fresh(self) -> bool:
@@ -261,3 +300,39 @@ def _account_id(value: AccountId | str) -> AccountId:
 
 def _segment_key(value: SegmentKey | str) -> SegmentKey:
     return value if isinstance(value, SegmentKey) else SegmentKey(value)
+
+
+def _quantity(value: object) -> QuantityLike:
+    if isinstance(value, QuantityLike):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return Quantity(value)
+    raise TypeError("Quantity value is invalid")
+
+
+def _signed_quantity(value: object) -> SignedQuantityLike:
+    if isinstance(value, SignedQuantityLike):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return SignedQuantity(value)
+    raise TypeError("SignedQuantity value is invalid")
+
+
+def _optional_price(value: object | None) -> PriceLike | None:
+    if value is None:
+        return None
+    if isinstance(value, PriceLike):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return Price(value)
+    raise TypeError("Price value is invalid")
+
+
+def _optional_money(value: object | None) -> MoneyLike | None:
+    if value is None:
+        return None
+    if isinstance(value, MoneyLike):
+        return value
+    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
+        return Money(value)
+    raise TypeError("Money value is invalid")

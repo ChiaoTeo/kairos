@@ -37,6 +37,7 @@ from kairospy.investment.apps.reference.application import (
     MarketStatus,
 )
 from kairospy.primitives.account import AccountId
+from kairospy.primitives.decimal import Money, Quantity
 from kairospy.infrastructure.contracts.market import MarketTarget
 from kairospy.infrastructure.contracts.market.events import MarketEvent
 from kairospy.strategy import (
@@ -167,7 +168,7 @@ class UserStrategy(Strategy):
         )
         context.execution.target_position(
             InstrumentId(event.data.instrument_id),
-            Decimal("1"),
+            Quantity("1"),
             account="main",
             algorithm=ImmediateAlgorithm(),
             strategy_decision_id=decision.strategy_decision_id,
@@ -1034,7 +1035,7 @@ def test_execution_application_uses_strategy_scoped_command_surface(
     )
     receipt = host.context.execution.target_position(
         _MARKET.instrument,
-        Decimal("2"),
+        Quantity("2"),
         account="main",
         algorithm=ImmediateAlgorithm(),
         strategy_decision_id=decision.strategy_decision_id,
@@ -1463,7 +1464,7 @@ def test_backtest_quote_callbacks_bracket_strategy_and_record_equity(
                 "paper",
                 "paper",
                 "no_margin",
-                Decimal("101"),
+                Money("101"),
                 (),
                 (),
                 DataFreshness.FRESH,
@@ -1489,7 +1490,7 @@ def test_backtest_quote_callbacks_bracket_strategy_and_record_equity(
     )
     host.dispatch(event)
     assert calls == ["execution", "account"]
-    assert host.equity_curve[-1]["snapshot"].equity == Decimal("101")
+    assert host.equity_curve[-1]["snapshot"].equity.value == Decimal("101")
 
 
 def test_bar_backtest_callbacks_use_previous_completed_bar_for_execution(

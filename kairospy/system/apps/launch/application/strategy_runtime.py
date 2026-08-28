@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
 from typing import Literal, Mapping, cast
 
 from kairospy.strategy.apps.agent.application import AgentLaunchConfig
+from kairospy.primitives.decimal import Money
 from ..domain.identity import LaunchIdentity
 
 
@@ -22,7 +22,7 @@ class StrategyLaunchConfig:
     market_scope: Literal["shared", "instance"]
     execution_enabled: bool
     allow_trading: bool
-    max_order_notional: Decimal | None
+    max_order_notional: Money | None
     require_limit_orders: bool
     replay_start: datetime | None
     replay_end: datetime | None
@@ -163,14 +163,14 @@ def _env_boolean(name: str, default: object) -> bool:
     return value == "true"
 
 
-def _optional_positive_decimal(value: object, name: str) -> Decimal | None:
+def _optional_positive_decimal(value: object, name: str) -> Money | None:
     if value is None or value == "":
         return None
     try:
-        result = Decimal(str(value))
-    except InvalidOperation as error:
+        result = Money(str(value))
+    except (TypeError, ValueError) as error:
         raise ValueError(f"{name} must be a decimal") from error
-    if result <= 0:
+    if result.value <= 0:
         raise ValueError(f"{name} must be positive")
     return result
 

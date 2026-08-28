@@ -154,17 +154,31 @@ struct NativeBuildInfo {
     contract_fingerprint: String,
 }
 
-#[pyclass(frozen, module = "kairospy._native_execution_contract")]
+#[pyclass(
+    name = "_NativeSemanticDecimal",
+    frozen,
+    module = "kairospy._native_execution_contract"
+)]
 #[derive(Clone)]
 struct NativeDecimal {
     #[pyo3(get)]
     mantissa: i64,
     #[pyo3(get)]
     scale: u8,
+    semantic_type: &'static str,
 }
 
 #[pymethods]
 impl NativeDecimal {
+    fn __str__(&self) -> String {
+        decimal_text(self.mantissa, self.scale)
+    }
+
+    #[getter]
+    fn semantic_type(&self) -> &'static str {
+        self.semantic_type
+    }
+
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let decimal = PyModule::import(py, "decimal")?.getattr("Decimal")?;
@@ -564,10 +578,12 @@ impl ExecutionEvent {
             quantity: NativeDecimal {
                 mantissa: quantity,
                 scale: 0,
+                semantic_type: "quantity",
             },
             price: NativeDecimal {
                 mantissa: price,
                 scale: 0,
+                semantic_type: "price",
             },
             occurred_at_unix_nanos,
         };
@@ -806,13 +822,7 @@ impl ExecutionCurrentView {
     }
 
     fn orders(&self, py: Python<'_>) -> PyResult<Vec<ExecutionOrderCurrent>> {
-        self.read(py, |reader| {
-            reader
-                .orders()?
-                .into_iter()
-                .map(|value| value.order().map(order))
-                .collect()
-        })
+        self.read(py, |reader| reader.map_orders(|value| Ok(order(value))))
     }
 
     fn get_order(
@@ -826,13 +836,7 @@ impl ExecutionCurrentView {
     }
 
     fn intents(&self, py: Python<'_>) -> PyResult<Vec<ExecutionIntentCurrent>> {
-        self.read(py, |reader| {
-            reader
-                .intents()?
-                .into_iter()
-                .map(|value| value.intent().map(intent))
-                .collect()
-        })
+        self.read(py, |reader| reader.map_intents(|value| Ok(intent(value))))
     }
 
     fn get_intent(
@@ -841,40 +845,25 @@ impl ExecutionCurrentView {
         intent_id: String,
     ) -> PyResult<Option<ExecutionIntentCurrent>> {
         self.read(py, move |reader| {
-            reader
-                .intent(&intent_id)?
-                .map(|value| value.intent().map(intent))
-                .transpose()
+            reader.with_intent(&intent_id, |value| Ok(value.map(intent)))
         })
     }
 
     fn commitments(&self, py: Python<'_>) -> PyResult<Vec<ExecutionCommitmentCurrent>> {
         self.read(py, |reader| {
-            reader
-                .commitments()?
-                .into_iter()
-                .map(|value| value.commitment().map(commitment))
-                .collect()
+            reader.map_commitments(|value| Ok(commitment(value)))
         })
     }
 
     fn algorithm_runs(&self, py: Python<'_>) -> PyResult<Vec<ExecutionAlgorithmRunCurrent>> {
         self.read(py, |reader| {
-            reader
-                .algorithm_runs()?
-                .into_iter()
-                .map(|value| value.algorithm_run().map(algorithm_run))
-                .collect()
+            reader.map_algorithm_runs(|value| Ok(algorithm_run(value)))
         })
     }
 
     fn risk_reservations(&self, py: Python<'_>) -> PyResult<Vec<ExecutionRiskReservationCurrent>> {
         self.read(py, |reader| {
-            reader
-                .risk_reservations()?
-                .into_iter()
-                .map(|value| value.risk_reservation().map(risk_reservation))
-                .collect()
+            reader.map_risk_reservations(|value| Ok(risk_reservation(value)))
         })
     }
 
@@ -883,11 +872,7 @@ impl ExecutionCurrentView {
         py: Python<'_>,
     ) -> PyResult<Vec<ExecutionUnknownRemoteOrderCurrent>> {
         self.read(py, |reader| {
-            reader
-                .unknown_remote_orders()?
-                .into_iter()
-                .map(|value| value.unknown_remote_order().map(unknown_remote_order))
-                .collect()
+            reader.map_unknown_remote_orders(|value| Ok(unknown_remote_order(value)))
         })
     }
 
@@ -955,9 +940,9 @@ fn order(value: fb::ExecutionOrderCurrent<'_>) -> ExecutionOrderCurrent {
         instrument_id: state.instrument_id().to_owned(),
         account_id: state.account_id().to_owned(),
         side: if state.side().0 == 1 { "buy" } else { "sell" }.to_owned(),
-        quantity: decimal(state.quantity()),
-        filled_quantity: decimal(state.filled_quantity()),
-        limit_price: state.limit_price().map(decimal),
+        quantity: decimal(state.quantity(), "quantity"),
+        filled_quantity: decimal(state.filled_quantity(), "quantity"),
+        limit_price: state.limit_price().map(|value| decimal(value, "price")),
         status: order_status(state.lifecycle().0).to_owned(),
         updated_at_unix_nanos: state.updated_at_unix_nanos(),
     }
@@ -984,7 +969,7 @@ fn intent(value: fb::ExecutionIntentCurrent<'_>) -> ExecutionIntentCurrent {
         strategy_id: raw.strategy_id().to_owned(),
         instrument_id: first.instrument_id().to_owned(),
         account_ids,
-        target_quantity: decimal(first.quantity()),
+        target_quantity: decimal(first.quantity(), "quantity"),
         status: intent_status(state.lifecycle().0).to_owned(),
         reason: state.reason().unwrap_or_default().to_owned(),
         order_ids,
@@ -1009,8 +994,8 @@ fn commitment(value: fb::ExecutionCommitmentCurrent<'_>) -> ExecutionCommitmentC
         }
         .to_owned(),
         resource_id: state.resource_id().to_owned(),
-        amount: decimal(state.amount()),
-        remaining_quantity: decimal(state.remaining_quantity()),
+        amount: decimal(state.amount(), "decimal"),
+        remaining_quantity: decimal(state.remaining_quantity(), "quantity"),
         status: match state.lifecycle().0 {
             1 => "held_before_send",
             2 => "active",
@@ -1043,7 +1028,7 @@ fn risk_reservation(
         reservation_id: state.reservation_id().to_owned(),
         idempotency_key: state.idempotency_key().to_owned(),
         account_id: state.account_id().to_owned(),
-        amount: decimal(state.amount()),
+        amount: decimal(state.amount(), "money"),
         status: match state.lifecycle().0 {
             1 => "authorize_pending",
             2 => "active",
@@ -1066,9 +1051,9 @@ fn risk_reservation(
         funding_requirement: state
             .funding_requirement()
             .map(|raw| ExecutionFundingRequirement {
-                required_margin: decimal(raw.required_margin()),
-                available_margin: decimal(raw.available_margin()),
-                shortfall: decimal(raw.shortfall()),
+                required_margin: decimal(raw.required_margin(), "money"),
+                available_margin: decimal(raw.available_margin(), "money"),
+                shortfall: decimal(raw.shortfall(), "money"),
                 margin_rule_id: raw.margin_rule_id().to_owned(),
                 risk_decision_id: raw.risk_decision_id().to_owned(),
                 risk_policy_version: raw.risk_policy_version(),
@@ -1117,10 +1102,12 @@ fn unknown_remote_order(
         symbol: state.symbol().to_owned(),
         status: order_status(state.lifecycle().0).to_owned(),
         execution_id: optional_text(state.execution_id().unwrap_or_default()),
-        fill_quantity: state.fill_quantity().map(decimal),
-        fill_price: state.fill_price().map(decimal),
+        fill_quantity: state
+            .fill_quantity()
+            .map(|value| decimal(value, "quantity")),
+        fill_price: state.fill_price().map(|value| decimal(value, "price")),
         fee_currency: optional_text(state.fee_currency().unwrap_or_default()),
-        fee_amount: state.fee_amount().map(decimal),
+        fee_amount: state.fee_amount().map(|value| decimal(value, "money")),
         first_seen_at_unix_nanos: state.first_seen_at_unix_nanos(),
         last_seen_at_unix_nanos: state.last_seen_at_unix_nanos(),
         resolution: state.resolution().to_owned(),
@@ -1128,10 +1115,11 @@ fn unknown_remote_order(
     }
 }
 
-fn decimal(value: &Decimal64) -> NativeDecimal {
+fn decimal(value: &Decimal64, semantic_type: &'static str) -> NativeDecimal {
     NativeDecimal {
         mantissa: value.mantissa(),
         scale: value.scale(),
+        semantic_type,
     }
 }
 fn optional_text(value: &str) -> Option<String> {
@@ -1323,7 +1311,7 @@ fn event_intent(
                     leg_id: benchmark.leg_id().map(str::to_owned),
                     instrument_id: benchmark.instrument_id().to_owned(),
                     market_id: benchmark.market_id().to_owned(),
-                    price: decimal(benchmark.price()),
+                    price: decimal(benchmark.price(), "price"),
                     observed_at_unix_nanos: benchmark.observed_at_unix_nanos(),
                 },
             )
@@ -1408,9 +1396,9 @@ fn event_order(value: fb::OrderState<'_>) -> ExecutionOrderUpdate {
             _ => "unknown",
         }
         .to_owned(),
-        quantity: decimal(value.quantity()),
-        filled_quantity: decimal(value.filled_quantity()),
-        limit_price: value.limit_price().map(decimal),
+        quantity: decimal(value.quantity(), "quantity"),
+        filled_quantity: decimal(value.filled_quantity(), "quantity"),
+        limit_price: value.limit_price().map(|value| decimal(value, "price")),
         status: order_status(value.lifecycle().0).to_owned(),
         updated_at_unix_nanos: value.updated_at_unix_nanos(),
         reason: value.reason().unwrap_or_default().to_owned(),
@@ -1434,8 +1422,8 @@ fn event_fill(value: fb::Fill<'_>, occurred_at_unix_nanos: u64) -> ExecutionFill
         reported_broker_id: value.reported_broker_id().map(str::to_owned),
         execution_channel: value.execution_channel().map(str::to_owned),
         order_entry_symbol: value.provider_symbol().map(str::to_owned),
-        quantity: decimal(value.quantity()),
-        price: decimal(value.price()),
+        quantity: decimal(value.quantity(), "quantity"),
+        price: decimal(value.price(), "price"),
         occurred_at_unix_nanos,
     }
 }
@@ -1513,7 +1501,7 @@ fn project_execution_event(
                 root.lifecycle(),
                 Some(root.previous_lifecycle()),
                 root.order_ids().iter().map(str::to_owned).collect(),
-                Some(decimal(root.completed_quantity())),
+                Some(decimal(root.completed_quantity(), "quantity")),
                 root.reason().unwrap_or_default().to_owned(),
             )?;
             (
@@ -1644,7 +1632,6 @@ fn _native_execution_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     module.add_class::<NativeBuildInfo>()?;
     module.add_class::<NativeExecutionClient>()?;
-    module.add_class::<NativeDecimal>()?;
     module.add_class::<ExecutionEventMetadata>()?;
     module.add_class::<ExecutionBenchmark>()?;
     module.add_class::<ExecutionIntentEventValue>()?;

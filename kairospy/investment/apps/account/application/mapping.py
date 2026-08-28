@@ -9,6 +9,16 @@ from kairospy.infrastructure.contracts.market.events import MarketEvent
 from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.decimal import (
+    Money,
+    MoneyLike,
+    Price,
+    PriceLike,
+    Quantity,
+    QuantityLike,
+    SignedQuantity,
+    SignedQuantityLike,
+)
 
 from .models import (
     AccountSegmentSnapshot,
@@ -26,23 +36,18 @@ from .models import (
 )
 
 
-class _MarketDecimal(Protocol):
-    mantissa: int
-    scale: int
-
-
 class _MarketObservation(Protocol):
     instrument_id: str
     source_observed_at_unix_nanos: int
 
 
 class _MarketBar(_MarketObservation, Protocol):
-    close: _MarketDecimal
+    close: PriceLike
 
 
 class _MarketQuote(_MarketObservation, Protocol):
-    bid_price: _MarketDecimal | None
-    ask_price: _MarketDecimal | None
+    bid_price: PriceLike | None
+    ask_price: PriceLike | None
 
 
 def backtest_mark_to_market_request(
@@ -55,26 +60,24 @@ def backtest_mark_to_market_request(
 
     if isinstance(event, MarketEvent) and event.kind == "bar":
         observation = cast(_MarketBar, event.data)
-        mark = _market_decimal(observation.close)
+        mark: PriceLike = observation.close
     elif isinstance(event, MarketEvent) and event.kind == "quote":
         observation = cast(_MarketQuote, event.data)
         prices = tuple(
-            _market_decimal(value)
+            value.value
             for value in (observation.bid_price, observation.ask_price)
             if value is not None
         )
         if not prices:
             return None
-        mark = sum(prices, Decimal("0")) / len(prices)
+        mark = Price(sum(prices, Decimal("0")) / len(prices))
     else:
         return None
-    if not mark.is_finite():
-        raise ValueError("decimal value must be finite")
     return MarkToMarketRequest(
         segment_key,
         str(observation.instrument_id),
         quote_asset,
-        format(mark, "f"),
+        mark,
         observation.source_observed_at_unix_nanos,
     )
 
@@ -126,7 +129,7 @@ def map_account_segment_snapshot(
             if configured_model is None
             else str(configured_model)
         ),
-        equity=_decimal(_field(value, "equity", None)),
+        equity=_money(_field(value, "equity", None)),
         balances=tuple(
             _map_balance(item, account_id=account_id, segment_key=segment_key)
             for item in _sequence(_field(value, "balances", ()), "balances")
@@ -168,9 +171,9 @@ def map_account_segment_snapshot(
 def _map_balance(
     value: object, *, account_id: AccountId, segment_key: SegmentKey
 ) -> Balance:
-    total = _decimal(_field(value, "total", None)) or Decimal("0")
-    available = _decimal(_field(value, "available", None)) or Decimal("0")
-    reserved = _decimal(_field(value, "reserved", _field(value, "locked", None)))
+    total = _quantity(_field(value, "total", None)) or Quantity("0")
+    available = _quantity(_field(value, "available", None)) or Quantity("0")
+    reserved = _quantity(_field(value, "reserved", _field(value, "locked", None)))
     return Balance(
         account_id,
         segment_key,
@@ -183,7 +186,7 @@ def _map_balance(
         ),
         total,
         available,
-        total - available if reserved is None else reserved,
+        Quantity(total).checked_sub(available) if reserved is None else reserved,
     )
 
 
@@ -197,11 +200,12 @@ def _map_position(
         instrument=InstrumentRef(
             InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]
         ),
-        quantity=_decimal(_field(value, "quantity", None)) or Decimal("0"),
+        quantity=_signed_quantity(_field(value, "quantity", None))
+        or SignedQuantity("0"),
         position_side=_position_side(_field(value, "position_side", None)),
-        average_price=_decimal(_field(value, "average_price", None)),
-        market_value=_decimal(_field(value, "market_value", None)),
-        unrealized_pnl=_decimal(_field(value, "unrealized_pnl", None)),
+        average_price=_price(_field(value, "average_price", None)),
+        market_value=_money(_field(value, "market_value", None)),
+        unrealized_pnl=_money(_field(value, "unrealized_pnl", None)),
     )
 
 
@@ -219,8 +223,8 @@ def _map_earn_holding(
         ),
         product_id=_required_text(_field(value, "product_id"), "earn product_id"),
         asset=_required_text(_field(value, "asset"), "earn asset"),
-        principal=_decimal(_field(value, "principal", None)) or Decimal("0"),
-        redeemable=_decimal(_field(value, "redeemable", None)),
+        principal=_quantity(_field(value, "principal", None)) or Quantity("0"),
+        redeemable=_quantity(_field(value, "redeemable", None)),
         state=EarnHoldingState(str(_field(value, "state", "unknown"))),
         participant_state=(
             None if participant_state is None else str(participant_state)
@@ -233,12 +237,6 @@ def _map_earn_holding(
         observed_at_unix_nanos=_optional_int(
             _field(value, "observed_at_unix_nanos", None)
         ),
-    )
-
-
-def _market_decimal(value: object) -> Decimal:
-    return Decimal(int(getattr(value, "mantissa"))).scaleb(
-        -int(getattr(value, "scale"))
     )
 
 
@@ -286,23 +284,30 @@ def _sequence(value: object, name: str) -> Sequence[object]:
     return value
 
 
-def _decimal(value: object) -> Decimal | None:
+def _quantity(value: object) -> QuantityLike | None:
+    return _semantic_decimal(value, QuantityLike, Quantity)
+
+
+def _signed_quantity(value: object) -> SignedQuantityLike | None:
+    return _semantic_decimal(value, SignedQuantityLike, SignedQuantity)
+
+
+def _price(value: object) -> PriceLike | None:
+    return _semantic_decimal(value, PriceLike, Price)
+
+
+def _money(value: object) -> MoneyLike | None:
+    return _semantic_decimal(value, MoneyLike, Money)
+
+
+def _semantic_decimal(value: object, protocol, concrete):
     if value is None:
         return None
-    if isinstance(value, Decimal):
+    if isinstance(value, protocol):
         return value
-    if isinstance(value, str):
-        return Decimal(value)
-    decimal_value = getattr(value, "value", None)
-    if isinstance(decimal_value, Decimal):
-        return decimal_value
-    mantissa = getattr(value, "mantissa", None)
-    scale = getattr(value, "scale", None)
-    if isinstance(mantissa, bool) or not isinstance(mantissa, int):
-        raise ValueError("decimal mantissa must be an integer")
-    if isinstance(scale, bool) or not isinstance(scale, int):
-        raise ValueError("decimal scale must be an integer")
-    return Decimal(mantissa).scaleb(-scale)
+    if isinstance(value, (Decimal, str, int)):
+        return concrete(value)
+    raise ValueError(f"decimal value must satisfy {protocol.__name__}")
 
 
 def _optional_int(value: object) -> int | None:

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 from kairospy.strategy import (
     ImmediateAlgorithm,
     InstrumentId,
+    Price,
     QuoteEvent,
     Strategy,
     StrategyContext,
+    Quantity,
 )
 
 
@@ -31,10 +31,10 @@ class BtcusdtQuoteStrategy(Strategy):
         if count == 1:
             ctx.execution.target_position(
                 InstrumentId(quote.instrument_id),
-                Decimal("0.01"),
+                Quantity("0.01"),
                 account="paper-account",
                 algorithm=ImmediateAlgorithm(),
-                limit_price=quote.ask_price.value,
+                limit_price=Price(quote.ask_price),
                 reason="enter on the first executable quote",
             )
         elif count == 2:

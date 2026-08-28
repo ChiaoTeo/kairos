@@ -327,7 +327,7 @@ def test_reject_does_not_submit_and_revise_submits_effective(tmp_path: Path) -> 
     assert revised.status is DecisionStatus.REVISED
     effective = revised_submissions[0]
     assert isinstance(effective, TargetPositionRequest)
-    assert effective.quantity == Decimal("1")
+    assert effective.quantity.value == Decimal("1")
     revised_worker.close(timeout=1)
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NewType
 
 from ._text import TextValue
 
@@ -15,4 +16,21 @@ class SegmentKey(TextValue):
     """Stable Account segment identity shared across application boundaries."""
 
 
-__all__ = ["AccountId", "SegmentKey"]
+@dataclass(frozen=True, slots=True)
+class BrokerId(TextValue):
+    """Canonical broker identity."""
+
+
+AccountIdRead = NewType("AccountIdRead", str)
+BrokerIdRead = NewType("BrokerIdRead", str)
+SegmentKeyRead = NewType("SegmentKeyRead", str)
+
+
+__all__ = [
+    "AccountId",
+    "AccountIdRead",
+    "BrokerId",
+    "BrokerIdRead",
+    "SegmentKey",
+    "SegmentKeyRead",
+]

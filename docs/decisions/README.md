@@ -45,6 +45,7 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0038 | [Reference SQLite Owner Contract Python 边界](0038-reference-sqlite-owner-contract-python-boundary.md) | Accepted |
 | 0039 | [Workspace 与 Instance 事件传输路由](0039-workspace-and-instance-event-transport-routes.md) | Accepted |
 | 0040 | [Python Owner Contract 语义 Primitive 收敛](0040-python-owner-contract-semantic-primitives.md) | Accepted |
+| 0041 | [权威 Current View 与 Best-effort Notification](0041-authoritative-current-views-and-best-effort-notifications.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

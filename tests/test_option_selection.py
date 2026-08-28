@@ -53,11 +53,13 @@ def test_selection_is_point_in_time_deterministic_and_protected() -> None:
     second = OptionSpreadSelectionApplication().select(request)
 
     assert first == second
-    assert first.short.instrument_id == "short-tie-a"
-    assert first.long.instrument_id == "long"
+    assert str(first.short.instrument_id) == "short-tie-a"
+    assert str(first.long.instrument_id) == "long"
     assert first.long.strike < first.short.strike
     rejected = {
-        item.instrument_id: item.reasons for item in first.audit if not item.accepted
+        str(item.instrument_id): item.reasons
+        for item in first.audit
+        if not item.accepted
     }
     assert rejected == {"call": ("not-put",), "future": ("future-availability",)}
 

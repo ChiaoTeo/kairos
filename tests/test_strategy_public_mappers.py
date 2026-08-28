@@ -55,8 +55,8 @@ def test_execution_mapper_builds_intent_order_and_fill_models() -> None:
     )
     assert intent.status is IntentStatus.EXECUTING
     assert order.status is OrderStatus.PARTIALLY_FILLED
-    assert order.filled_quantity == Decimal("1.25")
-    assert fill.price == Decimal("100.01")
+    assert order.filled_quantity.value == Decimal("1.25")
+    assert fill.price.value == Decimal("100.01")
 
 
 def test_execution_mapper_rejects_legacy_decimal_objects() -> None:

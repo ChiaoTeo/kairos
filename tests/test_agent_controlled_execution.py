@@ -32,6 +32,7 @@ from kairospy.investment.apps.execution.application import (
     TargetPositionRequest,
 )
 from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.decimal import Quantity
 from kairospy.strategy import CommandResult
 
 
@@ -124,7 +125,7 @@ def test_gate_returns_pending_not_sent_then_worker_submits(tmp_path: Path) -> No
 
     receipt = application.target_position(
         InstrumentId("BTCUSDT"),
-        Decimal("1"),
+        Quantity("1"),
         account="main",
         algorithm=ImmediateAlgorithm(),
     )
@@ -151,7 +152,7 @@ def test_fixture_candidate_uses_deterministic_time_not_wall_clock(
 
     application.target_position(
         InstrumentId("BTCUSDT"),
-        Decimal("1"),
+        Quantity("1"),
         account="main",
         algorithm=ImmediateAlgorithm(),
     )
@@ -176,7 +177,7 @@ def test_shadow_submits_original_synchronously_and_does_not_resubmit(
     )
 
     receipt = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("1"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("1"), account="main", algorithm=ImmediateAlgorithm()
     )
     terminal = _wait_any_terminal(records)
 
@@ -205,7 +206,7 @@ def test_revise_records_original_and_effective_in_execution_admission(
     )
 
     receipt = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("2"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("2"), account="main", algorithm=ImmediateAlgorithm()
     )
     terminal = _wait_any_terminal(records)
 
@@ -214,8 +215,8 @@ def test_revise_records_original_and_effective_in_execution_admission(
     assert len(commands.calls) == 1
     admission = commands.calls[0][1]["admission_evidence"]
     assert getattr(admission, "outcome") == "revised"
-    assert getattr(admission, "original_intent").quantity == Decimal("2")
-    assert getattr(admission, "effective_intent").quantity == Decimal("1")
+    assert getattr(admission, "original_intent").quantity.value == Decimal("2")
+    assert getattr(admission, "effective_intent").quantity.value == Decimal("1")
     worker.close(timeout=1)
 
 
@@ -229,7 +230,7 @@ def test_required_context_failure_fails_closed_but_reduce_bypasses(
         required_contexts=("signal",),
     )
     rejected = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("1"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("1"), account="main", algorithm=ImmediateAlgorithm()
     )
     assert rejected.status is SubmissionStatus.REJECTED
     assert rejected.delivery_certainty is DeliveryCertainty.NOT_SENT
@@ -247,7 +248,7 @@ def test_required_context_failure_fails_closed_but_reduce_bypasses(
         )
     )
     pending = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("1"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("1"), account="main", algorithm=ImmediateAlgorithm()
     )
     assert pending.status is SubmissionStatus.PENDING
     worker.close(timeout=1)
@@ -260,7 +261,7 @@ def test_required_context_failure_fails_closed_but_reduce_bypasses(
         exposure="reduce",
     )
     bypassed = reducing.target_position(
-        InstrumentId("BTCUSDT"), Decimal("0"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("0"), account="main", algorithm=ImmediateAlgorithm()
     )
     assert bypassed.status is SubmissionStatus.ACCEPTED
     assert len(reducing_commands.calls) == 1
@@ -282,7 +283,7 @@ def test_shadow_required_context_failure_submits_original_once_and_records_failu
     )
 
     submitted = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("1"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("1"), account="main", algorithm=ImmediateAlgorithm()
     )
 
     assert submitted.status is SubmissionStatus.ACCEPTED
@@ -308,7 +309,7 @@ def test_runtime_failure_reduction_bypasses_without_agent_admission_evidence(
     )
 
     pending = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("0"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("0"), account="main", algorithm=ImmediateAlgorithm()
     )
     terminal = _wait_any_terminal(records)
 
@@ -336,15 +337,15 @@ def test_queue_full_reduction_returns_downstream_status_without_agent_evidence(
     )
 
     first = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("1"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("1"), account="main", algorithm=ImmediateAlgorithm()
     )
     assert first.status is SubmissionStatus.PENDING
     assert runtime.entered.wait(1)
     second = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("1"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("1"), account="main", algorithm=ImmediateAlgorithm()
     )
     bypassed = application.target_position(
-        InstrumentId("BTCUSDT"), Decimal("0"), account="main", algorithm=ImmediateAlgorithm()
+        InstrumentId("BTCUSDT"), Quantity("0"), account="main", algorithm=ImmediateAlgorithm()
     )
 
     assert second.status is SubmissionStatus.PENDING
@@ -368,7 +369,7 @@ def test_unavailable_runtime_allows_only_proven_reduction() -> None:
 
     result = unavailable.target_position(
         TargetPositionRequest(
-            "BTCUSDT", Decimal("0"), algorithm=ImmediateAlgorithm(), account_id="main"
+            "BTCUSDT", Quantity("0"), algorithm=ImmediateAlgorithm(), account_id="main"
         ),
         request_id="request",
         strategy_id="strategy",

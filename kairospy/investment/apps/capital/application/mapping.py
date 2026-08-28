@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
 import time
 
 from kairospy.infrastructure.contracts.capital.types import (
@@ -12,6 +11,7 @@ from kairospy.infrastructure.contracts.capital.types import (
     PublishFundingObjectiveRequest,
 )
 from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.decimal import Quantity, QuantityLike
 
 from .models import (
     CapitalAlertKind,
@@ -41,11 +41,11 @@ def funding_objective_request(
         objective.version,
         strategy_id,
         contract_funding_location(objective.destination),
-        format(objective.desired_available, "f"),
+        objective.desired_available,
         _nanos(objective.required_by),
         _nanos(objective.expires_at),
         objective.priority.value,
-        int(objective.confidence * 10_000),
+        int(objective.confidence.value * 10_000),
         objective.strategy_decision_id or request_id,
         (
             _nanos(objective.observed_at)
@@ -71,12 +71,12 @@ def capital_demand_request(
         capital_group_id,
         strategy_id,
         contract_funding_location(demand.destination),
-        format(demand.observed_shortfall, "f"),
+        demand.observed_shortfall,
         _nanos(demand.observed_at),
         _nanos(demand.required_by),
         _nanos(demand.expires_at),
         demand.priority.value,
-        int(demand.confidence * 10_000),
+        int(demand.confidence.value * 10_000),
         demand.account_watermark,
         demand.risk_watermark,
         launch_id,
@@ -117,14 +117,14 @@ def map_capital_availability(value: object) -> CapitalAvailability:
                 ),
                 objective_ids=tuple(getattr(item, "objective_ids")),
                 demand_ids=tuple(getattr(item, "demand_ids")),
-                desired_available=Decimal(str(getattr(item, "desired_available"))),
+                desired_available=_quantity(getattr(item, "desired_available")),
             )
             for item in getattr(value, "funding_horizons")
         ),
-        desired_target=Decimal(str(getattr(value, "desired_target"))),
-        observed_available=Decimal(str(getattr(value, "observed_available"))),
-        effective_target=Decimal(str(getattr(value, "effective_target"))),
-        deficit=Decimal(str(getattr(value, "deficit"))),
+        desired_target=_quantity(getattr(value, "desired_target")),
+        observed_available=_quantity(getattr(value, "observed_available")),
+        effective_target=_quantity(getattr(value, "effective_target")),
+        deficit=_quantity(getattr(value, "deficit")),
         account_watermark=int(getattr(value, "account_watermark")),
         risk_policy_version=int(getattr(value, "risk_policy_version")),
         risk_watermark=int(getattr(value, "risk_watermark")),
@@ -150,3 +150,11 @@ def map_capital_alert(value: object) -> CapitalRecoveryAlert:
 
 def _nanos(value: datetime) -> int:
     return int(value.timestamp() * 1_000_000_000)
+
+
+def _quantity(value: object) -> QuantityLike:
+    if isinstance(value, QuantityLike) and value.semantic_type == "quantity":
+        return value
+    if isinstance(value, (str, int)):
+        return Quantity(value)
+    raise TypeError("Capital contract value must be QuantityLike")

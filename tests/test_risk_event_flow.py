@@ -132,7 +132,7 @@ def test_risk_ignores_duplicates_and_rejects_non_native_events() -> None:
         asyncio.run(collect(invalid))
 
 
-def test_live_risk_source_joins_latest_then_enforces_continuity() -> None:
+def test_live_risk_source_joins_latest_then_reports_gap() -> None:
     application = RiskApplication(
         None,
         LiveRiskSource(
@@ -151,8 +151,8 @@ def test_live_risk_source_joins_latest_then_enforces_continuity() -> None:
         account_ids=(AccountId("main"),),
         strategy_id="strategy-1",
     )
-    with pytest.raises(RuntimeError, match="expected 41, received 42"):
-        asyncio.run(collect(gap))
+    assert len(asyncio.run(collect(gap))) == 2
+    assert gap.notification_health()["gap_count"] == 1
 
 
 def test_risk_rejects_another_launch_instance_before_business_scope() -> None:

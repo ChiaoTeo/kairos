@@ -449,16 +449,30 @@ impl RiskEvent {
         self.metadata.instance_id.as_deref()
     }
 }
-#[pyclass(frozen, module = "kairospy._native_risk_contract")]
+#[pyclass(
+    name = "_NativeSemanticDecimal",
+    frozen,
+    module = "kairospy._native_risk_contract"
+)]
 #[derive(Clone)]
 struct NativeDecimal {
     #[pyo3(get)]
     mantissa: i64,
     #[pyo3(get)]
     scale: u8,
+    semantic_type: &'static str,
 }
 #[pymethods]
 impl NativeDecimal {
+    fn __str__(&self) -> String {
+        native_decimal_text(self.mantissa, self.scale)
+    }
+
+    #[getter]
+    fn semantic_type(&self) -> &'static str {
+        self.semantic_type
+    }
+
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let decimal = PyModule::import(py, "decimal")?.getattr("Decimal")?;
@@ -477,6 +491,21 @@ impl NativeDecimal {
         Ok(decimal.call1((text,))?.unbind())
     }
 }
+
+fn native_decimal_text(mantissa: i64, scale: u8) -> String {
+    if scale == 0 {
+        return mantissa.to_string();
+    }
+    let sign = if mantissa < 0 { "-" } else { "" };
+    let scale = usize::from(scale);
+    let mut digits = mantissa.unsigned_abs().to_string();
+    if digits.len() <= scale {
+        digits.insert_str(0, &"0".repeat(scale + 1 - digits.len()));
+    }
+    let split = digits.len() - scale;
+    format!("{sign}{}.{}", &digits[..split], &digits[split..])
+}
+
 #[pyclass(frozen, module = "kairospy._native_risk_contract")]
 #[derive(Clone)]
 struct RiskScope {
@@ -585,7 +614,7 @@ impl NativeTradeRiskProposal {
     #[new]
     #[pyo3(signature = (notional, initial_margin_rate_bps, account_segment, collateral_asset, margin_rule_id, *, reduce_only=false))]
     fn new(
-        notional: String,
+        notional: &Bound<'_, PyAny>,
         initial_margin_rate_bps: u64,
         account_segment: String,
         collateral_asset: String,
@@ -594,7 +623,7 @@ impl NativeTradeRiskProposal {
     ) -> PyResult<Self> {
         Ok(Self {
             inner: TradeRiskProposal {
-                notional: amount(&notional)?,
+                notional: semantic_amount(notional, Some("money"))?,
                 initial_margin_rate_bps: basis_points(initial_margin_rate_bps)?,
                 account_segment: SegmentKey::new(account_segment).map_err(value_error)?,
                 collateral_asset: Currency::new(collateral_asset).map_err(value_error)?,
@@ -623,30 +652,30 @@ impl NativeRiskContext {
         account_snapshot_watermark: u64,
         market_freshness_watermark: u64,
         portfolio_version: u64,
-        current_exposure: String,
-        current_margin: String,
-        available_margin: String,
-        current_pnl: String,
-        current_drawdown: String,
+        current_exposure: &Bound<'_, PyAny>,
+        current_margin: &Bound<'_, PyAny>,
+        available_margin: &Bound<'_, PyAny>,
+        current_pnl: &Bound<'_, PyAny>,
+        current_drawdown: &Bound<'_, PyAny>,
         market_is_fresh: bool,
         leverage_bps: u64,
         price_deviation_bps: u64,
-        stress_loss: String,
+        stress_loss: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
         Ok(Self {
             inner: RiskContext {
                 account_snapshot_watermark: UnixNanos::new(account_snapshot_watermark),
                 market_freshness_watermark: UnixNanos::new(market_freshness_watermark),
                 portfolio_version: Generation::new(portfolio_version),
-                current_exposure: amount(&current_exposure)?,
-                current_margin: amount(&current_margin)?,
-                available_margin: amount(&available_margin)?,
-                current_pnl: amount(&current_pnl)?,
-                current_drawdown: amount(&current_drawdown)?,
+                current_exposure: semantic_amount(current_exposure, Some("money"))?,
+                current_margin: semantic_amount(current_margin, Some("money"))?,
+                available_margin: semantic_amount(available_margin, Some("money"))?,
+                current_pnl: semantic_amount(current_pnl, Some("money"))?,
+                current_drawdown: semantic_amount(current_drawdown, Some("rate"))?,
                 market_is_fresh,
                 leverage_bps: basis_points(leverage_bps)?,
                 price_deviation_bps: basis_points(price_deviation_bps)?,
-                stress_loss: amount(&stress_loss)?,
+                stress_loss: semantic_amount(stress_loss, Some("money"))?,
             },
         })
     }
@@ -672,7 +701,7 @@ impl NativePublishPolicyRequest {
         version: u64,
         scope: PyRef<'_, RiskScope>,
         metric: String,
-        limit: String,
+        limit: &Bound<'_, PyAny>,
         enforcement: String,
         valid_from_unix_nanos: u64,
         valid_until_unix_nanos: Option<u64>,
@@ -685,7 +714,7 @@ impl NativePublishPolicyRequest {
                     version: Generation::new(version),
                     scope: scope.policy_scope()?,
                     metric: metric_value(&metric)?,
-                    limit: amount(&limit)?,
+                    limit: semantic_amount(limit, Some(semantic_for_metric(&metric)))?,
                     enforcement: enforcement_value(&enforcement)?,
                     valid_from_unix_nanos: UnixNanos::new(valid_from_unix_nanos),
                     valid_until_unix_nanos: valid_until_unix_nanos.map(UnixNanos::new),
@@ -855,11 +884,15 @@ impl NativeConsumeReservationRequest {
 #[pymethods]
 impl NativeResizeReservationRequest {
     #[new]
-    fn new(reservation_id: String, amount_value: String, at_unix_nanos: u64) -> PyResult<Self> {
+    fn new(
+        reservation_id: String,
+        amount_value: &Bound<'_, PyAny>,
+        at_unix_nanos: u64,
+    ) -> PyResult<Self> {
         Ok(Self {
             inner: ResizeReservationRequest {
                 reservation_id: ReservationId::new(reservation_id).map_err(value_error)?,
-                amount: amount(&amount_value)?,
+                amount: semantic_amount(amount_value, None)?,
                 at_unix_nanos: UnixNanos::new(at_unix_nanos),
             },
         })
@@ -1330,10 +1363,7 @@ impl RiskCurrentView {
     }
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<RiskCurrentSnapshot> {
-        self.read(py, |reader| {
-            let snapshot = reader.snapshot().map_err(contract_error)?;
-            project(snapshot).map_err(contract_error)
-        })
+        self.read(py, |reader| project_direct(reader).map_err(contract_error))
     }
     fn close(&self) -> PyResult<()> {
         self.ensure_process()?;
@@ -1389,111 +1419,171 @@ impl RiskCurrentView {
     }
 }
 
-fn project(
-    snapshot: kairos_risk_contract::RiskIndexedSnapshot,
-) -> Result<RiskCurrentSnapshot, ContractError> {
-    let applied_event_sequence = snapshot.metadata().applied_event_sequence;
-    let state = snapshot.state()?;
-    let actor_id = state.actor_id().to_owned();
-    let generation = state.generation();
-    let policy_version = state.policy_version();
-    let mut policies = BTreeMap::new();
-    for value in snapshot.policies() {
-        let root = value.policy()?;
-        let raw = root.policy();
-        policies.insert(raw.policy_id().to_owned(), policy(raw));
-    }
-    let mut limits = Vec::new();
-    for value in snapshot.limit_usage() {
-        let root = value.limit_usage()?;
-        let policy = policies.get(root.policy_id()).cloned().ok_or_else(|| {
-            ContractError::Invalid(format!(
-                "Risk usage references missing policy {}",
-                root.policy_id()
-            ))
-        })?;
-        limits.push(RiskLimitUsage {
-            policy,
-            used: decimal(root.used()),
-            reserved: decimal(root.reserved()),
-            available: decimal(root.available()),
-        });
-    }
-    let mut allocations: BTreeMap<String, Vec<RiskAllocation>> = BTreeMap::new();
-    for value in snapshot.allocations() {
-        let root = value.allocation()?;
-        let raw = root.allocation();
-        allocations
-            .entry(root.reservation_id().to_owned())
-            .or_default()
-            .push(RiskAllocation {
-                policy_id: raw.policy_id().to_owned(),
-                metric: metric(raw.metric().0),
-                amount: decimal(raw.amount()),
-            });
-    }
-    let mut reservations = Vec::new();
-    for value in snapshot.reservations() {
-        let root = value.reservation()?;
-        let raw = root.reservation();
-        reservations.push(RiskReservation {
-            reservation_id: raw.reservation_id().to_owned(),
-            request_id: raw.request_id().to_owned(),
-            account_id: optional(raw.account_id()),
-            strategy_id: optional(raw.strategy_id()),
-            idempotency_key: raw.idempotency_key().to_owned(),
-            allocations: allocations.remove(raw.reservation_id()).unwrap_or_default(),
-            status: match raw.status().0 {
-                1 => "reserved",
-                2 => "consumed",
-                3 => "released",
-                4 => "expired",
-                other => {
-                    return Err(ContractError::Invalid(format!(
-                        "unknown Risk reservation status {other}"
-                    )));
-                },
-            }
-            .to_owned(),
-            created_at_unix_nanos: raw.created_at_unix_nanos(),
-            updated_at_unix_nanos: raw.updated_at_unix_nanos(),
-            expires_at_unix_nanos: raw.expires_at_unix_nanos(),
-            policy_version: raw.policy_version(),
-        });
-    }
-    let mut circuits = Vec::new();
-    for value in snapshot.circuits() {
-        let root = value.circuit()?;
-        let raw = root.circuit();
-        let scope = raw.scope();
-        circuits.push(RiskCircuit {
-            circuit_id: raw.circuit_id().to_owned(),
-            scope: RiskScope {
-                account_id: optional(scope.account_id()),
-                strategy_id: optional(scope.strategy_id()),
-                instrument_id: None,
-                exchange_id: optional(scope.exchange_id()),
+enum MappedRiskRow {
+    State(String, u64, u64),
+    Policy(RiskPolicy),
+    Usage(String, (i64, u8), (i64, u8), (i64, u8)),
+    Allocation(String, RiskAllocation),
+    Reservation(RiskReservation),
+    Circuit(RiskCircuit),
+}
+
+fn project_direct(reader: &RustView) -> Result<RiskCurrentSnapshot, ContractError> {
+    use kairos_risk_contract::{
+        RISK_ALLOCATIONS_DATABASE, RISK_CIRCUITS_DATABASE, RISK_LIMIT_USAGE_DATABASE,
+        RISK_POLICIES_DATABASE, RISK_RESERVATIONS_DATABASE, RISK_STATE_DATABASE,
+    };
+    let (metadata, rows) = reader.map_snapshot(|_, database, value| {
+        Ok(match database {
+            RISK_STATE_DATABASE => {
+                let root = value.state()?;
+                MappedRiskRow::State(
+                    root.actor_id().to_owned(),
+                    root.generation(),
+                    root.policy_version(),
+                )
             },
-            status: match raw.status().0 {
-                1 => "closed",
-                2 => "open",
-                other => {
-                    return Err(ContractError::Invalid(format!(
-                        "unknown Risk circuit status {other}"
-                    )));
-                },
-            }
-            .to_owned(),
-            opened_at_unix_nanos: raw.opened_at_unix_nanos(),
-            reset_at_unix_nanos: raw.reset_at_unix_nanos(),
-            reason: optional(raw.reason()),
+            RISK_POLICIES_DATABASE => MappedRiskRow::Policy(policy(value.policy()?.policy())),
+            RISK_LIMIT_USAGE_DATABASE => {
+                let root = value.limit_usage()?;
+                MappedRiskRow::Usage(
+                    root.policy_id().to_owned(),
+                    (root.used().mantissa(), root.used().scale()),
+                    (root.reserved().mantissa(), root.reserved().scale()),
+                    (root.available().mantissa(), root.available().scale()),
+                )
+            },
+            RISK_ALLOCATIONS_DATABASE => {
+                let root = value.allocation()?;
+                let raw = root.allocation();
+                MappedRiskRow::Allocation(
+                    root.reservation_id().to_owned(),
+                    RiskAllocation {
+                        policy_id: raw.policy_id().to_owned(),
+                        metric: metric(raw.metric().0),
+                        amount: decimal(raw.amount(), semantic_for_metric_code(raw.metric().0)),
+                    },
+                )
+            },
+            RISK_RESERVATIONS_DATABASE => {
+                let raw = value.reservation()?.reservation();
+                MappedRiskRow::Reservation(RiskReservation {
+                    reservation_id: raw.reservation_id().to_owned(),
+                    request_id: raw.request_id().to_owned(),
+                    account_id: optional(raw.account_id()),
+                    strategy_id: optional(raw.strategy_id()),
+                    idempotency_key: raw.idempotency_key().to_owned(),
+                    allocations: Vec::new(),
+                    status: match raw.status().0 {
+                        1 => "reserved",
+                        2 => "consumed",
+                        3 => "released",
+                        4 => "expired",
+                        other => {
+                            return Err(ContractError::Invalid(format!(
+                                "unknown Risk reservation status {other}"
+                            )));
+                        },
+                    }
+                    .to_owned(),
+                    created_at_unix_nanos: raw.created_at_unix_nanos(),
+                    updated_at_unix_nanos: raw.updated_at_unix_nanos(),
+                    expires_at_unix_nanos: raw.expires_at_unix_nanos(),
+                    policy_version: raw.policy_version(),
+                })
+            },
+            RISK_CIRCUITS_DATABASE => {
+                let raw = value.circuit()?.circuit();
+                let scope = raw.scope();
+                MappedRiskRow::Circuit(RiskCircuit {
+                    circuit_id: raw.circuit_id().to_owned(),
+                    scope: RiskScope {
+                        account_id: optional(scope.account_id()),
+                        strategy_id: optional(scope.strategy_id()),
+                        instrument_id: None,
+                        exchange_id: optional(scope.exchange_id()),
+                    },
+                    status: match raw.status().0 {
+                        1 => "closed",
+                        2 => "open",
+                        other => {
+                            return Err(ContractError::Invalid(format!(
+                                "unknown Risk circuit status {other}"
+                            )));
+                        },
+                    }
+                    .to_owned(),
+                    opened_at_unix_nanos: raw.opened_at_unix_nanos(),
+                    reset_at_unix_nanos: raw.reset_at_unix_nanos(),
+                    reason: optional(raw.reason()),
+                })
+            },
+            _ => unreachable!("Risk map_snapshot returns only declared databases"),
+        })
+    })?;
+
+    let mut state = None;
+    let mut policies = BTreeMap::new();
+    let mut usage = Vec::new();
+    let mut allocations: BTreeMap<String, Vec<RiskAllocation>> = BTreeMap::new();
+    let mut reservations = Vec::new();
+    let mut circuits = Vec::new();
+    for row in rows.into_values().flatten() {
+        match row {
+            MappedRiskRow::State(actor, generation, version) => {
+                state = Some((actor, generation, version))
+            },
+            MappedRiskRow::Policy(value) => {
+                policies.insert(value.policy_id.clone(), value);
+            },
+            MappedRiskRow::Usage(policy_id, used, reserved, available) => {
+                usage.push((policy_id, used, reserved, available))
+            },
+            MappedRiskRow::Allocation(key, value) => {
+                allocations.entry(key).or_default().push(value)
+            },
+            MappedRiskRow::Reservation(value) => reservations.push(value),
+            MappedRiskRow::Circuit(value) => circuits.push(value),
+        }
+    }
+    let (actor_id, generation, policy_version) = state.ok_or_else(|| {
+        ContractError::Invalid("Risk indexed snapshot must contain exactly one state value".into())
+    })?;
+    let mut limits = Vec::new();
+    for (policy_id, used, reserved, available) in usage {
+        let policy = policies.get(&policy_id).cloned().ok_or_else(|| {
+            ContractError::Invalid(format!("Risk usage references missing policy {policy_id}"))
+        })?;
+        let semantic_type = semantic_for_metric(&policy.metric);
+        limits.push(RiskLimitUsage {
+            used: NativeDecimal {
+                mantissa: used.0,
+                scale: used.1,
+                semantic_type,
+            },
+            reserved: NativeDecimal {
+                mantissa: reserved.0,
+                scale: reserved.1,
+                semantic_type,
+            },
+            available: NativeDecimal {
+                mantissa: available.0,
+                scale: available.1,
+                semantic_type,
+            },
+            policy,
         });
+    }
+    for reservation in &mut reservations {
+        reservation.allocations = allocations
+            .remove(&reservation.reservation_id)
+            .unwrap_or_default();
     }
     Ok(RiskCurrentSnapshot {
         actor_id,
         generation,
         policy_version,
-        applied_event_sequence,
+        applied_event_sequence: metadata.applied_event_sequence,
         limits,
         reservations,
         circuits,
@@ -1511,7 +1601,7 @@ fn policy(raw: kairos_protocol::generated::kairos::risk::v_2::RiskPolicy<'_>) ->
             exchange_id: optional(scope.exchange_id()),
         },
         metric: metric(raw.metric().0),
-        limit: decimal(raw.limit()),
+        limit: decimal(raw.limit(), semantic_for_metric_code(raw.metric().0)),
         enforcement: match raw.enforcement().0 {
             1 => "reject",
             2 => "warn",
@@ -1541,10 +1631,29 @@ fn metric(value: u8) -> String {
     }
     .to_owned()
 }
-fn decimal(value: &Decimal64) -> NativeDecimal {
+
+fn semantic_for_metric_code(value: u8) -> &'static str {
+    match value {
+        1 | 2 | 3 | 4 | 5 | 7 | 11 => "money",
+        8..=10 => "rate",
+        _ => "decimal",
+    }
+}
+
+fn semantic_for_metric(value: &str) -> &'static str {
+    match value {
+        "notional" | "margin" | "gross_exposure" | "net_exposure" | "turnover" | "daily_loss"
+        | "stress_loss" => "money",
+        "drawdown" | "leverage" | "price_deviation" => "rate",
+        _ => "decimal",
+    }
+}
+
+fn decimal(value: &Decimal64, semantic_type: &'static str) -> NativeDecimal {
     NativeDecimal {
         mantissa: value.mantissa(),
         scale: value.scale(),
+        semantic_type,
     }
 }
 fn risk_event_metadata(
@@ -1773,6 +1882,31 @@ fn amount(value: &str) -> PyResult<DecimalParts> {
     value.parse().map_err(value_error)
 }
 
+fn semantic_amount(value: &Bound<'_, PyAny>, expected: Option<&str>) -> PyResult<DecimalParts> {
+    if let Ok(text) = value.extract::<String>() {
+        return amount(&text);
+    }
+    let semantic_type = value
+        .getattr("semantic_type")
+        .and_then(|value| value.extract::<String>())
+        .map_err(|_| {
+            RiskInvalidInputError::new_err(
+                "Risk amount requires exact text or a semantic decimal value",
+            )
+        })?;
+    if expected.is_some_and(|expected| expected != semantic_type) {
+        return Err(RiskInvalidInputError::new_err(format!(
+            "Risk amount cannot use {semantic_type} for {}",
+            expected.unwrap_or("decimal")
+        )));
+    }
+    DecimalParts::new(
+        value.getattr("mantissa")?.extract::<i64>()?,
+        value.getattr("scale")?.extract::<u8>()?,
+    )
+    .map_err(value_error)
+}
+
 fn synthetic_risk_metadata(
     sequence: u64,
     launch_id: Option<String>,
@@ -1851,10 +1985,11 @@ fn enforcement_value(value: &str) -> PyResult<EnforcementMode> {
     }
 }
 
-fn native_amount(value: DecimalParts) -> NativeDecimal {
+fn native_amount(value: DecimalParts, semantic_type: &'static str) -> NativeDecimal {
     NativeDecimal {
         mantissa: value.mantissa(),
         scale: value.scale(),
+        semantic_type,
     }
 }
 
@@ -1862,7 +1997,7 @@ fn project_allocation(value: Allocation) -> RiskAllocation {
     RiskAllocation {
         policy_id: value.policy_id.to_string(),
         metric: value.metric.as_str().to_owned(),
-        amount: native_amount(value.amount),
+        amount: native_amount(value.amount, semantic_for_metric(value.metric.as_str())),
     }
 }
 
@@ -2090,7 +2225,6 @@ fn _native_risk_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<RiskReservationEventPayload>()?;
     module.add_class::<RiskCircuitEventPayload>()?;
     module.add_class::<RiskEvent>()?;
-    module.add_class::<NativeDecimal>()?;
     module.add_class::<RiskScope>()?;
     module.add_class::<RiskPolicy>()?;
     module.add_class::<RiskLimitUsage>()?;

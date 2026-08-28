@@ -1,4 +1,4 @@
-use kairos_primitives::decimal::{Money, Price, Quantity, Rate};
+use kairos_primitives::decimal::{Money, Price, PriceDelta, Quantity, Rate};
 use kairos_primitives::market::Provider;
 use kairos_primitives::reference::InstrumentId;
 use kairos_primitives::time::UnixNanos;
@@ -18,7 +18,7 @@ pub struct Ticker24h {
     pub low_price: Option<Price>,
     pub volume_base: Option<Quantity>,
     pub volume_quote: Option<Money>,
-    pub price_change_abs: Option<Money>,
+    pub price_change_abs: Option<PriceDelta>,
     pub price_change_pct: Option<Rate>,
     pub vwap: Option<Price>,
     pub mark_price: Option<Price>,

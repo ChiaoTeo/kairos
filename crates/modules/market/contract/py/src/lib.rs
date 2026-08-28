@@ -23,7 +23,7 @@ use kairos_market_contract::{
     ObservationRequirement as RustObservationRequirement,
     ProviderPreference as RustProviderPreference, SubscriptionPendingReason,
 };
-use kairos_primitives::decimal::{DecimalParts, Price, Quantity};
+use kairos_primitives::decimal::{DecimalParts, Price, PriceDelta, Quantity};
 use kairos_primitives::market::{ObservationKind, Provider as RustProvider};
 use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::runtime::{
@@ -151,6 +151,7 @@ impl NativeMarketClient {
         let owner = PyModule::import(py, "kairospy._native_market_contract")?;
         let kwargs = PyDict::new(py);
         kwargs.set_item("decoder", owner.getattr("decode_event")?)?;
+        kwargs.set_item("batch_decoder", owner.getattr("decode_events")?)?;
         kwargs.set_item("aeron_dir", self.aeron_dir.clone())?;
         kwargs.set_item("channel", self.channel.clone())?;
         kwargs.set_item("stream_id", self.stream_id)?;
@@ -1113,6 +1114,20 @@ struct NativeMarketHealthResponse {
     event_sequence: u64,
     #[pyo3(get)]
     feed_status: String,
+    #[pyo3(get)]
+    current_view_commit_count: u64,
+    #[pyo3(get)]
+    current_view_input_update_count: u64,
+    #[pyo3(get)]
+    current_view_encoded_update_count: u64,
+    #[pyo3(get)]
+    current_view_order_book_encode_count: u64,
+    #[pyo3(get)]
+    last_current_view_commit_latency_nanos: u64,
+    #[pyo3(get)]
+    notification_attempt_count: u64,
+    #[pyo3(get)]
+    notification_failure_count: u64,
 }
 
 #[pyclass(
@@ -1699,11 +1714,11 @@ impl MarketEvent {
         instrument_id: String,
         provider: String,
         bar_spec_id: String,
-        open: String,
-        high: String,
-        low: String,
-        close: String,
-        volume: Option<String>,
+        open: &Bound<'_, PyAny>,
+        high: &Bound<'_, PyAny>,
+        low: &Bound<'_, PyAny>,
+        close: &Bound<'_, PyAny>,
+        volume: Option<Bound<'_, PyAny>>,
         occurred_at_unix_nanos: u64,
         launch_id: Option<String>,
         instance_id: Option<String>,
@@ -1729,12 +1744,13 @@ impl MarketEvent {
             kind: "time".to_owned(),
             window_start_unix_nanos: occurred_at_unix_nanos,
             window_end_unix_nanos: occurred_at_unix_nanos,
-            open: decimal_from_price(price(&open)?),
-            high: decimal_from_price(price(&high)?),
-            low: decimal_from_price(price(&low)?),
-            close: decimal_from_price(price(&close)?),
+            open: decimal_from_price(price_input(open)?),
+            high: decimal_from_price(price_input(high)?),
+            low: decimal_from_price(price_input(low)?),
+            close: decimal_from_price(price_input(close)?),
             volume: volume
-                .map(|value| quantity(&value).map(decimal_from_quantity))
+                .as_ref()
+                .map(|value| quantity_input(value).map(decimal_from_quantity))
                 .transpose()?,
             source_observed_at_unix_nanos: occurred_at_unix_nanos,
             received_at_unix_nanos: occurred_at_unix_nanos,
@@ -1755,10 +1771,10 @@ impl MarketEvent {
         market_id: String,
         instrument_id: String,
         provider: String,
-        bid_price: Option<String>,
-        bid_quantity: Option<String>,
-        ask_price: Option<String>,
-        ask_quantity: Option<String>,
+        bid_price: Option<Bound<'_, PyAny>>,
+        bid_quantity: Option<Bound<'_, PyAny>>,
+        ask_price: Option<Bound<'_, PyAny>>,
+        ask_quantity: Option<Bound<'_, PyAny>>,
         occurred_at_unix_nanos: u64,
         launch_id: Option<String>,
         instance_id: Option<String>,
@@ -1780,16 +1796,20 @@ impl MarketEvent {
             instrument_id,
             provider,
             bid_price: bid_price
-                .map(|value| price(&value).map(decimal_from_price))
+                .as_ref()
+                .map(|value| price_input(value).map(decimal_from_price))
                 .transpose()?,
             bid_quantity: bid_quantity
-                .map(|value| quantity(&value).map(decimal_from_quantity))
+                .as_ref()
+                .map(|value| quantity_input(value).map(decimal_from_quantity))
                 .transpose()?,
             ask_price: ask_price
-                .map(|value| price(&value).map(decimal_from_price))
+                .as_ref()
+                .map(|value| price_input(value).map(decimal_from_price))
                 .transpose()?,
             ask_quantity: ask_quantity
-                .map(|value| quantity(&value).map(decimal_from_quantity))
+                .as_ref()
+                .map(|value| quantity_input(value).map(decimal_from_quantity))
                 .transpose()?,
             bid_venue_code: None,
             ask_venue_code: None,
@@ -1850,17 +1870,31 @@ impl MarketEvent {
     }
 }
 
-#[pyclass(frozen, module = "kairospy._native_market_contract")]
+#[pyclass(
+    name = "_NativeSemanticDecimal",
+    frozen,
+    module = "kairospy._native_market_contract"
+)]
 #[derive(Clone)]
 struct NativeDecimal {
     #[pyo3(get)]
     mantissa: i64,
     #[pyo3(get)]
     scale: u8,
+    semantic_type: &'static str,
 }
 
 #[pymethods]
 impl NativeDecimal {
+    fn __str__(&self) -> String {
+        decimal_parts_text(self.mantissa, self.scale)
+    }
+
+    #[getter]
+    fn semantic_type(&self) -> &'static str {
+        self.semantic_type
+    }
+
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let decimal = py.import("decimal")?.getattr("Decimal")?;
@@ -2681,7 +2715,7 @@ impl From<RustGreeks> for MarketGreeksCurrent {
             gamma: value.gamma.map(decimal_from_parts),
             vega: value.vega.map(decimal_from_parts),
             theta: value.theta.map(decimal_from_parts),
-            implied_volatility: value.implied_volatility.map(decimal_from_parts),
+            implied_volatility: value.implied_volatility.map(decimal_from_rate),
             source_observed_at_unix_nanos: value.source_observed_at.get(),
             received_at_unix_nanos: value.received_at.get(),
             derivation_id: value.derivation_id,
@@ -2698,7 +2732,7 @@ impl From<RustRate> for MarketRateCurrent {
             instrument_id: v.instrument_id.to_string(),
             provider: v.provider.to_string(),
             basis: v.basis,
-            value: decimal_from_parts(v.value),
+            value: decimal_from_rate(v.value),
             mark_price: v.mark_price.map(decimal_from_price),
             source_observed_at_unix_nanos: v.source_observed_at.get(),
             received_at_unix_nanos: v.received_at.get(),
@@ -2721,9 +2755,9 @@ impl From<RustTicker> for MarketTicker24hCurrent {
             high_price: v.high_price.map(decimal_from_price),
             low_price: v.low_price.map(decimal_from_price),
             volume_base: v.volume_base.map(decimal_from_quantity),
-            volume_quote: v.volume_quote.map(decimal_from_parts),
-            price_change_abs: v.price_change_abs.map(decimal_from_price),
-            price_change_pct: v.price_change_pct.map(decimal_from_parts),
+            volume_quote: v.volume_quote.map(decimal_from_money),
+            price_change_abs: v.price_change_abs.map(decimal_from_price_delta),
+            price_change_pct: v.price_change_pct.map(decimal_from_rate),
             vwap: v.vwap.map(decimal_from_price),
             mark_price: v.mark_price.map(decimal_from_price),
             source_observed_at_unix_nanos: v.source_observed_at.get(),
@@ -2741,7 +2775,7 @@ impl From<RustMark> for MarketMarkPriceCurrent {
             mark_price: decimal_from_price(v.mark_price),
             index_price: v.index_price.map(decimal_from_price),
             estimated_settlement_price: v.estimated_settlement_price.map(decimal_from_price),
-            funding_rate: v.funding_rate.map(decimal_from_parts),
+            funding_rate: v.funding_rate.map(decimal_from_rate),
             next_funding_time_unix_nanos: v.next_funding_time.map(|v| v.get()),
             source_observed_at_unix_nanos: v.source_observed_at.get(),
             received_at_unix_nanos: v.received_at.get(),
@@ -2755,7 +2789,7 @@ impl From<RustFunding> for MarketFundingRateCurrent {
             scope: v.scope.into(),
             instrument_id: v.instrument_id.to_string(),
             provider: v.provider.to_string(),
-            funding_rate: decimal_from_parts(v.funding_rate),
+            funding_rate: decimal_from_rate(v.funding_rate),
             funding_period_seconds: v.funding_period_seconds,
             next_funding_time_unix_nanos: v.next_funding_time.map(|v| v.get()),
             source_observed_at_unix_nanos: v.source_observed_at.get(),
@@ -2771,9 +2805,9 @@ impl From<RustOpenInterest> for MarketOpenInterestCurrent {
             instrument_id: v.instrument_id.to_string(),
             provider: v.provider.to_string(),
             contracts: decimal_from_quantity(v.contracts),
-            quote_value: v.quote_value.map(decimal_from_parts),
-            change_24h: v.change_24h.map(decimal_from_parts),
-            change_pct_24h: v.change_pct_24h.map(decimal_from_parts),
+            quote_value: v.quote_value.map(decimal_from_money),
+            change_24h: v.change_24h.map(decimal_from_signed_quantity),
+            change_pct_24h: v.change_pct_24h.map(decimal_from_rate),
             source_observed_at_unix_nanos: v.source_observed_at.get(),
             received_at_unix_nanos: v.received_at.get(),
         }
@@ -2789,7 +2823,7 @@ impl From<RustIndex> for MarketIndexPriceCurrent {
             spot_index_price: v.spot_index_price.map(decimal_from_price),
             contract_index_price: v.contract_index_price.map(decimal_from_price),
             index_price: v.index_price.map(decimal_from_price),
-            funding_rate: v.funding_rate.map(decimal_from_parts),
+            funding_rate: v.funding_rate.map(decimal_from_rate),
             source_observed_at_unix_nanos: v.source_observed_at.get(),
             received_at_unix_nanos: v.received_at.get(),
         }
@@ -2857,6 +2891,15 @@ fn decimal_from_price(value: Price) -> NativeDecimal {
     NativeDecimal {
         mantissa: value.mantissa(),
         scale: value.scale(),
+        semantic_type: "price",
+    }
+}
+
+fn decimal_from_price_delta(value: PriceDelta) -> NativeDecimal {
+    NativeDecimal {
+        mantissa: value.mantissa(),
+        scale: value.scale(),
+        semantic_type: "price_delta",
     }
 }
 
@@ -2864,6 +2907,7 @@ fn decimal_from_quantity(value: Quantity) -> NativeDecimal {
     NativeDecimal {
         mantissa: value.mantissa(),
         scale: value.scale(),
+        semantic_type: "quantity",
     }
 }
 
@@ -2871,6 +2915,27 @@ fn decimal_from_parts(value: DecimalParts) -> NativeDecimal {
     NativeDecimal {
         mantissa: value.mantissa(),
         scale: value.scale(),
+        semantic_type: "decimal",
+    }
+}
+
+fn decimal_from_money(value: DecimalParts) -> NativeDecimal {
+    semantic_decimal(value, "money")
+}
+
+fn decimal_from_rate(value: DecimalParts) -> NativeDecimal {
+    semantic_decimal(value, "rate")
+}
+
+fn decimal_from_signed_quantity(value: DecimalParts) -> NativeDecimal {
+    semantic_decimal(value, "signed_quantity")
+}
+
+fn semantic_decimal(value: DecimalParts, semantic_type: &'static str) -> NativeDecimal {
+    NativeDecimal {
+        mantissa: value.mantissa(),
+        scale: value.scale(),
+        semantic_type,
     }
 }
 
@@ -3145,13 +3210,42 @@ fn price(value: &str) -> PyResult<Price> {
         .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))
 }
 
-fn quantity(value: &str) -> PyResult<Quantity> {
-    let parts: DecimalParts =
-        value
+fn semantic_parts(value: &Bound<'_, PyAny>, expected: &str) -> PyResult<DecimalParts> {
+    if let Ok(text) = value.extract::<String>() {
+        return text
             .parse()
             .map_err(|error: kairos_primitives::DomainTypeError| {
                 MarketInvalidInputError::new_err(error.to_string())
-            })?;
+            });
+    }
+    let semantic_type = value
+        .getattr("semantic_type")
+        .and_then(|value| value.extract::<String>())
+        .map_err(|_| {
+            MarketInvalidInputError::new_err(format!(
+                "Market {expected} requires exact text or a semantic decimal value"
+            ))
+        })?;
+    if semantic_type != expected {
+        return Err(MarketInvalidInputError::new_err(format!(
+            "Market {expected} cannot be constructed from {semantic_type}"
+        )));
+    }
+    DecimalParts::new(
+        value.getattr("mantissa")?.extract::<i64>()?,
+        value.getattr("scale")?.extract::<u8>()?,
+    )
+    .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))
+}
+
+fn price_input(value: &Bound<'_, PyAny>) -> PyResult<Price> {
+    let parts = semantic_parts(value, "price")?;
+    Price::new(parts.mantissa(), parts.scale())
+        .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))
+}
+
+fn quantity_input(value: &Bound<'_, PyAny>) -> PyResult<Quantity> {
+    let parts = semantic_parts(value, "quantity")?;
     Quantity::new(parts.mantissa(), parts.scale())
         .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))
 }
@@ -3235,6 +3329,13 @@ fn project_health(value: RustHealthResponse) -> NativeMarketHealthResponse {
             MarketFeedStatus::Degraded => "degraded",
         }
         .to_owned(),
+        current_view_commit_count: value.current_view_commit_count,
+        current_view_input_update_count: value.current_view_input_update_count,
+        current_view_encoded_update_count: value.current_view_encoded_update_count,
+        current_view_order_book_encode_count: value.current_view_order_book_encode_count,
+        last_current_view_commit_latency_nanos: value.last_current_view_commit_latency_nanos,
+        notification_attempt_count: value.notification_attempt_count,
+        notification_failure_count: value.notification_failure_count,
     }
 }
 
@@ -3395,10 +3496,55 @@ fn event_scope(value: fb::ObservationScope<'_>) -> PyResult<MarketObservationSco
 
 fn event_decimal(
     value: &kairos_protocol::generated::kairos::common::v_2::Decimal64,
+    semantic_type: &'static str,
 ) -> PyResult<NativeDecimal> {
     DecimalParts::new(value.mantissa(), value.scale())
-        .map(decimal_from_parts)
+        .map(|value| semantic_decimal(value, semantic_type))
         .map_err(|error| MarketInvalidEventError::new_err(error.to_string()))
+}
+
+fn event_exact_decimal(
+    value: &kairos_protocol::generated::kairos::common::v_2::Decimal64,
+) -> PyResult<NativeDecimal> {
+    event_decimal(value, "decimal")
+}
+
+fn event_money(
+    value: &kairos_protocol::generated::kairos::common::v_2::Decimal64,
+) -> PyResult<NativeDecimal> {
+    event_decimal(value, "money")
+}
+
+fn event_price(
+    value: &kairos_protocol::generated::kairos::common::v_2::Decimal64,
+) -> PyResult<NativeDecimal> {
+    event_decimal(value, "price")
+}
+
+fn event_price_delta(
+    value: &kairos_protocol::generated::kairos::common::v_2::Decimal64,
+) -> PyResult<NativeDecimal> {
+    PriceDelta::new(value.mantissa(), value.scale())
+        .map(|value| decimal_from_price_delta(value))
+        .map_err(|error| MarketInvalidEventError::new_err(error.to_string()))
+}
+
+fn event_quantity(
+    value: &kairos_protocol::generated::kairos::common::v_2::Decimal64,
+) -> PyResult<NativeDecimal> {
+    event_decimal(value, "quantity")
+}
+
+fn event_rate(
+    value: &kairos_protocol::generated::kairos::common::v_2::Decimal64,
+) -> PyResult<NativeDecimal> {
+    event_decimal(value, "rate")
+}
+
+fn event_signed_quantity(
+    value: &kairos_protocol::generated::kairos::common::v_2::Decimal64,
+) -> PyResult<NativeDecimal> {
+    event_decimal(value, "signed_quantity")
 }
 
 fn required_event_text(value: Option<&str>, name: &str) -> PyResult<String> {
@@ -3430,10 +3576,10 @@ fn project_quote(
         scope: event_scope(value.scope())?,
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
-        bid_price: value.bid_price().map(event_decimal).transpose()?,
-        bid_quantity: value.bid_quantity().map(event_decimal).transpose()?,
-        ask_price: value.ask_price().map(event_decimal).transpose()?,
-        ask_quantity: value.ask_quantity().map(event_decimal).transpose()?,
+        bid_price: value.bid_price().map(event_price).transpose()?,
+        bid_quantity: value.bid_quantity().map(event_quantity).transpose()?,
+        ask_price: value.ask_price().map(event_price).transpose()?,
+        ask_quantity: value.ask_quantity().map(event_quantity).transpose()?,
         bid_venue_code: optional_event_text(value.bid_venue_code()),
         ask_venue_code: optional_event_text(value.ask_venue_code()),
         tape: (value.tape() != 0).then_some(value.tape()),
@@ -3462,11 +3608,11 @@ fn project_bar(metadata: &MarketEventMetadata, value: fb::Bar<'_>) -> PyResult<M
         kind: kind.to_owned(),
         window_start_unix_nanos: value.window_start_unix_nanos(),
         window_end_unix_nanos: value.window_end_unix_nanos(),
-        open: event_decimal(value.open())?,
-        high: event_decimal(value.high())?,
-        low: event_decimal(value.low())?,
-        close: event_decimal(value.close())?,
-        volume: value.volume().map(event_decimal).transpose()?,
+        open: event_price(value.open())?,
+        high: event_price(value.high())?,
+        low: event_price(value.low())?,
+        close: event_price(value.close())?,
+        volume: value.volume().map(event_quantity).transpose()?,
         source_observed_at_unix_nanos: value.source_observed_at_unix_nanos(),
         received_at_unix_nanos: value.received_at_unix_nanos(),
     })
@@ -3482,12 +3628,12 @@ fn project_greeks(
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
         expiry_unix_nanos: value.expiry_unix_nanos(),
-        strike: value.strike().map(event_decimal).transpose()?,
-        delta: value.delta().map(event_decimal).transpose()?,
-        gamma: value.gamma().map(event_decimal).transpose()?,
-        vega: value.vega().map(event_decimal).transpose()?,
-        theta: value.theta().map(event_decimal).transpose()?,
-        implied_volatility: value.implied_volatility().map(event_decimal).transpose()?,
+        strike: value.strike().map(event_price).transpose()?,
+        delta: value.delta().map(event_exact_decimal).transpose()?,
+        gamma: value.gamma().map(event_exact_decimal).transpose()?,
+        vega: value.vega().map(event_exact_decimal).transpose()?,
+        theta: value.theta().map(event_exact_decimal).transpose()?,
+        implied_volatility: value.implied_volatility().map(event_rate).transpose()?,
         source_observed_at_unix_nanos: value.source_observed_at_unix_nanos(),
         received_at_unix_nanos: value.received_at_unix_nanos(),
         derivation_id: optional_event_text(value.derivation_id()),
@@ -3510,8 +3656,8 @@ fn project_trade(value: fb::Trade<'_>) -> PyResult<MarketTradeEventPayload> {
         scope: event_scope(value.scope())?,
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
-        price: event_decimal(value.price())?,
-        quantity: event_decimal(value.quantity())?,
+        price: event_price(value.price())?,
+        quantity: event_quantity(value.quantity())?,
         aggressor_side,
         venue_code: optional_event_text(value.venue_code()),
         tape: (value.tape() != 0).then_some(value.tape()),
@@ -3536,8 +3682,8 @@ fn project_rate(
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
         basis: required_event_value(value.basis(), "basis")?,
-        value: event_decimal(value.value())?,
-        mark_price: value.mark_price().map(event_decimal).transpose()?,
+        value: event_rate(value.value())?,
+        mark_price: value.mark_price().map(event_price).transpose()?,
         source_observed_at_unix_nanos: value.source_observed_at_unix_nanos(),
         received_at_unix_nanos: value.received_at_unix_nanos(),
     })
@@ -3552,20 +3698,23 @@ fn project_ticker(
         scope: event_scope(value.scope())?,
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
-        last_price: value.last_price().map(event_decimal).transpose()?,
-        bid_price: value.bid_price().map(event_decimal).transpose()?,
-        bid_quantity: value.bid_quantity().map(event_decimal).transpose()?,
-        ask_price: value.ask_price().map(event_decimal).transpose()?,
-        ask_quantity: value.ask_quantity().map(event_decimal).transpose()?,
-        open_price: value.open_price().map(event_decimal).transpose()?,
-        high_price: value.high_price().map(event_decimal).transpose()?,
-        low_price: value.low_price().map(event_decimal).transpose()?,
-        volume_base: value.volume_base().map(event_decimal).transpose()?,
-        volume_quote: value.volume_quote().map(event_decimal).transpose()?,
-        price_change_abs: value.price_change_abs().map(event_decimal).transpose()?,
-        price_change_pct: value.price_change_pct().map(event_decimal).transpose()?,
-        vwap: value.vwap().map(event_decimal).transpose()?,
-        mark_price: value.mark_price().map(event_decimal).transpose()?,
+        last_price: value.last_price().map(event_price).transpose()?,
+        bid_price: value.bid_price().map(event_price).transpose()?,
+        bid_quantity: value.bid_quantity().map(event_quantity).transpose()?,
+        ask_price: value.ask_price().map(event_price).transpose()?,
+        ask_quantity: value.ask_quantity().map(event_quantity).transpose()?,
+        open_price: value.open_price().map(event_price).transpose()?,
+        high_price: value.high_price().map(event_price).transpose()?,
+        low_price: value.low_price().map(event_price).transpose()?,
+        volume_base: value.volume_base().map(event_quantity).transpose()?,
+        volume_quote: value.volume_quote().map(event_money).transpose()?,
+        price_change_abs: value
+            .price_change_abs()
+            .map(event_price_delta)
+            .transpose()?,
+        price_change_pct: value.price_change_pct().map(event_rate).transpose()?,
+        vwap: value.vwap().map(event_price).transpose()?,
+        mark_price: value.mark_price().map(event_price).transpose()?,
         source_observed_at_unix_nanos: value.source_observed_at_unix_nanos(),
         received_at_unix_nanos: value.received_at_unix_nanos(),
     })
@@ -3580,13 +3729,13 @@ fn project_mark(
         scope: event_scope(value.scope())?,
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
-        mark_price: event_decimal(value.mark_price())?,
-        index_price: value.index_price().map(event_decimal).transpose()?,
+        mark_price: event_price(value.mark_price())?,
+        index_price: value.index_price().map(event_price).transpose()?,
         estimated_settlement_price: value
             .estimated_settlement_price()
-            .map(event_decimal)
+            .map(event_price)
             .transpose()?,
-        funding_rate: value.funding_rate().map(event_decimal).transpose()?,
+        funding_rate: value.funding_rate().map(event_rate).transpose()?,
         next_funding_time_unix_nanos: (value.next_funding_time_unix_nanos() != 0)
             .then_some(value.next_funding_time_unix_nanos()),
         source_observed_at_unix_nanos: value.source_observed_at_unix_nanos(),
@@ -3603,7 +3752,7 @@ fn project_funding(
         scope: event_scope(value.scope())?,
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
-        funding_rate: event_decimal(value.funding_rate())?,
+        funding_rate: event_rate(value.funding_rate())?,
         funding_period_seconds: value.funding_period_seconds(),
         next_funding_time_unix_nanos: (value.next_funding_time_unix_nanos() != 0)
             .then_some(value.next_funding_time_unix_nanos()),
@@ -3621,10 +3770,10 @@ fn project_open_interest(
         scope: event_scope(value.scope())?,
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
-        contracts: event_decimal(value.contracts())?,
-        quote_value: value.quote_value().map(event_decimal).transpose()?,
-        change_24h: value.change_24h().map(event_decimal).transpose()?,
-        change_pct_24h: value.change_pct_24h().map(event_decimal).transpose()?,
+        contracts: event_quantity(value.contracts())?,
+        quote_value: value.quote_value().map(event_money).transpose()?,
+        change_24h: value.change_24h().map(event_signed_quantity).transpose()?,
+        change_pct_24h: value.change_pct_24h().map(event_rate).transpose()?,
         source_observed_at_unix_nanos: value.source_observed_at_unix_nanos(),
         received_at_unix_nanos: value.received_at_unix_nanos(),
     })
@@ -3639,13 +3788,10 @@ fn project_index(
         scope: event_scope(value.scope())?,
         instrument_id: required_event_value(value.instrument_id(), "instrument_id")?,
         provider: required_event_value(value.provider(), "provider")?,
-        spot_index_price: value.spot_index_price().map(event_decimal).transpose()?,
-        contract_index_price: value
-            .contract_index_price()
-            .map(event_decimal)
-            .transpose()?,
-        index_price: value.index_price().map(event_decimal).transpose()?,
-        funding_rate: value.funding_rate().map(event_decimal).transpose()?,
+        spot_index_price: value.spot_index_price().map(event_price).transpose()?,
+        contract_index_price: value.contract_index_price().map(event_price).transpose()?,
+        index_price: value.index_price().map(event_price).transpose()?,
+        funding_rate: value.funding_rate().map(event_rate).transpose()?,
         source_observed_at_unix_nanos: value.source_observed_at_unix_nanos(),
         received_at_unix_nanos: value.received_at_unix_nanos(),
     })
@@ -3653,8 +3799,8 @@ fn project_index(
 
 fn order_book_level(value: fb::OrderBookLevel<'_>) -> PyResult<MarketOrderBookLevel> {
     Ok(MarketOrderBookLevel {
-        price: event_decimal(value.price())?,
-        quantity: event_decimal(value.quantity())?,
+        price: event_price(value.price())?,
+        quantity: event_quantity(value.quantity())?,
         order_count: value.order_count(),
     })
 }
@@ -3714,8 +3860,8 @@ fn project_delta(value: fb::OrderBookDeltaValue<'_>) -> PyResult<MarketOrderBook
             Ok(MarketOrderBookChange {
                 side: side.to_owned(),
                 action: action.to_owned(),
-                price: event_decimal(change.price())?,
-                quantity: change.quantity().map(event_decimal).transpose()?,
+                price: event_price(change.price())?,
+                quantity: change.quantity().map(event_quantity).transpose()?,
                 order_count: change.order_count(),
             })
         })
@@ -3832,6 +3978,20 @@ fn decode_event(py: Python<'_>, payload: &[u8]) -> PyResult<MarketEvent> {
 }
 
 #[pyfunction]
+fn decode_events(
+    py: Python<'_>,
+    payloads: Vec<Bound<'_, pyo3::types::PyBytes>>,
+) -> PyResult<Vec<MarketEvent>> {
+    let mut events = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        let value = kairos_market_contract::decode_event(payload.as_bytes())
+            .map_err(|error| MarketInvalidEventError::new_err(error.to_string()))?;
+        events.push(project_market_event(py, value)?);
+    }
+    Ok(events)
+}
+
+#[pyfunction]
 #[pyo3(signature = (root, workspace_id, launch_id=None, instance_id=None))]
 fn indexed_environment_path(
     root: PathBuf,
@@ -3938,7 +4098,6 @@ fn _native_market_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<MarketEvent>()?;
     module.add_class::<NativeMarketViewKind>()?;
     module.add_class::<NativeMarketViewKey>()?;
-    module.add_class::<NativeDecimal>()?;
     module.add_class::<MarketCurrentEvidence>()?;
     module.add_class::<MarketObservationScope>()?;
     module.add_class::<MarketQuoteCurrent>()?;
@@ -3956,6 +4115,7 @@ fn _native_market_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<MarketCurrentView>()?;
     module.add_function(wrap_pyfunction!(build_info, module)?)?;
     module.add_function(wrap_pyfunction!(decode_event, module)?)?;
+    module.add_function(wrap_pyfunction!(decode_events, module)?)?;
     module.add_function(wrap_pyfunction!(indexed_environment_path, module)?)?;
     Ok(())
 }

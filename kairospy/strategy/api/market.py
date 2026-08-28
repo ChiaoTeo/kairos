@@ -7,19 +7,15 @@ them structurally.
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Literal, Protocol
 
-
-class DecimalValue(Protocol):
-    @property
-    def mantissa(self) -> int: ...
-
-    @property
-    def scale(self) -> int: ...
-
-    @property
-    def value(self) -> Decimal: ...
+from kairospy.primitives.decimal import (
+    DecimalValue,
+    PriceLike,
+    QuantityLike,
+    RateLike,
+)
+from kairospy.primitives.reference import InstrumentIdRead, MarketIdRead
 
 
 class ObservationScope(Protocol):
@@ -27,10 +23,10 @@ class ObservationScope(Protocol):
     def kind(self) -> str: ...
 
     @property
-    def market_id(self) -> str | None: ...
+    def market_id(self) -> MarketIdRead | None: ...
 
     @property
-    def instrument_id(self) -> str | None: ...
+    def instrument_id(self) -> InstrumentIdRead | None: ...
 
     @property
     def network_id(self) -> str | None: ...
@@ -49,48 +45,48 @@ class MarketEventMetadata(Protocol):
 
 class Bar(Protocol):
     scope: ObservationScope
-    instrument_id: str
+    instrument_id: InstrumentIdRead
     provider: str
     bar_spec_id: str
-    open: DecimalValue
-    high: DecimalValue
-    low: DecimalValue
-    close: DecimalValue
-    volume: DecimalValue | None
+    open: PriceLike
+    high: PriceLike
+    low: PriceLike
+    close: PriceLike
+    volume: QuantityLike | None
     source_observed_at_unix_nanos: int
 
 
 class Quote(Protocol):
     scope: ObservationScope
-    instrument_id: str
+    instrument_id: InstrumentIdRead
     provider: str
-    bid_price: DecimalValue | None
-    bid_quantity: DecimalValue | None
-    ask_price: DecimalValue | None
-    ask_quantity: DecimalValue | None
+    bid_price: PriceLike | None
+    bid_quantity: QuantityLike | None
+    ask_price: PriceLike | None
+    ask_quantity: QuantityLike | None
     source_observed_at_unix_nanos: int
 
 
 class Trade(Protocol):
     scope: ObservationScope
-    instrument_id: str
+    instrument_id: InstrumentIdRead
     provider: str
-    price: DecimalValue
-    quantity: DecimalValue
+    price: PriceLike
+    quantity: QuantityLike
     source_observed_at_unix_nanos: int
 
 
 class OptionGreeks(Protocol):
     scope: ObservationScope
-    instrument_id: str
+    instrument_id: InstrumentIdRead
     provider: str
     expiry_unix_nanos: int | None
-    strike: DecimalValue | None
+    strike: PriceLike | None
     delta: DecimalValue | None
     gamma: DecimalValue | None
     vega: DecimalValue | None
     theta: DecimalValue | None
-    implied_volatility: DecimalValue | None
+    implied_volatility: RateLike | None
     source_observed_at_unix_nanos: int
 
 
@@ -129,12 +125,17 @@ __all__ = [
     "BarEvent",
     "DecimalValue",
     "GreeksEvent",
+    "InstrumentIdRead",
     "MarketEvent",
     "MarketEventMetadata",
+    "MarketIdRead",
     "ObservationScope",
     "OptionGreeks",
+    "PriceLike",
+    "QuantityLike",
     "Quote",
     "QuoteEvent",
+    "RateLike",
     "Trade",
     "TradeEvent",
 ]

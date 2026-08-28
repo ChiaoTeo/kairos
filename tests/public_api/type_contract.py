@@ -1,6 +1,5 @@
 """Static-only contract checked by Pyright; this is not a pytest module."""
 
-from decimal import Decimal
 from typing import assert_type, cast
 
 from kairospy.strategy import (
@@ -14,10 +13,12 @@ from kairospy.strategy import (
     ImmediateAlgorithm,
     InstrumentId,
     MarketEvent,
+    PriceLike,
     Quote,
     QuoteEvent,
     Strategy,
     StrategyContext,
+    Quantity,
 )
 
 
@@ -37,12 +38,12 @@ class TypeContractStrategy(Strategy):
         if event.kind == "bar":
             bar_event = cast(BarEvent, event)
             assert_type(bar_event.data, Bar)
-            assert_type(bar_event.data.close.value, Decimal)
+            assert_type(bar_event.data.close, PriceLike)
             count = ctx.state.increment("bar_count")
             assert_type(count, int)
             ctx.execution.target_position(
                 InstrumentId(bar_event.data.instrument_id),
-                Decimal("1"),
+                Quantity("1"),
                 account="paper-account",
                 algorithm=ImmediateAlgorithm(),
             )
@@ -50,7 +51,7 @@ class TypeContractStrategy(Strategy):
             quote_event = cast(QuoteEvent, event)
             assert_type(quote_event.data, Quote)
             if quote_event.data.ask_price is not None:
-                assert_type(quote_event.data.ask_price.value, Decimal)
+                assert_type(quote_event.data.ask_price, PriceLike)
 
 
 class TypedMarketHookStrategy(Strategy):
@@ -60,9 +61,9 @@ class TypedMarketHookStrategy(Strategy):
 
     def on_bar(self, ctx: StrategyContext, event: BarEvent) -> None:
         assert_type(event.data, Bar)
-        assert_type(event.data.close.value, Decimal)
+        assert_type(event.data.close, PriceLike)
 
     def on_quote(self, ctx: StrategyContext, event: QuoteEvent) -> None:
         assert_type(event.data, Quote)
         if event.data.ask_price is not None:
-            assert_type(event.data.ask_price.value, Decimal)
+            assert_type(event.data.ask_price, PriceLike)

@@ -42,10 +42,11 @@ impl MarketActor {
             self.event_sequence.get(),
             synchronized,
         );
+        let view = MarketViewUpdate::OrderBook((&book).into());
         self.pending_changes.push(MarketChange {
             sequence: self.event_sequence,
-            event: Some(MarketEvent::OrderBookSnapshot(book.clone())),
-            view: Some(MarketViewUpdate::OrderBook(book)),
+            event: Some(MarketEvent::OrderBookSnapshot(book)),
+            view: Some(view),
         });
         Ok(self.event_sequence.get())
     }
@@ -67,15 +68,14 @@ impl MarketActor {
         if delta.last_sequence <= book.sequence {
             return Ok(self.event_sequence.get());
         }
-        let delta_for_event = delta.clone();
-        book.apply_delta(delta)?;
+        book.apply_delta_ref(&delta)?;
         let freshness = (
             book.provider.clone(),
             book.market_id.clone(),
             book.event_time_unix_nanos,
             book.sequence,
         );
-        let event = book.clone();
+        let view = MarketViewUpdate::OrderBook((&*book).into());
         self.event_sequence += 1;
         self.record_order_book_freshness(
             &freshness.0,
@@ -86,8 +86,8 @@ impl MarketActor {
         );
         self.pending_changes.push(MarketChange {
             sequence: self.event_sequence,
-            event: Some(MarketEvent::OrderBookDelta(delta_for_event)),
-            view: Some(MarketViewUpdate::OrderBook(event)),
+            event: Some(MarketEvent::OrderBookDelta(delta)),
+            view: Some(view),
         });
         Ok(self.event_sequence.get())
     }

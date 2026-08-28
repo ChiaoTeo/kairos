@@ -90,12 +90,12 @@ def test_account_scope_filters_other_accounts() -> None:
     ]
 
 
-def test_account_gap_fails_without_reading_snapshot() -> None:
+def test_account_gap_is_reported_without_stopping_notifications() -> None:
     application = AccountApplication(
         {AccountId("main"): object()}, _Records(_record(1), _record(3))
     )
-    with pytest.raises(RuntimeError, match="expected 2, received 3"):
-        asyncio.run(_collect(application))
+    assert len(asyncio.run(_collect(application))) == 2
+    assert application.notification_health()["gap_count"] == 1
 
 
 def test_account_rejects_a_stream_identity_for_another_scope() -> None:
@@ -125,7 +125,7 @@ def test_account_frames_remain_owner_native_without_callback_dto_mapping() -> No
     ]
 
 
-def test_live_account_source_joins_at_first_observed_event_then_detects_gap() -> None:
+def test_live_account_source_joins_latest_and_reports_later_gap() -> None:
     application = AccountApplication(
         {AccountId("main"): object()}, _LiveRecords(_record(40), _record(41))
     )
@@ -134,8 +134,8 @@ def test_live_account_source_joins_at_first_observed_event_then_detects_gap() ->
     application = AccountApplication(
         {AccountId("main"): object()}, _LiveRecords(_record(40), _record(42))
     )
-    with pytest.raises(RuntimeError, match="expected 41, received 42"):
-        asyncio.run(_collect(application))
+    assert len(asyncio.run(_collect(application))) == 2
+    assert application.notification_health()["gap_count"] == 1
 
 
 def test_account_ignores_duplicate_and_stale_redelivery() -> None:

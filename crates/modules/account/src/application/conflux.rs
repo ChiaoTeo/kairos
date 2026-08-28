@@ -619,30 +619,6 @@ impl AccountApplication {
     fn publish(&mut self, context: &mut Context<'_, Self>) -> Result<(), AccountError> {
         const EVENTS: &str = "account-events";
 
-        while let Some(event) = self.pending_business_event().cloned() {
-            let event_key = EVENTS.to_owned();
-            for (index, change) in event.changes.iter().enumerate() {
-                let bytes = encode_business_change(
-                    self.actor_id(),
-                    self.conflux.producer_incarnation,
-                    &self.conflux.identity,
-                    &event,
-                    index,
-                    change,
-                )
-                .map_err(AccountError::Publication)?;
-                if !context.outputs().aeron.contains(&event_key) {
-                    return Ok(());
-                }
-                context
-                    .outputs()
-                    .aeron
-                    .publish(&event_key, &bytes)
-                    .map_err(|error| AccountError::Publication(error.to_string()))?;
-            }
-            self.acknowledge_business_event()?;
-        }
-
         let mut view = (*self.current_view_shared()).clone();
         self.enrich_current_view(&mut view);
         let next = encode_indexed_current(&view).map_err(AccountError::Publication)?;
@@ -684,6 +660,40 @@ impl AccountApplication {
             )
             .map_err(|error| AccountError::Publication(error.to_string()))?;
         self.conflux.published_indexed_values = next;
+        while let Some(event) = self.pending_business_event().cloned() {
+            let event_key = EVENTS.to_owned();
+            for (index, change) in event.changes.iter().enumerate() {
+                if !context.outputs().aeron.contains(&event_key) {
+                    continue;
+                }
+                let bytes = match encode_business_change(
+                    self.actor_id(),
+                    self.conflux.producer_incarnation,
+                    &self.conflux.identity,
+                    &event,
+                    index,
+                    change,
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        tracing::warn!(
+                            event = "account_notification_encode_failed",
+                            sequence = event.sequence.get(),
+                            error = %error,
+                        );
+                        continue;
+                    },
+                };
+                if let Err(error) = context.outputs().aeron.publish(&event_key, &bytes) {
+                    tracing::warn!(
+                        event = "account_notification_publish_failed",
+                        sequence = event.sequence.get(),
+                        error = %error,
+                    );
+                }
+            }
+            self.acknowledge_business_event()?;
+        }
         Ok(())
     }
 

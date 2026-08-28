@@ -24,6 +24,7 @@ from kairospy.strategy import (
     InstrumentId,
     ImmediateAlgorithm,
     MarketId,
+    Money,
     Strategy,
     StrategyContractError,
     StrategyState,
@@ -207,8 +208,8 @@ def test_account_application_owns_concrete_multi_account_current_view_selection(
     )
 
     assert account.account_ids == (main_id, secondary_id)
-    assert account.accounts[0].segment(SPOT).equity == Decimal("100")
-    assert account.account("secondary").segment(SPOT).equity == Decimal("200")
+    assert account.accounts[0].segment(SPOT).equity.value == Decimal("100")
+    assert account.account("secondary").segment(SPOT).equity.value == Decimal("200")
     assert [value.generation for value in account.snapshot().accounts] == [1, 1]
     with pytest.raises(AccountNotEnabledError, match="not enabled"):
         account.account("outside")
@@ -234,8 +235,8 @@ def test_risk_application_owns_concrete_current_view_query() -> None:
             policy = SimpleNamespace(scope=scope, metric="notional")
             limit = SimpleNamespace(
                 policy=policy,
-                available=SimpleNamespace(value=Decimal("1000")),
-                reserved=SimpleNamespace(value=Decimal("0")),
+                available=Money("1000"),
+                reserved=Money("0"),
             )
             return SimpleNamespace(
                 limits=[limit], circuits=[], applied_event_sequence=1
@@ -246,7 +247,8 @@ def test_risk_application_owns_concrete_current_view_query() -> None:
     status = risk.status(account="main")
     assert status.account_id == AccountId("main")
     assert status.trading_allowed is True
-    assert status.available_notional == Decimal("1000")
+    assert status.available_notional is not None
+    assert status.available_notional.value == Decimal("1000")
 
 
 def test_unavailable_risk_fails_at_the_application_boundary() -> None:

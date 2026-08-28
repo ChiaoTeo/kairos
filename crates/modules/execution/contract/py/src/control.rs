@@ -65,9 +65,9 @@ impl NativeSplitOrderPolicyRequest {
     #[new]
     #[pyo3(signature = (*, max_child_quantity=None, child_count=None, min_child_quantity=None))]
     fn new(
-        max_child_quantity: Option<String>,
+        max_child_quantity: Option<Bound<'_, PyAny>>,
         child_count: Option<u32>,
-        min_child_quantity: Option<String>,
+        min_child_quantity: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         if child_count == Some(0) {
             return Err(ExecutionInvalidInputError::new_err(
@@ -76,9 +76,15 @@ impl NativeSplitOrderPolicyRequest {
         }
         Ok(Self {
             inner: SplitOrderPolicyRequest {
-                max_child_quantity: max_child_quantity.map(|v| parse_quantity(&v)).transpose()?,
+                max_child_quantity: max_child_quantity
+                    .as_ref()
+                    .map(quantity_input)
+                    .transpose()?,
                 child_count,
-                min_child_quantity: min_child_quantity.map(|v| parse_quantity(&v)).transpose()?,
+                min_child_quantity: min_child_quantity
+                    .as_ref()
+                    .map(quantity_input)
+                    .transpose()?,
             },
         })
     }
@@ -99,14 +105,20 @@ impl NativeMakerExecutionPolicyRequest {
     #[new]
     #[pyo3(signature = (*, max_inventory_abs=None, target_inventory=None, max_quote_age_nanos=None))]
     fn new(
-        max_inventory_abs: Option<String>,
-        target_inventory: Option<String>,
+        max_inventory_abs: Option<Bound<'_, PyAny>>,
+        target_inventory: Option<Bound<'_, PyAny>>,
         max_quote_age_nanos: Option<u64>,
     ) -> PyResult<Self> {
         Ok(Self {
             inner: MakerExecutionPolicyRequest {
-                max_inventory_abs: max_inventory_abs.map(|v| signed_quantity(&v)).transpose()?,
-                target_inventory: target_inventory.map(|v| signed_quantity(&v)).transpose()?,
+                max_inventory_abs: max_inventory_abs
+                    .as_ref()
+                    .map(nonnegative_signed_quantity_input)
+                    .transpose()?,
+                target_inventory: target_inventory
+                    .as_ref()
+                    .map(signed_quantity_input)
+                    .transpose()?,
                 max_quote_age: max_quote_age_nanos.map(DurationNanos::new),
             },
         })
@@ -200,11 +212,11 @@ impl NativeIntentLegRequest {
         segment_key: String,
         instrument_id: String,
         side: String,
-        quantity: String,
+        quantity: &Bound<'_, PyAny>,
         options: PyRef<'_, NativeExecutionOrderOptionsRequest>,
         market_id: Option<String>,
         execution_route_id: Option<String>,
-        limit_price: Option<String>,
+        limit_price: Option<Bound<'_, PyAny>>,
         target_position: bool,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -222,8 +234,8 @@ impl NativeIntentLegRequest {
                     .transpose()
                     .map_err(value_error)?,
                 side: side.parse().map_err(value_error)?,
-                quantity: parse_quantity(&quantity)?,
-                limit_price: limit_price.map(|v| parse_price(&v)).transpose()?,
+                quantity: quantity_input(quantity)?,
+                limit_price: limit_price.as_ref().map(price_input).transpose()?,
                 target_position,
                 options: options.inner.clone(),
             },
@@ -265,12 +277,18 @@ impl NativeIntentLegRequest {
         }
     }
     #[getter]
-    fn quantity(&self) -> String {
-        self.inner.quantity.to_string()
+    fn quantity(&self) -> super::NativeDecimal {
+        native_decimal(
+            self.inner.quantity.mantissa(),
+            self.inner.quantity.scale(),
+            "quantity",
+        )
     }
     #[getter]
-    fn limit_price(&self) -> Option<String> {
-        self.inner.limit_price.as_ref().map(ToString::to_string)
+    fn limit_price(&self) -> Option<super::NativeDecimal> {
+        self.inner
+            .limit_price
+            .map(|value| native_decimal(value.mantissa(), value.scale(), "price"))
     }
     #[getter]
     fn target_position(&self) -> bool {
@@ -301,7 +319,7 @@ impl NativeExecutionBenchmarkRequest {
     fn new(
         instrument_id: String,
         market_id: String,
-        price: String,
+        price: &Bound<'_, PyAny>,
         observed_at_unix_nanos: u64,
         leg_id: Option<String>,
         kind: &str,
@@ -317,7 +335,7 @@ impl NativeExecutionBenchmarkRequest {
                 leg_id: leg_id.map(LegId::new).transpose().map_err(value_error)?,
                 instrument_id: InstrumentId::new(instrument_id).map_err(value_error)?,
                 market_id: MarketId::new(market_id).map_err(value_error)?,
-                price: parse_price(&price)?,
+                price: price_input(price)?,
                 observed_at_unix_nanos: UnixNanos::new(observed_at_unix_nanos),
             },
         })
@@ -339,8 +357,12 @@ impl NativeExecutionBenchmarkRequest {
         self.inner.market_id.to_string()
     }
     #[getter]
-    fn price(&self) -> String {
-        self.inner.price.to_string()
+    fn price(&self) -> super::NativeDecimal {
+        native_decimal(
+            self.inner.price.mantissa(),
+            self.inner.price.scale(),
+            "price",
+        )
     }
     #[getter]
     fn observed_at_unix_nanos(&self) -> u64 {
@@ -405,7 +427,7 @@ impl NativeExecutionAlgorithmPolicyRequest {
         hedge_leg_id: String,
         ratio: String,
         contract_multiplier: String,
-        max_unhedged_quantity: String,
+        max_unhedged_quantity: &Bound<'_, PyAny>,
         compensate_on_failure: bool,
         max_compensation_attempts: u32,
         max_unhedged_duration_nanos: Option<u64>,
@@ -417,7 +439,7 @@ impl NativeExecutionAlgorithmPolicyRequest {
                 hedge_leg_id: LegId::new(hedge_leg_id).map_err(value_error)?,
                 ratio: parse_ratio(&ratio)?,
                 contract_multiplier: parse_ratio(&contract_multiplier)?,
-                max_unhedged_quantity: parse_quantity(&max_unhedged_quantity)?,
+                max_unhedged_quantity: quantity_input(max_unhedged_quantity)?,
                 max_unhedged_duration: max_unhedged_duration_nanos.map(DurationNanos::new),
                 fallback_execution_route_ids: fallback_execution_route_ids
                     .into_iter()
@@ -465,7 +487,7 @@ impl NativeExecutionIntentRequest {
         instrument_id: String,
         account_ids: Vec<String>,
         segment_key: String,
-        target_quantity: String,
+        target_quantity: &Bound<'_, PyAny>,
         reason: String,
         intent_type: &str,
         algorithm: Py<NativeExecutionAlgorithmPolicyRequest>,
@@ -473,7 +495,7 @@ impl NativeExecutionIntentRequest {
         strategy_decision_id: Option<String>,
         market_id: Option<String>,
         execution_route_id: Option<String>,
-        limit_price: Option<String>,
+        limit_price: Option<Bound<'_, PyAny>>,
         source_snapshot_id: Option<String>,
         source_event_sequence: Option<u64>,
         source_event_time_unix_nanos: Option<u64>,
@@ -485,8 +507,8 @@ impl NativeExecutionIntentRequest {
         min_edge_bps: Option<u32>,
         max_slippage_bps: Option<u32>,
         estimated_fee_bps: Option<u32>,
-        minimum_net_credit: Option<String>,
-        maximum_loss: Option<String>,
+        minimum_net_credit: Option<Bound<'_, PyAny>>,
+        maximum_loss: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         if account_ids.is_empty() {
             return Err(ExecutionInvalidInputError::new_err(
@@ -519,8 +541,8 @@ impl NativeExecutionIntentRequest {
                     .collect::<Result<_, _>>()
                     .map_err(value_error)?,
                 segment_key: SegmentKey::new(segment_key).map_err(value_error)?,
-                target_quantity: parse_quantity(&target_quantity)?,
-                limit_price: limit_price.map(|v| parse_price(&v)).transpose()?,
+                target_quantity: quantity_input(target_quantity)?,
+                limit_price: limit_price.as_ref().map(price_input).transpose()?,
                 source_snapshot_id,
                 source_event_sequence: source_event_sequence.map(Sequence::new),
                 source_event_time_unix_nanos: source_event_time_unix_nanos.map(UnixNanos::new),
@@ -541,8 +563,8 @@ impl NativeExecutionIntentRequest {
                 min_edge_bps,
                 max_slippage_bps,
                 estimated_fee_bps,
-                minimum_net_credit: minimum_net_credit.map(|v| parse_money(&v)).transpose()?,
-                maximum_loss: maximum_loss.map(|v| parse_money(&v)).transpose()?,
+                minimum_net_credit: minimum_net_credit.as_ref().map(money_input).transpose()?,
+                maximum_loss: maximum_loss.as_ref().map(money_input).transpose()?,
                 order_options: order_options.borrow(py).inner.clone(),
             },
         })
@@ -599,12 +621,18 @@ impl NativeExecutionIntentRequest {
         self.inner.segment_key.to_string()
     }
     #[getter]
-    fn target_quantity(&self) -> String {
-        self.inner.target_quantity.to_string()
+    fn target_quantity(&self) -> super::NativeDecimal {
+        native_decimal(
+            self.inner.target_quantity.mantissa(),
+            self.inner.target_quantity.scale(),
+            "quantity",
+        )
     }
     #[getter]
-    fn limit_price(&self) -> Option<String> {
-        self.inner.limit_price.as_ref().map(ToString::to_string)
+    fn limit_price(&self) -> Option<super::NativeDecimal> {
+        self.inner
+            .limit_price
+            .map(|value| native_decimal(value.mantissa(), value.scale(), "price"))
     }
     #[getter]
     fn reason(&self) -> &str {
@@ -837,15 +865,15 @@ impl NativeReplaceOrderRequest {
     #[new]
     #[pyo3(signature = (*, quantity=None, limit_price=None, options=None, reason=None))]
     fn new(
-        quantity: Option<String>,
-        limit_price: Option<String>,
+        quantity: Option<Bound<'_, PyAny>>,
+        limit_price: Option<Bound<'_, PyAny>>,
         options: Option<PyRef<'_, NativeExecutionOrderOptionsRequest>>,
         reason: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
             inner: ReplaceOrderRequest {
-                quantity: quantity.map(|v| parse_quantity(&v)).transpose()?,
-                limit_price: limit_price.map(|v| parse_price(&v)).transpose()?,
+                quantity: quantity.as_ref().map(quantity_input).transpose()?,
+                limit_price: limit_price.as_ref().map(price_input).transpose()?,
                 options: options.map(|v| v.inner.clone()),
                 reason,
             },
@@ -1185,11 +1213,11 @@ pub(crate) struct NativeExecutionBacktestEquityPoint {
 #[pymethods]
 impl NativeExecutionBacktestEquityPoint {
     #[new]
-    fn new(observed_at_unix_nanos: u64, equity: String) -> PyResult<Self> {
+    fn new(observed_at_unix_nanos: u64, equity: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(Self {
             inner: ExecutionBacktestEquityPoint {
                 observed_at_unix_nanos: UnixNanos::new(observed_at_unix_nanos),
-                equity: parse_money(&equity)?,
+                equity: money_input(equity)?,
             },
         })
     }
@@ -1207,22 +1235,26 @@ pub(crate) struct NativeExecutionBacktestInputFill {
 #[pymethods]
 impl NativeExecutionBacktestInputFill {
     #[new]
-    #[pyo3(signature = (*, instrument_id, side, quantity, price, occurred_at_unix_nanos, fee="0"))]
+    #[pyo3(signature = (*, instrument_id, side, quantity, price, occurred_at_unix_nanos, fee=None))]
     fn new(
         instrument_id: String,
         side: String,
-        quantity: String,
-        price: String,
+        quantity: &Bound<'_, PyAny>,
+        price: &Bound<'_, PyAny>,
         occurred_at_unix_nanos: u64,
-        fee: &str,
+        fee: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
             inner: ExecutionBacktestFill {
                 instrument_id: InstrumentId::new(instrument_id).map_err(value_error)?,
                 side: side.parse().map_err(value_error)?,
-                quantity: parse_quantity(&quantity)?,
-                price: parse_price(&price)?,
-                fee: parse_money(fee)?,
+                quantity: quantity_input(quantity)?,
+                price: price_input(price)?,
+                fee: fee
+                    .as_ref()
+                    .map(money_input)
+                    .transpose()?
+                    .unwrap_or_default(),
                 occurred_at_unix_nanos: UnixNanos::new(occurred_at_unix_nanos),
             },
         })
@@ -1248,10 +1280,10 @@ impl NativeExecutionBacktestOrderRequest {
         instrument_id: String,
         side: String,
         order_type: &str,
-        quantity: String,
+        quantity: &Bound<'_, PyAny>,
         submitted_at_unix_nanos: u64,
         market_id: Option<String>,
-        limit_price: Option<String>,
+        limit_price: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let order_type = match order_type.to_ascii_lowercase().as_str() {
             "market" => OrderType::Market,
@@ -1272,8 +1304,8 @@ impl NativeExecutionBacktestOrderRequest {
                     .map_err(value_error)?,
                 side: side.parse().map_err(value_error)?,
                 order_type,
-                quantity: parse_quantity(&quantity)?,
-                limit_price: limit_price.map(|v| parse_price(&v)).transpose()?,
+                quantity: quantity_input(quantity)?,
+                limit_price: limit_price.as_ref().map(price_input).transpose()?,
                 submitted_at_unix_nanos: UnixNanos::new(submitted_at_unix_nanos),
             },
         })
@@ -1292,21 +1324,29 @@ pub(crate) struct NativeExecutionBacktestSimulationConfig {
 #[pymethods]
 impl NativeExecutionBacktestSimulationConfig {
     #[new]
-    #[pyo3(signature = (*, fee_bps="0", fee_currency=None, slippage_bps="0", enforce_quote_quantity=true))]
+    #[pyo3(signature = (*, fee_bps=None, fee_currency=None, slippage_bps=None, enforce_quote_quantity=true))]
     fn new(
-        fee_bps: &str,
+        fee_bps: Option<Bound<'_, PyAny>>,
         fee_currency: Option<String>,
-        slippage_bps: &str,
+        slippage_bps: Option<Bound<'_, PyAny>>,
         enforce_quote_quantity: bool,
     ) -> PyResult<Self> {
         Ok(Self {
             inner: ExecutionBacktestSimulationConfig {
-                fee_bps: parse_rate(fee_bps)?,
+                fee_bps: fee_bps
+                    .as_ref()
+                    .map(rate_input)
+                    .transpose()?
+                    .unwrap_or_default(),
                 fee_currency: fee_currency
                     .map(Currency::new)
                     .transpose()
                     .map_err(value_error)?,
-                slippage_bps: parse_rate(slippage_bps)?,
+                slippage_bps: slippage_bps
+                    .as_ref()
+                    .map(rate_input)
+                    .transpose()?
+                    .unwrap_or_default(),
                 enforce_quote_quantity,
             },
         })
@@ -1325,14 +1365,14 @@ pub(crate) struct NativeExecutionBacktestRequest {
 #[pymethods]
 impl NativeExecutionBacktestRequest {
     #[new]
-    #[pyo3(signature = (*, initial_equity, equity_curve=Vec::new(), fills=Vec::new(), risk_free_rate="0", annualization_periods=None, market_events=Vec::new(), orders=Vec::new(), simulation=None))]
+    #[pyo3(signature = (*, initial_equity, equity_curve=Vec::new(), fills=Vec::new(), risk_free_rate=None, annualization_periods=None, market_events=Vec::new(), orders=Vec::new(), simulation=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
-        initial_equity: String,
+        initial_equity: &Bound<'_, PyAny>,
         equity_curve: Vec<Py<NativeExecutionBacktestEquityPoint>>,
         fills: Vec<Py<NativeExecutionBacktestInputFill>>,
-        risk_free_rate: &str,
+        risk_free_rate: Option<Bound<'_, PyAny>>,
         annualization_periods: Option<f64>,
         market_events: Vec<Py<NativeExecutionBacktestMarketRequest>>,
         orders: Vec<Py<NativeExecutionBacktestOrderRequest>>,
@@ -1345,7 +1385,7 @@ impl NativeExecutionBacktestRequest {
         }
         Ok(Self {
             inner: ExecutionBacktestRequest {
-                initial_equity: parse_money(&initial_equity)?,
+                initial_equity: money_input(initial_equity)?,
                 equity_curve: equity_curve
                     .into_iter()
                     .map(|v| v.borrow(py).inner.clone())
@@ -1354,7 +1394,11 @@ impl NativeExecutionBacktestRequest {
                     .into_iter()
                     .map(|v| v.borrow(py).inner.clone())
                     .collect(),
-                risk_free_rate: parse_rate(risk_free_rate)?,
+                risk_free_rate: risk_free_rate
+                    .as_ref()
+                    .map(rate_input)
+                    .transpose()?
+                    .unwrap_or_default(),
                 annualization_periods,
                 market_events: market_events
                     .into_iter()
@@ -1411,9 +1455,9 @@ pub(crate) struct NativeExecutionBacktestOrder {
     #[pyo3(get)]
     status: String,
     #[pyo3(get)]
-    filled_quantity: String,
+    filled_quantity: super::NativeDecimal,
     #[pyo3(get)]
-    remaining_quantity: String,
+    remaining_quantity: super::NativeDecimal,
     #[pyo3(get)]
     updated_at_unix_nanos: u64,
     #[pyo3(get)]
@@ -1454,26 +1498,30 @@ impl NativeExecutionBacktestMarketRequest {
         instrument_id: String,
         observed_at_unix_nanos: u64,
         source_id: String,
-        bid_price: Option<String>,
-        bid_quantity: Option<String>,
-        ask_price: Option<String>,
-        ask_quantity: Option<String>,
+        bid_price: Option<Bound<'_, PyAny>>,
+        bid_quantity: Option<Bound<'_, PyAny>>,
+        ask_price: Option<Bound<'_, PyAny>>,
+        ask_quantity: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         validate_text(&market_id, "market_id")?;
         validate_text(&instrument_id, "instrument_id")?;
         validate_text(&source_id, "source_id")?;
-        for (name, value) in [
-            ("bid_price", bid_price.as_deref()),
-            ("bid_quantity", bid_quantity.as_deref()),
-            ("ask_price", ask_price.as_deref()),
-            ("ask_quantity", ask_quantity.as_deref()),
-        ] {
-            if let Some(value) = value {
-                decimal_parts(value).map_err(|error| {
-                    ExecutionInvalidInputError::new_err(format!("{name}: {error}"))
-                })?;
-            }
-        }
+        let bid_price = bid_price
+            .as_ref()
+            .map(|value| semantic_text(value, "price", "bid_price"))
+            .transpose()?;
+        let bid_quantity = bid_quantity
+            .as_ref()
+            .map(|value| semantic_text(value, "quantity", "bid_quantity"))
+            .transpose()?;
+        let ask_price = ask_price
+            .as_ref()
+            .map(|value| semantic_text(value, "price", "ask_price"))
+            .transpose()?;
+        let ask_quantity = ask_quantity
+            .as_ref()
+            .map(|value| semantic_text(value, "quantity", "ask_quantity"))
+            .transpose()?;
         Ok(Self {
             inner: ExecutionBacktestMarketRequest {
                 event: ExecutionBacktestMarketObservation::Quote(ExecutionBacktestQuote {
@@ -1497,13 +1545,13 @@ impl NativeExecutionBacktestMarketRequest {
         market_id: String,
         instrument_id: String,
         timeframe: String,
-        open: String,
-        high: String,
-        low: String,
-        close: String,
+        open: &Bound<'_, PyAny>,
+        high: &Bound<'_, PyAny>,
+        low: &Bound<'_, PyAny>,
+        close: &Bound<'_, PyAny>,
         observed_at_unix_nanos: u64,
         source_id: String,
-        volume: Option<String>,
+        volume: Option<Bound<'_, PyAny>>,
         derivation: &str,
     ) -> PyResult<Self> {
         for (name, value) in [
@@ -1515,18 +1563,14 @@ impl NativeExecutionBacktestMarketRequest {
             validate_text(value, name)?;
         }
         validate_text(derivation, "derivation")?;
-        for (name, value) in [
-            ("open", &open),
-            ("high", &high),
-            ("low", &low),
-            ("close", &close),
-        ] {
-            decimal_parts(value)
-                .map_err(|error| ExecutionInvalidInputError::new_err(format!("{name}: {error}")))?;
-        }
-        if let Some(value) = &volume {
-            decimal_parts(value)?;
-        }
+        let open = semantic_text(open, "price", "open")?;
+        let high = semantic_text(high, "price", "high")?;
+        let low = semantic_text(low, "price", "low")?;
+        let close = semantic_text(close, "price", "close")?;
+        let volume = volume
+            .as_ref()
+            .map(|value| semantic_text(value, "quantity", "volume"))
+            .transpose()?;
         Ok(Self {
             inner: ExecutionBacktestMarketRequest {
                 event: ExecutionBacktestMarketObservation::Bar(ExecutionBacktestBar {
@@ -1564,11 +1608,11 @@ pub(crate) struct NativeExecutionBacktestFill {
     #[pyo3(get)]
     side: String,
     #[pyo3(get)]
-    quantity: String,
+    quantity: super::NativeDecimal,
     #[pyo3(get)]
-    price: String,
+    price: super::NativeDecimal,
     #[pyo3(get)]
-    fee: String,
+    fee: super::NativeDecimal,
     #[pyo3(get)]
     fee_currency: Option<String>,
     #[pyo3(get)]
@@ -1906,9 +1950,13 @@ fn backtest_fill(value: ExecutionBacktestSimulationFill) -> NativeExecutionBackt
             OrderSide::Sell => "sell",
         }
         .to_owned(),
-        quantity: value.quantity.to_string(),
-        price: value.price.to_string(),
-        fee: value.fee.to_string(),
+        quantity: native_decimal(
+            value.quantity.mantissa(),
+            value.quantity.scale(),
+            "quantity",
+        ),
+        price: native_decimal(value.price.mantissa(), value.price.scale(), "price"),
+        fee: native_decimal(value.fee.mantissa(), value.fee.scale(), "money"),
         fee_currency: value.fee_currency.map(|v| v.to_string()),
         occurred_at_unix_nanos: value.occurred_at_unix_nanos.get(),
     }
@@ -1959,8 +2007,16 @@ fn backtest_order(value: ExecutionBacktestOrder) -> NativeExecutionBacktestOrder
             ExecutionBacktestOrderStatus::Rejected => "rejected",
         }
         .to_owned(),
-        filled_quantity: value.filled_quantity.to_string(),
-        remaining_quantity: value.remaining_quantity.to_string(),
+        filled_quantity: native_decimal(
+            value.filled_quantity.mantissa(),
+            value.filled_quantity.scale(),
+            "quantity",
+        ),
+        remaining_quantity: native_decimal(
+            value.remaining_quantity.mantissa(),
+            value.remaining_quantity.scale(),
+            "quantity",
+        ),
         updated_at_unix_nanos: value.updated_at_unix_nanos.get(),
         reason: value.reason,
     }
@@ -1993,22 +2049,6 @@ where
 fn decimal_parts(value: &str) -> PyResult<DecimalParts> {
     value.parse().map_err(value_error)
 }
-fn parse_quantity(value: &str) -> PyResult<Quantity> {
-    let p = decimal_parts(value)?;
-    Quantity::new(p.mantissa(), p.scale()).map_err(value_error)
-}
-fn parse_price(value: &str) -> PyResult<Price> {
-    let p = decimal_parts(value)?;
-    Price::new(p.mantissa(), p.scale()).map_err(value_error)
-}
-fn parse_money(value: &str) -> PyResult<Money> {
-    let p = decimal_parts(value)?;
-    Money::new(p.mantissa(), p.scale()).map_err(value_error)
-}
-fn parse_rate(value: &str) -> PyResult<Rate> {
-    let p = decimal_parts(value)?;
-    Rate::new(p.mantissa(), p.scale()).map_err(value_error)
-}
 fn parse_ratio(value: &str) -> PyResult<Ratio> {
     let p = decimal_parts(value)?;
     let numerator = u64::try_from(p.mantissa())
@@ -2018,9 +2058,64 @@ fn parse_ratio(value: &str) -> PyResult<Ratio> {
         .ok_or_else(|| ExecutionInvalidInputError::new_err("ratio scale is too large"))?;
     Ratio::new(numerator, denominator).map_err(value_error)
 }
-fn signed_quantity(value: &str) -> PyResult<SignedQuantity> {
-    let p = decimal_parts(value)?;
-    SignedQuantity::new(p.mantissa(), p.scale()).map_err(value_error)
+fn semantic_parts(value: &Bound<'_, PyAny>, expected: &str) -> PyResult<DecimalParts> {
+    if let Ok(text) = value.extract::<String>() {
+        return decimal_parts(&text);
+    }
+    let semantic_type = value
+        .getattr("semantic_type")
+        .and_then(|value| value.extract::<String>())
+        .map_err(|_| {
+            ExecutionInvalidInputError::new_err(format!(
+                "Execution {expected} requires exact text or a semantic decimal value"
+            ))
+        })?;
+    if semantic_type != expected {
+        return Err(ExecutionInvalidInputError::new_err(format!(
+            "Execution {expected} cannot be constructed from {semantic_type}"
+        )));
+    }
+    DecimalParts::new(
+        value.getattr("mantissa")?.extract::<i64>()?,
+        value.getattr("scale")?.extract::<u8>()?,
+    )
+    .map_err(value_error)
+}
+fn quantity_input(value: &Bound<'_, PyAny>) -> PyResult<Quantity> {
+    let parts = semantic_parts(value, "quantity")?;
+    Quantity::new(parts.mantissa(), parts.scale()).map_err(value_error)
+}
+fn nonnegative_signed_quantity_input(value: &Bound<'_, PyAny>) -> PyResult<SignedQuantity> {
+    let parts = semantic_parts(value, "quantity")?;
+    SignedQuantity::new(parts.mantissa(), parts.scale()).map_err(value_error)
+}
+fn signed_quantity_input(value: &Bound<'_, PyAny>) -> PyResult<SignedQuantity> {
+    let parts = semantic_parts(value, "signed_quantity")?;
+    SignedQuantity::new(parts.mantissa(), parts.scale()).map_err(value_error)
+}
+fn price_input(value: &Bound<'_, PyAny>) -> PyResult<Price> {
+    let parts = semantic_parts(value, "price")?;
+    Price::new(parts.mantissa(), parts.scale()).map_err(value_error)
+}
+fn money_input(value: &Bound<'_, PyAny>) -> PyResult<Money> {
+    let parts = semantic_parts(value, "money")?;
+    Money::new(parts.mantissa(), parts.scale()).map_err(value_error)
+}
+fn rate_input(value: &Bound<'_, PyAny>) -> PyResult<Rate> {
+    let parts = semantic_parts(value, "rate")?;
+    Rate::new(parts.mantissa(), parts.scale()).map_err(value_error)
+}
+fn semantic_text(value: &Bound<'_, PyAny>, expected: &str, field: &str) -> PyResult<String> {
+    semantic_parts(value, expected)
+        .map(|parts| parts.to_string())
+        .map_err(|error| ExecutionInvalidInputError::new_err(format!("{field}: {error}")))
+}
+fn native_decimal(mantissa: i64, scale: u8, semantic_type: &'static str) -> super::NativeDecimal {
+    super::NativeDecimal {
+        mantissa,
+        scale,
+        semantic_type,
+    }
 }
 fn value_error(error: impl std::fmt::Display) -> PyErr {
     ExecutionInvalidInputError::new_err(error.to_string())

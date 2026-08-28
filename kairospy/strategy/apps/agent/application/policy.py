@@ -11,6 +11,7 @@ from kairospy.investment.apps.execution.application.intents import (
     SplitOrderPolicy,
     TargetPositionRequest,
 )
+from kairospy.primitives.decimal import Price, Quantity
 
 from .models import (
     DecisionKind,
@@ -90,12 +91,14 @@ class DecisionPolicy:
             self._require_enabled("allow_quantity_reduction")
             if not isinstance(request, TargetPositionRequest):
                 raise TypeError("Quantity revision only supports target_position")
-            quantity = _decimal(revision.quantity, "revision quantity")
-            if request.quantity == 0:
+            quantity = Quantity(_decimal(revision.quantity, "revision quantity"))
+            if request.quantity.value == 0:
                 raise ValueError("A zero target quantity cannot be reduced")
-            if quantity != 0 and (quantity > 0) != (request.quantity > 0):
+            if quantity.value != 0 and (quantity.value > 0) != (
+                request.quantity.value > 0
+            ):
                 raise ValueError("Quantity revision cannot change target direction")
-            if abs(quantity) >= abs(request.quantity):
+            if abs(quantity.value) >= abs(request.quantity.value):
                 raise ValueError(
                     "Quantity revision must strictly reduce absolute target"
                 )
@@ -108,16 +111,14 @@ class DecisionPolicy:
                 raise TypeError("Limit revision only supports target_position")
             if request.limit_price is None:
                 raise ValueError("Limit revision requires an original limit price")
-            price = _decimal(revision.limit_price, "revision limit_price")
-            if price <= 0:
-                raise ValueError("Revision limit_price must be positive")
-            adjustment = abs(price - request.limit_price) * Decimal(10_000)
-            adjustment /= request.limit_price
+            price = Price(_decimal(revision.limit_price, "revision limit_price"))
+            adjustment = abs(price.value - request.limit_price.value) * Decimal(10_000)
+            adjustment /= request.limit_price.value
             if adjustment > max_adjustment:
                 raise ValueError("Limit revision exceeds max_price_adjustment_bps")
-            if request.quantity > 0 and price > request.limit_price:
+            if request.quantity.value > 0 and price > request.limit_price:
                 raise ValueError("Buy limit revision cannot increase limit price")
-            if request.quantity < 0 and price < request.limit_price:
+            if request.quantity.value < 0 and price < request.limit_price:
                 raise ValueError("Sell limit revision cannot decrease limit price")
             return replace(request, limit_price=price)
         if isinstance(revision, ShortenDeadline):
@@ -168,10 +169,10 @@ def _tightened_split(
     max_child = (
         None
         if revision.max_child_quantity is None
-        else _decimal(revision.max_child_quantity, "revision max_child_quantity")
+        else Quantity.positive(
+            _decimal(revision.max_child_quantity, "revision max_child_quantity")
+        )
     )
-    if max_child is not None and max_child <= 0:
-        raise ValueError("Split max_child_quantity must be positive")
     if original is not None and original.max_child_quantity is not None:
         if max_child is None or max_child > original.max_child_quantity:
             raise ValueError("Split revision cannot increase max child quantity")

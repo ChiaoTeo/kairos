@@ -396,7 +396,7 @@ fn view_checkpoint_and_change_have_distinct_boundaries() {
     assert!(access.contains("pub fn current_view"));
     assert!(!crate_root().join("src/application/process").exists());
     let publication = source("src/services/publication/contract/indexed.rs");
-    assert!(publication.contains("fn encode_change_view"));
+    assert!(publication.contains("fn encode_latest_change_views"));
     assert!(!publication.contains("trait MarketChangePublisher"));
 }
 

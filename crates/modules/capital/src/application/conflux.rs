@@ -941,27 +941,6 @@ where
         let previous_indexed_values = state.published_indexed_values.clone();
         let snapshot = self.application().snapshot();
         let owner_id = format!("capital:{}", snapshot.capital_group_id);
-        while let Some(event) = self.application().pending_event().cloned() {
-            let event = capital_event(&event);
-            let mut writer =
-                kairos_capital_contract::FlatbuffersCapitalEventWriter::new_with_incarnation(
-                    owner_id.clone(),
-                    identity.clone(),
-                    producer_incarnation,
-                );
-            writer
-                .publish(&event)
-                .map_err(CapitalProcessError::Connection)?;
-            context
-                .outputs()
-                .aeron
-                .publish(
-                    "capital-events",
-                    writer.last_payload.as_deref().unwrap_or_default(),
-                )
-                .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
-            self.application_mut().acknowledge_event()?;
-        }
         let view = capital_current_view(&self.application().snapshot());
         let next = kairos_capital_contract::encode_indexed_current(&view)
             .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
@@ -999,6 +978,35 @@ where
             .as_mut()
             .expect("Capital Conflux checked above")
             .published_indexed_values = next;
+        while let Some(event) = self.application().pending_event().cloned() {
+            let event = capital_event(&event);
+            let mut writer =
+                kairos_capital_contract::FlatbuffersCapitalEventWriter::new_with_incarnation(
+                    owner_id.clone(),
+                    identity.clone(),
+                    producer_incarnation,
+                );
+            if let Err(error) = writer.publish(&event) {
+                tracing::warn!(
+                    event = "capital_notification_encode_failed",
+                    sequence = event.sequence().get(),
+                    error = %error,
+                );
+                self.application_mut().acknowledge_event()?;
+                continue;
+            }
+            if let Err(error) = context.outputs().aeron.publish(
+                "capital-events",
+                writer.last_payload.as_deref().unwrap_or_default(),
+            ) {
+                tracing::warn!(
+                    event = "capital_notification_publish_failed",
+                    sequence = event.sequence().get(),
+                    error = %error,
+                );
+            }
+            self.application_mut().acknowledge_event()?;
+        }
         Ok(())
     }
 }

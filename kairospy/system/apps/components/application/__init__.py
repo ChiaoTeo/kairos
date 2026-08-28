@@ -33,6 +33,7 @@ from .event_routes import (
     EventTransportRoute,
     ensure_instance_event_route,
     ensure_workspace_event_route,
+    event_route_from_manifest,
 )
 
 
@@ -41,6 +42,7 @@ from .event_routes import (
 # instance rather than the workspace inventory.
 SYSTEM_COMPONENTS = ("reference", "market")
 SUPPORT_COMPONENTS = ("system-supervisor", "aeron")
+INSTANCE_COMPONENTS = frozenset({"account", "risk", "execution", "capital"})
 
 
 def _lock_is_held(path: Path) -> bool:
@@ -123,6 +125,68 @@ def _process_details(value: object) -> dict[str, Any]:
         return {"alive": _pid_is_alive(pid), "state": None, "command": None}
 
 
+def _event_route_declaration_path(
+    workspace: Any, runtime_name: str, instance_workspace: Any | None
+) -> Path:
+    health_file = (
+        instance_workspace.health(runtime_name)
+        if instance_workspace is not None
+        else workspace.paths.health_file(runtime_name)
+    )
+    return health_file.parent / "event-route.json"
+
+
+def _write_event_route_declaration(
+    path: Path, route: EventTransportRoute | None, pid: int
+) -> None:
+    if route is None:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "pid": pid,
+                "event_route": route.as_manifest(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _require_event_route_declaration(
+    path: Path, expected: EventTransportRoute | None
+) -> None:
+    if expected is None:
+        if path.exists():
+            raise RuntimeError(
+                "replay component has an unexpected live event-route declaration"
+            )
+        return
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, Mapping) or value.get("schema_version") != 1:
+            raise ValueError("unsupported declaration schema")
+        pid = value.get("pid")
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            raise ValueError("declaration pid must be positive")
+        actual = event_route_from_manifest(value.get("event_route"))
+    except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as error:
+        raise RuntimeError(
+            f"component event-route declaration is missing or invalid: {path}: {error}"
+        ) from error
+    if actual != expected:
+        raise RuntimeError("ready component declares a different System event route")
+    if not _process_details(pid)["alive"]:
+        raise RuntimeError("ready component event-route declaration belongs to a dead process")
+
+
 @dataclass(frozen=True, slots=True)
 class ComponentControlApplication(SystemRpcClient):
     """Generic facade for system component control.
@@ -159,7 +223,11 @@ class ComponentProcessApplication:
         confirm_live: bool = False,
         instance_workspace: Any | None = None,
         stream_startup_logs: bool = False,
+        event_route: EventTransportRoute | None = None,
     ) -> SystemRpcClient:
+        runtime = instance_workspace
+        if component in INSTANCE_COMPONENTS and runtime is None:
+            raise RuntimeError(f"{component} requires a Run Instance workspace")
         # A static replay owns its observations locally and does not construct
         # a provider/reference Aeron source.  Keeping the driver out of this
         # path makes offline backtests independent from a live workspace
@@ -168,8 +236,36 @@ class ComponentProcessApplication:
             component == "market" and market_runtime_profile != "replay"
         ):
             self._ensure_aeron_driver()
-        runtime = instance_workspace
         runtime_name = socket_name or component
+        event_route = (
+            None
+            if component == "market" and market_runtime_profile == "replay"
+            else (
+                event_route
+                or (
+                    ensure_instance_event_route(runtime)
+                    if runtime is not None
+                    else ensure_workspace_event_route(self.workspace)
+                )
+            )
+        )
+        if event_route is not None:
+            if event_route.workspace_id != self.workspace.workspace_id:
+                raise RuntimeError("component event route belongs to another Workspace")
+            if runtime is None:
+                if event_route.scope != "workspace":
+                    raise RuntimeError("workspace component requires a Workspace event route")
+            elif (
+                event_route.scope != "instance"
+                or event_route.launch_id != runtime.launch_id
+                or event_route.instance_id != runtime.instance_id
+            ):
+                raise RuntimeError(
+                    "instance component event route belongs to another Run Instance"
+                )
+        declaration_path = _event_route_declaration_path(
+            self.workspace, runtime_name, runtime
+        )
         socket = (
             runtime.socket(runtime_name)
             if runtime is not None
@@ -178,12 +274,20 @@ class ComponentProcessApplication:
         client_component = "account" if component == "account" else component
         control = self.client(client_component, socket, timeout=self.control_timeout)
         if socket.exists():
+            ready = False
             try:
                 health = control.status()
-                if health.get("status") in {"ok", "ready", "running", "degraded"}:
-                    return control
+                ready = health.get("status") in {
+                    "ok",
+                    "ready",
+                    "running",
+                    "degraded",
+                }
             except Exception:
                 pass
+            if ready:
+                _require_event_route_declaration(declaration_path, event_route)
+                return control
 
         if socket.exists():
             lock = _runtime_lock_path(self.workspace, component, runtime)
@@ -212,15 +316,6 @@ class ComponentProcessApplication:
             socket.unlink(missing_ok=True)
             health_file.unlink(missing_ok=True)
 
-        event_route = (
-            None
-            if component == "market" and market_runtime_profile == "replay"
-            else (
-                ensure_instance_event_route(runtime)
-                if runtime is not None
-                else ensure_workspace_event_route(self.workspace)
-            )
-        )
         command, extra_environment = self._command(
             component,
             account_id=account_id,
@@ -247,6 +342,7 @@ class ComponentProcessApplication:
             cwd=str(self.workspace.paths.root),
             environment={**os.environ, **extra_environment},
         )
+        _write_event_route_declaration(declaration_path, event_route, process.pid)
         recovery_command = (
             f"kairos launch artifacts {runtime.launch_id} "
             f"--instance {runtime.instance_id} --workspace {self.workspace.paths.project_root}"
@@ -361,13 +457,20 @@ class ComponentProcessApplication:
         account_id: str | None = None,
         stream_startup_logs: bool = False,
         progress: Callable[[str], None] | None = None,
+        instance_workspace: Any | None = None,
+        socket_name: str | None = None,
+        event_route: EventTransportRoute | None = None,
     ) -> SystemRpcClient:
         """Stop a workspace component completely before starting its replacement."""
         report = progress or (lambda _message: None)
         report(f"Stopping {component}...")
         stop_error: Exception | None = None
         try:
-            self.stop(component)
+            self.stop(
+                component,
+                instance_workspace=instance_workspace,
+                socket_name=socket_name,
+            )
         except (OSError, RuntimeError, ValueError) as error:
             # A component can exit between socket discovery and the stop
             # request. Waiting on its process ownership distinguishes that
@@ -378,7 +481,12 @@ class ComponentProcessApplication:
             f"(timeout: {self.stop_timeout:g}s)..."
         )
         try:
-            self._wait_stopped(component, progress=progress)
+            self._wait_stopped(
+                component,
+                instance_workspace=instance_workspace,
+                socket_name=socket_name,
+                progress=progress,
+            )
         except TimeoutError as error:
             if stop_error is not None:
                 raise TimeoutError(
@@ -391,6 +499,9 @@ class ComponentProcessApplication:
             component,
             account_id=account_id,
             stream_startup_logs=stream_startup_logs,
+            instance_workspace=instance_workspace,
+            socket_name=socket_name,
+            event_route=event_route,
         )
         report(f"{component} restarted.")
         return control
@@ -455,6 +566,9 @@ class ComponentProcessApplication:
             instance_workspace=instance_workspace,
             socket_name=socket_name,
         )
+        _event_route_declaration_path(
+            self.workspace, socket_name or component, instance_workspace
+        ).unlink(missing_ok=True)
 
     def status(
         self,
@@ -755,7 +869,14 @@ class ComponentProcessApplication:
                 raise RuntimeError(
                     f"{component} event route must have {expected_scope} scope"
                 )
-            command.extend(("--aeron-channel", event_route.channel))
+            command.extend(
+                (
+                    "--aeron-dir",
+                    str(event_route.aeron_dir),
+                    "--aeron-channel",
+                    event_route.channel,
+                )
+            )
         if instance_workspace is not None:
             command.extend(
                 (

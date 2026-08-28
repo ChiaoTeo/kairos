@@ -160,11 +160,16 @@ from .market import (
     Bar,
     BarEvent,
     GreeksEvent,
+    InstrumentIdRead,
     MarketEvent,
+    MarketIdRead,
     ObservationScope,
     OptionGreeks,
+    PriceLike,
+    QuantityLike,
     Quote,
     QuoteEvent,
+    RateLike,
     Trade,
     TradeEvent,
 )
@@ -175,6 +180,14 @@ from .protocol import (
 )
 from .results import CommandResult
 from .risk import RiskEvent, RiskEventMetadata
+from kairospy.primitives.decimal import (
+    Money,
+    Price,
+    PriceDelta,
+    Quantity,
+    Rate,
+    SignedQuantity,
+)
 from .reference import (
     Asset,
     Exchange,

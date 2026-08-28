@@ -218,7 +218,7 @@ the same write transaction as the affected entity families:
 | `schema_set` | required | Exact named-database key/value schemas and versions |
 | `resource_epoch` | required, greater than zero | Incompatible environment replacement epoch |
 | `producer_incarnation` | required, greater than zero | Writer-process incarnation used for fencing and diagnosis |
-| `applied_event_sequence` | required | Highest owner event sequence reflected by this transaction |
+| `applied_event_sequence` | required | Highest owner state sequence reflected by this transaction; never an Aeron replay cursor |
 | `committed_at_unix_nanos` | required | Publication commit time |
 | `rebuild_state` | required | `building`, `ready`, or bounded `failed` diagnostic state |
 
@@ -319,29 +319,18 @@ record by identifier.
 
 ## 11. Delivery and recovery profiles
 
-Every event stream declares exactly one profile in its contract registry:
+Runtime Aeron publication has one profile: bounded, best-effort, non-replayable notification. A subscriber
+may begin at any observed sequence. Within one `(stream_id, producer, producer_incarnation)`, sequence
+supports duplicate suppression and loss diagnosis; a gap is observable but does not become a snapshot
+recovery protocol. Incarnation change establishes a new observation position.
 
-### Retained
+Queue overflow terminates and recreates that subscription while recording notification loss. Current views
+remain authoritative and may be read explicitly by business key, but they never repair or replay missing
+notifications.
 
-The owner provides bounded retention and replay by `(stream_id, sequence)`.
-The contract defines retention limits, unavailable-cursor behavior, ordering,
-and resync. Account, Risk, Execution, and Reference lifecycle streams should
-converge on this profile because they represent durable business transitions.
-
-### Ephemeral fail-closed
-
-The owner provides ordered live delivery but no replay promise. A gap is a
-terminal continuity error for that subscription; the caller restarts through a
-documented application workflow. Initial high-rate Market streams may use this
-profile.
-
-Snapshots do not repair either profile. A dedicated owner-defined resync
-operation may return a new current view and a separately defined retained
-cursor, but the relationship must be part of that operation's contract.
-
-Backpressure behavior is part of the stream contract. Silent drop followed by
-continued delivery is forbidden; a dropped sequence must become an observable
-gap or explicit subscriber termination.
+An owner that admits durable replay, audit, or history defines a separate query, journal, or dataset contract
+with explicit retention, cursor, unavailable-range, and ordering semantics. It must not label the live Aeron
+subscription as that durable source.
 
 ## 12. Initial v2 semantic surface
 
@@ -544,7 +533,7 @@ The following are selected per admitted root from measured caller needs, not
 standardized speculatively:
 
 - exact keyed-family cardinality and retention for future admitted views;
-- Market retained replay versus ephemeral fail-closed delivery;
+- retention and unavailable-range policy for separately admitted durable history or replay sources;
 - whether a concrete view needs partial pagination or a dataset API;
 - Decimal64 replacement for a demonstrated out-of-range field;
 - transport choice beyond the semantic delivery profile.

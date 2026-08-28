@@ -16,7 +16,8 @@ class PrintAaplOptions(Strategy):
         markets = tuple(
             market
             for market in markets
-            if (market.base_asset or "").upper() == "AAPL"
+            if (market.base_asset.value if market.base_asset is not None else "").upper()
+            == "AAPL"
             or (market.venue_symbol or "").upper().startswith("AAPL")
         )
         if not markets:

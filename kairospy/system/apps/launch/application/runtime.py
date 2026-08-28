@@ -524,7 +524,9 @@ class LaunchRuntimeApplication:
             components = ComponentProcessApplication(self.workspace)
             if reference_required:
                 components.ensure_running(
-                    "reference", reference_config=ReferenceProcessConfig(self.workspace)
+                    "reference",
+                    reference_config=ReferenceProcessConfig(self.workspace),
+                    event_route=workspace_event_route,
                 )
             market_control = cast(
                 MarketSystemClient,
@@ -532,6 +534,11 @@ class LaunchRuntimeApplication:
                     "market",
                     market_runtime_profile=market_runtime_profile,
                     instance_workspace=market_instance_workspace,
+                    event_route=(
+                        instance_event_route
+                        if market_instance_workspace is not None
+                        else workspace_event_route
+                    ),
                 ),
             )
             account_connections: dict[str, dict[str, Any]] = {}
@@ -558,6 +565,7 @@ class LaunchRuntimeApplication:
                     account_id=bound_account_id,
                     socket_name=socket_name,
                     instance_workspace=instance_workspace,
+                    event_route=instance_event_route,
                 )
                 account_connections[bound_account_id] = {
                     "socket": str(instance_workspace.socket(socket_name)),
@@ -595,7 +603,11 @@ class LaunchRuntimeApplication:
                     "lease_fence": account_lease_fences[bound_account_id],
                     "event_route": instance_event_route.route_id,
                 }
-            components.ensure_running("risk", instance_workspace=instance_workspace)
+            components.ensure_running(
+                "risk",
+                instance_workspace=instance_workspace,
+                event_route=instance_event_route,
+            )
             component_connections: dict[str, dict[str, Any]] = {
                 "risk": {
                     "socket": str(instance_workspace.socket("risk")),
@@ -650,7 +662,9 @@ class LaunchRuntimeApplication:
             )
             if bool(plan.capital.get("enabled", False)):
                 components.ensure_running(
-                    "capital", instance_workspace=instance_workspace
+                    "capital",
+                    instance_workspace=instance_workspace,
+                    event_route=instance_event_route,
                 )
                 component_connections["capital"] = {
                     "socket": str(instance_workspace.socket("capital")),
@@ -663,6 +677,7 @@ class LaunchRuntimeApplication:
                     "execution",
                     confirm_live=confirm_live,
                     instance_workspace=instance_workspace,
+                    event_route=instance_event_route,
                 )
                 component_connections["execution"] = {
                     "socket": str(instance_workspace.socket("execution")),

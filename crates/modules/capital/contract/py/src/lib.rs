@@ -8,11 +8,12 @@ use kairos_capital_contract::{
     CAPITAL_PLANS_DATABASE, CAPITAL_POLICIES_DATABASE, CAPITAL_RESERVATIONS_DATABASE,
     CAPITAL_ROUTES_DATABASE, CancelFundingObjectiveRequest, CapitalAvailabilityResponse,
     CapitalControlError, CapitalControlResponse, CapitalControlRpcClient, CapitalDemandResponse,
-    CapitalDemandStatus, CapitalHealthResponse, CapitalIndexedView as RustView,
-    CapitalPlanReconcileStatus, CapitalReadinessStatus, ContractError, DecodedCapitalEvent,
-    FundingLocation as RustFundingLocation, FundingObjectivePriority, FundingObjectiveStatus,
-    ObserveCapitalDemandRequest, PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest,
-    ReconcileCapitalPlanRequest, ReconcileCapitalPlanResponse,
+    CapitalDemandStatus, CapitalHealthResponse, CapitalIndexedRowRef,
+    CapitalIndexedView as RustView, CapitalPlanReconcileStatus, CapitalReadinessStatus,
+    ContractError, DecodedCapitalEvent, FundingLocation as RustFundingLocation,
+    FundingObjectivePriority, FundingObjectiveStatus, ObserveCapitalDemandRequest,
+    PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest, ReconcileCapitalPlanRequest,
+    ReconcileCapitalPlanResponse,
 };
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::capital::{
@@ -189,6 +190,39 @@ struct NativeBuildInfo {
     contract_fingerprint: String,
 }
 
+#[pyclass(
+    name = "_NativeSemanticDecimal",
+    frozen,
+    module = "kairospy._native_capital_contract"
+)]
+#[derive(Clone)]
+struct NativeDecimal {
+    #[pyo3(get)]
+    mantissa: i64,
+    #[pyo3(get)]
+    scale: u8,
+}
+
+#[pymethods]
+impl NativeDecimal {
+    fn __str__(&self) -> String {
+        decimal_parts_text(self.mantissa, self.scale)
+    }
+
+    #[getter]
+    fn semantic_type(&self) -> &'static str {
+        "quantity"
+    }
+
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let decimal = py.import("decimal")?.getattr("Decimal")?;
+        Ok(decimal
+            .call1((decimal_parts_text(self.mantissa, self.scale),))?
+            .unbind())
+    }
+}
+
 #[pyclass(frozen, module = "kairospy._native_capital_contract")]
 #[derive(Clone)]
 struct CapitalEventMetadata {
@@ -327,7 +361,7 @@ impl NativePublishFundingObjectiveRequest {
         version: u64,
         strategy_id: String,
         destination: PyRef<'_, FundingLocation>,
-        desired_available: String,
+        desired_available: &Bound<'_, PyAny>,
         required_by_unix_nanos: u64,
         expires_at_unix_nanos: u64,
         priority: String,
@@ -343,7 +377,7 @@ impl NativePublishFundingObjectiveRequest {
                 version: Generation::new(version),
                 strategy_id: StrategyId::new(strategy_id).map_err(value_error)?,
                 destination: destination.to_rust()?,
-                desired_available: quantity(&desired_available)?,
+                desired_available: quantity_input(desired_available)?,
                 required_by_unix_nanos: UnixNanos::new(required_by_unix_nanos),
                 expires_at_unix_nanos: UnixNanos::new(expires_at_unix_nanos),
                 priority: funding_priority(&priority)?,
@@ -380,8 +414,8 @@ impl NativePublishFundingObjectiveRequest {
         FundingLocation::from_rust(&self.inner.destination)
     }
     #[getter]
-    fn desired_available(&self) -> String {
-        self.inner.desired_available.to_string()
+    fn desired_available(&self) -> NativeDecimal {
+        native_quantity(self.inner.desired_available)
     }
     #[getter]
     fn required_by_unix_nanos(&self) -> u64 {
@@ -489,7 +523,7 @@ impl NativeObserveCapitalDemandRequest {
         capital_group_id: String,
         strategy_id: String,
         destination: PyRef<'_, FundingLocation>,
-        observed_shortfall: String,
+        observed_shortfall: &Bound<'_, PyAny>,
         observed_at_unix_nanos: u64,
         required_by_unix_nanos: u64,
         expires_at_unix_nanos: u64,
@@ -515,7 +549,7 @@ impl NativeObserveCapitalDemandRequest {
                 capital_group_id: CapitalGroupId::new(capital_group_id).map_err(value_error)?,
                 strategy_id: StrategyId::new(strategy_id).map_err(value_error)?,
                 destination: destination.to_rust()?,
-                observed_shortfall: quantity(&observed_shortfall)?,
+                observed_shortfall: quantity_input(observed_shortfall)?,
                 observed_at_unix_nanos: UnixNanos::new(observed_at_unix_nanos),
                 required_by_unix_nanos: UnixNanos::new(required_by_unix_nanos),
                 expires_at_unix_nanos: UnixNanos::new(expires_at_unix_nanos),
@@ -556,8 +590,8 @@ impl NativeObserveCapitalDemandRequest {
         FundingLocation::from_rust(&self.inner.destination)
     }
     #[getter]
-    fn observed_shortfall(&self) -> String {
-        self.inner.observed_shortfall.to_string()
+    fn observed_shortfall(&self) -> NativeDecimal {
+        native_quantity(self.inner.observed_shortfall)
     }
     #[getter]
     fn observed_at_unix_nanos(&self) -> u64 {
@@ -730,11 +764,11 @@ struct NativeCapitalAvailabilityResponse {
     #[pyo3(get)]
     readiness: String,
     #[pyo3(get)]
-    policy_minimum: String,
+    policy_minimum: NativeDecimal,
     #[pyo3(get)]
-    policy_default_target: String,
+    policy_default_target: NativeDecimal,
     #[pyo3(get)]
-    policy_maximum: String,
+    policy_maximum: NativeDecimal,
     #[pyo3(get)]
     policy_version: u64,
     #[pyo3(get)]
@@ -742,13 +776,13 @@ struct NativeCapitalAvailabilityResponse {
     #[pyo3(get)]
     active_demand_ids: Vec<String>,
     #[pyo3(get)]
-    desired_target: String,
+    desired_target: NativeDecimal,
     #[pyo3(get)]
-    observed_available: String,
+    observed_available: NativeDecimal,
     #[pyo3(get)]
-    effective_target: String,
+    effective_target: NativeDecimal,
     #[pyo3(get)]
-    deficit: String,
+    deficit: NativeDecimal,
     #[pyo3(get)]
     account_watermark: u64,
     #[pyo3(get)]
@@ -931,7 +965,7 @@ struct FundingHorizon {
     #[pyo3(get)]
     demand_ids: Vec<String>,
     #[pyo3(get)]
-    desired_available: String,
+    desired_available: NativeDecimal,
 }
 #[pyclass(frozen, module = "kairospy._native_capital_contract")]
 #[derive(Clone)]
@@ -949,13 +983,13 @@ struct CapitalAvailability {
     #[pyo3(get)]
     funding_horizons: Vec<FundingHorizon>,
     #[pyo3(get)]
-    desired_target: String,
+    desired_target: NativeDecimal,
     #[pyo3(get)]
-    observed_available: String,
+    observed_available: NativeDecimal,
     #[pyo3(get)]
-    effective_target: String,
+    effective_target: NativeDecimal,
     #[pyo3(get)]
-    deficit: String,
+    deficit: NativeDecimal,
     #[pyo3(get)]
     account_watermark: u64,
     #[pyo3(get)]
@@ -977,7 +1011,7 @@ struct FundingObjective {
     #[pyo3(get)]
     destination: FundingLocation,
     #[pyo3(get)]
-    desired_available: String,
+    desired_available: NativeDecimal,
     #[pyo3(get)]
     required_by_unix_nanos: u64,
     #[pyo3(get)]
@@ -1005,7 +1039,7 @@ struct CapitalDemand {
     #[pyo3(get)]
     destination: FundingLocation,
     #[pyo3(get)]
-    observed_shortfall: String,
+    observed_shortfall: NativeDecimal,
     #[pyo3(get)]
     observed_at_unix_nanos: u64,
     #[pyo3(get)]
@@ -1039,17 +1073,17 @@ struct CapitalPolicy {
     #[pyo3(get)]
     version: u64,
     #[pyo3(get)]
-    minimum: String,
+    minimum: NativeDecimal,
     #[pyo3(get)]
-    default_target: String,
+    default_target: NativeDecimal,
     #[pyo3(get)]
-    maximum: String,
+    maximum: NativeDecimal,
     #[pyo3(get)]
-    stress_buffer: String,
+    stress_buffer: NativeDecimal,
     #[pyo3(get)]
-    minimum_movement: String,
+    minimum_movement: NativeDecimal,
     #[pyo3(get)]
-    hysteresis: String,
+    hysteresis: NativeDecimal,
     #[pyo3(get)]
     deficit_dwell_nanos: u64,
     #[pyo3(get)]
@@ -1063,9 +1097,9 @@ struct CapitalEarnHolding {
     #[pyo3(get)]
     product_id: String,
     #[pyo3(get)]
-    principal: String,
+    principal: NativeDecimal,
     #[pyo3(get)]
-    redeemable_amount: String,
+    redeemable_amount: NativeDecimal,
     #[pyo3(get)]
     immediately_redeemable: bool,
     #[pyo3(get)]
@@ -1077,7 +1111,7 @@ struct CapitalFacts {
     #[pyo3(get)]
     destination: FundingLocation,
     #[pyo3(get)]
-    observed_available: String,
+    observed_available: NativeDecimal,
     #[pyo3(get)]
     account_watermark: u64,
     #[pyo3(get)]
@@ -1085,7 +1119,7 @@ struct CapitalFacts {
     #[pyo3(get)]
     account_complete: bool,
     #[pyo3(get)]
-    risk_capacity: String,
+    risk_capacity: NativeDecimal,
     #[pyo3(get)]
     risk_policy_version: u64,
     #[pyo3(get)]
@@ -1111,7 +1145,7 @@ struct CapitalPlan {
     #[pyo3(get)]
     destination: FundingLocation,
     #[pyo3(get)]
-    amount: String,
+    amount: NativeDecimal,
     #[pyo3(get)]
     objective_ids: Vec<String>,
     #[pyo3(get)]
@@ -1127,15 +1161,15 @@ struct CapitalPlan {
     #[pyo3(get)]
     destination_account_watermark: u64,
     #[pyo3(get)]
-    source_observed_available: String,
+    source_observed_available: NativeDecimal,
     #[pyo3(get)]
-    destination_observed_available: String,
+    destination_observed_available: NativeDecimal,
     #[pyo3(get)]
     redemption_account_watermark: Option<u64>,
     #[pyo3(get)]
-    redemption_observed_available: Option<String>,
+    redemption_observed_available: Option<NativeDecimal>,
     #[pyo3(get)]
-    earn_principal_before: String,
+    earn_principal_before: NativeDecimal,
     #[pyo3(get)]
     status: String,
     #[pyo3(get)]
@@ -1163,9 +1197,9 @@ struct CapitalRoute {
     #[pyo3(get)]
     kind: String,
     #[pyo3(get)]
-    per_operation_limit: String,
+    per_operation_limit: NativeDecimal,
     #[pyo3(get)]
-    daily_limit: String,
+    daily_limit: NativeDecimal,
     #[pyo3(get)]
     required_source_authority: String,
     #[pyo3(get)]
@@ -1189,7 +1223,7 @@ struct CapitalReservation {
     #[pyo3(get)]
     source: FundingLocation,
     #[pyo3(get)]
-    amount: String,
+    amount: NativeDecimal,
     #[pyo3(get)]
     source_account_watermark: u64,
     #[pyo3(get)]
@@ -1367,10 +1401,7 @@ impl CapitalCurrentView {
     }
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<CapitalCurrentSnapshot> {
-        self.read(py, |reader| {
-            let snapshot = reader.snapshot().map_err(contract_error)?;
-            project(snapshot).map_err(contract_error)
-        })
+        self.read(py, |reader| project_direct(reader).map_err(contract_error))
     }
     fn close(&self) -> PyResult<()> {
         self.ensure_process()?;
@@ -1426,79 +1457,136 @@ impl CapitalCurrentView {
     }
 }
 
-fn project(
-    snapshot: kairos_capital_contract::CapitalIndexedSnapshot,
-) -> Result<CapitalCurrentSnapshot, ContractError> {
-    let applied_event_sequence = snapshot.metadata().applied_event_sequence;
-    let state = snapshot.state()?;
-    let capital_group_id = state.capital_group_id().to_owned();
-    let strategy_id = optional_required(state.strategy_id());
-    let environment = optional_required(state.environment());
-    let membership_version = state.membership_version();
-    let event_sequence = state.event_sequence();
-    let journal_sequence = state.journal_sequence();
-    let policies = snapshot
-        .entities(CAPITAL_POLICIES_DATABASE)?
-        .into_iter()
-        .map(|v| policy(v.policy().unwrap()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let facts = snapshot
-        .entities(CAPITAL_FACTS_DATABASE)?
-        .into_iter()
-        .map(|v| capital_facts(v.facts().unwrap()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let policy_count = policies.len();
-    let facts_count = facts.len();
-    let objectives = snapshot
-        .entities(CAPITAL_OBJECTIVES_DATABASE)?
-        .into_iter()
-        .map(|v| objective(v.objective().unwrap()))
-        .collect::<Result<_, _>>()?;
-    let demands = snapshot
-        .entities(CAPITAL_DEMANDS_DATABASE)?
-        .into_iter()
-        .map(|v| demand(v.demand().unwrap()))
-        .collect::<Result<_, _>>()?;
-    let availabilities = snapshot
-        .entities(CAPITAL_AVAILABILITY_DATABASE)?
-        .into_iter()
-        .map(|v| availability(v.availability().unwrap()))
-        .collect::<Result<_, _>>()?;
-    let plans = snapshot
-        .entities(CAPITAL_PLANS_DATABASE)?
-        .into_iter()
-        .map(|v| plan(v.plan().unwrap()))
-        .collect::<Result<_, _>>()?;
-    let routes = snapshot
-        .entities(CAPITAL_ROUTES_DATABASE)?
-        .into_iter()
-        .map(|v| route(v.route().unwrap()))
-        .collect::<Result<_, _>>()?;
-    let reservations = snapshot
-        .entities(CAPITAL_RESERVATIONS_DATABASE)?
-        .into_iter()
-        .map(|v| reservation(v.reservation().unwrap()))
-        .collect::<Result<_, _>>()?;
-    let operations = snapshot
-        .entities(CAPITAL_OPERATIONS_DATABASE)?
-        .into_iter()
-        .map(|v| operation(v.operation().unwrap()))
-        .collect::<Result<_, _>>()?;
-    let alerts = snapshot
-        .entities(CAPITAL_ALERTS_DATABASE)?
-        .into_iter()
-        .map(|v| alert(v.alert().unwrap()))
-        .collect::<Result<_, _>>()?;
-    Ok(CapitalCurrentSnapshot {
+enum MappedCapitalRow {
+    State {
+        capital_group_id: String,
+        strategy_id: Option<String>,
+        environment: Option<String>,
+        membership_version: u64,
+        event_sequence: u64,
+        journal_sequence: u64,
+    },
+    Policy(CapitalPolicy),
+    Facts(CapitalFacts),
+    Availability(CapitalAvailability),
+    Objective(FundingObjective),
+    Demand(CapitalDemand),
+    Plan(CapitalPlan),
+    Route(CapitalRoute),
+    Reservation(CapitalReservation),
+    Operation(CapitalOperation),
+    Alert(CapitalAlert),
+}
+
+fn project_direct(reader: &RustView) -> Result<CapitalCurrentSnapshot, ContractError> {
+    let (metadata, rows) = reader.map_snapshot(|_, database, row| {
+        Ok(match row {
+            CapitalIndexedRowRef::State(value) => MappedCapitalRow::State {
+                capital_group_id: value.capital_group_id().to_owned(),
+                strategy_id: optional_required(value.strategy_id()),
+                environment: optional_required(value.environment()),
+                membership_version: value.membership_version(),
+                event_sequence: value.event_sequence(),
+                journal_sequence: value.journal_sequence(),
+            },
+            CapitalIndexedRowRef::Entity(value) => match database {
+                CAPITAL_POLICIES_DATABASE => {
+                    MappedCapitalRow::Policy(policy(value.policy().unwrap())?)
+                },
+                CAPITAL_FACTS_DATABASE => {
+                    MappedCapitalRow::Facts(capital_facts(value.facts().unwrap())?)
+                },
+                CAPITAL_AVAILABILITY_DATABASE => {
+                    MappedCapitalRow::Availability(availability(value.availability().unwrap())?)
+                },
+                CAPITAL_OBJECTIVES_DATABASE => {
+                    MappedCapitalRow::Objective(objective(value.objective().unwrap())?)
+                },
+                CAPITAL_DEMANDS_DATABASE => {
+                    MappedCapitalRow::Demand(demand(value.demand().unwrap())?)
+                },
+                CAPITAL_PLANS_DATABASE => MappedCapitalRow::Plan(plan(value.plan().unwrap())?),
+                CAPITAL_ROUTES_DATABASE => MappedCapitalRow::Route(route(value.route().unwrap())?),
+                CAPITAL_RESERVATIONS_DATABASE => {
+                    MappedCapitalRow::Reservation(reservation(value.reservation().unwrap())?)
+                },
+                CAPITAL_OPERATIONS_DATABASE => {
+                    MappedCapitalRow::Operation(operation(value.operation().unwrap())?)
+                },
+                CAPITAL_ALERTS_DATABASE => MappedCapitalRow::Alert(alert(value.alert().unwrap())?),
+                _ => unreachable!("Capital map_snapshot returns only declared databases"),
+            },
+        })
+    })?;
+
+    let mut state = None;
+    let mut policies = Vec::new();
+    let mut facts = Vec::new();
+    let mut availabilities = Vec::new();
+    let mut objectives = Vec::new();
+    let mut demands = Vec::new();
+    let mut plans = Vec::new();
+    let mut routes = Vec::new();
+    let mut reservations = Vec::new();
+    let mut operations = Vec::new();
+    let mut alerts = Vec::new();
+    for row in rows.into_values().flatten() {
+        match row {
+            MappedCapitalRow::State {
+                capital_group_id,
+                strategy_id,
+                environment,
+                membership_version,
+                event_sequence,
+                journal_sequence,
+            } => {
+                if state
+                    .replace((
+                        capital_group_id,
+                        strategy_id,
+                        environment,
+                        membership_version,
+                        event_sequence,
+                        journal_sequence,
+                    ))
+                    .is_some()
+                {
+                    return Err(ContractError::Invalid(
+                        "Capital snapshot must contain one state".into(),
+                    ));
+                }
+            },
+            MappedCapitalRow::Policy(value) => policies.push(value),
+            MappedCapitalRow::Facts(value) => facts.push(value),
+            MappedCapitalRow::Availability(value) => availabilities.push(value),
+            MappedCapitalRow::Objective(value) => objectives.push(value),
+            MappedCapitalRow::Demand(value) => demands.push(value),
+            MappedCapitalRow::Plan(value) => plans.push(value),
+            MappedCapitalRow::Route(value) => routes.push(value),
+            MappedCapitalRow::Reservation(value) => reservations.push(value),
+            MappedCapitalRow::Operation(value) => operations.push(value),
+            MappedCapitalRow::Alert(value) => alerts.push(value),
+        }
+    }
+    let (
         capital_group_id,
-        applied_event_sequence,
         strategy_id,
         environment,
         membership_version,
         event_sequence,
         journal_sequence,
-        policy_count,
-        facts_count,
+    ) = state
+        .ok_or_else(|| ContractError::Invalid("Capital snapshot must contain one state".into()))?;
+    Ok(CapitalCurrentSnapshot {
+        capital_group_id,
+        applied_event_sequence: metadata.applied_event_sequence,
+        strategy_id,
+        environment,
+        membership_version,
+        event_sequence,
+        journal_sequence,
+        policy_count: policies.len(),
+        facts_count: facts.len(),
         policies,
         facts,
         availabilities,
@@ -1523,9 +1611,10 @@ fn location(v: fb::FundingLocation<'_>) -> FundingLocation {
 fn strings(v: flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&str>>) -> Vec<String> {
     v.iter().map(str::to_owned).collect()
 }
-fn decimal(v: &Decimal64) -> Result<String, ContractError> {
+fn decimal(v: &Decimal64) -> Result<NativeDecimal, ContractError> {
     DecimalParts::new(v.mantissa(), v.scale())
-        .map(|v| v.to_string())
+        .and_then(|parts| Quantity::new(parts.mantissa(), parts.scale()))
+        .map(native_quantity)
         .map_err(|e| ContractError::Invalid(e.to_string()))
 }
 fn optional(v: Option<&str>) -> Option<String> {
@@ -2028,6 +2117,51 @@ fn quantity(value: &str) -> PyResult<Quantity> {
     Quantity::new(parts.mantissa(), parts.scale()).map_err(value_error)
 }
 
+fn quantity_input(value: &Bound<'_, PyAny>) -> PyResult<Quantity> {
+    if let Ok(text) = value.extract::<String>() {
+        return quantity(&text);
+    }
+    let semantic_type = value
+        .getattr("semantic_type")
+        .and_then(|value| value.extract::<String>())
+        .map_err(|_| {
+            CapitalInvalidInputError::new_err(
+                "Capital quantity requires exact text or a QuantityLike value",
+            )
+        })?;
+    if semantic_type != "quantity" {
+        return Err(CapitalInvalidInputError::new_err(format!(
+            "Capital quantity cannot be constructed from {semantic_type}"
+        )));
+    }
+    let mantissa = value.getattr("mantissa")?.extract::<i64>()?;
+    let scale = value.getattr("scale")?.extract::<u8>()?;
+    Quantity::new(mantissa, scale).map_err(value_error)
+}
+
+fn native_quantity(value: Quantity) -> NativeDecimal {
+    NativeDecimal {
+        mantissa: value.mantissa(),
+        scale: value.scale(),
+    }
+}
+
+fn decimal_parts_text(mantissa: i64, scale: u8) -> String {
+    if scale == 0 {
+        return mantissa.to_string();
+    }
+    let negative = mantissa < 0;
+    let digits = mantissa.unsigned_abs().to_string();
+    let scale = usize::from(scale);
+    let value = if digits.len() <= scale {
+        format!("0.{}{}", "0".repeat(scale - digits.len()), digits)
+    } else {
+        let split = digits.len() - scale;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    };
+    if negative { format!("-{value}") } else { value }
+}
+
 fn funding_priority(value: &str) -> PyResult<FundingObjectivePriority> {
     match value {
         "low" => Ok(FundingObjectivePriority::Low),
@@ -2115,9 +2249,9 @@ fn project_availability_response(
             CapitalReadinessStatus::Ready => "ready",
         }
         .to_owned(),
-        policy_minimum: value.policy_minimum.to_string(),
-        policy_default_target: value.policy_default_target.to_string(),
-        policy_maximum: value.policy_maximum.to_string(),
+        policy_minimum: native_quantity(value.policy_minimum),
+        policy_default_target: native_quantity(value.policy_default_target),
+        policy_maximum: native_quantity(value.policy_maximum),
         policy_version: value.policy_version.get(),
         active_objective_ids: value
             .active_objective_ids
@@ -2129,10 +2263,10 @@ fn project_availability_response(
             .into_iter()
             .map(|item| item.to_string())
             .collect(),
-        desired_target: value.desired_target.to_string(),
-        observed_available: value.observed_available.to_string(),
-        effective_target: value.effective_target.to_string(),
-        deficit: value.deficit.to_string(),
+        desired_target: native_quantity(value.desired_target),
+        observed_available: native_quantity(value.observed_available),
+        effective_target: native_quantity(value.effective_target),
+        deficit: native_quantity(value.deficit),
         account_watermark: value.account_watermark.get(),
         risk_policy_version: value.risk_policy_version.get(),
         risk_watermark: value.risk_watermark.get(),

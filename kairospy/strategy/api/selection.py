@@ -9,25 +9,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from kairospy.primitives.decimal import Price, Rate
+from kairospy.primitives.reference import InstrumentId
+
 
 _DAY_NANOS = 86_400_000_000_000
 
 
 @dataclass(frozen=True, slots=True)
 class OptionSelectionCandidate:
-    instrument_id: str
+    instrument_id: InstrumentId
     reference_snapshot_id: str
     expiry_unix_nanos: int
     option_right: str
-    strike: Decimal
-    delta: Decimal
-    bid: Decimal
-    ask: Decimal
+    strike: Price
+    delta: Rate
+    bid: Price
+    ask: Price
     observed_at_unix_nanos: int
     available_at_unix_nanos: int
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip() or not self.reference_snapshot_id.strip():
+        object.__setattr__(self, "instrument_id", InstrumentId(str(self.instrument_id)))
+        object.__setattr__(self, "strike", Price(self.strike))
+        object.__setattr__(self, "delta", Rate(self.delta))
+        object.__setattr__(self, "bid", Price(self.bid))
+        object.__setattr__(self, "ask", Price(self.ask))
+        if not str(self.instrument_id).strip() or not self.reference_snapshot_id.strip():
             raise ValueError("candidate identity and Reference snapshot are required")
 
 
@@ -37,26 +45,28 @@ class OptionSpreadSelectionRequest:
     decision_time_unix_nanos: int
     minimum_dte: int = 30
     maximum_dte: int = 45
-    short_target_delta: Decimal = Decimal("-0.25")
-    long_target_delta: Decimal = Decimal("-0.10")
+    short_target_delta: Rate = Rate("-0.25")
+    long_target_delta: Rate = Rate("-0.10")
     maximum_quote_age_nanos: int = 60_000_000_000
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "short_target_delta", Rate(self.short_target_delta))
+        object.__setattr__(self, "long_target_delta", Rate(self.long_target_delta))
         if not self.candidates:
             raise ValueError("option selection requires candidates")
         if self.minimum_dte < 0 or self.minimum_dte > self.maximum_dte:
             raise ValueError("option selection DTE range is invalid")
         if self.maximum_quote_age_nanos < 0:
             raise ValueError("maximum quote age cannot be negative")
-        if not Decimal("-1") <= self.short_target_delta < Decimal("0"):
+        if not Decimal("-1") <= self.short_target_delta.value < Decimal("0"):
             raise ValueError("short Put target Delta must be in [-1, 0)")
-        if not Decimal("-1") <= self.long_target_delta < Decimal("0"):
+        if not Decimal("-1") <= self.long_target_delta.value < Decimal("0"):
             raise ValueError("long Put target Delta must be in [-1, 0)")
 
 
 @dataclass(frozen=True, slots=True)
 class OptionSelectionAudit:
-    instrument_id: str
+    instrument_id: InstrumentId
     accepted: bool
     reasons: tuple[str, ...]
 
@@ -77,7 +87,7 @@ class OptionSpreadSelectionApplication:
         eligible: list[OptionSelectionCandidate] = []
         audit: list[OptionSelectionAudit] = []
         for candidate in sorted(
-            request.candidates, key=lambda item: item.instrument_id
+            request.candidates, key=lambda item: str(item.instrument_id)
         ):
             reasons = self._rejections(candidate, request)
             audit.append(
@@ -97,10 +107,10 @@ class OptionSpreadSelectionApplication:
         short = min(
             eligible,
             key=lambda item: (
-                abs(item.delta - request.short_target_delta),
+                abs(item.delta.value - request.short_target_delta.value),
                 item.expiry_unix_nanos,
                 item.strike,
-                item.instrument_id,
+                str(item.instrument_id),
             ),
         )
         protection = [
@@ -117,9 +127,9 @@ class OptionSpreadSelectionApplication:
         long = min(
             protection,
             key=lambda item: (
-                abs(item.delta - request.long_target_delta),
-                -item.strike,
-                item.instrument_id,
+                abs(item.delta.value - request.long_target_delta.value),
+                -item.strike.value,
+                str(item.instrument_id),
             ),
         )
         return OptionSpreadSelectionResult(short=short, long=long, audit=tuple(audit))
@@ -144,13 +154,9 @@ class OptionSpreadSelectionApplication:
         ) // _DAY_NANOS
         if dte < request.minimum_dte or dte > request.maximum_dte:
             reasons.append("dte-out-of-range")
-        if candidate.bid <= 0 or candidate.ask <= 0:
-            reasons.append("non-positive-quote")
-        elif candidate.bid > candidate.ask:
+        if candidate.bid > candidate.ask:
             reasons.append("crossed-quote")
-        if candidate.strike <= 0:
-            reasons.append("non-positive-strike")
-        if not Decimal("-1") <= candidate.delta <= Decimal("0"):
+        if not Decimal("-1") <= candidate.delta.value <= Decimal("0"):
             reasons.append("invalid-put-delta")
         return reasons
 

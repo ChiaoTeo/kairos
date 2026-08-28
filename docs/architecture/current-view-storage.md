@@ -1,7 +1,8 @@
 # Current-view storage architecture
 
 This document specifies the implemented cross-module storage contract for current business state. It is
-governed by [Decision 0034](../decisions/0034-unified-current-view-storage.md). Execution, Account, Risk,
+governed by [Decision 0034](../decisions/0034-unified-current-view-storage.md) and
+[Decision 0041](../decisions/0041-authoritative-current-views-and-best-effort-notifications.md). Execution, Account, Risk,
 Capital, and Market publish and read only owner-scoped LMDB indexed current views; the former aggregate
 snapshot transports and roots have been removed. Python value-reading semantics are refined by
 [Decision 0035](../decisions/0035-python-current-view-buffer-backed-reads.md).
@@ -12,7 +13,7 @@ Kairos has three cross-process data paths:
 
 | Path | Semantic role | Examples |
 | --- | --- | --- |
-| Aeron | ordered immutable changes | quote updates, order lifecycle, fills, reservation transitions |
+| Aeron | bounded best-effort change notifications | quote updates, order lifecycle, fills, reservation transitions |
 | LMDB current view | indexed state that is true now | current order, active intent, latest quote, balance, open reservation |
 | JSON-RPC query/control | history, audit, filtering, calculation, and commands | order audit, catalog search, health, submit/cancel |
 
@@ -23,7 +24,7 @@ This specification covers owner-published current views. It does not replace:
 
 - Actor/domain state or recovery journals;
 - Reference's authoritative SQLite catalog;
-- immutable Aeron streams;
+- ephemeral Aeron notifications;
 - durable audit/history stores;
 - provider reconciliation queries;
 - same-package Application reads.
@@ -100,7 +101,7 @@ The reserved metadata database contains fixed keys with typed values:
 | `schema_set` | exact owner database/value schema versions |
 | `resource_epoch` | incompatible replacement epoch |
 | `producer_incarnation` | current writer process incarnation |
-| `applied_event_sequence` | highest owner event sequence reflected by the committed transaction |
+| `applied_event_sequence` | highest owner state sequence reflected by the committed transaction; not an Aeron cursor |
 | `committed_at_unix_nanos` | business publication commit time |
 | `rebuild_state` | `building`, `ready`, or `failed` with bounded diagnostic code |
 
@@ -123,7 +124,7 @@ The following semantics remain owner contracts and are not delegated to LMDB:
 | storage/schema version | reject bytes whose key or value encoding has changed |
 | `resource_epoch` | invalidate an incompatible environment replacement or rebuild |
 | `producer_incarnation` | fence and diagnose writer restart/takeover |
-| `applied_event_sequence` | correlate a current transaction with the owner Aeron stream and measure lag |
+| `applied_event_sequence` | order owner state commits, diagnose freshness, and support bounded waits without defining an Aeron join point |
 | provider connection/reconnect epoch and participant sequence | reject stale or conflicting external facts before they mutate Actor state |
 | entity revision/lifecycle evidence | express owner business concurrency and reconciliation |
 | command/idempotency identity | make retry outcomes deterministic |
@@ -156,7 +157,8 @@ carry core current state. A reader validates semantic IDs in the value against t
 
 ## 7. Write transaction contract
 
-One accepted Actor transition produces at most one current-view write transaction:
+One publication flush produces at most one current-view write transaction. Consecutive already-authoritative
+changes may be latest-wins coalesced by canonical key before encoding:
 
 ```text
 authoritative state transition succeeds
@@ -164,13 +166,13 @@ authoritative state transition succeeds
   -> put/delete every affected owner key
   -> update __kairos_metadata.applied_event_sequence
   -> commit
-  -> publish/drain the corresponding Aeron event according to owner outbox rules
+  -> attempt the corresponding best-effort Aeron notifications
 ```
 
-The owner may batch consecutive already-authoritative changes into one transaction when their event
-sequence and freshness semantics remain explicit. It must not acknowledge a command based solely on a
-view write. A failed view commit leaves business state authoritative, marks current-view health
-degraded, and fails closed wherever a fresh view is required for trading.
+The transaction metadata uses the highest retained owner state sequence. It must not acknowledge a command
+based solely on a view write. A failed view commit leaves business state authoritative, marks current-view
+health degraded, and fails closed wherever a fresh view is required for trading. Aeron publication failure
+after the commit is recorded as notification health and does not roll back or redefine the current state.
 
 Cross-family changes that must be observed together use named databases in the same environment and one
 transaction. Splitting them into multiple environments forfeits this atomicity and requires a concrete
@@ -184,15 +186,15 @@ Readers open the exact environment read-only through the owner contract:
 2. begin a short read transaction;
 3. read the requested key or an explicitly bounded range;
 4. verify and semantically validate each value while its bytes remain available;
-5. return an owned immutable buffer-backed view, or use a callback that explicitly bounds a borrowed
-   lifetime;
+5. project directly from the borrowed LMDB value into an owned immutable result, or use a callback that
+   explicitly bounds a borrowed lifetime;
 6. end the transaction promptly.
 
 Long-lived read transactions are forbidden in ordinary clients because they pin old MVCC pages and can
-cause file growth. Python obtains reads through the native transport extension; it does not keep raw
-pointers, LMDB buffers, or transactions behind Python object lifetimes. Its default exact-value path
-copies the LMDB slice directly into Python `bytes` without an intermediate Rust `Vec<u8>`; generated
-FlatBuffers accessors read lazily from that buffer instead of requiring a second owned object tree.
+cause file growth. Python obtains reads through the native contract extension; it does not keep raw pointers,
+LMDB buffers, generated FlatBuffers accessors, or transactions behind Python object lifetimes. The default
+path validates and projects while borrowing the LMDB slice, then creates the stable owned Python result
+exactly once. It does not first collect raw rows into intermediate Rust `Vec<u8>` values.
 
 One keyed value is complete, but consecutive Python reads need not observe one LMDB transaction or one
 business revision. Consumers use value-owned revision, sequence, time, freshness, and synchronization
@@ -222,10 +224,10 @@ Events, diagnostic logs, and unbounded history are not duplicated into current d
 Market current storage keeps exactly one latest completed `MarketBarCurrent` per semantic series key.
 It does not retain a bar window, window metadata, or sequence-suffixed historical rows.
 
-Strategy builds each rolling window from immutable `BarCompleted` events because window length,
-warm-up, gap policy, and replay position are consumer-owned behavior. A consumer that starts after the
-required event range must use an explicit Market history/backfill query before becoming ready. Current
-storage is never treated as an event-recovery or historical-window path.
+Strategy may advance a rolling window from live `BarCompleted` notifications, but that window is only
+complete while its own continuity evidence remains valid. Startup or an observed notification gap requires
+an explicit Market history/backfill query before a complete window becomes ready. Current storage is never
+treated as an event-recovery or historical-window path.
 
 A future shared retained window requires a named owner and consumer, explicit retention and gap
 semantics, and measurement evidence. It is not admitted as a generic indexed-view feature.
@@ -237,8 +239,10 @@ Every environment declares and monitors:
 - configured LMDB map size and current page use;
 - named-database cardinality and retained-window counts;
 - oldest/longest read transaction where observable;
-- last committed event sequence and commit time;
+- last committed owner state sequence and commit time;
 - Actor-to-view publication lag;
+- Aeron publish/drop/queue-overflow counts, observed consumer gaps, and incarnation changes as separate
+  notification health;
 - map-full, corruption, permission, identity, and schema errors;
 - rebuild progress and last successful verification.
 

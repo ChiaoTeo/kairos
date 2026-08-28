@@ -437,6 +437,61 @@ impl IndexedViewReader {
         })
     }
 
+    /// Maps several named-database ranges inside one short LMDB read
+    /// transaction. The callback sees borrowed key/value slices, so callers
+    /// can project directly into their final owned representation without an
+    /// intermediate raw-byte snapshot.
+    pub fn try_map_snapshot<R, E>(
+        &self,
+        requests: &[PrefixRequest<'_>],
+        mut map: impl FnMut(&MetadataSnapshot, &str, &[u8], &[u8]) -> Result<R, E>,
+    ) -> Result<Result<(MetadataSnapshot, BTreeMap<String, Vec<R>>), E>, StoreError> {
+        let txn = self.env.read_txn()?;
+        let metadata = read_metadata(&self.metadata, &txn)?;
+        let mut all_rows = BTreeMap::new();
+        let mut mapping_error = None;
+        for request in requests {
+            if request.prefix.is_empty() || request.limit == 0 {
+                return Err(StoreError::InvalidSchema(
+                    "snapshot prefix reads require a non-empty prefix and positive limit".into(),
+                ));
+            }
+            if all_rows.contains_key(request.database) {
+                return Err(StoreError::InvalidSchema(format!(
+                    "snapshot request repeats database `{}`",
+                    request.database
+                )));
+            }
+            let mut rows = Vec::new();
+            for result in self
+                .database(request.database)?
+                .prefix_iter(&txn, request.prefix)?
+            {
+                let (key, value) = result?;
+                match map(&metadata, request.database, key, value) {
+                    Ok(value) => rows.push(value),
+                    Err(error) => {
+                        mapping_error = Some(error);
+                        break;
+                    },
+                }
+                if rows.len() == request.limit {
+                    break;
+                }
+            }
+            all_rows.insert(request.database.to_owned(), rows);
+            if mapping_error.is_some() {
+                break;
+            }
+        }
+        txn.commit()?;
+        if let Some(error) = mapping_error {
+            Ok(Err(error))
+        } else {
+            Ok(Ok((metadata, all_rows)))
+        }
+    }
+
     fn database(&self, name: &str) -> Result<RawDatabase, StoreError> {
         self.databases
             .get(name)
@@ -813,6 +868,62 @@ mod tests {
         assert_eq!(snapshot.metadata.applied_event_sequence, 7);
         assert_eq!(snapshot.rows["orders"][0].1, b"open");
         assert_eq!(snapshot.rows["intents"][0].1, b"active");
+    }
+
+    #[test]
+    fn mapped_snapshot_projects_borrowed_rows_without_a_raw_byte_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = identity(1);
+        let options = options(root.path(), &identity);
+        let mut writer = IndexedViewWriter::create(&options, identity.clone()).unwrap();
+        writer
+            .apply(
+                &[
+                    Mutation::Put {
+                        database: "orders".into(),
+                        key: b"entity/order-1".to_vec(),
+                        value: b"open".to_vec(),
+                    },
+                    Mutation::Put {
+                        database: "intents".into(),
+                        key: b"entity/intent-1".to_vec(),
+                        value: b"active".to_vec(),
+                    },
+                ],
+                19,
+                23,
+            )
+            .unwrap();
+        drop(writer);
+        let reader = IndexedViewReader::open(&options, identity).unwrap();
+        let mapped = reader
+            .try_map_snapshot(
+                &[
+                    PrefixRequest {
+                        database: "orders",
+                        prefix: b"entity/",
+                        limit: usize::MAX,
+                    },
+                    PrefixRequest {
+                        database: "intents",
+                        prefix: b"entity/",
+                        limit: usize::MAX,
+                    },
+                ],
+                |metadata, database, key, value| {
+                    Ok::<_, std::convert::Infallible>(format!(
+                        "{}:{database}:{}={}",
+                        metadata.applied_event_sequence,
+                        std::str::from_utf8(key).unwrap(),
+                        std::str::from_utf8(value).unwrap()
+                    ))
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(mapped.0.applied_event_sequence, 19);
+        assert_eq!(mapped.1["orders"], ["19:orders:entity/order-1=open"]);
+        assert_eq!(mapped.1["intents"], ["19:intents:entity/intent-1=active"]);
     }
 
     #[test]

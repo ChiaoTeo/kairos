@@ -33,6 +33,40 @@ create_exception!(
 
 const API_VERSION: u32 = 1;
 
+#[pyclass(
+    name = "_NativeSemanticDecimal",
+    frozen,
+    module = "kairospy._native_reference_contract"
+)]
+#[derive(Clone)]
+struct NativeDecimal {
+    #[pyo3(get)]
+    mantissa: i64,
+    #[pyo3(get)]
+    scale: u8,
+    semantic_type: &'static str,
+}
+
+#[pymethods]
+impl NativeDecimal {
+    fn __str__(&self) -> String {
+        decimal_text(self.mantissa, self.scale)
+    }
+
+    #[getter]
+    fn semantic_type(&self) -> &'static str {
+        self.semantic_type
+    }
+
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let decimal = PyModule::import(py, "decimal")?.getattr("Decimal")?;
+        Ok(decimal
+            .call1((decimal_text(self.mantissa, self.scale),))?
+            .unbind())
+    }
+}
+
 #[pyclass(frozen, module = "kairospy._native_reference_contract")]
 struct NativeBuildInfo {
     #[pyo3(get)]
@@ -173,7 +207,7 @@ struct ReferenceInstrument {
     #[pyo3(get)]
     expiry_unix_nanos: Option<u64>,
     #[pyo3(get)]
-    strike: Option<String>,
+    strike: Option<NativeDecimal>,
     #[pyo3(get)]
     option_right: Option<String>,
     #[pyo3(get)]
@@ -225,19 +259,19 @@ struct ReferenceMarket {
     #[pyo3(get)]
     status: String,
     #[pyo3(get)]
-    price_tick: Option<String>,
+    price_tick: Option<NativeDecimal>,
     #[pyo3(get)]
-    quantity_tick: Option<String>,
+    quantity_tick: Option<NativeDecimal>,
     #[pyo3(get)]
     price_precision: i32,
     #[pyo3(get)]
     quantity_precision: i32,
     #[pyo3(get)]
-    minimum_quantity: Option<String>,
+    minimum_quantity: Option<NativeDecimal>,
     #[pyo3(get)]
-    minimum_notional: Option<String>,
+    minimum_notional: Option<NativeDecimal>,
     #[pyo3(get)]
-    contract_size: Option<String>,
+    contract_size: Option<NativeDecimal>,
     #[pyo3(get)]
     effective_from_unix_nanos: u64,
     #[pyo3(get)]
@@ -712,7 +746,9 @@ impl From<RustInstrument> for ReferenceInstrument {
             primary_currency_asset_id: value.primary_currency_asset_id.map(|v| v.to_string()),
             underlying_instrument_id: value.underlying_instrument_id.map(|v| v.to_string()),
             expiry_unix_nanos: value.expiry_unix_nanos.map(|v| v.get()),
-            strike: value.strike.map(|v| v.to_string()),
+            strike: value
+                .strike
+                .map(|value| native_decimal(value.mantissa(), value.scale(), "price")),
             option_right: value.option_right,
             status: value.status.to_string(),
         }
@@ -747,13 +783,23 @@ impl From<RustMarket> for ReferenceMarket {
             base_asset_id: value.base_asset_id.map(|v| v.to_string()),
             quote_asset_id: value.quote_asset_id.map(|v| v.to_string()),
             status: value.status.to_string(),
-            price_tick: value.price_tick.map(|v| v.to_string()),
-            quantity_tick: value.quantity_tick.map(|v| v.to_string()),
+            price_tick: value
+                .price_tick
+                .map(|value| native_decimal(value.mantissa(), value.scale(), "price")),
+            quantity_tick: value
+                .quantity_tick
+                .map(|value| native_decimal(value.mantissa(), value.scale(), "quantity")),
             price_precision: value.price_precision,
             quantity_precision: value.quantity_precision,
-            minimum_quantity: value.minimum_quantity.map(|v| v.to_string()),
-            minimum_notional: value.minimum_notional.map(|v| v.to_string()),
-            contract_size: value.contract_size.map(|v| v.to_string()),
+            minimum_quantity: value
+                .minimum_quantity
+                .map(|value| native_decimal(value.mantissa(), value.scale(), "quantity")),
+            minimum_notional: value
+                .minimum_notional
+                .map(|value| native_decimal(value.mantissa(), value.scale(), "money")),
+            contract_size: value
+                .contract_size
+                .map(|value| native_decimal(value.mantissa(), value.scale(), "rate")),
             effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
             effective_to_unix_nanos: value.effective_to_unix_nanos.map(|v| v.get()),
         }
@@ -936,7 +982,7 @@ fn project_instrument(value: fb::Instrument<'_>) -> ReferenceInstrument {
         primary_currency_asset_id: value.primary_currency_asset_id().map(ToOwned::to_owned),
         underlying_instrument_id: value.underlying_instrument_id().map(ToOwned::to_owned),
         expiry_unix_nanos: optional_nanos(value.expiry_unix_nanos()),
-        strike: value.strike().map(decimal_text),
+        strike: value.strike().map(|value| semantic_decimal(value, "price")),
         option_right: value.option_right().map(ToOwned::to_owned),
         status: lifecycle_status(value.status()),
     }
@@ -967,13 +1013,23 @@ fn project_market(value: fb::Market<'_>) -> ReferenceMarket {
         base_asset_id: value.base_asset_id().map(ToOwned::to_owned),
         quote_asset_id: value.quote_asset_id().map(ToOwned::to_owned),
         status: lifecycle_status(value.status()),
-        price_tick: value.price_tick().map(decimal_text),
-        quantity_tick: value.quantity_tick().map(decimal_text),
+        price_tick: value
+            .price_tick()
+            .map(|value| semantic_decimal(value, "price")),
+        quantity_tick: value
+            .quantity_tick()
+            .map(|value| semantic_decimal(value, "quantity")),
         price_precision: value.price_precision(),
         quantity_precision: value.quantity_precision(),
-        minimum_quantity: value.minimum_quantity().map(decimal_text),
-        minimum_notional: value.minimum_notional().map(decimal_text),
-        contract_size: value.contract_size().map(decimal_text),
+        minimum_quantity: value
+            .minimum_quantity()
+            .map(|value| semantic_decimal(value, "quantity")),
+        minimum_notional: value
+            .minimum_notional()
+            .map(|value| semantic_decimal(value, "money")),
+        contract_size: value
+            .contract_size()
+            .map(|value| semantic_decimal(value, "rate")),
         effective_from_unix_nanos: value.effective_from_unix_nanos(),
         effective_to_unix_nanos: optional_nanos(value.effective_to_unix_nanos()),
     }
@@ -990,9 +1046,20 @@ fn optional_nanos(value: u64) -> Option<u64> {
     (value != 0).then_some(value)
 }
 
-fn decimal_text(value: &Decimal64) -> String {
-    let mantissa = value.mantissa();
-    let scale = usize::from(value.scale());
+fn semantic_decimal(value: &Decimal64, semantic_type: &'static str) -> NativeDecimal {
+    native_decimal(value.mantissa(), value.scale(), semantic_type)
+}
+
+fn native_decimal(mantissa: i64, scale: u8, semantic_type: &'static str) -> NativeDecimal {
+    NativeDecimal {
+        mantissa,
+        scale,
+        semantic_type,
+    }
+}
+
+fn decimal_text(mantissa: i64, scale: u8) -> String {
+    let scale = usize::from(scale);
     if scale == 0 {
         return mantissa.to_string();
     }

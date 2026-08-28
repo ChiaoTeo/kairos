@@ -36,7 +36,7 @@ RPC、Aeron 和 indexed current-view storage 是交付机制，不是三种业�
 | 运行中的最新业务状态 | LMDB `CurrentView` / `LatestView` | 同机、稳定业务 key、单实体或有界范围读取 | 任意复杂过滤、跨机、无限历史 |
 | Reference 目录与生命周期检索 | SQLite-backed `Catalog` / `HistoryQuery` | 持久、可过滤、分页、事务内一致读取 | 复制每个运行模块的私有数据库供外部读取 |
 | 同一 main package 内部读取 | Application 方法 | 调用者属于 owner 包；无需跨进程 | 其他业务包绕过 contract 调用 owner application |
-| 增量事实 | Aeron event stream | 持续消费、顺序和重放语义 | 替代当前状态查询或任意历史查询 |
+| 低延迟变化通知 | Aeron notification | best-effort 实时触发、同 incarnation 去重和丢失诊断 | 替代当前状态、durable audit 或任意历史查询 |
 
 选择顺序如下：
 

@@ -146,19 +146,19 @@ def _observed_order_payload(value: object) -> dict[str, object]:
         "instrument_id": getattr(value, "instrument_id"),
         "market_id": getattr(value, "market_id"),
         "side": getattr(value, "side"),
-        "quantity": _native_decimal(getattr(value, "quantity")),
-        "filled_quantity": _native_decimal(getattr(value, "filled_quantity")),
+        "quantity": _decimal_presentation(getattr(value, "quantity")),
+        "filled_quantity": _decimal_presentation(getattr(value, "filled_quantity")),
         "status": getattr(value, "status"),
         "observed_at_unix_nanos": getattr(value, "observed_at_unix_nanos"),
         "segment_key": getattr(value, "segment_key"),
     }
 
 
-def _native_decimal(value: object) -> Decimal:
-    result = getattr(value, "value")
-    if not isinstance(result, Decimal):
-        raise TypeError("Account native decimal value must be Decimal")
-    return result
+def _decimal_presentation(value: object) -> Decimal:
+    raw = getattr(value, "value", None)
+    if not isinstance(raw, Decimal):
+        raise TypeError("Account value must expose a Decimal value")
+    return raw
 
 
 @instance_component_account_app.command("refresh")

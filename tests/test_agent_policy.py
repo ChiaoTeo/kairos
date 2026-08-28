@@ -94,9 +94,10 @@ def test_policy_applies_atomic_risk_monotonic_target_revisions() -> None:
 
     assert outcome.decision is DecisionKind.REVISE
     assert isinstance(outcome.effective_request, TargetPositionRequest)
-    assert outcome.effective_request.quantity == Decimal("1")
-    assert outcome.effective_request.limit_price == Decimal("99.5")
-    assert request.quantity == Decimal("2")
+    assert outcome.effective_request.quantity.value == Decimal("1")
+    assert outcome.effective_request.limit_price is not None
+    assert outcome.effective_request.limit_price.value == Decimal("99.5")
+    assert request.quantity.value == Decimal("2")
 
 
 def test_policy_rejects_direction_or_risk_expansion_atomically() -> None:
@@ -276,7 +277,8 @@ def test_policy_tightens_split_and_requires_maker_execution() -> None:
 
     assert isinstance(split.effective_request, TargetPositionRequest)
     assert split.effective_request.split is not None
-    assert split.effective_request.split.max_child_quantity == Decimal("2")
+    assert split.effective_request.split.max_child_quantity is not None
+    assert split.effective_request.split.max_child_quantity.value == Decimal("2")
     assert split.effective_request.split.child_count == 3
     assert isinstance(maker.effective_request, TargetPositionRequest)
     assert maker.effective_request.maker is not None

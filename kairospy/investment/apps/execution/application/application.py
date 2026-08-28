@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any, cast, overload
 
 from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.primitives.execution import IntentId, OrderId
 from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.decimal import Price, Quantity
 
 from .errors import (
     ExecutionAccountNotEnabledError,
@@ -28,7 +28,6 @@ from .intents import (
     TargetPositionRequest,
 )
 from .mapping import (
-    map_execution_fill,
     map_execution_intent,
     map_execution_order,
     map_order_commitment,
@@ -101,8 +100,7 @@ class ExecutionApplication:
         self._event_source_ready = event_source is None
         self._event_gap_count = 0
         self._event_scope_error_count = 0
-        self._event_recovery_count = 0
-        self._event_recovery_incomplete = False
+        self._notification_incarnation_change_count = 0
         self._disabled_reason = disabled_reason
         self._event_sequence: int | None = None
         self._event_time_unix_nanos: int | None = None
@@ -122,7 +120,6 @@ class ExecutionApplication:
         check_ready = getattr(self._event_source, "check_ready", None)
         if callable(check_ready):
             check_ready()
-        self._recover_from_current_view()
         self._event_source_ready = True
 
     def commitments(self) -> tuple[OrderCommitment, ...]:
@@ -182,36 +179,17 @@ class ExecutionApplication:
                 int(record.producer_incarnation),
             )
             if self._event_cursor_key is not None and cursor_key != self._event_cursor_key:
-                recovered = self._recover_from_current_view(
-                    force=True, cursor_key=cursor_key
-                )
-                if recovered is None:
-                    raise RuntimeError(
-                        "Execution producer restarted but current view is unavailable for resync"
-                    )
-                cursor = recovered
-            elif self._event_cursor_key is None and cursor > 0:
-                recovered = self._recover_from_current_view(
-                    force=True, cursor_key=cursor_key
-                )
-                if recovered is None:
-                    raise RuntimeError(
-                        "Execution cursor has no producer incarnation and cannot resume "
-                        "without a current view"
-                    )
-                cursor = recovered
+                self._notification_incarnation_change_count += 1
+                cursor = record.sequence - 1
+            elif self._event_cursor_key is None:
+                cursor = record.sequence - 1
             self._event_cursor_key = cursor_key
             if cursor == 0:
                 cursor = record.sequence - 1
             if record.sequence <= cursor:
                 continue
-            expected = cursor + 1
-            if record.sequence != expected:
+            if record.sequence != cursor + 1:
                 self._event_gap_count += 1
-                raise RuntimeError(
-                    "Execution event stream is not contiguous: "
-                    f"expected {expected}, received {record.sequence}"
-                )
             cursor = record.sequence
             self._event_cursor = cursor
             self._event_head_sequence = max(self._event_head_sequence, cursor)
@@ -235,8 +213,9 @@ class ExecutionApplication:
             "event_lag": max(0, self._event_head_sequence - self._durable_event_cursor),
             "event_gap_count": self._event_gap_count,
             "event_scope_error_count": self._event_scope_error_count,
-            "event_recovery_count": self._event_recovery_count,
-            "event_recovery_incomplete": self._event_recovery_incomplete,
+            "notification_incarnation_change_count": (
+                self._notification_incarnation_change_count
+            ),
         }
 
     def _checkpoint_cursor(
@@ -250,71 +229,6 @@ class ExecutionApplication:
                 producer_incarnation=None if cursor_key is None else cursor_key[2],
             )
         self._durable_event_cursor = sequence
-
-    def _recover_from_current_view(
-        self,
-        *,
-        force: bool = False,
-        cursor_key: tuple[str, str, int] | None = None,
-    ) -> int | None:
-        if self._current_views is None:
-            return None
-        recovery_snapshot = getattr(self._current_views, "recovery_snapshot", None)
-        if not callable(recovery_snapshot):
-            return None
-        try:
-            raw_snapshot = recovery_snapshot()
-            if not isinstance(raw_snapshot, (list, tuple)):
-                raise ValueError("Execution recovery snapshot must be an array")
-            snapshot = tuple(raw_snapshot)
-            if len(snapshot) == 2:
-                head, intents = snapshot
-                fills: tuple[object, ...] = ()
-                fill_history_truncated = False
-            elif len(snapshot) == 4:
-                head, intents, fills, fill_history_truncated = snapshot
-            else:
-                raise ValueError("Execution recovery snapshot shape is invalid")
-            if isinstance(head, bool) or not isinstance(head, int):
-                raise ValueError("Execution recovery head must be an integer")
-            if not isinstance(intents, (list, tuple)):
-                raise ValueError("Execution recovery intents must be an array")
-            if not isinstance(fills, (list, tuple)):
-                raise ValueError("Execution recovery fills must be an array")
-            intents = tuple(map_execution_intent(value) for value in intents)
-            fills = tuple(map_execution_fill(value) for value in fills)
-        except FileNotFoundError:
-            return None
-        if not force and head <= self._event_cursor:
-            self._event_head_sequence = max(self._event_head_sequence, head)
-            return head
-        if self._decision_application is not None:
-            scoped_intent_ids: set[str] = set()
-            for intent in intents:
-                if intent.strategy_id != self._strategy_id:
-                    continue
-                if self._account_ids and not set(intent.account_ids).issubset(
-                    self._account_ids
-                ):
-                    continue
-                scoped_intent_ids.add(str(intent.id))
-                self._decision_application.reconcile_execution_snapshot(
-                    intent, source_event_sequence=head
-                )
-            for fill in fills:
-                intent_id = getattr(fill, "intent_id", None)
-                if intent_id is None or str(intent_id) not in scoped_intent_ids:
-                    continue
-                self._decision_application.reconcile_execution_fill(
-                    fill, source_event_sequence=head
-                )
-        self._event_recovery_incomplete = bool(fill_history_truncated)
-        self._event_cursor = head
-        self._event_head_sequence = head
-        self._event_cursor_key = cursor_key or self._event_cursor_key
-        self._checkpoint_cursor(head, cursor_key)
-        self._event_recovery_count += 1
-        return head
 
     def _change_belongs_to_accounts(self, change: object) -> bool:
         if not self._account_ids:
@@ -348,12 +262,12 @@ class ExecutionApplication:
     def target_position(
         self,
         instrument: InstrumentRef | InstrumentId,
-        quantity: Decimal,
+        quantity: Quantity,
         *,
         account: AccountId | str,
         algorithm: ExecutionAlgorithmPolicy,
         segment: SegmentKey | str = "spot",
-        limit_price: Decimal | None = None,
+        limit_price: Price | None = None,
         reason: str = "",
         intent_id: IntentId | None = None,
         strategy_decision_id: str | None = None,
@@ -405,7 +319,7 @@ class ExecutionApplication:
     ) -> IntentReceipt:
         return self.target_position(
             instrument,
-            Decimal("0"),
+            Quantity("0"),
             account=account,
             algorithm=algorithm,
             segment=segment,
@@ -445,7 +359,7 @@ class ExecutionApplication:
     def market_order(
         self,
         instrument: InstrumentRef | InstrumentId,
-        quantity: Decimal,
+        quantity: Quantity,
         *,
         account: AccountId | str,
         side: OrderSide,
@@ -472,8 +386,8 @@ class ExecutionApplication:
     def limit_order(
         self,
         instrument: InstrumentRef | InstrumentId,
-        quantity: Decimal,
-        price: Decimal,
+        quantity: Quantity,
+        price: Price,
         *,
         account: AccountId | str,
         side: OrderSide,
@@ -877,10 +791,10 @@ class AccountExecution:
     def target_position(
         self,
         instrument: InstrumentRef | InstrumentId,
-        quantity: Decimal,
+        quantity: Quantity,
         *,
         algorithm: ExecutionAlgorithmPolicy,
-        limit_price: Decimal | None = None,
+        limit_price: Price | None = None,
         reason: str = "",
         intent_id: IntentId | None = None,
         strategy_decision_id: str | None = None,
@@ -927,7 +841,7 @@ class AccountExecution:
     def market_order(
         self,
         instrument: InstrumentRef | InstrumentId,
-        quantity: Decimal,
+        quantity: Quantity,
         *,
         side: OrderSide,
         time_in_force: TimeInForce = TimeInForce.IOC,
@@ -948,8 +862,8 @@ class AccountExecution:
     def limit_order(
         self,
         instrument: InstrumentRef | InstrumentId,
-        quantity: Decimal,
-        price: Decimal,
+        quantity: Quantity,
+        price: Price,
         *,
         side: OrderSide,
         time_in_force: TimeInForce = TimeInForce.DAY,

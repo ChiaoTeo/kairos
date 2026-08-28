@@ -44,6 +44,8 @@ class AccountApplication:
         self._required_segments = dict(required_segments or {})
         self._event_cursors: dict[tuple[str, str, int], int] = {}
         self._account_event_cursor_keys: dict[str, tuple[str, str, int]] = {}
+        self._notification_gap_count = 0
+        self._notification_incarnation_change_count = 0
         self._event_source_ready = event_source is None
 
     @property
@@ -130,23 +132,25 @@ class AccountApplication:
             )
             previous_key = self._account_event_cursor_keys.get(record.account_id)
             if previous_key is not None and previous_key != cursor_key:
-                # Establish the restarted Account actor from its authoritative
-                # current view before a new incarnation cursor is accepted.
-                self._current_views[AccountId(record.account_id)].snapshot()
+                self._notification_incarnation_change_count += 1
             self._account_event_cursor_keys[record.account_id] = cursor_key
             cursor = self._event_cursors.get(cursor_key, 0)
             if cursor == 0:
                 cursor = record.sequence - 1
             if record.sequence <= cursor:
                 continue
-            expected = cursor + 1
-            if record.sequence != expected:
-                raise RuntimeError(
-                    f"Account {record.account_id} event stream is not contiguous: "
-                    f"expected {expected}, received {record.sequence}"
-                )
+            if record.sequence != cursor + 1:
+                self._notification_gap_count += 1
             self._event_cursors[cursor_key] = record.sequence
             yield cast("AccountEvent", record)
+
+    def notification_health(self) -> dict[str, int]:
+        """Return diagnostics for best-effort Account notifications."""
+
+        return {
+            "gap_count": self._notification_gap_count,
+            "incarnation_change_count": self._notification_incarnation_change_count,
+        }
 
     def _validate_event_scope(
         self, launch_id: str | None, instance_id: str | None

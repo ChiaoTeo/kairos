@@ -11,7 +11,7 @@ use kairos_account_contract::{
     SimulatedCapitalMutationQuery, SimulatedCapitalMutationStatus, SimulatedSettlement,
 };
 use kairos_primitives::account::{AccountId, SegmentKey};
-use kairos_primitives::decimal::{DecimalParts, Price, Quantity, SignedQuantity};
+use kairos_primitives::decimal::{DecimalParts, Money, Price, Quantity, SignedQuantity};
 use kairos_primitives::execution::{FillId, OrderId, OrderSide};
 use kairos_primitives::reference::{Currency, InstrumentId};
 use kairos_primitives::runtime::{IdempotencyKey, InstanceIdentity};
@@ -265,7 +265,7 @@ impl NativeMarkToMarketRequest {
         segment_key: String,
         instrument_id: String,
         quote_asset: String,
-        mark_price: String,
+        mark_price: &Bound<'_, PyAny>,
         observed_at_unix_nanos: u64,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -276,7 +276,7 @@ impl NativeMarkToMarketRequest {
                     .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
                 quote_asset: Currency::new(quote_asset)
                     .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
-                mark_price: price(&mark_price)?,
+                mark_price: price_input(mark_price)?,
                 observed_at_unix_nanos: UnixNanos::new(observed_at_unix_nanos),
             },
         })
@@ -334,15 +334,15 @@ impl NativeSimulatedSettlement {
         fill_id: String,
         segment_key: String,
         instrument_id: String,
-        quantity: String,
-        price: String,
+        quantity: &Bound<'_, PyAny>,
+        price: &Bound<'_, PyAny>,
         side: String,
         occurred_at_unix_nanos: u64,
         order_id: Option<String>,
         settlement_asset: Option<String>,
-        settlement_delta: Option<String>,
+        settlement_delta: Option<Bound<'_, PyAny>>,
         fee_asset: Option<String>,
-        fee_amount: Option<String>,
+        fee_amount: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
             inner: SimulatedSettlement {
@@ -356,19 +356,18 @@ impl NativeSimulatedSettlement {
                     .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
                 instrument_id: InstrumentId::new(instrument_id)
                     .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
-                quantity: quantity_value(&quantity)?,
-                price: price_value(&price)?,
+                quantity: quantity_input(quantity)?,
+                price: price_input(price)?,
                 side: side
                     .parse::<OrderSide>()
                     .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
                 settlement_asset: optional_currency(settlement_asset)?,
                 settlement_delta: settlement_delta
-                    .map(|value| signed_quantity(&value))
+                    .as_ref()
+                    .map(signed_quantity_input)
                     .transpose()?,
                 fee_asset: optional_currency(fee_asset)?,
-                fee_amount: fee_amount
-                    .map(|value| signed_quantity(&value))
-                    .transpose()?,
+                fee_amount: fee_amount.as_ref().map(signed_quantity_input).transpose()?,
                 occurred_at_unix_nanos: UnixNanos::new(occurred_at_unix_nanos),
             },
         })
@@ -393,7 +392,7 @@ impl NativeSimulatedCapitalMutation {
         mutation_id: String,
         segment_key: String,
         asset: String,
-        amount: String,
+        amount: &Bound<'_, PyAny>,
         kind: String,
         occurred_at_unix_nanos: u64,
         product_id: Option<String>,
@@ -417,7 +416,7 @@ impl NativeSimulatedCapitalMutation {
                     .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
                 asset: Currency::new(asset)
                     .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
-                amount: quantity_value(&amount)?,
+                amount: quantity_input(amount)?,
                 kind,
                 product_id: validated_optional_text(product_id, "product_id")?,
                 occurred_at_unix_nanos: UnixNanos::new(occurred_at_unix_nanos),
@@ -707,17 +706,31 @@ impl NativeAccountControlClient {
     }
 }
 
-#[pyclass(frozen, module = "kairospy._native_account_contract")]
+#[pyclass(
+    name = "_NativeSemanticDecimal",
+    frozen,
+    module = "kairospy._native_account_contract"
+)]
 #[derive(Clone)]
 struct NativeDecimal {
     #[pyo3(get)]
     mantissa: i64,
     #[pyo3(get)]
     scale: u8,
+    semantic_type: &'static str,
 }
 
 #[pymethods]
 impl NativeDecimal {
+    fn __str__(&self) -> String {
+        native_decimal_text(self.mantissa, self.scale)
+    }
+
+    #[getter]
+    fn semantic_type(&self) -> &'static str {
+        self.semantic_type
+    }
+
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let decimal = PyModule::import(py, "decimal")?.getattr("Decimal")?;
@@ -735,6 +748,20 @@ impl NativeDecimal {
         };
         Ok(decimal.call1((text,))?.unbind())
     }
+}
+
+fn native_decimal_text(mantissa: i64, scale: u8) -> String {
+    if scale == 0 {
+        return mantissa.to_string();
+    }
+    let sign = if mantissa < 0 { "-" } else { "" };
+    let scale = usize::from(scale);
+    let mut digits = mantissa.unsigned_abs().to_string();
+    if digits.len() <= scale {
+        digits.insert_str(0, &"0".repeat(scale + 1 - digits.len()));
+    }
+    let split = digits.len() - scale;
+    format!("{sign}{}.{}", &digits[..split], &digits[split..])
 }
 
 #[pyclass(frozen, module = "kairospy._native_account_contract")]
@@ -1042,8 +1069,8 @@ impl AccountEvent {
                 balance: Some(AccountBalanceEvent {
                     asset_id: asset.clone(),
                     asset,
-                    total: native_decimal(&total)?,
-                    available: Some(native_decimal(&available)?),
+                    total: native_decimal(&total, "quantity")?,
+                    available: Some(native_decimal(&available, "quantity")?),
                     locked: None,
                     borrowed: None,
                     interest: None,
@@ -1088,7 +1115,7 @@ impl AccountEvent {
                 earn_holding: None,
                 valuation: Some(AccountValuationEvent {
                     valuation_asset_id: None,
-                    equity: Some(native_decimal(&equity)?),
+                    equity: Some(native_decimal(&equity, "money")?),
                     initial_equity: None,
                     net_profit: None,
                     observed_at_unix_nanos: None,
@@ -1358,8 +1385,7 @@ impl AccountCurrentView {
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<AccountCurrentSnapshot> {
         self.read(py, |reader| {
-            let snapshot = reader.snapshot().map_err(contract_error)?;
-            project_snapshot(snapshot).map_err(contract_error)
+            project_snapshot_direct(reader).map_err(contract_error)
         })
     }
 
@@ -1418,228 +1444,274 @@ impl AccountCurrentView {
     }
 }
 
-fn project_snapshot(
-    snapshot: kairos_account_contract::AccountIndexedSnapshot,
-) -> Result<AccountCurrentSnapshot, ContractError> {
-    let event_sequence = snapshot.metadata().applied_event_sequence;
-    let mut balances: BTreeMap<String, Vec<AccountBalanceCurrent>> = BTreeMap::new();
-    for value in snapshot.balances() {
-        let root = value.balance()?;
-        let raw = root.balance();
-        balances
-            .entry(root.segment_key().to_owned())
-            .or_default()
-            .push(AccountBalanceCurrent {
-                asset: raw
-                    .asset_code()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(raw.asset_id())
+enum MappedAccountRow {
+    Segment(AccountSegmentCurrent),
+    Balance(String, AccountBalanceCurrent),
+    Collateral(AccountCollateralCurrent),
+    Position(String, AccountPositionCurrent),
+    EarnHolding(String, AccountEarnHoldingCurrent),
+    Valuation(String, Option<NativeDecimal>),
+    ObservedOrder(AccountObservedOrderCurrent),
+}
+
+fn project_snapshot_direct(reader: &RustView) -> Result<AccountCurrentSnapshot, ContractError> {
+    use kairos_account_contract::{
+        ACCOUNT_BALANCES_DATABASE, ACCOUNT_COLLATERAL_DATABASE, ACCOUNT_EARN_HOLDINGS_DATABASE,
+        ACCOUNT_OBSERVED_ORDERS_DATABASE, ACCOUNT_POSITIONS_DATABASE, ACCOUNT_SEGMENTS_DATABASE,
+        ACCOUNT_VALUATIONS_DATABASE,
+    };
+
+    let (metadata, rows) = reader.map_snapshot(|_, database, value| {
+        let row = match database {
+            ACCOUNT_BALANCES_DATABASE => {
+                let root = value.balance()?;
+                let raw = root.balance();
+                MappedAccountRow::Balance(
+                    root.segment_key().to_owned(),
+                    AccountBalanceCurrent {
+                        asset: raw
+                            .asset_code()
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or(raw.asset_id())
+                            .to_owned(),
+                        total: decimal(raw.total(), "quantity"),
+                        available: raw
+                            .available()
+                            .map(|value| decimal(value, "quantity"))
+                            .unwrap_or_else(|| zero_decimal("quantity")),
+                        reserved: raw
+                            .locked()
+                            .map(|value| decimal(value, "quantity"))
+                            .unwrap_or_else(|| zero_decimal("quantity")),
+                    },
+                )
+            },
+            ACCOUNT_COLLATERAL_DATABASE => {
+                let root = value.collateral()?;
+                let raw = root.balance();
+                MappedAccountRow::Collateral(AccountCollateralCurrent {
+                    account_id: root.account_id().to_owned(),
+                    segment_key: root.segment_key().to_owned(),
+                    asset: raw
+                        .asset_code()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(raw.asset_id())
+                        .to_owned(),
+                    total: decimal(raw.total(), "quantity"),
+                    available: raw.available().map(|value| decimal(value, "quantity")),
+                    locked: raw.locked().map(|value| decimal(value, "quantity")),
+                    borrowed: raw.borrowed().map(|value| decimal(value, "quantity")),
+                    interest: raw.interest().map(|value| decimal(value, "quantity")),
+                })
+            },
+            ACCOUNT_POSITIONS_DATABASE => {
+                let root = value.position()?;
+                let raw = root.position();
+                let quantity = decimal(raw.quantity(), "signed_quantity");
+                let mark = raw.mark_price().map(|value| decimal(value, "price"));
+                MappedAccountRow::Position(
+                    root.segment_key().to_owned(),
+                    AccountPositionCurrent {
+                        instrument_id: raw.instrument_id().to_owned(),
+                        quantity: quantity.clone(),
+                        position_side: position_side(raw.position_side().0).to_owned(),
+                        average_price: raw.average_price().map(|value| decimal(value, "price")),
+                        market_value: mark.map(|mark| multiply(&quantity, &mark)).transpose()?,
+                        unrealized_pnl: raw.unrealized_pnl().map(|value| decimal(value, "money")),
+                    },
+                )
+            },
+            ACCOUNT_EARN_HOLDINGS_DATABASE => {
+                let root = value.earn_holding()?;
+                let raw = root.holding();
+                MappedAccountRow::EarnHolding(
+                    root.segment_key().to_owned(),
+                    AccountEarnHoldingCurrent {
+                        holding_key: raw.holding_key().to_owned(),
+                        participant_position_id: optional_text(raw.participant_position_id()),
+                        product_id: raw.product_id().to_owned(),
+                        asset: raw.asset().to_owned(),
+                        principal: decimal(raw.principal(), "quantity"),
+                        redeemable: raw.redeemable().map(|value| decimal(value, "quantity")),
+                        state: match raw.state().0 {
+                            1 => "active",
+                            2 => "redeeming",
+                            3 => "redeemed",
+                            _ => "unknown",
+                        }
+                        .to_owned(),
+                        participant_state: optional_text(raw.participant_state()),
+                        liquidity: match raw.liquidity().0 {
+                            1 => "immediate",
+                            2 => "notice",
+                            3 => "fixed_term",
+                            _ => "unknown",
+                        }
+                        .to_owned(),
+                        notice_seconds: optional_u64(raw.notice_seconds()),
+                        matures_at_unix_nanos: optional_u64(raw.matures_at_unix_nanos()),
+                        observed_at_unix_nanos: optional_u64(raw.observed_at_unix_nanos()),
+                    },
+                )
+            },
+            ACCOUNT_VALUATIONS_DATABASE => {
+                let root = value.valuation()?;
+                MappedAccountRow::Valuation(
+                    root.segment_key().to_owned(),
+                    root.valuation()
+                        .equity()
+                        .map(|value| decimal(value, "money")),
+                )
+            },
+            ACCOUNT_SEGMENTS_DATABASE => {
+                let root = value.segment()?;
+                let state = root.state();
+                MappedAccountRow::Segment(AccountSegmentCurrent {
+                    account_id: root.account_id().to_owned(),
+                    segment_key: state.segment_key().to_owned(),
+                    broker: state.broker().to_owned(),
+                    environment: state.environment().to_owned(),
+                    account_model: match state.observed_account_model().0 {
+                        1 => Some("cash"),
+                        2 => Some("margin"),
+                        3 => Some("portfolio_margin"),
+                        _ => None,
+                    }
+                    .map(str::to_owned),
+                    equity: None,
+                    balances: Vec::new(),
+                    positions: Vec::new(),
+                    earn_holdings: Vec::new(),
+                    earn_watermark_unix_nanos: optional_u64(state.earn_watermark_unix_nanos()),
+                    freshness: match state.freshness().0 {
+                        1 => "fresh",
+                        2 => "stale",
+                        4 => "resyncing",
+                        5 => "unavailable",
+                        _ => "unknown",
+                    }
                     .to_owned(),
-                total: decimal(raw.total()),
-                available: raw.available().map(decimal).unwrap_or_else(zero_decimal),
-                reserved: raw.locked().map(decimal).unwrap_or_else(zero_decimal),
-            });
-    }
-    let mut collateral = Vec::new();
-    for value in snapshot.collateral() {
-        let root = value.collateral()?;
-        let raw = root.balance();
-        collateral.push(AccountCollateralCurrent {
-            account_id: root.account_id().to_owned(),
-            segment_key: root.segment_key().to_owned(),
-            asset: raw
-                .asset_code()
-                .filter(|value| !value.is_empty())
-                .unwrap_or(raw.asset_id())
-                .to_owned(),
-            total: decimal(raw.total()),
-            available: raw.available().map(decimal),
-            locked: raw.locked().map(decimal),
-            borrowed: raw.borrowed().map(decimal),
-            interest: raw.interest().map(decimal),
-        });
-    }
+                    generation: state.state_generation(),
+                    sync_mode: match state.sync_mode().0 {
+                        1 => "snapshot_then_stream",
+                        2 => "snapshot_only",
+                        _ => "unknown",
+                    }
+                    .to_owned(),
+                    sync_lifecycle: match state.sync_lifecycle().0 {
+                        1 => "configured",
+                        2 => "bootstrapping",
+                        3 => "live",
+                        4 => "snapshot_current",
+                        5 => "degraded",
+                        6 => "resyncing",
+                        7 => "unavailable",
+                        8 => "stopped",
+                        _ => "configured",
+                    }
+                    .to_owned(),
+                    completeness: match state.completeness().0 {
+                        1 => "complete",
+                        2 => "partial",
+                        _ => "unknown",
+                    }
+                    .to_owned(),
+                    snapshot_watermark: optional_u64(state.snapshot_watermark()),
+                    event_watermark: optional_u64(state.event_watermark()),
+                    channel_epoch: optional_u64(state.channel_epoch()),
+                    last_event_at_unix_nanos: optional_u64(state.last_event_at_unix_nanos()),
+                    last_success_at_unix_nanos: optional_u64(state.last_success_at_unix_nanos()),
+                    last_error: optional_text(state.last_error()),
+                    recovery_buffer_depth: u64::from(state.recovery_buffer_depth()),
+                })
+            },
+            ACCOUNT_OBSERVED_ORDERS_DATABASE => {
+                let root = value.observed_order()?;
+                let raw = root.order();
+                MappedAccountRow::ObservedOrder(AccountObservedOrderCurrent {
+                    segment_key: root.segment_key().to_owned(),
+                    observation_id: optional_required_text(raw.observation_id()),
+                    source_id: optional_required_text(raw.source_id()),
+                    execution_order_id: optional_text(raw.execution_order_id()),
+                    remote_order_id: optional_text(raw.remote_order_id()),
+                    instrument_id: optional_required_text(raw.instrument_id()),
+                    market_id: optional_required_text(raw.market_id()),
+                    side: match raw.side().0 {
+                        1 => "buy",
+                        2 => "sell",
+                        other => {
+                            return Err(ContractError::Invalid(format!(
+                                "unknown Account observed order side {other}"
+                            )));
+                        },
+                    }
+                    .to_owned(),
+                    quantity: decimal(raw.quantity(), "quantity"),
+                    filled_quantity: decimal(raw.filled_quantity(), "quantity"),
+                    status: match raw.status().0 {
+                        1 => "open",
+                        2 => "partially_filled",
+                        3 => "pending_cancel",
+                        4 => "closed",
+                        5 => "unknown",
+                        other => {
+                            return Err(ContractError::Invalid(format!(
+                                "unknown Account observed order status {other}"
+                            )));
+                        },
+                    }
+                    .to_owned(),
+                    observed_at_unix_nanos: raw.observed_at_unix_nanos(),
+                })
+            },
+            _ => unreachable!("Account map_snapshot returns only declared databases"),
+        };
+        Ok(row)
+    })?;
+
+    let mut balances: BTreeMap<String, Vec<AccountBalanceCurrent>> = BTreeMap::new();
     let mut positions: BTreeMap<String, Vec<AccountPositionCurrent>> = BTreeMap::new();
-    for value in snapshot.positions() {
-        let root = value.position()?;
-        let raw = root.position();
-        let quantity = decimal(raw.quantity());
-        let mark = raw.mark_price().map(decimal);
-        positions
-            .entry(root.segment_key().to_owned())
-            .or_default()
-            .push(AccountPositionCurrent {
-                instrument_id: raw.instrument_id().to_owned(),
-                quantity: quantity.clone(),
-                position_side: position_side(raw.position_side().0).to_owned(),
-                average_price: raw.average_price().map(decimal),
-                market_value: mark.map(|mark| multiply(&quantity, &mark)),
-                unrealized_pnl: raw.unrealized_pnl().map(decimal),
-            });
-    }
     let mut holdings: BTreeMap<String, Vec<AccountEarnHoldingCurrent>> = BTreeMap::new();
-    for value in snapshot.earn_holdings() {
-        let root = value.earn_holding()?;
-        let raw = root.holding();
-        holdings
-            .entry(root.segment_key().to_owned())
-            .or_default()
-            .push(AccountEarnHoldingCurrent {
-                holding_key: raw.holding_key().to_owned(),
-                participant_position_id: optional_text(raw.participant_position_id()),
-                product_id: raw.product_id().to_owned(),
-                asset: raw.asset().to_owned(),
-                principal: decimal(raw.principal()),
-                redeemable: raw.redeemable().map(decimal),
-                state: match raw.state().0 {
-                    1 => "active",
-                    2 => "redeeming",
-                    3 => "redeemed",
-                    _ => "unknown",
-                }
-                .to_owned(),
-                participant_state: optional_text(raw.participant_state()),
-                liquidity: match raw.liquidity().0 {
-                    1 => "immediate",
-                    2 => "notice",
-                    3 => "fixed_term",
-                    _ => "unknown",
-                }
-                .to_owned(),
-                notice_seconds: optional_u64(raw.notice_seconds()),
-                matures_at_unix_nanos: optional_u64(raw.matures_at_unix_nanos()),
-                observed_at_unix_nanos: optional_u64(raw.observed_at_unix_nanos()),
-            });
-    }
     let mut valuations = BTreeMap::new();
-    for value in snapshot.valuations() {
-        let root = value.valuation()?;
-        valuations.insert(
-            root.segment_key().to_owned(),
-            root.valuation().equity().map(decimal),
-        );
-    }
-    let account_id = snapshot
-        .segments()
-        .first()
-        .map(|value| value.segment().map(|root| root.account_id().to_owned()))
-        .transpose()?
-        .unwrap_or_default();
     let mut segments = Vec::new();
-    for value in snapshot.segments() {
-        let root = value.segment()?;
-        let state = root.state();
-        let key = state.segment_key().to_owned();
-        segments.push(AccountSegmentCurrent {
-            account_id: root.account_id().to_owned(),
-            segment_key: key.clone(),
-            broker: state.broker().to_owned(),
-            environment: state.environment().to_owned(),
-            account_model: match state.observed_account_model().0 {
-                1 => Some("cash"),
-                2 => Some("margin"),
-                3 => Some("portfolio_margin"),
-                _ => None,
-            }
-            .map(str::to_owned),
-            equity: valuations.remove(&key).flatten(),
-            balances: balances.remove(&key).unwrap_or_default(),
-            positions: positions.remove(&key).unwrap_or_default(),
-            earn_holdings: holdings.remove(&key).unwrap_or_default(),
-            earn_watermark_unix_nanos: optional_u64(state.earn_watermark_unix_nanos()),
-            freshness: match state.freshness().0 {
-                1 => "fresh",
-                2 => "stale",
-                4 => "resyncing",
-                5 => "unavailable",
-                _ => "unknown",
-            }
-            .to_owned(),
-            generation: state.state_generation(),
-            sync_mode: match state.sync_mode().0 {
-                1 => "snapshot_then_stream",
-                2 => "snapshot_only",
-                _ => "unknown",
-            }
-            .to_owned(),
-            sync_lifecycle: match state.sync_lifecycle().0 {
-                1 => "configured",
-                2 => "bootstrapping",
-                3 => "live",
-                4 => "snapshot_current",
-                5 => "degraded",
-                6 => "resyncing",
-                7 => "unavailable",
-                8 => "stopped",
-                _ => "configured",
-            }
-            .to_owned(),
-            completeness: match state.completeness().0 {
-                1 => "complete",
-                2 => "partial",
-                _ => "unknown",
-            }
-            .to_owned(),
-            snapshot_watermark: optional_u64(state.snapshot_watermark()),
-            event_watermark: optional_u64(state.event_watermark()),
-            channel_epoch: optional_u64(state.channel_epoch()),
-            last_event_at_unix_nanos: optional_u64(state.last_event_at_unix_nanos()),
-            last_success_at_unix_nanos: optional_u64(state.last_success_at_unix_nanos()),
-            last_error: optional_text(state.last_error()),
-            recovery_buffer_depth: u64::from(state.recovery_buffer_depth()),
-        });
+    let mut collateral = Vec::new();
+    let mut observed_orders = Vec::new();
+    for row in rows.into_values().flatten() {
+        match row {
+            MappedAccountRow::Segment(value) => segments.push(value),
+            MappedAccountRow::Balance(key, value) => balances.entry(key).or_default().push(value),
+            MappedAccountRow::Collateral(value) => collateral.push(value),
+            MappedAccountRow::Position(key, value) => positions.entry(key).or_default().push(value),
+            MappedAccountRow::EarnHolding(key, value) => {
+                holdings.entry(key).or_default().push(value)
+            },
+            MappedAccountRow::Valuation(key, value) => {
+                valuations.insert(key, value);
+            },
+            MappedAccountRow::ObservedOrder(value) => observed_orders.push(value),
+        }
     }
+    for segment in &mut segments {
+        segment.equity = valuations.remove(&segment.segment_key).flatten();
+        segment.balances = balances.remove(&segment.segment_key).unwrap_or_default();
+        segment.positions = positions.remove(&segment.segment_key).unwrap_or_default();
+        segment.earn_holdings = holdings.remove(&segment.segment_key).unwrap_or_default();
+    }
+    let account_id = segments
+        .first()
+        .map(|segment| segment.account_id.clone())
+        .unwrap_or_default();
     let generation = segments
         .iter()
         .map(|segment| segment.generation)
         .max()
         .unwrap_or(0);
-    let mut observed_orders = Vec::new();
-    for value in snapshot.observed_orders() {
-        let root = value.observed_order()?;
-        let raw = root.order();
-        observed_orders.push(AccountObservedOrderCurrent {
-            segment_key: root.segment_key().to_owned(),
-            observation_id: optional_required_text(raw.observation_id()),
-            source_id: optional_required_text(raw.source_id()),
-            execution_order_id: optional_text(raw.execution_order_id()),
-            remote_order_id: optional_text(raw.remote_order_id()),
-            instrument_id: optional_required_text(raw.instrument_id()),
-            market_id: optional_required_text(raw.market_id()),
-            side: match raw.side().0 {
-                1 => "buy",
-                2 => "sell",
-                other => {
-                    return Err(ContractError::Invalid(format!(
-                        "unknown Account observed order side {other}"
-                    )));
-                },
-            }
-            .to_owned(),
-            quantity: decimal(raw.quantity()),
-            filled_quantity: decimal(raw.filled_quantity()),
-            status: match raw.status().0 {
-                1 => "open",
-                2 => "partially_filled",
-                3 => "pending_cancel",
-                4 => "closed",
-                5 => "unknown",
-                other => {
-                    return Err(ContractError::Invalid(format!(
-                        "unknown Account observed order status {other}"
-                    )));
-                },
-            }
-            .to_owned(),
-            observed_at_unix_nanos: raw.observed_at_unix_nanos(),
-        });
-    }
     Ok(AccountCurrentSnapshot {
         account_id,
         segments,
         collateral,
         generation,
-        event_sequence,
+        event_sequence: metadata.applied_event_sequence,
         observed_orders,
     })
 }
@@ -1689,11 +1761,11 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
             change.balance = Some(AccountBalanceEvent {
                 asset_id: item.asset_id.to_string(),
                 asset: item.asset_code.unwrap_or_else(|| item.asset_id.to_string()),
-                total: decimal_parts(item.total),
-                available: item.available.map(decimal_parts),
-                locked: item.locked.map(decimal_parts),
-                borrowed: item.borrowed.map(decimal_parts),
-                interest: item.interest.map(decimal_parts),
+                total: decimal_parts(item.total, "quantity"),
+                available: item.available.map(|value| decimal_parts(value, "quantity")),
+                locked: item.locked.map(|value| decimal_parts(value, "quantity")),
+                borrowed: item.borrowed.map(|value| decimal_parts(value, "quantity")),
+                interest: item.interest.map(|value| decimal_parts(value, "quantity")),
             });
         },
         RustAccountChange::BalanceRemoved { asset_id } => {
@@ -1704,11 +1776,15 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                 instrument_id: item.instrument_id.to_string(),
                 market_id: item.market_id.to_string(),
                 position_side: item.position_side.as_str().to_owned(),
-                quantity: decimal_parts(item.quantity),
-                average_price: item.average_price.map(decimal_parts),
-                mark_price: item.mark_price.map(decimal_parts),
-                unrealized_pnl: item.unrealized_pnl.map(decimal_parts),
-                realized_pnl: item.realized_pnl.map(decimal_parts),
+                quantity: decimal_parts(item.quantity, "signed_quantity"),
+                average_price: item
+                    .average_price
+                    .map(|value| decimal_parts(value, "price")),
+                mark_price: item.mark_price.map(|value| decimal_parts(value, "price")),
+                unrealized_pnl: item
+                    .unrealized_pnl
+                    .map(|value| decimal_parts(value, "money")),
+                realized_pnl: item.realized_pnl.map(|value| decimal_parts(value, "money")),
                 observed_at_unix_nanos: item.observed_at_unix_nanos.map(|value| value.get()),
             });
         },
@@ -1725,8 +1801,10 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                 participant_position_id: item.participant_position_id,
                 product_id: item.product_id,
                 asset: item.asset,
-                principal: decimal_parts(item.principal),
-                redeemable: item.redeemable.map(decimal_parts),
+                principal: decimal_parts(item.principal, "quantity"),
+                redeemable: item
+                    .redeemable
+                    .map(|value| decimal_parts(value, "quantity")),
                 state: item.state.as_str().to_owned(),
                 participant_state: item.participant_state,
                 liquidity: item.liquidity.as_str().to_owned(),
@@ -1741,9 +1819,11 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
         RustAccountChange::ValuationChanged(item) => {
             change.valuation = Some(AccountValuationEvent {
                 valuation_asset_id: item.valuation_asset_id.map(|value| value.to_string()),
-                equity: item.equity.map(decimal_parts),
-                initial_equity: item.initial_equity.map(decimal_parts),
-                net_profit: item.net_profit.map(decimal_parts),
+                equity: item.equity.map(|value| decimal_parts(value, "money")),
+                initial_equity: item
+                    .initial_equity
+                    .map(|value| decimal_parts(value, "money")),
+                net_profit: item.net_profit.map(|value| decimal_parts(value, "money")),
                 observed_at_unix_nanos: item.observed_at_unix_nanos.map(|value| value.get()),
             });
         },
@@ -1771,8 +1851,8 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                     kairos_primitives::execution::OrderSide::Sell => "sell",
                 }
                 .to_owned(),
-                quantity: decimal_parts(item.quantity),
-                filled_quantity: decimal_parts(item.filled_quantity),
+                quantity: decimal_parts(item.quantity, "quantity"),
+                filled_quantity: decimal_parts(item.filled_quantity, "quantity"),
                 status: item.status.as_str().to_owned(),
                 observed_at_unix_nanos: item.observed_at_unix_nanos.map(|value| value.get()),
             });
@@ -1793,16 +1873,21 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
     }
 }
 
-fn decimal(value: &Decimal64) -> NativeDecimal {
+fn decimal(value: &Decimal64, semantic_type: &'static str) -> NativeDecimal {
     NativeDecimal {
         mantissa: value.mantissa(),
         scale: value.scale(),
+        semantic_type,
     }
 }
-fn decimal_parts(value: kairos_primitives::decimal::DecimalParts) -> NativeDecimal {
+fn decimal_parts(
+    value: kairos_primitives::decimal::DecimalParts,
+    semantic_type: &'static str,
+) -> NativeDecimal {
     NativeDecimal {
         mantissa: value.mantissa(),
         scale: value.scale(),
+        semantic_type,
     }
 }
 fn optional_text(value: Option<&str>) -> Option<String> {
@@ -1816,10 +1901,11 @@ fn optional_required_text(value: &str) -> Option<String> {
 fn optional_u64(value: u64) -> Option<u64> {
     (value != 0).then_some(value)
 }
-fn zero_decimal() -> NativeDecimal {
+fn zero_decimal(semantic_type: &'static str) -> NativeDecimal {
     NativeDecimal {
         mantissa: 0,
         scale: 0,
+        semantic_type,
     }
 }
 fn position_side(value: u8) -> &'static str {
@@ -1829,11 +1915,19 @@ fn position_side(value: u8) -> &'static str {
         _ => "net",
     }
 }
-fn multiply(left: &NativeDecimal, right: &NativeDecimal) -> NativeDecimal {
-    NativeDecimal {
-        mantissa: left.mantissa.saturating_mul(right.mantissa),
-        scale: left.scale.saturating_add(right.scale),
-    }
+fn multiply(left: &NativeDecimal, right: &NativeDecimal) -> Result<NativeDecimal, ContractError> {
+    let quantity = SignedQuantity::new(left.mantissa, left.scale)
+        .map_err(|error| ContractError::Invalid(error.to_string()))?;
+    let price = Price::new(right.mantissa, right.scale)
+        .map_err(|error| ContractError::Invalid(error.to_string()))?;
+    let value: Money = quantity
+        .checked_mul(price)
+        .map_err(|error| ContractError::Invalid(error.to_string()))?;
+    Ok(NativeDecimal {
+        mantissa: value.mantissa(),
+        scale: value.scale(),
+        semantic_type: "money",
+    })
 }
 fn identity(
     workspace_id: String,
@@ -1881,39 +1975,48 @@ where
         })
 }
 
-fn price(value: &str) -> PyResult<Price> {
-    let parts: DecimalParts =
-        value
+fn semantic_parts(value: &Bound<'_, PyAny>, expected: &str) -> PyResult<DecimalParts> {
+    if let Ok(text) = value.extract::<String>() {
+        return text
             .parse()
             .map_err(|error: kairos_primitives::DomainTypeError| {
                 AccountInvalidInputError::new_err(error.to_string())
-            })?;
+            });
+    }
+    let semantic_type = value
+        .getattr("semantic_type")
+        .and_then(|value| value.extract::<String>())
+        .map_err(|_| {
+            AccountInvalidInputError::new_err(format!(
+                "Account {expected} requires exact text or a semantic decimal value"
+            ))
+        })?;
+    if semantic_type != expected {
+        return Err(AccountInvalidInputError::new_err(format!(
+            "Account {expected} cannot be constructed from {semantic_type}"
+        )));
+    }
+    DecimalParts::new(
+        value.getattr("mantissa")?.extract::<i64>()?,
+        value.getattr("scale")?.extract::<u8>()?,
+    )
+    .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))
+}
+
+fn price_input(value: &Bound<'_, PyAny>) -> PyResult<Price> {
+    let parts = semantic_parts(value, "price")?;
     Price::new(parts.mantissa(), parts.scale())
         .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))
 }
 
-fn price_value(value: &str) -> PyResult<Price> {
-    price(value)
-}
-
-fn quantity_value(value: &str) -> PyResult<Quantity> {
-    let parts: DecimalParts =
-        value
-            .parse()
-            .map_err(|error: kairos_primitives::DomainTypeError| {
-                AccountInvalidInputError::new_err(error.to_string())
-            })?;
+fn quantity_input(value: &Bound<'_, PyAny>) -> PyResult<Quantity> {
+    let parts = semantic_parts(value, "quantity")?;
     Quantity::new(parts.mantissa(), parts.scale())
         .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))
 }
 
-fn signed_quantity(value: &str) -> PyResult<SignedQuantity> {
-    let parts: DecimalParts =
-        value
-            .parse()
-            .map_err(|error: kairos_primitives::DomainTypeError| {
-                AccountInvalidInputError::new_err(error.to_string())
-            })?;
+fn signed_quantity_input(value: &Bound<'_, PyAny>) -> PyResult<SignedQuantity> {
+    let parts = semantic_parts(value, "signed_quantity")?;
     SignedQuantity::new(parts.mantissa(), parts.scale())
         .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))
 }
@@ -1996,7 +2099,7 @@ fn simulation_event(
     })
 }
 
-fn native_decimal(value: &str) -> PyResult<NativeDecimal> {
+fn native_decimal(value: &str, semantic_type: &'static str) -> PyResult<NativeDecimal> {
     let parts: DecimalParts =
         value
             .parse()
@@ -2006,6 +2109,7 @@ fn native_decimal(value: &str) -> PyResult<NativeDecimal> {
     Ok(NativeDecimal {
         mantissa: parts.mantissa(),
         scale: parts.scale(),
+        semantic_type,
     })
 }
 
@@ -2118,7 +2222,6 @@ fn _native_account_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NativeAccountRefreshResponse>()?;
     module.add_class::<NativeAdvanceAccountTimeResponse>()?;
     module.add_class::<NativeAccountControlClient>()?;
-    module.add_class::<NativeDecimal>()?;
     module.add_class::<AccountEventMetadata>()?;
     module.add_class::<AccountEventProvenance>()?;
     module.add_class::<AccountBalanceEvent>()?;

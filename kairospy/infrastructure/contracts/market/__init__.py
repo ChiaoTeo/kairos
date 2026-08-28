@@ -11,6 +11,7 @@ _EXPORTS = {
     "MarketViewKey": (".view", "MarketViewKey"),
     "MarketViewKind": (".view", "MarketViewKind"),
     "decode_event": (".events", "decode_event"),
+    "decode_events": (".events", "decode_events"),
     "MarketSubscriptionRequest": (".types", "MarketSubscriptionRequest"),
     "MarketTarget": (".types", "MarketTarget"),
     "ObservationRequirement": (".types", "ObservationRequirement"),

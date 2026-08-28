@@ -125,6 +125,13 @@ pub struct MarketHealthResponse {
     pub actor_id: kairos_primitives::runtime::ActorId,
     pub event_sequence: Sequence,
     pub feed_status: MarketFeedStatus,
+    pub current_view_commit_count: u64,
+    pub current_view_input_update_count: u64,
+    pub current_view_encoded_update_count: u64,
+    pub current_view_order_book_encode_count: u64,
+    pub last_current_view_commit_latency_nanos: u64,
+    pub notification_attempt_count: u64,
+    pub notification_failure_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

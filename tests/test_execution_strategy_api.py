@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 
@@ -22,7 +21,7 @@ from kairospy.investment.apps.execution.application import (
 from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
 from kairospy.investment.apps.execution.services import ExecutionEventCursorCheckpoint
 from kairospy.primitives.account import AccountId
-from kairospy.primitives.execution import IntentId, OrderId
+from kairospy.primitives.execution import IntentId
 from kairospy.primitives.reference import InstrumentId
 from kairospy.strategy import CommandResult
 
@@ -253,8 +252,7 @@ def test_execution_event_cursor_ignores_duplicates_and_reports_gaps() -> None:
         "event_lag": 0,
         "event_gap_count": 0,
         "event_scope_error_count": 0,
-        "event_recovery_count": 0,
-        "event_recovery_incomplete": False,
+        "notification_incarnation_change_count": 0,
     }
 
     gap = ExecutionApplication(
@@ -264,9 +262,9 @@ def test_execution_event_cursor_ignores_duplicates_and_reports_gaps() -> None:
         strategy_id="strategy-a",
         instance_id="instance-1",
     )
-    with pytest.raises(RuntimeError, match="not contiguous"):
-        asyncio.run(_drain(gap))
+    asyncio.run(_drain(gap))
     assert gap.health()["event_gap_count"] == 1
+    assert gap.health()["processing_event_cursor"] == 6
 
 
 def test_execution_cursor_checkpoints_only_after_record_consumption(
@@ -319,40 +317,12 @@ def test_execution_cursor_checkpoints_only_after_record_consumption(
     assert restored.health()["event_cursor"] == 1
 
 
-def test_execution_cursor_recovers_decision_progress_from_current_view(
+def test_execution_readiness_does_not_treat_current_view_as_event_replay(
     tmp_path,
 ) -> None:
-    intent = ExecutionIntent(
-        IntentId("intent-recovered"),
-        "strategy-a",
-        _instrument(InstrumentId("instrument:test:BTCUSDT")),
-        (AccountId("main"),),
-        Decimal("1"),
-        IntentStatus.SATISFIED,
-        "filled while Strategy was stopped",
-        (OrderId("order-1"),),
-        strategy_decision_id="decision-recovered",
-        updated_at_unix_nanos=10,
-    )
-
     class CurrentView:
         def recovery_snapshot(self):
-            native_intent = SimpleNamespace(
-                intent=SimpleNamespace(
-                    intent_id=str(intent.id),
-                    instrument_id=str(intent.instrument.id),
-                    account_ids=tuple(str(value) for value in intent.account_ids),
-                    target_quantity=format(intent.target_quantity, "f"),
-                    status=intent.status.value,
-                    reason=intent.reason,
-                    strategy_decision_id=intent.strategy_decision_id,
-                    source_event_sequence=7,
-                ),
-                strategy_id=intent.strategy_id,
-                status=intent.status.value,
-                order_ids=tuple(str(value) for value in intent.order_ids),
-            )
-            return 7, (native_intent,), (), True
+            raise AssertionError("current view must not be used as an event backlog")
 
     class Decisions:
         def __init__(self) -> None:
@@ -377,15 +347,9 @@ def test_execution_cursor_recovers_decision_progress_from_current_view(
     execution.bind_decisions(decisions)
     execution.check_event_source_ready()
 
-    assert len(decisions.values) == 1
-    recovered, source_event_sequence = decisions.values[0]
-    assert recovered.id == intent.id
-    assert recovered.status is IntentStatus.SATISFIED
-    assert recovered.source_event_sequence == 7
-    assert source_event_sequence == 7
-    assert checkpoint.load() == 7
-    assert execution.health()["event_recovery_count"] == 1
-    assert execution.health()["event_recovery_incomplete"] is True
+    assert decisions.values == []
+    assert checkpoint.load() == 0
+    assert execution.health()["processing_event_cursor"] == 0
 
 
 def test_execution_checkpoint_partitions_sequence_by_producer_incarnation(

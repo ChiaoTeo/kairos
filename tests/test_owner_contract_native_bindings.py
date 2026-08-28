@@ -205,6 +205,37 @@ def test_execution_backtest_quote_validates_optional_decimal_fields() -> None:
         )
 
 
+def test_execution_backtest_and_replace_inputs_accept_semantic_values() -> None:
+    from kairospy.primitives.decimal import Money, Price, Quantity, Rate
+
+    native = import_module("kairospy._native_execution_contract")
+
+    native.ReplaceOrderRequest(quantity=Quantity("2.5"), limit_price=Price("100.25"))
+    native.ExecutionBacktestEquityPoint(1, Money("1000"))
+    native.ExecutionBacktestInputFill(
+        instrument_id="instrument:BTCUSDT",
+        side="buy",
+        quantity=Quantity("1"),
+        price=Price("100"),
+        occurred_at_unix_nanos=1,
+        fee=Money("0.1"),
+    )
+    native.ExecutionBacktestSimulationConfig(
+        fee_bps=Rate("1"), slippage_bps=Rate("2")
+    )
+    native.ExecutionBacktestMarketRequest.quote(
+        market_id="market:BTCUSDT",
+        instrument_id="instrument:BTCUSDT",
+        observed_at_unix_nanos=1,
+        source_id="test",
+        bid_price=Price("99"),
+        bid_quantity=Quantity("2"),
+    )
+
+    with pytest.raises(native.ExecutionInvalidInputError, match="cannot be constructed"):
+        native.ReplaceOrderRequest(quantity=Price("2.5"))
+
+
 def test_atomic_snapshot_bindings_expose_non_summary_families() -> None:
     account = import_module("kairospy._native_account_contract")
     capital = import_module("kairospy._native_capital_contract")

@@ -17,6 +17,42 @@ MODULE_FUNCTIONS = {
     for owner in OWNERS
 }
 MODULE_FUNCTIONS["reference"] = ("build_info", "decode_event")
+SEMANTIC_PROPERTIES = {
+    "reference": {
+        ("ReferenceInstrument", "strike"),
+        ("ReferenceMarket", "contract_size"),
+        ("ReferenceMarket", "minimum_notional"),
+        ("ReferenceMarket", "minimum_quantity"),
+        ("ReferenceMarket", "price_tick"),
+        ("ReferenceMarket", "quantity_tick"),
+    },
+    "risk": {
+        ("RiskAllocation", "amount"),
+        ("RiskPolicy", "limit"),
+        ("RiskLimitUsage", "available"),
+        ("RiskLimitUsage", "reserved"),
+        ("RiskLimitUsage", "used"),
+    },
+}
+CANONICAL_IDENTITY_PROPERTIES = {
+    "account_id",
+    "asset_id",
+    "capital_group_id",
+    "demand_id",
+    "exchange_id",
+    "execution_route_id",
+    "fill_id",
+    "instrument_id",
+    "intent_id",
+    "leg_id",
+    "listing_id",
+    "market_id",
+    "objective_id",
+    "order_id",
+    "reservation_id",
+    "segment_key",
+    "strategy_id",
+}
 
 
 def _runtime_classes(module: object) -> dict[str, type[object]]:
@@ -76,6 +112,15 @@ def main() -> int:
         stubs = {
             node.name: node for node in tree.body if isinstance(node, ast.ClassDef)
         }
+        if "NativeDecimal" in stubs or hasattr(module, "NativeDecimal"):
+            failures.append(
+                f"{owner}: generic NativeDecimal must not be part of the public contract surface"
+            )
+        source_path = ROOT / "crates" / "modules" / owner / "contract" / "py" / "src" / "lib.rs"
+        if source_path.exists() and "add_class::<NativeDecimal>" in source_path.read_text(
+            encoding="utf-8"
+        ):
+            failures.append(f"{owner}: PyO3 registers generic NativeDecimal")
         if classes.keys() != stubs.keys():
             failures.append(
                 f"{owner}: class surface differs; missing={sorted(classes.keys() - stubs.keys())}, "
@@ -110,6 +155,28 @@ def main() -> int:
             for member in node.body:
                 if not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
+                is_property = any(
+                    isinstance(decorator, ast.Name) and decorator.id == "property"
+                    for decorator in member.decorator_list
+                )
+                annotation = (
+                    "" if member.returns is None else ast.unparse(member.returns)
+                )
+                if (
+                    is_property
+                    and member.name in CANONICAL_IDENTITY_PROPERTIES
+                    and annotation in {"", "object", "str", "str | None"}
+                ):
+                    failures.append(
+                        f"{owner}.{class_name}.{member.name}: canonical identity "
+                        f"must use its read type, found {annotation or 'missing'}"
+                    )
+                if (class_name, member.name) in SEMANTIC_PROPERTIES.get(owner, set()):
+                    if annotation in {"", "object", "str", "Decimal"}:
+                        failures.append(
+                            f"{owner}.{class_name}.{member.name}: semantic value "
+                            f"must use a canonical protocol, found {annotation or 'missing'}"
+                        )
                 if member.name == "__init__":
                     runtime_member: object = runtime_class
                 else:
@@ -117,10 +184,7 @@ def main() -> int:
                     if runtime_member is None:
                         failures.append(f"{owner}.{class_name}.{member.name}: absent at runtime")
                         continue
-                    if any(
-                        isinstance(decorator, ast.Name) and decorator.id == "property"
-                        for decorator in member.decorator_list
-                    ):
+                    if is_property:
                         if not inspect.isgetsetdescriptor(runtime_member):
                             failures.append(
                                 f"{owner}.{class_name}.{member.name}: stub property is not a runtime property"

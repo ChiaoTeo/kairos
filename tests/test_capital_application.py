@@ -125,7 +125,7 @@ def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
         capital.publish_objective(_objective()).status
         is FundingObjectiveStatus.ACCEPTED
     )
-    assert capital.availability(_objective().destination).deficit == Decimal("30000")
+    assert capital.availability(_objective().destination).deficit.value == Decimal("30000")
 
 
 def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -> None:
@@ -168,7 +168,7 @@ def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -
 
     assert receipt.status is FundingObjectiveStatus.ACCEPTED
     assert forecast.source is FundingForecastSource.HISTORICAL_PEAK
-    assert getattr(captured[0], "desired_available") == "90"
+    assert getattr(captured[0], "desired_available").value == Decimal("90")
     assert getattr(captured[0], "observed_at_unix_nanos") == int(observed_at.timestamp() * 1_000_000_000)
     assert getattr(captured[0], "strategy_decision_id") == (
         "forecast:historical_peak:session-usdt-peak:3"

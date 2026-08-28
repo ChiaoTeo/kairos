@@ -104,7 +104,7 @@ def test_target_position_maps_to_typed_owner_request() -> None:
     intent = _intent(control)
     assert handle.status == "accepted"
     assert type(control.submissions[0]).__module__ == "kairospy._native_execution_contract"
-    assert intent.target_quantity == "1.25"
+    assert intent.target_quantity.value == Decimal("1.25")
     assert intent.strategy_id == "sma"
     assert intent.segment_key == "usd_m_futures"
     assert intent.algorithm.kind == "immediate"
@@ -132,7 +132,7 @@ def test_execution_benchmark_is_native_and_read_only() -> None:
         request_id="request-benchmark",
     )
     benchmark = _intent(control).execution_benchmarks[0]
-    assert benchmark.price == "100.25"
+    assert benchmark.price.value == Decimal("100.25")
     assert benchmark.observed_at_unix_nanos == 123
     with pytest.raises(AttributeError):
         benchmark.price = "0"  # type: ignore[misc]
@@ -231,7 +231,7 @@ def test_direct_order_is_one_typed_single_order_leg() -> None:
     assert handle.status == "accepted"
     assert intent.intent_type == "single_order"
     assert intent.legs[0].instrument_id == "instrument:test:SPY"
-    assert intent.legs[0].limit_price == "100.01"
+    assert intent.legs[0].limit_price.value == Decimal("100.01")
     assert intent.legs[0].options.post_only is True
 
 

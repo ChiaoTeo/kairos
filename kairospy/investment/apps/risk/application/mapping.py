@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from collections.abc import Iterable
 
 from kairospy.primitives.account import AccountId
+from kairospy.primitives.decimal import Money, MoneyLike
 
 from .models import RiskStatus, RiskViolation
 
@@ -23,12 +24,8 @@ def map_risk_status(value: object, *, account_id: AccountId) -> RiskStatus:
         if getattr(item, "scope").account_id in {None, str(account_id)}
         and getattr(item, "status") == "open"
     )
-    available = sum(
-        (_decimal(getattr(item, "available")) for item in usages), Decimal("0")
-    )
-    reserved = sum(
-        (_decimal(getattr(item, "reserved")) for item in usages), Decimal("0")
-    )
+    available = _sum_money(getattr(item, "available") for item in usages)
+    reserved = _sum_money(getattr(item, "reserved") for item in usages)
     violations = tuple(
         RiskViolation(
             code="circuit_open",
@@ -49,8 +46,10 @@ def map_risk_status(value: object, *, account_id: AccountId) -> RiskStatus:
     )
 
 
-def _decimal(value: object) -> Decimal:
-    native = getattr(value, "value", None)
-    if isinstance(native, Decimal):
-        return native
-    raise ValueError("decimal value is not a Risk contract decimal")
+def _sum_money(values: Iterable[object]) -> Money:
+    total = Money("0")
+    for value in values:
+        if not isinstance(value, MoneyLike):
+            raise ValueError("notional value is not a Risk contract Money")
+        total = total.checked_add(value)
+    return total

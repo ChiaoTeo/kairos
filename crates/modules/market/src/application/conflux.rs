@@ -21,7 +21,7 @@ use crate::domain::source::{
 };
 use crate::services::actor::PhysicalSubscriptionKey;
 use crate::services::publication::HistoryQueue;
-use crate::services::publication::contract::{encode_change_view, encode_event};
+use crate::services::publication::contract::{encode_event, encode_latest_change_views};
 use crate::services::source::messages::{ProviderSubscriptionId, SourceInput};
 use crate::services::source::{
     confirmed_subscription, confirmed_unsubscription, normalize, quote_event, subscription_request,
@@ -85,6 +85,13 @@ pub(crate) struct MarketConfluxState {
     history: Option<HistoryQueue>,
     reference_universe_sync: Option<ReferenceUniverseSyncState>,
     command_results: BTreeMap<String, CachedMarketControlResult>,
+    current_view_commit_count: u64,
+    current_view_input_update_count: u64,
+    current_view_encoded_update_count: u64,
+    current_view_order_book_encode_count: u64,
+    last_current_view_commit_latency_nanos: u64,
+    notification_attempt_count: u64,
+    notification_failure_count: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -118,6 +125,13 @@ impl Default for MarketConfluxState {
             history: None,
             reference_universe_sync: None,
             command_results: BTreeMap::new(),
+            current_view_commit_count: 0,
+            current_view_input_update_count: 0,
+            current_view_encoded_update_count: 0,
+            current_view_order_book_encode_count: 0,
+            last_current_view_commit_latency_nanos: 0,
+            notification_attempt_count: 0,
+            notification_failure_count: 0,
         }
     }
 }
@@ -823,19 +837,25 @@ impl MarketApplication {
             actor_id: view.actor_id,
             event_sequence: self.event_sequence().into(),
             feed_status,
+            current_view_commit_count: self.conflux.current_view_commit_count,
+            current_view_input_update_count: self.conflux.current_view_input_update_count,
+            current_view_encoded_update_count: self.conflux.current_view_encoded_update_count,
+            current_view_order_book_encode_count: self.conflux.current_view_order_book_encode_count,
+            last_current_view_commit_latency_nanos: self
+                .conflux
+                .last_current_view_commit_latency_nanos,
+            notification_attempt_count: self.conflux.notification_attempt_count,
+            notification_failure_count: self.conflux.notification_failure_count,
         }
     }
 
     async fn publish(&mut self, context: &mut Context<'_, Self>) -> Result<(), MarketError> {
         let changes = self.drain_changes_limited(1_024);
+        let batch = encode_latest_change_views(&changes, self.actor.order_books())
+            .map_err(MarketError::Recovery)?;
         let events = changes
-            .iter()
-            .filter_map(|change| {
-                change
-                    .event
-                    .clone()
-                    .map(|event| (change.sequence.get(), event))
-            })
+            .into_iter()
+            .filter_map(|change| change.event.map(|event| (change.sequence.get(), event)))
             .collect::<Vec<_>>();
         if let Some(history) = self.conflux.history.as_ref() {
             history
@@ -843,40 +863,83 @@ impl MarketApplication {
                 .await
                 .map_err(MarketError::Recovery)?;
         }
-        let actor_id = self.current_view().actor_id.to_string();
-        let event_key = "market-events".to_owned();
-        for (sequence, event) in &events {
-            let bytes = encode_event(
-                &actor_id,
-                self.conflux.producer_incarnation,
-                &self.conflux.identity,
-                *sequence,
-                event,
-            )
-            .map_err(MarketError::Recovery)?;
-            if context.outputs().aeron.contains(&event_key) {
-                context
-                    .outputs()
-                    .aeron
-                    .publish(&event_key, &bytes)
-                    .map_err(|error| MarketError::Recovery(error.to_string()))?;
-            }
-        }
-        for change in &changes {
-            let Some(encoded) = encode_change_view(change).map_err(MarketError::Recovery)? else {
-                continue;
-            };
-            let mutations = encoded.into_mutations().map_err(MarketError::Recovery)?;
+        if let Some(batch) = batch {
+            tracing::trace!(
+                event = "market_current_view_flush",
+                input_updates = batch.input_update_count,
+                encoded_updates = batch.encoded_update_count,
+                coalesced_updates = batch
+                    .input_update_count
+                    .saturating_sub(batch.encoded_update_count),
+                applied_state_sequence = batch.applied_state_sequence,
+            );
+            let commit_started = std::time::Instant::now();
             context
                 .outputs()
                 .indexed
                 .apply(
                     "market-current",
-                    &mutations,
-                    change.sequence.get(),
+                    &batch.mutations,
+                    batch.applied_state_sequence,
                     now_unix_nanos(),
                 )
                 .map_err(|error| MarketError::Recovery(error.to_string()))?;
+            self.conflux.current_view_commit_count =
+                self.conflux.current_view_commit_count.saturating_add(1);
+            self.conflux.current_view_input_update_count = self
+                .conflux
+                .current_view_input_update_count
+                .saturating_add(batch.input_update_count as u64);
+            self.conflux.current_view_encoded_update_count = self
+                .conflux
+                .current_view_encoded_update_count
+                .saturating_add(batch.encoded_update_count as u64);
+            self.conflux.current_view_order_book_encode_count = self
+                .conflux
+                .current_view_order_book_encode_count
+                .saturating_add(batch.encoded_order_book_count as u64);
+            self.conflux.last_current_view_commit_latency_nanos = commit_started
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX))
+                as u64;
+        }
+        let actor_id = self.actor.actor_id().to_owned();
+        let event_key = "market-events".to_owned();
+        for (sequence, event) in &events {
+            if !context.outputs().aeron.contains(&event_key) {
+                continue;
+            }
+            self.conflux.notification_attempt_count =
+                self.conflux.notification_attempt_count.saturating_add(1);
+            let bytes = match encode_event(
+                &actor_id,
+                self.conflux.producer_incarnation,
+                &self.conflux.identity,
+                *sequence,
+                event,
+            ) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    self.conflux.notification_failure_count =
+                        self.conflux.notification_failure_count.saturating_add(1);
+                    tracing::warn!(
+                        event = "market_notification_encode_failed",
+                        sequence,
+                        error = %error,
+                    );
+                    continue;
+                },
+            };
+            if let Err(error) = context.outputs().aeron.publish(&event_key, &bytes) {
+                self.conflux.notification_failure_count =
+                    self.conflux.notification_failure_count.saturating_add(1);
+                tracing::warn!(
+                    event = "market_notification_publish_failed",
+                    sequence,
+                    error = %error,
+                );
+            }
         }
         Ok(())
     }

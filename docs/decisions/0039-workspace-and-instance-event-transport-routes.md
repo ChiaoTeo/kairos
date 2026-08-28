@@ -1,6 +1,6 @@
 # Decision 0039：Workspace 与 Instance 事件传输路由
 
-- Status: Accepted
+- Status: Accepted; section 6 superseded by [Decision 0041](0041-authoritative-current-views-and-best-effort-notifications.md)
 - Date: 2026-08-28
 - Scope: Aeron business-event publication, Run Instance isolation, shared-service fan-out
 - Extends: [Decision 0001](0001-workspace-resource-layout.md),
@@ -183,10 +183,15 @@ Strategy composition 从 manifest 的 component route reference 构造 owner con
 Account、Execution、Risk 和 Capital Python client 已有的 `channel` 参数必须收到 manifest 中的值。
 一个 Strategy 可以同时订阅 Workspace route 上的 shared Market 和 Instance route 上的其他 owner。
 
-System readiness 比较 publisher declaration、component manifest 和 consumer route。任一端 scope、channel、
-spec version 或 fingerprint 不一致时，Instance 不得进入 ready。
+System 在启动 publisher 时持久化包含进程 PID 和完整 typed route 的 component declaration。复用已 ready
+进程前先验证 declaration 的 PID 仍存活，且其 scope、identity、channel、spec version 和 fingerprint 与
+当前 System route 一致；缺失 declaration 的旧进程也 fail closed。Instance manifest 引用同一个 route
+fact，consumer composition 再验证 manifest route。任一端不一致时，Instance 不得进入 ready。
 
 ### 6. 顺序连续性按 producer incarnation 分区
+
+本节关于 route 隔离和 continuity key 的结论保留；snapshot/resync 与 gap fail-closed 语义由
+[Decision 0041](0041-authoritative-current-views-and-best-effort-notifications.md) 替代。
 
 Aeron route 负责 delivery isolation；contract metadata 负责 event-log identity。连续性键至少包含：
 

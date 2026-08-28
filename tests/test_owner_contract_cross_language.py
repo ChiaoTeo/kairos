@@ -5,6 +5,8 @@ import subprocess
 
 import pytest
 
+from kairospy.primitives.decimal import Price, PriceLike, Quantity, QuantityLike
+
 
 def _rust_event(owner: str, example: str) -> object:
     native = import_module(f"kairospy._native_{owner}_contract")
@@ -60,6 +62,19 @@ def test_rust_account_event_fixture_has_the_same_python_typed_fields() -> None:
     assert event.provenance.provider_sequence == 10
 
 
+def test_market_native_batch_projects_stable_owned_events() -> None:
+    native = import_module("kairospy._native_market_contract")
+    payload = _rust_event_bytes("market", "emit_quote_event_fixture")
+
+    events = native.decode_events([payload, payload])
+    del payload
+
+    assert len(events) == 2
+    assert events[0].kind == "quote"
+    assert events[0].data.bid_price.value == Price("123.45").value
+    assert events[1].data.ask_price.value == Price("123.55").value
+
+
 def test_rust_capital_event_fixture_preserves_decimal_text_and_absence() -> None:
     event = _rust_event("capital", "emit_policy_event_fixture")
 
@@ -68,8 +83,9 @@ def test_rust_capital_event_fixture_preserves_decimal_text_and_absence() -> None
     assert event.launch_id == "launch"
     assert event.instance_id == "instance"
     assert event.payload.version == 7
-    assert event.payload.minimum == "10.25"
-    assert event.payload.default_target == "20.5"
+    assert event.payload.minimum.semantic_type == "quantity"
+    assert event.payload.minimum.value == Quantity("10.25").value
+    assert event.payload.default_target.value == Quantity("20.5").value
 
 
 def test_rust_execution_event_fixture_preserves_metadata_and_nested_values() -> None:
@@ -106,3 +122,40 @@ def test_rust_market_event_fixture_preserves_decimal_and_scope_values() -> None:
     assert event.data.bid_price.mantissa == 12345
     assert event.data.bid_price.scale == 2
     assert event.data.ask_price.mantissa == 12355
+    assert event.data.bid_price.semantic_type == "price"
+    assert isinstance(event.data.bid_price, PriceLike)
+    assert Price(event.data.bid_price) == Price("123.45")
+
+
+@pytest.mark.parametrize(
+    "owner", ("account", "capital", "execution", "market", "reference", "risk")
+)
+def test_owner_extensions_do_not_publish_generic_native_decimal(owner: str) -> None:
+    native = import_module(f"kairospy._native_{owner}_contract")
+
+    assert not hasattr(native, "NativeDecimal")
+    assert not hasattr(native, "_NativeSemanticDecimal")
+
+
+def test_native_market_values_preserve_distinct_semantics_without_rewrapping() -> None:
+    native = import_module("kairospy._native_market_contract")
+    event = native.MarketEvent.simulation_bar(
+        sequence=1,
+        market_id="market:test",
+        instrument_id="instrument:test",
+        provider="simulation",
+        bar_spec_id="1m",
+        open="10",
+        high="12",
+        low="9",
+        close="11",
+        volume="2.5",
+        occurred_at_unix_nanos=1,
+    )
+
+    assert event.data.close.semantic_type == "price"
+    assert isinstance(event.data.close, PriceLike)
+    assert event.data.volume.semantic_type == "quantity"
+    assert isinstance(event.data.volume, QuantityLike)
+    with pytest.raises(TypeError, match="cannot be constructed"):
+        Price(event.data.volume)

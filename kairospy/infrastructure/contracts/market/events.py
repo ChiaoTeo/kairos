@@ -1,5 +1,6 @@
 """Market events backed only by the owner native contract."""
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from kairospy.infrastructure.contracts._native import load_owner_contract
@@ -19,9 +20,13 @@ def decode_event(payload: bytes) -> MarketEvent:
     return _native().decode_event(payload)
 
 
+def decode_events(payloads: Sequence[bytes]) -> list[MarketEvent]:
+    return _native().decode_events(payloads)
+
+
 if not TYPE_CHECKING:
     MarketEvent = _native().MarketEvent
     MarketInvalidEventError = _native().MarketInvalidEventError
 
 
-__all__ = ["MarketEvent", "MarketInvalidEventError", "decode_event"]
+__all__ = ["MarketEvent", "MarketInvalidEventError", "decode_event", "decode_events"]

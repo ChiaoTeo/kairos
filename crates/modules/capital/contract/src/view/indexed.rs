@@ -170,9 +170,54 @@ impl CapitalIndexedView {
             rows: snapshot.rows,
         })
     }
+
+    pub fn map_snapshot<R>(
+        &self,
+        mut map: impl FnMut(&MetadataSnapshot, &str, CapitalIndexedRowRef<'_>) -> ContractResult<R>,
+    ) -> ContractResult<(MetadataSnapshot, BTreeMap<String, Vec<R>>)> {
+        let requests = DATABASES.map(|database| PrefixRequest {
+            database,
+            prefix: &ALL_VALUES_PREFIX,
+            limit: MAX_CAPITAL_INDEXED_VALUES_PER_DATABASE + 1,
+        });
+        let result = self
+            .reader
+            .try_map_snapshot(&requests, |metadata, database, key, bytes| {
+                let value = if database == CAPITAL_STATE_DATABASE {
+                    CapitalIndexedRowRef::State(decode_state(key, bytes, &self.group_id)?)
+                } else {
+                    CapitalIndexedRowRef::Entity(decode_entity(
+                        database,
+                        key,
+                        bytes,
+                        &self.group_id,
+                    )?)
+                };
+                map(metadata, database, value)
+            })
+            .map_err(|error| ContractError::Transport(error.to_string()))??;
+        if result.0.rebuild_state != kairos_indexed_view::RebuildState::Ready {
+            return Err(ContractError::Transport(
+                "Capital indexed current view is not ready".into(),
+            ));
+        }
+        ensure_bounded_row_counts(&result.1)?;
+        Ok(result)
+    }
 }
 
 fn ensure_bounded_rows(rows: &BTreeMap<String, Vec<(Vec<u8>, Vec<u8>)>>) -> ContractResult<()> {
+    for (database, values) in rows {
+        if values.len() > MAX_CAPITAL_INDEXED_VALUES_PER_DATABASE {
+            return Err(ContractError::Invalid(format!(
+                "Capital indexed database `{database}` exceeds its read bound"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_bounded_row_counts<R>(rows: &BTreeMap<String, Vec<R>>) -> ContractResult<()> {
     for (database, values) in rows {
         if values.len() > MAX_CAPITAL_INDEXED_VALUES_PER_DATABASE {
             return Err(ContractError::Invalid(format!(
@@ -200,6 +245,11 @@ pub enum CapitalIndexedEntity<'a> {
     Reservation(fb::CapitalReservation<'a>),
     Operation(fb::CapitalOperation<'a>),
     Alert(fb::CapitalAlert<'a>),
+}
+
+pub enum CapitalIndexedRowRef<'a> {
+    State(fb::CapitalStateCurrent<'a>),
+    Entity(CapitalIndexedEntity<'a>),
 }
 
 macro_rules! capital_entity_accessors {
@@ -267,25 +317,8 @@ impl CapitalIndexedSnapshot {
                 "Capital snapshot must contain one state".into(),
             ));
         }
-        let (_, bytes) = &rows[0];
-        if !kairos_protocol::flatbuffer::identifier_is_readable(bytes) {
-            return Err(ContractError::Invalid(
-                "truncated CSM3 CapitalStateCurrent FlatBuffers value".into(),
-            ));
-        }
-        if !fb::capital_state_current_buffer_has_identifier(bytes) {
-            return Err(ContractError::Invalid(
-                "expected CSM3 CapitalStateCurrent".into(),
-            ));
-        }
-        let value = fb::root_as_capital_state_current(bytes)
-            .map_err(|error| ContractError::Invalid(error.to_string()))?;
-        if value.capital_group_id() != self.group_id.as_str() {
-            return Err(ContractError::Invalid(
-                "Capital group identity mismatch".into(),
-            ));
-        }
-        Ok(value)
+        let (key, bytes) = &rows[0];
+        decode_state(key, bytes, &self.group_id)
     }
 
     pub fn entities(&self, database: &str) -> ContractResult<Vec<CapitalIndexedEntity<'_>>> {
@@ -298,113 +331,153 @@ impl CapitalIndexedSnapshot {
             .get(database)
             .into_iter()
             .flatten()
-            .map(|(key, bytes)| {
-                let value = match database {
-                    CAPITAL_OBJECTIVES_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_objective_current_buffer_has_identifier,
-                        root_as_capital_objective_current,
-                        Objective,
-                        "CFO3 CapitalObjectiveCurrent"
-                    ),
-                    CAPITAL_DEMANDS_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_demand_current_buffer_has_identifier,
-                        root_as_capital_demand_current,
-                        Demand,
-                        "CDM3 CapitalDemandCurrent"
-                    ),
-                    CAPITAL_POLICIES_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_policy_current_buffer_has_identifier,
-                        root_as_capital_policy_current,
-                        Policy,
-                        "CPC3 CapitalPolicyCurrent"
-                    ),
-                    CAPITAL_FACTS_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_facts_current_buffer_has_identifier,
-                        root_as_capital_facts_current,
-                        Facts,
-                        "CFC3 CapitalFactsCurrent"
-                    ),
-                    CAPITAL_AVAILABILITY_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_availability_current_buffer_has_identifier,
-                        root_as_capital_availability_current,
-                        Availability,
-                        "CAV3 CapitalAvailabilityCurrent"
-                    ),
-                    CAPITAL_ROUTES_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_route_current_buffer_has_identifier,
-                        root_as_capital_route_current,
-                        Route,
-                        "CRT3 CapitalRouteCurrent"
-                    ),
-                    CAPITAL_PLANS_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_plan_current_buffer_has_identifier,
-                        root_as_capital_plan_current,
-                        Plan,
-                        "CPL3 CapitalPlanCurrent"
-                    ),
-                    CAPITAL_RESERVATIONS_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_reservation_current_buffer_has_identifier,
-                        root_as_capital_reservation_current,
-                        Reservation,
-                        "CRS3 CapitalReservationCurrent"
-                    ),
-                    CAPITAL_OPERATIONS_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_operation_current_buffer_has_identifier,
-                        root_as_capital_operation_current,
-                        Operation,
-                        "COP3 CapitalOperationCurrent"
-                    ),
-                    CAPITAL_ALERTS_DATABASE => decode_capital_current!(
-                        bytes,
-                        self.group_id,
-                        capital_alert_current_buffer_has_identifier,
-                        root_as_capital_alert_current,
-                        Alert,
-                        "CAL3 CapitalAlertCurrent"
-                    ),
-                    _ => unreachable!("database checked above"),
-                };
-                let expected = match &value {
-                    CapitalIndexedEntity::Objective(value) => vec![value.objective_id()],
-                    CapitalIndexedEntity::Demand(value) => vec![value.demand_id()],
-                    CapitalIndexedEntity::Policy(value) => location_parts(value.destination()),
-                    CapitalIndexedEntity::Facts(value) => location_parts(value.destination()),
-                    CapitalIndexedEntity::Availability(value) => {
-                        location_parts(value.destination())
-                    },
-                    CapitalIndexedEntity::Route(value) => vec![value.route_id()],
-                    CapitalIndexedEntity::Plan(value) => vec![value.plan_id()],
-                    CapitalIndexedEntity::Reservation(value) => vec![value.reservation_id()],
-                    CapitalIndexedEntity::Operation(value) => vec![value.operation_id()],
-                    CapitalIndexedEntity::Alert(value) => vec![value.alert_id()],
-                };
-                if decode_key_components(key)? != expected {
-                    return Err(ContractError::Invalid(
-                        "Capital indexed key/value identity mismatch".into(),
-                    ));
-                }
-                Ok(value)
-            })
+            .map(|(key, bytes)| decode_entity(database, key, bytes, &self.group_id))
             .collect()
     }
+}
+
+fn decode_state<'a>(
+    key: &[u8],
+    bytes: &'a [u8],
+    group_id: &CapitalGroupId,
+) -> ContractResult<fb::CapitalStateCurrent<'a>> {
+    if !kairos_protocol::flatbuffer::identifier_is_readable(bytes) {
+        return Err(ContractError::Invalid(
+            "truncated CSM3 CapitalStateCurrent FlatBuffers value".into(),
+        ));
+    }
+    if !fb::capital_state_current_buffer_has_identifier(bytes) {
+        return Err(ContractError::Invalid(
+            "expected CSM3 CapitalStateCurrent".into(),
+        ));
+    }
+    let value = fb::root_as_capital_state_current(bytes)
+        .map_err(|error| ContractError::Invalid(error.to_string()))?;
+    if value.capital_group_id() != group_id.as_str() {
+        return Err(ContractError::Invalid(
+            "Capital group identity mismatch".into(),
+        ));
+    }
+    if decode_key_components(key)? != [value.capital_group_id()] {
+        return Err(ContractError::Invalid(
+            "Capital indexed key/value identity mismatch".into(),
+        ));
+    }
+    Ok(value)
+}
+
+fn decode_entity<'a>(
+    database: &str,
+    key: &[u8],
+    bytes: &'a [u8],
+    group_id: &CapitalGroupId,
+) -> ContractResult<CapitalIndexedEntity<'a>> {
+    if database == CAPITAL_STATE_DATABASE || !DATABASES.contains(&database) {
+        return Err(ContractError::Invalid(
+            "invalid Capital entity database".into(),
+        ));
+    }
+    let value = match database {
+        CAPITAL_OBJECTIVES_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_objective_current_buffer_has_identifier,
+            root_as_capital_objective_current,
+            Objective,
+            "CFO3 CapitalObjectiveCurrent"
+        ),
+        CAPITAL_DEMANDS_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_demand_current_buffer_has_identifier,
+            root_as_capital_demand_current,
+            Demand,
+            "CDM3 CapitalDemandCurrent"
+        ),
+        CAPITAL_POLICIES_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_policy_current_buffer_has_identifier,
+            root_as_capital_policy_current,
+            Policy,
+            "CPC3 CapitalPolicyCurrent"
+        ),
+        CAPITAL_FACTS_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_facts_current_buffer_has_identifier,
+            root_as_capital_facts_current,
+            Facts,
+            "CFC3 CapitalFactsCurrent"
+        ),
+        CAPITAL_AVAILABILITY_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_availability_current_buffer_has_identifier,
+            root_as_capital_availability_current,
+            Availability,
+            "CAV3 CapitalAvailabilityCurrent"
+        ),
+        CAPITAL_ROUTES_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_route_current_buffer_has_identifier,
+            root_as_capital_route_current,
+            Route,
+            "CRT3 CapitalRouteCurrent"
+        ),
+        CAPITAL_PLANS_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_plan_current_buffer_has_identifier,
+            root_as_capital_plan_current,
+            Plan,
+            "CPL3 CapitalPlanCurrent"
+        ),
+        CAPITAL_RESERVATIONS_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_reservation_current_buffer_has_identifier,
+            root_as_capital_reservation_current,
+            Reservation,
+            "CRS3 CapitalReservationCurrent"
+        ),
+        CAPITAL_OPERATIONS_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_operation_current_buffer_has_identifier,
+            root_as_capital_operation_current,
+            Operation,
+            "COP3 CapitalOperationCurrent"
+        ),
+        CAPITAL_ALERTS_DATABASE => decode_capital_current!(
+            bytes,
+            group_id,
+            capital_alert_current_buffer_has_identifier,
+            root_as_capital_alert_current,
+            Alert,
+            "CAL3 CapitalAlertCurrent"
+        ),
+        _ => unreachable!("database checked above"),
+    };
+    let expected = match &value {
+        CapitalIndexedEntity::Objective(value) => vec![value.objective_id()],
+        CapitalIndexedEntity::Demand(value) => vec![value.demand_id()],
+        CapitalIndexedEntity::Policy(value) => location_parts(value.destination()),
+        CapitalIndexedEntity::Facts(value) => location_parts(value.destination()),
+        CapitalIndexedEntity::Availability(value) => location_parts(value.destination()),
+        CapitalIndexedEntity::Route(value) => vec![value.route_id()],
+        CapitalIndexedEntity::Plan(value) => vec![value.plan_id()],
+        CapitalIndexedEntity::Reservation(value) => vec![value.reservation_id()],
+        CapitalIndexedEntity::Operation(value) => vec![value.operation_id()],
+        CapitalIndexedEntity::Alert(value) => vec![value.alert_id()],
+    };
+    if decode_key_components(key)? != expected {
+        return Err(ContractError::Invalid(
+            "Capital indexed key/value identity mismatch".into(),
+        ));
+    }
+    Ok(value)
 }
 
 fn location_parts(value: fb::FundingLocation<'_>) -> Vec<&str> {

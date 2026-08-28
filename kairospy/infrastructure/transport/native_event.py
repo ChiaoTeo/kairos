@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Generic, TypeVar
+from typing import Generic, Sequence, TypeVar
 
 from kairospy.infrastructure.protocol.generated_spec import DEFAULT_MAX_PAYLOAD_LEN
 from .native import native
@@ -23,6 +23,7 @@ class NativeEventSource(Generic[RecordT]):
         self,
         *,
         decoder: Callable[[bytes], RecordT],
+        batch_decoder: Callable[[Sequence[bytes]], Sequence[RecordT]] | None = None,
         aeron_dir: str | Path | None,
         channel: str,
         stream_id: int,
@@ -30,6 +31,7 @@ class NativeEventSource(Generic[RecordT]):
         queue_capacity: int = 1024,
     ) -> None:
         self._decoder = decoder
+        self._batch_decoder = batch_decoder
         self._aeron_dir = None if aeron_dir is None else str(aeron_dir)
         self._spec = native.StreamSpec(channel, stream_id, max_payload_len)
         self._queue_capacity = queue_capacity
@@ -61,8 +63,12 @@ class NativeEventSource(Generic[RecordT]):
         try:
             while True:
                 frames = await asyncio.to_thread(subscription.poll, 64, 10)
+                if self._batch_decoder is not None:
+                    for record in self._batch_decoder(frames):
+                        yield record
+                    continue
                 for payload in frames:
-                    yield self._decoder(bytes(payload))
+                    yield self._decoder(payload)
         except native.QueueOverflowError as error:
             await self.close()
             raise ResyncRequired("Aeron live queue overflowed") from error

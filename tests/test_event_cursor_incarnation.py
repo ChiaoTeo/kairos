@@ -75,6 +75,7 @@ def test_market_cursor_resets_after_producer_incarnation_change() -> None:
     asyncio.run(_collect(application.events()))
     assert application._event_cursor == 1
     assert application._event_cursor_key == ("market.events", "market.simulation", 2)
+    assert application.notification_health()["incarnation_change_count"] == 1
 
 
 def test_account_cursor_resyncs_each_account_after_actor_restart() -> None:
@@ -88,7 +89,8 @@ def test_account_cursor_resyncs_each_account_after_actor_restart() -> None:
     )
 
     assert len(asyncio.run(_collect(application._events()))) == 2
-    assert view.reads == 1
+    assert view.reads == 0
+    assert application.notification_health()["incarnation_change_count"] == 1
 
 
 def test_risk_cursor_resyncs_from_current_view_after_actor_restart() -> None:
@@ -104,7 +106,8 @@ def test_risk_cursor_resyncs_from_current_view_after_actor_restart() -> None:
 
     events = asyncio.run(_collect(application.events()))
     assert len(events) == 1
-    assert view.reads == 1
+    assert view.reads == 0
+    assert application.notification_health()["incarnation_change_count"] == 1
 
 
 def test_execution_cursor_resyncs_from_current_view_after_actor_restart() -> None:
@@ -135,4 +138,62 @@ def test_execution_cursor_resyncs_from_current_view_after_actor_restart() -> Non
 
     asyncio.run(_collect(application.events()))
     assert application.health()["processing_event_cursor"] == 1
-    assert application.health()["event_recovery_count"] == 1
+    assert application.health()["notification_incarnation_change_count"] == 1
+
+
+def test_live_notification_gaps_are_observable_but_not_replay_failures() -> None:
+    market = MarketApplication(
+        None,
+        None,
+        _Events(
+            MarketEvent.simulation_bar(
+                sequence=4,
+                market_id="market:test",
+                instrument_id="instrument:test:BTCUSD",
+                provider="simulation",
+                bar_spec_id="1m",
+                open="1",
+                high="1",
+                low="1",
+                close="1",
+                occurred_at_unix_nanos=4,
+            ),
+            MarketEvent.simulation_bar(
+                sequence=6,
+                market_id="market:test",
+                instrument_id="instrument:test:BTCUSD",
+                provider="simulation",
+                bar_spec_id="1m",
+                open="2",
+                high="2",
+                low="2",
+                close="2",
+                occurred_at_unix_nanos=6,
+            ),
+        ),
+        strategy_id="strategy",
+        instance_id="instance",
+    )
+    account = AccountApplication(
+        {AccountId("main"): _SnapshotView()},
+        _Events(
+            AccountEvent.simulation_status("main", "spot", 4),
+            AccountEvent.simulation_status("main", "spot", 6),
+        ),
+    )
+    risk = RiskApplication(
+        _SnapshotView(),
+        _Events(
+            RiskEvent.reservation_changed(4, "main", "strategy"),
+            RiskEvent.reservation_changed(6, "main", "strategy"),
+        ),
+        account_ids=(AccountId("main"),),
+        strategy_id="strategy",
+    )
+
+    assert len(asyncio.run(_collect(market.events()))) == 2
+    assert len(asyncio.run(_collect(account._events()))) == 2
+    assert len(asyncio.run(_collect(risk.events()))) == 2
+    assert market.notification_health()["gap_count"] == 1
+    assert account.notification_health()["gap_count"] == 1
+    assert risk.notification_health()["gap_count"] == 1

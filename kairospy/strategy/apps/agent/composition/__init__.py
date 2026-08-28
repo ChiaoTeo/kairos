@@ -333,13 +333,14 @@ def _exposure_classifier(account: AccountApplication):
         ):
             return "unknown"
         position = segment.position(InstrumentId(request.instrument_id))
-        current = 0 if position is None else position.quantity
-        if current == request.quantity:
+        current = 0 if position is None else position.quantity.value
+        target = request.quantity.value
+        if current == target:
             return "neutral"
-        if request.quantity == 0:
+        if target == 0:
             return "reduce" if current != 0 else "neutral"
-        if current != 0 and (current > 0) == (request.quantity > 0):
-            return "reduce" if abs(request.quantity) < abs(current) else "increase"
+        if current != 0 and (current > 0) == (target > 0):
+            return "reduce" if abs(target) < abs(current) else "increase"
         return "increase"
 
     return classify

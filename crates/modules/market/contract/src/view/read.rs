@@ -1,5 +1,5 @@
 use kairos_indexed_view::{MetadataSnapshot, RebuildState};
-use kairos_primitives::decimal::{DecimalParts, Price, Quantity};
+use kairos_primitives::decimal::{DecimalParts, Price, PriceDelta, Quantity};
 use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::time::{Sequence, UnixNanos};
@@ -125,7 +125,7 @@ pub struct MarketTicker24hCurrent {
     pub low_price: Option<Price>,
     pub volume_base: Option<Quantity>,
     pub volume_quote: Option<DecimalParts>,
-    pub price_change_abs: Option<Price>,
+    pub price_change_abs: Option<PriceDelta>,
     pub price_change_pct: Option<DecimalParts>,
     pub vwap: Option<Price>,
     pub mark_price: Option<Price>,
@@ -755,7 +755,7 @@ fn ticker_current(
         low_price: v.low_price().map(price).transpose()?,
         volume_base: v.volume_base().map(quantity).transpose()?,
         volume_quote: v.volume_quote().map(parts).transpose()?,
-        price_change_abs: v.price_change_abs().map(price).transpose()?,
+        price_change_abs: v.price_change_abs().map(price_delta).transpose()?,
         price_change_pct: v.price_change_pct().map(parts).transpose()?,
         vwap: v.vwap().map(price).transpose()?,
         mark_price: v.mark_price().map(price).transpose()?,
@@ -921,6 +921,11 @@ fn instrument(value: &str) -> ContractResult<InstrumentId> {
 
 fn price(value: &Decimal64) -> ContractResult<Price> {
     Price::new(value.mantissa(), value.scale())
+        .map_err(|error| ContractError::Invalid(error.to_string()))
+}
+
+fn price_delta(value: &Decimal64) -> ContractResult<PriceDelta> {
+    PriceDelta::new(value.mantissa(), value.scale())
         .map_err(|error| ContractError::Invalid(error.to_string()))
 }
 

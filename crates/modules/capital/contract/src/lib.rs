@@ -46,9 +46,9 @@ pub use view::{
     CAPITAL_FACTS_DATABASE, CAPITAL_MAP_SIZE, CAPITAL_OBJECTIVES_DATABASE,
     CAPITAL_OPERATIONS_DATABASE, CAPITAL_PLANS_DATABASE, CAPITAL_POLICIES_DATABASE,
     CAPITAL_RESERVATIONS_DATABASE, CAPITAL_RESOURCE_EPOCH, CAPITAL_ROUTES_DATABASE,
-    CAPITAL_STATE_DATABASE, CapitalIndexedEntity, CapitalIndexedSnapshot, CapitalIndexedView,
-    capital_indexed_environment_path, capital_indexed_identity, capital_indexed_key,
-    capital_indexed_schema_set, encode_indexed_current, location_key,
+    CAPITAL_STATE_DATABASE, CapitalIndexedEntity, CapitalIndexedRowRef, CapitalIndexedSnapshot,
+    CapitalIndexedView, capital_indexed_environment_path, capital_indexed_identity,
+    capital_indexed_key, capital_indexed_schema_set, encode_indexed_current, location_key,
 };
 
 /// Unified public entry point for the Capital contract.

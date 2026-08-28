@@ -29,7 +29,7 @@ OWNER_NATIVE_MODULES = {
 OWNER_FACADE_FILES = frozenset({"__init__.py", "events.py", "types.py", "view.py"})
 OWNER_FACADE_FUNCTIONS = {
     "__init__.py": frozenset({"__getattr__"}),
-    "events.py": frozenset({"_native", "decode_event"}),
+    "events.py": frozenset({"_native", "decode_event", "decode_events"}),
     "types.py": frozenset({"_native"}),
     "view.py": frozenset(),
 }

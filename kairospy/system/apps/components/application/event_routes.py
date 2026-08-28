@@ -182,6 +182,11 @@ def _ensure_route(
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
             return existing
 
+        if lease is not None:
+            raise RuntimeError(
+                "event route record is missing while its owner runtime is active"
+            )
+
         port = _allocate_port(leases)
         route = EventTransportRoute(
             route_id=route_id,
@@ -233,8 +238,37 @@ def _load_mapping(path: Path) -> dict[str, dict[str, object]]:
 def _discard_missing_route_files(leases: dict[str, dict[str, object]]) -> None:
     for key, value in list(leases.items()):
         route_file = value.get("route_file")
-        if not isinstance(route_file, str) or not Path(route_file).is_file():
+        if not isinstance(route_file, str):
+            raise RuntimeError("event route lease route_file must be a path")
+        path = Path(route_file)
+        if path.is_file():
+            continue
+        runtime_root = path.parents[2] if len(path.parents) >= 3 else None
+        if runtime_root is None or not _runtime_has_held_process_lock(runtime_root):
             leases.pop(key, None)
+
+
+def _runtime_has_held_process_lock(runtime_root: Path) -> bool:
+    """Confirm that a missing route record is not owned by a live process."""
+
+    if not runtime_root.is_dir():
+        return False
+    for lock_path in runtime_root.rglob("process.lock"):
+        try:
+            with lock_path.open("a+") as stream:
+                try:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return True
+                finally:
+                    try:
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+        except OSError:
+            # An unreadable lock cannot prove that the owner stopped.
+            return True
+    return False
 
 
 def _reject_port_conflict(

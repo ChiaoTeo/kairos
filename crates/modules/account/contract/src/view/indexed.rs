@@ -161,6 +161,51 @@ impl AccountIndexedView {
         })
     }
 
+    pub fn map_snapshot<R>(
+        &self,
+        mut map: impl FnMut(
+            &MetadataSnapshot,
+            &str,
+            AccountIndexedViewValueRef<'_>,
+        ) -> ContractResult<R>,
+    ) -> ContractResult<(MetadataSnapshot, BTreeMap<String, Vec<R>>)> {
+        let databases = [
+            ACCOUNT_SEGMENTS_DATABASE,
+            ACCOUNT_BALANCES_DATABASE,
+            ACCOUNT_COLLATERAL_DATABASE,
+            ACCOUNT_POSITIONS_DATABASE,
+            ACCOUNT_VALUATIONS_DATABASE,
+            ACCOUNT_EARN_HOLDINGS_DATABASE,
+            ACCOUNT_OBSERVED_ORDERS_DATABASE,
+        ];
+        let requests = databases.map(|database| PrefixRequest {
+            database,
+            prefix: &ALL_VALUES_PREFIX,
+            limit: MAX_ACCOUNT_INDEXED_VALUES_PER_DATABASE + 1,
+        });
+        let result = self
+            .reader
+            .try_map_snapshot(&requests, |metadata, database, key, bytes| {
+                map(
+                    metadata,
+                    database,
+                    AccountIndexedViewValueRef {
+                        account_id: &self.account_id,
+                        key,
+                        bytes,
+                    },
+                )
+            })
+            .map_err(|error| ContractError::Transport(error.to_string()))??;
+        if result.0.rebuild_state != kairos_indexed_view::RebuildState::Ready {
+            return Err(ContractError::Transport(
+                "Account indexed current view is not ready".into(),
+            ));
+        }
+        ensure_bounded_row_counts(&result.1)?;
+        Ok(result)
+    }
+
     pub fn segments(&self) -> ContractResult<Vec<AccountIndexedViewValue>> {
         self.values(ACCOUNT_SEGMENTS_DATABASE)
     }
@@ -216,6 +261,17 @@ impl AccountIndexedView {
 }
 
 fn ensure_bounded_rows(rows: &BTreeMap<String, Vec<(Vec<u8>, Vec<u8>)>>) -> ContractResult<()> {
+    for (database, values) in rows {
+        if values.len() > MAX_ACCOUNT_INDEXED_VALUES_PER_DATABASE {
+            return Err(ContractError::Invalid(format!(
+                "Account indexed database `{database}` exceeds its read bound"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_bounded_row_counts<T>(rows: &BTreeMap<String, Vec<T>>) -> ContractResult<()> {
     for (database, values) in rows {
         if values.len() > MAX_ACCOUNT_INDEXED_VALUES_PER_DATABASE {
             return Err(ContractError::Invalid(format!(
@@ -283,6 +339,131 @@ pub struct AccountIndexedViewValue {
     account_id: AccountId,
     key: Vec<u8>,
     bytes: Vec<u8>,
+}
+
+pub struct AccountIndexedViewValueRef<'a> {
+    account_id: &'a AccountId,
+    key: &'a [u8],
+    bytes: &'a [u8],
+}
+
+impl<'a> AccountIndexedViewValueRef<'a> {
+    pub fn key_components(&self) -> ContractResult<Vec<&'a str>> {
+        decode_key_components(self.key)
+    }
+
+    pub fn segment(&self) -> ContractResult<fb::AccountSegmentCurrent<'a>> {
+        let value = decode(
+            self.bytes,
+            fb::account_segment_current_buffer_has_identifier,
+            fb::root_as_account_segment_current,
+            "ASG3 AccountSegmentCurrent",
+        )?;
+        self.validate(&[value.state().segment_key()], value.account_id())?;
+        Ok(value)
+    }
+
+    pub fn balance(&self) -> ContractResult<fb::AccountBalanceCurrent<'a>> {
+        let value = decode(
+            self.bytes,
+            fb::account_balance_current_buffer_has_identifier,
+            fb::root_as_account_balance_current,
+            "ABA3 AccountBalanceCurrent",
+        )?;
+        self.validate(
+            &[value.segment_key(), value.balance().asset_id()],
+            value.account_id(),
+        )?;
+        Ok(value)
+    }
+
+    pub fn collateral(&self) -> ContractResult<fb::AccountCollateralCurrent<'a>> {
+        let value = decode(
+            self.bytes,
+            fb::account_collateral_current_buffer_has_identifier,
+            fb::root_as_account_collateral_current,
+            "ACO3 AccountCollateralCurrent",
+        )?;
+        self.validate(
+            &[value.segment_key(), value.balance().asset_id()],
+            value.account_id(),
+        )?;
+        Ok(value)
+    }
+
+    pub fn position(&self) -> ContractResult<fb::AccountPositionCurrent<'a>> {
+        let value = decode(
+            self.bytes,
+            fb::account_position_current_buffer_has_identifier,
+            fb::root_as_account_position_current,
+            "APO3 AccountPositionCurrent",
+        )?;
+        self.validate(
+            &[
+                value.segment_key(),
+                value.position().instrument_id(),
+                value
+                    .position()
+                    .position_side()
+                    .variant_name()
+                    .unwrap_or("UNSPECIFIED"),
+            ],
+            value.account_id(),
+        )?;
+        Ok(value)
+    }
+
+    pub fn valuation(&self) -> ContractResult<fb::AccountValuationCurrent<'a>> {
+        let value = decode(
+            self.bytes,
+            fb::account_valuation_current_buffer_has_identifier,
+            fb::root_as_account_valuation_current,
+            "AVL3 AccountValuationCurrent",
+        )?;
+        self.validate(&[value.segment_key()], value.account_id())?;
+        Ok(value)
+    }
+
+    pub fn earn_holding(&self) -> ContractResult<fb::AccountEarnHoldingCurrent<'a>> {
+        let value = decode(
+            self.bytes,
+            fb::account_earn_holding_current_buffer_has_identifier,
+            fb::root_as_account_earn_holding_current,
+            "AEH3 AccountEarnHoldingCurrent",
+        )?;
+        self.validate(
+            &[value.segment_key(), value.holding().holding_key()],
+            value.account_id(),
+        )?;
+        Ok(value)
+    }
+
+    pub fn observed_order(&self) -> ContractResult<fb::AccountObservedOrderCurrent<'a>> {
+        let value = decode(
+            self.bytes,
+            fb::account_observed_order_current_buffer_has_identifier,
+            fb::root_as_account_observed_order_current,
+            "AOO3 AccountObservedOrderCurrent",
+        )?;
+        self.validate(
+            &[
+                value.segment_key(),
+                value.order().source_id(),
+                value.order().observation_id(),
+            ],
+            value.account_id(),
+        )?;
+        Ok(value)
+    }
+
+    fn validate(&self, expected_parts: &[&str], account_id: &str) -> ContractResult<()> {
+        if account_id != self.account_id.as_str() || self.key_components()? != expected_parts {
+            return Err(ContractError::Invalid(
+                "Account indexed key/value semantic identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl AccountIndexedViewValue {

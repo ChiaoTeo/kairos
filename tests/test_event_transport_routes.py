@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 from pathlib import Path
 
@@ -192,3 +193,24 @@ def test_persisted_route_identity_mismatch_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="does not belong"):
         ensure_instance_event_route(instance)
+
+
+def test_missing_route_is_not_reallocated_while_owner_lock_is_held(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "w", workspace_id="active")
+    instance = workspace.instance("paper", "launch", "one")
+    ensure_instance_event_route(instance)
+    route_file = instance.paths.child("run", "transport", "instance-route.json")
+    process_lock = instance.paths.process_lock("risk")
+    process_lock.parent.mkdir(parents=True, exist_ok=True)
+
+    with process_lock.open("a+") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        route_file.unlink()
+        with pytest.raises(RuntimeError, match="owner runtime is active"):
+            ensure_instance_event_route(instance)
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+    replacement = ensure_instance_event_route(instance)
+    assert replacement.instance_id == "one"

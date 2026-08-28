@@ -137,6 +137,52 @@ impl RiskIndexedView {
             rows: snapshot.rows,
         })
     }
+
+    pub fn map_snapshot<R>(
+        &self,
+        mut map: impl FnMut(&MetadataSnapshot, &str, RiskIndexedViewValueRef<'_>) -> ContractResult<R>,
+    ) -> ContractResult<(MetadataSnapshot, BTreeMap<String, Vec<R>>)> {
+        let databases = [
+            RISK_STATE_DATABASE,
+            RISK_POLICIES_DATABASE,
+            RISK_LIMIT_USAGE_DATABASE,
+            RISK_ALLOCATIONS_DATABASE,
+            RISK_RESERVATIONS_DATABASE,
+            RISK_CIRCUITS_DATABASE,
+        ];
+        let requests = databases.map(|database| PrefixRequest {
+            database,
+            prefix: &ALL_VALUES_PREFIX,
+            limit: MAX_RISK_INDEXED_VALUES_PER_DATABASE + 1,
+        });
+        let result = self
+            .reader
+            .try_map_snapshot(&requests, |metadata, database, key, bytes| {
+                map(
+                    metadata,
+                    database,
+                    RiskIndexedViewValueRef {
+                        actor_id: &self.actor_id,
+                        key,
+                        bytes,
+                    },
+                )
+            })
+            .map_err(|error| ContractError::Transport(error.to_string()))??;
+        if result.0.rebuild_state != kairos_indexed_view::RebuildState::Ready {
+            return Err(ContractError::Transport(
+                "Risk indexed current view is not ready".into(),
+            ));
+        }
+        for (database, rows) in &result.1 {
+            if rows.len() > MAX_RISK_INDEXED_VALUES_PER_DATABASE {
+                return Err(ContractError::Invalid(format!(
+                    "Risk indexed database `{database}` exceeds its read bound"
+                )));
+            }
+        }
+        Ok(result)
+    }
 }
 
 fn ensure_bounded_rows(rows: &BTreeMap<String, Vec<(Vec<u8>, Vec<u8>)>>) -> ContractResult<()> {
@@ -227,6 +273,93 @@ pub struct RiskIndexedViewValue {
     actor_id: ActorId,
     key: Vec<u8>,
     bytes: Vec<u8>,
+}
+
+pub struct RiskIndexedViewValueRef<'a> {
+    actor_id: &'a ActorId,
+    key: &'a [u8],
+    bytes: &'a [u8],
+}
+
+macro_rules! risk_ref_accessor {
+    ($method:ident, $root:ty, $identifier:ident, $decode:ident, $label:literal, $parts:expr) => {
+        pub fn $method(&self) -> ContractResult<$root> {
+            let value = decode(self.bytes, fb::$identifier, fb::$decode, $label)?;
+            self.validate(&($parts)(&value), value.actor_id())?;
+            Ok(value)
+        }
+    };
+}
+
+impl<'a> RiskIndexedViewValueRef<'a> {
+    risk_ref_accessor!(
+        state,
+        fb::RiskStateCurrent<'a>,
+        risk_state_current_buffer_has_identifier,
+        root_as_risk_state_current,
+        "RSM3 RiskStateCurrent",
+        |value: &fb::RiskStateCurrent<'a>| vec![value.actor_id()]
+    );
+    risk_ref_accessor!(
+        policy,
+        fb::RiskPolicyCurrent<'a>,
+        risk_policy_current_buffer_has_identifier,
+        root_as_risk_policy_current,
+        "RPO3 RiskPolicyCurrent",
+        |value: &fb::RiskPolicyCurrent<'a>| vec![value.policy().policy_id()]
+    );
+    risk_ref_accessor!(
+        limit_usage,
+        fb::RiskLimitUsageCurrent<'a>,
+        risk_limit_usage_current_buffer_has_identifier,
+        root_as_risk_limit_usage_current,
+        "RLU3 RiskLimitUsageCurrent",
+        |value: &fb::RiskLimitUsageCurrent<'a>| vec![value.policy_id()]
+    );
+    risk_ref_accessor!(
+        reservation,
+        fb::RiskReservationCurrent<'a>,
+        risk_reservation_current_buffer_has_identifier,
+        root_as_risk_reservation_current,
+        "RRS3 RiskReservationCurrent",
+        |value: &fb::RiskReservationCurrent<'a>| vec![value.reservation().reservation_id()]
+    );
+    risk_ref_accessor!(
+        circuit,
+        fb::RiskCircuitCurrent<'a>,
+        risk_circuit_current_buffer_has_identifier,
+        root_as_risk_circuit_current,
+        "RCI3 RiskCircuitCurrent",
+        |value: &fb::RiskCircuitCurrent<'a>| vec![value.circuit_key()]
+    );
+
+    pub fn allocation(&self) -> ContractResult<fb::RiskAllocationCurrent<'a>> {
+        let value = decode(
+            self.bytes,
+            fb::risk_allocation_current_buffer_has_identifier,
+            fb::root_as_risk_allocation_current,
+            "RAL3 RiskAllocationCurrent",
+        )?;
+        let allocation = value.allocation();
+        self.validate(
+            &[
+                value.reservation_id(),
+                allocation.policy_id(),
+                allocation.metric().variant_name().unwrap_or("UNSPECIFIED"),
+            ],
+            value.actor_id(),
+        )?;
+        Ok(value)
+    }
+
+    fn validate(&self, parts: &[&str], actor_id: &str) -> ContractResult<()> {
+        if actor_id != self.actor_id.as_str() || decode_key_components(self.key)? != parts {
+            return Err(ContractError::Invalid(
+                "Risk indexed key/value identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl RiskIndexedViewValue {
