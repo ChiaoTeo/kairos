@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
-from decimal import Decimal
-from typing import cast
+from collections import deque
+from dataclasses import dataclass, field
 
 from kairospy.investment.apps.account.application import (
     AccountApplication,
@@ -10,9 +9,12 @@ from kairospy.investment.apps.account.application import (
     PositionSide,
     SegmentCompleteness,
 )
-from kairospy.infrastructure.contracts.account.events import AccountEvent
-from kairospy.infrastructure.contracts.market.events import MarketEvent
+from kairospy.contracts.account.events import AccountEvent
+from kairospy.contracts.market.events import MarketEvent
 from kairospy.investment.apps.reference.application import InstrumentRef
+from kairospy.primitives.decimal import Money, Quantity, SignedQuantity
+from kairospy.primitives.reference import AssetId
+from kairospy.primitives.time import Generation, Sequence, UnixNanos
 
 from .models import (
     AccountWatermark,
@@ -26,6 +28,25 @@ from .models import (
     SegmentWatermark,
     ValuationWatermark,
 )
+
+
+@dataclass(slots=True)
+class _CashAccumulator:
+    total: Quantity = field(default_factory=lambda: Quantity(0))
+    available: Quantity = field(default_factory=lambda: Quantity(0))
+    reserved: Quantity = field(default_factory=lambda: Quantity(0))
+
+
+@dataclass(slots=True)
+class _HoldingAccumulator:
+    instrument: InstrumentRef
+    net: SignedQuantity = field(default_factory=lambda: SignedQuantity(0))
+    long: Quantity = field(default_factory=lambda: Quantity(0))
+    short: Quantity = field(default_factory=lambda: Quantity(0))
+    market_values: list[Money] = field(default_factory=list)
+    pnls: list[Money] = field(default_factory=list)
+    missing_market_value: bool = False
+    missing_pnl: bool = False
 
 
 class PortfolioApplication:
@@ -80,24 +101,27 @@ class PortfolioApplication:
         return snapshot
 
     def rebuild(
-        self, *, observed_at_unix_nanos: int | None = None
+        self, *, observed_at_unix_nanos: UnixNanos | int | None = None
     ) -> PortfolioSnapshot:
+        observed_at = (
+            None
+            if observed_at_unix_nanos is None
+            else UnixNanos(observed_at_unix_nanos)
+        )
         accounts = self._account.snapshot().accounts
         self._version += 1
         if not accounts:
             self._snapshot = self._empty_snapshot(version=self._version)
             return self._snapshot
 
-        cash: dict[str, list[Decimal]] = defaultdict(
-            lambda: [Decimal("0"), Decimal("0"), Decimal("0")]
-        )
-        holdings: dict[str, dict[str, object]] = {}
+        cash: dict[AssetId, _CashAccumulator] = {}
+        holdings: dict[str, _HoldingAccumulator] = {}
         equities: list[PortfolioEquity] = []
         earn_holdings: list[PortfolioEarnHolding] = []
         account_watermarks: list[AccountWatermark] = []
         all_fresh = True
         all_complete = True
-        latest_observation = observed_at_unix_nanos
+        latest_observation = observed_at
 
         for account in accounts:
             segment_watermarks: list[SegmentWatermark] = []
@@ -112,15 +136,20 @@ class PortfolioApplication:
                     segment.last_success_at_unix_nanos,
                 ):
                     if candidate is not None:
+                        candidate_time = UnixNanos(candidate)
                         latest_observation = max(
-                            latest_observation or candidate, candidate
+                            latest_observation or candidate_time, candidate_time
                         )
                 segment_watermarks.append(
                     SegmentWatermark(
                         segment.segment_key,
-                        segment.generation,
-                        segment.snapshot_watermark,
-                        segment.event_watermark,
+                        Generation(segment.generation),
+                        None
+                        if segment.snapshot_watermark is None
+                        else Sequence(segment.snapshot_watermark),
+                        None
+                        if segment.event_watermark is None
+                        else Sequence(segment.event_watermark),
                         segment.freshness,
                         segment.completeness,
                     )
@@ -129,99 +158,90 @@ class PortfolioApplication:
                     PortfolioEquity(
                         account.account_id,
                         segment.segment_key,
-                        None if segment.equity is None else segment.equity.value,
+                        None if segment.equity is None else Money(segment.equity),
                     )
                 )
                 for balance in segment.balances:
-                    totals = cash[balance.asset]
-                    totals[0] += balance.total.value
-                    totals[1] += balance.available.value
-                    totals[2] += balance.reserved.value
+                    asset = (
+                        balance.asset
+                        if isinstance(balance.asset, AssetId)
+                        else AssetId(str(balance.asset))
+                    )
+                    totals = cash.setdefault(asset, _CashAccumulator())
+                    totals.total = totals.total + Quantity(balance.total)
+                    totals.available = totals.available + Quantity(balance.available)
+                    totals.reserved = totals.reserved + Quantity(balance.reserved)
                 earn_holdings.extend(
                     PortfolioEarnHolding(
                         account.account_id,
                         segment.segment_key,
                         holding.holding_key,
                         holding.product_id,
-                        holding.asset,
-                        holding.principal.value,
-                        None if holding.redeemable is None else holding.redeemable.value,
+                        holding.asset
+                        if isinstance(holding.asset, AssetId)
+                        else AssetId(str(holding.asset)),
+                        Quantity(holding.principal),
+                        None
+                        if holding.redeemable is None
+                        else Quantity(holding.redeemable),
                         holding.state,
                         holding.liquidity,
-                        holding.observed_at_unix_nanos,
+                        None
+                        if holding.observed_at_unix_nanos is None
+                        else UnixNanos(holding.observed_at_unix_nanos),
                     )
                     for holding in segment.earn_holdings
                 )
                 for position in segment.positions:
                     key = str(position.instrument.id)
-                    value = holdings.setdefault(
-                        key,
-                        {
-                            "instrument": position.instrument,
-                            "net": Decimal("0"),
-                            "long": Decimal("0"),
-                            "short": Decimal("0"),
-                            "market_values": [],
-                            "pnls": [],
-                            "missing_market_value": False,
-                            "missing_pnl": False,
-                        },
-                    )
-                    signed_quantity = position.quantity.value
-                    quantity = abs(signed_quantity)
+                    value = holdings.setdefault(key, _HoldingAccumulator(position.instrument))
+                    signed_quantity = SignedQuantity(position.quantity)
+                    quantity = Quantity(abs(signed_quantity.value))
                     if position.position_side is PositionSide.SHORT:
-                        value["short"] = cast(Decimal, value["short"]) + quantity
-                        value["net"] = cast(Decimal, value["net"]) - quantity
+                        value.short = value.short + quantity
+                        value.net = value.net - SignedQuantity(quantity.value)
                     elif position.position_side is PositionSide.LONG:
-                        value["long"] = cast(Decimal, value["long"]) + quantity
-                        value["net"] = cast(Decimal, value["net"]) + quantity
+                        value.long = value.long + quantity
+                        value.net = value.net + SignedQuantity(quantity.value)
                     else:
-                        value["net"] = cast(Decimal, value["net"]) + signed_quantity
-                        if signed_quantity >= 0:
-                            value["long"] = (
-                                cast(Decimal, value["long"]) + signed_quantity
-                            )
+                        value.net = value.net + signed_quantity
+                        if signed_quantity.value >= 0:
+                            value.long = value.long + Quantity(signed_quantity.value)
                         else:
-                            value["short"] = cast(Decimal, value["short"]) + abs(
-                                signed_quantity
-                            )
+                            value.short = value.short + Quantity(abs(signed_quantity.value))
                     if position.market_value is None:
-                        value["missing_market_value"] = True
+                        value.missing_market_value = True
                     else:
-                        cast(list[Decimal], value["market_values"]).append(
-                            position.market_value.value
-                        )
+                        value.market_values.append(Money(position.market_value))
                     if position.unrealized_pnl is None:
-                        value["missing_pnl"] = True
+                        value.missing_pnl = True
                     else:
-                        cast(list[Decimal], value["pnls"]).append(
-                            position.unrealized_pnl.value
-                        )
+                        value.pnls.append(Money(position.unrealized_pnl))
             account_watermarks.append(
                 AccountWatermark(
                     account.account_id,
-                    account.generation,
-                    account.event_sequence,
+                    Generation(account.generation),
+                    Sequence(account.event_sequence),
                     tuple(segment_watermarks),
                 )
             )
 
         cash_values = tuple(
-            PortfolioCash(asset, values[0], values[1], values[2])
-            for asset, values in sorted(cash.items())
+            PortfolioCash(asset, values.total, values.available, values.reserved)
+            for asset, values in sorted(cash.items(), key=lambda item: str(item[0]))
         )
         holding_values = tuple(
             PortfolioHolding(
-                cast("InstrumentRef", value["instrument"]),
-                cast(Decimal, value["net"]),
-                cast(Decimal, value["long"]),
-                cast(Decimal, value["short"]),
+                value.instrument,
+                value.net,
+                value.long,
+                value.short,
                 None
-                if value["missing_market_value"]
-                else sum(cast(list[Decimal], value["market_values"]), Decimal("0")),
+                if value.missing_market_value
+                else _sum_money(value.market_values),
                 None
-                if value["missing_pnl"]
-                else sum(cast(list[Decimal], value["pnls"]), Decimal("0")),
+                if value.missing_pnl
+                else _sum_money(value.pnls),
             )
             for _, value in sorted(holdings.items())
         )
@@ -231,13 +251,13 @@ class PortfolioApplication:
             if value.unrealized_pnl is not None
         ]
         unrealized_pnl = (
-            sum(pnl_values, Decimal("0"))
+            _sum_money(pnl_values)
             if len(pnl_values) == len(holding_values)
             else None
         )
         equity_values = [value.equity for value in equities if value.equity is not None]
         nav = (
-            sum(equity_values, Decimal("0"))
+            _sum_money(equity_values)
             if self._valuation_asset is not None and len(equity_values) == len(equities)
             else None
         )
@@ -289,8 +309,8 @@ class PortfolioApplication:
         if isinstance(event, MarketEvent):
             self._valuation_watermark = ValuationWatermark(
                 event.metadata.stream_id,
-                event.metadata.sequence,
-                event.metadata.occurred_at_unix_nanos,
+                Sequence(event.metadata.sequence),
+                UnixNanos(event.metadata.occurred_at_unix_nanos),
             )
             return self.rebuild(
                 observed_at_unix_nanos=event.metadata.occurred_at_unix_nanos
@@ -298,13 +318,17 @@ class PortfolioApplication:
         return self._snapshot
 
     def record_account_mark(
-        self, account_snapshot: object, *, observed_at_unix_nanos: int
+        self,
+        account_snapshot: object,
+        *,
+        observed_at_unix_nanos: UnixNanos | int,
     ) -> PortfolioSnapshot:
-        snapshot = self.rebuild(observed_at_unix_nanos=observed_at_unix_nanos)
-        self._history.append(PortfolioHistoryPoint(observed_at_unix_nanos, snapshot))
+        observed_at = UnixNanos(observed_at_unix_nanos)
+        snapshot = self.rebuild(observed_at_unix_nanos=observed_at)
+        self._history.append(PortfolioHistoryPoint(observed_at, snapshot))
         self._legacy_equity_curve.append(
             {
-                "observed_at_unix_nanos": observed_at_unix_nanos,
+                "observed_at_unix_nanos": observed_at,
                 "snapshot": account_snapshot,
             }
         )
@@ -320,10 +344,17 @@ class PortfolioApplication:
             holdings_by_instrument=(),
             equity_by_location=(),
             earn_holdings=(),
-            nav=Decimal("0") if self._valuation_asset is not None else None,
+            nav=Money(0) if self._valuation_asset is not None else None,
             realized_pnl=None,
-            unrealized_pnl=Decimal("0"),
+            unrealized_pnl=Money(0),
             freshness=PortfolioFreshness.EMPTY,
             complete=True,
             observed_at_unix_nanos=None,
         )
+
+
+def _sum_money(values: list[Money]) -> Money:
+    result = Money(0)
+    for value in values:
+        result = result + value
+    return result

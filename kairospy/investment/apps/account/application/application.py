@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable, Mapping
 
-from kairospy.infrastructure.contracts.account.events import (
-    AccountEvent as NativeAccountEvent,
+from kairospy.contracts.account.events import AccountEventVariant
+from kairospy.contracts.account.types import (
+    AccountCurrentSnapshot,
+    AccountCurrentView,
 )
+from kairospy.infrastructure.protocol import LiveEventSource
 from kairospy.primitives.account import AccountId
 
 from .errors import AccountNotEnabledError
@@ -17,10 +19,6 @@ from .models import (
     SegmentSyncLifecycle,
 )
 
-if TYPE_CHECKING:
-    from kairospy.strategy.api.account import AccountEvent
-
-
 class AccountApplication:
     """Typed read-only Account access scoped to one Strategy launch.
 
@@ -30,8 +28,8 @@ class AccountApplication:
 
     def __init__(
         self,
-        current_views: Mapping[AccountId, Any],
-        event_source: Any | None = None,
+        current_views: Mapping[AccountId, AccountCurrentView],
+        event_source: LiveEventSource[AccountEventVariant] | None = None,
         *,
         launch_id: str | None = None,
         instance_id: str | None = None,
@@ -108,41 +106,49 @@ class AccountApplication:
                         f"freshness={segment.freshness.value}"
                     )
 
-    async def _events(self) -> AsyncIterator[AccountEvent]:
+    def visit_live(
+        self,
+        visitor: Callable[[AccountEventVariant], None],
+        *,
+        fragment_limit: int = 64,
+    ) -> int:
+        """Poll Account once and consume callback-scoped events synchronously."""
+
         if self._event_source is None:
-            return
-        async for record in self._event_source.subscribe_live():
+            return 0
+
+        def accept(record: AccountEventVariant) -> None:
             if AccountId(record.account_id) not in self._current_views:
-                continue
-            if not isinstance(record, NativeAccountEvent):
-                raise TypeError(
-                    "Account event source must yield owner-native AccountEvent values"
-                )
+                return
+            metadata = record.metadata
             expected_stream_id = f"account.events/account:{record.account_id}"
-            if record.stream_id != expected_stream_id:
+            if metadata.stream_id != expected_stream_id:
                 raise RuntimeError(
                     "Account event stream identity is invalid: "
-                    f"expected {expected_stream_id}, received {record.stream_id}"
+                    f"expected {expected_stream_id}, received {metadata.stream_id}"
                 )
-            self._validate_event_scope(record.launch_id, record.instance_id)
+            self._validate_event_scope(metadata.launch_id, metadata.instance_id)
             cursor_key = (
-                record.stream_id,
-                str(record.producer),
-                int(record.producer_incarnation),
+                metadata.stream_id,
+                str(metadata.producer),
+                int(metadata.producer_incarnation),
             )
             previous_key = self._account_event_cursor_keys.get(record.account_id)
             if previous_key is not None and previous_key != cursor_key:
                 self._notification_incarnation_change_count += 1
             self._account_event_cursor_keys[record.account_id] = cursor_key
+            sequence = int(metadata.sequence)
             cursor = self._event_cursors.get(cursor_key, 0)
             if cursor == 0:
-                cursor = record.sequence - 1
-            if record.sequence <= cursor:
-                continue
-            if record.sequence != cursor + 1:
+                cursor = sequence - 1
+            if sequence <= cursor:
+                return
+            if sequence != cursor + 1:
                 self._notification_gap_count += 1
-            self._event_cursors[cursor_key] = record.sequence
-            yield cast("AccountEvent", record)
+            self._event_cursors[cursor_key] = sequence
+            visitor(record)
+
+        return self._event_source.poll_visit(accept, fragment_limit=fragment_limit)
 
     def notification_health(self) -> dict[str, int]:
         """Return diagnostics for best-effort Account notifications."""
@@ -151,6 +157,10 @@ class AccountApplication:
             "gap_count": self._notification_gap_count,
             "incarnation_change_count": self._notification_incarnation_change_count,
         }
+
+    def close_live(self) -> None:
+        if self._event_source is not None:
+            self._event_source.close()
 
     def _validate_event_scope(
         self, launch_id: str | None, instance_id: str | None
@@ -161,7 +171,9 @@ class AccountApplication:
             raise RuntimeError("Account event belongs to another launch instance")
 
 
-def _map_snapshot(value: object, account_id: AccountId) -> AccountSnapshot:
+def _map_snapshot(
+    value: AccountCurrentSnapshot | AccountSnapshot, account_id: AccountId
+) -> AccountSnapshot:
     if isinstance(value, AccountSnapshot):
         if value.account_id != account_id:
             raise ValueError("Account snapshot belongs to another account")

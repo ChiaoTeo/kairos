@@ -7,7 +7,7 @@ from collections.abc import Callable
 from kairospy.system.apps.components.application.clients import ExecutionSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace
 from ..application.commands import ExecutionCommandClient
-from kairospy.infrastructure.contracts.execution import ExecutionClient
+from kairospy.contracts.execution import ExecutionClient
 from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
 

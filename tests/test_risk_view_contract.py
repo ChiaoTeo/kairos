@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kairospy.infrastructure.contracts.risk import RiskCurrentView
+from kairospy.contracts.risk import RiskCurrentView
 
 
 def test_risk_indexed_path_matches_rust_contract() -> None:

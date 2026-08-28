@@ -4,36 +4,32 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.infrastructure.contracts.account import AccountClient
-from kairospy.infrastructure.contracts.capital import CapitalClient
-from kairospy.infrastructure.contracts.execution import ExecutionClient
-from kairospy.infrastructure.contracts.market import MarketClient
-from kairospy.infrastructure.contracts.risk import RiskClient
-from kairospy.infrastructure.protocol.generated_spec import (
-    ACCOUNT_EVENTS,
-    CAPITAL_EVENTS,
-    EXECUTION_EVENTS,
-    MARKET_EVENTS,
-    RISK_EVENTS,
-)
-
-
+from kairospy.contracts.account import AccountClient
+from kairospy.contracts.capital import CapitalClient
+from kairospy.contracts.execution import ExecutionClient
+from kairospy.contracts.market import MarketClient
+from kairospy.contracts.risk import RiskClient
 def _clients(socket: Path):
-    common = {"workspace_id": "workspace", "aeron_dir": "/workspace/run/aeron/media"}
+    common = {"workspace_id": "workspace"}
     return (
-        (MarketClient(socket, **common), MARKET_EVENTS),
-        (AccountClient(socket, account_id="main", **common), ACCOUNT_EVENTS),
-        (ExecutionClient(socket, **common), EXECUTION_EVENTS),
-        (RiskClient(socket, actor_id="risk:main", **common), RISK_EVENTS),
-        (CapitalClient(socket, capital_group_id="main", **common), CAPITAL_EVENTS),
+        MarketClient(socket, **common),
+        AccountClient(socket, account_id="main", **common),
+        ExecutionClient(socket, **common),
+        RiskClient(socket, actor_id="risk:main", **common),
+        CapitalClient(socket, capital_group_id="main", **common),
     )
 
 
 @pytest.mark.parametrize("index", range(5))
-def test_owner_clients_supply_native_event_sources(index: int, tmp_path: Path) -> None:
-    client, stream_id = _clients(tmp_path / "control.sock")[index]
-    source = client.events
+def test_owner_clients_expose_only_direct_owner_live_subscriptions(
+    index: int, tmp_path: Path
+) -> None:
+    client = _clients(tmp_path / "control.sock")[index]
+    owner = type(client).__name__.removesuffix("Client")
+    native = __import__(
+        f"kairospy._native_{owner.lower()}_contract", fromlist=["*"]
+    )
 
-    assert source._aeron_dir == "/workspace/run/aeron/media"
-    assert source._spec.stream_id == stream_id
-    assert callable(source._decoder)
+    subscription = getattr(native, f"{owner}LiveSubscription")
+    assert subscription.__module__ == f"kairospy._native_{owner.lower()}_contract"
+    assert not hasattr(native, "NativeEventSource")

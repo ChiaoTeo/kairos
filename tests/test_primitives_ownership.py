@@ -1,4 +1,5 @@
 from decimal import Decimal
+from collections.abc import Callable
 from pathlib import Path
 import re
 
@@ -29,10 +30,24 @@ from kairospy.primitives.reference import (
     MarketIdRead,
 )
 from kairospy.primitives.time import (
+    BasisPoints,
+    DurationNanos,
+    Generation,
+    Sequence,
+    UnixNanos,
     datetime_from_unix_nanos,
     unix_nanos_from_datetime,
 )
-from kairospy.primitives.runtime import InstanceId, LaunchId, WorkspaceId
+from kairospy.primitives.runtime import (
+    ActorId,
+    EventId,
+    IdempotencyKey,
+    InstanceId,
+    LaunchId,
+    ProducerId,
+    StrategyDecisionId,
+    WorkspaceId,
+)
 from kairospy.primitives.risk import DecisionId, PolicyId, ReservationId
 
 
@@ -224,6 +239,35 @@ def test_time_conversions_are_utc_exact_to_python_microsecond_precision() -> Non
         datetime_from_unix_nanos(-1)
     with pytest.raises(ValueError, match="timezone-aware"):
         unix_nanos_from_datetime(converted.replace(tzinfo=None))
+
+
+@pytest.mark.parametrize(
+    "value_type",
+    (UnixNanos, Sequence, Generation, DurationNanos, BasisPoints),
+)
+def test_unsigned_time_primitives_match_rust_u64_validation(value_type: type[int]) -> None:
+    assert value_type(0) == 0
+    assert value_type(2**64 - 1) == 2**64 - 1
+    with pytest.raises(ValueError, match="negative"):
+        value_type(-1)
+    with pytest.raises(ValueError, match="u64"):
+        value_type(2**64)
+    with pytest.raises(TypeError, match="integer"):
+        value_type(True)
+
+
+@pytest.mark.parametrize(
+    "value_type",
+    (ActorId, EventId, IdempotencyKey, ProducerId, StrategyDecisionId),
+)
+def test_runtime_identity_primitives_share_text_validation(
+    value_type: Callable[[str], object],
+) -> None:
+    assert str(value_type("runtime-id")) == "runtime-id"
+    with pytest.raises(ValueError, match="empty"):
+        value_type("")
+    with pytest.raises(ValueError, match="whitespace"):
+        value_type(" runtime-id")
 
 
 def test_application_event_messages_live_outside_primitives() -> None:

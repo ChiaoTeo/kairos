@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 kairos-execution-contract.workspace = true
 kairos-primitives.workspace = true
 kairos-protocol.workspace = true
+kairos-python-transport.workspace = true
 pyo3.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

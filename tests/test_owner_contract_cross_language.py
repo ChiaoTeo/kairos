@@ -56,8 +56,8 @@ def test_rust_account_event_fixture_has_the_same_python_typed_fields() -> None:
     event = _rust_event("account", "emit_status_event_fixture")
 
     assert event.account_id == "main"
-    assert event.sequence == 1
-    assert event.change.kind == "status_changed"
+    assert event.metadata.sequence == 1
+    assert event.kind == "account_status_changed"
     assert event.provenance.source_id == "binance:spot"
     assert event.provenance.provider_sequence == 10
 
@@ -70,7 +70,7 @@ def test_market_native_batch_projects_stable_owned_events() -> None:
     del payload
 
     assert len(events) == 2
-    assert events[0].kind == "quote"
+    assert events[0].kind == "quote_updated"
     assert events[0].data.bid_price.value == Price("123.45").value
     assert events[1].data.ask_price.value == Price("123.55").value
 
@@ -79,20 +79,20 @@ def test_rust_capital_event_fixture_preserves_decimal_text_and_absence() -> None
     event = _rust_event("capital", "emit_policy_event_fixture")
 
     assert event.kind == "policy_changed"
-    assert event.sequence == 11
-    assert event.launch_id == "launch"
-    assert event.instance_id == "instance"
-    assert event.payload.version == 7
-    assert event.payload.minimum.semantic_type == "quantity"
-    assert event.payload.minimum.value == Quantity("10.25").value
-    assert event.payload.default_target.value == Quantity("20.5").value
+    assert event.metadata.sequence == 11
+    assert event.metadata.launch_id == "launch"
+    assert event.metadata.instance_id == "instance"
+    assert event.data.version == 7
+    assert event.data.minimum.semantic_type == "quantity"
+    assert event.data.minimum.value == Quantity("10.25").value
+    assert event.data.default_target.value == Quantity("20.5").value
 
 
 def test_rust_execution_event_fixture_preserves_metadata_and_nested_values() -> None:
     event = _rust_event("execution", "emit_lifecycle_event_fixture")
 
-    assert event.kind == "intent_update"
-    assert event.sequence == 2
+    assert event.kind == "intent_lifecycle_changed"
+    assert event.metadata.sequence == 2
     assert event.data.intent_id == "intent-1"
     assert event.data.status == "satisfied"
     assert event.data.previous_status == "executing"
@@ -102,22 +102,22 @@ def test_rust_execution_event_fixture_preserves_metadata_and_nested_values() -> 
 def test_rust_risk_event_fixture_preserves_typed_optional_fields() -> None:
     event = _rust_event("risk", "emit_circuit_event_fixture")
 
-    assert event.kind == "circuit_changed"
-    assert event.sequence == 13
-    assert event.launch_id == "launch"
-    assert event.instance_id == "instance"
-    assert event.payload.open is True
-    assert event.payload.opened_at_unix_nanos == 12
-    assert event.payload.reset_at_unix_nanos is None
+    assert event.kind == "circuit_opened"
+    assert event.metadata.sequence == 13
+    assert event.metadata.launch_id == "launch"
+    assert event.metadata.instance_id == "instance"
+    assert event.data.open is True
+    assert event.data.opened_at_unix_nanos == 12
+    assert event.data.reset_at_unix_nanos is None
 
 
 def test_rust_market_event_fixture_preserves_decimal_and_scope_values() -> None:
     event = _rust_event("market", "emit_quote_event_fixture")
 
-    assert event.kind == "quote"
-    assert event.sequence == 17
-    assert event.launch_id == "launch"
-    assert event.instance_id == "instance"
+    assert event.kind == "quote_updated"
+    assert event.metadata.sequence == 17
+    assert event.metadata.launch_id == "launch"
+    assert event.metadata.instance_id == "instance"
     assert event.data.scope.market_id == "market:fixture"
     assert event.data.bid_price.mantissa == 12345
     assert event.data.bid_price.scale == 2

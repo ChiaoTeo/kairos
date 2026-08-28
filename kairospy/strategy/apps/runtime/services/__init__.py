@@ -8,6 +8,7 @@ from importlib import import_module
 _EXPORTS = {
     "InMemoryApplicationPorts": (".fakes", "InMemoryApplicationPorts"),
     "InMemoryMarketEventSource": (".fakes", "InMemoryMarketEventSource"),
+    "InMemoryMarketReplaySource": (".fakes", "InMemoryMarketReplaySource"),
     "InMemoryLifecycleJournal": (".fakes", "InMemoryLifecycleJournal"),
     "InMemoryMarketSnapshotReader": (".fakes", "InMemoryMarketSnapshotReader"),
     "build_in_memory_strategy_applications": (

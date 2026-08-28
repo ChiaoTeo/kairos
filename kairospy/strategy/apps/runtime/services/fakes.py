@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import replace
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import AsyncIterator, Mapping
 
+from kairospy.contracts.market.events import MarketEventVariant
 from kairospy.investment.apps.market.application import SubscriptionRequest
 from kairospy.investment.apps.account.application import AccountApplication
 from kairospy.investment.apps.execution.application import ExecutionApplication
@@ -27,7 +28,7 @@ class RecordedApplicationRequest:
     instance_id: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _MarketSubscriptionResponse:
     subscription_id: str
     owner_id: str
@@ -90,7 +91,7 @@ class InMemoryApplicationPorts:
             )
         )
         response = _MarketSubscriptionResponse(
-            request_id, f"{strategy_id}:{instance_id}", "pending"
+            request_id, f"{strategy_id}:{instance_id}", "resolving"
         )
         self._handles[request_id] = response
         return response
@@ -101,7 +102,7 @@ class InMemoryApplicationPorts:
 
     def unsubscribe(
         self,
-        subscription: object,
+        subscription_id: str,
         *,
         strategy_id: str,
         instance_id: str,
@@ -111,7 +112,7 @@ class InMemoryApplicationPorts:
         del launch_id
         self.requests.append(
             RecordedApplicationRequest(
-                "market.unsubscribe", subscription, strategy_id, request_id, instance_id
+                "market.unsubscribe", subscription_id, strategy_id, request_id, instance_id
             )
         )
         response = _MarketCommandStatus("applied")
@@ -190,7 +191,7 @@ class InMemoryApplicationPorts:
         self,
         request_id: str,
         *,
-        status: str = "ready",
+        status: str = "active",
         result: Mapping[str, object] | None = None,
         error: str | None = None,
     ) -> None:
@@ -204,9 +205,8 @@ class InMemoryApplicationPorts:
             providers = tuple(
                 str(value) for value in raw_providers
             )
-            self._handles[request_id] = replace(
-                current, state=status, resolved_providers=providers
-            )
+            current.state = status
+            current.resolved_providers = providers
         else:
             self._handles[request_id] = CommandHandle(
                 request_id, status, result or {}, error
@@ -217,29 +217,65 @@ class InMemoryMarketSnapshotReader:
     def __init__(self, snapshots: Mapping[str, object] | None = None) -> None:
         self.snapshots = dict(snapshots or {})
 
-    def get(self, view_key: object) -> object | None:
-        canonical_key = getattr(view_key, "canonical_key")
+    def get(self, key: object) -> object | None:
+        canonical_key = getattr(key, "canonical_key")
         return self.snapshots.get(canonical_key())
 
-    def quote(self, market_id: str, provider: str) -> object | None:
-        return self.snapshots.get(f"{market_id}:{provider}:quote")
+    def quote(self, scope_key: str, provider: str) -> object | None:
+        return self.snapshots.get(f"{scope_key}:{provider}:quote")
 
-    def bar(self, market_id: str, provider: str, qualifier: str) -> object | None:
-        return self.snapshots.get(f"{market_id}:{provider}:bar:{qualifier}")
+    def bar(self, scope_key: str, provider: str, qualifier: str) -> object | None:
+        return self.snapshots.get(f"{scope_key}:{provider}:bar:{qualifier}")
 
-    def greeks(self, market_id: str, provider: str) -> object | None:
-        return self.snapshots.get(f"{market_id}:{provider}:greeks")
+    def greeks(self, scope_key: str, provider: str) -> object | None:
+        return self.snapshots.get(f"{scope_key}:{provider}:greeks")
 
 
 class InMemoryMarketEventSource:
+    """Synchronous test subscription matching the production live path."""
+
     def __init__(self, stream_id: str) -> None:
         self.stream_id = stream_id
-        self._events: deque[object] = deque()
+        self._events: deque[MarketEventVariant] = deque()
+        self._closed = False
+
+    def append(self, event: MarketEventVariant) -> None:
+        metadata = event.metadata
+        if metadata.stream_id != self.stream_id:
+            raise ValueError("event belongs to a different stream")
+        self._events.append(event)
+
+    def check_ready(self) -> None:
+        if self._closed:
+            raise RuntimeError("Market event source is closed")
+
+    def poll_visit(
+        self,
+        visitor: Callable[[MarketEventVariant], None],
+        *,
+        fragment_limit: int = 64,
+    ) -> int:
+        self.check_ready()
+        count = 0
+        while self._events and count < fragment_limit:
+            visitor(self._events.popleft())
+            count += 1
+        return count
+
+    def close(self) -> None:
+        self._closed = True
+
+
+class InMemoryMarketReplaySource:
+    """Owned async source used only by explicit replay/backtest tests."""
+
+    def __init__(self, stream_id: str) -> None:
+        self.stream_id = stream_id
+        self._events: deque[MarketEventVariant] = deque()
         self._waiters: list[asyncio.Future[None]] = []
 
-    def append(self, event: object) -> None:
-        metadata = getattr(event, "metadata")
-        if metadata.stream_id != self.stream_id:
+    def append(self, event: MarketEventVariant) -> None:
+        if event.metadata.stream_id != self.stream_id:
             raise ValueError("event belongs to a different stream")
         self._events.append(event)
         for waiter in self._waiters:
@@ -247,17 +283,19 @@ class InMemoryMarketEventSource:
                 waiter.set_result(None)
         self._waiters.clear()
 
-    async def replay_from(self, after_sequence: int = 0) -> AsyncIterator[object]:
+    async def replay_from(
+        self, after_sequence: int = 0
+    ) -> AsyncIterator[MarketEventVariant]:
         next_sequence = after_sequence + 1
         while True:
             while (
                 self._events
-                and getattr(self._events[0], "metadata").sequence < next_sequence
+                and self._events[0].metadata.sequence < next_sequence
             ):
                 self._events.popleft()
             if (
                 self._events
-                and getattr(self._events[0], "metadata").sequence == next_sequence
+                and self._events[0].metadata.sequence == next_sequence
             ):
                 event = self._events.popleft()
                 next_sequence += 1
@@ -279,10 +317,11 @@ class InMemoryLifecycleJournal(StrategyLifecycleJournal):
 def build_in_memory_strategy_applications(
     commands: InMemoryApplicationPorts,
     snapshots: InMemoryMarketSnapshotReader,
-    event_source: InMemoryMarketEventSource,
+    event_source: InMemoryMarketEventSource | InMemoryMarketReplaySource,
     *,
     strategy_id: str,
     instance_id: str,
+    replay: bool = False,
 ) -> tuple[
     ReferenceApplication,
     MarketApplication,
@@ -292,15 +331,28 @@ def build_in_memory_strategy_applications(
 ]:
     """Build deterministic module Applications for Strategy runtime tests."""
 
-    return (
-        ReferenceApplication(),
-        MarketApplication(
+    if replay:
+        assert isinstance(event_source, InMemoryMarketReplaySource)
+        market = MarketApplication(
+            commands,
+            snapshots,
+            replay_source=event_source,
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+        )
+    else:
+        assert isinstance(event_source, InMemoryMarketEventSource)
+        market = MarketApplication(
             commands,
             snapshots,
             event_source,
             strategy_id=strategy_id,
             instance_id=instance_id,
-        ),
+        )
+
+    return (
+        ReferenceApplication(),
+        market,
         AccountApplication({}),
         RiskApplication(None),
         ExecutionApplication(

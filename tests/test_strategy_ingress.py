@@ -9,7 +9,10 @@ from kairospy.strategy.apps.agent.application import (
     AgentEvent,
     AgentEventStatus,
 )
-from kairospy.strategy.apps.runtime.services.ingress import StrategyEventIngress
+from kairospy.strategy.apps.runtime.services.ingress import (
+    StrategyEventIngress,
+    StrategySourceError,
+)
 from kairospy.investment.application.eventing import EventMetadata
 from kairospy.strategy import SystemEvent, SystemNotice
 
@@ -25,82 +28,89 @@ class _FiniteSource:
     def __init__(self, events: list[SystemEvent]) -> None:
         self._records = events
 
-    async def events(self):
-        for event in self._records:
-            await asyncio.sleep(0)
-            yield event
+    def visit_live(self, visitor, *, fragment_limit: int = 64) -> int:
+        records, self._records = (
+            self._records[:fragment_limit],
+            self._records[fragment_limit:],
+        )
+        for event in records:
+            visitor(event)
+        return len(records)
+
+    def close_live(self) -> None:
+        return None
 
 
 class _FailedSource:
-    async def events(self):
-        yield _event(1)
+    def visit_live(self, visitor, *, fragment_limit: int = 64) -> int:
         raise RuntimeError("source failed")
+
+    def close_live(self) -> None:
+        return None
 
 
 class _EmptySource:
-    async def events(self):
-        if False:
-            yield _event(1)
+    def visit_live(self, visitor, *, fragment_limit: int = 64) -> int:
+        return 0
+
+    def close_live(self) -> None:
+        return None
 
 
 class _UnexpectedSource:
-    async def events(self):
+    def visit_live(self, visitor, *, fragment_limit: int = 64) -> int:
         raise AssertionError("disabled source must not be started")
-        yield _event(1)
+
+    def close_live(self) -> None:
+        return None
 
 
 def _ingress(
-    market: object | None = None,
-    account: object | None = None,
+    market: _FiniteSource | _FailedSource | _UnexpectedSource | None = None,
+    account: _FiniteSource | None = None,
     *,
     queue_size: int = 256,
     agent_events=None,
 ) -> StrategyEventIngress:
     return StrategyEventIngress(
-        market=market or _EmptySource(),  # type: ignore[arg-type]
-        account=account or _EmptySource(),  # type: ignore[arg-type]
-        risk=_EmptySource(),  # type: ignore[arg-type]
-        execution=_EmptySource(),  # type: ignore[arg-type]
+        market=market or _EmptySource(),
+        account=account or _EmptySource(),
+        risk=_EmptySource(),
+        execution=_EmptySource(),
         agent_events=agent_events,
         queue_size=queue_size,
     )
 
 
 def test_ingress_merges_multiple_typed_sources_without_dropping_events() -> None:
-    async def run() -> None:
-        ingress = _ingress(
-            _FiniteSource([_event(1, "system:a"), _event(2, "system:a")]),
-            _FiniteSource([_event(1, "system:b"), _event(2, "system:b")]),
-            queue_size=1,
-        )
+    ingress = _ingress(
+        _FiniteSource([_event(1, "system:a"), _event(2, "system:a")]),
+        _FiniteSource([_event(1, "system:b"), _event(2, "system:b")]),
+        queue_size=1,
+    )
+    received = []
 
-        received = [dispatch async for dispatch in ingress.events()]
+    summary = ingress.poll_once(received.append)
 
-        assert len(received) == 4
-        assert {
-            (dispatch.event.metadata.stream_id, dispatch.event.metadata.sequence)
-            for dispatch in received
-        } == {("system:a", 1), ("system:a", 2), ("system:b", 1), ("system:b", 2)}
-        assert all(dispatch.hook == "on_system" for dispatch in received)
-
-    asyncio.run(run())
+    assert summary.fragment_count == 4
+    assert len(received) == 4
+    assert [dispatch.domain for dispatch in received] == [
+        "market",
+        "market",
+        "account",
+        "account",
+    ]
 
 
 def test_ingress_propagates_source_failure_and_cancels_other_pumps() -> None:
-    async def run() -> None:
-        ingress = _ingress(
-            _FailedSource(),
-            _FiniteSource([_event(1, "system:healthy")]),
-            queue_size=1,
-        )
-        stream = ingress.events()
+    ingress = _ingress(
+        _FailedSource(),
+        _FiniteSource([_event(1, "system:healthy")]),
+        queue_size=1,
+    )
 
-        await anext(stream)
-        with pytest.raises(RuntimeError, match="source failed"):
-            while True:
-                await anext(stream)
-
-    asyncio.run(run())
+    with pytest.raises(StrategySourceError, match="source failed"):
+        ingress.poll_once(lambda _dispatch: None)
 
 
 def test_ingress_rejects_an_unbounded_zero_capacity_configuration() -> None:
@@ -109,11 +119,9 @@ def test_ingress_rejects_an_unbounded_zero_capacity_configuration() -> None:
 
 
 def test_ingress_does_not_start_market_without_strategy_demand() -> None:
-    async def run() -> None:
-        ingress = _ingress(_UnexpectedSource())
-        assert [item async for item in ingress.events(include_market=False)] == []
-
-    asyncio.run(run())
+    ingress = _ingress(_UnexpectedSource())
+    summary = ingress.poll_once(lambda _dispatch: None, include_market=False)
+    assert summary.fragment_count == 0
 
 
 def test_ingress_routes_agent_notice_to_on_agent() -> None:

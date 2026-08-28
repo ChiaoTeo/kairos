@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from kairospy.infrastructure.contracts.reference.events import ReferenceEvent
+from kairospy.contracts.reference.events import ReferenceEvent
 
 __all__ = ["ReferenceEvent"]

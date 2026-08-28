@@ -22,8 +22,6 @@ create_exception!(
 );
 create_exception!(_native_transport, ClosedError, NativeTransportError);
 create_exception!(_native_transport, ForkedProcessError, NativeTransportError);
-create_exception!(_native_transport, WorkerExitedError, NativeTransportError);
-create_exception!(_native_transport, QueueOverflowError, NativeTransportError);
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
@@ -48,31 +46,8 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
         ),
         ("ClosedError", py.get_type::<ClosedError>()),
         ("ForkedProcessError", py.get_type::<ForkedProcessError>()),
-        ("WorkerExitedError", py.get_type::<WorkerExitedError>()),
-        ("QueueOverflowError", py.get_type::<QueueOverflowError>()),
     ] {
         module.add(name, exception)?;
     }
     Ok(())
-}
-
-pub fn closed(py: Python<'_>) -> PyErr {
-    with_code(
-        py,
-        PyErr::new::<ClosedError, _>("snapshot reader is closed"),
-        "closed",
-    )
-}
-
-pub fn forked(py: Python<'_>) -> PyErr {
-    with_code(
-        py,
-        PyErr::new::<ForkedProcessError, _>("native transport object belongs to another process"),
-        "forked_process",
-    )
-}
-
-pub fn with_code(py: Python<'_>, error: PyErr, code: &str) -> PyErr {
-    let _ = error.value(py).setattr("code", code);
-    error
 }

@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 import struct
 
-from kairospy.infrastructure.contracts.market import decode_event
+from kairospy.contracts.market.events import MarketEventVariant, decode_event
 
 
 class UnixMarketEventStream:
@@ -19,7 +19,9 @@ class UnixMarketEventStream:
             raise ValueError("reconnect_delay cannot be negative")
         self.reconnect_delay = reconnect_delay
 
-    async def replay_from(self, after_sequence: int = 0) -> AsyncIterator[object]:
+    async def replay_from(
+        self, after_sequence: int = 0
+    ) -> AsyncIterator[MarketEventVariant]:
         cursor = max(0, after_sequence)
         while True:
             try:
@@ -33,8 +35,8 @@ class UnixMarketEventStream:
                     if length == 0 or length > 4 * 1024 * 1024:
                         raise ValueError("invalid market event frame length")
                     event = decode_event(await reader.readexactly(length))
-                    if event.sequence > cursor:
-                        cursor = event.sequence
+                    if event.metadata.sequence > cursor:
+                        cursor = int(event.metadata.sequence)
                         yield event
             except asyncio.IncompleteReadError:
                 return

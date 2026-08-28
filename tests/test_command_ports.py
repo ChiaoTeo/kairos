@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.infrastructure.contracts.execution import ExecutionControlClient
-from kairospy.infrastructure.contracts.execution.types import (
+from kairospy.contracts.execution import ExecutionControlClient
+from kairospy.contracts.execution.types import (
     CancelOrderRequest,
     ExecutionIntentRequest,
     ReplaceOrderRequest as ContractReplaceOrderRequest,

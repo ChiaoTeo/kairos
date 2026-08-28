@@ -3085,6 +3085,7 @@ dependencies = [
  "kairos-account-contract",
  "kairos-primitives",
  "kairos-protocol",
+ "kairos-python-transport",
  "pyo3",
  "tokio",
 ]
@@ -3138,6 +3139,7 @@ dependencies = [
  "kairos-capital-contract",
  "kairos-primitives",
  "kairos-protocol",
+ "kairos-python-transport",
  "pyo3",
  "tokio",
 ]
@@ -3237,6 +3239,7 @@ dependencies = [
  "kairos-execution-contract",
  "kairos-primitives",
  "kairos-protocol",
+ "kairos-python-transport",
  "pyo3",
  "serde_json",
  "sha2 0.10.9",
@@ -3337,6 +3340,7 @@ dependencies = [
  "kairos-market-contract",
  "kairos-primitives",
  "kairos-protocol",
+ "kairos-python-transport",
  "pyo3",
  "tokio",
 ]
@@ -3388,6 +3392,7 @@ version = "0.2.0"
 dependencies = [
  "kairos-transport",
  "pyo3",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3442,6 +3447,7 @@ version = "0.2.0"
 dependencies = [
  "kairos-primitives",
  "kairos-protocol",
+ "kairos-python-transport",
  "kairos-reference-contract",
  "pyo3",
 ]
@@ -3492,6 +3498,7 @@ version = "0.2.0"
 dependencies = [
  "kairos-primitives",
  "kairos-protocol",
+ "kairos-python-transport",
  "kairos-risk-contract",
  "pyo3",
  "tokio",
@@ -3502,6 +3509,7 @@ name = "kairos-transport"
 version = "0.2.0"
 dependencies = [
  "clap",
+ "criterion",
  "kairos-workspace",
  "rusteron-client",
  "rusteron-media-driver",

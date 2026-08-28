@@ -8,26 +8,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Literal, TypeAlias
 
 from kairospy.primitives.decimal import Price, Rate
 from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.time import DurationNanos, UnixNanos
 
 
 _DAY_NANOS = 86_400_000_000_000
+OptionRightCode: TypeAlias = Literal[
+    "P", "PUT", "p", "put", "C", "CALL", "c", "call"
+]
 
 
 @dataclass(frozen=True, slots=True)
 class OptionSelectionCandidate:
     instrument_id: InstrumentId
     reference_snapshot_id: str
-    expiry_unix_nanos: int
-    option_right: str
+    expiry_unix_nanos: UnixNanos
+    option_right: OptionRightCode
     strike: Price
     delta: Rate
     bid: Price
     ask: Price
-    observed_at_unix_nanos: int
-    available_at_unix_nanos: int
+    observed_at_unix_nanos: UnixNanos
+    available_at_unix_nanos: UnixNanos
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instrument_id", InstrumentId(str(self.instrument_id)))
@@ -35,6 +40,17 @@ class OptionSelectionCandidate:
         object.__setattr__(self, "delta", Rate(self.delta))
         object.__setattr__(self, "bid", Price(self.bid))
         object.__setattr__(self, "ask", Price(self.ask))
+        object.__setattr__(
+            self, "expiry_unix_nanos", UnixNanos(self.expiry_unix_nanos)
+        )
+        object.__setattr__(
+            self, "observed_at_unix_nanos", UnixNanos(self.observed_at_unix_nanos)
+        )
+        object.__setattr__(
+            self,
+            "available_at_unix_nanos",
+            UnixNanos(self.available_at_unix_nanos),
+        )
         if not str(self.instrument_id).strip() or not self.reference_snapshot_id.strip():
             raise ValueError("candidate identity and Reference snapshot are required")
 
@@ -42,16 +58,26 @@ class OptionSelectionCandidate:
 @dataclass(frozen=True, slots=True)
 class OptionSpreadSelectionRequest:
     candidates: tuple[OptionSelectionCandidate, ...]
-    decision_time_unix_nanos: int
+    decision_time_unix_nanos: UnixNanos
     minimum_dte: int = 30
     maximum_dte: int = 45
     short_target_delta: Rate = Rate("-0.25")
     long_target_delta: Rate = Rate("-0.10")
-    maximum_quote_age_nanos: int = 60_000_000_000
+    maximum_quote_age_nanos: DurationNanos = DurationNanos(60_000_000_000)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "short_target_delta", Rate(self.short_target_delta))
         object.__setattr__(self, "long_target_delta", Rate(self.long_target_delta))
+        object.__setattr__(
+            self,
+            "decision_time_unix_nanos",
+            UnixNanos(self.decision_time_unix_nanos),
+        )
+        object.__setattr__(
+            self,
+            "maximum_quote_age_nanos",
+            DurationNanos(self.maximum_quote_age_nanos),
+        )
         if not self.candidates:
             raise ValueError("option selection requires candidates")
         if self.minimum_dte < 0 or self.minimum_dte > self.maximum_dte:
@@ -164,6 +190,7 @@ class OptionSpreadSelectionApplication:
 __all__ = [
     "OptionSelectionAudit",
     "OptionSelectionCandidate",
+    "OptionRightCode",
     "OptionSpreadSelectionApplication",
     "OptionSpreadSelectionRequest",
     "OptionSpreadSelectionResult",

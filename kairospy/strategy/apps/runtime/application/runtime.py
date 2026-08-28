@@ -26,17 +26,21 @@ from kairospy.investment.apps.execution.application import (
     ExecutionBacktestResult,
     Fill,
 )
-from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
+from kairospy.strategy.api.execution import ExecutionEvent
 from kairospy.investment.apps.market.application import MarketApplication
 from kairospy.strategy.apps.notification.application import NotificationApplication
 from kairospy.investment.apps.portfolio.application import PortfolioApplication
 from kairospy.investment.apps.reference.application import ReferenceApplication
 from kairospy.investment.apps.risk.application import RiskApplication
-from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.account import AccountId, BrokerId, SegmentKey
+from kairospy.primitives.capital import CapitalDemandId
 from kairospy.primitives.decimal import Quantity
+from kairospy.primitives.reference import AssetId
+from kairospy.primitives.runtime import IdempotencyKey, RequestId
+from kairospy.primitives.time import Sequence
 from ..services.context import StrategyContext
 from ..services.callbacks import StrategyCallbackHost
-from ..services.ingress import StrategyEventIngress
+from ..services.ingress import StrategyEventIngress, StrategySourceError
 from kairospy.strategy.api import (
     EventMetadata,
     MarketEvent,
@@ -46,7 +50,7 @@ from kairospy.strategy.api import (
     SystemNotice,
 )
 from kairospy.strategy.api import CommandResult, StrategyCommand
-from kairospy.infrastructure.contracts.market.types import MarketSubscriptionResponse
+from kairospy.contracts.market.types import MarketSubscriptionResponse
 from kairospy.strategy.api.clock import (
     DeterministicTimerQueue,
     StrategyClock,
@@ -158,8 +162,8 @@ class StrategyApplication:
         self._status = StrategyStatus(
             launch_id, instance_id, strategy.strategy_id, StrategyLifecycle.CREATED
         )
-        self._subscription_requests: set[str] = set()
-        self._subscriptions: dict[str, dict[str, object]] = {}
+        self._subscription_requests: set[RequestId] = set()
+        self._subscriptions: dict[RequestId, dict[str, object]] = {}
         self._subscription_owner_released = False
         self._stop_requested = asyncio.Event()
         self._command_active = False
@@ -413,9 +417,11 @@ class StrategyApplication:
         if self._status.state is not StrategyLifecycle.RUNNING:
             return
         route = self.ingress.route(event)
-        if isinstance(event, ExecutionEvent) and getattr(event, "kind") in {
-            "intent_update",
-            "fill",
+        if route.domain == "execution" and getattr(event, "kind") in {
+            "intent_accepted",
+            "intent_rejected",
+            "intent_lifecycle_changed",
+            "fill_recorded",
         }:
             self.decisions.observe_execution(cast(ExecutionEvent, event))
         domain, hook = route.domain, route.hook
@@ -456,13 +462,16 @@ class StrategyApplication:
         # event.  This prevents a strategy from observing a bar close and
         # immediately filling against that same close by accident.  Quote
         # events keep the existing quote-after-intent behavior.
-        if domain == "market" and getattr(event, "kind") == "bar":
+        if domain == "market" and getattr(event, "kind") == "bar_completed":
             market_event = cast(MarketEvent, event)
             if self._pending_bar_event is not None:
                 self._apply_backtest_callbacks(self._pending_bar_event)
             self._pending_bar_event = market_event
             self._last_data_event = market_event
-        elif domain == "market" and getattr(event, "kind") in {"quote", "trade"}:
+        elif domain == "market" and getattr(event, "kind") in {
+            "quote_updated",
+            "trade_occurred",
+        }:
             self._last_data_event = cast(MarketEvent, event)
 
         def log_dispatch() -> None:
@@ -486,7 +495,10 @@ class StrategyApplication:
             raise
         if self.backtest is not None:
             self._synchronize_agent_events()
-        if domain == "market" and getattr(event, "kind") in {"quote", "trade"}:
+        if domain == "market" and getattr(event, "kind") in {
+            "quote_updated",
+            "trade_occurred",
+        }:
             self._apply_backtest_callbacks(cast(MarketEvent, event))
         first_event = not self._status.first_event_received and domain == "market"
         self._status = replace(
@@ -517,17 +529,18 @@ class StrategyApplication:
             )
 
     def _observe_execution_funding_demand(self, event: object) -> None:
+        metadata = getattr(event, "metadata", None)
         if (
             not self.context.capital.enabled
-            or not isinstance(event, ExecutionEvent)
-            or getattr(event, "kind") != "order_update"
+            or getattr(metadata, "stream_id", None) != "execution.events"
+            or getattr(event, "kind") != "order_rejected"
         ):
             return
-        execution_event = cast(ExecutionEvent, event)
-        if str(getattr(execution_event.data, "status")) != "rejected":
+        data = getattr(event, "data")
+        if str(getattr(data, "status")) != "rejected":
             return
-        order_id = str(getattr(execution_event.data, "order_id"))
-        account_id = AccountId(str(getattr(execution_event.data, "account_id")))
+        order_id = str(getattr(data, "order_id"))
+        account_id = AccountId(str(getattr(data, "account_id")))
         reservation = next(
             (
                 value
@@ -547,7 +560,7 @@ class StrategyApplication:
                 order_id=order_id,
             )
             return
-        occurred_at_unix_nanos = execution_event.metadata.occurred_at_unix_nanos
+        occurred_at_unix_nanos = getattr(metadata, "occurred_at_unix_nanos", None)
         if occurred_at_unix_nanos is None:
             self._log(
                 "capital demand omitted because event time is unavailable",
@@ -559,26 +572,32 @@ class StrategyApplication:
             occurred_at_unix_nanos / 1_000_000_000,
             tz=timezone.utc,
         )
-        demand_id = f"risk:{requirement.risk_decision_id}:{order_id}"
+        demand_id = CapitalDemandId(
+            f"risk:{requirement.risk_decision_id}:{order_id}"
+        )
         try:
             receipt = self.context.capital.observe_demand(
                 CapitalDemand(
                     demand_id=demand_id,
-                    idempotency_key=demand_id,
+                    idempotency_key=IdempotencyKey(str(demand_id)),
                     destination=FundingLocation(
                         account_id,
                         SegmentKey(requirement.segment),
-                        requirement.collateral_asset,
-                        requirement.broker,
+                        AssetId(str(requirement.collateral_asset)),
+                        BrokerId(str(requirement.broker)),
                     ),
                     observed_shortfall=Quantity(requirement.shortfall),
                     observed_at=observed_at,
                     required_by=observed_at,
                     expires_at=observed_at + timedelta(seconds=60),
-                    account_watermark=requirement.account_snapshot_watermark,
-                    risk_watermark=max(
-                        reservation.risk_generation,
-                        reservation.risk_event_sequence,
+                    account_watermark=Sequence(
+                        requirement.account_snapshot_watermark
+                    ),
+                    risk_watermark=Sequence(
+                        max(
+                            reservation.risk_generation,
+                            reservation.risk_event_sequence,
+                        )
                     ),
                     destination_lease_fence=lease_fence,
                     priority=FundingPriority.HIGH,
@@ -707,46 +726,71 @@ class StrategyApplication:
         # choose every timer in a market gap without sleeping on wall time.
         # Live streams retain the reconnecting incremental path below.
         if self.context.market.events_replayable:
-            replay_events = [event async for event in self.context.market.events()]
-            for event in replay_events:
-                if self._stop_requested.is_set():
-                    return
-                self._dispatch_replay_event(event)
-            if self._replay_end is not None:
-                self._advance_replay_time(self._replay_end)
-            self.stop()
-            return
-        while not self._stop_requested.is_set():
             try:
-                async for dispatch in self.ingress.events(
-                    include_market=self.context.market.events_enabled
-                ):
+                replay_events = [
+                    event async for event in self.context.market.replay_events()
+                ]
+                for event in replay_events:
                     if self._stop_requested.is_set():
                         return
-                    self.dispatch(dispatch.event)
-            except Exception as error:
-                domain = getattr(error, "domain", "unknown")
-                self._emit_system_fact_best_effort(
-                    "event_source_failed",
-                    f"{domain} event source failed",
-                    {
-                        "domain": str(domain),
-                        "error": str(getattr(error, "cause", error)),
-                    },
-                )
-                self._log(
-                    "strategy event loop failed",
-                    event="strategy_event_loop_failed",
-                    error=repr(error),
-                )
-                self._release_subscriptions_best_effort()
-                self._transition(StrategyLifecycle.FAILED, str(error))
-                raise
-            else:
+                    self._dispatch_replay_event(event)
                 if self._replay_end is not None:
                     self._advance_replay_time(self._replay_end)
                 self.stop()
                 return
+            except Exception as error:
+                wrapped = StrategySourceError("market", error)
+                self._emit_system_fact_best_effort(
+                    "event_source_failed",
+                    "market event source failed",
+                    {"domain": "market", "error": str(error)},
+                )
+                self._release_subscriptions_best_effort()
+                self._transition(StrategyLifecycle.FAILED, str(wrapped))
+                raise wrapped from error
+        self.ingress.start_owned()
+        try:
+            while not self._stop_requested.is_set():
+                try:
+                    if self._command_active:
+                        await asyncio.sleep(0.001)
+                        continue
+                    owned_count = self.ingress.drain_owned(
+                        lambda dispatch: self.dispatch(dispatch.event)
+                    )
+                    summary = self.ingress.poll_once(
+                        lambda dispatch: self.dispatch(dispatch.event),
+                        include_market=self.context.market.events_enabled,
+                    )
+                    if summary.fragment_count == 0 and owned_count == 0:
+                        try:
+                            await asyncio.wait_for(
+                                self._stop_requested.wait(), timeout=0.001
+                            )
+                        except TimeoutError:
+                            pass
+                    else:
+                        await asyncio.sleep(0)
+                except Exception as error:
+                    domain = getattr(error, "domain", "unknown")
+                    self._emit_system_fact_best_effort(
+                        "event_source_failed",
+                        f"{domain} event source failed",
+                        {
+                            "domain": str(domain),
+                            "error": str(getattr(error, "cause", error)),
+                        },
+                    )
+                    self._log(
+                        "strategy event loop failed",
+                        event="strategy_event_loop_failed",
+                        error=repr(error),
+                    )
+                    self._release_subscriptions_best_effort()
+                    self._transition(StrategyLifecycle.FAILED, str(error))
+                    raise
+        finally:
+            await self.ingress.close()
 
     def stop(self) -> StrategyStatus:
         if self._status.state in {
@@ -862,15 +906,12 @@ class StrategyApplication:
                 result.error
                 or f"Market rejected subscription owner release: {result.status}"
             )
-        removed_ids = set(result.removed_subscription_ids)
-        # A successful owner-scoped release is authoritative even when the
-        # Market response omits individual IDs (for example an older fake).
-        removed_ids.update(self._subscription_requests)
-        for subscription_id in removed_ids:
-            subscription = self._subscriptions.get(subscription_id)
-            if subscription is not None:
-                subscription["status"] = "removed"
-                subscription["release_request_id"] = request_id
+        removed_ids = tuple(result.removed_subscription_ids)
+        # Owner-scoped release is authoritative for every request owned by this
+        # Strategy, regardless of whether the response enumerates every ID.
+        for subscription in self._subscriptions.values():
+            subscription["status"] = "removed"
+            subscription["release_request_id"] = str(request_id)
         self._subscription_requests.clear()
         self._subscription_owner_released = True
         self._status = replace(
@@ -883,7 +924,7 @@ class StrategyApplication:
             "market subscription owner released",
             event="market_subscription_owner_released",
             request_id=request_id,
-            removed_subscription_ids=sorted(removed_ids),
+            removed_subscription_ids=sorted(map(str, removed_ids)),
         )
 
     def _release_subscriptions_best_effort(self) -> None:
@@ -916,12 +957,12 @@ class StrategyApplication:
             if request_id not in self._subscription_requests:
                 self._observe_subscription(result)
             subscription = self._subscriptions.setdefault(
-                request_id, {"request_id": request_id}
+                request_id, {"request_id": str(request_id)}
             )
             response = cast(MarketSubscriptionResponse, result.response)
             response_summary = {
-                "subscription_id": response.subscription_id,
-                "owner_id": response.owner_id,
+                "subscription_id": str(response.subscription_id),
+                "owner_id": str(response.owner_id),
                 "state": response.state,
                 "satisfied_selectors": list(response.satisfied_selectors),
                 "missing_selectors": list(response.missing_selectors),
@@ -946,7 +987,7 @@ class StrategyApplication:
         pending = [
             request_id
             for request_id, result in results.items()
-            if result.status not in {"ready", "accepted"}
+            if result.status != "active"
         ]
         active = len(results) - len(pending)
         self._status = replace(
@@ -960,7 +1001,8 @@ class StrategyApplication:
         )
         if pending:
             self._status = replace(
-                self._status, reason=f"dependencies pending: {', '.join(pending)}"
+                self._status,
+                reason=f"dependencies pending: {', '.join(map(str, pending))}",
             )
             return False
         else:
@@ -1017,7 +1059,7 @@ class StrategyApplication:
             provider_preference=preference_value,
         )
         self._subscriptions[request_id] = {
-            "request_id": request_id,
+            "request_id": str(request_id),
             "status": getattr(status, "status", "unknown"),
             "target": target_value,
             "observations": observation_values,

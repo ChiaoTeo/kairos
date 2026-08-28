@@ -19,14 +19,20 @@ if TYPE_CHECKING:
     from .event_routes import EventTransportRoute
     from kairospy.system.apps.workspace.application import InstanceWorkspace
     from kairospy.primitives.account import AccountId
-    from kairospy.infrastructure.contracts.account import (
+    from kairospy.contracts.account import (
         AccountControlClient,
     )
-    from kairospy.infrastructure.contracts.capital.types import CapitalControlClient
-    from kairospy.infrastructure.contracts.execution import (
+    from kairospy.contracts.capital.types import CapitalControlClient
+    from kairospy.contracts.capital.types import (
+        CancelFundingObjectiveRequest,
+        ObserveCapitalDemandRequest,
+        PublishFundingObjectiveRequest,
+        ReconcileCapitalPlanRequest,
+    )
+    from kairospy.contracts.execution import (
         ExecutionControlClient,
     )
-    from kairospy.infrastructure.contracts.execution.types import (
+    from kairospy.contracts.execution.types import (
         AdvanceExecutionTimeResponse,
         ExecutionBacktestMarketResponse,
         ExecutionCommandStatus,
@@ -37,9 +43,9 @@ if TYPE_CHECKING:
         ReplaceOrderRequest,
         SubmitIntentRequest,
     )
-    from kairospy.infrastructure.contracts.market import MarketControlClient
-    from kairospy.infrastructure.contracts.reference.client import ReferenceClient
-    from kairospy.infrastructure.contracts.reference.control import (
+    from kairospy.contracts.market import MarketControlClient
+    from kairospy.contracts.reference.client import ReferenceClient
+    from kairospy.contracts.reference.control import (
         ReferenceControlClient,
     )
 
@@ -157,7 +163,7 @@ class AccountSystemClient(SystemRpcClient):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        from kairospy.infrastructure.contracts.account import AccountControlClient
+        from kairospy.contracts.account import AccountControlClient
 
         object.__setattr__(
             self,
@@ -166,19 +172,19 @@ class AccountSystemClient(SystemRpcClient):
         )
 
     def reconcile(self) -> dict[str, Any]:
-        from kairospy.infrastructure.contracts.account import AccountSegmentsRequest
+        from kairospy.contracts.account import AccountSegmentsRequest
 
         return _account_refresh_response(
             self.control.reconcile(AccountSegmentsRequest())
         )
 
     def refresh(self) -> dict[str, Any]:
-        from kairospy.infrastructure.contracts.account import AccountSegmentsRequest
+        from kairospy.contracts.account import AccountSegmentsRequest
 
         return _account_refresh_response(self.control.refresh(AccountSegmentsRequest()))
 
     def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
-        from kairospy.infrastructure.contracts.account import AdvanceAccountTimeRequest
+        from kairospy.contracts.account import AdvanceAccountTimeRequest
 
         result = self.control.advance_time(
             AdvanceAccountTimeRequest(event_time_unix_nanos)
@@ -203,7 +209,7 @@ class AccountSystemClient(SystemRpcClient):
         }
 
     def current_view(self, account_id: AccountId):
-        from kairospy.infrastructure.contracts.account import AccountCurrentView
+        from kairospy.contracts.account import AccountCurrentView
 
         return AccountCurrentView(
             self.require_view_root(),
@@ -229,7 +235,7 @@ class ExecutionSystemClient(SystemRpcClient):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        from kairospy.infrastructure.contracts.execution import ExecutionControlClient
+        from kairospy.contracts.execution import ExecutionControlClient
 
         object.__setattr__(
             self,
@@ -261,7 +267,7 @@ class ExecutionSystemClient(SystemRpcClient):
         return self.control.submit_intent(request)
 
     def cancel(self, order_id: str, reason: str = "system cancel") -> "ExecutionCommandStatus":
-        from kairospy.infrastructure.contracts.execution.types import CancelOrderRequest
+        from kairospy.contracts.execution.types import CancelOrderRequest
 
         return self.control.cancel_order(order_id, CancelOrderRequest(reason=reason))
 
@@ -273,7 +279,7 @@ class ExecutionSystemClient(SystemRpcClient):
     def advance_time(
         self, event_time_unix_nanos: int
     ) -> "AdvanceExecutionTimeResponse":
-        from kairospy.infrastructure.contracts.execution.types import (
+        from kairospy.contracts.execution.types import (
             AdvanceExecutionTimeRequest,
         )
 
@@ -292,7 +298,7 @@ class ExecutionSystemClient(SystemRpcClient):
         return self.control.backtest_market(request)
 
     def current_view(self, instance: InstanceWorkspace):
-        from kairospy.infrastructure.contracts.execution import ExecutionCurrentView
+        from kairospy.contracts.execution import ExecutionCurrentView
 
         return ExecutionCurrentView(
             instance.snapshot(),
@@ -307,7 +313,7 @@ class MarketSystemClient(SystemRpcClient):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        from kairospy.infrastructure.contracts.market import MarketControlClient
+        from kairospy.contracts.market import MarketControlClient
 
         object.__setattr__(
             self,
@@ -369,7 +375,7 @@ class RiskSystemClient(SystemRpcClient):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        from kairospy.infrastructure.contracts.risk import RiskControlClient
+        from kairospy.contracts.risk import RiskControlClient
 
         object.__setattr__(
             self,
@@ -402,7 +408,7 @@ class RiskSystemClient(SystemRpcClient):
         return _risk_circuit_state(self.control.close_circuit(request))
 
     def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
-        from kairospy.infrastructure.contracts.risk import AdvanceRiskTimeRequest
+        from kairospy.contracts.risk import AdvanceRiskTimeRequest
 
         value = self.control.advance_time(AdvanceRiskTimeRequest(event_time_unix_nanos))
         return {
@@ -473,7 +479,7 @@ class RiskSystemClient(SystemRpcClient):
         }
 
     def latest_view(self, *, actor_id: str):
-        from kairospy.infrastructure.contracts.risk import RiskCurrentView
+        from kairospy.contracts.risk import RiskCurrentView
 
         if self.workspace_id is None:
             raise RuntimeError("Risk indexed current view requires workspace identity")
@@ -594,7 +600,7 @@ class CapitalSystemClient(SystemRpcClient):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        from kairospy.infrastructure.contracts.capital import CapitalControlClient
+        from kairospy.contracts.capital import CapitalControlClient
 
         object.__setattr__(
             self,
@@ -607,19 +613,19 @@ class CapitalSystemClient(SystemRpcClient):
         return {"status": value.status}
 
     def publish_funding_objective(
-        self, request: object
+        self, request: PublishFundingObjectiveRequest
     ) -> dict[str, Any]:
         return _capital_control_response(
             self.control.publish_funding_objective(request)
         )
 
     def cancel_funding_objective_request(
-        self, request: object
+        self, request: CancelFundingObjectiveRequest
     ) -> dict[str, Any]:
         return _capital_control_response(self.control.cancel_funding_objective(request))
 
     def observe_capital_demand(
-        self, request: object
+        self, request: ObserveCapitalDemandRequest
     ) -> dict[str, Any]:
         return _capital_demand_response(self.control.observe_capital_demand(request))
 
@@ -630,7 +636,7 @@ class CapitalSystemClient(SystemRpcClient):
         plan_id: str,
         request_id: str | None = None,
     ) -> dict[str, Any]:
-        from kairospy.infrastructure.contracts.capital.types import (
+        from kairospy.contracts.capital.types import (
             ReconcileCapitalPlanRequest,
         )
 
@@ -645,14 +651,14 @@ class CapitalSystemClient(SystemRpcClient):
         )
 
     def reconcile_plan_request(
-        self, request: object
+        self, request: ReconcileCapitalPlanRequest
     ) -> dict[str, Any]:
         return _capital_reconcile_response(
             self.control.reconcile_capital_plan(request)
         )
 
     def current_view(self, capital_group_id: str):
-        from kairospy.infrastructure.contracts.capital import CapitalCurrentView
+        from kairospy.contracts.capital import CapitalCurrentView
 
         if self.workspace_id is None:
             raise RuntimeError(
@@ -736,7 +742,7 @@ class ReferenceSystemClient(SystemRpcClient):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        from kairospy.infrastructure.contracts.reference import (
+        from kairospy.contracts.reference import (
             ReferenceClient,
             ReferenceControlClient,
         )

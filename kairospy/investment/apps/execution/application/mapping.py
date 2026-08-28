@@ -33,8 +33,8 @@ from kairospy.primitives.decimal import (
     QuantityLike,
 )
 from kairospy.primitives.time import datetime_from_unix_nanos
-from kairospy.infrastructure.contracts.market.events import MarketEvent
-from kairospy.infrastructure.contracts.execution.types import (
+from kairospy.contracts.market.events import MarketEvent
+from kairospy.contracts.execution.types import (
     ExecutionBacktestMarketRequest,
 )
 
@@ -69,7 +69,7 @@ class _MarketBar(_MarketObservation, Protocol):
 def backtest_market_request(event: object) -> ExecutionBacktestMarketRequest | None:
     """Map one owner-native Market fact into a typed Execution request."""
 
-    if isinstance(event, MarketEvent) and event.kind == "quote":
+    if isinstance(event, MarketEvent) and event.kind == "quote_updated":
         quote = cast(_MarketQuote, event.data)
         if quote.scope.market_id is None:
             raise ValueError(
@@ -96,7 +96,7 @@ def backtest_market_request(event: object) -> ExecutionBacktestMarketRequest | N
                 observed_at_unix_nanos=quote.source_observed_at_unix_nanos,
                 source_id=quote.provider,
         )
-    if isinstance(event, MarketEvent) and event.kind == "bar":
+    if isinstance(event, MarketEvent) and event.kind == "bar_completed":
         bar = cast(_MarketBar, event.data)
         if bar.scope.market_id is None:
             raise ValueError(

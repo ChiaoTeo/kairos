@@ -7,7 +7,7 @@ from typing import Literal
 
 from kairospy.system.apps.components.application.clients import MarketSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace, Workspace
-from kairospy.infrastructure.contracts.market import MarketClient
+from kairospy.contracts.market import MarketClient
 from kairospy.strategy import StrategyIdentity
 
 from ..application.application import MarketApplication
@@ -74,15 +74,11 @@ def build_strategy_access(
     current_view = owner.current
     if current_view is None:
         raise RuntimeError("Market owner client is missing its current-view capability")
-    event_source = (
-        UnixMarketEventStream(event_socket)
-        if config.replayable
-        else owner.events
-    )
     application = MarketApplication(
         owner.control,
         current_view,
-        event_source,
+        None if config.replayable else owner.events,
+        replay_source=UnixMarketEventStream(event_socket) if config.replayable else None,
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,
         # Shared Market is a workspace process and intentionally carries no

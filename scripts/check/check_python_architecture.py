@@ -98,6 +98,7 @@ def main() -> int:
         PACKAGE / "application",
         PACKAGE / "surface" / "client",
         PACKAGE / "infrastructure" / "transport" / "generated",
+        PACKAGE / "infrastructure" / "contracts",
     )
     for path in legacy_paths:
         if path.exists():
@@ -140,9 +141,31 @@ def main() -> int:
     ).read_text(encoding="utf-8")
     if "IndexedViewReader" in native_transport:
         failures.append("generic IndexedViewReader remains in kairos-python-transport")
-    reference_client = (
-        PACKAGE / "infrastructure" / "contracts" / "reference" / "client.py"
+    legacy_native_source = (
+        ROOT / "crates" / "platform" / "python-transport" / "src" / "aeron.rs"
     )
+    if legacy_native_source.exists():
+        failures.append("queued Python Aeron adapter has returned")
+    python_transport_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "crates" / "platform" / "python-transport" / "src"
+        ).glob("*.rs")
+    )
+    for forbidden in ("WorkerExitedError", "QueueOverflowError", "mpsc::", "PyBytes"):
+        if forbidden in python_transport_sources:
+            failures.append(
+                f"Python live transport reintroduced queued/copied path {forbidden!r}"
+            )
+    for path in python_files:
+        source = path.read_text(encoding="utf-8")
+        for forbidden in ("subscribe_live", "NativeEventSource", "native_event"):
+            if forbidden in source:
+                failures.append(
+                    f"legacy live-event path {forbidden!r} remains in "
+                    f"{path.relative_to(ROOT)}"
+                )
+    reference_client = PACKAGE / "contracts" / "reference" / "client.py"
     reference_source = reference_client.read_text(encoding="utf-8")
     for forbidden in ("reference_meta", "reference_markets_current", "SELECT ", "sqlite3"):
         if forbidden in reference_source:
@@ -150,6 +173,42 @@ def main() -> int:
                 "Reference Python contract contains SQLite implementation detail "
                 f"{forbidden!r}: {reference_client.relative_to(ROOT)}"
             )
+    reference_application = (
+        PACKAGE / "investment" / "apps" / "reference" / "application" / "application.py"
+    )
+    for path in (reference_client, reference_application):
+        source = path.read_text(encoding="utf-8")
+        for forbidden in ("_from_row", "def _exchange(", "def _asset(", "def _market("):
+            if forbidden in source:
+                failures.append(
+                    "Reference query path reintroduced a consumer DTO reconstruction: "
+                    f"{path.relative_to(ROOT)} contains {forbidden!r}"
+                )
+
+    # Strategy re-exports owner-classified events; it does not define a second
+    # payload/change product over the owner contract.
+    for name in ("account.py", "risk.py", "execution.py", "market.py"):
+        path = PACKAGE / "strategy" / "api" / name
+        source = path.read_text(encoding="utf-8")
+        owner = path.stem
+        if f"from kairospy.contracts.{owner}.events import" not in source:
+            failures.append(f"Strategy {owner} does not re-export its owner contract")
+        for field in ("payload", "change"):
+            if re.search(rf"\b{field}\b", source):
+                failures.append(
+                    f"Strategy {owner} reintroduced legacy event field {field!r}"
+                )
+
+    public_type_contract = ROOT / "tests" / "public_api" / "type_contract.py"
+    public_type_source = public_type_contract.read_text(encoding="utf-8")
+    for required in (
+        'event.kind == "bar_completed"',
+        'event.kind == "quote_updated"',
+        "assert_type(event.metadata.sequence, SequenceRead)",
+        "assert_type(event.account_id, AccountIdRead)",
+    ):
+        if required not in public_type_source:
+            failures.append(f"public semantic type contract is missing {required!r}")
     for owner in OWNER_CONTRACT_PY_BINDINGS:
         binding = ROOT / "crates" / "modules" / owner / "contract" / "py"
         if not (binding / "Cargo.toml").is_file() or not (binding / "src" / "lib.rs").is_file():
@@ -166,7 +225,7 @@ def main() -> int:
         "risk": ("control.py", "records.py", "source.py"),
     }
     for owner, names in forbidden_owner_files.items():
-        facade = PACKAGE / "infrastructure" / "contracts" / owner
+        facade = PACKAGE / "contracts" / owner
         for name in names:
             path = facade / name
             if path.exists():
@@ -177,7 +236,7 @@ def main() -> int:
         rust = (
             ROOT / "crates" / "modules" / owner / "contract" / "py" / "src" / "lib.rs"
         ).read_text(encoding="utf-8")
-        source_module = f"kairospy.infrastructure.contracts.{owner}.source"
+        source_module = f"kairospy.contracts.{owner}.source"
         if source_module in rust:
             failures.append(
                 f"{owner} native companion delegates events back to Python source.py"
@@ -196,8 +255,20 @@ def main() -> int:
         for path in facade_python:
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(path))
+            parents = {
+                child: parent
+                for parent in ast.walk(tree)
+                for child in ast.iter_child_nodes(parent)
+            }
             for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
+                if (
+                    isinstance(node, ast.ClassDef)
+                    and path.name != "events.py"
+                    and not any(
+                        isinstance(base, ast.Name) and base.id == "Protocol"
+                        for base in node.bases
+                    )
+                ):
                     _failure(
                         failures,
                         path,
@@ -205,7 +276,9 @@ def main() -> int:
                         "owner facade must not define a parallel contract class",
                     )
                 elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-                    node.name not in OWNER_FACADE_FUNCTIONS.get(path.name, frozenset())
+                    isinstance(parents.get(node), ast.Module)
+                    and node.name
+                    not in OWNER_FACADE_FUNCTIONS.get(path.name, frozenset())
                 ):
                     _failure(
                         failures,
@@ -280,7 +353,7 @@ def main() -> int:
                 )
 
     scoped_owner_roots = tuple(
-        PACKAGE / "infrastructure" / "contracts" / owner
+        PACKAGE / "contracts" / owner
         for owner in CURRENT_VIEW_OWNERS
     ) + tuple(
         PACKAGE / "investment" / "apps" / owner
@@ -313,7 +386,7 @@ def main() -> int:
             target_parts = module.split(".")
 
             if path.is_relative_to(PACKAGE / "strategy" / "api") and module.startswith(
-                "kairospy.infrastructure.contracts.reference"
+                "kairospy.contracts.reference"
             ):
                 _failure(
                     failures,
@@ -324,7 +397,7 @@ def main() -> int:
 
             if (
                 path.is_relative_to(
-                    PACKAGE / "infrastructure" / "contracts" / "reference"
+                    PACKAGE / "contracts" / "reference"
                 )
                 and module == "sqlite3"
             ):
@@ -336,7 +409,7 @@ def main() -> int:
                 )
 
             if (
-                path.is_relative_to(PACKAGE / "infrastructure" / "contracts")
+                path.is_relative_to(PACKAGE / "contracts")
                 and any(owner in relative.parts for owner in CURRENT_VIEW_OWNERS)
                 and path.stem in {"view", "view_contract", "current", "runtime"}
                 and (
@@ -352,7 +425,7 @@ def main() -> int:
                 )
 
             if module in OWNER_NATIVE_MODULES and not path.is_relative_to(
-                PACKAGE / "infrastructure" / "contracts"
+                PACKAGE / "contracts"
             ):
                 _failure(
                     failures,
@@ -364,7 +437,7 @@ def main() -> int:
             if (
                 any(
                     path.is_relative_to(
-                        PACKAGE / "infrastructure" / "contracts" / owner
+                        PACKAGE / "contracts" / owner
                     )
                     for owner in CURRENT_VIEW_OWNERS
                 )

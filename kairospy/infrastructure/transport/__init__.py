@@ -12,8 +12,6 @@ from importlib import import_module
 _EXPORTS = {
     "UnixJsonCommandClient": (".commands", "UnixJsonCommandClient"),
     "UnixJsonRpcClient": (".commands", "UnixJsonRpcClient"),
-    "AeronReferenceEventSource": (".reference", "AeronReferenceEventSource"),
-    "decode_reference_event": (".reference", "decode_reference_event"),
 }
 
 

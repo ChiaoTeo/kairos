@@ -1,7 +1,9 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use _native_transport::direct::DirectAeronSubscription;
+use _native_transport::lease::{EventLease, EventLeaseError};
 use kairos_market_contract::{
     ContractError, MarketBarCurrent as RustBar, MarketBarKind, MarketCommandEnvelope,
     MarketCommandOutcome, MarketCommandStatus as RustCommandStatus, MarketControlRpcClient,
@@ -147,18 +149,16 @@ impl NativeMarketClient {
 
     #[getter]
     fn events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let platform = PyModule::import(py, "kairospy.infrastructure.transport.native_event")?;
-        let owner = PyModule::import(py, "kairospy._native_market_contract")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("decoder", owner.getattr("decode_event")?)?;
-        kwargs.set_item("batch_decoder", owner.getattr("decode_events")?)?;
-        kwargs.set_item("aeron_dir", self.aeron_dir.clone())?;
-        kwargs.set_item("channel", self.channel.clone())?;
-        kwargs.set_item("stream_id", self.stream_id)?;
-        Ok(platform
-            .getattr("NativeEventSource")?
-            .call((), Some(&kwargs))?
-            .unbind())
+        Ok(Py::new(
+            py,
+            MarketLiveSubscription::new(
+                self.aeron_dir.clone(),
+                Some(self.channel.clone()),
+                Some(self.stream_id),
+                _native_transport::DEFAULT_MAX_PAYLOAD_LEN,
+            )?,
+        )?
+        .into_any())
     }
 }
 
@@ -1533,7 +1533,130 @@ struct MarketEvent {
     metadata: MarketEventMetadata,
     #[pyo3(get)]
     kind: String,
-    payload: Py<PyAny>,
+    data: Py<PyAny>,
+}
+
+/// Callback-scoped Market event backed by the current Aeron fragment.
+#[pyclass(
+    name = "MarketLiveEventView",
+    frozen,
+    module = "kairospy._native_market_contract"
+)]
+struct MarketLiveEventView {
+    lease: Arc<EventLease>,
+}
+
+#[pymethods]
+impl MarketLiveEventView {
+    #[getter]
+    fn kind(&self) -> PyResult<String> {
+        self.with_event(|event| event.kind().as_str().to_owned())
+    }
+
+    #[getter]
+    fn metadata(&self) -> PyResult<MarketEventMetadata> {
+        self.with_event(|event| match event {
+            RustMarketEvent::QuoteUpdated(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::TradeOccurred(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::BarCompleted(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::GreeksUpdated(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::RateUpdated(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::Ticker24hUpdated(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::MarkPriceUpdated(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::FundingRateUpdated(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::OpenInterestUpdated(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::IndexPriceUpdated(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::OrderBookSnapshotReceived(root) => {
+                market_event_metadata(root.metadata())
+            },
+            RustMarketEvent::OrderBookDeltaReceived(root) => market_event_metadata(root.metadata()),
+            RustMarketEvent::OrderBookResyncRequired(root) => {
+                market_event_metadata(root.metadata())
+            },
+        })?
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.with_event(|event| project_market_event(py, event).map(|value| value.data))?
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("MarketLiveEventView(kind={:?})", self.kind()?))
+    }
+}
+
+impl MarketLiveEventView {
+    fn with_event<R>(
+        &self,
+        read: impl for<'frame> FnOnce(RustMarketEvent<'frame>) -> R,
+    ) -> PyResult<R> {
+        self.lease
+            .with_frame(|frame| {
+                kairos_market_contract::decode_event(frame)
+                    .map(read)
+                    .map_err(|error| MarketInvalidEventError::new_err(error.to_string()))
+            })
+            .map_err(market_lease_error)?
+    }
+}
+
+#[pyclass(
+    name = "MarketLiveSubscription",
+    module = "kairospy._native_market_contract",
+    unsendable
+)]
+struct MarketLiveSubscription {
+    inner: DirectAeronSubscription,
+}
+
+#[pymethods]
+impl MarketLiveSubscription {
+    #[new]
+    #[pyo3(signature = (*, aeron_dir=None, channel=None, stream_id=None, max_payload_len=_native_transport::DEFAULT_MAX_PAYLOAD_LEN))]
+    fn new(
+        aeron_dir: Option<String>,
+        channel: Option<String>,
+        stream_id: Option<i32>,
+        max_payload_len: usize,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: DirectAeronSubscription::connect(
+                aeron_dir.as_deref(),
+                channel
+                    .as_deref()
+                    .unwrap_or(kairos_market_contract::DEFAULT_AERON_CHANNEL),
+                stream_id.unwrap_or(kairos_market_contract::MARKET_EVENTS_STREAM_ID),
+                max_payload_len,
+            )?,
+        })
+    }
+
+    #[pyo3(signature = (visitor, *, fragment_limit=64))]
+    fn poll_visit(
+        &self,
+        py: Python<'_>,
+        visitor: Py<PyAny>,
+        fragment_limit: i32,
+    ) -> PyResult<usize> {
+        self.inner.poll_visit(py, fragment_limit, |py, lease| {
+            lease
+                .with_frame(|frame| kairos_market_contract::decode_event(frame).map(|_| ()))
+                .map_err(market_lease_error)?
+                .map_err(|error| MarketInvalidEventError::new_err(error.to_string()))?;
+            let event = Py::new(py, MarketLiveEventView { lease })?;
+            visitor.call1(py, (event,))?;
+            Ok(())
+        })
+    }
+
+    fn close(&self) -> PyResult<()> {
+        self.inner.close()
+    }
+}
+
+fn market_lease_error(error: EventLeaseError) -> PyErr {
+    PyRuntimeError::new_err(error.to_string())
 }
 
 #[pyclass(
@@ -1757,8 +1880,8 @@ impl MarketEvent {
         };
         Ok(Self {
             metadata,
-            kind: "bar".to_owned(),
-            payload: Py::new(py, payload)?.into_any(),
+            kind: "bar_completed".to_owned(),
+            data: Py::new(py, payload)?.into_any(),
         })
     }
 
@@ -1819,18 +1942,14 @@ impl MarketEvent {
         };
         Ok(Self {
             metadata,
-            kind: "quote".to_owned(),
-            payload: Py::new(py, payload)?.into_any(),
+            kind: "quote_updated".to_owned(),
+            data: Py::new(py, payload)?.into_any(),
         })
     }
 
     #[getter]
-    fn payload(&self, py: Python<'_>) -> Py<PyAny> {
-        self.payload.clone_ref(py)
-    }
-    #[getter]
     fn data(&self, py: Python<'_>) -> Py<PyAny> {
-        self.payload.clone_ref(py)
+        self.data.clone_ref(py)
     }
     #[getter]
     fn stream_id(&self) -> &str {
@@ -3895,78 +4014,79 @@ fn project_resync(
 
 fn project_market_event(py: Python<'_>, value: RustMarketEvent<'_>) -> PyResult<MarketEvent> {
     macro_rules! project {
-        ($root:expr, $kind:literal, $payload:expr) => {{
+        ($root:expr, $payload:expr) => {{
             let metadata = market_event_metadata($root.metadata())?;
             let payload = Py::new(py, $payload)?.into_any();
-            (metadata, $kind, payload)
+            (metadata, payload)
         }};
     }
-    let (metadata, kind, payload) = match value {
+    let kind = value.kind().as_str().to_owned();
+    let (metadata, data) = match value {
         RustMarketEvent::QuoteUpdated(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_quote(&metadata, root.quote())?)?.into_any();
-            (metadata, "quote", payload)
+            (metadata, payload)
         },
         RustMarketEvent::TradeOccurred(root) => {
-            project!(root, "trade", project_trade(root.trade())?)
+            project!(root, project_trade(root.trade())?)
         },
         RustMarketEvent::BarCompleted(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_bar(&metadata, root.bar())?)?.into_any();
-            (metadata, "bar", payload)
+            (metadata, payload)
         },
         RustMarketEvent::GreeksUpdated(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_greeks(&metadata, root.greeks())?)?.into_any();
-            (metadata, "greeks", payload)
+            (metadata, payload)
         },
         RustMarketEvent::RateUpdated(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_rate(&metadata, root.rate())?)?.into_any();
-            (metadata, "rate", payload)
+            (metadata, payload)
         },
         RustMarketEvent::Ticker24hUpdated(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_ticker(&metadata, root.ticker())?)?.into_any();
-            (metadata, "ticker_24h", payload)
+            (metadata, payload)
         },
         RustMarketEvent::MarkPriceUpdated(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_mark(&metadata, root.mark_price())?)?.into_any();
-            (metadata, "mark_price", payload)
+            (metadata, payload)
         },
         RustMarketEvent::FundingRateUpdated(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_funding(&metadata, root.funding_rate())?)?.into_any();
-            (metadata, "funding_rate", payload)
+            (metadata, payload)
         },
         RustMarketEvent::OpenInterestUpdated(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload =
                 Py::new(py, project_open_interest(&metadata, root.open_interest())?)?.into_any();
-            (metadata, "open_interest", payload)
+            (metadata, payload)
         },
         RustMarketEvent::IndexPriceUpdated(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_index(&metadata, root.index_price())?)?.into_any();
-            (metadata, "index_price", payload)
+            (metadata, payload)
         },
         RustMarketEvent::OrderBookSnapshotReceived(root) => {
             let metadata = market_event_metadata(root.metadata())?;
             let payload = Py::new(py, project_order_book(&metadata, root.snapshot())?)?.into_any();
-            (metadata, "order_book_snapshot", payload)
+            (metadata, payload)
         },
         RustMarketEvent::OrderBookDeltaReceived(root) => {
-            project!(root, "order_book_delta", project_delta(root.delta())?)
+            project!(root, project_delta(root.delta())?)
         },
         RustMarketEvent::OrderBookResyncRequired(root) => {
-            project!(root, "order_book_resync", project_resync(root)?)
+            project!(root, project_resync(root)?)
         },
     };
     Ok(MarketEvent {
         metadata,
-        kind: kind.to_owned(),
-        payload,
+        kind,
+        data,
     })
 }
 
@@ -4096,6 +4216,8 @@ fn _native_market_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<MarketOrderBookDeltaEventPayload>()?;
     module.add_class::<MarketOrderBookResyncEventPayload>()?;
     module.add_class::<MarketEvent>()?;
+    module.add_class::<MarketLiveEventView>()?;
+    module.add_class::<MarketLiveSubscription>()?;
     module.add_class::<NativeMarketViewKind>()?;
     module.add_class::<NativeMarketViewKey>()?;
     module.add_class::<MarketCurrentEvidence>()?;

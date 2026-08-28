@@ -5,7 +5,8 @@ from decimal import Decimal
 from enum import StrEnum
 
 from kairospy.investment.apps.reference.application import InstrumentRef
-from kairospy.primitives.account import AccountId, SegmentKey
+from kairospy.primitives.account import AccountId, BrokerId, SegmentKey
+from kairospy.primitives.capital import EarnProductId
 from kairospy.primitives.decimal import (
     Money,
     MoneyLike,
@@ -16,7 +17,10 @@ from kairospy.primitives.decimal import (
     SignedQuantity,
     SignedQuantityLike,
 )
-from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.execution import OrderId
+from kairospy.primitives.integration import RemoteOrderId
+from kairospy.primitives.reference import AssetId, InstrumentId, MarketId
+from kairospy.primitives.time import Generation, Sequence, UnixNanos
 
 from .errors import (
     AccountNotEnabledError,
@@ -94,7 +98,7 @@ class EarnLiquidity(StrEnum):
 class Balance:
     account_id: AccountId
     segment_key: SegmentKey
-    asset: str
+    asset: AssetId
     total: QuantityLike
     available: QuantityLike
     reserved: QuantityLike
@@ -130,8 +134,8 @@ class EarnHolding:
     account_id: AccountId
     segment_key: SegmentKey
     holding_key: str
-    product_id: str
-    asset: str
+    product_id: EarnProductId
+    asset: AssetId
     principal: QuantityLike
     redeemable: QuantityLike | None
     state: EarnHoldingState
@@ -139,8 +143,8 @@ class EarnHolding:
     participant_position_id: str | None = None
     participant_state: str | None = None
     notice_seconds: int | None = None
-    matures_at_unix_nanos: int | None = None
-    observed_at_unix_nanos: int | None = None
+    matures_at_unix_nanos: UnixNanos | None = None
+    observed_at_unix_nanos: UnixNanos | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "principal", _quantity(self.principal))
@@ -155,10 +159,10 @@ class EarnHolding:
 class ObservedOrder:
     account_id: AccountId
     segment_key: SegmentKey
-    order_id: str
-    remote_order_id: str | None
+    order_id: OrderId
+    remote_order_id: RemoteOrderId | None
     instrument: InstrumentRef
-    market_id: str
+    market_id: MarketId
     quantity: QuantityLike
     filled_quantity: QuantityLike
     status: str
@@ -193,24 +197,24 @@ class AccountSegmentSnapshot:
 
     account_id: AccountId
     segment_key: SegmentKey
-    broker: str
+    broker: BrokerId
     environment: str
     account_model: str | None
     equity: MoneyLike | None
     balances: tuple[Balance, ...]
     positions: tuple[Position, ...]
     freshness: DataFreshness
-    generation: int
+    generation: Generation
     earn_holdings: tuple[EarnHolding, ...] = ()
-    earn_watermark_unix_nanos: int | None = None
+    earn_watermark_unix_nanos: UnixNanos | None = None
     sync_mode: SegmentSyncMode = SegmentSyncMode.UNKNOWN
     sync_lifecycle: SegmentSyncLifecycle = SegmentSyncLifecycle.CONFIGURED
     completeness: SegmentCompleteness = SegmentCompleteness.UNKNOWN
-    snapshot_watermark: int | None = None
-    event_watermark: int | None = None
+    snapshot_watermark: Sequence | None = None
+    event_watermark: Sequence | None = None
     channel_epoch: int | None = None
-    last_event_at_unix_nanos: int | None = None
-    last_success_at_unix_nanos: int | None = None
+    last_event_at_unix_nanos: UnixNanos | None = None
+    last_success_at_unix_nanos: UnixNanos | None = None
     last_error: str | None = None
     recovery_buffer_depth: int = 0
 
@@ -221,13 +225,15 @@ class AccountSegmentSnapshot:
     def is_fresh(self) -> bool:
         return self.freshness is DataFreshness.FRESH
 
-    def balance(self, asset: str) -> Balance | None:
-        return next((value for value in self.balances if value.asset == asset), None)
+    def balance(self, asset: AssetId | str) -> Balance | None:
+        asset_id = asset if isinstance(asset, AssetId) else AssetId(asset)
+        return next((value for value in self.balances if value.asset == asset_id), None)
 
-    def require_balance(self, asset: str) -> Balance:
-        value = self.balance(asset)
+    def require_balance(self, asset: AssetId | str) -> Balance:
+        asset_id = asset if isinstance(asset, AssetId) else AssetId(asset)
+        value = self.balance(asset_id)
         if value is None:
-            raise BalanceNotFoundError(self.account_id, self.segment_key, asset)
+            raise BalanceNotFoundError(self.account_id, self.segment_key, asset_id)
         return value
 
     def position(self, instrument: InstrumentRef | InstrumentId) -> Position | None:
@@ -257,8 +263,8 @@ class AccountSnapshot:
 
     account_id: AccountId
     segments: tuple[AccountSegmentSnapshot, ...]
-    generation: int
-    event_sequence: int = 0
+    generation: Generation
+    event_sequence: Sequence = Sequence(0)
 
     def find_segment(self, segment: SegmentKey | str) -> AccountSegmentSnapshot | None:
         segment_key = _segment_key(segment)

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from base64 import b64decode
 
-from kairospy.infrastructure.contracts.reference.events import decode_event
-from kairospy.infrastructure.contracts.reference.source import decode_reference_event
+from kairospy.contracts.reference.events import decode_event
+from kairospy.contracts.reference.source import decode_reference_event
 
 
 MARKET_UPSERTED = b64decode(
@@ -16,7 +16,7 @@ def test_reference_v2_event_decoder_returns_owner_native_event() -> None:
 
     assert event.catalog_revision == 3
     assert event.metadata.sequence == 1
-    assert event.payload.market_id == "market:binance:spot:BTCUSDT"
+    assert event.data.market_id == "market:binance:spot:BTCUSDT"
     record = decode_reference_event(MARKET_UPSERTED)
     assert record.kind == "market_upserted"
     assert record.event_id == "reference:event:1"

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kairospy.infrastructure.contracts import _native as native_loader
+from kairospy.contracts import _native as native_loader
 
 
 @pytest.mark.parametrize(
@@ -58,10 +58,9 @@ def test_owner_named_client_unifies_control_events_and_optional_current(
     )
 
     assert type(client.control).__name__ == f"{prefix}ControlClient"
-    assert type(client.events).__name__ == "NativeEventSource"
-    assert type(client.events).__module__ == (
-        "kairospy.infrastructure.transport.native_event"
-    )
+    subscription = getattr(native, f"{prefix}LiveSubscription")
+    assert subscription.__name__ == f"{prefix}LiveSubscription"
+    assert subscription.__module__ == f"kairospy._native_{owner}_contract"
     assert client.current is None
 
     with pytest.raises(
@@ -110,7 +109,7 @@ def test_missing_control_socket_is_transport_unavailable(owner: str) -> None:
 
 def test_public_owner_facades_export_the_native_owner_named_client() -> None:
     for owner in ("account", "capital", "execution", "market", "risk"):
-        facade = import_module(f"kairospy.infrastructure.contracts.{owner}")
+        facade = import_module(f"kairospy.contracts.{owner}")
         native = import_module(f"kairospy._native_{owner}_contract")
         name = f"{owner.title()}Client"
         assert getattr(facade, name) is getattr(native, name)

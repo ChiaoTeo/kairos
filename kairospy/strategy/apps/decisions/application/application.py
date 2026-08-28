@@ -307,7 +307,7 @@ class StrategyDecisionApplication:
     def observe_execution(
         self, event: ExecutionEvent, *, replay: bool = False
     ) -> StrategyDecision | None:
-        if event.kind == "fill":
+        if event.kind == "fill_recorded":
             fill = event.data
             return self._observe_fill_values(
                 intent_id=str(getattr(fill, "intent_id")),
@@ -321,7 +321,11 @@ class StrategyDecisionApplication:
                 ),
                 source_event_sequence=event.metadata.sequence,
             )
-        if event.kind != "intent_update":
+        if event.kind not in {
+            "intent_accepted",
+            "intent_rejected",
+            "intent_lifecycle_changed",
+        }:
             return None
         update = event.data
         intent = getattr(update, "intent")

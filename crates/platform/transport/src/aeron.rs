@@ -10,6 +10,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -324,12 +325,43 @@ impl AeronByteSubscription {
     }
 
     pub fn poll(&mut self, fragment_limit: i32) -> Result<usize, AeronTransportError> {
+        let mut frames = Vec::new();
+        let count = self.poll_with(fragment_limit, |buffer| frames.push(buffer.to_vec()))?;
+        self.queue.extend(frames);
+        Ok(count)
+    }
+
+    /// Poll complete Aeron messages and visit each message without copying it.
+    ///
+    /// The borrowed slice is valid only for the duration of the callback. It
+    /// may refer directly to an Aeron term buffer for an unfragmented message,
+    /// or to the fragment assembler's reusable buffer for a fragmented one.
+    /// Callers must finish decoding and handling the message before returning;
+    /// retaining a pointer to the slice beyond the callback is invalid.
+    ///
+    /// Unlike [`Self::poll`], this method never appends messages to the owned
+    /// frame queue. The returned count is Aeron's fragment count, which can be
+    /// greater than the number of complete messages delivered to `visitor`.
+    pub fn poll_with<F>(
+        &mut self,
+        fragment_limit: i32,
+        mut visitor: F,
+    ) -> Result<usize, AeronTransportError>
+    where
+        F: FnMut(&[u8]),
+    {
         if fragment_limit <= 0 {
             return Err(AeronTransportError::Configuration(
                 "fragment limit must be positive".into(),
             ));
         }
-        let mut frames = Vec::new();
+
+        let mut context = BorrowedFrameContext {
+            visitor: &mut visitor,
+            max_payload_len: self.max_payload_len,
+            oversized: None,
+            panic: None,
+        };
         let subscription = self
             .subscription
             .lock()
@@ -338,21 +370,18 @@ impl AeronByteSubscription {
             .assembler
             .poll(
                 &*subscription,
-                &mut frames,
-                collect_reassembled_frame,
+                &mut context,
+                visit_borrowed_frame::<F>,
                 fragment_limit as usize,
             )
             .map_err(|error| {
                 AeronTransportError::Operation(format!("poll subscription: {error:?}"))
             })?;
-        self.queue.extend(frames);
-        if let Some(frame) = self
-            .queue
-            .iter()
-            .find(|frame| frame.len() > self.max_payload_len)
-        {
-            let actual = frame.len();
-            self.queue.clear();
+
+        if let Some(panic) = context.panic {
+            resume_unwind(panic);
+        }
+        if let Some(actual) = context.oversized {
             return Err(AeronTransportError::PayloadTooLarge {
                 limit: self.max_payload_len,
                 actual,
@@ -362,8 +391,30 @@ impl AeronByteSubscription {
     }
 }
 
-fn collect_reassembled_frame(frames: &mut Vec<Vec<u8>>, buffer: &[u8], _header: AeronHeader) {
-    frames.push(buffer.to_vec());
+struct BorrowedFrameContext<'a, F> {
+    visitor: &'a mut F,
+    max_payload_len: usize,
+    oversized: Option<usize>,
+    panic: Option<Box<dyn std::any::Any + Send>>,
+}
+
+fn visit_borrowed_frame<F>(
+    context: &mut BorrowedFrameContext<'_, F>,
+    buffer: &[u8],
+    _header: AeronHeader,
+) where
+    F: FnMut(&[u8]),
+{
+    if context.oversized.is_some() || context.panic.is_some() {
+        return;
+    }
+    if buffer.len() > context.max_payload_len {
+        context.oversized = Some(buffer.len());
+        return;
+    }
+    if let Err(panic) = catch_unwind(AssertUnwindSafe(|| (context.visitor)(buffer))) {
+        context.panic = Some(panic);
+    }
 }
 
 fn connect_client(aeron_dir: Option<&str>) -> Result<Aeron, AeronTransportError> {

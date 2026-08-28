@@ -5,31 +5,33 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from kairospy.primitives.account import AccountId
-from kairospy.primitives.decimal import Money, MoneyLike
+from kairospy.contracts.risk.types import RiskCurrentSnapshot
+from kairospy.primitives.decimal import DecimalValue, Money
+from kairospy.primitives.time import Generation
 
 from .models import RiskStatus, RiskViolation
 
 
-def map_risk_status(value: object, *, account_id: AccountId) -> RiskStatus:
+def map_risk_status(value: RiskCurrentSnapshot, *, account_id: AccountId) -> RiskStatus:
     usages = tuple(
         item
-        for item in getattr(value, "limits")
-        if getattr(getattr(item, "policy"), "scope").account_id
+        for item in value.limits
+        if item.policy.scope.account_id
         in {None, str(account_id)}
-        and getattr(getattr(item, "policy"), "metric") == "notional"
+        and item.policy.metric == "notional"
     )
     circuits = tuple(
         item
-        for item in getattr(value, "circuits")
-        if getattr(item, "scope").account_id in {None, str(account_id)}
-        and getattr(item, "status") == "open"
+        for item in value.circuits
+        if item.scope.account_id in {None, str(account_id)}
+        and item.status == "open"
     )
-    available = _sum_money(getattr(item, "available") for item in usages)
-    reserved = _sum_money(getattr(item, "reserved") for item in usages)
+    available = _sum_money(item.available for item in usages)
+    reserved = _sum_money(item.reserved for item in usages)
     violations = tuple(
         RiskViolation(
             code="circuit_open",
-            message=getattr(item, "reason") or "Risk circuit is open",
+            message=item.reason or "Risk circuit is open",
             limit=None,
             actual=None,
         )
@@ -42,14 +44,12 @@ def map_risk_status(value: object, *, account_id: AccountId) -> RiskStatus:
         reserved_notional=reserved,
         utilization=None,
         violations=violations,
-        generation=int(getattr(value, "applied_event_sequence")),
+        generation=Generation(value.generation),
     )
 
 
-def _sum_money(values: Iterable[object]) -> Money:
+def _sum_money(values: Iterable[DecimalValue]) -> Money:
     total = Money("0")
     for value in values:
-        if not isinstance(value, MoneyLike):
-            raise ValueError("notional value is not a Risk contract Money")
-        total = total.checked_add(value)
+        total = total.checked_add(Money(value.value))
     return total

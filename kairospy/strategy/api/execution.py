@@ -1,46 +1,32 @@
-"""Read-only Strategy view of the owner-native Execution event contract."""
+"""Strategy re-exports of the Execution-owned event contract."""
 
-from __future__ import annotations
+from kairospy.contracts.execution.events import (
+    ExecutionEventVariant,
+    ExecutionFillRecordedEvent,
+    ExecutionIntentAcceptedEvent,
+    ExecutionIntentLifecycleChangedEvent,
+    ExecutionIntentRejectedEvent,
+    ExecutionOrderAcceptedEvent,
+    ExecutionOrderCanceledEvent,
+    ExecutionOrderExpiredEvent,
+    ExecutionOrderRejectedEvent,
+    ExecutionOrderSubmittedEvent,
+    ExecutionPlanCreatedEvent,
+)
 
-from typing import Protocol
+ExecutionEvent = ExecutionEventVariant
 
-
-class ExecutionEventMetadata(Protocol):
-    @property
-    def stream_id(self) -> str: ...
-    @property
-    def sequence(self) -> int: ...
-    @property
-    def producer(self) -> str: ...
-    @property
-    def occurred_at_unix_nanos(self) -> int: ...
-
-
-class ExecutionEvent(Protocol):
-    @property
-    def metadata(self) -> ExecutionEventMetadata: ...
-    @property
-    def kind(self) -> str: ...
-    @property
-    def strategy_id(self) -> str | None: ...
-    @property
-    def account_id(self) -> str | None: ...
-    @property
-    def data(self) -> object: ...
-    @property
-    def payload(self) -> object: ...
-
-    @property
-    def stream_id(self) -> str: ...
-
-    @property
-    def sequence(self) -> int: ...
-
-    @property
-    def launch_id(self) -> str | None: ...
-
-    @property
-    def instance_id(self) -> str | None: ...
-
-
-__all__ = ["ExecutionEvent", "ExecutionEventMetadata"]
+__all__ = [
+    "ExecutionEvent",
+    "ExecutionEventVariant",
+    "ExecutionFillRecordedEvent",
+    "ExecutionIntentAcceptedEvent",
+    "ExecutionIntentLifecycleChangedEvent",
+    "ExecutionIntentRejectedEvent",
+    "ExecutionOrderAcceptedEvent",
+    "ExecutionOrderCanceledEvent",
+    "ExecutionOrderExpiredEvent",
+    "ExecutionOrderRejectedEvent",
+    "ExecutionOrderSubmittedEvent",
+    "ExecutionPlanCreatedEvent",
+]

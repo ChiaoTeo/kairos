@@ -1,6 +1,8 @@
-mod aeron;
+pub mod direct;
 mod errors;
+pub mod lease;
 
+pub use kairos_transport::DEFAULT_MAX_PAYLOAD_LEN;
 use pyo3::prelude::*;
 
 #[pyclass(frozen, module = "kairospy._native_transport")]
@@ -26,8 +28,6 @@ fn build_info() -> NativeBuildInfo {
 fn _native_transport(module: &Bound<'_, PyModule>) -> PyResult<()> {
     errors::register(module)?;
     module.add_class::<NativeBuildInfo>()?;
-    module.add_class::<aeron::StreamSpec>()?;
-    module.add_class::<aeron::PyAeronSubscription>()?;
     module.add_function(wrap_pyfunction!(build_info, module)?)?;
     Ok(())
 }

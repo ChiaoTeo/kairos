@@ -8,11 +8,17 @@ import importlib
 import inspect
 from pathlib import Path
 import sys
+from types import ModuleType
+from typing import Callable, cast
 
 
 ROOT = Path(__file__).resolve().parents[2]
 OWNERS = ("account", "capital", "execution", "market", "reference", "risk")
-MODULE_FUNCTIONS = {
+# Owners move into this set only after every public extension signature has an
+# audited type. This keeps migration slices green while making regression for
+# completed owners impossible.
+FULLY_TYPED_OWNERS = frozenset(OWNERS)
+MODULE_FUNCTIONS: dict[str, tuple[str, ...]] = {
     owner: ("build_info", "decode_event", "indexed_environment_path")
     for owner in OWNERS
 }
@@ -39,6 +45,7 @@ CANONICAL_IDENTITY_PROPERTIES = {
     "asset_id",
     "capital_group_id",
     "demand_id",
+    "client_order_id",
     "exchange_id",
     "execution_route_id",
     "fill_id",
@@ -48,14 +55,23 @@ CANONICAL_IDENTITY_PROPERTIES = {
     "listing_id",
     "market_id",
     "objective_id",
+    "operation_id",
     "order_id",
     "reservation_id",
+    "remote_order_id",
+    "route_id",
     "segment_key",
     "strategy_id",
+    "product_id",
+    "earn_product_id",
+    "selected_earn_product_id",
+    "execution_channel",
+    "order_entry_symbol",
+    "destination_market_id",
 }
 
 
-def _runtime_classes(module: object) -> dict[str, type[object]]:
+def _runtime_classes(module: ModuleType) -> dict[str, type[object]]:
     result: dict[str, type[object]] = {}
     for name, value in vars(module).items():
         if name.startswith("_") or not inspect.isclass(value):
@@ -89,7 +105,8 @@ def _stub_parameters(arguments: ast.arguments) -> tuple[tuple[str, str, bool], .
 
 def _runtime_parameters(value: object) -> tuple[tuple[str, str, bool], ...]:
     parameters = []
-    for parameter in inspect.signature(value).parameters.values():
+    callable_value = cast(Callable[..., object], value)
+    for parameter in inspect.signature(callable_value).parameters.values():
         if parameter.name in {"self", "cls"}:
             continue
         parameters.append(
@@ -100,6 +117,41 @@ def _runtime_parameters(value: object) -> tuple[tuple[str, str, bool], ...]:
             )
         )
     return tuple(parameters)
+
+
+def _annotation_text(annotation: ast.expr | None) -> str:
+    return "" if annotation is None else ast.unparse(annotation)
+
+
+def _check_complete_signature(
+    failures: list[str],
+    owner: str,
+    qualified_name: str,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> None:
+    result = _annotation_text(node.returns)
+    if result in {"", "Any", "object"}:
+        failures.append(
+            f"{owner}.{qualified_name}: public return type is {result or 'missing'}"
+        )
+    arguments = [
+        *node.args.posonlyargs,
+        *node.args.args,
+        *node.args.kwonlyargs,
+    ]
+    if node.args.vararg is not None:
+        arguments.append(node.args.vararg)
+    if node.args.kwarg is not None:
+        arguments.append(node.args.kwarg)
+    for argument in arguments:
+        if argument.arg in {"self", "cls"}:
+            continue
+        annotation = _annotation_text(argument.annotation)
+        if annotation in {"", "Any", "object"}:
+            failures.append(
+                f"{owner}.{qualified_name}({argument.arg}): public parameter type "
+                f"is {annotation or 'missing'}"
+            )
 
 
 def main() -> int:
@@ -162,6 +214,10 @@ def main() -> int:
                 annotation = (
                     "" if member.returns is None else ast.unparse(member.returns)
                 )
+                if owner in FULLY_TYPED_OWNERS:
+                    _check_complete_signature(
+                        failures, owner, f"{class_name}.{member.name}", member
+                    )
                 if (
                     is_property
                     and member.name in CANONICAL_IDENTITY_PROPERTIES
@@ -201,11 +257,18 @@ def main() -> int:
                         f"{owner}.{class_name}.{member.name}: signature {actual!r} != {expected!r}"
                     )
         for function_name in MODULE_FUNCTIONS[owner]:
-            if not any(
-                isinstance(node, ast.FunctionDef) and node.name == function_name
-                for node in tree.body
-            ):
+            function = next(
+                (
+                    node
+                    for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == function_name
+                ),
+                None,
+            )
+            if function is None:
                 failures.append(f"{owner}: stub omitted {function_name}()")
+            elif owner in FULLY_TYPED_OWNERS:
+                _check_complete_signature(failures, owner, function_name, function)
     if failures:
         print("Owner contract stub violations:", file=sys.stderr)
         for failure in failures:

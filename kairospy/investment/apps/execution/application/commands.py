@@ -13,11 +13,11 @@ from kairospy.primitives.decimal import (
     SignedQuantityLike,
 )
 
-from kairospy.infrastructure.contracts.execution import (
+from kairospy.contracts.execution import (
     ExecutionControlClient,
     ExecutionControlRejectedError,
 )
-from kairospy.infrastructure.contracts.execution.types import (
+from kairospy.contracts.execution.types import (
     CancelOrderRequest as ContractCancelOrderRequest,
     ExecutionAlgorithmPolicyRequest,
     ExecutionBenchmarkRequest,

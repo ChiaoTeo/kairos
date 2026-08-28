@@ -16,7 +16,7 @@ class PrintBinanceBtcOptions(Strategy):
         markets = tuple(
             market
             for market in markets
-            if (market.base_asset.value if market.base_asset is not None else "").upper()
+            if (str(market.base_asset) if market.base_asset is not None else "").upper()
             == "BTC"
             or (market.venue_symbol or "").upper().startswith("BTC")
         )

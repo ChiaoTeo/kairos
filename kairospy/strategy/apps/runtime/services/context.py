@@ -22,6 +22,7 @@ from kairospy.strategy.apps.notification.application import NotificationApplicat
 from kairospy.investment.apps.portfolio.application import PortfolioApplication
 from kairospy.investment.apps.risk.application import RiskApplication
 from kairospy.investment.apps.reference.application import ReferenceApplication
+from kairospy.primitives.runtime import InstanceIdRead, LaunchIdRead, StrategyIdRead
 
 if TYPE_CHECKING:
     from kairospy.strategy.apps.decisions.application import StrategyDecisionApplication
@@ -51,11 +52,16 @@ class StrategyContext(StrategyContextContract):
         logger: StrategyLogger | None = None,
         clock: StrategyClock | None = None,
     ) -> None:
-        if not strategy_id.strip():
-            raise ValueError("strategy_id is required")
-        self.strategy_id = strategy_id
-        self.launch_id = launch_id
-        self.instance_id = instance_id
+        for name, value in (
+            ("strategy_id", strategy_id),
+            ("launch_id", launch_id),
+            ("instance_id", instance_id),
+        ):
+            if not value.strip():
+                raise ValueError(f"{name} is required")
+        self.strategy_id = StrategyIdRead(strategy_id)
+        self.launch_id = LaunchIdRead(launch_id)
+        self.instance_id = InstanceIdRead(instance_id)
         self.identity = StrategyIdentity(strategy_id, launch_id, instance_id)
         self.params = MappingProxyType(dict(params or {}))
         self._event: object | None = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.decimal import DecimalValue, Money, MoneyLike, Rate, RateLike
+from kairospy.primitives.time import Generation
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +22,7 @@ class RiskStatus:
     reserved_notional: MoneyLike
     utilization: RateLike | None
     violations: tuple[RiskViolation, ...]
-    generation: int
+    generation: Generation
 
     def __post_init__(self) -> None:
         if self.available_notional is not None and not isinstance(
@@ -34,3 +35,4 @@ class RiskStatus:
             object.__setattr__(self, "reserved_notional", Money(self.reserved_notional))
         if self.utilization is not None and not isinstance(self.utilization, RateLike):
             object.__setattr__(self, "utilization", Rate(self.utilization))
+        object.__setattr__(self, "generation", Generation(self.generation))

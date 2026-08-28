@@ -14,5 +14,6 @@ flatbuffers.workspace = true
 kairos-capital-contract.workspace = true
 kairos-primitives.workspace = true
 kairos-protocol.workspace = true
+kairos-python-transport.workspace = true
 pyo3.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt", "time"] }

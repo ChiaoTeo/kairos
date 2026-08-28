@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 
@@ -22,8 +20,10 @@ from kairospy.investment.apps.account.application import (
     SegmentSyncLifecycle,
 )
 from kairospy.investment.apps.reference.application import InstrumentRef
-from kairospy.primitives.account import AccountId, SegmentKey
-from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.account import AccountId, BrokerId, SegmentKey
+from kairospy.primitives.decimal import Money, Quantity, SignedQuantity
+from kairospy.primitives.reference import AssetId, InstrumentId
+from kairospy.primitives.time import Generation, Sequence
 
 
 def _segment(
@@ -38,18 +38,18 @@ def _segment(
     return AccountSegmentSnapshot(
         account_id=account_id,
         segment_key=segment,
-        broker="paper",
+        broker=BrokerId("paper"),
         environment="paper",
         account_model="no_margin",
-        equity=Decimal("1000"),
+        equity=Money("1000"),
         balances=(
             Balance(
                 account_id,
                 segment,
-                "USDT",
-                Decimal("100"),
-                Decimal(available),
-                Decimal("10"),
+                AssetId("USDT"),
+                Quantity("100"),
+                Quantity(available),
+                Quantity("10"),
             ),
         ),
         positions=(
@@ -57,11 +57,11 @@ def _segment(
                 account_id,
                 segment,
                 instrument,
-                Decimal("2"),
+                SignedQuantity("2"),
             ),
         ),
         freshness=DataFreshness.FRESH,
-        generation=generation,
+        generation=Generation(generation),
     )
 
 
@@ -74,7 +74,7 @@ class _CurrentView:
         self.segments = segments
         self.reads = 0
 
-    def snapshot(self) -> object:
+    def snapshot(self) -> AccountSnapshot:
         account_id = self.account_id
         self.reads += 1
         segments = tuple(
@@ -93,56 +93,12 @@ def _contract_snapshot(
     account_id: AccountId,
     segments: tuple[AccountSegmentSnapshot, ...],
     generation: int,
-) -> object:
-    """Build the narrow native-current shape used by this application test fake."""
-
-    return SimpleNamespace(
-        account_id=str(account_id),
-        generation=generation,
-        event_sequence=generation,
-        segments=tuple(
-            SimpleNamespace(
-                segment_key=str(segment.segment_key),
-                broker=segment.broker,
-                environment=segment.environment,
-                observed_account_model=segment.account_model,
-                equity=None if segment.equity is None else format(segment.equity, "f"),
-                balances=tuple(
-                    SimpleNamespace(
-                        asset=value.asset,
-                        total=format(value.total, "f"),
-                        available=format(value.available, "f"),
-                        reserved=format(value.reserved, "f"),
-                    )
-                    for value in segment.balances
-                ),
-                positions=tuple(
-                    SimpleNamespace(
-                        instrument_id=str(value.instrument.id),
-                        quantity=format(value.quantity, "f"),
-                        position_side=value.position_side.value,
-                        average_price=None,
-                        market_value=None,
-                        unrealized_pnl=None,
-                    )
-                    for value in segment.positions
-                ),
-                earn_holdings=(),
-                earn_watermark_unix_nanos=None,
-                freshness=segment.freshness.value,
-                sync_mode=segment.sync_mode.value,
-                sync_lifecycle=segment.sync_lifecycle.value,
-                completeness=segment.completeness.value,
-                snapshot_watermark=None,
-                event_watermark=None,
-                channel_epoch=None,
-                last_event_at_unix_nanos=None,
-                last_success_at_unix_nanos=None,
-                last_error=None,
-                recovery_buffer_depth=0,
-            )
-            for segment in segments
-        ),
+) -> AccountSnapshot:
+    return AccountSnapshot(
+        account_id=account_id,
+        generation=Generation(generation),
+        event_sequence=Sequence(generation),
+        segments=segments,
     )
 
 
@@ -160,7 +116,7 @@ def test_accounts_chain_reads_each_account_current_view_once_and_preserves_order
     balance = accounts[0].segment(SPOT).require_balance("USDT")
 
     assert [str(value.account_id) for value in accounts] == ["main", "secondary"]
-    assert balance.available.value == Decimal("90")
+    assert balance.available == Quantity("90")
     assert main.reads == 1
     assert secondary.reads == 1
     assert accounts[0].generation == 7
@@ -173,7 +129,7 @@ def test_required_segment_readiness_is_checked_from_account_current_view() -> No
     class CurrentView:
         lifecycle = SegmentSyncLifecycle.BOOTSTRAPPING
 
-        def snapshot(self) -> object:
+        def snapshot(self) -> AccountSnapshot:
             segment = replace(
                 _segment("main", SPOT, generation=1, available="90"),
                 sync_lifecycle=self.lifecycle,
@@ -216,7 +172,7 @@ def test_segment_queries_have_optional_and_required_forms() -> None:
     account = AccountSnapshot(
         AccountId("main"),
         (_segment("main", SPOT, generation=1, available="90"),),
-        1,
+        Generation(1),
     )
     spot = account.segment("spot")
 
@@ -235,7 +191,7 @@ def test_custom_segment_keys_remain_open_ended() -> None:
     account = AccountSnapshot(
         AccountId("main"),
         (_segment("main", custom, generation=1, available="90"),),
-        1,
+        Generation(1),
     )
 
     assert account.segment("provider_custom").segment_key == custom

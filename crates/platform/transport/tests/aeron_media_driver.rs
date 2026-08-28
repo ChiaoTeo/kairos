@@ -104,6 +104,49 @@ fn wait_for_frame(subscription: &mut AeronByteSubscription, expected: &[u8]) {
 }
 
 #[test]
+fn live_transport_visits_unfragmented_frame_without_entering_owned_queue() {
+    let (root, _driver) = driver();
+    let dir = root.path().join("media");
+    let dir = dir.to_str().unwrap();
+    let channel = "aeron:ipc";
+    let stream_id = 29_003;
+    let publisher = AeronBytePublisher::connect(Some(dir), channel, stream_id).unwrap();
+    let mut subscription = AeronByteSubscription::connect(Some(dir), channel, stream_id).unwrap();
+
+    let connected = Instant::now() + Duration::from_secs(10);
+    while !publisher.has_subscriber().unwrap() {
+        assert!(
+            Instant::now() < connected,
+            "subscription connection timed out"
+        );
+        subscription.poll_with(16, |_| {}).unwrap();
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    let expected = b"callback-scoped-borrow";
+    assert_eq!(
+        publisher.publish(expected).unwrap(),
+        PublishOutcome::Offered
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut visited = false;
+    while !visited {
+        subscription
+            .poll_with(16, |frame| {
+                assert_eq!(frame, expected);
+                visited = true;
+            })
+            .unwrap();
+        assert!(Instant::now() < deadline, "Aeron frame delivery timed out");
+        if !visited {
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    assert!(subscription.next_frame().unwrap().is_none());
+}
+
+#[test]
 fn live_routes_fan_out_shared_channel_and_isolate_distinct_channels() {
     let (root, _driver) = driver();
     let dir = root.path().join("media");

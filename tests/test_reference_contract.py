@@ -10,16 +10,55 @@ from types import SimpleNamespace
 import pytest
 
 from kairospy.investment.apps.reference.application import (
-    Asset,
-    Instrument,
-    Listing,
     ReferenceApplication,
     ReferenceNotFoundError,
     observe_reference_stream,
     validate_reference_runtime,
 )
 from kairospy.primitives.reference import InstrumentId, ListingId, MarketId
-from kairospy.infrastructure.contracts.reference import ReferenceClient
+from kairospy.contracts.reference import (
+    ReferenceAsset,
+    ReferenceClient,
+    ReferenceInstrument,
+    ReferenceListing,
+)
+
+
+def test_reference_live_events_follow_the_single_synchronous_poll_path() -> None:
+    event = SimpleNamespace(
+        metadata=SimpleNamespace(
+            stream_id="reference.events",
+            producer="reference",
+            producer_incarnation=2,
+            sequence=11,
+            launch_id="launch-a",
+            instance_id="instance-a",
+        )
+    )
+
+    class LiveSource:
+        closed = False
+
+        def poll_visit(self, visitor, *, fragment_limit=64):
+            visitor(event)
+            return 1
+
+        def close(self):
+            self.closed = True
+
+    source = LiveSource()
+    reference = ReferenceApplication(
+        live_source=source,
+        launch_id="launch-a",
+        instance_id="instance-a",
+    )
+    observed: list[object] = []
+
+    assert reference.visit_live(observed.append) == 1
+    assert observed == [event]
+    assert reference.notification_health()["cursor"] == 11
+    reference.close_live()
+    assert source.closed
 
 
 def _reference_database(tmp_path: Path) -> Path:
@@ -198,7 +237,7 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
         "option_markets": 0,
     }
     assert (
-        client.resolve_market(symbol="BTCUSDT")["instrument_id"]
+        client.resolve_market(symbol="BTCUSDT").instrument_id
         == "instrument:spot:BTC"
     )
     assert (
@@ -230,14 +269,14 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
 def test_reference_queries_search_names_and_escape_sql_wildcards(tmp_path) -> None:
     client = ReferenceClient(database_path=_reference_database(tmp_path))
 
-    assert [value["code"] for value in client.assets(query="bitco", limit=10)] == [
+    assert [value.code for value in client.assets(query="bitco", limit=10)] == [
         "BTC"
     ]
-    assert [value["exchangeId"] for value in client.exchanges(query="BIN", limit=10)] == [
+    assert [value.exchange_id for value in client.exchanges(query="BIN", limit=10)] == [
         "exchange:binance"
     ]
     assert [
-        value["instrumentId"]
+        value.instrument_id
         for value in client.instruments(query="bitcoin spot", limit=10)
     ] == ["instrument:spot:BTC"]
     assert client.assets(query="%", limit=10) == []
@@ -324,9 +363,9 @@ def test_reference_application_reads_concrete_sqlite_client(tmp_path) -> None:
     )
 
     assert len(markets) == 1
-    assert markets[0].id == MarketId("market:binance:spot:BTCUSDT")
+    assert markets[0].id == "market:binance:spot:BTCUSDT"
     assert markets[0].venue_symbol == "BTCUSDT"
-    assert application.require_market(markets[0].id) == markets[0]
+    assert application.require_market(MarketId(markets[0].id)).market_id == markets[0].market_id
     assert application.market(MarketId("market:missing")) is None
     with pytest.raises(ReferenceNotFoundError):
         application.require_market(
@@ -343,13 +382,13 @@ def test_reference_application_exposes_typed_catalog_and_access_queries(
     market_id = MarketId("market:binance:spot:BTCUSDT")
 
     assert application.require_exchange("exchange:binance").name == "Binance"
-    assert isinstance(application.require_asset("asset:crypto:BTC"), Asset)
+    assert isinstance(application.require_asset("asset:crypto:BTC"), ReferenceAsset)
     instrument = application.require_instrument(InstrumentId("instrument:spot:BTC"))
-    assert isinstance(instrument, Instrument)
+    assert isinstance(instrument, ReferenceInstrument)
     assert instrument.ref.display_symbol == "BTC"
     assert isinstance(
         application.require_listing(ListingId("listing:binance:spot:BTCUSDT")),
-        Listing,
+        ReferenceListing,
     )
     assert application.require_market(market_id).venue_symbol == "BTCUSDT"
 
@@ -393,7 +432,11 @@ def test_reference_application_snapshot_pins_generation_and_rows(tmp_path) -> No
         writer.commit()
         writer.close()
         after = snapshot.require_asset("asset:crypto:BTC")
-        assert after == before
+        assert (after.asset_id, after.code, after.status) == (
+            before.asset_id,
+            before.code,
+            before.status,
+        )
         assert (snapshot.generation, snapshot.event_sequence) == (3, 7)
 
     assert application.require_asset("asset:crypto:BTC").code == "XBT"
@@ -444,7 +487,7 @@ def test_market_id_lookup_is_not_truncated_by_catalog_size(tmp_path) -> None:
 
     application = ReferenceApplication(ReferenceClient(database_path=database))
     target = MarketId("market:test:10000")
-    assert application.require_market(target).id == target
+    assert application.require_market(target).id == str(target)
 
 
 def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
@@ -520,7 +563,7 @@ def test_reference_client_pages_filtered_collections(tmp_path) -> None:
     second = client.instruments(active_only=True, limit=1, offset=1)
 
     assert len(first) == len(second) == 1
-    assert first[0]["instrumentId"] != second[0]["instrumentId"]
+    assert first[0].instrument_id != second[0].instrument_id
     with pytest.raises(ValueError, match="limit must be between"):
         client.instruments(limit=10_001)
     with pytest.raises(ValueError, match="offset must be non-negative"):
@@ -669,21 +712,27 @@ class _ReferenceEventSource:
         self.remain_open = remain_open
         self.closed = False
 
-    async def subscribe_live(self):
-        for event in self.events:
-            yield event
-        if self.remain_open:
-            await asyncio.sleep(60)
+    def poll_visit(self, visitor, *, fragment_limit: int = 64) -> int:
+        events, self.events = self.events[:fragment_limit], self.events[fragment_limit:]
+        for event in events:
+            visitor(event)
+        return len(events)
 
-    async def close(self) -> None:
+    def close(self) -> None:
         self.closed = True
 
 
 def test_reference_stream_observer_uses_native_events_and_stops_when_idle() -> None:
     source = _ReferenceEventSource(
         (
-            SimpleNamespace(event_id="event-1", catalog_revision=4, sequence=8),
-            SimpleNamespace(event_id="event-2", catalog_revision=5, sequence=9),
+            SimpleNamespace(
+                metadata=SimpleNamespace(event_id="event-1", sequence=8),
+                catalog_revision=4,
+            ),
+            SimpleNamespace(
+                metadata=SimpleNamespace(event_id="event-2", sequence=9),
+                catalog_revision=5,
+            ),
         ),
         remain_open=True,
     )
@@ -698,7 +747,7 @@ def test_reference_stream_observer_uses_native_events_and_stops_when_idle() -> N
 
     assert result == {
         "status": "received",
-        "batches": 2,
+        "batches": 1,
         "events": 2,
         "generation": 5,
         "event_sequence": 9,

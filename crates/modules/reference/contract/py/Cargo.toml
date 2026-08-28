@@ -12,5 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 kairos-primitives.workspace = true
 kairos-protocol.workspace = true
+kairos-python-transport.workspace = true
 kairos-reference-contract.workspace = true
 pyo3.workspace = true

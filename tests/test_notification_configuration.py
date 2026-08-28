@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.infrastructure.contracts.market import MarketControlUnavailableError
+from kairospy.contracts.market import MarketControlUnavailableError
 from kairospy.system.apps.launch.application.configuration import (
     LaunchConfigError,
     LaunchConfigurationApplication,

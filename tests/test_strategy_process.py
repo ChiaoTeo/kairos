@@ -270,8 +270,9 @@ def test_interactive_strategy_composes_without_execution_or_accounts(
 
     assert composition.entrypoint.strategy.strategy_id == "builtin-interactive"
     assert composition.application.context.account is not None
-    assert composition.application.context.market._event_source.aeron_dir == str(
-        workspace.paths.aeron_dir()
+    assert (
+        type(composition.application.context.market._live_source).__name__
+        == "MarketLiveSubscription"
     )
     composition.application.start()
     result = asyncio.run(

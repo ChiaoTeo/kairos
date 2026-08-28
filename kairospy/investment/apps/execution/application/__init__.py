@@ -7,7 +7,7 @@ from .errors import (
     IntentNotFoundError,
     OrderNotFoundError,
 )
-from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
+from kairospy.contracts.execution.events import ExecutionEvent
 from .models import (
     ExecutionBacktestResult,
     ExecutionFundingRequirement,

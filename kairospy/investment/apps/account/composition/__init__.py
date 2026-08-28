@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from kairospy.system.apps.components.application.clients import AccountSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace
 from kairospy.primitives.account import AccountId
-from kairospy.infrastructure.contracts.account import AccountClient
+from kairospy.contracts.account import AccountClient
 from kairospy.system.apps.components.application.event_routes import EventTransportRoute
 
 from ..application.application import AccountApplication
@@ -56,12 +56,13 @@ def build_strategy_access(
         )
         for account_id, (client, route) in resolved_clients.items()
     }
-    current_views: dict[AccountId, object] = {}
-    for account_id, owner in owner_clients.items():
-        current = owner.current
-        if current is None:
-            raise RuntimeError("Account owner client is missing its current-view capability")
-        current_views[account_id] = current
+    current_views = {
+        account_id: current
+        for account_id, owner in owner_clients.items()
+        if (current := owner.current) is not None
+    }
+    if len(current_views) != len(owner_clients):
+        raise RuntimeError("Account owner client is missing its current-view capability")
     first_owner = next(iter(owner_clients.values()))
     return AccountApplication(
         current_views,

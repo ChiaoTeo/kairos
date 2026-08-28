@@ -1,14 +1,17 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use _native_transport::direct::DirectAeronSubscription;
+use _native_transport::lease::{EventLease, EventLeaseError};
 use kairos_account_contract::{
     AccountChange as RustAccountChange, AccountCommandOutcome, AccountControlRpcClient,
-    AccountEvent as RustAccountEvent, AccountHealthStatus, AccountIndexedView as RustView,
-    AccountRefreshStatus, AccountSegmentsRequest, AdvanceAccountTimeRequest, ContractError,
-    MarkToMarketRequest, SimulatedCapitalMutation, SimulatedCapitalMutationKind,
-    SimulatedCapitalMutationQuery, SimulatedCapitalMutationStatus, SimulatedSettlement,
+    AccountEvent as RustAccountEvent, AccountEventView as RustAccountEventView,
+    AccountHealthStatus, AccountIndexedView as RustView, AccountRefreshStatus,
+    AccountSegmentsRequest, AdvanceAccountTimeRequest, ContractError, MarkToMarketRequest,
+    SimulatedCapitalMutation, SimulatedCapitalMutationKind, SimulatedCapitalMutationQuery,
+    SimulatedCapitalMutationStatus, SimulatedSettlement,
 };
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::decimal::{DecimalParts, Money, Price, Quantity, SignedQuantity};
@@ -17,10 +20,11 @@ use kairos_primitives::reference::{Currency, InstrumentId};
 use kairos_primitives::runtime::{IdempotencyKey, InstanceIdentity};
 use kairos_primitives::time::UnixNanos;
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
-use pyo3::create_exception;
+use kairos_protocol::{EventMetadataOwned, decode_event_metadata};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use pyo3::{PyClass, create_exception};
 
 create_exception!(
     _native_account_contract,
@@ -138,13 +142,16 @@ impl NativeAccountClient {
 
     #[getter]
     fn events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        construct_events(
+        Ok(Py::new(
             py,
-            "kairospy._native_account_contract",
-            self.aeron_dir.clone(),
-            &self.channel,
-            self.stream_id,
-        )
+            AccountLiveSubscription::new(
+                self.aeron_dir.clone(),
+                Some(self.channel.clone()),
+                Some(self.stream_id),
+                _native_transport::DEFAULT_MAX_PAYLOAD_LEN,
+            )?,
+        )?
+        .into_any())
     }
 }
 
@@ -175,26 +182,6 @@ fn construct_control(
     Ok(module
         .getattr(class_name)?
         .call((socket,), Some(&kwargs))?
-        .unbind())
-}
-
-fn construct_events(
-    py: Python<'_>,
-    owner_module_name: &str,
-    aeron_dir: Option<String>,
-    channel: &str,
-    stream_id: i32,
-) -> PyResult<Py<PyAny>> {
-    let platform = PyModule::import(py, "kairospy.infrastructure.transport.native_event")?;
-    let owner = PyModule::import(py, owner_module_name)?;
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("decoder", owner.getattr("decode_event")?)?;
-    kwargs.set_item("aeron_dir", aeron_dir)?;
-    kwargs.set_item("channel", channel)?;
-    kwargs.set_item("stream_id", stream_id)?;
-    Ok(platform
-        .getattr("NativeEventSource")?
-        .call((), Some(&kwargs))?
         .unbind())
 }
 
@@ -828,6 +815,12 @@ struct AccountBalanceEvent {
 }
 
 #[pyclass(frozen, module = "kairospy._native_account_contract")]
+struct AccountBalanceRemovedEvent {
+    #[pyo3(get)]
+    asset_id: String,
+}
+
+#[pyclass(frozen, module = "kairospy._native_account_contract")]
 #[derive(Clone)]
 struct AccountPositionEvent {
     #[pyo3(get)]
@@ -888,6 +881,12 @@ struct AccountEarnHoldingEvent {
     matures_at_unix_nanos: Option<u64>,
     #[pyo3(get)]
     observed_at_unix_nanos: Option<u64>,
+}
+
+#[pyclass(frozen, module = "kairospy._native_account_contract")]
+struct AccountEarnHoldingRemovedEvent {
+    #[pyo3(get)]
+    holding_key: String,
 }
 
 #[pyclass(frozen, module = "kairospy._native_account_contract")]
@@ -957,44 +956,142 @@ struct AccountObservedOrderRemovedEvent {
 }
 
 #[pyclass(frozen, module = "kairospy._native_account_contract")]
-#[derive(Clone)]
-struct AccountEventChange {
-    #[pyo3(get)]
-    kind: String,
-    #[pyo3(get)]
-    segment_key: String,
-    #[pyo3(get)]
-    asset_id: Option<String>,
-    #[pyo3(get)]
-    holding_key: Option<String>,
-    #[pyo3(get)]
-    balance: Option<AccountBalanceEvent>,
-    #[pyo3(get)]
-    position: Option<AccountPositionEvent>,
-    #[pyo3(get)]
-    removed_position: Option<AccountPositionRemovedEvent>,
-    #[pyo3(get)]
-    earn_holding: Option<AccountEarnHoldingEvent>,
-    #[pyo3(get)]
-    valuation: Option<AccountValuationEvent>,
-    #[pyo3(get)]
-    status: Option<AccountStatusEvent>,
-    #[pyo3(get)]
-    observed_order: Option<AccountObservedOrderEvent>,
-    #[pyo3(get)]
-    removed_observed_order: Option<AccountObservedOrderRemovedEvent>,
-}
-
-#[pyclass(frozen, module = "kairospy._native_account_contract")]
 struct AccountEvent {
     #[pyo3(get)]
     metadata: AccountEventMetadata,
     #[pyo3(get)]
+    kind: String,
+    data: Py<PyAny>,
+    #[pyo3(get)]
     account_id: String,
     #[pyo3(get)]
-    change: AccountEventChange,
+    segment_key: String,
     #[pyo3(get)]
     provenance: Option<AccountEventProvenance>,
+}
+
+#[pyclass(
+    name = "AccountLiveEventView",
+    frozen,
+    module = "kairospy._native_account_contract"
+)]
+struct AccountLiveEventView {
+    lease: Arc<EventLease>,
+}
+
+#[pymethods]
+impl AccountLiveEventView {
+    #[getter]
+    fn kind(&self) -> PyResult<String> {
+        self.with_view(|event| event.kind().as_str().to_owned())
+    }
+
+    #[getter]
+    fn metadata(&self) -> PyResult<AccountEventMetadata> {
+        self.with_view(|event| account_event_metadata(event.metadata()))?
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.with_owned(|event| project_event(py, event).map(|value| value.data))?
+    }
+
+    #[getter]
+    fn account_id(&self) -> PyResult<String> {
+        self.with_owned(|event| event.account_id.to_string())
+    }
+
+    #[getter]
+    fn segment_key(&self) -> PyResult<String> {
+        self.with_owned(|event| event.segment_key.to_string())
+    }
+
+    #[getter]
+    fn provenance(&self, py: Python<'_>) -> PyResult<Option<AccountEventProvenance>> {
+        self.with_owned(|event| project_event(py, event).map(|value| value.provenance))?
+    }
+}
+
+impl AccountLiveEventView {
+    fn with_view<R>(
+        &self,
+        read: impl for<'frame> FnOnce(RustAccountEventView<'frame>) -> R,
+    ) -> PyResult<R> {
+        self.lease
+            .with_frame(|frame| {
+                kairos_account_contract::decode_event_view(frame)
+                    .map(read)
+                    .map_err(|error| AccountInvalidEventError::new_err(error.to_string()))
+            })
+            .map_err(account_lease_error)?
+    }
+
+    fn with_owned<R>(&self, read: impl FnOnce(RustAccountEvent) -> R) -> PyResult<R> {
+        self.lease
+            .with_frame(|frame| {
+                kairos_account_contract::decode_event(frame)
+                    .map(read)
+                    .map_err(|error| AccountInvalidEventError::new_err(error.to_string()))
+            })
+            .map_err(account_lease_error)?
+    }
+}
+
+#[pyclass(
+    name = "AccountLiveSubscription",
+    module = "kairospy._native_account_contract",
+    unsendable
+)]
+struct AccountLiveSubscription {
+    inner: DirectAeronSubscription,
+}
+
+#[pymethods]
+impl AccountLiveSubscription {
+    #[new]
+    #[pyo3(signature = (*, aeron_dir=None, channel=None, stream_id=None, max_payload_len=_native_transport::DEFAULT_MAX_PAYLOAD_LEN))]
+    fn new(
+        aeron_dir: Option<String>,
+        channel: Option<String>,
+        stream_id: Option<i32>,
+        max_payload_len: usize,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: DirectAeronSubscription::connect(
+                aeron_dir.as_deref(),
+                channel
+                    .as_deref()
+                    .unwrap_or(kairos_account_contract::DEFAULT_AERON_CHANNEL),
+                stream_id.unwrap_or(kairos_account_contract::ACCOUNT_EVENT_STREAM_ID),
+                max_payload_len,
+            )?,
+        })
+    }
+
+    #[pyo3(signature = (visitor, *, fragment_limit=64))]
+    fn poll_visit(
+        &self,
+        py: Python<'_>,
+        visitor: Py<PyAny>,
+        fragment_limit: i32,
+    ) -> PyResult<usize> {
+        self.inner.poll_visit(py, fragment_limit, |py, lease| {
+            lease
+                .with_frame(|frame| kairos_account_contract::decode_event_view(frame).map(|_| ()))
+                .map_err(account_lease_error)?
+                .map_err(|error| AccountInvalidEventError::new_err(error.to_string()))?;
+            visitor.call1(py, (Py::new(py, AccountLiveEventView { lease })?,))?;
+            Ok(())
+        })
+    }
+
+    fn close(&self) -> PyResult<()> {
+        self.inner.close()
+    }
+}
+
+fn account_lease_error(error: EventLeaseError) -> PyErr {
+    PyRuntimeError::new_err(error.to_string())
 }
 
 #[pymethods]
@@ -1003,6 +1100,7 @@ impl AccountEvent {
     #[pyo3(signature = (account_id, segment_key, sequence, *, status=None, freshness=None, trading_enabled=true, launch_id=None, instance_id=None))]
     #[allow(clippy::too_many_arguments)]
     fn simulation_status(
+        py: Python<'_>,
         account_id: String,
         segment_key: String,
         sequence: u64,
@@ -1013,30 +1111,19 @@ impl AccountEvent {
         instance_id: Option<String>,
     ) -> PyResult<Self> {
         simulation_event(
+            py,
             account_id,
             segment_key,
             sequence,
             launch_id,
             instance_id,
             1,
-            AccountEventChange {
-                kind: "status_changed".to_owned(),
-                segment_key: String::new(),
-                asset_id: None,
-                holding_key: None,
-                balance: None,
-                position: None,
-                removed_position: None,
-                earn_holding: None,
-                valuation: None,
-                status: Some(AccountStatusEvent {
-                    status: status.unwrap_or_else(|| "active".to_owned()),
-                    freshness: freshness.unwrap_or_else(|| "fresh".to_owned()),
-                    reason: None,
-                    trading_enabled,
-                }),
-                observed_order: None,
-                removed_observed_order: None,
+            "account_status_changed",
+            AccountStatusEvent {
+                status: status.unwrap_or_else(|| "active".to_owned()),
+                freshness: freshness.unwrap_or_else(|| "fresh".to_owned()),
+                reason: None,
+                trading_enabled,
             },
         )
     }
@@ -1045,6 +1132,7 @@ impl AccountEvent {
     #[pyo3(signature = (account_id, segment_key, sequence, asset, total, available, *, launch_id=None, instance_id=None))]
     #[allow(clippy::too_many_arguments)]
     fn simulation_balance(
+        py: Python<'_>,
         account_id: String,
         segment_key: String,
         sequence: u64,
@@ -1055,33 +1143,22 @@ impl AccountEvent {
         instance_id: Option<String>,
     ) -> PyResult<Self> {
         simulation_event(
+            py,
             account_id,
             segment_key,
             sequence,
             launch_id,
             instance_id,
             1,
-            AccountEventChange {
-                kind: "balance_changed".to_owned(),
-                segment_key: String::new(),
-                asset_id: None,
-                holding_key: None,
-                balance: Some(AccountBalanceEvent {
-                    asset_id: asset.clone(),
-                    asset,
-                    total: native_decimal(&total, "quantity")?,
-                    available: Some(native_decimal(&available, "quantity")?),
-                    locked: None,
-                    borrowed: None,
-                    interest: None,
-                }),
-                position: None,
-                removed_position: None,
-                earn_holding: None,
-                valuation: None,
-                status: None,
-                observed_order: None,
-                removed_observed_order: None,
+            "balance_upserted",
+            AccountBalanceEvent {
+                asset_id: asset.clone(),
+                asset,
+                total: native_decimal(&total, "quantity")?,
+                available: Some(native_decimal(&available, "quantity")?),
+                locked: None,
+                borrowed: None,
+                interest: None,
             },
         )
     }
@@ -1089,6 +1166,7 @@ impl AccountEvent {
     #[staticmethod]
     #[pyo3(signature = (account_id, segment_key, sequence, equity, *, launch_id=None, instance_id=None, producer_incarnation=1))]
     fn simulation_valuation(
+        py: Python<'_>,
         account_id: String,
         segment_key: String,
         sequence: u64,
@@ -1098,33 +1176,27 @@ impl AccountEvent {
         producer_incarnation: u64,
     ) -> PyResult<Self> {
         simulation_event(
+            py,
             account_id,
             segment_key,
             sequence,
             launch_id,
             instance_id,
             producer_incarnation,
-            AccountEventChange {
-                kind: "equity_changed".to_owned(),
-                segment_key: String::new(),
-                asset_id: None,
-                holding_key: None,
-                balance: None,
-                position: None,
-                removed_position: None,
-                earn_holding: None,
-                valuation: Some(AccountValuationEvent {
-                    valuation_asset_id: None,
-                    equity: Some(native_decimal(&equity, "money")?),
-                    initial_equity: None,
-                    net_profit: None,
-                    observed_at_unix_nanos: None,
-                }),
-                status: None,
-                observed_order: None,
-                removed_observed_order: None,
+            "valuation_changed",
+            AccountValuationEvent {
+                valuation_asset_id: None,
+                equity: Some(native_decimal(&equity, "money")?),
+                initial_equity: None,
+                net_profit: None,
+                observed_at_unix_nanos: None,
             },
         )
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> Py<PyAny> {
+        self.data.clone_ref(py)
     }
 
     #[getter]
@@ -1154,10 +1226,6 @@ impl AccountEvent {
     #[getter]
     fn instance_id(&self) -> Option<&str> {
         self.metadata.instance_id.as_deref()
-    }
-    #[getter]
-    fn changes(&self) -> Vec<AccountEventChange> {
-        vec![self.change.clone()]
     }
 }
 
@@ -1716,7 +1784,42 @@ fn project_snapshot_direct(reader: &RustView) -> Result<AccountCurrentSnapshot, 
     })
 }
 
-fn project_event(value: RustAccountEvent) -> AccountEvent {
+fn account_event_metadata(
+    value: kairos_protocol::generated::kairos::common::v_2::EventMetadata<'_>,
+) -> PyResult<AccountEventMetadata> {
+    let EventMetadataOwned {
+        event_id,
+        stream_id,
+        sequence,
+        producer_id,
+        producer_incarnation,
+        workspace_id,
+        launch_id,
+        instance_id,
+        correlation_id,
+        causation_id,
+        occurred_at_unix_nanos,
+        published_at_unix_nanos,
+    } = decode_event_metadata(value)
+        .map_err(|error| AccountInvalidEventError::new_err(error.to_string()))?;
+    Ok(AccountEventMetadata {
+        event_id: event_id.to_string(),
+        stream_id: stream_id.to_string(),
+        sequence: sequence.get(),
+        producer: producer_id.to_string(),
+        producer_incarnation,
+        workspace_id: workspace_id.to_string(),
+        launch_id: launch_id.map(|item| item.to_string()),
+        instance_id: instance_id.map(|item| item.to_string()),
+        correlation_id: correlation_id.map(|item| item.to_string()),
+        causation_id: causation_id.map(|item| item.to_string()),
+        occurred_at_unix_nanos: occurred_at_unix_nanos.get(),
+        published_at_unix_nanos: published_at_unix_nanos.get(),
+    })
+}
+
+fn project_event(py: Python<'_>, value: RustAccountEvent) -> PyResult<AccountEvent> {
+    let kind = value.kind().as_str().to_owned();
     let metadata = AccountEventMetadata {
         event_id: value.metadata.event_id.to_string(),
         stream_id: value.metadata.stream_id,
@@ -1742,23 +1845,14 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
             .provider_received_at_unix_nanos
             .map(|value| value.get()),
     });
-    let mut change = AccountEventChange {
-        kind: value.change.kind().to_owned(),
-        segment_key: value.segment_key.to_string(),
-        asset_id: None,
-        holding_key: None,
-        balance: None,
-        position: None,
-        removed_position: None,
-        earn_holding: None,
-        valuation: None,
-        status: None,
-        observed_order: None,
-        removed_observed_order: None,
-    };
-    match value.change {
+    macro_rules! data {
+        ($value:expr) => {
+            Py::new(py, $value)?.into_any()
+        };
+    }
+    let data = match value.change {
         RustAccountChange::BalanceUpserted(item) => {
-            change.balance = Some(AccountBalanceEvent {
+            data!(AccountBalanceEvent {
                 asset_id: item.asset_id.to_string(),
                 asset: item.asset_code.unwrap_or_else(|| item.asset_id.to_string()),
                 total: decimal_parts(item.total, "quantity"),
@@ -1766,13 +1860,13 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                 locked: item.locked.map(|value| decimal_parts(value, "quantity")),
                 borrowed: item.borrowed.map(|value| decimal_parts(value, "quantity")),
                 interest: item.interest.map(|value| decimal_parts(value, "quantity")),
-            });
+            })
         },
-        RustAccountChange::BalanceRemoved { asset_id } => {
-            change.asset_id = Some(asset_id.to_string());
-        },
+        RustAccountChange::BalanceRemoved { asset_id } => data!(AccountBalanceRemovedEvent {
+            asset_id: asset_id.to_string(),
+        }),
         RustAccountChange::PositionUpserted(item) => {
-            change.position = Some(AccountPositionEvent {
+            data!(AccountPositionEvent {
                 instrument_id: item.instrument_id.to_string(),
                 market_id: item.market_id.to_string(),
                 position_side: item.position_side.as_str().to_owned(),
@@ -1786,17 +1880,17 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                     .map(|value| decimal_parts(value, "money")),
                 realized_pnl: item.realized_pnl.map(|value| decimal_parts(value, "money")),
                 observed_at_unix_nanos: item.observed_at_unix_nanos.map(|value| value.get()),
-            });
+            })
         },
         RustAccountChange::PositionRemoved(item) => {
-            change.removed_position = Some(AccountPositionRemovedEvent {
+            data!(AccountPositionRemovedEvent {
                 instrument_id: item.instrument_id.to_string(),
                 market_id: item.market_id.to_string(),
                 position_side: item.position_side.as_str().to_owned(),
-            });
+            })
         },
         RustAccountChange::EarnHoldingUpserted(item) => {
-            change.earn_holding = Some(AccountEarnHoldingEvent {
+            data!(AccountEarnHoldingEvent {
                 holding_key: item.holding_key,
                 participant_position_id: item.participant_position_id,
                 product_id: item.product_id,
@@ -1811,13 +1905,13 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                 notice_seconds: item.notice_seconds,
                 matures_at_unix_nanos: item.matures_at_unix_nanos.map(|value| value.get()),
                 observed_at_unix_nanos: item.observed_at_unix_nanos.map(|value| value.get()),
-            });
+            })
         },
         RustAccountChange::EarnHoldingRemoved { holding_key } => {
-            change.holding_key = Some(holding_key);
+            data!(AccountEarnHoldingRemovedEvent { holding_key })
         },
         RustAccountChange::ValuationChanged(item) => {
-            change.valuation = Some(AccountValuationEvent {
+            data!(AccountValuationEvent {
                 valuation_asset_id: item.valuation_asset_id.map(|value| value.to_string()),
                 equity: item.equity.map(|value| decimal_parts(value, "money")),
                 initial_equity: item
@@ -1825,10 +1919,10 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                     .map(|value| decimal_parts(value, "money")),
                 net_profit: item.net_profit.map(|value| decimal_parts(value, "money")),
                 observed_at_unix_nanos: item.observed_at_unix_nanos.map(|value| value.get()),
-            });
+            })
         },
         RustAccountChange::StatusChanged(item) => {
-            change.status = Some(AccountStatusEvent {
+            data!(AccountStatusEvent {
                 status: item.status.as_str().to_owned(),
                 freshness: item.freshness.as_str().to_owned(),
                 reason: item.reason,
@@ -1836,10 +1930,10 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                     item.status,
                     kairos_account_contract::AccountStatus::Active
                 ),
-            });
+            })
         },
         RustAccountChange::ObservedOrderUpserted(item) => {
-            change.observed_order = Some(AccountObservedOrderEvent {
+            data!(AccountObservedOrderEvent {
                 observation_id: item.observation_id,
                 source_id: item.source_id,
                 execution_order_id: item.execution_order_id.map(|value| value.to_string()),
@@ -1855,22 +1949,24 @@ fn project_event(value: RustAccountEvent) -> AccountEvent {
                 filled_quantity: decimal_parts(item.filled_quantity, "quantity"),
                 status: item.status.as_str().to_owned(),
                 observed_at_unix_nanos: item.observed_at_unix_nanos.map(|value| value.get()),
-            });
+            })
         },
         RustAccountChange::ObservedOrderRemoved(item) => {
-            change.removed_observed_order = Some(AccountObservedOrderRemovedEvent {
+            data!(AccountObservedOrderRemovedEvent {
                 observation_id: item.observation_id,
                 execution_order_id: item.execution_order_id.map(|value| value.to_string()),
                 remote_order_id: item.remote_order_id.map(|value| value.to_string()),
-            });
+            })
         },
-    }
-    AccountEvent {
+    };
+    Ok(AccountEvent {
         metadata,
+        kind,
+        data,
         account_id: value.account_id.to_string(),
-        change,
+        segment_key: value.segment_key.to_string(),
         provenance,
-    }
+    })
 }
 
 fn decimal(value: &Decimal64, semantic_type: &'static str) -> NativeDecimal {
@@ -2054,14 +2150,16 @@ fn project_command_status(
     }
 }
 
-fn simulation_event(
+fn simulation_event<T: PyClass<BaseType = PyAny>>(
+    py: Python<'_>,
     account_id: String,
     segment_key: String,
     sequence: u64,
     launch_id: Option<String>,
     instance_id: Option<String>,
     producer_incarnation: u64,
-    mut change: AccountEventChange,
+    kind: &'static str,
+    data: T,
 ) -> PyResult<AccountEvent> {
     AccountId::new(account_id.clone())
         .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?;
@@ -2077,7 +2175,6 @@ fn simulation_event(
             "launch_id and instance_id must both be present or both be absent",
         ));
     }
-    change.segment_key = segment_key;
     Ok(AccountEvent {
         metadata: AccountEventMetadata {
             event_id: format!("account:{account_id}:{sequence}"),
@@ -2093,8 +2190,10 @@ fn simulation_event(
             occurred_at_unix_nanos: sequence,
             published_at_unix_nanos: sequence,
         },
+        kind: kind.to_owned(),
+        data: Py::new(py, data)?.into_any(),
         account_id,
-        change,
+        segment_key,
         provenance: None,
     })
 }
@@ -2128,10 +2227,10 @@ fn build_info() -> NativeBuildInfo {
 }
 
 #[pyfunction]
-fn decode_event(payload: &[u8]) -> PyResult<AccountEvent> {
+fn decode_event(py: Python<'_>, payload: &[u8]) -> PyResult<AccountEvent> {
     kairos_account_contract::decode_event(payload)
-        .map(project_event)
         .map_err(|error| AccountInvalidEventError::new_err(error.to_string()))
+        .and_then(|event| project_event(py, event))
 }
 
 #[pyfunction]
@@ -2225,15 +2324,18 @@ fn _native_account_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<AccountEventMetadata>()?;
     module.add_class::<AccountEventProvenance>()?;
     module.add_class::<AccountBalanceEvent>()?;
+    module.add_class::<AccountBalanceRemovedEvent>()?;
     module.add_class::<AccountPositionEvent>()?;
     module.add_class::<AccountPositionRemovedEvent>()?;
     module.add_class::<AccountEarnHoldingEvent>()?;
+    module.add_class::<AccountEarnHoldingRemovedEvent>()?;
     module.add_class::<AccountValuationEvent>()?;
     module.add_class::<AccountStatusEvent>()?;
     module.add_class::<AccountObservedOrderEvent>()?;
     module.add_class::<AccountObservedOrderRemovedEvent>()?;
-    module.add_class::<AccountEventChange>()?;
     module.add_class::<AccountEvent>()?;
+    module.add_class::<AccountLiveEventView>()?;
+    module.add_class::<AccountLiveSubscription>()?;
     module.add_class::<AccountBalanceCurrent>()?;
     module.add_class::<AccountCollateralCurrent>()?;
     module.add_class::<AccountPositionCurrent>()?;

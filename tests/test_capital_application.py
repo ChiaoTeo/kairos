@@ -22,7 +22,9 @@ from kairospy.investment.apps.capital.application import (
     FundingObjectiveStatus,
 )
 from kairospy.primitives.account import AccountId, SegmentKey
-from kairospy.infrastructure.contracts.capital import CapitalCurrentView
+from kairospy.primitives.decimal import Quantity
+from kairospy.primitives.runtime import InstanceId, LaunchId
+from kairospy.contracts.capital import CapitalCurrentView
 from kairospy.investment.apps.capital.application.mapping import map_capital_alert
 
 
@@ -56,6 +58,47 @@ def test_disabled_capital_is_a_typed_non_blocking_strategy_outcome() -> None:
     assert capital.enabled is False
 
 
+def test_capital_live_events_follow_the_single_synchronous_poll_path() -> None:
+    event = SimpleNamespace(
+        metadata=SimpleNamespace(
+            stream_id="capital.events",
+            producer="capital",
+            producer_incarnation=1,
+            sequence=7,
+            launch_id=LaunchId("launch-a"),
+            instance_id=InstanceId("instance-a"),
+        )
+    )
+
+    class LiveSource:
+        closed = False
+
+        def poll_visit(self, visitor, *, fragment_limit=64):
+            visitor(event)
+            return 1
+
+        def close(self):
+            self.closed = True
+
+    source = LiveSource()
+    capital = CapitalApplication(
+        None,
+        None,
+        source,
+        strategy_id="basis",
+        launch_id="launch-a",
+        instance_id="instance-a",
+        capital_group_id=None,
+    )
+    observed: list[object] = []
+
+    assert capital.visit_live(observed.append) == 1
+    assert observed == [event]
+    assert capital.notification_health()["cursor"] == 7
+    capital.close_live()
+    assert source.closed
+
+
 def test_strategy_cannot_publish_an_objective_outside_its_group() -> None:
     capital = CapitalApplication(
         object(),
@@ -76,7 +119,7 @@ def test_strategy_cannot_publish_an_objective_outside_its_group() -> None:
 def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
     class Commands:
         def publish_funding_objective(self, request):
-            assert request.objective_id == _objective().objective_id
+            assert request.objective_id == str(_objective().objective_id)
             assert request.capital_group_id == "group-a"
             assert request.strategy_id == "basis"
             assert not hasattr(request, "source")
@@ -87,29 +130,36 @@ def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
             )
 
     class CurrentView:
-        def availability(self, **query):
-            location = query["location"]
-            return SimpleNamespace(
-                readiness="ready",
-                location=SimpleNamespace(
-                    broker=location.broker,
-                    account_id=str(location.account_id),
-                    segment=str(location.segment),
-                    asset=location.asset,
-                ),
-                policy_version=2,
-                active_objective_ids=("buffer-usdt",),
-                active_demand_ids=(),
-                funding_horizons=(),
-                desired_target="80000",
-                observed_available="50000",
-                effective_target="80000",
-                deficit="30000",
-                account_watermark=41,
-                risk_policy_version=3,
-                risk_watermark=4,
-                reason=None,
-            )
+        def snapshot(self):
+            class Snapshot:
+                alerts = ()
+
+                def availability(self, location):
+                    assert location is not None
+                    broker, account_id, segment, asset = location
+                    return SimpleNamespace(
+                        readiness="ready",
+                        location=SimpleNamespace(
+                            broker=broker,
+                            account_id=account_id,
+                            segment=segment,
+                            asset=asset,
+                        ),
+                        policy_version=2,
+                        active_objective_ids=("buffer-usdt",),
+                        active_demand_ids=(),
+                        funding_horizons=(),
+                        desired_target=Quantity("80000"),
+                        observed_available=Quantity("50000"),
+                        effective_target=Quantity("80000"),
+                        deficit=Quantity("30000"),
+                        account_watermark=41,
+                        risk_policy_version=3,
+                        risk_watermark=4,
+                        reason=None,
+                    )
+
+            return Snapshot()
 
     capital = CapitalApplication(
         Commands(),
@@ -178,8 +228,12 @@ def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -
 
 def test_availability_transport_failure_is_not_hidden_by_a_python_fallback() -> None:
     class CurrentView:
-        def availability(self, **_query):
-            raise RuntimeError("snapshot is warming up")
+        def snapshot(self):
+            class Snapshot:
+                def availability(self, _location):
+                    raise RuntimeError("snapshot is warming up")
+
+            return Snapshot()
 
     capital = CapitalApplication(
         object(),
@@ -249,7 +303,7 @@ def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
     receipt = capital.observe_demand(demand)
 
     assert receipt.status is FundingObjectiveStatus.ACCEPTED
-    assert getattr(observed[0], "demand_id") == demand.demand_id
+    assert getattr(observed[0], "demand_id") == str(demand.demand_id)
     assert getattr(observed[0], "capital_group_id") == "group-a"
     assert not hasattr(observed[0], "source")
 
@@ -290,8 +344,9 @@ def test_capital_recovery_alert_decoder_preserves_operator_evidence() -> None:
         )
     )
 
-    assert alert.plan_id == "plan-a"
-    assert alert.operation_id == "operation-a"
+    assert str(alert.plan_id) == "plan-a"
+    assert alert.operation_id is not None
+    assert str(alert.operation_id) == "operation-a"
     assert alert.kind is CapitalAlertKind.MANUAL_REVIEW
     assert alert.severity is CapitalAlertSeverity.CRITICAL
     assert alert.recovery_action is CapitalRecoveryAction.HOLD_AND_REVIEW

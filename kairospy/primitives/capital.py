@@ -22,6 +22,11 @@ class CapitalDemandId(TextValue):
 
 
 @dataclass(frozen=True, slots=True)
+class CapitalRouteId(TextValue):
+    """Canonical Capital route identity."""
+
+
+@dataclass(frozen=True, slots=True)
 class CapitalPlanId(TextValue):
     """Canonical Capital plan identity."""
 
@@ -31,11 +36,30 @@ class CapitalReservationId(TextValue):
     """Canonical Capital reservation identity."""
 
 
+@dataclass(frozen=True, slots=True)
+class CapitalOperationId(TextValue):
+    """Canonical Capital operation identity."""
+
+
+@dataclass(frozen=True, slots=True)
+class CapitalSourceAuthority(TextValue):
+    """Canonical authority that governs a Capital source."""
+
+
+@dataclass(frozen=True, slots=True)
+class EarnProductId(TextValue):
+    """Canonical earn-product identity."""
+
+
 CapitalGroupIdRead = NewType("CapitalGroupIdRead", str)
 FundingObjectiveIdRead = NewType("FundingObjectiveIdRead", str)
 CapitalDemandIdRead = NewType("CapitalDemandIdRead", str)
+CapitalRouteIdRead = NewType("CapitalRouteIdRead", str)
 CapitalPlanIdRead = NewType("CapitalPlanIdRead", str)
 CapitalReservationIdRead = NewType("CapitalReservationIdRead", str)
+CapitalOperationIdRead = NewType("CapitalOperationIdRead", str)
+CapitalSourceAuthorityRead = NewType("CapitalSourceAuthorityRead", str)
+EarnProductIdRead = NewType("EarnProductIdRead", str)
 
 
 __all__ = [
@@ -43,10 +67,18 @@ __all__ = [
     "CapitalDemandIdRead",
     "CapitalGroupId",
     "CapitalGroupIdRead",
+    "CapitalOperationId",
+    "CapitalOperationIdRead",
     "CapitalPlanId",
     "CapitalPlanIdRead",
     "CapitalReservationId",
     "CapitalReservationIdRead",
+    "CapitalRouteId",
+    "CapitalRouteIdRead",
+    "CapitalSourceAuthority",
+    "CapitalSourceAuthorityRead",
+    "EarnProductId",
+    "EarnProductIdRead",
     "FundingObjectiveId",
     "FundingObjectiveIdRead",
 ]

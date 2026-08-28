@@ -165,7 +165,7 @@ import kairospy._native_transport
 
 for owner in ('account', 'capital', 'execution', 'market', 'risk'):
     native = import_module(f'kairospy._native_{owner}_contract')
-    facade = import_module(f'kairospy.infrastructure.contracts.{owner}')
+    facade = import_module(f'kairospy.contracts.{owner}')
     info = native.build_info()
     assert info.owner.lower() == owner
     assert info.api_version == 1

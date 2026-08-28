@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from kairospy.infrastructure.contracts.reference.source import (
+from kairospy.contracts.reference.source import (
     DEFAULT_CHANNEL,
     REFERENCE_CHANGES,
 )

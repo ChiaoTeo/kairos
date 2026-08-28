@@ -1,7 +1,7 @@
 from base64 import b64decode
 from pathlib import Path
 
-from kairospy.infrastructure.contracts.execution import (
+from kairospy.contracts.execution import (
     ExecutionCurrentView,
     decode_event,
 )
@@ -24,14 +24,14 @@ def test_execution_indexed_path_matches_rust_contract() -> None:
 def test_execution_event_decoder_returns_owner_native_event() -> None:
     decoded = decode_event(INTENT_ACCEPTED)
     assert type(decoded).__module__ == "kairospy._native_execution_contract"
-    assert decoded.kind == "intent_update"
+    assert decoded.kind == "intent_accepted"
     assert decoded.data.intent_id == "intent-1"
     assert decoded.metadata.stream_id == "execution.events"
 
 
 def test_intent_lifecycle_changed_is_strategy_scoped_and_decision_correlated() -> None:
     event = decode_event(INTENT_LIFECYCLE_CHANGED)
-    assert event.kind == "intent_update"
+    assert event.kind == "intent_lifecycle_changed"
     assert event.strategy_id == "strategy-a"
     assert event.data.status == "satisfied"
     assert event.data.previous_status == "executing"

@@ -3,15 +3,18 @@
 from . import api as _api
 from .api import (
     AccountExecution,
+    AccountEvent,
     AccountSegmentSnapshot,
     AccountSnapshot,
     Balance,
     Bar,
     BarEvent,
+    ExecutionEvent,
     MarketEvent,
     PriceLike,
     Quote,
     QuoteEvent,
+    RiskEvent,
     SPOT,
     Strategy,
     StrategyContext,

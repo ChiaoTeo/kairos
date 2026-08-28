@@ -9,76 +9,91 @@ use kairos_protocol::generated::kairos::account::v_2 as fb;
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
 
 use crate::{
-    AccountBalance, AccountChange, AccountEarnHolding, AccountEvent, AccountFactProvenance,
-    AccountFreshness, AccountObservedOrder, AccountObservedOrderIdentity, AccountPosition,
-    AccountPositionIdentity, AccountStatus, AccountStatusChange, AccountValuation, ContractError,
-    ContractResult, EarnHoldingState, EarnLiquidity, ObservedOrderStatus,
+    AccountBalance, AccountChange, AccountEarnHolding, AccountEvent, AccountEventView,
+    AccountFactProvenance, AccountFreshness, AccountObservedOrder, AccountObservedOrderIdentity,
+    AccountPosition, AccountPositionIdentity, AccountStatus, AccountStatusChange, AccountValuation,
+    ContractError, ContractResult, EarnHoldingState, EarnLiquidity, ObservedOrderStatus,
 };
 
 pub fn decode_event(bytes: &[u8]) -> ContractResult<AccountEvent> {
+    match decode_event_view(bytes)? {
+        AccountEventView::BalanceUpserted(value) => balance_upserted(value),
+        AccountEventView::BalanceRemoved(value) => balance_removed(value),
+        AccountEventView::PositionUpserted(value) => position_upserted(value),
+        AccountEventView::PositionRemoved(value) => position_removed(value),
+        AccountEventView::EarnHoldingUpserted(value) => earn_holding_upserted(value),
+        AccountEventView::EarnHoldingRemoved(value) => earn_holding_removed(value),
+        AccountEventView::ValuationChanged(value) => valuation_changed(value),
+        AccountEventView::AccountStatusChanged(value) => status_changed(value),
+        AccountEventView::ObservedOrderUpserted(value) => observed_order_upserted(value),
+        AccountEventView::ObservedOrderRemoved(value) => observed_order_removed(value),
+    }
+}
+
+pub fn decode_event_view(bytes: &[u8]) -> ContractResult<AccountEventView<'_>> {
     if !kairos_protocol::flatbuffer::identifier_is_readable(bytes) {
         return Err(ContractError::Invalid(
             "Account v2 event payload is shorter than the FlatBuffers header".into(),
         ));
     }
     macro_rules! decode {
-        ($check:ident, $root:ident, $project:ident) => {
+        ($check:ident, $root:ident, $variant:ident) => {
             if fb::$check(bytes) {
                 return fb::$root(bytes)
                     .map_err(invalid_flatbuffer)
-                    .and_then($project);
+                    .map(AccountEventView::$variant);
             }
         };
     }
     decode!(
         balance_upserted_buffer_has_identifier,
         root_as_balance_upserted,
-        balance_upserted
+        BalanceUpserted
     );
     decode!(
         balance_removed_buffer_has_identifier,
         root_as_balance_removed,
-        balance_removed
+        BalanceRemoved
     );
     decode!(
         position_upserted_buffer_has_identifier,
         root_as_position_upserted,
-        position_upserted
+        PositionUpserted
     );
     decode!(
         position_removed_buffer_has_identifier,
         root_as_position_removed,
-        position_removed
+        PositionRemoved
     );
     decode!(
         earn_holding_upserted_buffer_has_identifier,
         root_as_earn_holding_upserted,
-        earn_holding_upserted
+        EarnHoldingUpserted
     );
     decode!(
         earn_holding_removed_buffer_has_identifier,
         root_as_earn_holding_removed,
-        earn_holding_removed
+        EarnHoldingRemoved
     );
     decode!(
         valuation_changed_buffer_has_identifier,
         root_as_valuation_changed,
-        valuation_changed
+        ValuationChanged
     );
     decode!(
         account_status_changed_buffer_has_identifier,
         root_as_account_status_changed,
-        status_changed
+        AccountStatusChanged
     );
     decode!(
         observed_order_upserted_buffer_has_identifier,
         root_as_observed_order_upserted,
-        observed_order_upserted
+        ObservedOrderUpserted
     );
     decode!(
         observed_order_removed_buffer_has_identifier,
         root_as_observed_order_removed,
-        observed_order_removed
+        ObservedOrderRemoved
     );
     Err(ContractError::Invalid(
         "unknown Account v2 event identifier".into(),

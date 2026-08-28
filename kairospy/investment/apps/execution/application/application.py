@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, cast, overload
+from typing import Any, overload
 
+from kairospy.contracts.execution.events import ExecutionEventVariant
+from kairospy.infrastructure.protocol import LiveEventSource
 from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.primitives.account import AccountId, SegmentKey
 from kairospy.primitives.execution import IntentId, OrderId
@@ -15,7 +17,6 @@ from .errors import (
     IntentNotFoundError,
     OrderNotFoundError,
 )
-from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
 from .intents import (
     ExecutionAlgorithmPolicy,
     MakerExecutionPolicy,
@@ -61,7 +62,7 @@ class ExecutionApplication:
         self,
         commands: Any | None,
         current_views: Any | None,
-        event_source: Any | None = None,
+        event_source: LiveEventSource[ExecutionEventVariant] | None = None,
         *,
         strategy_id: str,
         instance_id: str,
@@ -149,48 +150,49 @@ class ExecutionApplication:
             return None
         return intent
 
-    async def events(self) -> AsyncIterator[ExecutionEvent]:
+    def visit_live(
+        self,
+        visitor: Callable[[ExecutionEventVariant], None],
+        *,
+        fragment_limit: int = 64,
+    ) -> int:
         if self._event_source is None:
-            return
+            return 0
         cursor = self._event_cursor
-        async for record in self._event_source.subscribe_live():
-            from kairospy.infrastructure.contracts.execution.events import (
-                ExecutionEvent as NativeExecutionEvent,
-            )
 
-            if not isinstance(record, NativeExecutionEvent):
-                raise TypeError(
-                    "Execution event source must yield owner-native ExecutionEvent values"
-                )
-            if record.stream_id != "execution.events":
+        def accept(record: ExecutionEventVariant) -> None:
+            nonlocal cursor
+            metadata = record.metadata
+            if metadata.stream_id != "execution.events":
                 self._event_scope_error_count += 1
                 raise RuntimeError(
-                    f"Execution event stream identity is invalid: {record.stream_id}"
+                    f"Execution event stream identity is invalid: {metadata.stream_id}"
                 )
-            if self._launch_id is not None and record.launch_id != self._launch_id:
+            if self._launch_id is not None and metadata.launch_id != self._launch_id:
                 self._event_scope_error_count += 1
                 raise RuntimeError("Execution event belongs to another launch")
-            if record.instance_id != self._instance_id:
+            if metadata.instance_id != self._instance_id:
                 self._event_scope_error_count += 1
                 raise RuntimeError("Execution event belongs to another launch instance")
             cursor_key = (
-                record.stream_id,
-                str(record.producer),
-                int(record.producer_incarnation),
+                metadata.stream_id,
+                str(metadata.producer),
+                int(metadata.producer_incarnation),
             )
             if self._event_cursor_key is not None and cursor_key != self._event_cursor_key:
                 self._notification_incarnation_change_count += 1
-                cursor = record.sequence - 1
+                cursor = int(metadata.sequence) - 1
             elif self._event_cursor_key is None:
-                cursor = record.sequence - 1
+                cursor = int(metadata.sequence) - 1
             self._event_cursor_key = cursor_key
+            sequence = int(metadata.sequence)
             if cursor == 0:
-                cursor = record.sequence - 1
-            if record.sequence <= cursor:
-                continue
-            if record.sequence != cursor + 1:
+                cursor = sequence - 1
+            if sequence <= cursor:
+                return
+            if sequence != cursor + 1:
                 self._event_gap_count += 1
-            cursor = record.sequence
+            cursor = sequence
             self._event_cursor = cursor
             self._event_head_sequence = max(self._event_head_sequence, cursor)
             if (
@@ -198,10 +200,12 @@ class ExecutionApplication:
                 or not self._change_belongs_to_accounts(record)
             ):
                 self._checkpoint_cursor(cursor, cursor_key)
-                continue
+                return
             if record.kind != "plan_created":
-                yield record
+                visitor(record)
             self._checkpoint_cursor(cursor, cursor_key)
+
+        return self._event_source.poll_visit(accept, fragment_limit=fragment_limit)
 
     def health(self) -> dict[str, object]:
         """Return process-local event consumption diagnostics."""
@@ -217,6 +221,10 @@ class ExecutionApplication:
                 self._notification_incarnation_change_count
             ),
         }
+
+    def close_live(self) -> None:
+        if self._event_source is not None:
+            self._event_source.close()
 
     def _checkpoint_cursor(
         self, sequence: int, cursor_key: tuple[str, str, int] | None = None
@@ -235,7 +243,11 @@ class ExecutionApplication:
             return True
         kind = getattr(change, "kind", "")
         account_id = getattr(change, "account_id", None)
-        if kind == "intent_update":
+        if kind in {
+            "intent_accepted",
+            "intent_rejected",
+            "intent_lifecycle_changed",
+        }:
             payload = getattr(change, "data", None)
             intent = getattr(payload, "intent", None)
             if intent is None:

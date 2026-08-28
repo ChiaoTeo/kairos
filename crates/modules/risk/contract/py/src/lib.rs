@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use _native_transport::direct::DirectAeronSubscription;
+use _native_transport::lease::{EventLease, EventLeaseError};
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::decimal::DecimalParts;
 use kairos_primitives::reference::{Currency, ExchangeId, InstrumentId};
@@ -134,17 +136,16 @@ impl NativeRiskClient {
 
     #[getter]
     fn events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let platform = PyModule::import(py, "kairospy.infrastructure.transport.native_event")?;
-        let owner = PyModule::import(py, "kairospy._native_risk_contract")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("decoder", owner.getattr("decode_event")?)?;
-        kwargs.set_item("aeron_dir", self.aeron_dir.clone())?;
-        kwargs.set_item("channel", self.channel.clone())?;
-        kwargs.set_item("stream_id", self.stream_id)?;
-        Ok(platform
-            .getattr("NativeEventSource")?
-            .call((), Some(&kwargs))?
-            .unbind())
+        Ok(Py::new(
+            py,
+            RiskLiveSubscription::new(
+                self.aeron_dir.clone(),
+                Some(self.channel.clone()),
+                Some(self.stream_id),
+                _native_transport::DEFAULT_MAX_PAYLOAD_LEN,
+            )?,
+        )?
+        .into_any())
     }
 }
 
@@ -254,12 +255,121 @@ struct RiskEvent {
     account_id: Option<String>,
     #[pyo3(get)]
     strategy_id: Option<String>,
-    payload: Py<PyAny>,
+    data: Py<PyAny>,
+}
+
+#[pyclass(
+    name = "RiskLiveEventView",
+    frozen,
+    module = "kairospy._native_risk_contract"
+)]
+struct RiskLiveEventView {
+    lease: Arc<EventLease>,
+}
+
+#[pymethods]
+impl RiskLiveEventView {
+    #[getter]
+    fn kind(&self) -> PyResult<String> {
+        self.with_event(|event| event.kind().as_str().to_owned())
+    }
+
+    #[getter]
+    fn metadata(&self) -> PyResult<RiskEventMetadata> {
+        self.with_event(|event| risk_event_metadata(event.metadata()))?
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.with_event(|event| project_event(py, event).map(|value| value.data))?
+    }
+
+    #[getter]
+    fn account_id(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.with_event(|event| project_event(py, event).map(|value| value.account_id))?
+    }
+
+    #[getter]
+    fn strategy_id(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.with_event(|event| project_event(py, event).map(|value| value.strategy_id))?
+    }
+}
+
+impl RiskLiveEventView {
+    fn with_event<R>(
+        &self,
+        read: impl for<'frame> FnOnce(DecodedRiskEvent<'frame>) -> R,
+    ) -> PyResult<R> {
+        self.lease
+            .with_frame(|frame| {
+                kairos_risk_contract::decode_event(frame)
+                    .map(read)
+                    .map_err(|error| RiskInvalidEventError::new_err(error.to_string()))
+            })
+            .map_err(risk_lease_error)?
+    }
+}
+
+#[pyclass(
+    name = "RiskLiveSubscription",
+    module = "kairospy._native_risk_contract",
+    unsendable
+)]
+struct RiskLiveSubscription {
+    inner: DirectAeronSubscription,
+}
+
+#[pymethods]
+impl RiskLiveSubscription {
+    #[new]
+    #[pyo3(signature = (*, aeron_dir=None, channel=None, stream_id=None, max_payload_len=_native_transport::DEFAULT_MAX_PAYLOAD_LEN))]
+    fn new(
+        aeron_dir: Option<String>,
+        channel: Option<String>,
+        stream_id: Option<i32>,
+        max_payload_len: usize,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: DirectAeronSubscription::connect(
+                aeron_dir.as_deref(),
+                channel
+                    .as_deref()
+                    .unwrap_or(kairos_risk_contract::DEFAULT_AERON_CHANNEL),
+                stream_id.unwrap_or(kairos_risk_contract::RISK_EVENTS_STREAM_ID),
+                max_payload_len,
+            )?,
+        })
+    }
+
+    #[pyo3(signature = (visitor, *, fragment_limit=64))]
+    fn poll_visit(
+        &self,
+        py: Python<'_>,
+        visitor: Py<PyAny>,
+        fragment_limit: i32,
+    ) -> PyResult<usize> {
+        self.inner.poll_visit(py, fragment_limit, |py, lease| {
+            lease
+                .with_frame(|frame| kairos_risk_contract::decode_event(frame).map(|_| ()))
+                .map_err(risk_lease_error)?
+                .map_err(|error| RiskInvalidEventError::new_err(error.to_string()))?;
+            visitor.call1(py, (Py::new(py, RiskLiveEventView { lease })?,))?;
+            Ok(())
+        })
+    }
+
+    fn close(&self) -> PyResult<()> {
+        self.inner.close()
+    }
+}
+
+fn risk_lease_error(error: EventLeaseError) -> PyErr {
+    PyRuntimeError::new_err(error.to_string())
 }
 #[pymethods]
 impl RiskEvent {
     #[staticmethod]
-    #[pyo3(signature = (sequence, account_id, strategy_id, *, reservation_id=None, request_id=None, status="reserved", launch_id=None, instance_id=None))]
+    #[pyo3(signature = (sequence, account_id, strategy_id, *, reservation_id=None, request_id=None, status="reserved", launch_id=None, instance_id=None, producer_incarnation=1))]
     #[allow(clippy::too_many_arguments)]
     fn reservation_changed(
         py: Python<'_>,
@@ -271,6 +381,7 @@ impl RiskEvent {
         status: &str,
         launch_id: Option<String>,
         instance_id: Option<String>,
+        producer_incarnation: u64,
     ) -> PyResult<Self> {
         AccountId::new(account_id.clone()).map_err(value_error)?;
         StrategyId::new(strategy_id.clone()).map_err(value_error)?;
@@ -284,11 +395,23 @@ impl RiskEvent {
             ));
         }
         Ok(Self {
-            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id, 1)?,
-            kind: "reservation_changed".to_owned(),
+            metadata: synthetic_risk_metadata(
+                sequence,
+                launch_id,
+                instance_id,
+                producer_incarnation,
+            )?,
+            kind: match status {
+                "reserved" => "reservation_reserved",
+                "consumed" => "reservation_consumed",
+                "released" => "reservation_released",
+                "expired" => "reservation_expired",
+                _ => unreachable!("validated reservation status"),
+            }
+            .to_owned(),
             account_id: Some(account_id),
             strategy_id: Some(strategy_id),
-            payload: Py::new(
+            data: Py::new(
                 py,
                 RiskReservationEventPayload {
                     reservation_id,
@@ -301,7 +424,7 @@ impl RiskEvent {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (sequence, account_id, strategy_id, decision_id, request_id, allowed, *, degraded=false, reason_codes=Vec::new(), violations=Vec::new(), launch_id=None, instance_id=None))]
+    #[pyo3(signature = (sequence, account_id, strategy_id, decision_id, request_id, allowed, *, degraded=false, reason_codes=Vec::new(), violations=Vec::new(), launch_id=None, instance_id=None, producer_incarnation=1))]
     #[allow(clippy::too_many_arguments)]
     fn decision_evaluated(
         py: Python<'_>,
@@ -316,16 +439,22 @@ impl RiskEvent {
         violations: Vec<String>,
         launch_id: Option<String>,
         instance_id: Option<String>,
+        producer_incarnation: u64,
     ) -> PyResult<Self> {
         AccountId::new(account_id.clone()).map_err(value_error)?;
         StrategyId::new(strategy_id.clone()).map_err(value_error)?;
         RequestId::new(request_id.clone()).map_err(value_error)?;
         Ok(Self {
-            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id, 1)?,
-            kind: "decision_evaluated".to_owned(),
+            metadata: synthetic_risk_metadata(
+                sequence,
+                launch_id,
+                instance_id,
+                producer_incarnation,
+            )?,
+            kind: "decision_made".to_owned(),
             account_id: Some(account_id),
             strategy_id: Some(strategy_id),
-            payload: Py::new(
+            data: Py::new(
                 py,
                 RiskDecisionEventPayload {
                     decision_id,
@@ -341,7 +470,7 @@ impl RiskEvent {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (sequence, state, *, account_id=None, strategy_id=None, exchange_id=None, reason=None, opened_at_unix_nanos=None, reset_at_unix_nanos=None, launch_id=None, instance_id=None))]
+    #[pyo3(signature = (sequence, state, *, account_id=None, strategy_id=None, exchange_id=None, reason=None, opened_at_unix_nanos=None, reset_at_unix_nanos=None, launch_id=None, instance_id=None, producer_incarnation=1))]
     #[allow(clippy::too_many_arguments)]
     fn circuit_changed(
         py: Python<'_>,
@@ -355,6 +484,7 @@ impl RiskEvent {
         reset_at_unix_nanos: Option<u64>,
         launch_id: Option<String>,
         instance_id: Option<String>,
+        producer_incarnation: u64,
     ) -> PyResult<Self> {
         if !matches!(state, "open" | "closed") {
             return Err(RiskInvalidInputError::new_err(
@@ -371,11 +501,21 @@ impl RiskEvent {
             ExchangeId::new(value.clone()).map_err(value_error)?;
         }
         Ok(Self {
-            metadata: synthetic_risk_metadata(sequence, launch_id, instance_id, 1)?,
-            kind: "circuit_changed".to_owned(),
+            metadata: synthetic_risk_metadata(
+                sequence,
+                launch_id,
+                instance_id,
+                producer_incarnation,
+            )?,
+            kind: if state == "open" {
+                "circuit_opened"
+            } else {
+                "circuit_closed"
+            }
+            .to_owned(),
             account_id,
             strategy_id,
-            payload: Py::new(
+            data: Py::new(
                 py,
                 RiskCircuitEventPayload {
                     exchange_id,
@@ -408,17 +548,13 @@ impl RiskEvent {
             kind: "policy_activated".to_owned(),
             account_id: None,
             strategy_id: None,
-            payload: py.None(),
+            data: py.None(),
         })
     }
 
     #[getter]
-    fn payload(&self, py: Python<'_>) -> Py<PyAny> {
-        self.payload.clone_ref(py)
-    }
-    #[getter]
     fn data(&self, py: Python<'_>) -> Py<PyAny> {
-        self.payload.clone_ref(py)
+        self.data.clone_ref(py)
     }
     #[getter]
     fn stream_id(&self) -> &str {
@@ -1730,7 +1866,8 @@ fn project_event(py: Python<'_>, value: DecodedRiskEvent<'_>) -> PyResult<RiskEv
             Py::new(py, $value)?.into_any()
         };
     }
-    let (metadata, kind, account_id, strategy_id, payload) = match value {
+    let canonical_kind = value.kind().as_str().to_owned();
+    let (metadata, account_id, strategy_id, data) = match value {
         DecodedRiskEvent::DecisionMade(root) => {
             let value = root.decision();
             let reasons = value.reasons();
@@ -1744,7 +1881,6 @@ fn project_event(py: Python<'_>, value: DecodedRiskEvent<'_>) -> PyResult<RiskEv
                 .collect();
             (
                 risk_event_metadata(root.metadata())?,
-                "decision_evaluated",
                 Some(value.account_id().to_owned()),
                 Some(value.strategy_id().to_owned()),
                 payload!(RiskDecisionEventPayload {
@@ -1778,23 +1914,17 @@ fn project_event(py: Python<'_>, value: DecodedRiskEvent<'_>) -> PyResult<RiskEv
     };
     Ok(RiskEvent {
         metadata,
-        kind: kind.to_owned(),
+        kind: canonical_kind,
         account_id,
         strategy_id,
-        payload,
+        data,
     })
 }
 fn reservation_event(
     py: Python<'_>,
     metadata: kairos_protocol::generated::kairos::common::v_2::EventMetadata<'_>,
     value: kairos_protocol::generated::kairos::risk::v_2::Reservation<'_>,
-) -> PyResult<(
-    RiskEventMetadata,
-    &'static str,
-    Option<String>,
-    Option<String>,
-    Py<PyAny>,
-)> {
+) -> PyResult<(RiskEventMetadata, Option<String>, Option<String>, Py<PyAny>)> {
     let payload = RiskReservationEventPayload {
         reservation_id: value.reservation_id().to_owned(),
         request_id: value.request_id().to_owned(),
@@ -1802,7 +1932,6 @@ fn reservation_event(
     };
     Ok((
         risk_event_metadata(metadata)?,
-        "reservation_changed",
         Some(value.account_id().to_owned()),
         Some(value.strategy_id().to_owned()),
         Py::new(py, payload)?.into_any(),
@@ -1813,13 +1942,7 @@ fn circuit_event(
     metadata: kairos_protocol::generated::kairos::common::v_2::EventMetadata<'_>,
     value: kairos_protocol::generated::kairos::risk::v_2::CircuitState<'_>,
     state: &'static str,
-) -> PyResult<(
-    RiskEventMetadata,
-    &'static str,
-    Option<String>,
-    Option<String>,
-    Py<PyAny>,
-)> {
+) -> PyResult<(RiskEventMetadata, Option<String>, Option<String>, Py<PyAny>)> {
     let scope = value.scope();
     let account_id = optional(scope.account_id());
     let strategy_id = optional(scope.strategy_id());
@@ -1832,7 +1955,6 @@ fn circuit_event(
     };
     Ok((
         risk_event_metadata(metadata)?,
-        "circuit_changed",
         account_id,
         strategy_id,
         Py::new(py, payload)?.into_any(),
@@ -2225,6 +2347,8 @@ fn _native_risk_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<RiskReservationEventPayload>()?;
     module.add_class::<RiskCircuitEventPayload>()?;
     module.add_class::<RiskEvent>()?;
+    module.add_class::<RiskLiveEventView>()?;
+    module.add_class::<RiskLiveSubscription>()?;
     module.add_class::<RiskScope>()?;
     module.add_class::<RiskPolicy>()?;
     module.add_class::<RiskLimitUsage>()?;

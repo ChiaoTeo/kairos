@@ -1,7 +1,9 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use _native_transport::direct::DirectAeronSubscription;
+use _native_transport::lease::{EventLease, EventLeaseError};
 use kairos_capital_contract::{
     CAPITAL_ALERTS_DATABASE, CAPITAL_AVAILABILITY_DATABASE, CAPITAL_DEMANDS_DATABASE,
     CAPITAL_FACTS_DATABASE, CAPITAL_OBJECTIVES_DATABASE, CAPITAL_OPERATIONS_DATABASE,
@@ -150,17 +152,16 @@ impl NativeCapitalClient {
 
     #[getter]
     fn events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let platform = PyModule::import(py, "kairospy.infrastructure.transport.native_event")?;
-        let owner = PyModule::import(py, "kairospy._native_capital_contract")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("decoder", owner.getattr("decode_event")?)?;
-        kwargs.set_item("aeron_dir", self.aeron_dir.clone())?;
-        kwargs.set_item("channel", self.channel.clone())?;
-        kwargs.set_item("stream_id", self.stream_id)?;
-        Ok(platform
-            .getattr("NativeEventSource")?
-            .call((), Some(&kwargs))?
-            .unbind())
+        Ok(Py::new(
+            py,
+            CapitalLiveSubscription::new(
+                self.aeron_dir.clone(),
+                Some(self.channel.clone()),
+                Some(self.stream_id),
+                _native_transport::DEFAULT_MAX_PAYLOAD_LEN,
+            )?,
+        )?
+        .into_any())
     }
 }
 
@@ -274,14 +275,113 @@ struct CapitalEvent {
     metadata: CapitalEventMetadata,
     #[pyo3(get)]
     kind: String,
-    payload: Py<PyAny>,
+    data: Py<PyAny>,
+}
+
+#[pyclass(
+    name = "CapitalLiveEventView",
+    frozen,
+    module = "kairospy._native_capital_contract"
+)]
+struct CapitalLiveEventView {
+    lease: Arc<EventLease>,
+}
+
+#[pymethods]
+impl CapitalLiveEventView {
+    #[getter]
+    fn kind(&self) -> PyResult<String> {
+        self.with_event(|event| event.kind().as_str().to_owned())
+    }
+
+    #[getter]
+    fn metadata(&self) -> PyResult<CapitalEventMetadata> {
+        self.with_event(|event| event_metadata(event.metadata()))?
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.with_event(|event| project_event(py, event).map(|value| value.data))?
+    }
+}
+
+impl CapitalLiveEventView {
+    fn with_event<R>(
+        &self,
+        read: impl for<'frame> FnOnce(DecodedCapitalEvent<'frame>) -> R,
+    ) -> PyResult<R> {
+        self.lease
+            .with_frame(|frame| {
+                kairos_capital_contract::decode_event(frame)
+                    .map(read)
+                    .map_err(|error| CapitalInvalidEventError::new_err(error.to_string()))
+            })
+            .map_err(capital_lease_error)?
+    }
+}
+
+#[pyclass(
+    name = "CapitalLiveSubscription",
+    module = "kairospy._native_capital_contract",
+    unsendable
+)]
+struct CapitalLiveSubscription {
+    inner: DirectAeronSubscription,
+}
+
+#[pymethods]
+impl CapitalLiveSubscription {
+    #[new]
+    #[pyo3(signature = (*, aeron_dir=None, channel=None, stream_id=None, max_payload_len=_native_transport::DEFAULT_MAX_PAYLOAD_LEN))]
+    fn new(
+        aeron_dir: Option<String>,
+        channel: Option<String>,
+        stream_id: Option<i32>,
+        max_payload_len: usize,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: DirectAeronSubscription::connect(
+                aeron_dir.as_deref(),
+                channel
+                    .as_deref()
+                    .unwrap_or(kairos_capital_contract::DEFAULT_AERON_CHANNEL),
+                stream_id.unwrap_or(kairos_capital_contract::CAPITAL_EVENTS_STREAM_ID),
+                max_payload_len,
+            )?,
+        })
+    }
+
+    #[pyo3(signature = (visitor, *, fragment_limit=64))]
+    fn poll_visit(
+        &self,
+        py: Python<'_>,
+        visitor: Py<PyAny>,
+        fragment_limit: i32,
+    ) -> PyResult<usize> {
+        self.inner.poll_visit(py, fragment_limit, |py, lease| {
+            lease
+                .with_frame(|frame| kairos_capital_contract::decode_event(frame).map(|_| ()))
+                .map_err(capital_lease_error)?
+                .map_err(|error| CapitalInvalidEventError::new_err(error.to_string()))?;
+            visitor.call1(py, (Py::new(py, CapitalLiveEventView { lease })?,))?;
+            Ok(())
+        })
+    }
+
+    fn close(&self) -> PyResult<()> {
+        self.inner.close()
+    }
+}
+
+fn capital_lease_error(error: EventLeaseError) -> PyErr {
+    PyRuntimeError::new_err(error.to_string())
 }
 
 #[pymethods]
 impl CapitalEvent {
     #[getter]
-    fn payload(&self, py: Python<'_>) -> Py<PyAny> {
-        self.payload.clone_ref(py)
+    fn data(&self, py: Python<'_>) -> Py<PyAny> {
+        self.data.clone_ref(py)
     }
 
     #[getter]
@@ -1972,25 +2072,22 @@ fn project_event(py: Python<'_>, value: DecodedCapitalEvent<'_>) -> PyResult<Cap
             Py::new(py, $value)?.into_any()
         };
     }
-    let (metadata, kind, payload) = match value {
+    let kind = value.kind().as_str().to_owned();
+    let (metadata, data) = match value {
         DecodedCapitalEvent::FundingObjectiveChanged(root) => (
             event_metadata(root.metadata())?,
-            "funding_objective_changed",
             event_payload!(objective(root.objective()).map_err(contract_error)?),
         ),
         DecodedCapitalEvent::CapitalDemandChanged(root) => (
             event_metadata(root.metadata())?,
-            "capital_demand_changed",
             event_payload!(demand(root.demand()).map_err(contract_error)?),
         ),
         DecodedCapitalEvent::PolicyChanged(root) => (
             event_metadata(root.metadata())?,
-            "policy_changed",
             event_payload!(policy(root.policy()).map_err(contract_error)?),
         ),
         DecodedCapitalEvent::FactsObserved(root) => (
             event_metadata(root.metadata())?,
-            "facts_observed",
             event_payload!(capital_facts(root.facts()).map_err(contract_error)?),
         ),
         DecodedCapitalEvent::AvailabilityEvaluated(root) => {
@@ -2002,18 +2099,15 @@ fn project_event(py: Python<'_>, value: DecodedCapitalEvent<'_>) -> PyResult<Cap
                 .map_err(contract_error)?;
             (
                 event_metadata(root.metadata())?,
-                "availability_evaluated",
                 event_payload!(CapitalAvailabilityEventPayload { availability }),
             )
         },
         DecodedCapitalEvent::RouteChanged(root) => (
             event_metadata(root.metadata())?,
-            "route_changed",
             event_payload!(route(root.route()).map_err(contract_error)?),
         ),
         DecodedCapitalEvent::PlanAuthorized(root) => (
             event_metadata(root.metadata())?,
-            "plan_authorized",
             event_payload!(CapitalPlanEventPayload {
                 plan: plan(root.plan()).map_err(contract_error)?,
                 reservation: reservation(root.reservation()).map_err(contract_error)?,
@@ -2022,7 +2116,6 @@ fn project_event(py: Python<'_>, value: DecodedCapitalEvent<'_>) -> PyResult<Cap
         ),
         DecodedCapitalEvent::PlanStateChanged(root) => (
             event_metadata(root.metadata())?,
-            "plan_state_changed",
             event_payload!(CapitalPlanEventPayload {
                 plan: plan(root.plan()).map_err(contract_error)?,
                 reservation: reservation(root.reservation()).map_err(contract_error)?,
@@ -2031,7 +2124,6 @@ fn project_event(py: Python<'_>, value: DecodedCapitalEvent<'_>) -> PyResult<Cap
         ),
         DecodedCapitalEvent::PlanExpired(root) => (
             event_metadata(root.metadata())?,
-            "plan_expired",
             event_payload!(CapitalPlanEventPayload {
                 plan: plan(root.plan()).map_err(contract_error)?,
                 reservation: reservation(root.reservation()).map_err(contract_error)?,
@@ -2045,8 +2137,8 @@ fn project_event(py: Python<'_>, value: DecodedCapitalEvent<'_>) -> PyResult<Cap
     };
     Ok(CapitalEvent {
         metadata,
-        kind: kind.to_owned(),
-        payload,
+        kind,
+        data,
     })
 }
 
@@ -2387,6 +2479,8 @@ fn _native_capital_contract(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CapitalAvailabilityEventPayload>()?;
     m.add_class::<CapitalPlanEventPayload>()?;
     m.add_class::<CapitalEvent>()?;
+    m.add_class::<CapitalLiveEventView>()?;
+    m.add_class::<CapitalLiveSubscription>()?;
     m.add_class::<FundingLocation>()?;
     m.add_class::<NativePublishFundingObjectiveRequest>()?;
     m.add_class::<NativeCancelFundingObjectiveRequest>()?;

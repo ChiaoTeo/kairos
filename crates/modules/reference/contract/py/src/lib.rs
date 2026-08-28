@@ -1,5 +1,8 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use _native_transport::direct::DirectAeronSubscription;
+use _native_transport::lease::{EventLease, EventLeaseError};
 use kairos_primitives::reference::ReferenceStatus;
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
@@ -114,14 +117,124 @@ struct ReferenceEvent {
     kind: String,
     #[pyo3(get)]
     catalog_revision: u64,
-    payload: Py<PyAny>,
+    data: Py<PyAny>,
+}
+
+#[pyclass(
+    name = "ReferenceLiveEventView",
+    frozen,
+    module = "kairospy._native_reference_contract"
+)]
+struct ReferenceLiveEventView {
+    lease: Arc<EventLease>,
+}
+
+#[pymethods]
+impl ReferenceLiveEventView {
+    #[getter]
+    fn kind(&self) -> PyResult<String> {
+        self.with_event(|event| event.kind().as_str().to_owned())
+    }
+
+    #[getter]
+    fn metadata(&self) -> PyResult<ReferenceEventMetadata> {
+        self.with_event(|event| {
+            decode_event_metadata(event.metadata())
+                .map(event_metadata)
+                .map_err(|error| ReferenceInvalidEventError::new_err(error.to_string()))
+        })?
+    }
+
+    #[getter]
+    fn catalog_revision(&self, py: Python<'_>) -> PyResult<u64> {
+        self.with_event(|event| {
+            project_reference_event(py, event).map(|value| value.catalog_revision)
+        })?
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.with_event(|event| project_reference_event(py, event).map(|value| value.data))?
+    }
+}
+
+impl ReferenceLiveEventView {
+    fn with_event<R>(
+        &self,
+        read: impl for<'frame> FnOnce(kairos_reference_contract::ReferenceEvent<'frame>) -> R,
+    ) -> PyResult<R> {
+        self.lease
+            .with_frame(|frame| {
+                kairos_reference_contract::decode_event(frame)
+                    .map(read)
+                    .map_err(|error| ReferenceInvalidEventError::new_err(error.to_string()))
+            })
+            .map_err(reference_lease_error)?
+    }
+}
+
+#[pyclass(
+    name = "ReferenceLiveSubscription",
+    module = "kairospy._native_reference_contract",
+    unsendable
+)]
+struct ReferenceLiveSubscription {
+    inner: DirectAeronSubscription,
+}
+
+#[pymethods]
+impl ReferenceLiveSubscription {
+    #[new]
+    #[pyo3(signature = (*, aeron_dir=None, channel=None, stream_id=None, max_payload_len=_native_transport::DEFAULT_MAX_PAYLOAD_LEN))]
+    fn new(
+        aeron_dir: Option<String>,
+        channel: Option<String>,
+        stream_id: Option<i32>,
+        max_payload_len: usize,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: DirectAeronSubscription::connect(
+                aeron_dir.as_deref(),
+                channel
+                    .as_deref()
+                    .unwrap_or(kairos_reference_contract::DEFAULT_AERON_CHANNEL),
+                stream_id.unwrap_or(kairos_reference_contract::REFERENCE_EVENTS_STREAM_ID),
+                max_payload_len,
+            )?,
+        })
+    }
+
+    #[pyo3(signature = (visitor, *, fragment_limit=64))]
+    fn poll_visit(
+        &self,
+        py: Python<'_>,
+        visitor: Py<PyAny>,
+        fragment_limit: i32,
+    ) -> PyResult<usize> {
+        self.inner.poll_visit(py, fragment_limit, |py, lease| {
+            lease
+                .with_frame(|frame| kairos_reference_contract::decode_event(frame).map(|_| ()))
+                .map_err(reference_lease_error)?
+                .map_err(|error| ReferenceInvalidEventError::new_err(error.to_string()))?;
+            visitor.call1(py, (Py::new(py, ReferenceLiveEventView { lease })?,))?;
+            Ok(())
+        })
+    }
+
+    fn close(&self) -> PyResult<()> {
+        self.inner.close()
+    }
+}
+
+fn reference_lease_error(error: EventLeaseError) -> PyErr {
+    PyRuntimeError::new_err(error.to_string())
 }
 
 #[pymethods]
 impl ReferenceEvent {
     #[getter]
-    fn payload(&self, py: Python<'_>) -> Py<PyAny> {
-        self.payload.clone_ref(py)
+    fn data(&self, py: Python<'_>) -> Py<PyAny> {
+        self.data.clone_ref(py)
     }
     #[getter]
     fn event_id(&self) -> &str {
@@ -168,6 +281,14 @@ struct ReferenceExchange {
     status: String,
 }
 
+#[pymethods]
+impl ReferenceExchange {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.exchange_id
+    }
+}
+
 #[pyclass(frozen, module = "kairospy._native_reference_contract")]
 #[derive(Clone)]
 struct ReferenceAsset {
@@ -181,6 +302,23 @@ struct ReferenceAsset {
     asset_class: String,
     #[pyo3(get)]
     status: String,
+}
+
+#[pymethods]
+impl ReferenceAsset {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.asset_id
+    }
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceInstrumentRef {
+    #[pyo3(get)]
+    id: String,
+    #[pyo3(get)]
+    display_symbol: String,
 }
 
 #[pyclass(frozen, module = "kairospy._native_reference_contract")]
@@ -214,6 +352,22 @@ struct ReferenceInstrument {
     status: String,
 }
 
+#[pymethods]
+impl ReferenceInstrument {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.instrument_id
+    }
+
+    #[getter]
+    fn r#ref(&self) -> ReferenceInstrumentRef {
+        ReferenceInstrumentRef {
+            id: self.instrument_id.clone(),
+            display_symbol: self.symbol.clone(),
+        }
+    }
+}
+
 #[pyclass(frozen, module = "kairospy._native_reference_contract")]
 #[derive(Clone)]
 struct ReferenceListing {
@@ -231,6 +385,29 @@ struct ReferenceListing {
     effective_from_unix_nanos: u64,
     #[pyo3(get)]
     effective_to_unix_nanos: Option<u64>,
+}
+
+#[pymethods]
+impl ReferenceListing {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.listing_id
+    }
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceTradingRules {
+    #[pyo3(get)]
+    price_increment: Option<NativeDecimal>,
+    #[pyo3(get)]
+    quantity_increment: Option<NativeDecimal>,
+    #[pyo3(get)]
+    minimum_quantity: Option<NativeDecimal>,
+    #[pyo3(get)]
+    minimum_notional: Option<NativeDecimal>,
+    #[pyo3(get)]
+    contract_multiplier: Option<NativeDecimal>,
 }
 
 #[pyclass(frozen, module = "kairospy._native_reference_contract")]
@@ -276,6 +453,43 @@ struct ReferenceMarket {
     effective_from_unix_nanos: u64,
     #[pyo3(get)]
     effective_to_unix_nanos: Option<u64>,
+}
+
+#[pymethods]
+impl ReferenceMarket {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.market_id
+    }
+
+    #[getter]
+    fn instrument(&self) -> ReferenceInstrumentRef {
+        ReferenceInstrumentRef {
+            id: self.instrument_id.clone(),
+            display_symbol: self.venue_symbol.clone().unwrap_or_default(),
+        }
+    }
+
+    #[getter]
+    fn base_asset(&self) -> Option<&str> {
+        self.base_asset_id.as_deref()
+    }
+
+    #[getter]
+    fn quote_asset(&self) -> Option<&str> {
+        self.quote_asset_id.as_deref()
+    }
+
+    #[getter]
+    fn trading_rules(&self) -> ReferenceTradingRules {
+        ReferenceTradingRules {
+            price_increment: self.price_tick.clone(),
+            quantity_increment: self.quantity_tick.clone(),
+            minimum_quantity: self.minimum_quantity.clone(),
+            minimum_notional: self.minimum_notional.clone(),
+            contract_multiplier: self.contract_size.clone(),
+        }
+    }
 }
 
 #[pyclass(frozen, module = "kairospy._native_reference_contract")]
@@ -861,7 +1075,7 @@ fn reference_event<T: PyClass<BaseType = PyAny>>(
     metadata: kairos_protocol::generated::kairos::common::v_2::EventMetadata<'_>,
     kind: &str,
     catalog_revision: u64,
-    payload: T,
+    data: T,
 ) -> PyResult<ReferenceEvent> {
     let metadata = decode_event_metadata(metadata)
         .map_err(|error| ReferenceInvalidEventError::new_err(error.to_string()))?;
@@ -869,83 +1083,91 @@ fn reference_event<T: PyClass<BaseType = PyAny>>(
         metadata: event_metadata(metadata),
         kind: kind.to_owned(),
         catalog_revision,
-        payload: Py::new(py, payload)?.into_any(),
+        data: Py::new(py, data)?.into_any(),
     })
 }
 
 #[pyfunction]
 fn decode_event(py: Python<'_>, payload: &[u8]) -> PyResult<ReferenceEvent> {
-    use kairos_reference_contract::ReferenceEvent as Event;
     let event = kairos_reference_contract::decode_event(payload)
         .map_err(|error| ReferenceInvalidEventError::new_err(error.to_string()))?;
+    project_reference_event(py, event)
+}
+
+fn project_reference_event(
+    py: Python<'_>,
+    event: kairos_reference_contract::ReferenceEvent<'_>,
+) -> PyResult<ReferenceEvent> {
+    use kairos_reference_contract::ReferenceEvent as Event;
+    let kind = event.kind().as_str();
     match event {
         Event::ExchangeUpserted(value) => reference_event(
             py,
             value.metadata(),
-            "exchange_upserted",
+            kind,
             value.catalog_revision(),
             project_exchange(value.exchange()),
         ),
         Event::ExchangeUpdated(value) => reference_event(
             py,
             value.metadata(),
-            "exchange_updated",
+            kind,
             value.catalog_revision(),
             project_exchange(value.exchange()),
         ),
         Event::AssetUpserted(value) => reference_event(
             py,
             value.metadata(),
-            "asset_upserted",
+            kind,
             value.catalog_revision(),
             project_asset(value.asset()),
         ),
         Event::AssetUpdated(value) => reference_event(
             py,
             value.metadata(),
-            "asset_updated",
+            kind,
             value.catalog_revision(),
             project_asset(value.asset()),
         ),
         Event::InstrumentUpserted(value) => reference_event(
             py,
             value.metadata(),
-            "instrument_upserted",
+            kind,
             value.catalog_revision(),
             project_instrument(value.instrument()),
         ),
         Event::InstrumentUpdated(value) => reference_event(
             py,
             value.metadata(),
-            "instrument_updated",
+            kind,
             value.catalog_revision(),
             project_instrument(value.instrument()),
         ),
         Event::ListingUpserted(value) => reference_event(
             py,
             value.metadata(),
-            "listing_upserted",
+            kind,
             value.catalog_revision(),
             project_listing(value.listing()),
         ),
         Event::ListingUpdated(value) => reference_event(
             py,
             value.metadata(),
-            "listing_updated",
+            kind,
             value.catalog_revision(),
             project_listing(value.listing()),
         ),
         Event::MarketUpserted(value) => reference_event(
             py,
             value.metadata(),
-            "market_upserted",
+            kind,
             value.catalog_revision(),
             project_market(value.market()),
         ),
         Event::MarketUpdated(value) => reference_event(
             py,
             value.metadata(),
-            "market_updated",
+            kind,
             value.catalog_revision(),
             project_market(value.market()),
         ),
@@ -1111,10 +1333,14 @@ fn _native_reference_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NativeBuildInfo>()?;
     module.add_class::<ReferenceEventMetadata>()?;
     module.add_class::<ReferenceEvent>()?;
+    module.add_class::<ReferenceLiveEventView>()?;
+    module.add_class::<ReferenceLiveSubscription>()?;
     module.add_class::<ReferenceExchange>()?;
     module.add_class::<ReferenceAsset>()?;
+    module.add_class::<ReferenceInstrumentRef>()?;
     module.add_class::<ReferenceInstrument>()?;
     module.add_class::<ReferenceListing>()?;
+    module.add_class::<ReferenceTradingRules>()?;
     module.add_class::<ReferenceMarket>()?;
     module.add_class::<ReferenceLifecycleEvent>()?;
     module.add_class::<ReferenceCatalogStatus>()?;

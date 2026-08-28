@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 from base64 import b64decode
 from importlib import import_module
 
 import pytest
 
-from kairospy.infrastructure.contracts.account import decode_event
+from kairospy.contracts.account import decode_event
 from kairospy.investment.apps.account.application.application import AccountApplication
 from kairospy.primitives.account import AccountId
 
@@ -33,9 +32,14 @@ class _Records:
     def __init__(self, *records: object) -> None:
         self.records = records
 
-    async def subscribe_live(self):
-        for record in self.records:
-            yield record
+    def poll_visit(self, visitor, *, fragment_limit: int = 64) -> int:
+        records, self.records = self.records[:fragment_limit], self.records[fragment_limit:]
+        for record in records:
+            visitor(record)
+        return len(records)
+
+    def close(self) -> None:
+        return None
 
 
 class _LiveRecords(_Records):
@@ -59,8 +63,10 @@ def _record(
     )
 
 
-async def _collect(application: AccountApplication) -> list[object]:
-    return [event async for event in application._events()]
+def _collect(application: AccountApplication) -> list[object]:
+    events: list[object] = []
+    application.visit_live(events.append)
+    return events
 
 
 def test_decodes_and_yields_owner_native_account_status_event() -> None:
@@ -68,24 +74,24 @@ def test_decodes_and_yields_owner_native_account_status_event() -> None:
     record = decode_event(_status_event_payload())
     assert isinstance(record, native.AccountEvent)
     assert record.account_id == "main"
-    assert record.sequence == 1
+    assert record.metadata.sequence == 1
     assert record.provenance.source_id == "binance:spot"
     assert record.provenance.provider_sequence == 10
 
     application = AccountApplication({AccountId("main"): object()}, _Records(record))
-    events = asyncio.run(_collect(application))
+    events = _collect(application)
 
     assert events == [record]
-    assert record.change.kind == "status_changed"
-    assert record.change.segment_key == "spot"
-    assert record.change.status.trading_enabled is True
+    assert record.kind == "account_status_changed"
+    assert record.segment_key == "spot"
+    assert record.data.trading_enabled is True
 
 
 def test_account_scope_filters_other_accounts() -> None:
     application = AccountApplication(
         {AccountId("main"): object()}, _Records(_record(1, "other"), _record(1))
     )
-    assert [event.account_id for event in asyncio.run(_collect(application))] == [
+    assert [event.account_id for event in _collect(application)] == [
         "main"
     ]
 
@@ -94,7 +100,7 @@ def test_account_gap_is_reported_without_stopping_notifications() -> None:
     application = AccountApplication(
         {AccountId("main"): object()}, _Records(_record(1), _record(3))
     )
-    assert len(asyncio.run(_collect(application))) == 2
+    assert len(_collect(application)) == 2
     assert application.notification_health()["gap_count"] == 1
 
 
@@ -104,7 +110,7 @@ def test_account_rejects_a_stream_identity_for_another_scope() -> None:
     )
     application = AccountApplication({AccountId("main"): object()}, _Records(invalid))
     with pytest.raises(RuntimeError, match="stream identity"):
-        asyncio.run(_collect(application))
+        _collect(application)
 
 
 def test_account_frames_remain_owner_native_without_callback_dto_mapping() -> None:
@@ -117,11 +123,11 @@ def test_account_frames_remain_owner_native_without_callback_dto_mapping() -> No
         {AccountId("main"): object()}, _Records(balance, valuation)
     )
 
-    events = asyncio.run(_collect(application))
+    events = _collect(application)
     assert events == [balance, valuation]
-    assert [event.change.kind for event in events] == [
-        "balance_changed",
-        "equity_changed",
+    assert [event.kind for event in events] == [
+        "balance_upserted",
+        "valuation_changed",
     ]
 
 
@@ -129,12 +135,12 @@ def test_live_account_source_joins_latest_and_reports_later_gap() -> None:
     application = AccountApplication(
         {AccountId("main"): object()}, _LiveRecords(_record(40), _record(41))
     )
-    assert len(asyncio.run(_collect(application))) == 2
+    assert len(_collect(application)) == 2
 
     application = AccountApplication(
         {AccountId("main"): object()}, _LiveRecords(_record(40), _record(42))
     )
-    assert len(asyncio.run(_collect(application))) == 2
+    assert len(_collect(application)) == 2
     assert application.notification_health()["gap_count"] == 1
 
 
@@ -144,7 +150,7 @@ def test_account_ignores_duplicate_and_stale_redelivery() -> None:
         _Records(_record(1), _record(2), _record(1), _record(3)),
     )
     assert [
-        event.metadata.sequence for event in asyncio.run(_collect(application))
+        event.metadata.sequence for event in _collect(application)
     ] == [
         1,
         2,
@@ -160,4 +166,4 @@ def test_account_rejects_another_launch_instance_before_dispatch() -> None:
         instance_id="instance",
     )
     with pytest.raises(RuntimeError, match="another launch instance"):
-        asyncio.run(_collect(application))
+        _collect(application)

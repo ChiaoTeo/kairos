@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 from kairospy._native_account_contract import AccountEvent
 from kairospy._native_execution_contract import ExecutionEvent
 from kairospy._native_market_contract import MarketEvent
@@ -13,15 +11,21 @@ from kairospy.investment.apps.execution.application.application import (
 from kairospy.investment.apps.market.application.application import MarketApplication
 from kairospy.investment.apps.risk.application.application import RiskApplication
 from kairospy.primitives.account import AccountId
-
-
 class _Events:
     def __init__(self, *records: object) -> None:
         self.records = records
 
-    async def subscribe_live(self):
-        for record in self.records:
-            yield record
+    def poll_visit(self, visitor, *, fragment_limit: int = 64) -> int:
+        records, self.records = self.records[:fragment_limit], self.records[fragment_limit:]
+        for record in records:
+            visitor(record)
+        return len(records)
+
+    def close(self) -> None:
+        return None
+
+    def check_ready(self) -> None:
+        return None
 
 
 class _SnapshotView:
@@ -33,8 +37,10 @@ class _SnapshotView:
         return object()
 
 
-async def _collect(values) -> list[object]:
-    return [value async for value in values]
+def _collect(application) -> list[object]:
+    values: list[object] = []
+    application.visit_live(values.append)
+    return values
 
 
 def test_market_cursor_resets_after_producer_incarnation_change() -> None:
@@ -72,7 +78,7 @@ def test_market_cursor_resets_after_producer_incarnation_change() -> None:
         instance_id="instance",
     )
 
-    asyncio.run(_collect(application.events()))
+    _collect(application)
     assert application._event_cursor == 1
     assert application._event_cursor_key == ("market.events", "market.simulation", 2)
     assert application.notification_health()["incarnation_change_count"] == 1
@@ -88,7 +94,7 @@ def test_account_cursor_resyncs_each_account_after_actor_restart() -> None:
         {AccountId("main"): view}, _Events(first, restarted)
     )
 
-    assert len(asyncio.run(_collect(application._events()))) == 2
+    assert len(_collect(application)) == 2
     assert view.reads == 0
     assert application.notification_health()["incarnation_change_count"] == 1
 
@@ -96,7 +102,9 @@ def test_account_cursor_resyncs_each_account_after_actor_restart() -> None:
 def test_risk_cursor_resyncs_from_current_view_after_actor_restart() -> None:
     view = _SnapshotView()
     first = RiskEvent.reservation_changed(8, "main", "strategy")
-    restarted = RiskEvent.policy_activated(1, producer_incarnation=2)
+    restarted = RiskEvent.reservation_changed(
+        1, "main", "strategy", producer_incarnation=2
+    )
     application = RiskApplication(
         view,
         _Events(first, restarted),
@@ -104,8 +112,8 @@ def test_risk_cursor_resyncs_from_current_view_after_actor_restart() -> None:
         strategy_id="strategy",
     )
 
-    events = asyncio.run(_collect(application.events()))
-    assert len(events) == 1
+    events = _collect(application)
+    assert len(events) == 2
     assert view.reads == 0
     assert application.notification_health()["incarnation_change_count"] == 1
 
@@ -136,7 +144,7 @@ def test_execution_cursor_resyncs_from_current_view_after_actor_restart() -> Non
         instance_id="instance",
     )
 
-    asyncio.run(_collect(application.events()))
+    _collect(application)
     assert application.health()["processing_event_cursor"] == 1
     assert application.health()["notification_incarnation_change_count"] == 1
 
@@ -191,9 +199,9 @@ def test_live_notification_gaps_are_observable_but_not_replay_failures() -> None
         strategy_id="strategy",
     )
 
-    assert len(asyncio.run(_collect(market.events()))) == 2
-    assert len(asyncio.run(_collect(account._events()))) == 2
-    assert len(asyncio.run(_collect(risk.events()))) == 2
+    assert len(_collect(market)) == 2
+    assert len(_collect(account)) == 2
+    assert len(_collect(risk)) == 2
     assert market.notification_health()["gap_count"] == 1
     assert account.notification_health()["gap_count"] == 1
     assert risk.notification_health()["gap_count"] == 1

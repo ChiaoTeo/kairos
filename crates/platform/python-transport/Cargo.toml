@@ -7,8 +7,9 @@ publish = false
 
 [lib]
 name = "_native_transport"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 kairos-transport.workspace = true
 pyo3.workspace = true
+thiserror.workspace = true

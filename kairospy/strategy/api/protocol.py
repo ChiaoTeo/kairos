@@ -23,6 +23,7 @@ from .execution import ExecutionEvent
 from .risk import RiskEvent
 from .results import CommandResult
 from .state import StrategyState
+from kairospy.primitives.runtime import InstanceIdRead, LaunchIdRead, StrategyIdRead
 
 if TYPE_CHECKING:
     from kairospy.strategy.apps.agent.application import AgentApplication, AgentEvent
@@ -45,9 +46,9 @@ StrategyEvent: TypeAlias = Union[
 class StrategyContext(Protocol):
     """Stable, application-oriented surface exposed to strategy code."""
 
-    strategy_id: str
-    launch_id: str
-    instance_id: str
+    strategy_id: StrategyIdRead
+    launch_id: LaunchIdRead
+    instance_id: InstanceIdRead
     identity: StrategyIdentity
     params: Mapping[str, object]
     state: StrategyState
@@ -101,13 +102,13 @@ class Strategy:
         return None
 
     def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None:
-        if event.kind == "quote":
+        if event.kind == "quote_updated":
             return self.on_quote(ctx, cast(QuoteEvent, event))
-        if event.kind == "bar":
+        if event.kind == "bar_completed":
             return self.on_bar(ctx, cast(BarEvent, event))
-        if event.kind == "trade":
+        if event.kind == "trade_occurred":
             return self.on_trade(ctx, cast(TradeEvent, event))
-        if event.kind == "greeks":
+        if event.kind == "greeks_updated":
             return self.on_greeks(ctx, cast(GreeksEvent, event))
 
     def on_quote(self, ctx: StrategyContext, event: QuoteEvent) -> None:

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use _native_transport::direct::DirectAeronSubscription;
+use _native_transport::lease::{EventLease, EventLeaseError};
 use kairos_execution_contract::{
     ContractError, ExecutionEvent as RustExecutionEvent, ExecutionIndexedView as RustView,
 };
@@ -128,17 +130,16 @@ impl NativeExecutionClient {
 
     #[getter]
     fn events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let platform = PyModule::import(py, "kairospy.infrastructure.transport.native_event")?;
-        let owner = PyModule::import(py, "kairospy._native_execution_contract")?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("decoder", owner.getattr("decode_event")?)?;
-        kwargs.set_item("aeron_dir", self.aeron_dir.clone())?;
-        kwargs.set_item("channel", self.channel.clone())?;
-        kwargs.set_item("stream_id", self.stream_id)?;
-        Ok(platform
-            .getattr("NativeEventSource")?
-            .call((), Some(&kwargs))?
-            .unbind())
+        Ok(Py::new(
+            py,
+            ExecutionLiveSubscription::new(
+                self.aeron_dir.clone(),
+                Some(self.channel.clone()),
+                Some(self.stream_id),
+                _native_transport::DEFAULT_MAX_PAYLOAD_LEN,
+            )?,
+        )?
+        .into_any())
     }
 }
 
@@ -376,14 +377,121 @@ struct ExecutionEvent {
     account_id: Option<String>,
 }
 
+#[pyclass(
+    name = "ExecutionLiveEventView",
+    frozen,
+    module = "kairospy._native_execution_contract"
+)]
+struct ExecutionLiveEventView {
+    lease: Arc<EventLease>,
+}
+
+#[pymethods]
+impl ExecutionLiveEventView {
+    #[getter]
+    fn kind(&self) -> PyResult<String> {
+        self.with_event(|event| event.kind().as_str().to_owned())
+    }
+
+    #[getter]
+    fn metadata(&self) -> PyResult<ExecutionEventMetadata> {
+        self.with_event(|event| execution_event_metadata(event.metadata()))?
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.with_event(|event| project_execution_event(py, event).map(|value| value.data))?
+    }
+
+    #[getter]
+    fn account_id(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.with_event(|event| project_execution_event(py, event).map(|value| value.account_id))?
+    }
+
+    #[getter]
+    fn strategy_id(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.with_event(|event| project_execution_event(py, event).map(|value| value.strategy_id))?
+    }
+}
+
+impl ExecutionLiveEventView {
+    fn with_event<R>(
+        &self,
+        read: impl for<'frame> FnOnce(RustExecutionEvent<'frame>) -> R,
+    ) -> PyResult<R> {
+        self.lease
+            .with_frame(|frame| {
+                kairos_execution_contract::event::decode_event(frame)
+                    .map(read)
+                    .map_err(|error| ExecutionInvalidEventError::new_err(error.to_string()))
+            })
+            .map_err(execution_lease_error)?
+    }
+}
+
+#[pyclass(
+    name = "ExecutionLiveSubscription",
+    module = "kairospy._native_execution_contract",
+    unsendable
+)]
+struct ExecutionLiveSubscription {
+    inner: DirectAeronSubscription,
+}
+
+#[pymethods]
+impl ExecutionLiveSubscription {
+    #[new]
+    #[pyo3(signature = (*, aeron_dir=None, channel=None, stream_id=None, max_payload_len=_native_transport::DEFAULT_MAX_PAYLOAD_LEN))]
+    fn new(
+        aeron_dir: Option<String>,
+        channel: Option<String>,
+        stream_id: Option<i32>,
+        max_payload_len: usize,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: DirectAeronSubscription::connect(
+                aeron_dir.as_deref(),
+                channel
+                    .as_deref()
+                    .unwrap_or(kairos_execution_contract::DEFAULT_AERON_CHANNEL),
+                stream_id.unwrap_or(kairos_execution_contract::EXECUTION_EVENTS_STREAM_ID),
+                max_payload_len,
+            )?,
+        })
+    }
+
+    #[pyo3(signature = (visitor, *, fragment_limit=64))]
+    fn poll_visit(
+        &self,
+        py: Python<'_>,
+        visitor: Py<PyAny>,
+        fragment_limit: i32,
+    ) -> PyResult<usize> {
+        self.inner.poll_visit(py, fragment_limit, |py, lease| {
+            lease
+                .with_frame(|frame| {
+                    kairos_execution_contract::event::decode_event(frame).map(|_| ())
+                })
+                .map_err(execution_lease_error)?
+                .map_err(|error| ExecutionInvalidEventError::new_err(error.to_string()))?;
+            visitor.call1(py, (Py::new(py, ExecutionLiveEventView { lease })?,))?;
+            Ok(())
+        })
+    }
+
+    fn close(&self) -> PyResult<()> {
+        self.inner.close()
+    }
+}
+
+fn execution_lease_error(error: EventLeaseError) -> PyErr {
+    PyRuntimeError::new_err(error.to_string())
+}
+
 #[pymethods]
 impl ExecutionEvent {
     #[getter]
     fn data(&self, py: Python<'_>) -> Py<PyAny> {
-        self.data.clone_ref(py)
-    }
-    #[getter]
-    fn payload(&self, py: Python<'_>) -> Py<PyAny> {
         self.data.clone_ref(py)
     }
     #[getter]
@@ -511,9 +619,14 @@ impl ExecutionEvent {
             completed_quantity: None,
             reason: reason.unwrap_or_default(),
         };
+        let kind = match lifecycle {
+            value if value == fb::IntentLifecycle::ACCEPTED.0 => "intent_accepted",
+            value if value == fb::IntentLifecycle::REJECTED.0 => "intent_rejected",
+            _ => "intent_lifecycle_changed",
+        };
         Ok(Self {
             metadata,
-            kind: "intent_update".to_owned(),
+            kind: kind.to_owned(),
             data: Py::new(py, payload)?.into_any(),
             strategy_id: Some(strategy_id),
             account_id: Some(account_id),
@@ -589,7 +702,7 @@ impl ExecutionEvent {
         };
         Ok(Self {
             metadata,
-            kind: "fill".to_owned(),
+            kind: "fill_recorded".to_owned(),
             data: Py::new(py, payload)?.into_any(),
             strategy_id: Some(strategy_id),
             account_id: Some(account_id),
@@ -1432,6 +1545,7 @@ fn project_execution_event(
     py: Python<'_>,
     value: RustExecutionEvent<'_>,
 ) -> PyResult<ExecutionEvent> {
+    let canonical_kind = value.kind().as_str();
     macro_rules! order_event {
         ($root:expr) => {{
             let root = $root;
@@ -1441,7 +1555,7 @@ fn project_execution_event(
             let account_id = Some(payload.account_id.clone());
             (
                 metadata,
-                "order_update",
+                canonical_kind,
                 Py::new(py, payload)?.into_any(),
                 strategy_id,
                 account_id,
@@ -1463,7 +1577,7 @@ fn project_execution_event(
             )?;
             (
                 metadata,
-                "intent_update",
+                canonical_kind,
                 Py::new(py, payload)?.into_any(),
                 strategy_id,
                 account_id,
@@ -1484,7 +1598,7 @@ fn project_execution_event(
             )?;
             (
                 metadata,
-                "intent_update",
+                canonical_kind,
                 Py::new(py, payload)?.into_any(),
                 strategy_id,
                 account_id,
@@ -1506,7 +1620,7 @@ fn project_execution_event(
             )?;
             (
                 metadata,
-                "intent_update",
+                canonical_kind,
                 Py::new(py, payload)?.into_any(),
                 strategy_id,
                 account_id,
@@ -1521,7 +1635,7 @@ fn project_execution_event(
             };
             (
                 metadata,
-                "plan_created",
+                canonical_kind,
                 Py::new(py, payload)?.into_any(),
                 None,
                 None,
@@ -1539,7 +1653,7 @@ fn project_execution_event(
             let account_id = Some(payload.account_id.clone());
             (
                 metadata,
-                "fill",
+                canonical_kind,
                 Py::new(py, payload)?.into_any(),
                 strategy_id,
                 account_id,
@@ -1640,6 +1754,8 @@ fn _native_execution_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ExecutionFillValue>()?;
     module.add_class::<ExecutionPlanCreatedValue>()?;
     module.add_class::<ExecutionEvent>()?;
+    module.add_class::<ExecutionLiveEventView>()?;
+    module.add_class::<ExecutionLiveSubscription>()?;
     module.add_class::<ExecutionOrderCurrent>()?;
     module.add_class::<ExecutionIntentCurrent>()?;
     module.add_class::<ExecutionCommitmentCurrent>()?;

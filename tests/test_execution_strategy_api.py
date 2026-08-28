@@ -18,7 +18,7 @@ from kairospy.investment.apps.execution.application import (
     QuoteRefreshRequest,
     SubmissionStatus,
 )
-from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
+from kairospy.contracts.execution.events import ExecutionEvent
 from kairospy.investment.apps.execution.services import ExecutionEventCursorCheckpoint
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.execution import IntentId
@@ -220,9 +220,14 @@ class EventSource:
     def __init__(self, records: tuple[object, ...]) -> None:
         self.records = records
 
-    async def subscribe_live(self):
-        for record in self.records:
-            yield record
+    def poll_visit(self, visitor, *, fragment_limit: int = 64) -> int:
+        records, self.records = self.records[:fragment_limit], self.records[fragment_limit:]
+        for record in records:
+            visitor(record)
+        return len(records)
+
+    def close(self) -> None:
+        return None
 
     def check_ready(self) -> None:
         return None
@@ -244,7 +249,7 @@ def test_execution_event_cursor_ignores_duplicates_and_reports_gaps() -> None:
         strategy_id="strategy-a",
         instance_id="instance-1",
     )
-    asyncio.run(_drain(execution))
+    _drain(execution)
     assert execution.health() == {
         "event_source_ready": False,
         "event_cursor": 2,
@@ -262,7 +267,7 @@ def test_execution_event_cursor_ignores_duplicates_and_reports_gaps() -> None:
         strategy_id="strategy-a",
         instance_id="instance-1",
     )
-    asyncio.run(_drain(gap))
+    _drain(gap)
     assert gap.health()["event_gap_count"] == 1
     assert gap.health()["processing_event_cursor"] == 6
 
@@ -294,17 +299,16 @@ def test_execution_cursor_checkpoints_only_after_record_consumption(
         cursor_checkpoint=checkpoint,
     )
 
-    async def consume() -> None:
-        iterator = execution.events()
-        await anext(iterator)
-        assert checkpoint.load() == 0
-        assert execution.health()["event_cursor"] == 0
-        assert execution.health()["processing_event_cursor"] == 1
-        assert execution.health()["event_lag"] == 1
-        with pytest.raises(StopAsyncIteration):
-            await anext(iterator)
+    def consume() -> None:
+        def accept(_event: object) -> None:
+            assert checkpoint.load() == 0
+            assert execution.health()["event_cursor"] == 0
+            assert execution.health()["processing_event_cursor"] == 1
+            assert execution.health()["event_lag"] == 1
 
-    asyncio.run(consume())
+        assert execution.visit_live(accept) == 1
+
+    consume()
     assert checkpoint.load() == 1
     restored = ExecutionApplication(
         None,
@@ -367,9 +371,8 @@ def test_execution_checkpoint_partitions_sequence_by_producer_incarnation(
     assert position.producer_incarnation == 2
 
 
-async def _drain(execution: ExecutionApplication) -> None:
-    async for _ in execution.events():
-        pass
+def _drain(execution: ExecutionApplication) -> None:
+    execution.visit_live(lambda _event: None)
 
 
 def _instrument(instrument_id: InstrumentId):

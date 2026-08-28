@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from kairospy.system.apps.components.application.clients import CapitalSystemClient
-from kairospy.infrastructure.contracts.capital import CapitalClient
+from kairospy.contracts.capital import CapitalClient
 from kairospy.primitives.account import AccountId
 from kairospy.strategy import StrategyIdentity
 
@@ -56,6 +56,7 @@ def build_strategy_access(
     return CapitalApplication(
         commands,
         current_view,
+        owner.events,
         strategy_id=identity.strategy_id,
         launch_id=identity.launch_id,
         instance_id=identity.instance_id,

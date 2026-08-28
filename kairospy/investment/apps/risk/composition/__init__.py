@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from kairospy.system.apps.components.application.clients import RiskSystemClient
 from kairospy.system.apps.workspace.application import InstanceWorkspace
-from kairospy.infrastructure.contracts.risk import RiskClient
+from kairospy.contracts.risk import RiskClient
 from kairospy.primitives.account import AccountId
 
 from ..application.application import RiskApplication

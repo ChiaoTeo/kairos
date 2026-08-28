@@ -38,8 +38,8 @@ from kairospy.investment.apps.reference.application import (
 )
 from kairospy.primitives.account import AccountId
 from kairospy.primitives.decimal import Money, Quantity
-from kairospy.infrastructure.contracts.market import MarketTarget
-from kairospy.infrastructure.contracts.market.events import MarketEvent
+from kairospy.contracts.market import MarketTarget
+from kairospy.contracts.market.events import MarketEvent
 from kairospy.strategy import (
     ClockAdvance,
     ClockAdvancedEvent,
@@ -65,6 +65,7 @@ from kairospy.strategy import (
 from kairospy.strategy.apps.runtime.services import (
     InMemoryApplicationPorts,
     InMemoryMarketEventSource,
+    InMemoryMarketReplaySource,
     InMemoryLifecycleJournal,
     InMemoryMarketSnapshotReader,
     StrategyControlServer,
@@ -156,7 +157,7 @@ class UserStrategy(Strategy):
         context.market.subscribe_bars(_MARKET, timeframe="1m")
 
     def on_market(self, context, event) -> None:
-        if event.kind != "bar":
+        if event.kind != "bar_completed":
             return
         self.events.append(event.metadata.sequence)
         decision = context.decisions.record(
@@ -230,8 +231,7 @@ class TimerStrategy(Strategy):
             self.clock_events.append((event.data.timer_id, event.data.scheduled_at))
 
 
-class FiniteReplayStream(InMemoryMarketEventSource):
-    replayable = True
+class FiniteReplayStream(InMemoryMarketReplaySource):
 
     async def replay_from(self, after_sequence: int = 0):
         while self._events:
@@ -249,10 +249,11 @@ class RecoveringSnapshotReader:
         return object()
 
 
-class GapThenRecoveryStream:
+class GapThenRecoveryStream(InMemoryMarketReplaySource):
     stream_id = "market.events"
 
     def __init__(self) -> None:
+        super().__init__(self.stream_id)
         self.calls = 0
 
     async def replay_from(self, after_sequence: int = 0):
@@ -320,6 +321,7 @@ def _strategy_application_arguments(
     *,
     strategy_id: str,
     instance_id: str,
+    replay: bool = False,
 ):
     reference, market, account, risk, execution = build_in_memory_strategy_applications(
         bus,
@@ -327,6 +329,7 @@ def _strategy_application_arguments(
         stream,
         strategy_id=strategy_id,
         instance_id=instance_id,
+        replay=replay,
     )
     return {
         "reference": reference,
@@ -542,6 +545,7 @@ def test_replay_driver_fires_each_timer_in_empty_market_gap(tmp_path: Path) -> N
             stream,
             strategy_id=strategy.strategy_id,
             instance_id="instance-1",
+            replay=True,
         ),
         journal=InMemoryLifecycleJournal(),
         replay_end=datetime(2024, 1, 1, 3, tzinfo=timezone.utc),
@@ -653,7 +657,7 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     assert status.readiness.value == "waiting_for_dependencies"
     assert status.subscription_count == 1
     assert status.active_subscription_count == 0
-    assert status.subscriptions[0]["status"] == "pending"
+    assert status.subscriptions[0]["status"] == "resolving"
     assert len(bus.requests) == 1
     assert bus.requests[0].operation == "market.subscribe"
     assert bus.requests[0].payload.target.market_id == str(_MARKET.id)
@@ -664,7 +668,7 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     assert host.refresh().state is StrategyLifecycle.READY
     assert host.status.readiness.value == "ready"
     assert host.status.active_subscription_count == 1
-    assert host.status.subscriptions[0]["status"] == "ready"
+    assert host.status.subscriptions[0]["status"] == "active"
     assert host.enable().state is StrategyLifecycle.RUNNING
     assert host.status.data_health.value == "waiting_for_data"
 
@@ -908,18 +912,15 @@ def test_market_client_does_not_guess_provider_from_event_source_names(
         )
     )
 
-    async def first_market_event():
-        async for event in host.context.market.events():
-            return event
-        raise AssertionError("expected one market event")
-
-    event = asyncio.run(first_market_event())
+    events: list[object] = []
+    host.context.market.visit_live(events.append)
+    event = events[0]
 
     assert event.metadata.sequence == 1
     assert event.data.provider == str(Provider.BINANCE)
 
 
-def test_strategy_start_fails_when_enabled_business_event_source_is_not_ready(
+def test_strategy_live_poll_fails_when_enabled_business_event_source_is_not_ready(
     tmp_path: Path,
 ) -> None:
     bus = InMemoryApplicationPorts()
@@ -940,9 +941,15 @@ def test_strategy_start_fails_when_enabled_business_event_source_is_not_ready(
         journal=InMemoryLifecycleJournal(),
     )
 
-    with pytest.raises(RuntimeError, match="Market event source is unavailable"):
-        application.start()
+    application.start()
+    bus.resolve(bus.requests[0].request_id)
+    application.refresh()
+    application.enable()
 
+    with pytest.raises(RuntimeError, match="market event source failed") as raised:
+        asyncio.run(application.run())
+
+    assert "Market event source is unavailable" in str(raised.value.__cause__)
     assert application.status.state is StrategyLifecycle.FAILED
 
 
@@ -984,10 +991,10 @@ def test_strategy_start_failure_releases_owner_after_subscription(
 ) -> None:
     host, _, bus, _ = _host(tmp_path)
 
-    def fail_status(request_id: str):
-        raise RuntimeError(f"Market unavailable for {request_id}")
+    def fail_statuses():
+        raise RuntimeError("Market unavailable")
 
-    bus.status = fail_status  # type: ignore[method-assign]
+    host.context.market.subscription_statuses = fail_statuses  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="Market unavailable"):
         host.start()
@@ -1061,6 +1068,7 @@ def test_strategy_does_not_use_snapshot_to_hide_event_gap(tmp_path: Path) -> Non
             stream,
             strategy_id=strategy.strategy_id,
             instance_id="gap-instance",
+            replay=True,
         ),
         journal=InMemoryLifecycleJournal(),
     )
@@ -1085,14 +1093,18 @@ def test_non_market_event_gap_also_fails_strategy_lifecycle(
     tmp_path: Path, failed_domain: str
 ) -> None:
     class EmptySource:
-        async def events(self):
-            if False:
-                yield None
+        def visit_live(self, visitor, *, fragment_limit: int = 64) -> int:
+            return 0
+
+        def close_live(self) -> None:
+            return None
 
     class GapSource:
-        async def events(self):
+        def visit_live(self, visitor, *, fragment_limit: int = 64) -> int:
             raise RuntimeError(f"{failed_domain} event stream is not contiguous")
-            yield None
+
+        def close_live(self) -> None:
+            return None
 
     host, strategy, bus, _ = _host(tmp_path, strategy=RuntimeFactStrategy())
     host.start()
@@ -1145,7 +1157,7 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
     assert host.status.data_health.value == "healthy"
     assert host.status.last_event_time == event_time
     assert host.status.event_count == 1
-    assert host.status.last_event_kind == "quote"
+    assert host.status.last_event_kind == "quote_updated"
 
     records = [json.loads(line) for line in output.getvalue().splitlines()]
     dispatch = next(
@@ -1155,7 +1167,7 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
     assert dispatch["event_time"] == event_time.isoformat()
     assert dispatch["event_time_source"] == "market_event"
     assert dispatch["event_sequence"] == 1
-    assert dispatch["data"]["event_kind"] == "quote"
+    assert dispatch["data"]["event_kind"] == "quote_updated"
     requested = next(
         record
         for record in records
@@ -1253,7 +1265,7 @@ def test_strategy_control_uses_instance_unix_rest_socket(
             assert status["readiness"] == "ready"
             assert status["data_health"] == "not_started"
             assert status["subscription_count"] == 1
-            assert status["subscriptions"][0]["status"] == "ready"
+            assert status["subscriptions"][0]["status"] == "active"
             assert status["decisions"]["decision_count"] == 1
             assert status["agent"] == {
                 "enabled": False,
@@ -1429,7 +1441,7 @@ def test_strategy_can_enable_on_market_logging_at_runtime(tmp_path: Path) -> Non
     event = next(
         record for record in records if record.get("event") == "strategy_on_market"
     )
-    assert event["data"]["event_kind"] == "quote"
+    assert event["data"]["event_kind"] == "quote_updated"
     assert event["data"]["event_payload"]["instrument_id"] == "instrument:test:AAPL"
 
 

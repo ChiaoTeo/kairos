@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.infrastructure.contracts.market import (
+from kairospy.contracts.market import (
     MarketControlClient,
     ExpiryRange,
     MarketCurrentView,

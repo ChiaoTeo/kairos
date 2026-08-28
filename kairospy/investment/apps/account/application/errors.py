@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kairospy.primitives.account import AccountId, SegmentKey
-from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.reference import AssetId, InstrumentId
 
 
 class AccountLookupError(LookupError):
@@ -25,7 +25,7 @@ class AccountSegmentNotFoundError(AccountLookupError):
 
 class BalanceNotFoundError(AccountLookupError):
     def __init__(
-        self, account_id: AccountId, segment_key: SegmentKey, asset: str
+        self, account_id: AccountId, segment_key: SegmentKey, asset: AssetId
     ) -> None:
         self.account_id = account_id
         self.segment_key = segment_key

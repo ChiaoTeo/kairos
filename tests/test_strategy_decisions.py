@@ -11,7 +11,7 @@ from kairospy.investment.apps.execution.application import (
     Fill,
     IntentStatus,
 )
-from kairospy.infrastructure.contracts.execution.events import ExecutionEvent
+from kairospy.contracts.execution.events import ExecutionEvent
 from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.strategy.apps.decisions.application import (
     DecisionHorizon,

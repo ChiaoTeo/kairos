@@ -1,40 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, TypeVar, overload
 
-from kairospy.primitives.decimal import (
-    Money,
-    MoneyLike,
-    Price,
-    PriceLike,
-    Quantity,
-    QuantityLike,
-    Rate,
-    RateLike,
+from kairospy.contracts.reference.events import ReferenceEventVariant
+from kairospy.infrastructure.protocol import LiveEventSource
+from kairospy.contracts.reference import (
+    ReferenceAsset,
+    ReferenceExchange,
+    ReferenceInstrument,
+    ReferenceListing,
+    ReferenceMarket,
 )
 from kairospy.primitives.reference import (
-    AssetId,
     ExchangeId,
     InstrumentId,
     ListingId,
     MarketId,
-)
-
-from .models import (
-    Asset,
-    Exchange,
-    Instrument,
-    InstrumentRef,
-    Listing,
-    Market,
-    MarketStatus,
-    ReferenceStatus,
-    TradingRules,
 )
 
 
@@ -50,7 +35,7 @@ _T = TypeVar("_T")
 
 
 async def observe_reference_stream(
-    source: Any,
+    source: LiveEventSource[ReferenceEventVariant],
     *,
     timeout_seconds: float,
     idle_timeout_seconds: float,
@@ -59,43 +44,49 @@ async def observe_reference_stream(
 
     if timeout_seconds <= 0 or idle_timeout_seconds <= 0:
         raise ValueError("Reference stream timeouts must be positive")
-    events: list[Any] = []
-    stream = source.subscribe_live().__aiter__()
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
+    idle_deadline = loop.time() + idle_timeout_seconds
+    event_count = 0
+    batch_count = 0
+    generation = 0
+    event_sequence = 0
+    first_event_id: str | None = None
+    last_event_id: str | None = None
+
+    def observe(event: ReferenceEventVariant) -> None:
+        nonlocal event_count, generation, event_sequence, first_event_id, last_event_id
+        event_id = str(event.metadata.event_id)
+        if first_event_id is None:
+            first_event_id = event_id
+        last_event_id = event_id
+        generation = int(event.catalog_revision)
+        event_sequence = int(event.metadata.sequence)
+        event_count += 1
+
     try:
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                break
-            try:
-                event = await asyncio.wait_for(
-                    anext(stream),
-                    timeout=min(remaining, idle_timeout_seconds),
-                )
-            except StopAsyncIteration:
-                break
-            except TimeoutError:
-                if events:
-                    break
-                if loop.time() >= deadline:
-                    break
+        while loop.time() < deadline:
+            count = source.poll_visit(observe)
+            if count:
+                batch_count += 1
+                idle_deadline = loop.time() + idle_timeout_seconds
+                await asyncio.sleep(0)
                 continue
-            events.append(event)
+            if event_count and loop.time() >= idle_deadline:
+                break
+            await asyncio.sleep(0.001)
     finally:
-        await source.close()
-    if not events:
+        source.close()
+    if event_count == 0:
         raise RuntimeError("Reference stream produced no events before timeout")
-    first = events[0]
-    last = events[-1]
     return {
         "status": "received",
-        "batches": len(events),
-        "events": len(events),
-        "generation": int(last.catalog_revision),
-        "event_sequence": int(last.sequence),
-        "first_event_id": str(first.event_id),
-        "last_event_id": str(last.event_id),
+        "batches": batch_count,
+        "events": event_count,
+        "generation": generation,
+        "event_sequence": event_sequence,
+        "first_event_id": first_event_id,
+        "last_event_id": last_event_id,
     }
 
 
@@ -106,18 +97,84 @@ class ReferenceApplication:
         self,
         client: Any | None = None,
         *,
+        live_source: LiveEventSource[ReferenceEventVariant] | None = None,
+        launch_id: str | None = None,
+        instance_id: str | None = None,
         generation: int | None = None,
         event_sequence: int | None = None,
     ) -> None:
         self._client = client
+        self._live_source = live_source
+        self._launch_id = launch_id
+        self._instance_id = instance_id
         self._generation = generation
         self._event_sequence = event_sequence
+        self._live_cursor = 0
+        self._live_cursor_key: tuple[str, str, int] | None = None
+        self._notification_gap_count = 0
+        self._notification_incarnation_change_count = 0
+
+    def visit_live(
+        self,
+        visitor: Callable[[ReferenceEventVariant], None],
+        *,
+        fragment_limit: int = 64,
+    ) -> int:
+        """Poll Reference once and consume callback-scoped events synchronously."""
+
+        if self._live_source is None:
+            return 0
+        cursor = self._live_cursor
+
+        def accept(event: ReferenceEventVariant) -> None:
+            nonlocal cursor
+            metadata = event.metadata
+            if metadata.stream_id != "reference.events":
+                raise RuntimeError(
+                    f"Reference event stream identity is invalid: {metadata.stream_id}"
+                )
+            if self._launch_id is not None and metadata.launch_id != self._launch_id:
+                raise RuntimeError("Reference event belongs to another launch")
+            if self._instance_id is not None and metadata.instance_id != self._instance_id:
+                raise RuntimeError("Reference event belongs to another launch instance")
+            cursor_key = (
+                metadata.stream_id,
+                str(metadata.producer),
+                int(metadata.producer_incarnation),
+            )
+            sequence = int(metadata.sequence)
+            if self._live_cursor_key is not None and cursor_key != self._live_cursor_key:
+                self._notification_incarnation_change_count += 1
+                cursor = sequence - 1
+            elif self._live_cursor_key is None:
+                cursor = sequence - 1
+            self._live_cursor_key = cursor_key
+            if sequence <= cursor:
+                return
+            if sequence != cursor + 1:
+                self._notification_gap_count += 1
+            cursor = sequence
+            self._live_cursor = sequence
+            visitor(event)
+
+        return self._live_source.poll_visit(accept, fragment_limit=fragment_limit)
+
+    def notification_health(self) -> dict[str, int]:
+        return {
+            "cursor": self._live_cursor,
+            "gap_count": self._notification_gap_count,
+            "incarnation_change_count": self._notification_incarnation_change_count,
+        }
+
+    def close_live(self) -> None:
+        if self._live_source is not None:
+            self._live_source.close()
 
     @classmethod
     def from_database(cls, database_path: str | Path) -> "ReferenceApplication":
         """Open the owner Contract reader without exposing it to UI callers."""
 
-        from kairospy.infrastructure.contracts.reference import ReferenceClient
+        from kairospy.contracts.reference import ReferenceClient
 
         return cls(ReferenceClient(database_path=Path(database_path)))
 
@@ -129,7 +186,7 @@ class ReferenceApplication:
         database_path: str | Path,
         timeout: float = 30.0,
     ) -> "ReferenceApplication":
-        from kairospy.infrastructure.contracts.reference import ReferenceClient
+        from kairospy.contracts.reference import ReferenceClient
 
         return cls(
             ReferenceClient(
@@ -198,7 +255,7 @@ class ReferenceApplication:
         active_only: bool = False,
         limit: int | None = None,
         offset: int = 0,
-    ) -> tuple[Exchange, ...]:
+    ) -> tuple[ReferenceExchange, ...]:
         rows = self._require_client().exchanges(
             exchange_ids=exchange_ids,
             query=query,
@@ -207,14 +264,14 @@ class ReferenceApplication:
             limit=limit,
             offset=offset,
         )
-        return tuple(_exchange_from_row(row) for row in rows)
+        return tuple(rows)
 
-    def exchange(self, exchange_id: str) -> Exchange | None:
+    def exchange(self, exchange_id: str) -> ReferenceExchange | None:
         return _optional_one(
             self.find_exchanges(exchange_ids=(exchange_id,), limit=2), "exchange", exchange_id
         )
 
-    def require_exchange(self, exchange_id: str) -> Exchange:
+    def require_exchange(self, exchange_id: str) -> ReferenceExchange:
         return _require_one(self.exchange(exchange_id), "exchange", exchange_id)
 
     def find_assets(
@@ -228,7 +285,7 @@ class ReferenceApplication:
         active_only: bool = False,
         limit: int | None = None,
         offset: int = 0,
-    ) -> tuple[Asset, ...]:
+    ) -> tuple[ReferenceAsset, ...]:
         rows = self._require_client().assets(
             asset_ids=asset_ids,
             query=query,
@@ -239,14 +296,14 @@ class ReferenceApplication:
             limit=limit,
             offset=offset,
         )
-        return tuple(_asset_from_row(row) for row in rows)
+        return tuple(rows)
 
-    def asset(self, asset_id: str) -> Asset | None:
+    def asset(self, asset_id: str) -> ReferenceAsset | None:
         return _optional_one(
             self.find_assets(asset_ids=(asset_id,), limit=2), "asset", asset_id
         )
 
-    def require_asset(self, asset_id: str) -> Asset:
+    def require_asset(self, asset_id: str) -> ReferenceAsset:
         return _require_one(self.asset(asset_id), "asset", asset_id)
 
     def find_instruments(
@@ -266,7 +323,7 @@ class ReferenceApplication:
         active_only: bool = False,
         limit: int | None = None,
         offset: int = 0,
-    ) -> tuple[Instrument, ...]:
+    ) -> tuple[ReferenceInstrument, ...]:
         rows = self._require_client().instruments(
             instrument_ids=_strings(instrument_ids),
             query=query,
@@ -283,16 +340,20 @@ class ReferenceApplication:
             limit=limit,
             offset=offset,
         )
-        return tuple(_instrument_from_row(row) for row in rows)
+        return tuple(rows)
 
-    def instrument(self, instrument_id: InstrumentId | str) -> Instrument | None:
+    def instrument(
+        self, instrument_id: InstrumentId | str
+    ) -> ReferenceInstrument | None:
         return _optional_one(
             self.find_instruments(instrument_ids=(instrument_id,), limit=2),
             "instrument",
             str(instrument_id),
         )
 
-    def require_instrument(self, instrument_id: InstrumentId | str) -> Instrument:
+    def require_instrument(
+        self, instrument_id: InstrumentId | str
+    ) -> ReferenceInstrument:
         return _require_one(
             self.instrument(instrument_id), "instrument", str(instrument_id)
         )
@@ -308,7 +369,7 @@ class ReferenceApplication:
         active_only: bool = True,
         limit: int | None = None,
         offset: int = 0,
-    ) -> tuple[Instrument, ...]:
+    ) -> tuple[ReferenceInstrument, ...]:
         return self.find_instruments(
             instrument_type="option",
             underlying_instrument_id=underlying_instrument_id,
@@ -333,7 +394,7 @@ class ReferenceApplication:
         active_only: bool = False,
         limit: int | None = None,
         offset: int = 0,
-    ) -> tuple[Listing, ...]:
+    ) -> tuple[ReferenceListing, ...]:
         rows = self._require_client().listings(
             listing_ids=_strings(listing_ids),
             query=query,
@@ -345,16 +406,16 @@ class ReferenceApplication:
             limit=limit,
             offset=offset,
         )
-        return tuple(_listing_from_row(row) for row in rows)
+        return tuple(rows)
 
-    def listing(self, listing_id: ListingId | str) -> Listing | None:
+    def listing(self, listing_id: ListingId | str) -> ReferenceListing | None:
         return _optional_one(
             self.find_listings(listing_ids=(listing_id,), limit=2),
             "listing",
             str(listing_id),
         )
 
-    def require_listing(self, listing_id: ListingId | str) -> Listing:
+    def require_listing(self, listing_id: ListingId | str) -> ReferenceListing:
         return _require_one(self.listing(listing_id), "listing", str(listing_id))
 
     def find_markets(
@@ -374,7 +435,7 @@ class ReferenceApplication:
         status: str | None = None,
         limit: int | None = None,
         offset: int = 0,
-    ) -> tuple[Market, ...]:
+    ) -> tuple[ReferenceMarket, ...]:
         rows = self._require_client().markets(
             market_ids=_strings(market_ids),
             query=query,
@@ -391,10 +452,10 @@ class ReferenceApplication:
             limit=limit,
             offset=offset,
         )
-        return tuple(_market_from_row(row) for row in rows)
+        return tuple(rows)
 
     @overload
-    def require_market(self, market_id: MarketId, /) -> Market: ...
+    def require_market(self, market_id: MarketId, /) -> ReferenceMarket: ...
 
     @overload
     def require_market(
@@ -403,7 +464,7 @@ class ReferenceApplication:
         symbol: str,
         exchange: str,
         instrument_kind: str,
-    ) -> Market: ...
+    ) -> ReferenceMarket: ...
 
     def require_market(
         self,
@@ -412,7 +473,7 @@ class ReferenceApplication:
         symbol: str | None = None,
         exchange: str | None = None,
         instrument_kind: str | None = None,
-    ) -> Market:
+    ) -> ReferenceMarket:
         matches = self.find_markets(
             market_ids=None if market_id is None else (market_id,),
             symbol=symbol,
@@ -435,7 +496,7 @@ class ReferenceApplication:
             )
         return matches[0]
 
-    def market(self, market_id: MarketId) -> Market | None:
+    def market(self, market_id: MarketId) -> ReferenceMarket | None:
         try:
             return self.require_market(market_id)
         except ReferenceNotFoundError:
@@ -467,196 +528,3 @@ def _strings(values: Sequence[object] | None) -> tuple[str, ...] | None:
 
 def _string(value: object | None) -> str | None:
     return None if value is None else str(value)
-
-
-def _value(row: Mapping[str, object], *names: str) -> object | None:
-    for name in names:
-        value = row.get(name)
-        if value is not None:
-            return value
-    return None
-
-
-def _required(row: Mapping[str, object], *names: str) -> str:
-    value = _value(row, *names)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"Reference record is missing {names[0]}")
-    return value
-
-
-def _optional_text(value: object) -> str | None:
-    return value if isinstance(value, str) and value.strip() else None
-
-
-def _optional_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, (str, int)):
-        return int(value)
-    raise ValueError(f"Reference integer field has invalid value: {value!r}")
-
-
-def _optional_price(value: object) -> PriceLike | None:
-    if value is None or isinstance(value, PriceLike):
-        return value
-    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
-        return Price(value)
-    raise ValueError("Reference price is invalid")
-
-
-def _optional_quantity(value: object) -> QuantityLike | None:
-    if value is None or isinstance(value, QuantityLike):
-        return value
-    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
-        return Quantity(value)
-    raise ValueError("Reference quantity is invalid")
-
-
-def _optional_money(value: object) -> MoneyLike | None:
-    if value is None or isinstance(value, MoneyLike):
-        return value
-    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
-        return Money(value)
-    raise ValueError("Reference money is invalid")
-
-
-def _optional_rate(value: object) -> RateLike | None:
-    if value is None or isinstance(value, RateLike):
-        return value
-    if isinstance(value, (Decimal, str, int)) and not isinstance(value, bool):
-        return Rate(value)
-    raise ValueError("Reference rate is invalid")
-
-
-def _status(row: Mapping[str, object]) -> ReferenceStatus:
-    raw = str(row.get("status", "unknown")).lower()
-    return (
-        ReferenceStatus(raw)
-        if raw in ReferenceStatus._value2member_map_
-        else ReferenceStatus.UNKNOWN
-    )
-
-
-def _exchange_from_row(row: Mapping[str, object]) -> Exchange:
-    return Exchange(
-        id=ExchangeId(_required(row, "exchangeId", "exchange_id")),
-        name=_required(row, "name"),
-        status=_status(row),
-    )
-
-
-def _asset_from_row(row: Mapping[str, object]) -> Asset:
-    return Asset(
-        id=AssetId(_required(row, "assetId", "asset_id")),
-        code=_required(row, "code"),
-        name=_optional_text(row.get("name")),
-        asset_class=_required(row, "assetClass", "asset_class"),
-        status=_status(row),
-    )
-
-
-def _instrument_from_row(row: Mapping[str, object]) -> Instrument:
-    underlying = _optional_text(
-        _value(row, "underlyingInstrumentId", "underlying_instrument_id")
-    )
-    return Instrument(
-        id=InstrumentId(_required(row, "instrumentId", "instrument_id")),
-        symbol=_required(row, "symbol"),
-        name=_optional_text(row.get("name")),
-        instrument_type=_required(row, "instrumentType", "instrument_type"),
-        product_family=_optional_text(_value(row, "productFamily", "product_family")),
-        issuer_id=_optional_text(_value(row, "issuerId", "issuer_id")),
-        share_class=_optional_text(_value(row, "shareClass", "share_class")),
-        primary_currency_asset_id=(
-            AssetId(primary_currency)
-            if (
-                primary_currency := _optional_text(
-                    _value(
-                        row,
-                        "primaryCurrencyAssetId",
-                        "primary_currency_asset_id",
-                    )
-                )
-            )
-            is not None
-            else None
-        ),
-        underlying_instrument_id=(
-            InstrumentId(underlying) if underlying is not None else None
-        ),
-        expiry_unix_nanos=_optional_int(
-            _value(row, "expiryUnixNanos", "expiry_unix_nanos")
-        ),
-        strike=_optional_price(row.get("strike")),
-        option_right=_optional_text(_value(row, "optionRight", "option_right")),
-        status=_status(row),
-    )
-
-
-def _listing_from_row(row: Mapping[str, object]) -> Listing:
-    return Listing(
-        id=ListingId(_required(row, "listingId", "listing_id")),
-        instrument_id=InstrumentId(_required(row, "instrumentId", "instrument_id")),
-        exchange_id=ExchangeId(_required(row, "exchangeId", "exchange_id")),
-        exchange_symbol=_required(row, "exchangeSymbol", "exchange_symbol"),
-        status=_status(row),
-        effective_from_unix_nanos=(
-            _optional_int(
-                _value(row, "effectiveFromUnixNanos", "effective_from_unix_nanos")
-            )
-            or 0
-        ),
-        effective_to_unix_nanos=_optional_int(
-            _value(row, "effectiveToUnixNanos", "effective_to_unix_nanos")
-        ),
-    )
-
-
-def _market_from_row(row: Mapping[str, object]) -> Market:
-    instrument_id = _required(row, "instrument_id", "instrumentId")
-    venue_symbol = _optional_text(_value(row, "venue_symbol", "venueSymbol"))
-    raw_status = str(row.get("status", "unknown")).lower()
-    status = (
-        MarketStatus(raw_status)
-        if raw_status in MarketStatus._value2member_map_
-        else MarketStatus.UNKNOWN
-    )
-    listing_id = _optional_text(_value(row, "listing_id", "listingId"))
-    return Market(
-        id=MarketId(_required(row, "market_id", "marketId")),
-        instrument=InstrumentRef(InstrumentId(instrument_id), instrument_id),
-        listing_id=ListingId(listing_id) if listing_id is not None else None,
-        exchange_id=ExchangeId(_required(row, "exchange_id", "exchangeId")),
-        instrument_kind=_required(row, "instrument_kind", "instrumentKind"),
-        venue_symbol=venue_symbol,
-        base_asset=(
-            AssetId(base_asset)
-            if (base_asset := _optional_text(_value(row, "base_asset", "base_asset_id")))
-            is not None
-            else None
-        ),
-        quote_asset=(
-            AssetId(quote_asset)
-            if (quote_asset := _optional_text(_value(row, "quote_asset", "quote_asset_id")))
-            is not None
-            else None
-        ),
-        status=status,
-        trading_rules=TradingRules(
-            price_increment=_optional_price(
-                _value(row, "price_increment", "tick_size")
-            ),
-            quantity_increment=_optional_quantity(
-                _value(row, "quantity_increment", "step_size")
-            ),
-            minimum_quantity=_optional_quantity(
-                _value(row, "minimum_quantity", "min_quantity")
-            ),
-            minimum_notional=_optional_money(
-                _value(row, "minimum_notional", "min_notional")
-            ),
-            contract_multiplier=_optional_rate(
-                _value(row, "contract_multiplier")
-            ),
-        ),
-    )

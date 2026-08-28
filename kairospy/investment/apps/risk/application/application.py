@@ -1,25 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable
 
-from kairospy.infrastructure.contracts.risk.events import RiskEvent as NativeRiskEvent
+from kairospy.contracts.risk.events import RiskEventVariant
+from kairospy.contracts.risk.types import RiskCurrentView
+from kairospy.infrastructure.protocol import LiveEventSource
 from kairospy.primitives.account import AccountId
+from kairospy.primitives.runtime import InstanceIdRead, LaunchIdRead, StrategyIdRead
 
 from .models import RiskStatus
 from .mapping import map_risk_status
-
-if TYPE_CHECKING:
-    from kairospy.strategy.api.risk import RiskEvent
-
 
 class RiskApplication:
     """Concrete read-only Risk latest view scoped to one strategy launch."""
 
     def __init__(
         self,
-        latest_view: Any | None,
-        event_source: Any | None = None,
+        latest_view: RiskCurrentView | None,
+        event_source: LiveEventSource[RiskEventVariant] | None = None,
         *,
         account_ids: tuple[AccountId, ...] = (),
         strategy_id: str = "",
@@ -29,9 +27,11 @@ class RiskApplication:
         self._latest_view = latest_view
         self._event_source = event_source
         self._account_ids = frozenset(account_ids)
-        self._strategy_id = strategy_id
-        self._launch_id = launch_id
-        self._instance_id = instance_id
+        self._strategy_id = StrategyIdRead(strategy_id) if strategy_id else None
+        self._launch_id = LaunchIdRead(launch_id) if launch_id is not None else None
+        self._instance_id = (
+            InstanceIdRead(instance_id) if instance_id is not None else None
+        )
         self._event_cursor = 0
         self._event_cursor_key: tuple[str, str, int] | None = None
         self._notification_gap_count = 0
@@ -43,60 +43,64 @@ class RiskApplication:
 
         if self._event_source_ready:
             return
-        check_ready = getattr(self._event_source, "check_ready", None)
-        if callable(check_ready):
-            check_ready()
         self._event_source_ready = True
 
-    async def events(self) -> AsyncIterator[RiskEvent]:
+    def visit_live(
+        self,
+        visitor: Callable[[RiskEventVariant], None],
+        *,
+        fragment_limit: int = 64,
+    ) -> int:
         if self._event_source is None:
-            return
+            return 0
         cursor = self._event_cursor
-        async for record in self._event_source.subscribe_live():
-            if not isinstance(record, NativeRiskEvent):
-                raise TypeError("Risk event source must yield owner-native RiskEvent values")
-            if record.stream_id != "risk.events":
+
+        def accept(record: RiskEventVariant) -> None:
+            nonlocal cursor
+            metadata = record.metadata
+            if metadata.stream_id != "risk.events":
                 raise RuntimeError(
-                    f"Risk event stream identity is invalid: {record.stream_id}"
+                    f"Risk event stream identity is invalid: {metadata.stream_id}"
                 )
-            if self._launch_id is not None and record.launch_id != self._launch_id:
+            if self._launch_id is not None and metadata.launch_id != self._launch_id:
                 raise RuntimeError("Risk event belongs to another launch")
-            if self._instance_id is not None and record.instance_id != self._instance_id:
+            if self._instance_id is not None and metadata.instance_id != self._instance_id:
                 raise RuntimeError("Risk event belongs to another launch instance")
             cursor_key = (
-                record.stream_id,
-                str(record.producer),
-                int(record.producer_incarnation),
+                metadata.stream_id,
+                str(metadata.producer),
+                int(metadata.producer_incarnation),
             )
             if self._event_cursor_key is not None and cursor_key != self._event_cursor_key:
                 self._notification_incarnation_change_count += 1
-                cursor = record.sequence - 1
+                cursor = int(metadata.sequence) - 1
             elif self._event_cursor_key is None:
-                cursor = record.sequence - 1
+                cursor = int(metadata.sequence) - 1
             self._event_cursor_key = cursor_key
+            sequence = int(metadata.sequence)
             if cursor == 0:
-                cursor = record.sequence - 1
-            if record.sequence <= cursor:
-                continue
-            if record.sequence != cursor + 1:
+                cursor = sequence - 1
+            if sequence <= cursor:
+                return
+            if sequence != cursor + 1:
                 self._notification_gap_count += 1
-            cursor = record.sequence
+            cursor = sequence
             self._event_cursor = cursor
-            if record.kind == "policy_activated":
-                continue
             if (
                 record.account_id is not None
                 and self._account_ids
                 and AccountId(record.account_id) not in self._account_ids
             ):
-                continue
+                return
             if (
                 record.strategy_id is not None
                 and self._strategy_id
                 and record.strategy_id != self._strategy_id
             ):
-                continue
-            yield cast("RiskEvent", record)
+                return
+            visitor(record)
+
+        return self._event_source.poll_visit(accept, fragment_limit=fragment_limit)
 
     def notification_health(self) -> dict[str, object]:
         """Return diagnostics for best-effort Risk notifications."""
@@ -112,6 +116,10 @@ class RiskApplication:
             "gap_count": self._notification_gap_count,
             "incarnation_change_count": self._notification_incarnation_change_count,
         }
+
+    def close_live(self) -> None:
+        if self._event_source is not None:
+            self._event_source.close()
 
     def status(self, *, account: AccountId | str) -> RiskStatus:
         if self._latest_view is None:

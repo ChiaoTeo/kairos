@@ -95,8 +95,8 @@ impl CapitalEvent {
     }
 }
 
-pub use decode::decode_event;
+pub use decode::{decode_event, decode_event as decode_event_view};
 pub use encode::{CapitalAeronEventPublisher, FlatbuffersCapitalEventWriter};
-pub use frame::{CapitalEventFrame, DecodedCapitalEvent};
+pub use frame::{CapitalEventFrame, CapitalEventKind, CapitalEventView, DecodedCapitalEvent};
 pub use stream::CapitalEventStream;
 pub use worker::QueuedCapitalEventPublisher;

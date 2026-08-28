@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
-
 import pytest
 
 from kairospy.investment.apps.account.application import (
@@ -21,14 +19,15 @@ from kairospy.investment.apps.account.application import (
     SPOT,
     USD_M_FUTURES,
 )
-from kairospy.infrastructure.contracts.market.events import MarketEvent
+from kairospy.contracts.market.events import MarketEvent
 from kairospy.investment.apps.portfolio.application import (
     PortfolioApplication,
     PortfolioFreshness,
 )
 from kairospy.investment.apps.reference.application import InstrumentRef
 from kairospy.primitives.account import AccountId
-from kairospy.primitives.reference import InstrumentId
+from kairospy.primitives.decimal import Money, Quantity, SignedQuantity
+from kairospy.primitives.reference import AssetId, InstrumentId
 
 
 class _CurrentView:
@@ -61,15 +60,15 @@ def _account(
                 broker="paper",
                 environment="paper",
                 account_model="no_margin",
-                equity=Decimal(equity),
+                equity=Money(equity),
                 balances=(
                     Balance(
                         account_id,
                         segment,
                         "USDT",
-                        Decimal(balance),
-                        Decimal(balance) - Decimal("10"),
-                        Decimal("10"),
+                        Quantity(balance),
+                        Quantity(balance) - Quantity("10"),
+                        Quantity("10"),
                     ),
                 ),
                 positions=(
@@ -77,10 +76,10 @@ def _account(
                         account_id,
                         segment,
                         instrument,
-                        Decimal(quantity),
+                        SignedQuantity(quantity),
                         side,
-                        market_value=Decimal(quantity) * Decimal("100"),
-                        unrealized_pnl=Decimal("5"),
+                        market_value=Money(SignedQuantity(quantity).value * 100),
+                        unrealized_pnl=Money("5"),
                     ),
                 ),
                 freshness=freshness,
@@ -132,14 +131,15 @@ def test_portfolio_rebuilds_one_record_across_accounts_and_segments() -> None:
     assert snapshot.portfolio_version == 1
     assert snapshot.freshness is PortfolioFreshness.CURRENT
     assert snapshot.complete is True
-    assert snapshot.nav == Decimal("3000")
-    assert snapshot.cash("USDT") is not None
-    assert snapshot.cash("USDT").total == Decimal("150")
+    assert snapshot.nav == Money("3000")
+    cash = snapshot.cash(AssetId("USDT"))
+    assert cash is not None
+    assert cash.total == Quantity("150")
     holding = snapshot.holding("instrument:test:BTCUSDT")
     assert holding is not None
-    assert holding.long_quantity == Decimal("2")
-    assert holding.short_quantity == Decimal("0.5")
-    assert holding.net_quantity == Decimal("1.5")
+    assert holding.long_quantity == Quantity("2")
+    assert holding.short_quantity == Quantity("0.5")
+    assert holding.net_quantity == SignedQuantity("1.5")
     assert [value.generation for value in snapshot.account_watermarks] == [3, 7]
     assert [value.event_sequence for value in snapshot.account_watermarks] == [31, 71]
 
@@ -190,8 +190,8 @@ def test_portfolio_records_earn_holdings_without_treating_them_as_positions() ->
                         "position:earn-1",
                         "USDT001",
                         "USDT",
-                        Decimal("50"),
-                        Decimal("50"),
+                        Quantity("50"),
+                        Quantity("50"),
                         EarnHoldingState.ACTIVE,
                         EarnLiquidity.IMMEDIATE,
                         participant_position_id="earn-1",
@@ -210,7 +210,7 @@ def test_portfolio_records_earn_holdings_without_treating_them_as_positions() ->
     snapshot = portfolio.rebuild()
 
     assert len(snapshot.earn_holdings) == 1
-    assert snapshot.earn_holdings[0].principal == Decimal("50")
+    assert snapshot.earn_holdings[0].principal == Quantity("50")
     assert snapshot.holding("USDT001") is None
 
 

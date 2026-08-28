@@ -24,7 +24,7 @@ from kairospy.investment.apps.account.application import (
     Position,
     PositionNotFoundError,
 )
-from .account import AccountEvent, AccountEventChange, AccountEventMetadata
+from .account import AccountEvent, AccountEventVariant
 from kairospy.strategy.apps.agent.application import (
     AgentApplication,
     AgentContextDocument,
@@ -93,7 +93,7 @@ from kairospy.investment.apps.execution.application import (
     TimeInForce,
     TwapAlgorithm,
 )
-from .execution import ExecutionEvent, ExecutionEventMetadata
+from .execution import ExecutionEvent, ExecutionEventVariant
 from kairospy.investment.apps.market.application import (
     ExpiryRange,
     MarketApplication,
@@ -162,6 +162,7 @@ from .market import (
     GreeksEvent,
     InstrumentIdRead,
     MarketEvent,
+    MarketEventVariant,
     MarketIdRead,
     ObservationScope,
     OptionGreeks,
@@ -179,7 +180,7 @@ from .protocol import (
     StrategyProtocol,
 )
 from .results import CommandResult
-from .risk import RiskEvent, RiskEventMetadata
+from .risk import RiskEvent, RiskEventVariant
 from kairospy.primitives.decimal import (
     Money,
     Price,

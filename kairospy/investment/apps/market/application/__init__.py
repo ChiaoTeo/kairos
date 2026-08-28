@@ -18,7 +18,7 @@ from .application import (
 )
 from .configuration import MarketProviderBindingApplication
 from .events import EventStreamGap
-from kairospy.infrastructure.contracts.market.types import (
+from kairospy.contracts.market.types import (
     ExpiryRange,
     MarketSubscriptionRequest as SubscriptionRequest,
     ObservationRequirement,

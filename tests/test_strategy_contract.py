@@ -99,32 +99,32 @@ class OptionGreeks:
 class QuoteEvent:
     data: Quote
     metadata: EventMetadata
-    kind: str = field(init=False, default="quote")
+    kind: str = field(init=False, default="quote_updated")
 
 
 @dataclass(frozen=True)
 class BarEvent:
     data: Bar
     metadata: EventMetadata
-    kind: str = field(init=False, default="bar")
+    kind: str = field(init=False, default="bar_completed")
 
 
 @dataclass(frozen=True)
 class TradeEvent:
     data: Trade
     metadata: EventMetadata
-    kind: str = field(init=False, default="trade")
+    kind: str = field(init=False, default="trade_occurred")
 
 
 @dataclass(frozen=True)
 class GreeksEvent:
     data: OptionGreeks
     metadata: EventMetadata
-    kind: str = field(init=False, default="greeks")
+    kind: str = field(init=False, default="greeks_updated")
 
 
 def test_strategy_exposes_read_only_market_protocol_without_application_dto() -> None:
-    assert PublicBar.__module__ == "kairospy.strategy.api.market"
+    assert PublicBar.__module__ == "kairospy._native_market_contract"
     assert not hasattr(
         __import__("kairospy.investment.apps.market.application", fromlist=["Bar"]),
         "Bar",
@@ -134,7 +134,7 @@ def test_strategy_exposes_read_only_market_protocol_without_application_dto() ->
 def test_market_application_has_no_internal_port_or_contract_facade() -> None:
     root = Path(__file__).parents[1]
     assert not (root / "kairospy/application/market/ports.py").exists()
-    assert not (root / "kairospy/infrastructure/contracts/market.py").exists()
+    assert not (root / "kairospy/contracts/market.py").exists()
     assert not (
         root / "kairospy/application/strategy/services/applications.py"
     ).exists()
@@ -220,7 +220,8 @@ def test_account_application_has_no_callable_or_object_adapter() -> None:
     application = (
         root / "kairospy/investment/apps/account/application/application.py"
     ).read_text(encoding="utf-8")
-    assert "Callable" not in application
+    assert "LiveEventSource[AccountEventVariant]" in application
+    assert "subscribe_live" not in application
     assert not (
         root / "kairospy/application/strategy/services/applications.py"
     ).exists()
@@ -239,7 +240,10 @@ def test_risk_application_owns_concrete_current_view_query() -> None:
                 reserved=Money("0"),
             )
             return SimpleNamespace(
-                limits=[limit], circuits=[], applied_event_sequence=1
+                limits=[limit],
+                circuits=[],
+                applied_event_sequence=1,
+                generation=1,
             )
 
     risk = RiskApplication(LatestView())
@@ -261,7 +265,8 @@ def test_risk_application_has_no_callable_or_object_adapter() -> None:
     application = (
         root / "kairospy/investment/apps/risk/application/application.py"
     ).read_text(encoding="utf-8")
-    assert "Callable" not in application
+    assert "LiveEventSource[RiskEventVariant]" in application
+    assert "subscribe_live" not in application
     assert not (
         root / "kairospy/application/strategy/services/applications.py"
     ).exists()
@@ -364,7 +369,12 @@ def test_strategy_default_market_dispatch_selects_one_typed_hook() -> None:
     strategy.on_market(None, trade)  # type: ignore[arg-type]
     strategy.on_market(None, greeks)  # type: ignore[arg-type]
 
-    assert strategy.received == ["quote", "bar", "trade", "greeks"]
+    assert strategy.received == [
+        "quote_updated",
+        "bar_completed",
+        "trade_occurred",
+        "greeks_updated",
+    ]
 
 
 def test_overriding_on_market_takes_control_of_typed_dispatch() -> None:
