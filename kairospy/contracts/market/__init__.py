@@ -26,6 +26,8 @@ _EXPORTS = {
     "MarketDataRoute": (".types", "MarketDataRoute"),
     "MarketDataRoutesResponse": (".types", "MarketDataRoutesResponse"),
     "MarketSubscriptionResponse": (".types", "MarketSubscriptionResponse"),
+    "MarketSubscriptionSnapshot": (".types", "MarketSubscriptionSnapshot"),
+    "MarketSubscriptionsResponse": (".types", "MarketSubscriptionsResponse"),
     "MarketCommandStatus": (".types", "MarketCommandStatus"),
     "MarketReleaseOwnerResponse": (".types", "MarketReleaseOwnerResponse"),
     "MarketControlUnavailableError": (".types", "MarketControlUnavailableError"),

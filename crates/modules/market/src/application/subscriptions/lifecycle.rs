@@ -56,4 +56,14 @@ impl MarketApplication {
         );
         removed
     }
+
+    pub fn replace_subscription_members(
+        &mut self,
+        subscription_id: &SubscriptionId,
+        markets: Vec<crate::ResolvedMarket>,
+    ) -> Result<crate::ReconcileResult, MarketError> {
+        self.actor
+            .replace_subscription_members(subscription_id, markets)
+            .map_err(MarketError::InvalidSubscription)
+    }
 }

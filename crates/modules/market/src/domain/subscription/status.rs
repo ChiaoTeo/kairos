@@ -20,7 +20,7 @@ pub fn derive_subscription_status(
     members: &BTreeMap<String, SubscriptionMemberStatus>,
 ) -> SubscriptionStatus {
     if members.is_empty() {
-        return SubscriptionStatus::Ready;
+        return SubscriptionStatus::Pending;
     }
     let required = members.iter().filter(|(member, _)| {
         requirements.get(*member).copied().unwrap_or_default()

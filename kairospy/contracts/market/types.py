@@ -30,6 +30,26 @@ class MarketReleaseResultRead(Protocol):
     def released_subscription_ids(self) -> Sequence[str]: ...
 
 
+class MarketSubscriptionSnapshotRead(Protocol):
+    @property
+    def subscription_id(self) -> str: ...
+    @property
+    def owner_id(self) -> str: ...
+    @property
+    def state(self) -> str: ...
+    @property
+    def observations(self) -> Sequence[str]: ...
+    @property
+    def selected_providers(self) -> Sequence[str]: ...
+    @property
+    def pending_reason(self) -> str | None: ...
+
+
+class MarketSubscriptionsRead(Protocol):
+    @property
+    def subscriptions(self) -> Sequence[MarketSubscriptionSnapshotRead]: ...
+
+
 class MarketCommands(Protocol):
     def subscribe(
         self,
@@ -60,6 +80,14 @@ class MarketCommands(Protocol):
         launch_id: str | None = None,
     ) -> MarketReleaseResultRead: ...
 
+    def subscriptions(
+        self,
+        *,
+        owner_id: str | None = None,
+        market_id: str | None = None,
+        state: str | None = None,
+    ) -> MarketSubscriptionsRead: ...
+
 
 class MarketSnapshots(Protocol):
     def quote(self, scope_key: str, provider: str) -> object | None: ...
@@ -86,6 +114,8 @@ if TYPE_CHECKING:
         MarketReleaseOwnerResponse,
         MarketSubscriptionRequest,
         MarketSubscriptionResponse,
+        MarketSubscriptionSnapshot,
+        MarketSubscriptionsResponse,
         MarketTarget,
         ObservationRequirement,
         OptionFilter,
@@ -123,6 +153,8 @@ if not TYPE_CHECKING:
     MarketDataRoute = _native().MarketDataRoute
     MarketDataRoutesResponse = _native().MarketDataRoutesResponse
     MarketSubscriptionResponse = _native().MarketSubscriptionResponse
+    MarketSubscriptionSnapshot = _native().MarketSubscriptionSnapshot
+    MarketSubscriptionsResponse = _native().MarketSubscriptionsResponse
     MarketCommandStatus = _native().MarketCommandStatus
     MarketReleaseOwnerResponse = _native().MarketReleaseOwnerResponse
     MarketControlUnavailableError = _native().MarketControlUnavailableError
@@ -133,9 +165,13 @@ __all__ = [
     "MarketCommands",
     "MarketReleaseResultRead",
     "MarketSnapshots",
+    "MarketSubscriptionSnapshotRead",
+    "MarketSubscriptionsRead",
     "MarketSubscriptionResultRead",
     "MarketSubscriptionRequest",
     "MarketSubscriptionResponse",
+    "MarketSubscriptionSnapshot",
+    "MarketSubscriptionsResponse",
     "MarketTarget",
     "MarketCommandStatus",
     "MarketClient",

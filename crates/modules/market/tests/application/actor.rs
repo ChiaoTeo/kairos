@@ -353,7 +353,7 @@ fn dynamic_budget_rejection_keeps_previous_members() {
 }
 
 #[test]
-fn stale_reference_changes_are_ignored_by_watermark() {
+fn explicit_universe_reconciliation_uses_the_supplied_current_facts() {
     let first = market("market:one", "ONE");
     let second = market("market:two", "TWO");
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
@@ -373,19 +373,46 @@ fn stale_reference_changes_are_ignored_by_watermark() {
             markets: vec![second.clone()],
         })
         .unwrap();
-    let ignored = actor
+    let applied = actor
         .reconcile_market_universe(ReconcileMarketUniverse {
             generation: 1.into(),
             event_sequence: 99.into(),
             markets: vec![first],
         })
         .unwrap();
-    assert!(ignored.is_empty());
+    assert!(!applied.is_empty());
     let state = actor.current_view().subscriptions.remove(0);
-    assert!(
-        state
-            .members
-            .contains_key(second.market_id().unwrap().as_str())
+    assert!(state.members.contains_key("market:one"));
+}
+
+#[test]
+fn pending_static_demand_can_gain_and_lose_current_reference_members() {
+    let mut application = MarketApplication::new("market-1", 10).unwrap();
+    let id = SubscriptionId::new("pending-static").unwrap();
+    application
+        .subscribe_static_many_with_selectors(
+            id.clone(),
+            "strategy",
+            Vec::new(),
+            vec![ObservationSelector::parse("quote").unwrap()],
+        )
+        .unwrap();
+    assert_eq!(
+        application.subscription_status(&id),
+        Some(kairos_market::SubscriptionStatus::Pending)
+    );
+
+    application
+        .replace_subscription_members(&id, vec![market("market:one", "ONE")])
+        .unwrap();
+    assert_eq!(application.current_view().subscriptions[0].members.len(), 1);
+
+    application
+        .replace_subscription_members(&id, Vec::new())
+        .unwrap();
+    assert_eq!(
+        application.subscription_status(&id),
+        Some(kairos_market::SubscriptionStatus::Pending)
     );
 }
 

@@ -2067,9 +2067,9 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_row("/exit", "退出 Kairos Workbench")
     table.add_row("/observe", "打开当前项目的运行中心")
     table.add_row("/market [代码]", "搜索有效市场标的；省略代码时进入引导")
+    table.add_row("/c", "打开 Market 运行与订阅")
     if context[:1] == ("market",):
         table.add_row("/r", "回放本地 JSONL 行情")
-        table.add_row("/c", "连接运行中的行情服务")
         table.add_row("/d", "诊断市场定义和 Reference 映射")
         table.add_row("/a", "输入完整 Market ID")
     table.add_row("/clear", "清空当前输出显示")

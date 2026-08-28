@@ -76,6 +76,7 @@ use crate::{
 pub fn reference_connection_from_workspace(
     workspace: &kairos_workspace::Workspace,
     aeron_dir: Option<&Path>,
+    aeron_channel: &str,
 ) -> Result<kairos_reference_contract::ReferenceConnection, String> {
     Ok(kairos_reference_contract::ReferenceConnection {
         contract: kairos_protocol::ContractClient::new(
@@ -86,7 +87,7 @@ pub fn reference_connection_from_workspace(
             Some(
                 kairos_transport::AeronEndpoint::new(
                     aeron_dir.map(Path::to_path_buf),
-                    kairos_transport::DEFAULT_CHANNEL,
+                    aeron_channel,
                     kairos_transport::stream_ids::REFERENCE_CHANGES,
                 )
                 .map_err(|error| error.to_string())?,

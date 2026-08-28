@@ -117,6 +117,25 @@ class KairosWorkbenchApp(App[int]):
             self.notify("Workbench 命令入口不可用", severity="error")
 
     def action_quit(self) -> None:
+        screen = self.screen
+        if isinstance(screen, CommandLineScreen):
+            try:
+                from .screens.flows.market.workspace import release_operator_owner
+
+                released = release_operator_owner(
+                    self.state, screen.session.market.operator_owner_id
+                )
+                self.transcript.record(
+                    "market_operator_owner_released",
+                    owner_id=screen.session.market.operator_owner_id,
+                    released_subscription_ids=released,
+                )
+            except Exception as error:
+                self.transcript.record(
+                    "market_operator_owner_release_failed",
+                    owner_id=screen.session.market.operator_owner_id,
+                    error=str(error),
+                )
         self.transcript.record("session_finished", status="quit")
         self.exit(0)
 

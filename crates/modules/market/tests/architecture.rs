@@ -171,13 +171,15 @@ fn private_services_do_not_depend_on_composition_or_provider_types() {
 }
 
 #[test]
-fn reference_aeron_is_polled_by_conflux_without_a_watcher_task() {
+fn reference_facts_are_queried_on_demand_without_a_market_replica() {
     let actor = std::fs::read_to_string(crate_root().join("src/application/conflux.rs")).unwrap();
     let assembly =
         std::fs::read_to_string(crate_root().join("src/composition/launch/assembly.rs")).unwrap();
     assert!(actor.contains("ConfluxEvent::Reference"));
-    assert!(actor.contains(".reference_client(&client_key)"));
+    assert!(actor.contains(".reference_client(&reference.client_key)"));
+    assert!(actor.contains(".market_catalog(&query)"));
     assert!(assembly.contains("install_reference_connection"));
+    assert!(assembly.contains(".market_catalog(&query)"));
     assert!(!assembly.contains("spawn_market_universe_watcher"));
     assert!(
         !crate_root()
@@ -191,13 +193,12 @@ fn reference_aeron_is_polled_by_conflux_without_a_watcher_task() {
     );
     assert!(!crate_root().join("src/domain/reference").exists());
     let resolution = source("src/application/universe/resolution.rs");
-    assert!(resolution.contains("MarketReferenceSnapshot"));
-    assert!(resolution.contains("ReconcileMarketUniverse"));
+    assert!(resolution.contains("resolve_catalog_page"));
     let composition = source("src/composition/reference/universe.rs");
     assert!(composition.contains("MarketProviderBinding"));
     assert!(composition.contains("MarketProviderCapability"));
-    assert!(assembly.contains("reference_market_snapshot"));
-    assert!(actor.contains(".market_snapshot()"));
+    assert!(!assembly.contains("reference_market_snapshot"));
+    assert!(!actor.contains(".market_snapshot()"));
 }
 
 #[test]

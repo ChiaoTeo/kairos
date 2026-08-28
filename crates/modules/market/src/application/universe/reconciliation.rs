@@ -2,9 +2,8 @@ use kairos_primitives::time::{Generation, Sequence};
 
 use crate::domain::market::ResolvedMarket;
 
-/// A complete, watermarked replacement of the markets and data routes that
-/// Market may use. Composition maps the external Reference contract into this
-/// Market-owned input before invoking the application.
+/// An explicit universe supplied by replay and same-package fixtures.
+/// Live Market runtime resolves current Reference facts on demand instead.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReconcileMarketUniverse {
     pub generation: Generation,

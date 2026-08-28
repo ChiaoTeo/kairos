@@ -60,6 +60,7 @@ from .workspace import (
     preview as preview_workspace_market,
     routes_renderable as workspace_routes_renderable,
     status_renderable as workspace_status_renderable,
+    subscriptions_renderable as workspace_subscriptions_renderable,
 )
 from ...navigation import (
     action_id,
@@ -138,6 +139,14 @@ def handle_command(
     arguments: tuple[str, ...],
 ) -> tuple[ScreenEffect, ...] | None:
     """Handle typed input commands owned by Market."""
+
+    if (
+        command == "c"
+        and not arguments
+        and (not session.context or session.context[0] == "market")
+    ):
+        session.context = ("market", "connected")
+        return _choice(state, session, status="Market 运行与订阅")
 
     if command == "market":
         query = " ".join(arguments).strip()
@@ -354,6 +363,15 @@ def handle_success(
             and isinstance(result, Mapping)
         ):
             body = workspace_routes_renderable(result)
+        elif (
+            isinstance(prompt, WorkspaceMarketPromptState)
+            and prompt.action in {"session-subscriptions", "subscriptions"}
+            and isinstance(result, Mapping)
+        ):
+            body = workspace_subscriptions_renderable(
+                result,
+                current_session=prompt.action == "session-subscriptions",
+            )
         else:
             body = Panel(Pretty(result, expand_all=True), title="Workspace Market 结果")
         return (_activity(spec, body), *_choice(state, session, status="操作已完成"))
@@ -526,7 +544,9 @@ def _handle_market_context(
             if selected_market is not None
             else ""
         )
-        prompt = WorkspaceMarketPromptState(action, default_market)
+        prompt = WorkspaceMarketPromptState(
+            action, default_market, session.market.operator_owner_id
+        )
         session.market.workspace_prompt = prompt
         return _advance_workspace_prompt(state, session, prompt)
 

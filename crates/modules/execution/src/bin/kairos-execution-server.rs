@@ -55,6 +55,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let reference_connection = kairos_conflux::reference_connection_from_workspace(
         &workspace,
         args.aeron_dir.as_deref().map(std::path::Path::new),
+        &args.aeron_channel,
     )?;
     let manifest = instance.component_manifest()?;
     let socket = instance.socket("execution")?;

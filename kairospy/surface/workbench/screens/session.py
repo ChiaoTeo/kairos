@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from rich.console import RenderableType
 
@@ -50,6 +51,9 @@ class MarketSession:
     routes: tuple[MarketRouteView, ...] = ()
     file_prompt: MarketFilePromptState | None = None
     workspace_prompt: WorkspaceMarketPromptState | None = None
+    operator_owner_id: str = field(
+        default_factory=lambda: f"operator:kairos-i:{uuid4().hex[:12]}"
+    )
 
     def reset_control(self) -> None:
         self.provider = None

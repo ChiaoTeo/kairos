@@ -381,6 +381,102 @@ class MarketSystemClient(SystemRpcClient):
             ]
         }
 
+    def subscriptions(
+        self,
+        *,
+        owner_id: str | None = None,
+        market_id: str | None = None,
+        state: str | None = None,
+    ) -> dict[str, Any]:
+        response = self.control.subscriptions(
+            owner_id=owner_id,
+            market_id=market_id,
+            state=state,
+        )
+        return {
+            "subscriptions": [
+                {
+                    "subscription_id": subscription.subscription_id,
+                    "owner_id": subscription.owner_id,
+                    "state": subscription.state,
+                    "market_ids": list(subscription.market_ids),
+                    "observations": list(subscription.observations),
+                    "selected_providers": list(subscription.selected_providers),
+                    "pending_reason": subscription.pending_reason,
+                }
+                for subscription in response.subscriptions
+            ]
+        }
+
+    def operator_subscribe(
+        self,
+        *,
+        owner_id: str,
+        request_id: str,
+        market_id: str,
+        observations: tuple[str, ...],
+        provider: str | None = None,
+    ) -> dict[str, Any]:
+        from kairospy.contracts.market import (
+            MarketSubscriptionRequest,
+            MarketTarget,
+            ObservationRequirement,
+            ProviderPreference,
+        )
+
+        preference = (
+            ProviderPreference.prefer(provider)
+            if provider
+            else ProviderPreference.automatic()
+        )
+        request = MarketSubscriptionRequest(
+            MarketTarget.market(market_id),
+            tuple(
+                ObservationRequirement.from_selector(selector)
+                for selector in observations
+            ),
+            preference,
+        )
+        response = self.control.operator_subscribe(
+            request,
+            owner_id=owner_id,
+            request_id=request_id,
+        )
+        return {
+            "subscription_id": response.subscription_id,
+            "owner_id": response.owner_id,
+            "state": response.state,
+            "satisfied_selectors": list(response.satisfied_selectors),
+            "missing_selectors": list(response.missing_selectors),
+            "resolved_providers": list(response.resolved_providers),
+            "pending_reason": response.pending_reason,
+        }
+
+    def operator_unsubscribe(
+        self,
+        *,
+        owner_id: str,
+        request_id: str,
+        subscription_id: str,
+    ) -> dict[str, Any]:
+        response = self.control.operator_unsubscribe(
+            subscription_id,
+            owner_id=owner_id,
+            request_id=request_id,
+        )
+        return {"status": response.status}
+
+    def operator_release_owner(
+        self, *, owner_id: str, request_id: str
+    ) -> dict[str, Any]:
+        response = self.control.operator_release_owner(
+            owner_id=owner_id,
+            request_id=request_id,
+        )
+        return {
+            "released_subscription_ids": list(response.released_subscription_ids)
+        }
+
     def recover(self) -> dict[str, Any]:
         response = self.control.recover()
         return {"status": response.status}

@@ -14,10 +14,11 @@ pub use control::{
     MarketCommandEnvelope, MarketCommandOutcome, MarketCommandStatus, MarketControlError,
     MarketControlRpcClient, MarketControlRpcServer, MarketDataRoute, MarketDataRouteState,
     MarketDataRoutesQuery, MarketDataRoutesResponse, MarketFeedStatus, MarketHealthResponse,
-    MarketHealthStatus, MarketOperation, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse,
-    MarketSubscribePayload, MarketSubscriptionResponse, MarketSubscriptionState, MarketTarget,
-    MarketUnsubscribePayload, ObservationRequirement, ProviderPreference, SubscriptionOwnerKey,
-    SubscriptionPendingReason,
+    MarketHealthStatus, MarketOperation, MarketOperatorCommandEnvelope, MarketReleaseOwnerPayload,
+    MarketReleaseOwnerResponse, MarketSubscribePayload, MarketSubscriptionResponse,
+    MarketSubscriptionSnapshot, MarketSubscriptionState, MarketSubscriptionsQuery,
+    MarketSubscriptionsResponse, MarketTarget, MarketUnsubscribePayload, ObservationRequirement,
+    ProviderPreference, SubscriptionOwnerKey, SubscriptionPendingReason,
 };
 pub use encode::{EncodeContext, event_metadata};
 pub use error::{ContractError, ContractResult};

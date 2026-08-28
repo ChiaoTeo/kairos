@@ -49,6 +49,21 @@ class _MarketReleaseOwnerResponse:
     released_subscription_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class _MarketSubscriptionSnapshot:
+    subscription_id: str
+    owner_id: str
+    state: str
+    observations: tuple[str, ...]
+    selected_providers: tuple[str, ...]
+    pending_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _MarketSubscriptionsResponse:
+    subscriptions: tuple[_MarketSubscriptionSnapshot, ...]
+
+
 class InMemoryApplicationPorts:
     """Deterministic Market and Execution port fake for runtime tests."""
 
@@ -186,6 +201,34 @@ class InMemoryApplicationPorts:
         response = _MarketReleaseOwnerResponse()
         self._handles[request_id] = response
         return response
+
+    def subscriptions(
+        self,
+        *,
+        owner_id: str | None = None,
+        market_id: str | None = None,
+        state: str | None = None,
+    ) -> _MarketSubscriptionsResponse:
+        del market_id
+        snapshots = []
+        for handle in self._handles.values():
+            if not isinstance(handle, _MarketSubscriptionResponse):
+                continue
+            if owner_id is not None and handle.owner_id != owner_id:
+                continue
+            if state is not None and handle.state != state:
+                continue
+            snapshots.append(
+                _MarketSubscriptionSnapshot(
+                    subscription_id=handle.subscription_id,
+                    owner_id=handle.owner_id,
+                    state=handle.state,
+                    observations=(),
+                    selected_providers=handle.resolved_providers,
+                    pending_reason=handle.pending_reason,
+                )
+            )
+        return _MarketSubscriptionsResponse(tuple(snapshots))
 
     def resolve(
         self,

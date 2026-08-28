@@ -50,9 +50,6 @@ impl MarketActor {
         if self.static_subscriptions.contains_key(&id) || self.dynamic_intents.contains_key(&id) {
             return Err(format!("subscription id already exists: {id}"));
         }
-        if markets.is_empty() {
-            return Err("static subscription requires at least one market".into());
-        }
         for market in &markets {
             market.validate()?;
             validate_observation_selectors(market.instrument_kind, &selectors)?;
@@ -203,6 +200,66 @@ impl MarketActor {
             self.generation += 1;
         }
         removed
+    }
+
+    pub(crate) fn replace_subscription_members(
+        &mut self,
+        id: &SubscriptionId,
+        markets: Vec<ResolvedMarket>,
+    ) -> Result<ReconcileResult, String> {
+        if let Some(subscription) = self.static_subscriptions.get_mut(id) {
+            for market in &markets {
+                market.validate()?;
+                validate_observation_selectors(market.instrument_kind, &subscription.selectors)?;
+            }
+            let current = markets
+                .into_iter()
+                .map(|market| (market.member_id(), market))
+                .collect::<BTreeMap<_, _>>();
+            let result = diff_members(&subscription.members, &current);
+            if result.added.is_empty() && result.removed.is_empty() && result.changed.is_empty() {
+                return Ok(result);
+            }
+            subscription.members = current;
+            subscription.member_requirements = subscription
+                .members
+                .keys()
+                .map(|member| (member.clone(), SubscriptionMemberRequirement::Required))
+                .collect();
+            subscription.member_status.clear();
+            self.generation += 1;
+            return Ok(result);
+        }
+        let Some(intent) = self.dynamic_intents.get(id) else {
+            return Err(format!("subscription not found: {id}"));
+        };
+        let query = intent.query.clone();
+        let selectors = intent.selectors.clone();
+        let max_members = intent.max_members;
+        let selected = self.valid_members(query, markets)?;
+        for market in selected.values() {
+            validate_observation_selectors(market.instrument_kind, &selectors)?;
+        }
+        if selected.len() > max_members {
+            return Err(format!(
+                "dynamic subscription has {} members; limit is {}",
+                selected.len(),
+                max_members
+            ));
+        }
+        let intent = self.dynamic_intents.get_mut(id).expect("intent exists");
+        let result = diff_members(&intent.members, &selected);
+        if result.added.is_empty() && result.removed.is_empty() && result.changed.is_empty() {
+            return Ok(result);
+        }
+        intent.members = selected;
+        intent.member_requirements = intent
+            .members
+            .keys()
+            .map(|member| (member.clone(), SubscriptionMemberRequirement::Required))
+            .collect();
+        self.generation += 1;
+        Ok(result)
     }
 
     pub fn set_member_requirement(

@@ -56,12 +56,6 @@ impl MarketActor {
         &mut self,
         update: crate::application::ReconcileMarketUniverse,
     ) -> Result<BTreeMap<SubscriptionId, ReconcileResult>, String> {
-        if update.generation < self.market_universe_generation
-            || (update.generation == self.market_universe_generation
-                && update.event_sequence <= self.market_universe_event_sequence)
-        {
-            return Ok(BTreeMap::new());
-        }
         let mut market_universe = BTreeMap::new();
         for market in &update.markets {
             market.validate()?;
@@ -80,8 +74,6 @@ impl MarketActor {
         }
         let result = self.reconcile_market_universe_members(update.markets)?;
         self.market_universe = market_universe;
-        self.market_universe_generation = update.generation;
-        self.market_universe_event_sequence = update.event_sequence;
         Ok(result)
     }
 

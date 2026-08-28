@@ -1,6 +1,6 @@
 mod cli;
 pub(crate) mod conflux;
-pub(crate) use conflux::ReferenceUniverseSyncConfig;
+pub(crate) use conflux::ReferenceDemandConfig;
 mod connected;
 mod model;
 mod observations;

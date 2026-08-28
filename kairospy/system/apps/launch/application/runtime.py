@@ -205,7 +205,7 @@ def cleanup_instance_components(
             }
         subscription_cleanup = release_strategy_market_owner(owner, instance_workspace)
         if subscription_cleanup is not None:
-            stopped["market_subscriptions"] = subscription_cleanup
+            stopped["market_subscription_cleanup"] = subscription_cleanup
     try:
         manifest = json.loads(
             instance_workspace.component_manifest().read_text(encoding="utf-8")
@@ -238,7 +238,7 @@ def cleanup_instance_components(
     process_results = {
         name: value
         for name, value in stopped.items()
-        if name != "market_subscriptions"
+        if name != "market_subscription_cleanup"
     }
     if process_results and all(
         str(value.get("status")) in terminal for value in process_results.values()

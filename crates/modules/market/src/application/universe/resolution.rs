@@ -30,14 +30,7 @@ impl MarketUniverseResolver {
     pub(crate) fn resolve(
         &self,
         snapshot: &kairos_reference_contract::MarketReferenceSnapshot,
-        required_sequence: u64,
     ) -> Result<ReconcileMarketUniverse, String> {
-        if snapshot.event_sequence < required_sequence.into() {
-            return Err(format!(
-                "Reference view sequence {} is behind required sequence {}",
-                snapshot.event_sequence, required_sequence
-            ));
-        }
         let instruments = snapshot
             .instruments
             .iter()
@@ -100,6 +93,23 @@ impl MarketUniverseResolver {
             event_sequence: snapshot.event_sequence,
             markets: merge_markets(markets)?,
         })
+    }
+
+    /// Resolve one bounded, transaction-consistent Reference query result.
+    /// The returned descriptors belong to the caller's current demand; this
+    /// method does not create or update a Market-side Reference catalog.
+    pub(crate) fn resolve_catalog_page(
+        &self,
+        page: kairos_reference_contract::ReferenceMarketCatalogPage,
+    ) -> Result<Vec<ResolvedMarket>, String> {
+        let snapshot = kairos_reference_contract::MarketReferenceSnapshot {
+            generation: page.watermark.generation,
+            event_sequence: page.watermark.event_sequence,
+            instruments: page.instruments.into_values().collect(),
+            markets: page.markets,
+            ..Default::default()
+        };
+        self.resolve(&snapshot).map(|resolved| resolved.markets)
     }
 }
 

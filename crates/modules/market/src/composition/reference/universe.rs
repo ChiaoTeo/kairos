@@ -83,23 +83,14 @@ pub fn resolve_market_universe(
     snapshot: &kairos_reference_contract::MarketReferenceSnapshot,
     sources: &BTreeMap<String, MarketProviderBinding>,
 ) -> Result<ReconcileMarketUniverse, String> {
-    build_market_universe_resolver(sources).resolve(snapshot, 0)
-}
-
-#[cfg(test)]
-pub(super) fn resolve_market_universe_at_sequence(
-    snapshot: &kairos_reference_contract::MarketReferenceSnapshot,
-    required_sequence: u64,
-    sources: &BTreeMap<String, MarketProviderBinding>,
-) -> Result<ReconcileMarketUniverse, String> {
-    build_market_universe_resolver(sources).resolve(snapshot, required_sequence)
+    build_market_universe_resolver(sources).resolve(snapshot)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{resolve_market_universe, resolve_market_universe_at_sequence};
+    use super::resolve_market_universe;
     use crate::composition::config::{MarketProviderBinding, MassiveMarketProduct};
 
     #[test]
@@ -342,17 +333,6 @@ mod tests {
                 .observation_capabilities
                 .contains(&crate::ObservationKind::Trade)
         );
-    }
-
-    #[test]
-    fn rejects_a_view_behind_the_required_event_sequence() {
-        let snapshot = kairos_reference_contract::MarketReferenceSnapshot {
-            event_sequence: 4.into(),
-            ..Default::default()
-        };
-        let error =
-            resolve_market_universe_at_sequence(&snapshot, 5, &BTreeMap::new()).unwrap_err();
-        assert!(error.contains("behind required sequence 5"));
     }
 
     fn fixture() -> kairos_reference_contract::MarketReferenceSnapshot {

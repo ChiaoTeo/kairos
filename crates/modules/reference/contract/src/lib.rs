@@ -112,6 +112,16 @@ impl ReferenceClient {
         })
     }
 
+    /// Read only the current Reference facts needed for one bounded Market
+    /// demand. Consumers should prefer this over retaining a full catalog
+    /// snapshot when resolving subscriptions.
+    pub fn market_catalog(
+        &self,
+        query: &MarketCatalogQuery,
+    ) -> ContractResult<ReferenceMarketCatalogPage> {
+        self.catalog()?.market_catalog(query)
+    }
+
     pub fn market_snapshot(&self) -> ContractResult<MarketReferenceSnapshot> {
         self.catalog()?.market_snapshot(self.actor_id.as_str())
     }

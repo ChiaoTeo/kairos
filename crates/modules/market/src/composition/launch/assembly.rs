@@ -17,7 +17,7 @@ use crate::{MarketApplication, ResolvedMarket, SubscriptionId};
 const MAX_DYNAMIC_MEMBERS: usize = 10_000;
 
 fn collection_market_descriptor(
-    reference: &kairos_reference_contract::MarketReferenceSnapshot,
+    reference: &kairos_reference_contract::ReferenceClient,
     sources: &std::collections::BTreeMap<String, super::super::config::MarketProviderBinding>,
     name: &str,
     collection: &super::super::config::MarketCollectionConfig,
@@ -27,7 +27,37 @@ fn collection_market_descriptor(
             "Market collection {name} requires exactly one of market_id or instrument_id"
         )));
     }
-    let universe = resolve_market_universe(reference, sources)
+    let query = kairos_reference_contract::MarketCatalogQuery {
+        market_id: collection
+            .market_id
+            .as_deref()
+            .map(kairos_primitives::reference::MarketId::new)
+            .transpose()
+            .map_err(MarketStartupError::new)?,
+        instrument_id: collection
+            .instrument_id
+            .as_deref()
+            .map(kairos_primitives::reference::InstrumentId::new)
+            .transpose()
+            .map_err(MarketStartupError::new)?,
+        statuses: vec![
+            kairos_primitives::reference::ReferenceStatus::Active,
+            kairos_primitives::reference::ReferenceStatus::Trading,
+        ],
+        limit: 10_000,
+        ..Default::default()
+    };
+    let page = reference
+        .market_catalog(&query)
+        .map_err(MarketStartupError::new)?;
+    let snapshot = kairos_reference_contract::MarketReferenceSnapshot {
+        generation: page.watermark.generation,
+        event_sequence: page.watermark.event_sequence,
+        instruments: page.instruments.into_values().collect(),
+        markets: page.markets,
+        ..Default::default()
+    };
+    let universe = resolve_market_universe(&snapshot, sources)
         .map_err(MarketStartupError::new)?
         .markets;
     let mut descriptor =
@@ -45,7 +75,7 @@ fn collection_market_descriptor(
                 .instrument_id
                 .as_deref()
                 .expect("collection identity validated");
-            let instrument = reference
+            let instrument = snapshot
                 .instruments
                 .iter()
                 .find(|instrument| instrument.instrument_id == instrument_id)
@@ -202,6 +232,11 @@ pub async fn build_market_host(
             kairos_conflux::reference_connection_from_workspace(
                 &workspace,
                 request.aeron_dir.as_deref(),
+                request.aeron_channel.as_deref().ok_or_else(|| {
+                    MarketStartupError::new(
+                        "Market live Reference notifications require an explicit System event route",
+                    )
+                })?,
             )
             .map_err(MarketStartupError::new)
         })
@@ -217,14 +252,9 @@ pub async fn build_market_host(
             Ok::<_, MarketStartupError>(key)
         })
         .transpose()?;
-    let initial_reference_snapshot = reference_client_key
+    let reference_client = reference_client_key
         .as_ref()
-        .map(|key| {
-            system
-                .reference_market_snapshot(key)
-                .map_err(MarketStartupError::new)
-        })
-        .transpose()?;
+        .and_then(|key| system.reference_client(key));
 
     std::fs::create_dir_all(&view_root).map_err(MarketStartupError::new)?;
     let replay_checkpoint_path = if profile.scope == MarketRuntimeScope::Replay {
@@ -256,14 +286,6 @@ pub async fn build_market_host(
         ),
     }
     .map_err(MarketStartupError::new)?;
-    if let Some(snapshot) = initial_reference_snapshot.as_ref() {
-        application
-            .reconcile_market_universe(
-                resolve_market_universe(snapshot, &market_config.providers)
-                    .map_err(MarketStartupError::new)?,
-            )
-            .map_err(MarketStartupError::new)?;
-    }
     match profile.scope {
         MarketRuntimeScope::Replay => {
             let instance = instance.as_ref().ok_or_else(|| {
@@ -316,7 +338,7 @@ pub async fn build_market_host(
                     "Market collection {name} queue_capacity must be positive"
                 )));
             }
-            let reference = initial_reference_snapshot.as_ref().ok_or_else(|| {
+            let reference = reference_client.as_ref().ok_or_else(|| {
                 MarketStartupError::new(format!(
                     "Market collection {name} requires the Reference current view"
                 ))
@@ -364,11 +386,11 @@ pub async fn build_market_host(
     // remains independent of the live Reference/Aeron runtime. Live modes
     // use the Reference client held by Conflux so no watcher task becomes a
     // second Aeron owner and Market does not create a foreign module client.
-    let reference_universe_sync = if let Some(key) = reference_client_key {
-        Some(crate::application::ReferenceUniverseSyncConfig {
+    let reference_demand = if let Some(key) = reference_client_key {
+        Some(crate::application::ReferenceDemandConfig {
             client_key: key,
-            interval: profile.reference_recovery_interval,
             resolver: build_market_universe_resolver(&market_config.providers),
+            revalidation_interval: profile.reference_recovery_interval,
         })
     } else {
         None
@@ -397,7 +419,7 @@ pub async fn build_market_host(
             identity,
             source_plans,
             history,
-            reference_universe_sync,
+            reference_demand,
         )
         .map_err(MarketStartupError::new)?;
     let (indexed_identity, producer_incarnation) = application.indexed_publication_identity();

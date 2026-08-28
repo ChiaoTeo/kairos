@@ -281,7 +281,7 @@ def test_home_navigation_does_not_append_to_content_stream() -> None:
     assert "kairos › 1" not in after
 
 
-def test_market_menu_keeps_advanced_operations_out_of_primary_choices() -> None:
+def test_market_menu_exposes_runtime_and_keeps_other_advanced_operations_separate() -> None:
     async def run() -> tuple[int, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
@@ -296,11 +296,29 @@ def test_market_menu_keeps_advanced_operations_out_of_primary_choices() -> None:
             )
 
     option_count, output = asyncio.run(run())
-    assert option_count == 3
+    assert option_count == 4
     assert "/r" in output
     assert "/c" in output
     assert "/d" in output
     assert "/a" in output
+
+
+def test_market_runtime_shortcut_is_available_from_home() -> None:
+    async def run() -> tuple[tuple[str, ...], str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("/c")
+            await pilot.pause()
+            return screen.session.context, interaction_copy_text(
+                screen.session.interaction
+            )
+
+    context, interaction = asyncio.run(run())
+    assert context == ("market", "connected")
+    assert "查看状态" in interaction
+    assert "查看数据路由" in interaction
 
 
 def test_submenu_back_and_home_navigation_stay_out_of_content_stream() -> None:

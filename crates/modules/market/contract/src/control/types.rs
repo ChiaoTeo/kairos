@@ -18,6 +18,16 @@ pub struct MarketCommandEnvelope<T> {
     pub payload: T,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketOperatorCommandEnvelope<T> {
+    pub schema_version: u16,
+    pub command_id: RequestId,
+    pub idempotency_key: IdempotencyKey,
+    pub operation: MarketOperation,
+    pub owner_id: SubscriptionOwnerKey,
+    pub payload: T,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MarketOperation {
@@ -193,6 +203,36 @@ pub struct MarketSubscriptionResponse {
     pub pending_reason: Option<SubscriptionPendingReason>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketSubscriptionsQuery {
+    #[serde(default)]
+    pub owner_id: Option<SubscriptionOwnerKey>,
+    #[serde(default)]
+    pub market_id: Option<MarketId>,
+    #[serde(default)]
+    pub state: Option<MarketSubscriptionState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketSubscriptionSnapshot {
+    pub subscription_id: SubscriptionId,
+    pub owner_id: SubscriptionOwnerKey,
+    pub state: MarketSubscriptionState,
+    #[serde(default)]
+    pub market_ids: Vec<MarketId>,
+    #[serde(default)]
+    pub observations: std::collections::BTreeSet<ObservationRequirement>,
+    #[serde(default)]
+    pub selected_providers: std::collections::BTreeSet<Provider>,
+    #[serde(default)]
+    pub pending_reason: Option<SubscriptionPendingReason>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketSubscriptionsResponse {
+    pub subscriptions: Vec<MarketSubscriptionSnapshot>,
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct SubscriptionOwnerKey(String);
@@ -284,8 +324,9 @@ mod tests {
     use kairos_primitives::runtime::{IdempotencyKey, InstanceId, LaunchId, RequestId};
 
     use super::{
-        MarketCommandEnvelope, MarketDataRoutesQuery, MarketOperation, MarketSubscribePayload,
-        MarketTarget, ObservationRequirement, ProviderPreference,
+        MarketCommandEnvelope, MarketDataRoutesQuery, MarketOperation,
+        MarketOperatorCommandEnvelope, MarketSubscribePayload, MarketSubscriptionsQuery,
+        MarketTarget, ObservationRequirement, ProviderPreference, SubscriptionOwnerKey,
     };
 
     #[test]
@@ -319,6 +360,35 @@ mod tests {
         assert_eq!(value["payload"]["observations"][0]["kind"], "trade");
         assert!(value["payload"].get("source_id").is_none());
         assert!(value.get("payload").is_some());
+    }
+
+    #[test]
+    fn subscription_inventory_and_operator_commands_are_typed() {
+        let owner = SubscriptionOwnerKey::new("operator:kairos-i:session-1").unwrap();
+        let query: MarketSubscriptionsQuery = serde_json::from_value(serde_json::json!({
+            "owner_id": owner.as_str(),
+            "market_id": "market:binance:spot:BTCUSDT",
+            "state": "active"
+        }))
+        .unwrap();
+        assert_eq!(query.owner_id.as_ref(), Some(&owner));
+
+        let command: MarketOperatorCommandEnvelope<MarketSubscribePayload> =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": 1,
+                "command_id": "command-1",
+                "idempotency_key": "command-1",
+                "operation": "subscribe",
+                "owner_id": owner.as_str(),
+                "payload": {
+                    "target": {"type": "market", "market_id": "market:binance:spot:BTCUSDT"},
+                    "observations": [{"kind": "quote"}],
+                    "provider_preference": {"mode": "automatic"}
+                }
+            }))
+            .unwrap();
+        assert_eq!(command.owner_id, owner);
+        assert_eq!(command.operation, MarketOperation::Subscribe);
     }
 
     #[test]

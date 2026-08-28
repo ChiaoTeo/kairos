@@ -15,15 +15,17 @@ use kairos_market_contract::{
     MarketHealthResponse as RustHealthResponse, MarketHealthStatus,
     MarketIndexPriceCurrent as RustIndex, MarketIndexedView as RustView,
     MarketMarkPriceCurrent as RustMark, MarketObservationScope as RustScope,
-    MarketOpenInterestCurrent as RustOpenInterest, MarketOperation,
+    MarketOpenInterestCurrent as RustOpenInterest, MarketOperation, MarketOperatorCommandEnvelope,
     MarketOrderBookCurrent as RustOrderBook, MarketQuoteCurrent as RustQuote,
     MarketRateCurrent as RustRate, MarketReleaseOwnerPayload,
     MarketSubscribePayload as RustSubscribePayload,
-    MarketSubscriptionResponse as RustSubscriptionResponse, MarketSubscriptionState,
-    MarketTarget as RustTarget, MarketTicker24hCurrent as RustTicker, MarketUnsubscribePayload,
-    MarketViewKey as RustViewKey, MarketViewKind,
-    ObservationRequirement as RustObservationRequirement,
-    ProviderPreference as RustProviderPreference, SubscriptionPendingReason,
+    MarketSubscriptionResponse as RustSubscriptionResponse,
+    MarketSubscriptionSnapshot as RustSubscriptionSnapshot, MarketSubscriptionState,
+    MarketSubscriptionsQuery as RustSubscriptionsQuery,
+    MarketSubscriptionsResponse as RustSubscriptionsResponse, MarketTarget as RustTarget,
+    MarketTicker24hCurrent as RustTicker, MarketUnsubscribePayload, MarketViewKey as RustViewKey,
+    MarketViewKind, ObservationRequirement as RustObservationRequirement,
+    ProviderPreference as RustProviderPreference, SubscriptionOwnerKey, SubscriptionPendingReason,
 };
 use kairos_primitives::decimal::{DecimalParts, Price, PriceDelta, Quantity};
 use kairos_primitives::market::{ObservationKind, Provider as RustProvider};
@@ -1184,6 +1186,39 @@ struct NativeMarketSubscriptionResponse {
 }
 
 #[pyclass(
+    name = "MarketSubscriptionSnapshot",
+    frozen,
+    module = "kairospy._native_market_contract"
+)]
+#[derive(Clone)]
+struct NativeMarketSubscriptionSnapshot {
+    #[pyo3(get)]
+    subscription_id: String,
+    #[pyo3(get)]
+    owner_id: String,
+    #[pyo3(get)]
+    state: String,
+    #[pyo3(get)]
+    market_ids: Vec<String>,
+    #[pyo3(get)]
+    observations: Vec<String>,
+    #[pyo3(get)]
+    selected_providers: Vec<String>,
+    #[pyo3(get)]
+    pending_reason: Option<String>,
+}
+
+#[pyclass(
+    name = "MarketSubscriptionsResponse",
+    frozen,
+    module = "kairospy._native_market_contract"
+)]
+struct NativeMarketSubscriptionsResponse {
+    #[pyo3(get)]
+    subscriptions: Vec<NativeMarketSubscriptionSnapshot>,
+}
+
+#[pyclass(
     name = "MarketCommandStatus",
     frozen,
     module = "kairospy._native_market_contract"
@@ -1284,6 +1319,37 @@ impl NativeMarketControlClient {
         Ok(project_routes(value))
     }
 
+    #[pyo3(signature = (*, owner_id=None, market_id=None, state=None))]
+    fn subscriptions(
+        &self,
+        py: Python<'_>,
+        owner_id: Option<String>,
+        market_id: Option<String>,
+        state: Option<String>,
+    ) -> PyResult<NativeMarketSubscriptionsResponse> {
+        let query = RustSubscriptionsQuery {
+            owner_id: owner_id
+                .map(SubscriptionOwnerKey::new)
+                .transpose()
+                .map_err(MarketInvalidInputError::new_err)?,
+            market_id: market_id
+                .map(MarketId::new)
+                .transpose()
+                .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))?,
+            state: state
+                .map(|value| parse_subscription_state(&value))
+                .transpose()?,
+        };
+        let client = self.client.clone();
+        let timeout = self.timeout;
+        let value = py.detach(move || {
+            run_control(timeout, async move {
+                client.control().subscriptions(query).await
+            })
+        })?;
+        Ok(project_subscriptions(value))
+    }
+
     #[pyo3(signature = (request, *, strategy_id, instance_id, request_id, launch_id=None))]
     fn subscribe(
         &self,
@@ -1309,6 +1375,30 @@ impl NativeMarketControlClient {
                 timeout,
                 async move { client.control().subscribe(command).await },
             )
+        })?;
+        Ok(project_subscription(value))
+    }
+
+    #[pyo3(signature = (request, *, owner_id, request_id))]
+    fn operator_subscribe(
+        &self,
+        py: Python<'_>,
+        request: PyRef<'_, NativeMarketSubscriptionRequest>,
+        owner_id: String,
+        request_id: String,
+    ) -> PyResult<NativeMarketSubscriptionResponse> {
+        let command = operator_command(
+            MarketOperation::Subscribe,
+            request.inner.clone(),
+            owner_id,
+            request_id,
+        )?;
+        let client = self.client.clone();
+        let timeout = self.timeout;
+        let value = py.detach(move || {
+            run_control(timeout, async move {
+                client.control().operator_subscribe(command).await
+            })
         })?;
         Ok(project_subscription(value))
     }
@@ -1345,6 +1435,30 @@ impl NativeMarketControlClient {
         Ok(project_command_status(value))
     }
 
+    #[pyo3(signature = (subscription_id, *, owner_id, request_id))]
+    fn operator_unsubscribe(
+        &self,
+        py: Python<'_>,
+        subscription_id: String,
+        owner_id: String,
+        request_id: String,
+    ) -> PyResult<NativeMarketCommandStatus> {
+        let payload = MarketUnsubscribePayload {
+            subscription_id: kairos_primitives::market::SubscriptionId::new(subscription_id)
+                .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))?,
+        };
+        let command =
+            operator_command(MarketOperation::Unsubscribe, payload, owner_id, request_id)?;
+        let client = self.client.clone();
+        let timeout = self.timeout;
+        let value = py.detach(move || {
+            run_control(timeout, async move {
+                client.control().operator_unsubscribe(command).await
+            })
+        })?;
+        Ok(project_command_status(value))
+    }
+
     #[pyo3(signature = (*, strategy_id, instance_id, request_id, launch_id=None))]
     fn release_owner(
         &self,
@@ -1367,6 +1481,35 @@ impl NativeMarketControlClient {
         let value = py.detach(move || {
             run_control(timeout, async move {
                 client.control().release_owner(command).await
+            })
+        })?;
+        Ok(NativeMarketReleaseOwnerResponse {
+            released_subscription_ids: value
+                .released_subscriptions
+                .into_iter()
+                .map(|value| value.to_string())
+                .collect(),
+        })
+    }
+
+    #[pyo3(signature = (*, owner_id, request_id))]
+    fn operator_release_owner(
+        &self,
+        py: Python<'_>,
+        owner_id: String,
+        request_id: String,
+    ) -> PyResult<NativeMarketReleaseOwnerResponse> {
+        let command = operator_command(
+            MarketOperation::ReleaseOwner,
+            MarketReleaseOwnerPayload::default(),
+            owner_id,
+            request_id,
+        )?;
+        let client = self.client.clone();
+        let timeout = self.timeout;
+        let value = py.detach(move || {
+            run_control(timeout, async move {
+                client.control().operator_release_owner(command).await
             })
         })?;
         Ok(NativeMarketReleaseOwnerResponse {
@@ -3409,6 +3552,24 @@ fn market_command<T>(
     })
 }
 
+fn operator_command<T>(
+    operation: MarketOperation,
+    payload: T,
+    owner_id: String,
+    request_id: String,
+) -> PyResult<MarketOperatorCommandEnvelope<T>> {
+    Ok(MarketOperatorCommandEnvelope {
+        schema_version: 2,
+        command_id: RequestId::new(request_id.clone())
+            .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))?,
+        idempotency_key: IdempotencyKey::new(request_id)
+            .map_err(|error| MarketInvalidInputError::new_err(error.to_string()))?,
+        operation,
+        owner_id: SubscriptionOwnerKey::new(owner_id).map_err(MarketInvalidInputError::new_err)?,
+        payload,
+    })
+}
+
 fn run_control<F, T, E>(timeout: Duration, future: F) -> PyResult<T>
 where
     F: std::future::Future<Output = Result<T, E>>,
@@ -3490,17 +3651,7 @@ fn project_subscription(value: RustSubscriptionResponse) -> NativeMarketSubscrip
     NativeMarketSubscriptionResponse {
         subscription_id: value.subscription_id.to_string(),
         owner_id: value.owner_id.to_string(),
-        state: match value.state {
-            MarketSubscriptionState::Resolving => "resolving",
-            MarketSubscriptionState::Active => "active",
-            MarketSubscriptionState::PartiallyActive => "partially_active",
-            MarketSubscriptionState::WaitingForProvider => "waiting_for_provider",
-            MarketSubscriptionState::WaitingForMarket => "waiting_for_market",
-            MarketSubscriptionState::Degraded => "degraded",
-            MarketSubscriptionState::Failed => "failed",
-            MarketSubscriptionState::Released => "released",
-        }
-        .to_owned(),
+        state: subscription_state(value.state).to_owned(),
         satisfied_selectors: value.satisfied.iter().map(observation_selector).collect(),
         missing_selectors: value.missing.iter().map(observation_selector).collect(),
         resolved_providers: value
@@ -3509,6 +3660,71 @@ fn project_subscription(value: RustSubscriptionResponse) -> NativeMarketSubscrip
             .map(|value| value.to_string())
             .collect(),
         pending_reason: value.pending_reason.as_ref().map(pending_reason),
+    }
+}
+
+fn project_subscriptions(value: RustSubscriptionsResponse) -> NativeMarketSubscriptionsResponse {
+    NativeMarketSubscriptionsResponse {
+        subscriptions: value
+            .subscriptions
+            .into_iter()
+            .map(project_subscription_snapshot)
+            .collect(),
+    }
+}
+
+fn project_subscription_snapshot(
+    value: RustSubscriptionSnapshot,
+) -> NativeMarketSubscriptionSnapshot {
+    NativeMarketSubscriptionSnapshot {
+        subscription_id: value.subscription_id.to_string(),
+        owner_id: value.owner_id.to_string(),
+        state: subscription_state(value.state).to_owned(),
+        market_ids: value
+            .market_ids
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        observations: value
+            .observations
+            .iter()
+            .map(observation_selector)
+            .collect(),
+        selected_providers: value
+            .selected_providers
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        pending_reason: value.pending_reason.as_ref().map(pending_reason),
+    }
+}
+
+fn subscription_state(value: MarketSubscriptionState) -> &'static str {
+    match value {
+        MarketSubscriptionState::Resolving => "resolving",
+        MarketSubscriptionState::Active => "active",
+        MarketSubscriptionState::PartiallyActive => "partially_active",
+        MarketSubscriptionState::WaitingForProvider => "waiting_for_provider",
+        MarketSubscriptionState::WaitingForMarket => "waiting_for_market",
+        MarketSubscriptionState::Degraded => "degraded",
+        MarketSubscriptionState::Failed => "failed",
+        MarketSubscriptionState::Released => "released",
+    }
+}
+
+fn parse_subscription_state(value: &str) -> PyResult<MarketSubscriptionState> {
+    match value {
+        "resolving" => Ok(MarketSubscriptionState::Resolving),
+        "active" => Ok(MarketSubscriptionState::Active),
+        "partially_active" => Ok(MarketSubscriptionState::PartiallyActive),
+        "waiting_for_provider" => Ok(MarketSubscriptionState::WaitingForProvider),
+        "waiting_for_market" => Ok(MarketSubscriptionState::WaitingForMarket),
+        "degraded" => Ok(MarketSubscriptionState::Degraded),
+        "failed" => Ok(MarketSubscriptionState::Failed),
+        "released" => Ok(MarketSubscriptionState::Released),
+        _ => Err(MarketInvalidInputError::new_err(format!(
+            "unknown Market subscription state: {value}"
+        ))),
     }
 }
 
@@ -4207,6 +4423,8 @@ fn _native_market_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NativeMarketDataRoute>()?;
     module.add_class::<NativeMarketDataRoutesResponse>()?;
     module.add_class::<NativeMarketSubscriptionResponse>()?;
+    module.add_class::<NativeMarketSubscriptionSnapshot>()?;
+    module.add_class::<NativeMarketSubscriptionsResponse>()?;
     module.add_class::<NativeMarketCommandStatus>()?;
     module.add_class::<NativeMarketReleaseOwnerResponse>()?;
     module.add_class::<NativeMarketControlClient>()?;

@@ -166,6 +166,17 @@ class SubscriptionReleaseResult:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _CurrentSubscriptionResult:
+    subscription_id: str
+    owner_id: str
+    state: str
+    satisfied_selectors: tuple[str, ...]
+    missing_selectors: tuple[str, ...]
+    resolved_providers: tuple[str, ...]
+    pending_reason: str | None
+
+
 class MarketApplication:
     """Concrete strategy-facing Market use cases.
 
@@ -700,7 +711,26 @@ class MarketApplication:
         return request_id, response
 
     def _command_status(self, request_id: RequestId) -> MarketSubscriptionResultRead:
-        return self._subscription_handles[request_id]
+        initial = self._subscription_handles[request_id]
+        current = self._required_commands().subscriptions(owner_id=str(initial.owner_id))
+        for snapshot in current.subscriptions:
+            if str(snapshot.subscription_id) != str(initial.subscription_id):
+                continue
+            request = self._subscription_requests[request_id]
+            observations = tuple(
+                requirement.kind for requirement in request.observations
+            )
+            active = snapshot.state == "active"
+            return _CurrentSubscriptionResult(
+                subscription_id=str(snapshot.subscription_id),
+                owner_id=snapshot.owner_id,
+                state=snapshot.state,
+                satisfied_selectors=observations if active else (),
+                missing_selectors=() if active else observations,
+                resolved_providers=tuple(snapshot.selected_providers),
+                pending_reason=snapshot.pending_reason,
+            )
+        return initial
 
     def _required_commands(self) -> MarketCommands:
         if self._commands is None:
