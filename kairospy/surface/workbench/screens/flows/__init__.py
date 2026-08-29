@@ -97,6 +97,8 @@ def handle_context(
         return operations.handle_context(state, session, command)
     if section == ("research",):
         return research.handle_context(state, session, command)
+    if section == ("account",):
+        return account.handle_context(state, session, command)
     if section == ("strategy",):
         effects = execution.handle_context(state, session, command)
         if effects is not None:

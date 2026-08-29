@@ -47,6 +47,7 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0040 | [Python Owner Contract 语义 Primitive 收敛](0040-python-owner-contract-semantic-primitives.md) | Accepted |
 | 0041 | [权威 Current View 与 Best-effort Notification](0041-authoritative-current-views-and-best-effort-notifications.md) | Accepted |
 | 0042 | [终态 Activity 与持续 Control 分离](0042-terminal-activity-and-live-control.md) | Accepted |
+| 0043 | [按用户任务与运行作用域组织 Workbench 导航](0043-task-and-scope-oriented-workbench-navigation.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

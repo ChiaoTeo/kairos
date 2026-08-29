@@ -15,9 +15,6 @@ from rich.text import Text
 from kairospy.investment.apps.market.application.cli import MarketCliApplication
 from kairospy.system.apps.components.application import ComponentProcessApplication
 from kairospy.system.apps.components.application.clients import MarketSystemClient
-from kairospy.system.apps.launch.application import (
-    WorkspaceComponentDependencyApplication,
-)
 from ...presentation import (
     ResultTone,
     conclusion,
@@ -31,26 +28,110 @@ from ...presentation import (
 from ....widgets import ActionItem
 
 
-WORKSPACE_MARKET_ACTIONS = (
-    ActionItem("status", "查看状态", "读取服务健康与运行资源", "1"),
-    ActionItem("routes", "查看数据路由", "读取已配置 Provider route", "2"),
+LIVE_MARKET_ACTIONS = (
     ActionItem(
-        "session-subscriptions", "当前 Kairos I 订阅", "查看本会话拥有的订阅", "3"
+        "session-subscriptions", "当前关注", "查看本次 Kairos I 会话正在接收的行情", "1"
     ),
+    ActionItem("subscribe", "添加实时行情", "选择市场并接收实时报价", "s"),
     ActionItem(
-        "subscriptions", "Market 全部订阅", "查看所有策略、操作员和系统订阅", "4"
+        "subscribe-custom",
+        "自定义行情内容",
+        "选择市场以及要接收的行情内容",
+        "x",
     ),
-    ActionItem("subscribe", "添加订阅", "为当前 Kairos I 会话添加行情订阅", "s"),
-    ActionItem("unsubscribe", "退出订阅", "退出当前 Kairos I 会话拥有的订阅", "u"),
-    ActionItem("snapshot", "查看行情快照", "读取 Quote、K 线或 Greeks", "5"),
-    ActionItem("freshness", "查看行情新鲜度", "读取指定 Market 数据年龄", "6"),
-    ActionItem("start", "启动服务", "启动 Workspace Market 服务", "7"),
-    ActionItem("stop", "停止服务", "停止 Workspace Market 服务", "8"),
-    ActionItem("restart", "重启服务", "重启 Workspace Market 服务", "9"),
-    ActionItem("logs", "查看日志", "读取最近进程日志", "l"),
-    ActionItem("pause", "暂停行情回放", "暂停 replay 时钟", "p"),
-    ActionItem("resume", "继续行情回放", "恢复 replay 时钟", "r"),
+    ActionItem("unsubscribe", "停止关注", "停止接收当前会话选择的行情", "u"),
+    ActionItem("snapshot", "查看行情快照", "读取实时报价、K 线或 Greeks", "2"),
+    ActionItem("freshness", "查看行情新鲜度", "查看所选行情的更新时间", "3"),
 )
+
+LIVE_MARKET_UNAVAILABLE_ACTIONS = (
+    ActionItem(
+        "prepare",
+        "启动实时行情",
+        "启动并保持项目共享行情服务运行",
+        "1",
+    ),
+    ActionItem(
+        "service-details",
+        "查看服务详细状态",
+        "前往运行中心查看状态、日志和技术诊断",
+        "2",
+    ),
+    ActionItem("history", "改看历史行情", "返回行情入口并使用独立历史数据", "3"),
+    ActionItem("back", "返回", "返回市场与行情入口", "4"),
+)
+
+
+def live_market_available(state: Any) -> bool:
+    """Project the latest known shared Market availability without probing in UI."""
+
+    snapshot = getattr(state, "snapshot", None)
+    services = getattr(snapshot, "shared_services", None)
+    if not isinstance(services, Mapping):
+        return True
+    market = services.get("market")
+    if not isinstance(market, Mapping):
+        return True
+    status = str(market.get("status") or "unknown").lower()
+    if status in {"not_running", "stopped", "failed", "start_failed", "error"}:
+        return False
+    return market.get("control_reachable") is not False
+
+
+def unavailable_renderable() -> RenderableType:
+    return Group(
+        conclusion("实时行情暂不可用", tone=ResultTone.WARNING),
+        facts(
+            (
+                ("原因", "当前项目的共享行情服务尚未就绪"),
+                ("影响", "暂时不能查看或管理实时行情；历史行情仍可使用"),
+                ("作用域", "项目共享行情服务"),
+            )
+        ),
+    )
+
+
+SUBSCRIPTION_CONTENT_ACTIONS = (
+    ActionItem("quote", "实时报价", "买卖报价与最新价格", "1"),
+    ActionItem("quote,trade", "实时报价与逐笔成交", "同时接收报价和成交明细", "2"),
+    ActionItem("bar:1m", "1 分钟 K 线", "接收一分钟聚合行情", "3"),
+    ActionItem("greeks", "期权 Greeks", "接收期权风险指标", "4"),
+)
+
+SNAPSHOT_KIND_ACTIONS = (
+    ActionItem("quote", "实时报价", "查看最新买卖报价", "1"),
+    ActionItem("bar", "K 线", "查看指定周期的最新 K 线", "2"),
+    ActionItem("greeks", "期权 Greeks", "查看最新期权风险指标", "3"),
+)
+
+TIMEFRAME_ACTIONS = (
+    ActionItem("1m", "1 分钟", "一分钟 K 线", "1"),
+    ActionItem("5m", "5 分钟", "五分钟 K 线", "2"),
+    ActionItem("15m", "15 分钟", "十五分钟 K 线", "3"),
+    ActionItem("1h", "1 小时", "一小时 K 线", "4"),
+    ActionItem("1d", "1 天", "日 K 线", "5"),
+)
+
+
+_ACTION_LABELS = {
+    "snapshot": "查看行情快照",
+    "freshness": "查看行情新鲜度",
+    "subscribe": "添加实时行情",
+    "unsubscribe": "退出行情",
+}
+
+_OBSERVATION_LABELS = {
+    "quote": "实时报价",
+    "trade": "逐笔成交",
+    "bar:1m": "1 分钟 K 线",
+    "greeks": "期权 Greeks",
+}
+
+_SNAPSHOT_LABELS = {
+    "quote": "实时报价",
+    "bar": "K 线",
+    "greeks": "期权 Greeks",
+}
 
 
 @dataclass(slots=True)
@@ -58,19 +139,17 @@ class WorkspaceMarketPromptState:
     action: str
     default_market: str = ""
     owner_id: str = ""
+    custom_content: bool = False
+    market_label: str = ""
+    market_description: str = ""
+    subscription_label: str = ""
+    subscription_description: str = ""
+    provider_resolved: bool = False
     values: dict[str, str] = field(default_factory=dict)
 
     @property
     def dangerous(self) -> bool:
-        return self.action in {
-            "start",
-            "stop",
-            "restart",
-            "pause",
-            "resume",
-            "subscribe",
-            "unsubscribe",
-        }
+        return False
 
     def next_prompt(self) -> tuple[str, str, str] | None:
         for name, label, default in self._steps():
@@ -85,7 +164,8 @@ class WorkspaceMarketPromptState:
 
     def accept(self, name: str, raw: str) -> None:
         default = next(
-            default for field, _label, default in self._steps() if field == name
+            (default for field, _label, default in self._steps() if field == name),
+            "",
         )
         value = raw.strip() or default
         if (
@@ -108,6 +188,29 @@ class WorkspaceMarketPromptState:
             raise ValueError("至少需要一个 observation")
         self.values[name] = value
 
+    def select_market(
+        self, market_id: str, *, label: str, description: str = ""
+    ) -> None:
+        """Retain the canonical identity while presenting human market vocabulary."""
+
+        if not market_id:
+            raise ValueError("所选市场没有有效的市场标识")
+        self.values["market-id"] = market_id
+        self.values.setdefault("provider", "")
+        self.market_label = label
+        self.market_description = description
+
+    def select_subscription(
+        self, subscription_id: str, *, label: str, description: str = ""
+    ) -> None:
+        """Retain an opaque subscription identity behind its business label."""
+
+        if not subscription_id:
+            raise ValueError("所选行情没有有效的订阅标识")
+        self.values["subscription-id"] = subscription_id
+        self.subscription_label = label
+        self.subscription_description = description
+
     def summary(self) -> dict[str, Any]:
         return {"scope": "workspace", "action": self.action, **self.values}
 
@@ -115,27 +218,59 @@ class WorkspaceMarketPromptState:
         if self.action == "snapshot":
             kind = self.values.get("kind", "")
             values = [
-                ("kind", "快照类型（quote / bar / greeks）", "quote"),
-                ("market-id", "Market ID", self.default_market),
-                ("provider", "Provider", ""),
+                ("market-id", "市场", self.default_market),
+                ("kind", "行情内容", "quote"),
             ]
             if kind == "bar":
                 values.append(("timeframe", "K 线周期", "1m"))
             return tuple(values)
         if self.action == "freshness":
-            return (
-                ("market-id", "Market ID", self.default_market),
-                ("provider", "Provider", ""),
-            )
+            return (("market-id", "市场", self.default_market),)
         if self.action == "subscribe":
-            return (
-                ("market-id", "Market ID", self.default_market),
-                ("observations", "Observations（逗号分隔）", "quote"),
-                ("provider", "Provider（留空自动选择）", ""),
-            )
+            values = [("market-id", "市场", self.default_market)]
+            if self.custom_content:
+                values.append(("observations", "行情内容", "quote"))
+            return tuple(values)
         if self.action == "unsubscribe":
-            return (("subscription-id", "Subscription ID", ""),)
+            return (("subscription-id", "当前会话行情", ""),)
         return ()
+
+
+def prompt_renderable(prompt: WorkspaceMarketPromptState) -> RenderableType:
+    """Present one Workspace Market operation without exposing request JSON."""
+
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style="dim", no_wrap=True)
+    table.add_column()
+    table.add_row("操作", _ACTION_LABELS.get(prompt.action, "Market 操作"))
+    if "market-id" in prompt.values:
+        market = prompt.market_label or "已选市场"
+        if prompt.market_description:
+            market = f"{market} · {prompt.market_description}"
+        table.add_row("市场", market)
+    if "kind" in prompt.values:
+        table.add_row(
+            "行情内容",
+            _SNAPSHOT_LABELS.get(prompt.values["kind"], prompt.values["kind"]),
+        )
+    if "timeframe" in prompt.values:
+        table.add_row("K 线周期", prompt.values["timeframe"])
+    if prompt.action == "subscribe":
+        observations = prompt.values.get("observations", "quote")
+        labels = [
+            _OBSERVATION_LABELS.get(value, value)
+            for value in observations.split(",")
+            if value
+        ]
+        table.add_row("行情内容", "、".join(labels) or "实时报价")
+        table.add_row("数据来源", "由 Market 自动选择")
+        table.add_row("订阅归属", "当前 Kairos I 会话")
+    if "subscription-id" in prompt.values:
+        subscription = prompt.subscription_label or "已选行情"
+        if prompt.subscription_description:
+            subscription = f"{subscription} · {prompt.subscription_description}"
+        table.add_row("退出行情", subscription)
+    return table
 
 
 def execute(state: Any, prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
@@ -144,60 +279,35 @@ def execute(state: Any, prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
     owner = state.owner
     action = prompt.action
     processes = ComponentProcessApplication(owner)
-    if action == "status":
-        process = processes.status("market")
-        if not process.get("control_reachable"):
-            return {"process": process, "health": None}
-        client = cast(
-            MarketSystemClient,
-            processes.client("market", owner.paths.process_socket("market")),
-        )
-        return {"process": process, "health": client.health()}
-    if action == "start":
-        return processes.ensure_running("market").status()
-    if action in {"stop", "restart"}:
-        WorkspaceComponentDependencyApplication(owner).require_clear("market", action)
-        return (
-            processes.stop("market")
-            if action == "stop"
-            else processes.restart("market").status()
-        )
-    if action == "logs":
-        return {"component": "market", "lines": list(processes.logs("market"))}
     market = MarketCliApplication(owner)
     if action == "snapshot":
         return market.connected_snapshot(
             market_id=prompt.values["market-id"],
-            provider=prompt.values["provider"],
+            provider=prompt.values.get("provider", ""),
             kind=prompt.values["kind"],
             timeframe=prompt.values.get("timeframe"),
         )
     if action == "freshness":
         return market.connected_freshness(
             market_id=prompt.values["market-id"],
-            provider=prompt.values["provider"],
+            provider=prompt.values.get("provider", ""),
         )
     client = cast(
         MarketSystemClient,
         processes.client("market", owner.paths.process_socket("market")),
     )
-    if action == "routes":
-        return client.data_routes()
     if action == "session-subscriptions":
         return client.subscriptions(owner_id=prompt.owner_id)
-    if action == "subscriptions":
-        return client.subscriptions()
     if action == "subscribe":
+        observations = prompt.values.get("observations", "quote")
         return client.operator_subscribe(
             owner_id=prompt.owner_id,
             request_id=f"kairos-i-subscribe:{time.time_ns()}",
             market_id=prompt.values["market-id"],
             observations=tuple(
-                value.strip()
-                for value in prompt.values["observations"].split(",")
-                if value.strip()
+                value.strip() for value in observations.split(",") if value.strip()
             ),
-            provider=prompt.values["provider"] or None,
+            provider=prompt.values.get("provider") or None,
         )
     if action == "unsubscribe":
         return client.operator_unsubscribe(
@@ -205,9 +315,32 @@ def execute(state: Any, prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
             request_id=f"kairos-i-unsubscribe:{time.time_ns()}",
             subscription_id=prompt.values["subscription-id"],
         )
-    if action == "pause":
-        return client.pause_replay()
-    return client.resume_replay()
+    raise ValueError(f"unknown live Market action: {action}")
+
+
+def provider_options(
+    state: Any, prompt: WorkspaceMarketPromptState
+) -> tuple[Mapping[str, Any], ...]:
+    """Read eligible providers only when a connected view needs one explicitly."""
+
+    if state.owner is None:
+        raise RuntimeError(state.load_error or "当前没有可用的 Workspace")
+    owner = state.owner
+    processes = ComponentProcessApplication(owner)
+    client = cast(
+        MarketSystemClient,
+        processes.client("market", owner.paths.process_socket("market")),
+    )
+    observation = prompt.values.get("kind", "quote")
+    result = client.data_routes(
+        market_id=prompt.values["market-id"],
+        observation_kind=observation,
+        configured_only=True,
+        ready_only=True,
+    )
+    return tuple(
+        value for value in result.get("routes", ()) if isinstance(value, Mapping)
+    )
 
 
 def release_operator_owner(state: Any, owner_id: str) -> tuple[str, ...]:
@@ -303,7 +436,7 @@ def routes_renderable(result: Mapping[str, Any]) -> RenderableType:
         summary[(provider, state)] = summary.get((provider, state), 0) + 1
 
     table = Table(show_header=True, header_style="bold")
-    table.add_column("Provider")
+    table.add_column("数据来源")
     table.add_column("状态")
     table.add_column("路由数", justify="right")
     table.add_column("说明")
@@ -360,32 +493,43 @@ def subscriptions_renderable(
         value for value in result.get("subscriptions", ()) if isinstance(value, Mapping)
     )
     table = Table(show_header=True, header_style="bold")
-    table.add_column("Subscription")
-    table.add_column("Owner")
-    table.add_column("Market")
-    table.add_column("Observations")
-    table.add_column("Provider")
+    if not current_session:
+        table.add_column("归属")
+    table.add_column("市场")
+    table.add_column("行情内容")
+    table.add_column("数据来源")
     table.add_column("状态")
-    table.add_column("Pending")
+    table.add_column("说明")
     for subscription in subscriptions[:20]:
-        table.add_row(
-            str(subscription.get("subscription_id") or "—"),
-            str(subscription.get("owner_id") or "—"),
-            ", ".join(str(value) for value in subscription.get("market_ids", ()))
-            or "—",
-            ", ".join(str(value) for value in subscription.get("observations", ()))
-            or "—",
-            ", ".join(
-                str(value) for value in subscription.get("selected_providers", ())
+        row = []
+        if not current_session:
+            row.append(_owner_display(subscription.get("owner_id")))
+        row.extend(
+            (
+                "、".join(
+                    _market_display(str(value))
+                    for value in subscription.get("market_ids", ())
+                )
+                or "—",
+                "、".join(
+                    _OBSERVATION_LABELS.get(str(value), str(value))
+                    for value in subscription.get("observations", ())
+                )
+                or "—",
+                "、".join(
+                    str(value) for value in subscription.get("selected_providers", ())
+                )
+                or "自动选择",
+                str(subscription.get("state") or "unknown"),
+                str(subscription.get("pending_reason") or "—"),
             )
-            or "—",
-            str(subscription.get("state") or "unknown"),
-            str(subscription.get("pending_reason") or "—"),
         )
+        table.add_row(*row)
     if not subscriptions:
-        table.add_row("—", "—", "—", "—", "—", "无订阅", "—")
+        empty = ["—"] if not current_session else []
+        table.add_row(*empty, "—", "—", "—", "无订阅", "—")
     visible = min(len(subscriptions), 20)
-    title = "当前 Kairos I 订阅" if current_session else "Market 全部订阅"
+    title = "当前关注" if current_session else "全部运行订阅"
     return Group(
         conclusion(
             f"{title}共 {count(len(subscriptions))} 条",
@@ -399,6 +543,64 @@ def subscriptions_renderable(
             style="dim",
         ),
     )
+
+
+def mutation_renderable(
+    result: Mapping[str, Any], prompt: WorkspaceMarketPromptState
+) -> RenderableType:
+    """Render a subscription mutation as an outcome, not a protocol response."""
+
+    if prompt.action == "unsubscribe":
+        return Group(
+            conclusion(
+                f"已退出 {prompt.subscription_label or '所选行情'}",
+                tone=ResultTone.SUCCESS,
+            ),
+            prompt_renderable(prompt),
+        )
+    state = str(result.get("state") or "unknown")
+    pending = result.get("pending_reason")
+    providers = tuple(str(value) for value in result.get("resolved_providers", ()))
+    rows: list[tuple[str, RenderableType]] = [
+        ("市场", prompt.market_label or "已选市场"),
+        (
+            "行情内容",
+            "、".join(
+                _OBSERVATION_LABELS.get(value, value)
+                for value in prompt.values.get("observations", "quote").split(",")
+                if value
+            ),
+        ),
+        ("数据来源", "、".join(providers) or "由 Market 自动选择"),
+        ("状态", _status_text(state)),
+    ]
+    if pending:
+        rows.append(("说明", str(pending)))
+    return Group(
+        conclusion(
+            (
+                f"{prompt.market_label or '所选市场'} 行情已开始接收"
+                if state == "active"
+                else f"{prompt.market_label or '所选市场'} 行情请求已提交"
+            ),
+            tone=ResultTone.SUCCESS if state == "active" else ResultTone.WARNING,
+        ),
+        facts(rows),
+    )
+
+
+def _market_display(market_id: str) -> str:
+    parts = tuple(part for part in market_id.split(":") if part)
+    return parts[-1] if parts else "未知市场"
+
+
+def _owner_display(value: object) -> str:
+    owner = str(value or "—")
+    if owner.startswith("operator:kairos-i:"):
+        return "Kairos I 会话"
+    if owner.startswith("strategy:"):
+        return owner.removeprefix("strategy:")
+    return owner
 
 
 def _mapping(value: object) -> Mapping[str, Any]:
@@ -444,7 +646,7 @@ def equivalent_command(
                 "--market-id",
                 prompt.values["market-id"],
                 "--provider",
-                prompt.values["provider"],
+                prompt.values.get("provider", ""),
             )
         )
         timeframe = prompt.values.get("timeframe")
@@ -456,7 +658,7 @@ def equivalent_command(
                 "--market-id",
                 prompt.values["market-id"],
                 "--provider",
-                prompt.values["provider"],
+                prompt.values.get("provider", ""),
             )
         )
     arguments.extend(("--workspace", str(owner.paths.root), "--format", "json"))
@@ -464,13 +666,22 @@ def equivalent_command(
 
 
 __all__ = [
-    "WORKSPACE_MARKET_ACTIONS",
+    "SNAPSHOT_KIND_ACTIONS",
+    "SUBSCRIPTION_CONTENT_ACTIONS",
+    "TIMEFRAME_ACTIONS",
+    "LIVE_MARKET_ACTIONS",
+    "LIVE_MARKET_UNAVAILABLE_ACTIONS",
     "WorkspaceMarketPromptState",
     "execute",
     "equivalent_command",
     "preview",
+    "provider_options",
+    "prompt_renderable",
+    "mutation_renderable",
+    "live_market_available",
     "routes_renderable",
     "subscriptions_renderable",
     "status_renderable",
+    "unavailable_renderable",
     "release_operator_owner",
 ]

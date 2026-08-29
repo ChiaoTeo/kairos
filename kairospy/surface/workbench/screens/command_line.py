@@ -79,13 +79,14 @@ from .results import ResultKind, ResultRoute
 
 if TYPE_CHECKING:
     from ..app import KairosWorkbenchApp
-from .catalog import HOME_ACTIONS, SECTION_ACTIONS
+from .navigation.catalog import HOME_ACTIONS, SECTION_ACTIONS
 from .session import GuidedSession
 from .commands import (
     is_dangerous as is_dangerous_kairos_command,
     normalize as normalize_kairos_command,
     preview as preview_kairos_command,
     run as run_kairos_command,
+    validate as validate_kairos_command,
 )
 from ..theme import THEME_CHOICES, theme_alias
 
@@ -488,6 +489,16 @@ class CommandLineScreen(Screen[None]):
             )
             self.app.set_focus(self._input())
             return
+        if (
+            not value.startswith("/")
+            and not value.isdecimal()
+            and not arguments
+            and isinstance(interaction, ChoiceInteraction)
+            and action_id(interaction.actions, command) is not None
+        ):
+            self._dispatch(command, arguments)
+            self.app.set_focus(self._input())
+            return
         if not value.startswith("/") and not value.isdecimal():
             self._dispatch_kairos(value)
             return
@@ -514,20 +525,19 @@ class CommandLineScreen(Screen[None]):
             argv = tuple(shlex.split(value))
         except ValueError as error:
             self._write_error(f"无法解析 kairos 命令：{error}")
-            self._show_context()
+            return
+        if argv in {("observe",), ("observe", "--once")}:
+            self._start_operation(self._observe_spec())
             return
         try:
             argv = normalize_kairos_command(self.workbench_app.state, argv)
+            validate_kairos_command(argv)
         except (RuntimeError, ValueError) as error:
             self._write_error(str(error))
-            self._show_context()
             return
         if not argv:
             return
         equivalent = ("kairos", *argv)
-        if argv in {("observe",), ("observe", "--once")}:
-            self._start_operation(self._observe_spec())
-            return
 
         def operation() -> Any:
             if self.workbench_app.state.dry_run or self.workbench_app.state.no_exec:
@@ -686,6 +696,16 @@ class CommandLineScreen(Screen[None]):
             )
             self._apply_effects(
                 product_flows.operations.enter_overview(
+                    self.workbench_app.state, self.session
+                )
+            )
+            return
+        if section == "account":
+            self.workbench_app.transcript.record(
+                "navigation", section=section, mode="guided"
+            )
+            self._apply_effects(
+                product_flows.account.enter_accounts(
                     self.workbench_app.state, self.session
                 )
             )
@@ -1937,6 +1957,8 @@ class CommandLineScreen(Screen[None]):
                 return f"{context} · {title or record_label(market)}"
         if self.session.context[:1] == ("resources",):
             return resources_flow.context_title(self.session, context)
+        if self.session.context[:1] == ("account",):
+            return product_flows.account.context_title(self.session)
         return context
 
     def _sync_root_label(self) -> None:
@@ -2034,6 +2056,7 @@ def _activity_kind(kind: ResultKind) -> ActivityKind:
         ResultKind.MARKET_ROUTES,
         ResultKind.MARKET_OBSERVATION,
         ResultKind.MARKET_DATASETS,
+        ResultKind.MARKET_CATALOG_SETUP,
         ResultKind.REFERENCE_RECORDS,
         ResultKind.REFERENCE_RELATED,
         ResultKind.REFERENCE_STATUS,
@@ -2098,7 +2121,7 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_row("/exit", "退出 Kairos Workbench")
     table.add_row("/observe", "打开当前项目的运行中心")
     table.add_row("/market [代码]", "搜索有效市场标的；省略代码时进入引导")
-    table.add_row("/c", "打开 Market 运行与订阅")
+    table.add_row("/c", "打开我的实时行情")
     if context[:1] == ("market",):
         table.add_row("/r", "回放本地 JSONL 行情")
         table.add_row("/d", "诊断市场定义和 Reference 映射")
@@ -2133,4 +2156,6 @@ def _running_status(kind: ResultKind) -> str:
     return {
         ResultKind.OBSERVE: "正在读取系统状态…",
         ResultKind.MARKET: "正在搜索市场标的…",
+        ResultKind.MARKET_CATALOG_SETUP: "正在检查标的目录准备条件…",
+        ResultKind.MARKET_CATALOG_PREPARE: "正在准备标的目录…",
     }.get(kind, "正在执行…")

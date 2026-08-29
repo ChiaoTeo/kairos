@@ -49,11 +49,11 @@ from app_support import (
 @pytest.mark.parametrize(
     ("shortcut", "context"),
     (
-        ("1", "trader / 市场行情  ›"),
-        ("2", "trader / 市场标的  ›"),
-        ("3", "trader / 策略管理  ›"),
-        ("4", "trader / 运行准备  ›"),
-        ("5", "trader / 数据研究  ›"),
+        ("1", "trader / 市场与标的  ›"),
+        ("2", "trader / 策略与运行  ›"),
+        ("3", "trader / 账户与交易  ›"),
+        ("4", "trader / 连接与配置  ›"),
+        ("5", "trader / 数据与回测  ›"),
         ("6", "trader / 运行中心 / 运行概览  ›"),
         ("7", "trader / 项目管理  ›"),
     ),
@@ -94,7 +94,7 @@ def test_tab_focuses_actions_and_keeps_focus_for_the_next_choice() -> None:
 
     context, actions_focused, highlighted = asyncio.run(run())
 
-    assert context == ("reference",)
+    assert context == ("strategy",)
     assert actions_focused
     assert highlighted == 0
 
@@ -148,7 +148,7 @@ def test_missing_project_enters_project_start_before_business_home() -> None:
     assert count == 2
     assert "打开项目" in actions
     assert "创建项目" in actions
-    assert "查看市场行情" not in actions
+    assert "市场与标的" not in actions
     assert guarded_context == ("project",)
     assert status == "请先打开或创建项目"
 
@@ -259,7 +259,7 @@ def test_create_project_unlocks_the_project_home(
     assert workspace_id == "demo"
     assert context == ()
     assert count == 7
-    assert "查看市场行情" in actions
+    assert "市场与标的" in actions
     assert "运行中心" in actions
     assert "项目管理" in actions
 
@@ -281,7 +281,9 @@ def test_home_navigation_does_not_append_to_content_stream() -> None:
     assert "kairos › 1" not in after
 
 
-def test_market_menu_exposes_runtime_and_keeps_other_advanced_operations_separate() -> None:
+def test_market_menu_exposes_runtime_and_keeps_other_advanced_operations_separate() -> (
+    None
+):
     async def run() -> tuple[int, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
@@ -296,7 +298,7 @@ def test_market_menu_exposes_runtime_and_keeps_other_advanced_operations_separat
             )
 
     option_count, output = asyncio.run(run())
-    assert option_count == 4
+    assert option_count == 5
     assert "/r" in output
     assert "/c" in output
     assert "/d" in output
@@ -316,9 +318,9 @@ def test_market_runtime_shortcut_is_available_from_home() -> None:
             )
 
     context, interaction = asyncio.run(run())
-    assert context == ("market", "connected")
-    assert "查看状态" in interaction
-    assert "查看数据路由" in interaction
+    assert context == ("market", "live-unavailable")
+    assert "启动实时行情" in interaction
+    assert "查看服务详细状态" in interaction
 
 
 def test_submenu_back_and_home_navigation_stay_out_of_content_stream() -> None:
@@ -368,7 +370,7 @@ def test_slash_back_returns_from_result_to_section_then_home() -> None:
             )
 
     section, home, screen_type, focused = asyncio.run(run())
-    assert section == "trader / 市场标的  ›"
+    assert section == "trader / 市场与标的 / 标的目录  ›"
     assert home == "trader  ›"
     assert screen_type is CommandLineScreen
     assert focused
@@ -396,8 +398,8 @@ def test_back_aliases_offer_the_same_return_level_picker(
 
     chooser, output, focused = asyncio.run(run())
     assert "选择返回层级" in chooser
-    assert "trader / 策略管理 / 实例组件" in chooser
-    assert "trader / 策略管理 / 已选实例" in chooser
+    assert "trader / 策略与运行 / 实例组件" in chooser
+    assert "trader / 策略与运行 / 已选实例" in chooser
     assert "直接返回到此层级" in chooser
     assert "跨过" not in chooser
     assert output == ""
@@ -449,7 +451,7 @@ def test_back_preview_is_reverted_when_input_no_longer_matches() -> None:
     preview, restored, context = asyncio.run(run())
     assert "选择返回层级" in preview
     assert "选择返回层级" not in restored
-    assert "搜索标的并查看行情" in restored
+    assert "查找可以交易的标的" in restored
     assert context == ("market",)
 
 
@@ -464,9 +466,7 @@ def test_focused_back_picker_consumes_alias_and_keeps_input_visible() -> None:
 
             await pilot.press("slash", "b", "tab", "down", "enter")
             await pilot.pause()
-            command_input = screen.query_one(
-                "#command-input", WorkbenchCommandInput
-            )
+            command_input = screen.query_one("#command-input", WorkbenchCommandInput)
             return (
                 screen.session.context,
                 command_input.value,
@@ -591,7 +591,7 @@ def test_slash_back_cancels_pending_argument_before_leaving_section() -> None:
             )
 
     context, pending, focused = asyncio.run(run())
-    assert context == "trader / 市场行情  ›"
+    assert context == "trader / 市场与标的  ›"
     assert not pending
     assert focused
 
@@ -616,7 +616,7 @@ def test_ctrl_c_cancels_pending_argument_without_exiting_workbench() -> None:
     return_value, pending, context, focused = asyncio.run(run())
     assert return_value is None
     assert not pending
-    assert context == "trader / 市场行情  ›"
+    assert context == "trader / 市场与标的  ›"
     assert focused
 
 

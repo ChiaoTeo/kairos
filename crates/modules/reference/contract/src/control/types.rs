@@ -112,6 +112,124 @@ pub struct ReferenceSourceDefinitionRequest {
     pub credential_binding: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceCatalogSetupRequest {
+    pub goal: ReferenceCatalogGoal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReferenceCatalogGoal {
+    ExchangeInstruments {
+        exchange_id: ExchangeId,
+        instrument_kind: InstrumentKind,
+    },
+    EquityOptions {
+        underlyings: Vec<InstrumentId>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceCatalogSetupPlan {
+    pub goal: ReferenceCatalogGoal,
+    pub availability: ReferenceCatalogAvailability,
+    pub activity: ReferenceCatalogActivity,
+    pub options: Vec<ReferenceCatalogSetupOption>,
+    pub recommended_option: Option<u32>,
+    #[serde(default)]
+    pub blockers: Vec<ReferenceCatalogSetupBlocker>,
+    #[serde(default)]
+    pub progress: Option<ReferenceCatalogPreparationProgress>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceCatalogSetupOption {
+    pub binding: ReferenceSourceBinding,
+    pub recommendation: ReferenceCatalogRecommendation,
+    pub actual_scope: ReferenceCatalogActualScope,
+    pub requires_connection: bool,
+    pub connection_binding_present: bool,
+    pub already_configured: bool,
+    #[serde(default)]
+    pub reasons: Vec<ReferenceCatalogRecommendationReason>,
+    #[serde(default)]
+    pub limitations: Vec<ReferenceCatalogSourceLimitation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceCatalogAvailability {
+    NotConfigured,
+    Preparing,
+    Usable,
+    PartiallyUsable,
+    Stale,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceCatalogActivity {
+    Idle,
+    Waiting,
+    Scanning,
+    Promoting,
+    Publishing,
+    RetryWaiting,
+    Paused,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceCatalogRecommendation {
+    Recommended,
+    Alternative,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceCatalogActualScope {
+    RequestedExchange,
+    CompleteUnitedStatesEquities,
+    ProviderCatalog,
+    SelectedUnderlyings,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceCatalogRecommendationReason {
+    AuthoritativeExchangeListings,
+    NativeExchangeCatalog,
+    SupportedProduct,
+    ExistingConfiguration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceCatalogSourceLimitation {
+    SynchronizesCompleteUnitedStatesEquities,
+    RequiresProviderAccount,
+    ProductIsProviderSpecific,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceCatalogSetupBlocker {
+    UnsupportedGoal,
+    MissingConnectionBinding,
+    EmptyUnderlyingSelection,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceCatalogPreparationProgress {
+    pub pages_done: Option<u64>,
+    pub pages_total: Option<u64>,
+    pub records_seen: Option<u64>,
+    pub records_changed: Option<u64>,
+    pub last_success_unix_nanos: Option<UnixNanos>,
+    pub retry_after_unix_nanos: Option<UnixNanos>,
+}
+
 /// A Reference-owned, code-supported catalog source binding.
 ///
 /// This is intentionally not a cross-module market segment or provider

@@ -78,6 +78,25 @@ class ConfigApplication:
             if not path.is_dir()
         ]
         launches: list[dict[str, Any]] = []
+        from kairospy.system.apps.workspace.services.templates import (
+            project_template_status,
+        )
+
+        templates = project_template_status(self.workspace)
+        missing_template_files: list[tuple[str, str]] = []
+        for installation in templates:
+            files = installation.get("files")
+            if not isinstance(files, list):
+                continue
+            for file in files:
+                if isinstance(file, Mapping) and file.get("status") == "missing":
+                    missing_template_files.append(
+                        (str(installation["installation_id"]), str(file["path"]))
+                    )
+        issues.extend(
+            f"template {installation_id}: generated file is missing: {path}"
+            for installation_id, path in missing_template_files
+        )
         launch_root = self.workspace.paths.config / "launches"
         if launch_root.is_dir():
             from kairospy.system.apps.launch.application import (
@@ -123,7 +142,13 @@ class ConfigApplication:
         unready_launches = [
             launch for launch in launches if launch["valid"] and not launch["ready"]
         ]
-        if invalid_launches:
+        if missing_template_files:
+            next_steps = [
+                "restore the missing launch resources and user-owned template "
+                "files, or remove the stale installation record, then run "
+                "'kairos project doctor'"
+            ]
+        elif invalid_launches:
             next_steps = [
                 f"kairos launch diagnose validate {launch['launch_id']}"
                 for launch in invalid_launches
@@ -142,6 +167,7 @@ class ConfigApplication:
             "issues": issues,
             "missing_directories": missing,
             "launches": launches,
+            "templates": templates,
             "next_steps": next_steps,
         }
 

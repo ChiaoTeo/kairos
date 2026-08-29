@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from .flows.launch.wizard import LaunchWizardState
     from .flows.market.actions import MarketFilePromptState, MarketRouteView
     from .flows.market.workspace import WorkspaceMarketPromptState
+    from .flows.reference.actions import CatalogSetupGoal, CatalogSetupPlanView
     from .flows.operations.actions import ProjectPromptState
     from .flows.operations.business import BusinessPromptState
     from .flows.operations.views import ServiceStatusView, SupportStatusView
@@ -37,11 +38,21 @@ if TYPE_CHECKING:
     from .flows.resources.account_transfers import TransferPromptState
 
 
+@dataclass(frozen=True, slots=True)
+class NavigationFrame:
+    """One visited Workbench page without copying owner-owned business facts."""
+
+    context: tuple[str, ...]
+
+
 @dataclass(slots=True)
 class MarketSession:
     """Market-owned transient selections, prompts, and live presentation state."""
 
     purpose: str = "search"
+    query: str | None = None
+    catalog_setup_goal: CatalogSetupGoal | None = None
+    catalog_setup_plan: CatalogSetupPlanView | None = None
     selected: object | None = None
     observation: str | None = None
     provider: str | None = None
@@ -62,6 +73,9 @@ class MarketSession:
 
     def reset(self) -> None:
         self.purpose = "search"
+        self.query = None
+        self.catalog_setup_goal = None
+        self.catalog_setup_plan = None
         self.selected = None
         self.observation = None
         self.records = ()
@@ -76,11 +90,13 @@ class ReferenceSession:
     """Reference-owned search vocabulary and current result kind."""
 
     kind: str | None = None
+    query: str | None = None
     instrument_type: str | None = None
     selected: object | None = None
 
     def reset(self) -> None:
         self.kind = None
+        self.query = None
         self.instrument_type = None
         self.selected = None
 
@@ -168,6 +184,7 @@ class ResourcesSession:
     action: str | None = None
     wizard: ResourceWizardState | None = None
     parent_wizard: ResourceWizardState | None = None
+    return_context: tuple[str, ...] | None = None
     model_chat: LiveBuffer | None = None
     model_chat_turns: int = 0
     model_chat_failures: int = 0
@@ -192,6 +209,7 @@ class ResourcesSession:
         self.action = None
         self.wizard = None
         self.parent_wizard = None
+        self.return_context = None
         self.reset_model_chat()
 
 
@@ -199,11 +217,17 @@ class ResourcesSession:
 class AccountSession:
     """Account runtime and order prompt state."""
 
+    runtime_entry: bool = False
+    records: tuple[ResourceRecordView, ...] = ()
+    selected: ResourceRecordView | None = None
     selected_segment: str | None = None
     order_prompt: OrderPromptState | None = None
     transfer_prompt: TransferPromptState | None = None
 
     def reset(self) -> None:
+        self.runtime_entry = False
+        self.records = ()
+        self.selected = None
         self.selected_segment = None
         self.order_prompt = None
         self.transfer_prompt = None
@@ -282,6 +306,7 @@ class GuidedSession:
 
     root_label: str = "首页"
     context: tuple[str, ...] = ()
+    navigation_stack: list[NavigationFrame] = field(default_factory=list)
     navigation_generation: int = 0
     interaction: InteractionState = ChoiceInteraction()
     suspended_interaction: (
@@ -298,9 +323,16 @@ class GuidedSession:
     execution: ExecutionSession = field(default_factory=ExecutionSession)
     launch_market: LaunchMarketSession = field(default_factory=LaunchMarketSession)
 
+    def __post_init__(self) -> None:
+        if not self.navigation_stack:
+            self.navigation_stack.append(NavigationFrame(self.context))
+        elif self.navigation_stack[-1].context != self.context:
+            self.navigation_stack.append(NavigationFrame(self.context))
+
     def home(self) -> None:
         self.navigation_generation += 1
         self.context = ()
+        self.navigation_stack[:] = [NavigationFrame(())]
         self.market.reset()
         self.reference.reset()
         self.operations.reset()
@@ -313,14 +345,71 @@ class GuidedSession:
         self.reset_prompt()
 
     def enter(self, *parts: str) -> None:
+        target = tuple(parts)
         self.navigation_generation += 1
-        self.context = tuple(parts)
+        if self.navigation_stack[-1].context != self.context:
+            self.navigation_stack.append(NavigationFrame(self.context))
+        if self.navigation_stack[-1].context != target:
+            self.navigation_stack.append(NavigationFrame(target))
+        self.context = target
         self.reset_prompt()
 
     def back(self) -> None:
         self.navigation_generation += 1
-        self.context = self.context[:-1]
+        if (
+            len(self.navigation_stack) > 1
+            and self.navigation_stack[-1].context == self.context
+        ):
+            self.navigation_stack.pop()
+            self.context = self.navigation_stack[-1].context
+        else:
+            self.context = self.context[:-1]
         self.reset_prompt()
+
+    def stack_parent(self) -> tuple[str, ...] | None:
+        """Return the actually visited parent when the current frame is tracked."""
+
+        if (
+            len(self.navigation_stack) > 1
+            and self.navigation_stack[-1].context == self.context
+        ):
+            return self.navigation_stack[-2].context
+        return None
+
+    def pop_frame(self) -> tuple[str, ...] | None:
+        """Pop one actually visited page without interpreting business state."""
+
+        parent = self.stack_parent()
+        if parent is None:
+            return None
+        self.navigation_stack.pop()
+        return parent
+
+    def replace_context(self, context: tuple[str, ...]) -> None:
+        """Replace an untracked compatibility page without growing history."""
+
+        self.context = context
+        self.reset_prompt()
+
+    def return_to(self, *parts: str) -> bool:
+        """Return to the most recent matching frame and discard its descendants."""
+
+        target = tuple(parts)
+        for index in range(len(self.navigation_stack) - 1, -1, -1):
+            if self.navigation_stack[index].context != target:
+                continue
+            del self.navigation_stack[index + 1 :]
+            self.context = target
+            self.navigation_generation += 1
+            self.reset_prompt()
+            return True
+        return False
+
+    def restore(self, *parts: str) -> None:
+        """Return to a visited frame or replace an unmigrated compatibility page."""
+
+        if not self.return_to(*parts):
+            self.replace_context(tuple(parts))
 
     def ask(
         self,

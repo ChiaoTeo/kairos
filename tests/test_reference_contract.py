@@ -334,8 +334,7 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
         "option_markets": 0,
     }
     assert (
-        client.resolve_market(symbol="BTCUSDT").instrument_id
-        == "instrument:spot:BTC"
+        client.resolve_market(symbol="BTCUSDT").instrument_id == "instrument:spot:BTC"
     )
     assert (
         len(
@@ -366,9 +365,7 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
 def test_reference_queries_search_names_and_escape_sql_wildcards(tmp_path) -> None:
     client = ReferenceClient(database_path=_reference_database(tmp_path))
 
-    assert [value.code for value in client.assets(query="bitco", limit=10)] == [
-        "BTC"
-    ]
+    assert [value.code for value in client.assets(query="bitco", limit=10)] == ["BTC"]
     assert [value.exchange_id for value in client.exchanges(query="BIN", limit=10)] == [
         "exchange:binance"
     ]
@@ -462,7 +459,10 @@ def test_reference_application_reads_concrete_sqlite_client(tmp_path) -> None:
     assert len(markets) == 1
     assert markets[0].id == "market:binance:spot:BTCUSDT"
     assert markets[0].venue_symbol == "BTCUSDT"
-    assert application.require_market(MarketId(markets[0].id)).market_id == markets[0].market_id
+    assert (
+        application.require_market(MarketId(markets[0].id)).market_id
+        == markets[0].market_id
+    )
     assert application.market(MarketId("market:missing")) is None
     with pytest.raises(ReferenceNotFoundError):
         application.require_market(
@@ -637,6 +637,21 @@ def test_reference_client_scopes_refresh_and_provider_controls(
     )
 
     client.refresh(source="massive-options")
+    client.plan_catalog_setup(
+        {
+            "kind": "exchange_instruments",
+            "exchange_id": "exchange:nasdaq",
+            "instrument_kind": "equity",
+        }
+    )
+    client.upsert_source_definition(
+        {
+            "binding": {"provider": "massive", "source": "equity"},
+            "scope": {"kind": "global"},
+            "desired_state": "enabled",
+            "credential_binding": "massive-main",
+        }
+    )
     client.set_source_paused("massive-options", True)
     client.set_source_paused("massive-options", False)
     client.option_coverage()
@@ -645,6 +660,31 @@ def test_reference_client_scopes_refresh_and_provider_controls(
 
     assert observed == [
         ("reference_refresh", ["massive-options"], 120.0),
+        (
+            "reference_plan_catalog_setup",
+            [
+                {
+                    "goal": {
+                        "kind": "exchange_instruments",
+                        "exchange_id": "exchange:nasdaq",
+                        "instrument_kind": "equity",
+                    }
+                }
+            ],
+            5.0,
+        ),
+        (
+            "reference_upsert_source_definition",
+            [
+                {
+                    "binding": {"provider": "massive", "source": "equity"},
+                    "scope": {"kind": "global"},
+                    "desired_state": "enabled",
+                    "credential_binding": "massive-main",
+                }
+            ],
+            5.0,
+        ),
         ("reference_pause_source", ["massive-options"], 5.0),
         ("reference_resume_source", ["massive-options"], 5.0),
         ("reference_add_option_coverage", ["SPY"], 120.0),

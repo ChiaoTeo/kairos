@@ -6,12 +6,12 @@ use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, SystemEvent};
 use kairos_primitives::reference::{InstrumentId, ReferenceSourceId};
 use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 use kairos_reference_contract::{
-    ReferenceControlError, ReferenceHealthResponse, ReferenceMutationResponse,
-    ReferenceOptionCoverageResponse, ReferencePublishResponse, ReferenceRefreshResponse,
-    ReferenceRuntimeStatusResponse, ReferenceSourceControlRequest,
-    ReferenceSourceDefinitionRequest, ReferenceSourceScopeRequest, ReferenceSourceScopeResponse,
-    ReferenceSourceStatusResponse, UpsertAssetRequest, UpsertInstrumentRequest,
-    UpsertListingRequest,
+    ReferenceCatalogSetupPlan, ReferenceCatalogSetupRequest, ReferenceControlError,
+    ReferenceHealthResponse, ReferenceMutationResponse, ReferenceOptionCoverageResponse,
+    ReferencePublishResponse, ReferenceRefreshResponse, ReferenceRuntimeStatusResponse,
+    ReferenceSourceControlRequest, ReferenceSourceDefinitionRequest, ReferenceSourceScopeRequest,
+    ReferenceSourceScopeResponse, ReferenceSourceStatusResponse, UpsertAssetRequest,
+    UpsertInstrumentRequest, UpsertListingRequest,
 };
 
 use super::{ReferenceApplication, ReferenceRpcActor, ReferenceTickTrigger};
@@ -57,6 +57,14 @@ impl ReferenceRpcActor for ReferenceApplication {
         _context: &mut Context<'_, Self>,
     ) -> RpcResult<ReferenceRuntimeStatusResponse> {
         Ok(self.contract_runtime_status().await)
+    }
+
+    async fn plan_catalog_setup(
+        &mut self,
+        request: ReferenceCatalogSetupRequest,
+        _context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceCatalogSetupPlan> {
+        Ok(self.contract_catalog_setup_plan(request).await)
     }
 
     async fn refresh(

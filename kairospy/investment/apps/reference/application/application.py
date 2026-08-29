@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TypeVar, overload
@@ -279,6 +279,14 @@ class ReferenceApplication:
 
     def runtime_status(self) -> dict[str, Any]:
         return dict(self._require_client().runtime_status())
+
+    def plan_catalog_setup(self, goal: Mapping[str, object]) -> dict[str, Any]:
+        return dict(self._require_client().plan_catalog_setup(goal))
+
+    def upsert_source_definition(
+        self, definition: Mapping[str, object]
+    ) -> dict[str, Any]:
+        return dict(self._require_client().upsert_source_definition(definition))
 
     def providers(self) -> dict[str, Any]:
         return dict(self._require_client().providers())

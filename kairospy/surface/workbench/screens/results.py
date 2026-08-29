@@ -45,6 +45,8 @@ class ResultKind(StrEnum):
     RESOURCE_LIST = "resource-list"
     RESOURCE_ACTION = "resource-action"
     MARKET_DIAGNOSTIC = "market-diagnostic"
+    MARKET_CATALOG_SETUP = "market-catalog-setup"
+    MARKET_CATALOG_PREPARE = "market-catalog-prepare"
 
 
 @dataclass(frozen=True, slots=True)

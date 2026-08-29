@@ -33,7 +33,11 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from ...catalog import MARKET_ADVANCED_ACTIONS, SECTION_ACTIONS
+from ...navigation.catalog import (
+    MARKET_ADVANCED_ACTIONS,
+    RESUME_MARKET_SEARCH_ACTION,
+    SECTION_ACTIONS,
+)
 from ...presentation import ResultTone, conclusion, count, facts, section
 from .actions import (
     MARKET_CONTROL_ACTIONS,
@@ -55,16 +59,30 @@ from .actions import (
     selected_market_actions,
 )
 from ...session import GuidedSession
-from ..reference.actions import load_records
+from ..reference.actions import (
+    CatalogSetupGoal,
+    CatalogSetupPlanView,
+    catalog_setup_renderable,
+    load_catalog_setup_plan,
+    load_records,
+    prepare_catalog_source,
+)
 from .workspace import (
-    WORKSPACE_MARKET_ACTIONS,
+    LIVE_MARKET_UNAVAILABLE_ACTIONS,
+    SNAPSHOT_KIND_ACTIONS,
+    SUBSCRIPTION_CONTENT_ACTIONS,
+    TIMEFRAME_ACTIONS,
+    LIVE_MARKET_ACTIONS,
     WorkspaceMarketPromptState,
     equivalent_command as workspace_market_command,
     execute as execute_workspace_market,
+    live_market_available,
+    mutation_renderable as workspace_mutation_renderable,
+    provider_options as workspace_provider_options,
+    prompt_renderable as workspace_prompt_renderable,
     preview as preview_workspace_market,
-    routes_renderable as workspace_routes_renderable,
-    status_renderable as workspace_status_renderable,
     subscriptions_renderable as workspace_subscriptions_renderable,
+    unavailable_renderable,
 )
 from ...navigation import (
     action_id,
@@ -86,6 +104,8 @@ def handle_input(
     if token.feature is Feature.MARKET:
         if token.action == "search":
             return handle_command(state, session, "market", (value,))
+        if token.action == "workspace-market-search":
+            return handle_command(state, session, "workspace-market:search", (value,))
         if token.action == "file-field" and token.field is not None:
             return handle_command(
                 state, session, f"market-file:field:{token.field}", (value,)
@@ -104,7 +124,7 @@ def cancel_input(session: GuidedSession, token: ActionToken) -> bool:
         return False
     if token.action == "file-field":
         session.market.file_prompt = None
-    elif token.action == "workspace-field":
+    elif token.action in {"workspace-field", "workspace-market-search"}:
         session.market.workspace_prompt = None
     return True
 
@@ -149,8 +169,7 @@ def handle_command(
         and not arguments
         and (not session.context or session.context[0] == "market")
     ):
-        session.context = ("market", "connected")
-        return _choice(state, session, status="Market 运行与订阅")
+        return _enter_live_market(state, session)
 
     if command == "market":
         query = " ".join(arguments).strip()
@@ -183,7 +202,7 @@ def handle_command(
     if command.startswith("workspace-market:field:"):
         prompt = session.market.workspace_prompt
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "connected")
+            session.context = ("market", "live")
             return _choice(
                 state,
                 session,
@@ -198,6 +217,20 @@ def handle_command(
             " ".join(arguments),
             workspace=True,
         )
+    if command == "workspace-market:search":
+        prompt = session.market.workspace_prompt
+        if not isinstance(prompt, WorkspaceMarketPromptState):
+            session.context = ("market", "live")
+            return _choice(
+                state,
+                session,
+                summary=Text("Workspace Market 参数向导已经失效。", style="yellow"),
+                status="参数向导已失效",
+            )
+        query = " ".join(arguments).strip()
+        if not query:
+            return _ask_workspace_market(session, prompt, error="请输入代码或名称。")
+        return (_run_workspace_market_search(state, query),)
     return None
 
 
@@ -225,23 +258,101 @@ def handle_success(
     if kind is ResultKind.MARKET:
         records = tuple(result or ())
         visible = _visible(records)
+        if spec.route.qualifier == "workspace-market":
+            prompt = session.market.workspace_prompt
+            if not isinstance(prompt, WorkspaceMarketPromptState):
+                session.context = ("market", "live")
+                return _choice(state, session, status="参数向导已失效")
+            if not records:
+                session.context = ("market", "live")
+                return _ask_workspace_market(
+                    session,
+                    prompt,
+                    error="没有找到匹配的市场，请换一个代码或名称。",
+                )
+            session.market.records = visible
+            return _show_record_choices(
+                session,
+                "market",
+                records,
+                record_kind="workspace-market-results",
+            )
         session.market.records = visible
         if records:
             return _show_record_choices(session, "market", visible)
-        session.enter("market")
+        session.enter("market", "missing")
         interaction = ChoiceInteraction(
-            title=f"{session.root_label} / 市场行情",
-            summary=Text("没有找到匹配的市场标的。", style="dim"),
-            actions=SECTION_ACTIONS["market"],
+            title=context_label(session.context, session.root_label),
+            summary=Text(
+                f"没有找到“{session.market.query or '这个代码'}”。"
+                "你可以选择交易所和品种，让项目准备相应目录。",
+                style="yellow",
+            ),
+            actions=context_items(session, state),
         )
+        session.interaction = interaction
         return SetInteraction(interaction), SetStatus("没有找到匹配结果")
+
+    if kind is ResultKind.MARKET_CATALOG_SETUP:
+        plan = (
+            result
+            if isinstance(result, CatalogSetupPlanView)
+            else CatalogSetupPlanView.from_mapping(result)
+            if isinstance(result, Mapping)
+            else CatalogSetupPlanView.from_mapping({})
+        )
+        session.market.catalog_setup_plan = plan
+        body = catalog_setup_renderable(plan)
+        if session.context != ("market", "catalog-setup"):
+            return (_activity(spec, body),)
+        if _catalog_is_usable(plan) and session.market.query:
+            session.return_to("market", "missing")
+            return _activity(spec, body), _run_market_search(
+                state, session, session.market.query
+            )
+        session.restore("market", "catalog-setup")
+        return (
+            _activity(spec, body),
+            *_choice(state, session, summary=body, status="准备条件已检查"),
+        )
+
+    if kind is ResultKind.MARKET_CATALOG_PREPARE:
+        prepared = dict(result) if isinstance(result, Mapping) else {}
+        plan = prepared.get("plan")
+        if isinstance(plan, CatalogSetupPlanView):
+            session.market.catalog_setup_plan = plan
+        elif isinstance(plan, Mapping):
+            session.market.catalog_setup_plan = CatalogSetupPlanView.from_mapping(plan)
+        body = catalog_setup_renderable(
+            session.market.catalog_setup_plan or CatalogSetupPlanView.from_mapping({})
+        )
+        if session.context != ("market", "catalog-setup"):
+            return (_activity(spec, body),)
+        if (
+            _catalog_is_usable(session.market.catalog_setup_plan)
+            and session.market.query
+        ):
+            session.return_to("market", "missing")
+            return _activity(spec, body), _run_market_search(
+                state, session, session.market.query
+            )
+        session.restore("market", "catalog-setup")
+        return (
+            _activity(spec, body),
+            *_choice(
+                state,
+                session,
+                summary=body,
+                status="目录准备已启动 · 可查看进度或返回原搜索",
+            ),
+        )
 
     if kind is ResultKind.MARKET_OBSERVATION:
         market = session.market.selected
         if market is None:
             session.enter("market")
             interaction = ChoiceInteraction(
-                title=f"{session.root_label} / 市场行情",
+                title=f"{session.root_label} / 市场与标的",
                 summary=Text("行情上下文已经失效，请重新选择标的。", style="yellow"),
                 actions=SECTION_ACTIONS["market"],
             )
@@ -249,7 +360,7 @@ def handle_success(
 
         body = observation_renderable(result)
         session.market.snapshot = body
-        session.context = ("market", "selected")
+        session.restore("market", "selected")
         session.visible_records = session.market.records
         actions = context_items(session, state)
         interaction = (
@@ -297,7 +408,7 @@ def handle_success(
         )
         if not routes:
             body = route_diagnostic_renderable(state, market, observation)
-            session.context = ("market", "selected")
+            session.restore("market", "selected")
             session.visible_records = session.market.records
             return (
                 _activity(spec, body),
@@ -306,7 +417,7 @@ def handle_success(
         if preferred is not None or len(routes) == 1:
             provider = (preferred or routes[0]).provider
             return (_run_observation(state, session, provider),)
-        session.context = ("market", "providers")
+        session.enter("market", "providers")
         session.visible_records = selection_records(
             routes,
             key=lambda route: route.provider,
@@ -323,7 +434,7 @@ def handle_success(
         )
 
     if kind is ResultKind.MARKET_DIAGNOSTIC:
-        session.context = ("market", "selected")
+        session.restore("market", "selected")
         session.visible_records = session.market.records
         body = _market_result("Market 诊断", result, diagnostic=True)
         return (
@@ -334,7 +445,7 @@ def handle_success(
     if kind is ResultKind.MARKET_FILE:
         prompt = session.market.file_prompt
         session.market.file_prompt = None
-        session.context = ("market", "selected")
+        session.restore("market", "selected")
         session.visible_records = session.market.records
         body = (
             file_result_renderable(result, prompt)
@@ -361,8 +472,103 @@ def handle_success(
 
     if kind is ResultKind.WORKSPACE_MARKET:
         prompt = session.market.workspace_prompt
+        if spec.route.qualifier == "provider-options":
+            if not isinstance(prompt, WorkspaceMarketPromptState):
+                session.context = ("market", "live")
+                return _choice(state, session, status="行情来源选择已失效")
+            routes = tuple(
+                value for value in result or () if isinstance(value, Mapping)
+            )
+            selected = tuple(
+                str(value.get("provider") or "")
+                for value in routes
+                if value.get("selected") and value.get("provider")
+            )
+            providers = tuple(
+                dict.fromkeys(
+                    str(value.get("provider") or "")
+                    for value in routes
+                    if value.get("provider")
+                )
+            )
+            automatic = (
+                selected[0] if selected else providers[0] if len(providers) == 1 else ""
+            )
+            if automatic:
+                prompt.values["provider"] = automatic
+                prompt.provider_resolved = True
+                return _advance_workspace_prompt(state, session, prompt)
+            if not providers:
+                session.market.workspace_prompt = None
+                session.context = ("market", "live")
+                return _choice(
+                    state,
+                    session,
+                    summary=Text(
+                        f"{prompt.market_label or '所选市场'} 当前没有可用的行情来源。",
+                        style="yellow",
+                    ),
+                    status="没有可用行情来源",
+                )
+            actions = tuple(
+                ActionItem(
+                    f"provider:{provider}",
+                    provider,
+                    _provider_description(provider, routes),
+                    str(index),
+                )
+                for index, provider in enumerate(providers, 1)
+            )
+            session.context = ("market", "workspace-providers")
+            interaction = ChoiceInteraction(
+                title="选择行情来源",
+                summary=workspace_prompt_renderable(prompt),
+                actions=actions,
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus("请选择行情来源")
+        if spec.route.qualifier == "unsubscribe-options":
+            if not isinstance(prompt, WorkspaceMarketPromptState):
+                session.context = ("market", "live")
+                return _choice(state, session, status="退出行情向导已失效")
+            subscriptions = tuple(
+                value
+                for value in (
+                    result.get("subscriptions", ())
+                    if isinstance(result, Mapping)
+                    else ()
+                )
+                if isinstance(value, Mapping)
+            )
+            if not subscriptions:
+                session.market.workspace_prompt = None
+                session.context = ("market", "live")
+                session.visible_records = ()
+                return _choice(
+                    state,
+                    session,
+                    summary=Text("当前 Kairos I 会话没有可退出的行情。", style="dim"),
+                    status="当前会话没有行情订阅",
+                )
+            visible = selection_records(
+                subscriptions,
+                key=lambda value: str(value.get("subscription_id") or ""),
+                label=lambda value: str(value.get("_market_label") or "已订阅市场"),
+                description=lambda value: str(
+                    value.get("_market_description") or "当前会话行情"
+                ),
+            )
+            session.visible_records = visible
+            session.context = ("market", "workspace-subscriptions")
+            interaction = ChoiceInteraction(
+                title="退出当前会话行情",
+                summary=Text("选择要停止接收的行情。", style="dim"),
+                actions=context_items(session, state),
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus("请选择要退出的行情")
         session.market.workspace_prompt = None
-        session.context = ("market", "connected")
+        session.context = ("market", "live")
         if isinstance(result, Mapping) and result.get("status") == "preview":
             body = _market_result(spec.display_title, result)
         elif (
@@ -373,33 +579,27 @@ def handle_success(
             snapshot = dict(result)
             snapshot.setdefault("data_type", prompt.values["kind"])
             snapshot.setdefault("symbol", prompt.values["market-id"])
-            snapshot.setdefault("provider", prompt.values["provider"] or "—")
+            snapshot.setdefault("provider", prompt.values.get("provider") or "自动选择")
             snapshot["_source_mode"] = "workspace-view"
             snapshot["_fetched_at_unix_nanos"] = time_ns()
             body = observation_renderable(snapshot)
         elif (
             isinstance(prompt, WorkspaceMarketPromptState)
-            and prompt.action == "status"
-            and isinstance(result, Mapping)
-        ):
-            body = workspace_status_renderable(result)
-        elif (
-            isinstance(prompt, WorkspaceMarketPromptState)
-            and prompt.action == "routes"
-            and isinstance(result, Mapping)
-        ):
-            body = workspace_routes_renderable(result)
-        elif (
-            isinstance(prompt, WorkspaceMarketPromptState)
-            and prompt.action in {"session-subscriptions", "subscriptions"}
+            and prompt.action == "session-subscriptions"
             and isinstance(result, Mapping)
         ):
             body = workspace_subscriptions_renderable(
                 result,
-                current_session=prompt.action == "session-subscriptions",
+                current_session=True,
             )
+        elif (
+            isinstance(prompt, WorkspaceMarketPromptState)
+            and prompt.action in {"subscribe", "unsubscribe"}
+            and isinstance(result, Mapping)
+        ):
+            body = workspace_mutation_renderable(result, prompt)
         else:
-            body = _market_result("Workspace Market", result)
+            body = _market_result("我的实时行情", result)
         return (
             _activity(spec, body, _result_outcome(result)),
             *_choice(state, session, status="操作已完成"),
@@ -417,6 +617,32 @@ def handle_failure(
     """Restore this product's interaction after a failed finite operation."""
 
     if spec.route.kind is ResultKind.MARKET:
+        if spec.route.qualifier == "workspace-market":
+            prompt = session.market.workspace_prompt
+            if isinstance(prompt, WorkspaceMarketPromptState):
+                effects = _ask_workspace_market(session, prompt, error=error)
+                return (
+                    _activity(spec, Text(error, style="red"), ActivityOutcome.FAILURE),
+                    *effects,
+                )
+        if _catalog_not_initialized(error):
+            session.enter("market", "missing")
+            message = Text(
+                "这个项目还没有可查询的标的目录。"
+                "你可以选择交易所和品种，Kairos 会推荐合适的数据服务并带你完成准备。",
+                style="yellow",
+            )
+            interaction = ChoiceInteraction(
+                title=context_label(session.context, session.root_label),
+                summary=message,
+                actions=context_items(session, state),
+            )
+            session.interaction = interaction
+            return (
+                _activity(spec, message, ActivityOutcome.FAILURE),
+                SetInteraction(interaction),
+                SetStatus("标的目录尚未准备"),
+            )
         _ask_market(session)
         interaction = session.interaction
         assert isinstance(interaction, InputInteraction)
@@ -457,8 +683,15 @@ def handle_cancel(
 
     if spec.route.kind not in _RESULT_KINDS:
         return None
+    workspace_market_search = (
+        spec.route.kind is ResultKind.MARKET
+        and spec.route.qualifier == "workspace-market"
+    )
     session.clear_result_flow(spec.route.kind)
-    if spec.route.kind is ResultKind.MARKET:
+    if workspace_market_search:
+        session.market.workspace_prompt = None
+        session.enter("market", "live")
+    elif spec.route.kind is ResultKind.MARKET:
         session.enter("market")
     body = Text("操作在开始执行后被取消。", style="yellow")
     return (
@@ -476,6 +709,8 @@ _RESULT_KINDS = frozenset(
         ResultKind.MARKET_FILE,
         ResultKind.WORKSPACE_MARKET,
         ResultKind.MARKET_DIAGNOSTIC,
+        ResultKind.MARKET_CATALOG_SETUP,
+        ResultKind.MARKET_CATALOG_PREPARE,
     }
 )
 
@@ -483,6 +718,178 @@ _RESULT_KINDS = frozenset(
 def _handle_market_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
+    if session.context == ("market", "missing"):
+        action = action_id(context_items(session, state), command)
+        if action == "prepare":
+            session.market.catalog_setup_goal = None
+            session.market.catalog_setup_plan = None
+            session.enter("market", "catalog-exchange")
+            return _choice(state, session, status="请选择交易所")
+        if action == "retry" and session.market.query:
+            return (_run_market_search(state, session, session.market.query),)
+        if action == "catalog":
+            session.enter("reference")
+            return _choice(state, session, status="请选择要浏览的标的目录")
+        return None
+
+    if session.context == ("market", "catalog-exchange"):
+        exchange = action_id(context_items(session, state), command)
+        if exchange is None:
+            return None
+        session.market.catalog_setup_goal = CatalogSetupGoal.exchange(exchange)
+        session.enter("market", "catalog-instrument")
+        return _choice(state, session, status="请选择要准备的品种")
+
+    if session.context == ("market", "catalog-instrument"):
+        instrument_kind = action_id(context_items(session, state), command)
+        goal = session.market.catalog_setup_goal
+        if instrument_kind is None or goal is None:
+            return None
+        session.market.catalog_setup_goal = CatalogSetupGoal.exchange(
+            goal.exchange_id or "", instrument_kind
+        )
+        session.enter("market", "catalog-setup")
+        return (_run_catalog_setup_plan(state, session),)
+
+    if session.context == ("market", "catalog-setup"):
+        action = action_id(context_items(session, state), command)
+        if action == "check":
+            return (_run_catalog_setup_plan(state, session),)
+        if action == "change":
+            session.enter("market", "catalog-exchange")
+            return _choice(state, session, status="请重新选择交易所")
+        if action == "search-again" and session.market.query:
+            return (_run_market_search(state, session, session.market.query),)
+        if action == "configure-connection":
+            return _start_catalog_connection_setup(state, session)
+        if action == "start":
+            return _confirm_catalog_preparation(state, session)
+        return None
+
+    if session.context == ("market", "live-unavailable"):
+        action = action_id(LIVE_MARKET_UNAVAILABLE_ACTIONS, command)
+        if action is None:
+            return None
+        if action == "prepare":
+            from ..operations.actions import execute_service
+
+            def operation() -> Any:
+                result = execute_service(state, "market", "start")
+                refresh = getattr(state, "refresh_snapshot", None)
+                if callable(refresh):
+                    refresh()
+                return result
+
+            session.operations.selected_service = "market"
+            spec = _spec(
+                action_name="operations.market.prepare-live",
+                summary="启动项目共享 Market 并返回我的实时行情",
+                display_title="准备实时行情",
+                route=ResultRoute(ResultKind.OPERATIONS, "live-market-recovery"),
+                operation=operation,
+                status="正在启动项目共享行情服务…",
+            )
+            return _confirm_or_run(
+                state,
+                session,
+                spec,
+                title="确认启动实时行情",
+                details=unavailable_renderable(),
+                dangerous=True,
+            )
+        if action == "service-details":
+            from ..operations.runtime import enter_service_detail
+
+            return enter_service_detail(state, session, "market")
+        session.enter("market")
+        return _choice(
+            state,
+            session,
+            status="请选择历史行情操作" if action == "history" else "已返回市场入口",
+        )
+
+    prompt = session.market.workspace_prompt
+    if session.context == ("market", "workspace-market-results"):
+        if not isinstance(prompt, WorkspaceMarketPromptState):
+            session.context = ("market", "live")
+            return _choice(state, session, status="参数向导已失效")
+        record = _record_choice(session.visible_records, command)
+        if record is None:
+            return None
+        prompt.select_market(
+            str(getattr(record, "id", "")),
+            label=record_label(record),
+            description=record_description(record),
+        )
+        session.market.selected = record
+        session.context = ("market", "live")
+        session.visible_records = ()
+        return _advance_workspace_prompt(state, session, prompt)
+
+    if session.context == ("market", "workspace-subscriptions"):
+        if not isinstance(prompt, WorkspaceMarketPromptState):
+            session.context = ("market", "live")
+            return _choice(state, session, status="退出行情向导已失效")
+        record = _record_choice(session.visible_records, command)
+        if not isinstance(record, Mapping):
+            return None
+        prompt.select_subscription(
+            str(record.get("subscription_id") or ""),
+            label=str(record.get("_market_label") or "已订阅市场"),
+            description=str(record.get("_market_description") or "当前会话行情"),
+        )
+        session.context = ("market", "live")
+        session.visible_records = ()
+        return _advance_workspace_prompt(state, session, prompt)
+
+    if session.context == ("market", "workspace-subscription-content"):
+        if not isinstance(prompt, WorkspaceMarketPromptState):
+            session.context = ("market", "live")
+            return _choice(state, session, status="参数向导已失效")
+        observations = action_id(SUBSCRIPTION_CONTENT_ACTIONS, command)
+        if observations is None:
+            return None
+        prompt.accept("observations", observations)
+        session.context = ("market", "live")
+        return _advance_workspace_prompt(state, session, prompt)
+
+    if session.context == ("market", "workspace-snapshot-kind"):
+        if not isinstance(prompt, WorkspaceMarketPromptState):
+            session.context = ("market", "live")
+            return _choice(state, session, status="参数向导已失效")
+        kind = action_id(SNAPSHOT_KIND_ACTIONS, command)
+        if kind is None:
+            return None
+        prompt.accept("kind", kind)
+        session.context = ("market", "live")
+        return _advance_workspace_prompt(state, session, prompt)
+
+    if session.context == ("market", "workspace-timeframe"):
+        if not isinstance(prompt, WorkspaceMarketPromptState):
+            session.context = ("market", "live")
+            return _choice(state, session, status="参数向导已失效")
+        timeframe = action_id(TIMEFRAME_ACTIONS, command)
+        if timeframe is None:
+            return None
+        prompt.accept("timeframe", timeframe)
+        session.context = ("market", "live")
+        return _advance_workspace_prompt(state, session, prompt)
+
+    if session.context == ("market", "workspace-providers"):
+        if not isinstance(prompt, WorkspaceMarketPromptState):
+            session.context = ("market", "live")
+            return _choice(state, session, status="行情来源选择已失效")
+        interaction = session.interaction
+        if not isinstance(interaction, ChoiceInteraction):
+            return None
+        provider_action = action_id(interaction.actions, command)
+        if provider_action is None or not provider_action.startswith("provider:"):
+            return None
+        prompt.values["provider"] = provider_action.removeprefix("provider:")
+        prompt.provider_resolved = True
+        session.context = ("market", "live")
+        return _advance_workspace_prompt(state, session, prompt)
+
     if session.context == ("market", "selected"):
         market = session.market.selected
         if market is None:
@@ -562,10 +969,13 @@ def _handle_market_context(
             ),
         )
 
-    if session.context == ("market", "connected"):
-        action = action_id(WORKSPACE_MARKET_ACTIONS, command)
+    if session.context == ("market", "live"):
+        action = action_id(LIVE_MARKET_ACTIONS, command)
         if action is None:
             return None
+        custom_content = action == "subscribe-custom"
+        if custom_content:
+            action = "subscribe"
         selected_market = session.market.selected
         default_market = (
             str(getattr(selected_market, "id", ""))
@@ -573,8 +983,17 @@ def _handle_market_context(
             else ""
         )
         prompt = WorkspaceMarketPromptState(
-            action, default_market, session.market.operator_owner_id
+            action,
+            default_market,
+            session.market.operator_owner_id,
+            custom_content=custom_content,
         )
+        if selected_market is not None and default_market:
+            prompt.select_market(
+                default_market,
+                label=record_label(selected_market),
+                description=record_description(selected_market),
+            )
         session.market.workspace_prompt = prompt
         return _advance_workspace_prompt(state, session, prompt)
 
@@ -594,7 +1013,7 @@ def _handle_market_context(
             return (_run_observation(state, session, provider),)
         session.market.selected = record
         session.market.reset_control()
-        session.context = ("market", "selected")
+        session.enter("market", "selected")
         if session.market.purpose in {"download", "replay"}:
             prompt = MarketFilePromptState(session.market.purpose, record)
             session.market.file_prompt = prompt
@@ -607,9 +1026,14 @@ def _handle_market_context(
             status=f"已选择 {record_label(record)} · 请选择行情",
         )
 
-    action = action_id((*SECTION_ACTIONS["market"], *MARKET_ADVANCED_ACTIONS), command)
+    root_actions = (*SECTION_ACTIONS["market"], *MARKET_ADVANCED_ACTIONS)
+    if _catalog_is_usable(session.market.catalog_setup_plan) and session.market.query:
+        root_actions = (RESUME_MARKET_SEARCH_ACTION, *root_actions)
+    action = action_id(root_actions, command)
     if action is None:
         return None
+    if action == "resume-search" and session.market.query:
+        return (_run_market_search(state, session, session.market.query),)
     if action in {"search", "download", "replay", "diagnostics", "advanced"}:
         session.market.purpose = action
         return _ask_market(session)
@@ -625,10 +1049,36 @@ def _handle_market_context(
                 )
             ),
         )
-    if action == "connected":
-        session.context = ("market", "connected")
-        return _choice(state, session)
+    if action == "catalog":
+        session.enter("reference")
+        return _choice(state, session, status="请选择标的目录")
+    if action == "live":
+        return _enter_live_market(state, session)
     return None
+
+
+def _catalog_not_initialized(error: str) -> bool:
+    """Recognize a project whose local Reference catalog has not been created."""
+
+    normalized = error.casefold()
+    return "unable to open database file" in normalized and (
+        "reference.sqlite" in normalized or "wal sidecar open failed" in normalized
+    )
+
+
+def _catalog_is_usable(plan: CatalogSetupPlanView | None) -> bool:
+    return plan is not None and plan.availability in {"usable", "partially_usable"}
+
+
+def _enter_live_market(state: Any, session: GuidedSession) -> tuple[ScreenEffect, ...]:
+    available = live_market_available(state)
+    session.enter("market", "live" if available else "live-unavailable")
+    return _choice(
+        state,
+        session,
+        summary=None if available else unavailable_renderable(),
+        status="我的实时行情" if available else "实时行情暂不可用",
+    )
 
 
 def _ask_market(session: GuidedSession) -> tuple[ScreenEffect, ...]:
@@ -660,6 +1110,7 @@ def _market_prompt_copy(purpose: str) -> tuple[str, str]:
 
 
 def _run_market_search(state: Any, session: GuidedSession, query: str) -> RunOperation:
+    session.market.query = query
     return RunOperation(
         _spec(
             action_name="market.find",
@@ -667,6 +1118,108 @@ def _run_market_search(state: Any, session: GuidedSession, query: str) -> RunOpe
             route=ResultRoute(ResultKind.MARKET),
             operation=lambda: load_records(state, "markets", query),
             status="正在搜索市场标的…",
+        )
+    )
+
+
+def _run_catalog_setup_plan(state: Any, session: GuidedSession) -> RunOperation:
+    goal = session.market.catalog_setup_goal
+    if goal is None:
+        raise RuntimeError("标的目录准备目标已经失效")
+    return RunOperation(
+        _spec(
+            action_name="market.catalog.check",
+            summary="检查标的目录准备条件",
+            route=ResultRoute(ResultKind.MARKET_CATALOG_SETUP),
+            operation=lambda: load_catalog_setup_plan(state, goal),
+            status="正在检查可用来源和账号要求…",
+        )
+    )
+
+
+def _start_catalog_connection_setup(
+    state: Any, session: GuidedSession
+) -> tuple[ScreenEffect, ...]:
+    plan = session.market.catalog_setup_plan
+    options = plan.options if plan is not None else ()
+    selected = plan.recommended_option or 0 if plan is not None else 0
+    option = options[selected] if selected < len(options) else None
+    provider = option.binding.provider if option is not None else ""
+    source = option.binding.source.replace("_", "-") if option is not None else ""
+    if provider not in {"massive", "binance", "okx"}:
+        return _choice(
+            state,
+            session,
+            summary=Text("该来源目前不需要或不支持账号配置。", style="yellow"),
+            status="无需配置账号",
+        )
+
+    from ..resources.configuration import _start_wizard
+    from ..resources.wizard import ResourceWizardState
+
+    product = {
+        ("massive", "equity"): "equity",
+        ("massive", "options"): "options",
+        ("binance", "usd-m-futures"): "usd-m-futures",
+        ("binance", "coin-m-futures"): "coin-m-futures",
+        ("okx", "perpetual"): "swap",
+    }.get((provider, source), source)
+    wizard = ResourceWizardState("data")
+    wizard.answers.update(
+        {
+            "data-provider": provider,
+            "data-product": product,
+        }
+    )
+    session.resources.return_context = ("market", "catalog-setup")
+    session.enter("resources", "data")
+    return _start_wizard(state, session, wizard)
+
+
+def _confirm_catalog_preparation(
+    state: Any, session: GuidedSession
+) -> tuple[ScreenEffect, ...]:
+    plan = session.market.catalog_setup_plan
+    if plan is None:
+        return (_run_catalog_setup_plan(state, session),)
+    credential_binding = plan.credential_binding
+
+    def operation() -> Any:
+        if state.dry_run or state.no_exec:
+            return {"status": "preview", "plan": plan}
+        return prepare_catalog_source(
+            state,
+            plan,
+            credential_binding=(
+                str(credential_binding) if credential_binding else None
+            ),
+        )
+
+    spec = _spec(
+        action_name="market.catalog.prepare",
+        summary=f"准备标的目录 · {session.market.query or '当前搜索'}",
+        route=ResultRoute(ResultKind.MARKET_CATALOG_PREPARE),
+        operation=operation,
+        status="正在启动目录准备…",
+    )
+    return _confirm_or_run(
+        state,
+        session,
+        spec,
+        title="确认准备标的目录",
+        details=catalog_setup_renderable(plan),
+        dangerous=True,
+    )
+
+
+def _run_workspace_market_search(state: Any, query: str) -> RunOperation:
+    return RunOperation(
+        _spec(
+            action_name="workspace.market.find",
+            summary=f"选择 Workspace Market 标的 · {query}",
+            route=ResultRoute(ResultKind.MARKET, "workspace-market"),
+            operation=lambda: load_records(state, "markets", query),
+            status="正在查找可用市场…",
         )
     )
 
@@ -784,16 +1337,54 @@ def _advance_workspace_prompt(
     next_prompt = prompt.next_prompt()
     if next_prompt is not None:
         name, label, detail = next_prompt
+        if name == "market-id":
+            return _ask_workspace_market(session, prompt)
+        if name == "subscription-id":
+            return (_run_unsubscribe_options(state, prompt),)
+        choice_context: tuple[str, tuple[ActionItem, ...], str] | None = None
+        if name == "observations":
+            choice_context = (
+                "workspace-subscription-content",
+                SUBSCRIPTION_CONTENT_ACTIONS,
+                "选择要接收的行情内容",
+            )
+        elif name == "kind":
+            choice_context = (
+                "workspace-snapshot-kind",
+                SNAPSHOT_KIND_ACTIONS,
+                "选择要查看的行情内容",
+            )
+        elif name == "timeframe":
+            choice_context = (
+                "workspace-timeframe",
+                TIMEFRAME_ACTIONS,
+                "选择 K 线周期",
+            )
+        if choice_context is not None:
+            context, actions, title = choice_context
+            session.context = ("market", context)
+            interaction = ChoiceInteraction(
+                title=title,
+                summary=workspace_prompt_renderable(prompt),
+                actions=actions,
+            )
+            session.interaction = interaction
+            return SetInteraction(interaction), SetStatus(title)
         session.ask(
             ActionToken(Feature.MARKET, "workspace-field", name),
-            title="Workspace Market",
+            title="我的实时行情",
             prompt=label,
             detail=detail,
-            value_summary=Pretty(prompt.summary(), expand_all=True),
+            value_summary=workspace_prompt_renderable(prompt),
         )
-        return SetInteraction(session.interaction), SetStatus(
-            "等待 Workspace Market 参数"
-        )
+        return SetInteraction(session.interaction), SetStatus("等待实时行情参数")
+
+    if prompt.action in {"snapshot", "freshness"} and not prompt.provider_resolved:
+        if state.dry_run or state.no_exec:
+            prompt.provider_resolved = True
+            prompt.values.setdefault("provider", "")
+            return _advance_workspace_prompt(state, session, prompt)
+        return (_run_provider_options(state, prompt),)
 
     def operation() -> Any:
         if state.dry_run or state.no_exec:
@@ -813,10 +1404,132 @@ def _advance_workspace_prompt(
         state,
         session,
         spec,
-        title="Workspace Market 操作确认",
-        details=Pretty(prompt.summary(), expand_all=True),
+        title="实时行情操作确认",
+        details=workspace_prompt_renderable(prompt),
         dangerous=prompt.dangerous,
     )
+
+
+def _ask_workspace_market(
+    session: GuidedSession,
+    prompt: WorkspaceMarketPromptState,
+    *,
+    error: str | None = None,
+) -> tuple[ScreenEffect, ...]:
+    session.context = ("market", "live")
+    interaction = InputInteraction(
+        action=ActionToken(Feature.MARKET, "workspace-market-search"),
+        title="选择市场",
+        prompt="输入代码或名称",
+        detail="例如 AAPL、比特币或 BTCUSDT；输入 /back 取消。",
+        value_summary=workspace_prompt_renderable(prompt),
+        error=error,
+    )
+    session.interaction = interaction
+    return SetInteraction(interaction), SetStatus("等待市场搜索条件")
+
+
+def _run_unsubscribe_options(
+    state: Any, prompt: WorkspaceMarketPromptState
+) -> RunOperation:
+    return RunOperation(
+        _spec(
+            action_name="workspace.market.unsubscribe.options",
+            summary="读取当前 Kairos I 行情",
+            route=ResultRoute(ResultKind.WORKSPACE_MARKET, "unsubscribe-options"),
+            operation=lambda: _load_operator_subscription_options(state, prompt),
+            status="正在读取当前会话行情…",
+        )
+    )
+
+
+def _run_provider_options(
+    state: Any, prompt: WorkspaceMarketPromptState
+) -> RunOperation:
+    return RunOperation(
+        _spec(
+            action_name=f"workspace.market.{prompt.action}.providers",
+            summary=f"为 {prompt.market_label or '所选市场'} 选择行情来源",
+            route=ResultRoute(ResultKind.WORKSPACE_MARKET, "provider-options"),
+            operation=lambda: workspace_provider_options(state, prompt),
+            status="正在查找可用行情来源…",
+        )
+    )
+
+
+def _load_operator_subscription_options(
+    state: Any, prompt: WorkspaceMarketPromptState
+) -> dict[str, Any]:
+    query = WorkspaceMarketPromptState(
+        "session-subscriptions", owner_id=prompt.owner_id
+    )
+    result = execute_workspace_market(state, query)
+    subscriptions: list[dict[str, Any]] = []
+    for raw in result.get("subscriptions", ()):
+        if not isinstance(raw, Mapping):
+            continue
+        value = dict(raw)
+        market_ids = tuple(str(item) for item in raw.get("market_ids", ()) if item)
+        market_id = market_ids[0] if market_ids else ""
+        try:
+            records = load_records(state, "markets", market_id) if market_id else ()
+        except (OSError, RuntimeError, ValueError):
+            # Reference enriches the label but does not own the user's ability
+            # to release a Market-owned subscription.
+            records = ()
+        exact = next(
+            (
+                record
+                for record in records
+                if str(getattr(record, "id", "")) == market_id
+            ),
+            records[0] if records else None,
+        )
+        if exact is not None:
+            label = record_label(exact)
+            market_description = record_description(exact)
+        else:
+            parts = tuple(part for part in market_id.split(":") if part)
+            label = parts[-1] if parts else "未知市场"
+            market_description = " · ".join(parts[1:-1]) or "市场目录中已不可用"
+        observations = tuple(str(item) for item in raw.get("observations", ()) if item)
+        providers = tuple(
+            str(item) for item in raw.get("selected_providers", ()) if item
+        )
+        details = [
+            market_description,
+            _observation_description(observations),
+            "、".join(providers) if providers else "数据来源自动选择",
+        ]
+        value["_market_label"] = label
+        value["_market_description"] = " · ".join(item for item in details if item)
+        subscriptions.append(value)
+    return {"subscriptions": subscriptions}
+
+
+def _observation_description(observations: Sequence[str]) -> str:
+    labels = {
+        "quote": "实时报价",
+        "trade": "逐笔成交",
+        "bar:1m": "1 分钟 K 线",
+        "greeks": "期权 Greeks",
+    }
+    return "、".join(labels.get(value, value) for value in observations) or "行情"
+
+
+def _provider_description(provider: str, routes: Sequence[Mapping[str, Any]]) -> str:
+    matching = tuple(
+        value for value in routes if str(value.get("provider") or "") == provider
+    )
+    observations = tuple(
+        dict.fromkeys(
+            str(observation)
+            for value in matching
+            for observation in value.get("observation_kinds", ())
+        )
+    )
+    content = _observation_description(observations)
+    return f"{content} · 可用"
 
 
 def _confirm_or_run(
@@ -968,22 +1681,13 @@ def _spec(
 
 def _workspace_display_title(prompt: WorkspaceMarketPromptState) -> str:
     titles = {
-        "status": "Market 运行状态",
-        "routes": "Market 数据路由",
-        "session-subscriptions": "当前 Kairos I Market 订阅",
-        "subscriptions": "Market 全部订阅",
-        "subscribe": "添加 Market 订阅",
-        "unsubscribe": "退出 Market 订阅",
-        "snapshot": "Market 行情快照",
-        "freshness": "Market 行情新鲜度",
-        "start": "启动 Market 服务",
-        "stop": "停止 Market 服务",
-        "restart": "重启 Market 服务",
-        "logs": "Market 最近日志",
-        "pause": "暂停 Market 行情回放",
-        "resume": "继续 Market 行情回放",
+        "session-subscriptions": "我的实时行情",
+        "subscribe": "添加实时行情",
+        "unsubscribe": "停止关注实时行情",
+        "snapshot": "查看实时行情快照",
+        "freshness": "查看行情新鲜度",
     }
-    return titles.get(prompt.action, "Market 操作结果")
+    return titles.get(prompt.action, "实时行情操作结果")
 
 
 def _activity(
@@ -1029,7 +1733,7 @@ def _show_record_choices(
     *,
     record_kind: str | None = None,
 ) -> tuple[ScreenEffect, ...]:
-    session.context = (section, record_kind or "results")
+    session.enter(section, record_kind or "results")
     visible = _visible(records)
     session.visible_records = visible
     actions = tuple(
@@ -1043,10 +1747,11 @@ def _show_record_choices(
     )
     interaction = ChoiceInteraction(
         title=(
-            f"{session.root_label} / 市场行情"
+            f"{session.root_label} / 市场与标的"
             if section == "market"
             else f"{session.root_label} / 市场标的"
         ),
+        summary=_market_group_summary(records) if section == "market" else None,
         actions=actions,
     )
     return (
@@ -1058,9 +1763,105 @@ def _show_record_choices(
 def _visible(records: tuple[Any, ...]) -> tuple[SelectionRecord, ...]:
     return selection_records(
         records,
-        label=record_label,
-        description=record_description,
+        label=_market_choice_label,
+        description=_market_choice_description,
     )
+
+
+def _market_group_summary(records: tuple[Any, ...]) -> RenderableType:
+    groups: dict[str, list[str]] = {}
+    for record in records:
+        label = _market_group_label(record)
+        exchange = _exchange_label(getattr(record, "exchange_id", None))
+        exchanges = groups.setdefault(label, [])
+        if exchange not in exchanges:
+            exchanges.append(exchange)
+
+    lines = Text()
+    for label, exchanges in groups.items():
+        market_count = sum(
+            1 for record in records if _market_group_label(record) == label
+        )
+        if lines:
+            lines.append("\n")
+        lines.append(label, style="bold")
+        lines.append(f" · {market_count} 个市场 · ", style="dim")
+        lines.append("、".join(exchanges))
+    return Group(
+        Text("按交易品种归类；请选择一个具体市场。", style="dim"),
+        lines,
+    )
+
+
+def _market_choice_label(record: Any) -> str:
+    return _market_group_label(record)
+
+
+def _market_choice_description(record: Any) -> str:
+    exchange = _exchange_label(getattr(record, "exchange_id", None))
+    venue_symbol = str(getattr(record, "venue_symbol", None) or "").strip()
+    status = _STATUS_LABELS.get(str(getattr(record, "status", "")), "状态未知")
+    values = [exchange]
+    if venue_symbol:
+        values.append(venue_symbol)
+    values.append(status)
+    return " · ".join(values)
+
+
+def _market_group_label(record: Any) -> str:
+    kind = str(getattr(record, "instrument_kind", "unknown"))
+    kind_label = _INSTRUMENT_KIND_LABELS.get(kind, "其他品种")
+    base = _asset_label(getattr(record, "base_asset", None))
+    quote = _asset_label(getattr(record, "quote_asset", None))
+    if base and quote:
+        subject = f"{base}/{quote}"
+    else:
+        instrument = getattr(record, "instrument", None)
+        subject = str(
+            getattr(instrument, "display_symbol", None)
+            or getattr(record, "venue_symbol", None)
+            or "未命名品种"
+        )
+    return f"{subject} · {kind_label}"
+
+
+def _asset_label(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).rsplit(":", 1)[-1]
+
+
+def _exchange_label(value: Any) -> str:
+    key = str(value or "").rsplit(":", 1)[-1]
+    return _EXCHANGE_LABELS.get(key.lower(), key or "未知交易所")
+
+
+_INSTRUMENT_KIND_LABELS = {
+    "equity": "股票",
+    "spot": "现货",
+    "perpetual": "永续合约",
+    "future": "期货",
+    "option": "期权",
+    "index": "指数",
+}
+
+_STATUS_LABELS = {
+    "active": "当前有效",
+    "trading": "正在交易",
+    "inactive": "当前不可用",
+    "halted": "暂停交易",
+    "delisted": "已退市",
+    "unknown": "状态未知",
+}
+
+_EXCHANGE_LABELS = {
+    "nasdaq": "Nasdaq",
+    "nyse": "NYSE",
+    "amex": "AMEX",
+    "binance": "Binance",
+    "okx": "OKX",
+    "hyperliquid": "Hyperliquid",
+}
 
 
 def _route_views(result: Any) -> tuple[MarketRouteView, ...]:

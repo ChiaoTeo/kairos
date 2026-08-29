@@ -144,6 +144,24 @@ def test_command_market_argument_guide(snap_compare: Any) -> None:
     )
 
 
+def test_workspace_market_subscription_search_uses_business_copy(
+    snap_compare: Any,
+) -> None:
+    async def request_subscription(pilot: Any) -> None:
+        screen = pilot.app.screen
+        assert isinstance(screen, CommandLineScreen)
+        screen.submit("1")
+        screen.submit("c")
+        screen.submit("s")
+        await pilot.pause()
+
+    assert snap_compare(
+        KairosWorkbenchApp(_state()),
+        terminal_size=(100, 30),
+        run_before=request_subscription,
+    )
+
+
 def test_command_market_results(snap_compare: Any) -> None:
     async def show_results(pilot: Any) -> None:
         screen = pilot.app.screen

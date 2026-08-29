@@ -1,0 +1,47 @@
+[template]
+id = "backtest-basic"
+version = "1.0.0"
+title = "Offline backtest"
+description = "A deterministic backtest with sample bars and no external connection."
+
+[[parameters]]
+name = "launch_id"
+description = "Launch resource id."
+kind = "id"
+default = "demo-backtest"
+
+[[parameters]]
+name = "account_id"
+description = "Simulated account resource id."
+kind = "id"
+default = "demo-paper"
+
+[[parameters]]
+name = "strategy_package"
+description = "Python package created for the example strategy."
+kind = "python-package"
+default = "kairos_demo"
+
+[[files]]
+source = "package-init.py.tmpl"
+target = "{{strategy_package_path}}/__init__.py"
+
+[[files]]
+source = "strategy.py.tmpl"
+target = "{{strategy_package_path}}/strategy.py"
+
+[[files]]
+source = "account.toml.tmpl"
+target = ".kairos/config/accounts/{{account_id}}.toml"
+
+[[files]]
+source = "events.jsonl.tmpl"
+target = ".kairos/data/examples/demo-market.jsonl"
+
+[[files]]
+source = "launch.toml.tmpl"
+target = ".kairos/config/launches/{{launch_id}}.toml"
+
+[[files]]
+source = "quickstart.md.tmpl"
+target = "KAIROS_QUICKSTART.md"

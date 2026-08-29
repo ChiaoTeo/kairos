@@ -15,6 +15,7 @@ from typer.main import get_command
 
 from .commands.launch import launch_app
 from .commands.project import project_app
+from .commands.template import template_app
 from .commands.notifications import notifications_app
 from .commands.config import config_app
 from .commands.data import data_app
@@ -53,6 +54,7 @@ _HELP_COMMAND_ORDER = {
             "quickstart",
             "interactive",
             "project",
+            "template",
             "launch",
             "observe",
             "data",
@@ -137,6 +139,12 @@ app.add_typer(
     project_app,
     name="project",
     help="Create, scaffold, and diagnose a Kairos project.",
+    rich_help_panel="Getting started",
+)
+app.add_typer(
+    template_app,
+    name="template",
+    help="Discover and install versioned project starters.",
     rich_help_panel="Getting started",
 )
 app.add_typer(

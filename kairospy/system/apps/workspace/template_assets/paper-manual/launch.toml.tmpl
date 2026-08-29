@@ -1,0 +1,18 @@
+[launch]
+id = "{{launch_id}}"
+mode = "paper"
+strategy = "builtin:interactive"
+
+[account]
+ref = "{{account_id}}"
+
+[execution]
+dry_run = true
+
+[[execution.routes]]
+route_id = "{{account_id}}-equity"
+account_id = "{{account_id}}"
+segment_key = "equity"
+broker_id = "simulated"
+execution_channel = "equity"
+environment = "paper"

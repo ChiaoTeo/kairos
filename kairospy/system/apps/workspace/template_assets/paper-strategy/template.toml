@@ -1,0 +1,51 @@
+[template]
+id = "paper-strategy"
+version = "1.0.0"
+title = "Paper market-data strategy"
+description = "A user-owned quote strategy bound to a verified market connection."
+
+[[parameters]]
+name = "launch_id"
+description = "Launch resource id."
+kind = "id"
+default = "demo-paper-strategy"
+
+[[parameters]]
+name = "strategy_package"
+description = "Python package created for the strategy."
+kind = "python-package"
+default = "kairos_paper"
+
+[[parameters]]
+name = "market_connection"
+description = "Existing verified provider connection id."
+kind = "id"
+required = true
+
+[[parameters]]
+name = "symbol"
+description = "Reference symbol subscribed by the example."
+kind = "id"
+default = "AAPL"
+
+[[requirements]]
+kind = "provider-connection"
+parameter = "market_connection"
+capability = "market-query"
+products = ["equity"]
+
+[[files]]
+source = "package-init.py.tmpl"
+target = "{{strategy_package_path}}/__init__.py"
+
+[[files]]
+source = "strategy.py.tmpl"
+target = "{{strategy_package_path}}/strategy.py"
+
+[[files]]
+source = "launch.toml.tmpl"
+target = ".kairos/config/launches/{{launch_id}}.toml"
+
+[[files]]
+source = "quickstart.md.tmpl"
+target = "KAIROS_PAPER_STRATEGY.md"

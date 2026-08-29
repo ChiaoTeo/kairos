@@ -59,7 +59,11 @@ include = ["kairospy*"]
 py-modules = ["backend"]
 
 [tool.setuptools.package-data]
-kairospy = ["_bin/**/*", "surface/workbench/styles/*.tcss"]
+kairospy = [
+    "_bin/**/*",
+    "surface/workbench/styles/*.tcss",
+    "system/apps/workspace/template_assets/**/*",
+]
 
 [[tool.setuptools-rust.ext-modules]]
 target = "kairospy._native_transport"
@@ -114,7 +118,7 @@ line-length = 88
 select = ["E4", "E7", "E9"]
 
 [tool.pyright]
-include = ["kairospy", "examples", "strategies", "tests/public_api"]
+include = ["kairospy", "examples", "tests/public_api"]
 exclude = ["**/__pycache__"]
 typeCheckingMode = "basic"
 reportMissingImports = "error"

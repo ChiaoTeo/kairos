@@ -22,7 +22,7 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from ...catalog import SECTION_ACTIONS
+from ...navigation.catalog import SECTION_ACTIONS
 from ...session import GuidedSession
 from .actions import (
     INSTRUMENT_TYPE_ACTIONS,
@@ -109,8 +109,8 @@ def handle_context(
         record = session.reference.selected
         kind = session.reference.kind
         if record is None or kind is None:
-            session.enter("reference")
-            return _choice(state, session, status="Reference 上下文已失效")
+            session.restore("reference")
+            return _choice(state, session, status="目录浏览上下文已失效")
         action = action_id(detail_actions(kind), command)
         if action is None:
             return None
@@ -120,7 +120,7 @@ def handle_context(
                 f"{record_label(record)} · {'技术标识' if action == 'technical' else '概览'}",
                 body,
             )
-            return activity, *_choice(state, session, status="Reference 详情已就绪")
+            return activity, *_choice(state, session, status="目录详情已就绪")
         operation: Callable[[], Any] = (
             (lambda: load_instrument_markets(state, record))
             if action == "markets" and kind in {"instruments", "option-chain"}
@@ -143,11 +143,11 @@ def handle_context(
         if record is None:
             return None
         session.reference.selected = record
-        session.context = ("reference", "selected")
+        session.enter("reference", "selected")
         body = detail_renderable(record, session.reference.kind)
         return (
             _standalone_activity(f"{record_label(record)} · 概览", body),
-            *_choice(state, session, status="已选择 Reference 记录"),
+            *_choice(state, session, status="已选择目录记录"),
         )
 
     action = action_id(SECTION_ACTIONS["reference"], command)
@@ -158,7 +158,7 @@ def handle_context(
     if action == "instruments":
         session.reference.kind = action
         session.reference.instrument_type = None
-        session.context = ("reference", "instrument-types")
+        session.enter("reference", "instrument-types")
         return _choice(state, session)
     session.reference.kind = action
     session.reference.instrument_type = None
@@ -184,7 +184,7 @@ def handle_success(
         body = runtime_status_renderable(result)
         return (
             _activity(spec, body),
-            *_choice(state, session, status="Reference 运行状态已就绪"),
+            *_choice(state, session, status="标的目录准备状态已就绪"),
         )
     if kind is ResultKind.REFERENCE_RECORDS:
         reference_kind = spec.route.qualifier
@@ -192,10 +192,10 @@ def handle_success(
         records = tuple(result or ())
         if records:
             return _show_record_choices(session, records, reference_kind)
-        session.enter("reference")
+        session.restore("reference")
         interaction = ChoiceInteraction(
             title=f"{session.root_label} / 市场标的",
-            summary=Text("没有找到匹配的 Reference 记录。", style="dim"),
+            summary=Text("没有找到匹配的目录记录。", style="dim"),
             actions=SECTION_ACTIONS["reference"],
         )
         return SetInteraction(interaction), SetStatus("没有找到匹配结果")
@@ -243,16 +243,17 @@ def handle_cancel(
 def _run_search(
     state: Any, session: GuidedSession, kind: str, query: str
 ) -> RunOperation:
+    session.reference.query = query or None
     instrument_type = session.reference.instrument_type
     return RunOperation(
         _spec(
             action_name=f"reference.find.{kind}",
-            summary=f"查找 Reference {kind}" + (f" · {query}" if query else ""),
+            summary="查找标的目录" + (f" · {query}" if query else ""),
             route=ResultRoute(ResultKind.REFERENCE_RECORDS, kind),
             operation=lambda: load_records(
                 state, kind, query, instrument_type=instrument_type
             ),
-            status="正在查找 Reference 记录…",
+            status="正在查找标的目录…",
         )
     )
 
@@ -261,10 +262,10 @@ def _run_status(state: Any) -> RunOperation:
     return RunOperation(
         _spec(
             action_name="reference.status",
-            summary="查看 Reference 运行状态",
+            summary="查看标的目录准备状态",
             route=ResultRoute(ResultKind.REFERENCE_STATUS),
             operation=lambda: load_runtime_status(state),
-            status="正在读取 Reference 运行状态…",
+            status="正在读取标的目录准备状态…",
         )
     )
 
@@ -342,7 +343,7 @@ def _standalone_activity(title: str, body: Any) -> AppendActivity:
 def _show_record_choices(
     session: GuidedSession, records: tuple[Any, ...], record_kind: str
 ) -> tuple[ScreenEffect, ...]:
-    session.context = ("reference", record_kind)
+    session.enter("reference", record_kind)
     visible = selection_records(
         records,
         label=record_label,

@@ -8,7 +8,7 @@ Application/Contract 边界和显式 CLI 约束仍以项目架构规则及
 ## 1. 产品定位
 
 Kairos Workbench 是面向人工操作的统一终端工作台。它帮助用户在不知道完整 CLI 命令和内部模块
-结构的前提下，完成行情、标的、运行方案、运行准备、数据研究以及运行中心操作。
+结构的前提下，完成市场浏览、策略运行、账户交易、连接配置、数据回测以及运行中心操作。
 
 Workbench 是现有业务 Application 与 Contract 的输入适配和结果展示层，不是新的业务 API、业务
 状态所有者或命令执行器。它只有一个 `KairosWorkbenchApp`、一个主工作屏和一个持续可见的输入框。
@@ -34,7 +34,7 @@ Workbench 是现有业务 Application 与 Contract 的输入适配和结果展�
 
 Workbench 同时服务三类使用者：
 
-- 新用户：需要发现能力、通过运行前检查并获得下一步引导。
+- 新用户：需要发现能力、按任务完成必要配置并获得下一步引导。
 - 日常操作者：需要快速查看行情、控制 Launch、管理账户和诊断服务。
 - 研究与开发人员：需要准备数据、运行研究流程、检查系统状态并把证据交给 Agent。
 
@@ -42,10 +42,10 @@ Workbench 同时服务三类使用者：
 
 | 编号 | 产品入口 | 用户要完成的工作 | 主要业务所有者 |
 | --- | --- | --- | --- |
-| 1 | 查看市场行情 | 搜索报价、下载历史行情、浏览数据集、回放与连接运行服务 | Market、Reference、Integration |
-| 2 | 查找市场标的 | 查找资产、交易所、合约、Market 与期权链 | Reference |
-| 3 | 策略管理 | 创建和配置运行方案、启动运行实例、查看组件、跟随输出和控制执行 | Workspace/System、Execution、Market |
-| 4 | 运行前检查 | 配置账户、市场数据、模型、通知并检查连接 | Account、Integration、Workspace/System |
+| 1 | 市场与标的 | 搜索标的、查看实时或历史行情、浏览标的目录和本地数据 | Market、Reference |
+| 2 | 策略与运行 | 创建和配置运行方案、启动实例、查看组件、跟随输出和控制执行 | Workspace/System、Execution、Market |
+| 3 | 账户与交易 | 查看账户、余额、持仓、订单、费率和资金操作 | Account、Execution、Integration |
+| 4 | 连接与配置 | 配置并验证账户、市场数据、模型和通知连接 | Account、Integration、Workspace/System |
 | 5 | 数据与回测 | 管理 Dataset、Research Plan 和 Gate | Data/Research 所属 Application |
 | 6 | 运行中心 | 查看活动运行实例、项目共享服务、支撑进程、依赖和日志 | Workspace/System |
 | 7 | 项目管理 | 查看、检查、创建、打开或切换项目，安装项目模板 | Workspace/System |
@@ -145,6 +145,10 @@ Application、Actor 或 Contract 拥有；界面不得成为第二个可变业�
 并非每个流程都需要所有层级。对象唯一且业务规则允许时可以直接进入详情；存在多个候选或选择会改变
 业务含义时，必须先让用户明确选择。
 
+导航语义由 Workbench 专有的 `screens/navigation/` 包统一拥有。该包维护稳定首页目录、上下文父子关系、
+返回路径、面包屑和当前动作投影；Textual Screen 只提交入口和展示结果。各产品 flow 继续拥有自己的动作
+定义、可用性判断、参数、业务调用和状态转换，导航包不得成为通用 router、业务 registry 或第二个 facade。
+
 ### 3.3 运行作用域
 
 产品必须显式区分 standalone、项目共享服务和 Launch Instance 三种作用域：
@@ -159,7 +163,7 @@ Backtest 和 Paper 的 Market 默认属于 Instance，Live 的 Market 默认项�
 socket 或文件而被解释为项目共享组件。
 
 不同作用域不得因文件存在、服务失败或 Provider 不可用而自动互相回退。当前作用域必须通过面包屑、
-对象摘要或确认信息对用户可见。从“运行中心”选择一个活动运行实例时，必须进入与“策略管理”共用的
+对象摘要或确认信息对用户可见。从“运行中心”选择一个活动运行实例时，必须进入与“策略与运行”共用的
 实例详情，不得建立第二套运行详情或组件控制模型。
 
 ### 3.4 无项目状态
@@ -359,7 +363,17 @@ dispatch、成功、错误和取消四处重复登记。
 参数输入只进入当前向导状态。普通参数可进入输入历史和脱敏 transcript，但不以
 `kairos › <原始值>` 的形式逐项写入内容区。Secret 参数既不进入输入历史，也不显示明文。
 
-### 6.3 一个操作、一个意图、一个终态
+### 6.3 逻辑页面栈与返回检查点
+
+Workbench 只有一个 Textual Screen，但 `GuidedSession` 维护按实际访问顺序排列的逻辑页面栈。产品
+flow 使用 `enter` 进入新页面，`/back` 弹出当前帧并恢复真实来源；`return_to` 用于完成前置条件后回到
+最近的指定检查点。首页和切换项目清空页面栈及临时任务上下文。
+
+页面帧只保存页面上下文。原始市场查询、所选目录准备目标等最小任务事实保存在所属产品 Session；凭据
+明文、Provider 原始响应和可从 owner 重读的目录记录不得进入页面帧。异步工作完成时只有用户仍在原流程
+才能直接恢复查询；用户已经离开时只追加完成活动并提供返回动作，不得抢占当前页面。
+
+### 6.4 一个操作、一个意图、一个终态
 
 参数齐全后，产品 flow 构造一个不可变 `OperationSpec`，其中包含 operation ID、稳定动作名、脱敏审计
 摘要、可选等价 CLI、类型化 `ResultRoute` 和 callable。确认和 Worker 都复用同一个 spec；Screen 只以
@@ -368,7 +382,7 @@ dispatch、成功、错误和取消四处重复登记。
 操作意图由 transcript 按 operation ID 去重记录。Activity Stream 不展示“开始执行”，只在 Worker 到达
 成功、失败或执行后取消时使用同一个 operation ID 追加一个终态 Activity。确认前取消不产生 Activity。
 
-### 6.4 特殊控制命令
+### 6.5 特殊控制命令
 
 | 命令 | 内容区行为 |
 | --- | --- |
@@ -546,31 +560,33 @@ owner 持有。
 
 ## 10. 七个首页入口
 
-### 10.1 市场行情
+### 10.1 市场与标的
 
 核心流程包括：
 
-- 按代码或名称搜索有效标的并查看当前行情；
+- 按代码或名称查找可以交易的标的并查看当前行情；
+- 按交易品种分组，并列出多个交易所提供的具体市场；
+- 浏览交易所、交易品种、具体市场和期权链；
+- 查看、添加或退出当前 Workbench 会话拥有的实时行情关注；
 - 选择时间范围和目标位置下载历史行情；
 - 浏览已准备的本地数据集；
 - 将 JSONL 行情事件送入独立回放；
-- 连接 Workspace 或 Launch Instance 的 Market 服务；
-- 诊断 Market 定义、Reference 映射和 Provider route；
 - 通过高级入口输入完整 Market 标识。
 
 普通用户流程优先使用 Reference 搜索结果，完整 Market ID 只属于明确的高级入口。
+搜索会先匹配具体市场，必要时通过 Asset 和 Instrument 关系找到关联市场。搜索为空时保留原查询，用户
+可以选择 Nasdaq、NYSE、Binance、OKX 等交易所和股票、现货、永续、期货或期权品种。Reference owner
+返回推荐目录来源、实际准备范围、账号要求和进度；市场数据账号配置完成后返回原准备页，目录可用后
+重新执行原搜索。用户不需要进入独立 Reference 菜单或输入内部 Instrument ID。
+“我的实时行情”只展示当前会话关注、用户可理解的项目共享行情来源和新鲜度，不展示 PID、socket、
+全部运行订阅或服务生命周期。项目共享 Market 的实际 route、全部订阅、启停、日志和回放时钟只在
+“运行中心 / 项目共享服务 / 行情服务”出现；具体 Instance 的 Market 状态和控制只在该实例组件中出现。
 
-### 10.2 市场标的
+Reference generation、publication 和 Provider 同步状态属于项目共享服务的运行信息，不混入普通标的详情。
 
-Reference 入口提供资产、交易所、合约、Market 和期权链。资产和合约按代码或名称搜索；数量较少的
-交易所和 Provider 可以直接列出。详情页可以继续查看关联 listing、Market 和技术标识。
+### 10.2 策略与运行
 
-Reference generation、publication 和 Provider 同步状态属于项目共享服务的运行信息，不应混入普通
-标的详情。
-
-### 10.3 策略管理
-
-策略管理围绕运行方案和运行实例组织：
+策略与运行围绕运行方案和运行实例组织：
 
 - 列出、创建和编辑运行方案；
 - 选择 backtest、paper 或 live 模式；
@@ -591,17 +607,27 @@ Execution、Capital 和实例级 Market 的生命周期由 Launch 统一管理�
 项目共享 Market 可以从 Instance 详情进入其 connected 业务视图，但其 Workspace 生命周期仍由
 “运行中心”负责。
 
-### 10.4 运行准备
+### 10.3 账户与交易
 
-运行准备按资源类型组织账户、市场数据、模型服务端点、可用模型和通知目标。配置向导必须区分普通字段与 Secret，
-支持预览、验证、编辑和删除，并在结束时给出资源是否可用于 paper/live 的明确结论。
+账户与交易是账户运行查询和人工交易任务的唯一普通入口，包括账户概览、余额、持仓、订单、费率、
+Earn、资金划转和账户诊断。所选账户及交易分区由 Account flow 的临时 Session 持有；业务事实仍由
+Account owner 提供。需要修改连接时，从已选账户跳转到“连接与配置 / 交易账户”的同一配置对象，
+不得在配置详情中复制账户运行菜单。
 
 Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不允许 Execution 或其他模块向 Account
 推送第二份 live 观察事实。
 
-### 10.5 数据研究
+### 10.4 连接与配置
 
-数据研究区分数据准备和研究流程：
+连接与配置按资源类型组织交易账户、市场数据、模型服务端点、可用模型和通知目标。配置向导必须区分普通字段与 Secret，
+支持预览、验证、编辑和删除，并在结束时给出资源是否可用于 paper/live 的明确结论。
+
+该入口只表达期望配置、凭据、访问绑定和验证结论，不展示余额、订单、资金划转或组件生命周期。策略启动
+所需的就绪检查属于“策略与运行”的启动阶段，复用这些配置 owner，不要求用户预先遍历配置菜单。
+
+### 10.5 数据与回测
+
+数据与回测区分数据准备和研究流程：
 
 - Dataset 浏览、需求计划、执行和 Data Gate；
 - Research Plan、锁定、执行证据和 Research Gate。
@@ -674,7 +700,7 @@ Reference、Market 或 Launch 故障的技术证据，不成为首页能力，�
 
 项目文件检查、Workspace 服务诊断和 Launch 诊断是三个不同用例：
 
-- 项目文件和 Launch 配置问题在打开项目、运行前检查或 Launch 校验中呈现；
+- 项目文件和 Launch 配置问题在打开项目、连接配置或 Launch 校验中呈现；
 - socket、health file、process lock 和 Supervisor 状态在具体 Workspace 服务详情中呈现；
 - Strategy 与 Instance 组件问题在具体 Launch/Instance 中呈现。
 
@@ -685,7 +711,7 @@ Workbench 不提供脱离对象的全局“问题诊断”入口。只有 Applic
 #### 10.6.4 不属于本入口的能力
 
 - 项目创建、打开、切换和模板安装属于全局项目管理；无项目时直接显示为启动状态；
-- 账户、市场数据连接、模型服务端点、可用模型和通知属于运行前检查；
+- 余额、持仓、订单和资金操作属于账户与交易；连接、凭据和验证属于连接与配置；
 - Market runtime profile 属于市场连接或 Launch，Agent Profile 属于 Agent 资源；
 - Risk、Capital 和 Integration 的业务动作属于具体 Launch Instance、资源配置或显式 standalone CLI；
 - Manifest、全部 TOML、配置路径、Application 操作清单和通用 Config Profile 不作为 Workbench 菜单。
@@ -797,7 +823,7 @@ port，也不得为了表面统一而引入接受任意业务数据的通用 ren
 - 有限操作最多形成一个终态 Activity，自动刷新不追加 Activity。
 - Observe 结果分别表达项目共享服务、Launch Instance 和支撑进程，不在 Workspace scope 虚构
   Account、Risk、Execution 或 Capital 状态。
-- “运行中心”和“策略管理”选择同一个实例时进入同一套 Instance Session 与页面。
+- “运行中心”和“策略与运行”选择同一个实例时进入同一套 Instance Session 与页面。
 - Workspace 服务启动登记 Supervisor desired state；停止先取消 desired state；停止和重启都执行活动
   Launch 依赖检查。
 - Instance-owned 组件只通过所属 Launch Instance 定位，Workbench 不提供局部生命周期捷径。

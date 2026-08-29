@@ -1,0 +1,14 @@
+# Kairos backtest quickstart
+
+This project includes an offline deterministic example. It needs no provider
+credentials or network connection.
+
+```bash
+kairos launch diagnose validate {{launch_id}}
+kairos project doctor
+kairos launch start {{launch_id}}
+kairos launch wait {{launch_id}}
+```
+
+Generated files belong to you. Edit `{{strategy_package_path}}/strategy.py` freely;
+`kairos template status` reports customization but never overwrites it.

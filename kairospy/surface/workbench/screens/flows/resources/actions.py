@@ -50,16 +50,15 @@ def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
     )
     if kind == "accounts":
         return (
-            ActionItem("operations", "账户运行查询", "余额、持仓、费率与订单", "1"),
             ActionItem(
                 "access",
                 "管理账户访问",
                 "增加或替换 account-read / order-trade binding",
-                "2",
+                "1",
             ),
             *tuple(
                 ActionItem(item.id, item.label, item.description, str(index))
-                for index, item in enumerate(common, 3)
+                for index, item in enumerate(common, 2)
             ),
         )
     if kind == "models":

@@ -22,10 +22,18 @@ from kairospy.investment.apps.reference.application.models import (
     MarketStatus,
     ReferenceStatus,
 )
-from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
+from kairospy.primitives.reference import AssetId, ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.effects import RunOperation
+from kairospy.surface.workbench.screens.operation import OperationSpec
+from kairospy.surface.workbench.screens.navigation import context_items
+from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
+from kairospy.surface.workbench.screens.session import GuidedSession
 from kairospy.surface.workbench.screens.flows import market, reference
+from kairospy.surface.workbench.screens.flows.reference import (
+    actions as reference_actions,
+)
 from kairospy.surface.workbench.screens.flows.reference.actions import (
     runtime_status_renderable,
 )
@@ -48,6 +56,7 @@ from kairospy.surface.workbench.widgets import (
     Feature,
     InputInteraction,
     WorkbenchCommandInput,
+    interaction_copy_text,
 )
 from textual.app import App
 from textual.containers import Vertical
@@ -59,6 +68,119 @@ from app_support import (
     market as _market,
     workbench_state as _state,
 )
+
+
+def test_market_letter_shortcut_is_dispatched_before_bare_cli_input() -> None:
+    async def run() -> tuple[tuple[str, ...], str, int]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+
+            screen.submit("1")
+            screen.submit("c")
+            await pilot.pause()
+            return (
+                screen.session.context,
+                interaction_copy_text(screen.session.interaction),
+                len(screen._output().activities),
+            )
+
+    context, interaction, activity_count = asyncio.run(run())
+
+    assert context == ("market", "live-unavailable")
+    assert "启动实时行情" in interaction
+    assert "查看服务详细状态" in interaction
+    assert activity_count == 0
+
+
+def test_unavailable_live_market_offers_scoped_recovery_and_canonical_details() -> None:
+    async def run(action: str) -> tuple[tuple[str, ...], object, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("1")
+            screen.submit("c")
+            screen.submit(action)
+            await pilot.pause()
+            return (
+                screen.session.context,
+                screen.session.interaction,
+                interaction_copy_text(screen.session.interaction),
+            )
+
+    confirm_context, confirm, confirm_copy = asyncio.run(run("1"))
+    assert confirm_context == ("market", "live-unavailable")
+    assert isinstance(confirm, ConfirmInteraction)
+    assert "项目共享 Market" in confirm.operation.audit_summary
+    assert "项目共享行情服务" in confirm_copy
+
+    detail_context, detail, detail_copy = asyncio.run(run("2"))
+    assert detail_context == ("operations", "service", "market")
+    assert isinstance(detail, ChoiceInteraction)
+    assert "启动并保持运行" in detail_copy
+
+
+def test_workspace_market_subscription_resolves_symbol_without_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: (_market(),))
+
+    async def run() -> tuple[str, str, str]:
+        state = _state()
+        assert state.snapshot is not None
+        state.snapshot.shared_services["market"] = {
+            "status": "ready",
+            "control_reachable": True,
+            "pid_alive": True,
+        }
+        state.dry_run = True
+        state.no_exec = True
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("1", "c", "s", "AAPL", "1"):
+                screen.submit(value)
+                await pilot.pause(0.05)
+            return (
+                str(screen.query_one("#command-context", Static).render()),
+                _log_text(screen.query_one("#command-output", RichLog)),
+                interaction_copy_text(screen.session.interaction),
+            )
+
+    context, output, interaction = asyncio.run(run())
+
+    assert context == "trader / 市场与标的 / 我的实时行情  ›"
+    assert "添加实时行情预演完成，未执行任何修改" in output
+    assert "market:aapl-nasdaq" not in interaction
+    assert "Market ID" not in interaction
+
+
+def test_unsupported_explicit_kairos_command_is_rejected_before_dry_run() -> None:
+    async def run() -> tuple[str, int]:
+        state = _state()
+        state.dry_run = True
+        state.no_exec = True
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+
+            screen.submit("kairos c")
+            await pilot.pause()
+            return (
+                interaction_copy_text(screen.session.interaction),
+                len(screen._output().activities),
+            )
+
+    interaction, activity_count = asyncio.run(run())
+
+    assert "kairos c 尚未接入单输入 Application 分派" in interaction
+    assert "请选择当前菜单中的操作" in interaction
+    assert "重新执行" not in interaction
+    assert activity_count == 0
 
 
 def test_market_command_runs_in_worker_and_presents_result_choices(
@@ -85,10 +207,324 @@ def test_market_command_runs_in_worker_and_presents_result_choices(
 
     assert output == ""
     assert "AAPL" in choice
-    assert "nasdaq · equity · active" in choice
+    assert "AAPL · 股票" in choice
+    assert "Nasdaq · AAPL · 当前有效" in choice
     assert "找到 1 个标的" not in output
     assert status == "找到 1 个结果 · 请选择"
     assert option_count == 1
+
+
+def test_market_search_falls_back_through_instrument_and_asset_relationships(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = _market()
+
+    class Catalog:
+        def find_markets(self, **filters):
+            return (
+                (expected,)
+                if filters.get("instrument_id") or filters.get("asset_code")
+                else ()
+            )
+
+        def find_instruments(self, **_filters):
+            return (SimpleNamespace(id=expected.instrument.id),)
+
+        def find_assets(self, **_filters):
+            return (SimpleNamespace(code="AAPL"),)
+
+    monkeypatch.setattr(reference_actions, "_application", lambda _state: Catalog())
+
+    records = reference_actions.load_records(object(), "markets", "AAPL")
+
+    assert records == (expected,)
+
+
+def test_market_search_groups_one_product_across_exchange_markets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    markets = (
+        Market(
+            id=MarketId("market:binance:spot:BTCUSDT"),
+            instrument=InstrumentRef(
+                InstrumentId("instrument:binance:spot:BTCUSDT"), "BTC/USDT"
+            ),
+            listing_id=None,
+            exchange_id=ExchangeId("exchange:binance"),
+            instrument_kind="spot",
+            venue_symbol="BTCUSDT",
+            base_asset=AssetId("asset:BTC"),
+            quote_asset=AssetId("asset:USDT"),
+            status=MarketStatus.ACTIVE,
+        ),
+        Market(
+            id=MarketId("market:okx:spot:BTC-USDT"),
+            instrument=InstrumentRef(
+                InstrumentId("instrument:okx:spot:BTC-USDT"), "BTC/USDT"
+            ),
+            listing_id=None,
+            exchange_id=ExchangeId("exchange:okx"),
+            instrument_kind="spot",
+            venue_symbol="BTC-USDT",
+            base_asset=AssetId("asset:BTC"),
+            quote_asset=AssetId("asset:USDT"),
+            status=MarketStatus.ACTIVE,
+        ),
+    )
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: markets)
+
+    async def run() -> str:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("/market BTCUSDT")
+            await pilot.pause(0.1)
+            return interaction_copy_text(screen.session.interaction)
+
+    result = asyncio.run(run())
+    assert "BTC/USDT · 现货" in result
+    assert "2 个市场" in result
+    assert "Binance · BTCUSDT · 当前有效" in result
+    assert "OKX · BTC-USDT · 当前有效" in result
+
+
+def test_missing_market_guides_catalog_setup_and_preserves_original_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        market,
+        "load_catalog_setup_plan",
+        lambda _state, goal: {
+            "goal": goal.to_request(),
+            "availability": "not_configured",
+            "activity": "idle",
+            "recommended_option": 0,
+            "blockers": ["missing_connection_binding"],
+            "options": [
+                {
+                    "binding": {"provider": "massive", "source": "equity"},
+                    "recommendation": "recommended",
+                    "actual_scope": "complete_united_states_equities",
+                    "requires_connection": True,
+                    "connection_binding_present": False,
+                    "already_configured": False,
+                    "reasons": ["authoritative_exchange_listings"],
+                    "limitations": [
+                        "synchronizes_complete_united_states_equities",
+                        "requires_provider_account",
+                    ],
+                }
+            ],
+        },
+    )
+
+    async def run() -> tuple[
+        tuple[str, ...], str, str | None, tuple[tuple[str, ...], ...]
+    ]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 34)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("/market AAPL")
+            await pilot.pause(0.1)
+            assert screen.session.context == ("market", "missing")
+            screen.submit("1")
+            screen.submit("1")
+            screen.submit("1")
+            await pilot.pause(0.1)
+            return (
+                screen.session.context,
+                interaction_copy_text(screen.session.interaction),
+                screen.session.market.query,
+                tuple(frame.context for frame in screen.session.navigation_stack),
+            )
+
+    context, interaction, query, stack = asyncio.run(run())
+
+    assert context == ("market", "catalog-setup")
+    assert query == "AAPL"
+    assert "完整美国股票目录" in interaction
+    assert "不能只同步一个交易所" in interaction
+    assert "配置所需的数据服务账号" in interaction
+    assert ("market", "missing") in stack
+    assert ("market", "catalog-exchange") in stack
+    assert ("market", "catalog-instrument") in stack
+
+
+def test_catalog_account_setup_returns_to_preparation_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market, "load_records", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        market,
+        "load_catalog_setup_plan",
+        lambda _state, goal: {
+            "goal": goal.to_request(),
+            "availability": "not_configured",
+            "activity": "idle",
+            "recommended_option": 0,
+            "blockers": ["missing_connection_binding"],
+            "options": [
+                {
+                    "binding": {"provider": "massive", "source": "equity"},
+                    "actual_scope": "complete_united_states_equities",
+                    "requires_connection": True,
+                    "connection_binding_present": False,
+                    "already_configured": False,
+                    "reasons": [],
+                    "limitations": [],
+                }
+            ],
+        },
+    )
+
+    async def run() -> tuple[tuple[str, ...], str, object]:
+        state = _state()
+        state.dry_run = True
+        state.no_exec = True
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 34)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("/market AAPL", "1", "1", "1"):
+                screen.submit(value)
+                await pilot.pause(0.05)
+            screen.submit("1")
+            await pilot.pause(0.05)
+            assert screen.session.context == ("resources", "setup")
+            for value in ("", "", "2", "test-key"):
+                screen.submit(value)
+                await pilot.pause(0.05)
+            return (
+                screen.session.context,
+                interaction_copy_text(screen.session.interaction),
+                (
+                    screen.session.market.catalog_setup_plan.credential_binding
+                    if screen.session.market.catalog_setup_plan is not None
+                    else None
+                ),
+            )
+
+    context, interaction, credential_binding = asyncio.run(run())
+
+    assert context == ("market", "catalog-setup")
+    assert "开始准备" in interaction
+    assert "配置所需的数据服务账号" not in interaction
+    assert credential_binding == "massive-equity-credential"
+
+
+def test_catalog_preparation_automatically_returns_to_original_market_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    searches = 0
+
+    def load_records(*_args, **_kwargs):
+        nonlocal searches
+        searches += 1
+        return () if searches == 1 else (_market(),)
+
+    initial_plan = {
+        "goal": {
+            "kind": "exchange_instruments",
+            "exchange_id": "exchange:nasdaq",
+            "instrument_kind": "equity",
+        },
+        "availability": "not_configured",
+        "activity": "idle",
+        "recommended_option": 0,
+        "blockers": [],
+        "options": [
+            {
+                "binding": {"provider": "massive", "source": "equity"},
+                "actual_scope": "complete_united_states_equities",
+                "requires_connection": True,
+                "connection_binding_present": True,
+                "already_configured": True,
+                "reasons": [],
+                "limitations": [],
+            }
+        ],
+        "_credential_binding": "massive-main-credential",
+    }
+    usable_plan = {**initial_plan, "availability": "usable"}
+    monkeypatch.setattr(market, "load_records", load_records)
+    monkeypatch.setattr(
+        market,
+        "load_catalog_setup_plan",
+        lambda _state, _goal: dict(initial_plan),
+    )
+    monkeypatch.setattr(
+        market,
+        "prepare_catalog_source",
+        lambda *_args, **_kwargs: {"plan": dict(usable_plan)},
+    )
+
+    async def run() -> tuple[tuple[str, ...], str, int]:
+        state = _state()
+        state.yes = True
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 34)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("/market AAPL", "1", "1", "1", "1"):
+                screen.submit(value)
+                await pilot.pause(0.06)
+            await pilot.pause(0.1)
+            return (
+                screen.session.context,
+                interaction_copy_text(screen.session.interaction),
+                searches,
+            )
+
+    context, interaction, search_count = asyncio.run(run())
+
+    assert context == ("market", "results")
+    assert "AAPL · 股票" in interaction
+    assert search_count == 2
+
+
+def test_catalog_completion_does_not_steal_an_unrelated_page() -> None:
+    session = GuidedSession(root_label="trader")
+    session.market.query = "AAPL"
+    session.enter("market", "missing")
+    session.enter("market", "catalog-exchange")
+    session.enter("market", "catalog-instrument")
+    session.enter("market", "catalog-setup")
+    session.enter("research")
+    spec = OperationSpec.create(
+        action_name="market.catalog.check",
+        audit_summary="检查标的目录准备条件",
+        route=ResultRoute(ResultKind.MARKET_CATALOG_SETUP),
+        operation=lambda: None,
+        running_status="正在检查…",
+    )
+
+    effects = market.handle_success(
+        _state(),
+        session,
+        spec,
+        {
+            "availability": "usable",
+            "activity": "idle",
+            "recommended_option": None,
+            "blockers": [],
+            "options": [],
+        },
+    )
+
+    assert effects is not None
+    assert len(effects) == 1
+    assert session.context == ("research",)
+
+    session.enter("market")
+    assert any(item.id == "resume-search" for item in context_items(session, _state()))
+    resume = market.handle_context(_state(), session, "u")
+
+    assert resume is not None
+    assert len(resume) == 1
+    assert isinstance(resume[0], RunOperation)
 
 
 def test_market_result_can_be_focused_and_opened_with_keyboard(
@@ -162,7 +598,7 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream(
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
 
-            await pilot.press("2", "enter", "4", "enter")
+            await pilot.press("1", "enter", "4", "enter", "3", "enter")
             await pilot.pause()
             assert (
                 screen.query_one("#command-input", WorkbenchCommandInput).placeholder
@@ -187,7 +623,7 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream(
         run()
     )
     assert screen_type is CommandLineScreen
-    assert context == "trader / 市场标的 / 查询结果  ›"
+    assert context == "trader / 市场与标的 / 标的目录 / 查询结果  ›"
     assert option_count == 1
     assert input_focused
     assert "找到 1 条交易标的记录" not in output
@@ -272,14 +708,14 @@ def test_reference_runtime_status_has_structured_owner_sections() -> None:
         console.print(runtime_status_renderable(_reference_runtime_status()))
     output = console.export_text()
 
-    assert "Reference 可访问，但存在需要处理的状态" in output
-    assert "运行时" in output
-    assert "generation 42 · sequence 9810" in output
-    assert "binance-spot" in output
-    assert "massive-options" in output
-    assert output.index("massive-options") < output.index("binance-spot")
+    assert "标的目录存在需要处理的状态" in output
+    assert "准备活动" in output
+    assert "交易品种 30" in output
+    assert "币安现货" in output
+    assert "美国股票期权目录" in output
+    assert output.index("美国股票期权目录") < output.index("币安现货")
     assert "HTTP 429 · 可重试" in output
-    assert "reference.source_retrying" in output
+    assert "可到运行中心查看技术详情" in output
 
 
 def test_reference_status_runs_from_existing_reference_menu(
@@ -294,7 +730,7 @@ def test_reference_status_runs_from_existing_reference_menu(
         async with app.run_test(size=(120, 34)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            screen.submit("2")
+            screen.enter_section("reference")
             await pilot.pause()
             screen.submit("/s")
             await pilot.pause(0.1)
@@ -305,9 +741,9 @@ def test_reference_status_runs_from_existing_reference_menu(
             )
 
     output, status, focused = asyncio.run(run())
-    assert "Reference 可访问，但存在需要处理的状态" in output
-    assert "binance-spot" in output
-    assert status == "Reference 运行状态已就绪"
+    assert "标的目录存在需要处理的状态" in output
+    assert "币安现货" in output
+    assert status == "标的目录准备状态已就绪"
     assert focused
 
 
@@ -431,12 +867,12 @@ def test_market_search_owns_action_area_until_results_are_ready(
         input_focused,
         output,
     ) = asyncio.run(run())
-    assert prompt_context == "trader / 市场行情  ›"
+    assert prompt_context == "trader / 市场与标的  ›"
     assert not prompt_actions_visible
     assert prompt_hints == (
         "Enter 搜索  ·  Esc 返回  ·  Tab 内容区  ·  /up 20  ·  /bottom"
     )
-    assert context == "trader / 市场行情 / 查询结果  ›"
+    assert context == "trader / 市场与标的 / 查询结果  ›"
     assert option_count == 1
     assert input_focused
     assert "找到 1 个标的" not in output
@@ -530,7 +966,7 @@ def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
     control_text = console.export_text()
 
     assert screen_type is CommandLineScreen
-    assert context == "trader / 市场行情 / 查询结果  ›"
+    assert context == "trader / 市场与标的 / 查询结果  ›"
     assert "226.50" in output
     assert "AAPL   QUOTE" in output
     assert "bar" in next_actions
@@ -677,7 +1113,7 @@ def test_selecting_market_enters_named_context_without_printing_raw_record(
             )
 
     context, output, actions = asyncio.run(run())
-    assert context == "trader / 市场行情 / 已选标的 · AAPL · nasdaq · equity  ›"
+    assert context == "trader / 市场与标的 / 已选标的 · AAPL · nasdaq · equity  ›"
     assert "MarketId(" not in output
     assert "最新报价" in actions[0]
     assert "订单簿" in actions[1]
@@ -788,7 +1224,7 @@ def test_market_history_download_is_a_single_input_redacted_scope_preview(
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 市场行情 / 已选标的 · AAPL · nasdaq · equity  ›"
+    assert context == "trader / 市场与标的 / 已选标的 · AAPL · nasdaq · equity  ›"
     assert "Market 文件操作预演完成，未执行任何修改" in output
     assert "history/aapl.jsonl" in output
     assert "preview" in output
@@ -846,7 +1282,7 @@ def test_guided_reference_detail_technical_and_back_preserve_results(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1", "USD", "1", "3"):
+            for value in ("1", "4", "5", "USD", "1", "3"):
                 screen.submit(value)
                 await pilot.pause(0.05)
             selected = str(screen.query_one("#command-context", Static).render())
@@ -862,8 +1298,8 @@ def test_guided_reference_detail_technical_and_back_preserve_results(
             )
 
     selected, results, output, focused = asyncio.run(run())
-    assert selected == "trader / 市场标的 / 已选目录记录  ›"
-    assert results == "trader / 市场标的 / 查询结果  ›"
+    assert selected == "trader / 市场与标的 / 标的目录 / 已选目录记录  ›"
+    assert results == "trader / 市场与标的 / 标的目录 / 查询结果  ›"
     assert "asset:usd" in output
     assert focused
 
@@ -874,7 +1310,7 @@ def test_guided_reference_instrument_type_is_an_explicit_input_step() -> None:
         async with app.run_test(size=(100, 30)):
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "3", "5"):
+            for value in ("1", "4", "2", "5"):
                 screen.submit(value)
             interaction = screen.session.interaction
             assert isinstance(interaction, InputInteraction)

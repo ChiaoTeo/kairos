@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import import_module
@@ -319,6 +319,24 @@ class ReferenceClient:
         """Read source, catalog, and publication status from Reference."""
 
         return self.request("reference_status")
+
+    def plan_catalog_setup(self, goal: Mapping[str, object]) -> dict[str, Any]:
+        """Ask Reference how a requested exchange/product catalog can be prepared."""
+
+        return self.request(
+            "reference_plan_catalog_setup",
+            params=[{"goal": dict(goal)}],
+        )
+
+    def upsert_source_definition(
+        self, definition: Mapping[str, object]
+    ) -> dict[str, Any]:
+        """Persist one source definition selected from a catalog setup plan."""
+
+        return self.request(
+            "reference_upsert_source_definition",
+            params=[dict(definition)],
+        )
 
     def providers(self) -> dict[str, Any]:
         health = self.health()

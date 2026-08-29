@@ -27,6 +27,7 @@ from kairospy.surface.workbench.screens.command_line import CommandLineScreen
 from kairospy.surface.workbench.screens.activity import ActivityOutcome
 from kairospy.surface.workbench.screens.effects import (
     AppendActivity,
+    RunOperation,
     SetInteraction,
     SetStatus,
 )
@@ -457,7 +458,45 @@ def test_service_status_copy_and_actions_follow_lifecycle_state() -> None:
     }
     assert "stop" not in {item.id for item in service_actions(stopped)}
     assert {item.id for item in service_actions(stale)} >= {"repair", "repair-start"}
-    assert {item.id for item in service_actions(running)} >= {"stop", "restart"}
+    assert {item.id for item in service_actions(running)} >= {
+        "stop",
+        "restart",
+        "market-routes",
+        "market-subscriptions",
+        "market-pause-replay",
+        "market-resume-replay",
+    }
+
+
+def test_workspace_market_runtime_controls_live_only_in_operations_center() -> None:
+    view = service_status_view(
+        {"component": "market", "status": "ready", "control_reachable": True}
+    )
+    state = SimpleNamespace(
+        owner=object(),
+        load_error=None,
+        dry_run=False,
+        no_exec=False,
+        yes=False,
+    )
+    session = GuidedSession(context=("operations", "service", "market"))
+    session.operations.selected_service = "market"
+    session.operations.selected_service_status = view
+
+    route_effects = operations.handle_context(state, session, "r")
+    assert route_effects is not None
+    route = next(effect for effect in route_effects if isinstance(effect, RunOperation))
+    assert route.operation.route.qualifier == "market-runtime:routes"
+
+    pause_effects = operations.handle_context(state, session, "z")
+    assert pause_effects is not None
+    interaction = next(
+        effect.interaction
+        for effect in pause_effects
+        if isinstance(effect, SetInteraction)
+    )
+    assert isinstance(interaction, ConfirmInteraction)
+    assert "项目共享 Market" in interaction.operation.audit_summary
 
 
 def test_stopped_service_detail_keeps_one_action_list_at_60x20() -> None:
@@ -636,16 +675,25 @@ def test_operations_log_rotation_does_not_hide_repeated_first_line() -> None:
     assert lines == ("same-first-line", "same-first-line", "same-first-line")
 
 
-def test_workspace_market_control_uses_single_input_and_inline_confirmation() -> None:
+def test_workspace_market_replay_control_lives_in_operations_center() -> None:
     async def run() -> tuple[type[object], str, str, ConfirmInteraction, bool]:
         state = _state()
+        assert state.snapshot is not None
+        state.snapshot.shared_services["market"] = {
+            "status": "ready",
+            "operating_mode": "continuous",
+            "control_reachable": True,
+            "pid_alive": True,
+        }
         app = KairosWorkbenchApp(state)
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            screen.enter_section("market")
-            screen.submit("/c")
-            screen.submit("/p")
+            screen.submit("6")
+            await pilot.pause(0.1)
+            screen.submit("1")
+            screen.submit("2")
+            screen.submit("z")
             await pilot.pause()
             interaction = screen.session.interaction
             assert isinstance(interaction, ConfirmInteraction)
@@ -659,9 +707,9 @@ def test_workspace_market_control_uses_single_input_and_inline_confirmation() ->
 
     screen_type, context, output, interaction, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 市场行情 / 运行中 Market  ›"
+    assert context == "trader / 运行中心 / 行情服务  ›"
     assert output == ""
-    assert interaction.title == "Workspace Market 操作确认"
+    assert "暂停项目共享 Market 行情回放" in interaction.operation.audit_summary
     assert focused
 
 
@@ -694,7 +742,7 @@ def test_research_read_flow_uses_nested_single_input_menu(
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 数据研究 / 数据准备  ›"
+    assert context == "trader / 数据与回测 / 数据准备  ›"
     assert "dataset-demo" in output
     assert focused
 

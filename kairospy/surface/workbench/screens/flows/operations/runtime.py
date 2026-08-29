@@ -35,7 +35,8 @@ from .business import (
     actions as business_actions,
     execute as execute_business,
 )
-from ...catalog import SECTION_ACTIONS
+from .market import execute as execute_market_runtime, render as render_market_runtime
+from ...navigation.catalog import SECTION_ACTIONS
 from ...session import GuidedSession
 from ...presentation import ResultTone, conclusion, count, facts
 from .actions import (
@@ -207,6 +208,27 @@ def enter_overview(state: Any, session: GuidedSession) -> tuple[ScreenEffect, ..
     )
 
 
+def enter_service_detail(
+    state: Any, session: GuidedSession, component: str
+) -> tuple[ScreenEffect, ...]:
+    """Enter the canonical shared-service detail from a task recovery path."""
+
+    snapshot = getattr(state, "snapshot", None)
+    shared_services = getattr(snapshot, "shared_services", {})
+    raw = (
+        dict(shared_services.get(component, {}))
+        if isinstance(shared_services, Mapping)
+        else {}
+    )
+    raw["component"] = component
+    view = service_status_view(raw)
+    session.operations.selected_service = component
+    session.operations.selected_service_status = view
+    session.visible_records = ()
+    session.context = ("operations", "service", component)
+    return _choice(state, session, service_summary(view), service_status_line(view))
+
+
 def handle_success(
     state: Any, session: GuidedSession, spec: OperationSpec, result: Any
 ) -> tuple[ScreenEffect, ...] | None:
@@ -286,8 +308,15 @@ def handle_success(
         session.context = ("operations", "profiles")
     elif kind is ResultKind.BUSINESS:
         session.operations.business_prompt = None
+    if kind is ResultKind.OPERATIONS and spec.route.qualifier == "live-market-recovery":
+        session.context = ("market", "live")
     if kind is ResultKind.OPERATIONS_PROJECT:
         body = project_result_renderable(spec.action_name, result)
+    elif kind is ResultKind.OPERATIONS and spec.route.qualifier == "live-market-recovery":
+        body = Group(
+            conclusion("实时行情服务已经就绪", tone=ResultTone.SUCCESS),
+            facts((("作用域", "项目共享行情服务"), ("下一步", "选择要查看的实时行情"))),
+        )
     elif kind is ResultKind.OPERATIONS and spec.route.qualifier == "service-status":
         view = service_status_view(result)
         session.operations.selected_service_status = view
@@ -315,6 +344,16 @@ def handle_success(
             support_diagnostics(view)
             if view is not None
             else Text("支撑进程上下文已经失效。", style="yellow")
+        )
+    elif (
+        kind is ResultKind.OPERATIONS
+        and spec.route.qualifier is not None
+        and spec.route.qualifier.startswith("market-runtime:")
+    ):
+        action = spec.route.qualifier.removeprefix("market-runtime:")
+        body = render_market_runtime(
+            action,
+            result if isinstance(result, Mapping) else {},
         )
     else:
         body = _operations_result(title, result)
@@ -541,6 +580,35 @@ def _operations_context(
         if action is None:
             return None
         display_name = service_display_name(component)
+
+        if action.startswith("market-"):
+            if component != "market":
+                return None
+            market_action = action.removeprefix("market-")
+            spec = _spec(
+                f"operations.market.{market_action}",
+                {
+                    "routes": "查看项目共享 Market 当前生效路由",
+                    "subscriptions": "查看项目共享 Market 全部运行订阅",
+                    "pause-replay": "暂停项目共享 Market 行情回放",
+                    "resume-replay": "继续项目共享 Market 行情回放",
+                }[market_action],
+                ResultKind.OPERATIONS,
+                lambda: (
+                    {"status": "preview", "action": market_action}
+                    if (state.dry_run or state.no_exec)
+                    and market_action in {"pause-replay", "resume-replay"}
+                    else execute_market_runtime(state, market_action)
+                ),
+                qualifier=f"market-runtime:{market_action}",
+                running_status="正在读取项目共享 Market…",
+            )
+            return _confirm_or_run(
+                state,
+                session,
+                spec,
+                dangerous=market_action in {"pause-replay", "resume-replay"},
+            )
 
         if action == "follow":
             session.operations.start_logs(component, started_at=time.monotonic())

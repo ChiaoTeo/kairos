@@ -9,9 +9,6 @@ from textual.widgets import RichLog, Static
 from kairospy.surface.workbench import KairosWorkbenchApp
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
 from kairospy.surface.workbench.screens.flows.resources import account
-from kairospy.surface.workbench.screens.flows.resources import (
-    configuration as resources,
-)
 from kairospy.surface.workbench.screens.flows.resources.account_transfers import (
     TransferPromptState,
     transfer_available,
@@ -199,9 +196,9 @@ def test_readonly_account_shows_capability_degradation_without_amount_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        resources,
-        "list_records",
-        lambda state, kind: (record(capabilities=["read"]),),
+        account.AccountConfigurationApplication,
+        "list",
+        lambda application: (record(capabilities=["read"]),),
     )
 
     async def run() -> tuple[str, object]:
@@ -209,7 +206,7 @@ def test_readonly_account_shows_capability_degradation_without_amount_prompt(
         async with app.run_test(size=(120, 32)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "1", "1", "7"):
+            for value in ("3", "1", "7"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             return (
@@ -227,7 +224,11 @@ def test_authorized_transfer_requires_preview_and_explicit_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     selected = record(capabilities=["read", "transfer"])
-    monkeypatch.setattr(resources, "list_records", lambda state, kind: (selected,))
+    monkeypatch.setattr(
+        account.AccountConfigurationApplication,
+        "list",
+        lambda application: (selected,),
+    )
     calls: list[str] = []
 
     def fake_preview(state: Any, prompt: TransferPromptState) -> dict[str, Any]:
@@ -247,7 +248,7 @@ def test_authorized_transfer_requires_preview_and_explicit_confirmation(
         async with app.run_test(size=(120, 36)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "1", "1", "7", "", "spot", "", "10"):
+            for value in ("3", "1", "7", "", "spot", "", "10"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             assert isinstance(screen.session.interaction, ConfirmInteraction)

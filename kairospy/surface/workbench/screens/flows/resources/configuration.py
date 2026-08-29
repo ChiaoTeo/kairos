@@ -37,7 +37,7 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from ...catalog import AI_MODEL_ACTIONS, SECTION_ACTIONS
+from ...navigation.catalog import AI_MODEL_ACTIONS, SECTION_ACTIONS
 from ...session import GuidedSession
 from .views import (
     RESOURCE_LABELS,
@@ -78,31 +78,19 @@ def context_title(session: GuidedSession, base: str) -> str:
     """Return the Resources-owned identity suffix for the shell chrome."""
 
     context = session.context
-    if context in {
-        ("resources", "account-operations"),
-        ("resources", "account-order-segments"),
-        ("resources", "account-orders"),
-    }:
-        account = _selected_account_id(session.resources.selected)
-        if context == ("resources", "account-order-segments"):
-            root = f"{session.root_label} / 运行准备 / 订单管理"
-            return f"{root} · {account} / 选择交易分区" if account else base
-        title = f"{base} · {account}" if account else base
-        segment = session.account.selected_segment
-        if context == ("resources", "account-orders") and segment:
-            title = f"{title} / {segment}"
-        return title
     kind = session.resources.kind
     label = RESOURCE_LABELS.get(kind or "")
     if len(context) == 2 and context[1] in RESOURCE_LABELS:
-        return f"{session.root_label} / 运行准备 / {RESOURCE_LABELS[context[1]]}"
+        return f"{session.root_label} / 连接与配置 / {RESOURCE_LABELS[context[1]]}"
     if context == ("resources", "selected") and label:
         rid = (
             identity(kind, session.resources.selected)
             if kind is not None and session.resources.selected is not None
             else ""
         )
-        return f"{base} · {label}" + (f" · {rid}" if rid else "")
+        return f"{session.root_label} / 连接与配置 / {label}" + (
+            f" · {rid}" if rid else ""
+        )
     if context == ("resources", "setup") and label:
         wizard = session.resources.wizard
         rid = ""
@@ -112,7 +100,9 @@ def context_title(session: GuidedSession, base: str) -> str:
                 if wizard.record
                 else str(wizard.answers.get("resource-id") or "新建")
             )
-        return f"{base} · {label} · {rid or '新建'}"
+        return (
+            f"{session.root_label} / 连接与配置 / 配置向导 · {label} · {rid or '新建'}"
+        )
     return base
 
 
@@ -126,12 +116,6 @@ def empty_resource_label(session: GuidedSession) -> str | None:
     ):
         return RESOURCE_LABELS[context[1]]
     return None
-
-
-def _selected_account_id(record: Mapping[str, Any] | None) -> str:
-    if record is None:
-        return ""
-    return str(record.get("account_id") or record.get("id") or "")
 
 
 def handle_input(
@@ -364,9 +348,6 @@ def handle_context(
             return None
         if action == "advanced":
             return (_resource_run(state, session, action),)
-        if action == "operations" and kind == "accounts":
-            session.context = ("resources", "account-operations")
-            return _choice(state, session, status="已进入账户上下文")
         if action == "access" and kind == "accounts":
             session.resources.action = "access-purpose"
             interaction = ChoiceInteraction(
@@ -409,9 +390,6 @@ def handle_context(
         selected = ResourceRecordView.from_mapping(record)
         session.resources.selected = selected
         session.resources.action = None
-        if session.resources.kind == "accounts":
-            session.context = ("resources", "account-operations")
-            return _choice(state, session, status="已进入账户上下文")
         session.context = ("resources", "selected")
         body = detail_renderable(session.resources.kind, selected)
         return _standalone(
@@ -536,6 +514,8 @@ def handle_success(
     if kind is ResultKind.RESOURCE_WIZARD:
         wizard = session.resources.wizard
         wizard_kind = wizard.kind if isinstance(wizard, ResourceWizardState) else None
+        return_context = session.resources.return_context
+        credential_binding = _saved_credential_binding(result, wizard)
         label = RESOURCE_LABELS.get(wizard_kind or "", "运行资源")
         rid = (
             identity(wizard_kind, result)
@@ -574,6 +554,32 @@ def handle_success(
             ).model_endpoints()
             parent.accept("endpoint-id", created_endpoint_id)
             return _activity(spec, body), *_start_wizard(state, session, parent)
+        if (
+            resource_kind == "data"
+            and return_context is not None
+            and session.return_to(*return_context)
+        ):
+            session.resources.return_context = None
+            plan = session.market.catalog_setup_plan
+            if plan is not None and credential_binding:
+                session.market.catalog_setup_plan = plan.with_credential_binding(
+                    credential_binding
+                )
+                plan = session.market.catalog_setup_plan
+            from ..reference.actions import catalog_setup_renderable
+
+            summary = catalog_setup_renderable(plan) if plan is not None else Text()
+            interaction = ChoiceInteraction(
+                title=context_label(session.context, session.root_label),
+                summary=summary,
+                actions=context_items(session, state),
+            )
+            session.interaction = interaction
+            return (
+                _activity(spec, body),
+                SetInteraction(interaction),
+                SetStatus("账号已配置 · 可以开始准备标的目录"),
+            )
         if resource_kind is not None:
             records = tuple(
                 ResourceRecordView.from_mapping(record)
@@ -594,6 +600,21 @@ def handle_success(
             )
         return _activity(spec, body), *_choice(state, session, status="资源配置已完成")
     return None
+
+
+def _saved_credential_binding(
+    result: Any, wizard: ResourceWizardState | None
+) -> str | None:
+    if isinstance(result, Mapping) and result.get("credential_id"):
+        return str(result["credential_id"])
+    if not isinstance(wizard, ResourceWizardState) or wizard.kind != "data":
+        return None
+    if wizard.answers.get("credential-id"):
+        return str(wizard.answers["credential-id"])
+    resource_id = str(
+        wizard.answers.get("resource-id") or wizard.record.get("connection_id") or ""
+    )
+    return f"{resource_id}-credential" if resource_id else None
 
 
 def _enter_resource_list(
@@ -816,7 +837,7 @@ def _start_wizard(
             wizard.model_endpoints = ()
     session.resources.wizard = wizard
     session.resources.kind = wizard.kind
-    session.context = ("resources", "setup")
+    session.enter("resources", "setup")
     return _advance_wizard(state, session, wizard)
 
 
@@ -1839,29 +1860,18 @@ def _title(session: GuidedSession) -> str:
         and session.context[1] in RESOURCE_LABELS
     ):
         return (
-            f"{session.root_label} / 运行准备 / {RESOURCE_LABELS[session.context[1]]}"
+            f"{session.root_label} / 连接与配置 / {RESOURCE_LABELS[session.context[1]]}"
         )
-    if session.context in {
-        ("resources", "account-operations"),
-        ("resources", "account-order-segments"),
-        ("resources", "account-orders"),
-    }:
-        account = _account_id(session.resources.selected)
-        if session.context == ("resources", "account-order-segments"):
-            root = f"{session.root_label} / 运行准备 / 订单管理"
-            return f"{root} · {account} / 选择交易分区" if account else base
-        title = f"{base} · {account}" if account else base
-        segment = session.account.selected_segment
-        if session.context == ("resources", "account-orders") and segment:
-            title = f"{title} / {segment}"
-        return title
     if (
         session.context == ("resources", "selected")
         and label
         and kind is not None
         and session.resources.selected
     ):
-        return f"{base} · {label} · {identity(kind, session.resources.selected)}"
+        return (
+            f"{session.root_label} / 连接与配置 / {label}"
+            f" · {identity(kind, session.resources.selected)}"
+        )
     if session.context == ("resources", "setup") and label:
         wizard = session.resources.wizard
         rid = ""
@@ -1871,16 +1881,14 @@ def _title(session: GuidedSession) -> str:
                 if wizard.record
                 else str(wizard.answers.get("resource-id") or "新建")
             )
-        return f"{base} · {label} · {rid or '新建'}"
+        return (
+            f"{session.root_label} / 连接与配置 / 配置向导 · {label} · {rid or '新建'}"
+        )
     return base
 
 
 def _record_choice(records: tuple[SelectionRecord, ...], value: str) -> object | None:
     return selected_value(records, value)
-
-
-def _account_id(record: Mapping[str, Any] | None) -> str:
-    return str(record.get("account_id") or "").strip() if record else ""
 
 
 def _clear_wizard(session: GuidedSession) -> None:

@@ -1,0 +1,29 @@
+[template]
+id = "paper-manual"
+version = "1.0.0"
+title = "Manual paper trading"
+description = "A simulated account and interactive paper-trading launch."
+
+[[parameters]]
+name = "launch_id"
+description = "Launch resource id."
+kind = "id"
+default = "demo-paper-manual"
+
+[[parameters]]
+name = "account_id"
+description = "Simulated account resource id."
+kind = "id"
+default = "demo-paper"
+
+[[files]]
+source = "account.toml.tmpl"
+target = ".kairos/config/accounts/{{account_id}}.toml"
+
+[[files]]
+source = "launch.toml.tmpl"
+target = ".kairos/config/launches/{{launch_id}}.toml"
+
+[[files]]
+source = "quickstart.md.tmpl"
+target = "KAIROS_PAPER_MANUAL.md"

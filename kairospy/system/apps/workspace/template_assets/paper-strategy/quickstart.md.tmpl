@@ -1,0 +1,12 @@
+# Kairos paper strategy
+
+This observer strategy uses the verified `{{market_connection}}` market-data
+connection and does not enable order execution.
+
+```bash
+kairos launch diagnose validate {{launch_id}}
+kairos launch start {{launch_id}}
+```
+
+Edit `{{strategy_package_path}}/strategy.py` freely. The installed template records
+its origin but does not own or overwrite your generated files.

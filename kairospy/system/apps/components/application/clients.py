@@ -473,9 +473,7 @@ class MarketSystemClient(SystemRpcClient):
             owner_id=owner_id,
             request_id=request_id,
         )
-        return {
-            "released_subscription_ids": list(response.released_subscription_ids)
-        }
+        return {"released_subscription_ids": list(response.released_subscription_ids)}
 
     def recover(self) -> dict[str, Any]:
         response = self.control.recover()
@@ -896,6 +894,18 @@ class ReferenceSystemClient(SystemRpcClient):
         """Read the Reference-owned runtime status, not generic process health."""
 
         return self.reader.runtime_status()
+
+    def plan_reference_catalog(self, goal: Mapping[str, object]) -> dict[str, Any]:
+        """Plan how Reference can prepare one exchange/product catalog."""
+
+        return self.reader.plan_catalog_setup(goal)
+
+    def configure_reference_source(
+        self, definition: Mapping[str, object]
+    ) -> dict[str, Any]:
+        """Apply one source definition selected from a Reference setup plan."""
+
+        return self.reader.upsert_source_definition(definition)
 
     def providers(self) -> dict[str, Any]:
         return self.reader.providers()

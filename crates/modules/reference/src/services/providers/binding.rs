@@ -148,6 +148,36 @@ impl ReferenceSourceBinding {
         }
     }
 
+    pub(crate) const fn to_contract(self) -> kairos_reference_contract::ReferenceSourceBinding {
+        use kairos_reference_contract::{
+            BinanceReferenceSource as Binance, HyperliquidReferenceSource as Hyperliquid,
+            MassiveReferenceSource as Massive, OkxReferenceSource as Okx,
+            ReferenceSourceBinding as Contract,
+        };
+        match self {
+            Self::Binance(BinanceReferenceSource::Spot) => Contract::Binance(Binance::Spot),
+            Self::Binance(BinanceReferenceSource::UsdMFutures) => {
+                Contract::Binance(Binance::UsdMFutures)
+            },
+            Self::Binance(BinanceReferenceSource::CoinMFutures) => {
+                Contract::Binance(Binance::CoinMFutures)
+            },
+            Self::Binance(BinanceReferenceSource::Options) => Contract::Binance(Binance::Options),
+            Self::Binance(BinanceReferenceSource::Equity) => Contract::Binance(Binance::Equity),
+            Self::Okx(OkxProduct::Spot) => Contract::Okx(Okx::Spot),
+            Self::Okx(OkxProduct::Margin) => Contract::Okx(Okx::Margin),
+            Self::Okx(OkxProduct::Swap) => Contract::Okx(Okx::Swap),
+            Self::Okx(OkxProduct::Futures) => Contract::Okx(Okx::Futures),
+            Self::Okx(OkxProduct::Option) => Contract::Okx(Okx::Options),
+            Self::Hyperliquid(HyperliquidProduct::Spot) => Contract::Hyperliquid(Hyperliquid::Spot),
+            Self::Hyperliquid(HyperliquidProduct::Perpetual) => {
+                Contract::Hyperliquid(Hyperliquid::Perpetual)
+            },
+            Self::Massive(MassiveReferenceSource::Equity) => Contract::Massive(Massive::Equity),
+            Self::Massive(MassiveReferenceSource::Options) => Contract::Massive(Massive::Options),
+        }
+    }
+
     pub(crate) fn definition(
         self,
         scope: SourceScope,

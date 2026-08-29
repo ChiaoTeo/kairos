@@ -27,6 +27,18 @@ class ReferenceControlClient:
 
         return self.call("reference_status")
 
+    def plan_catalog_setup(self, goal: Mapping[str, object]) -> Mapping[str, Any]:
+        """Plan catalog preparation for one user-facing market goal."""
+
+        return self.call("reference_plan_catalog_setup", [{"goal": dict(goal)}])
+
+    def upsert_source_definition(
+        self, definition: Mapping[str, object]
+    ) -> Mapping[str, Any]:
+        """Create or update one Reference-owned catalog source."""
+
+        return self.call("reference_upsert_source_definition", [dict(definition)])
+
     def refresh(self, *, source: str | None = None) -> Mapping[str, Any]:
         return self.call("reference_refresh", [source])
 

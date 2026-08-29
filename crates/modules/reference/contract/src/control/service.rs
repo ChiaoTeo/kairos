@@ -6,6 +6,11 @@ pub trait ReferenceControlRpc {
 
     async fn status(&self) -> RpcResult<kairos_reference_contract::ReferenceRuntimeStatusResponse>;
 
+    async fn plan_catalog_setup(
+        &self,
+        request: kairos_reference_contract::ReferenceCatalogSetupRequest,
+    ) -> RpcResult<kairos_reference_contract::ReferenceCatalogSetupPlan>;
+
     async fn refresh(
         &self,
         source_id: Option<kairos_primitives::reference::ReferenceSourceId>,

@@ -522,7 +522,7 @@ def service_actions(view: ServiceStatusView | None) -> tuple[ActionItem, ...]:
             diagnostics(4),
         )
     if view.state in {ServiceDisplayState.RUNNING, ServiceDisplayState.DEGRADED}:
-        return (
+        actions = (
             refresh(1),
             action("stop", "停止", "请求组件安全停止", 2),
             action("restart", "重启", "停止后启动新的组件进程", 3),
@@ -530,6 +530,35 @@ def service_actions(view: ServiceStatusView | None) -> tuple[ActionItem, ...]:
             follow(5),
             diagnostics(6),
         )
+        if view.component == "market":
+            actions = (
+                *actions,
+                ActionItem(
+                    "market-routes",
+                    "当前生效路由",
+                    "查看运行时实际使用的行情来源",
+                    "r",
+                ),
+                ActionItem(
+                    "market-subscriptions",
+                    "全部运行订阅",
+                    "查看策略、操作员和系统当前拥有的订阅",
+                    "s",
+                ),
+                ActionItem(
+                    "market-pause-replay",
+                    "暂停共享行情回放",
+                    "暂停项目共享 Market 的 replay 时钟",
+                    "z",
+                ),
+                ActionItem(
+                    "market-resume-replay",
+                    "继续共享行情回放",
+                    "恢复项目共享 Market 的 replay 时钟",
+                    "g",
+                ),
+            )
+        return actions
     if view.state is ServiceDisplayState.UNRESPONSIVE:
         return (
             refresh(1),

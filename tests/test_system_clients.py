@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -206,10 +207,27 @@ def test_reference_system_client_exposes_owner_runtime_status() -> None:
         def runtime_status(self) -> dict[str, object]:
             return {"status": "ready", "sources": []}
 
+        def plan_catalog_setup(self, goal: Mapping[str, object]) -> dict[str, object]:
+            return {"goal": dict(goal), "availability": "not_configured"}
+
     client = ReferenceSystemClient(Path("/tmp/reference.sock"))
     object.__setattr__(client, "reader", RecordingReferenceReader())
 
     assert client.reference_status() == {"status": "ready", "sources": []}
+    assert client.plan_reference_catalog(
+        {
+            "kind": "exchange_instruments",
+            "exchange_id": "exchange:nasdaq",
+            "instrument_kind": "equity",
+        }
+    ) == {
+        "goal": {
+            "kind": "exchange_instruments",
+            "exchange_id": "exchange:nasdaq",
+            "instrument_kind": "equity",
+        },
+        "availability": "not_configured",
+    }
 
 
 def test_instance_system_clients_are_built_from_connection_manifest_facts() -> None:

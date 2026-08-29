@@ -1,0 +1,21 @@
+from kairospy.strategy import QuoteEvent, Strategy, StrategyContext
+
+
+class PaperQuoteStrategy(Strategy):
+    strategy_id = "paper-quote-strategy"
+
+    def on_start(self, context: StrategyContext) -> None:
+        markets = context.reference.find_markets(symbol="{{symbol}}")
+        if not markets:
+            raise RuntimeError("no active market found for {{symbol}}")
+        context.market.subscribe_quotes(markets[0].id)
+
+    def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
+        del context
+        quote = event.data
+        print(
+            f"quote instrument={quote.instrument_id} "
+            f"bid={quote.bid_price.value if quote.bid_price else '-'} "
+            f"ask={quote.ask_price.value if quote.ask_price else '-'}",
+            flush=True,
+        )

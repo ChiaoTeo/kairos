@@ -121,9 +121,7 @@ def test_complete_operation_redacts_paired_secret_arguments(tmp_path: Path) -> N
                 event for event in app.transcript.events if event["event"] == "action"
             )
             activity = next(
-                event
-                for event in app.transcript.events
-                if event["event"] == "activity"
+                event for event in app.transcript.events if event["event"] == "activity"
             )
             return screen._output().plain_text, action, activity
 

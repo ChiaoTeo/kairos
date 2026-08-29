@@ -113,8 +113,8 @@ def test_account_selection_enters_account_context_and_back_returns_to_list(
 
     screen_type, selected, results, account, focused, has_summary = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert selected == "trader / 运行准备 / 交易账户 · paper-main  ›"
-    assert results == "trader / 运行准备 / 交易账户  ›"
+    assert selected == "trader / 连接与配置 / 交易账户 · paper-main  ›"
+    assert results == "trader / 连接与配置 / 交易账户  ›"
     assert account == "paper-main"
     assert focused
     assert not has_summary
@@ -424,11 +424,9 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
             for key in ("account_id", "connection_id", "model_id", "destination_id")
             if key in record
         )
-        assert listed == f"trader / 运行准备 / {labels[kind]}  ›"
+        assert listed == f"trader / 连接与配置 / {labels[kind]}  ›"
         assert selected == (
-            f"trader / 运行准备 / 交易账户 · {resource_id}  ›"
-            if kind == "accounts"
-            else f"trader / 运行准备 / 已选运行资源 · {labels[kind]} · {resource_id}  ›"
+            f"trader / 连接与配置 / {labels[kind]} · {resource_id}  ›"
         )
 
 
@@ -460,7 +458,7 @@ def test_check_all_connections_renders_all_resource_groups(
             )
 
     context, output = asyncio.run(run())
-    assert context == "trader / 运行准备  ›"
+    assert context == "trader / 连接与配置  ›"
     assert "运行资源检查" in output
     for label in ("交易账户", "市场数据", "可用模型", "通知提醒"):
         assert label in output
@@ -502,13 +500,13 @@ def test_empty_resource_groups_offer_new_configuration_action(
 
     states = asyncio.run(run())
     for label, (context, status, action, count) in zip(labels, states):
-        assert context == f"trader / 运行准备 / {label}  ›"
+        assert context == f"trader / 连接与配置 / {label}  ›"
         assert status == f"尚未配置 {label}"
         assert f"添加{label}" in action
         assert count == 1
 
 
-def test_account_runtime_queries_and_fee_argument_stay_in_resource_context(
+def test_account_runtime_queries_and_fee_argument_stay_in_account_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, str | None]] = []
@@ -519,9 +517,9 @@ def test_account_runtime_queries_and_fee_argument_stay_in_resource_context(
         "verification_status": "verified",
     }
     monkeypatch.setattr(
-        resources,
-        "list_records",
-        lambda state, kind: (record,),
+        account.AccountConfigurationApplication,
+        "list",
+        lambda application: (record,),
     )
     monkeypatch.setattr(
         account,
@@ -536,7 +534,7 @@ def test_account_runtime_queries_and_fee_argument_stay_in_resource_context(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "1"):
+            for value in ("3",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             for value in ("1", "2"):
@@ -555,7 +553,7 @@ def test_account_runtime_queries_and_fee_argument_stay_in_resource_context(
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert calls == [("assets", None), ("fees", "perpetual:BTCUSDT")]
-    assert context == "trader / 运行准备 / 交易账户 · paper-main  ›"
+    assert context == "trader / 账户与交易 / 已选账户 · paper-main  ›"
     assert "paper-main · 账户运行结果" in output
     assert focused
 
@@ -662,9 +660,9 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
         "verification_status": "verified",
     }
     monkeypatch.setattr(
-        resources,
-        "list_records",
-        lambda state, kind: (record,),
+        account.AccountConfigurationApplication,
+        "list",
+        lambda application: (record,),
     )
 
     def execute(state: object, prompt: object) -> dict[str, object]:
@@ -680,7 +678,7 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "1"):
+            for value in ("3",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             for value in ("1", "4", "1"):
@@ -692,7 +690,7 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
             assert [action for action, _ in calls] == ["open-orders"]
             screen.submit("/confirm")
             await pilot.pause(0.1)
-            assert screen.session.resources.selected is not None
+            assert screen.session.account.selected is not None
             return (
                 type(app.screen),
                 str(screen.query_one("#command-context", Static).render()),
@@ -706,7 +704,7 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
     assert all(values["segment"] == "spot" for _, values in calls)
     assert calls[-1][1]["side"] == "buy"
     assert calls[-1][1]["order-type"] == "market"
-    assert context == "trader / 运行准备 / 订单管理 · paper-main / spot  ›"
+    assert context == "trader / 账户与交易 / 订单管理 · paper-main / spot  ›"
     assert "订单作用域确认" not in output
     assert "paper-main · 订单操作结果" in output
     assert focused
@@ -722,7 +720,11 @@ def test_account_order_selects_segment_before_action_and_renders_failure_once(
         "segments": ["funding", "spot", "usd_m_futures"],
         "verification_status": "verified",
     }
-    monkeypatch.setattr(resources, "list_records", lambda state, kind: (record,))
+    monkeypatch.setattr(
+        account.AccountConfigurationApplication,
+        "list",
+        lambda application: (record,),
+    )
 
     selected_segments: list[str | None] = []
 
@@ -737,7 +739,7 @@ def test_account_order_selects_segment_before_action_and_renders_failure_once(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "1"):
+            for value in ("3",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             for value in ("1", "4"):
@@ -766,10 +768,10 @@ def test_account_order_selects_segment_before_action_and_renders_failure_once(
         asyncio.run(run())
     )
     assert segment_context == (
-        "trader / 运行准备 / 订单管理 · manual-live-readonly / 选择交易分区  ›"
+        "trader / 账户与交易 / 订单管理 · manual-live-readonly / 选择交易分区  ›"
     )
     assert actions == ("funding", "spot", "usd_m_futures")
-    expected = "trader / 运行准备 / 订单管理 · manual-live-readonly / usd_m_futures  ›"
+    expected = "trader / 账户与交易 / 订单管理 · manual-live-readonly / usd_m_futures  ›"
     assert action_context == expected
     assert failure_context == expected
     assert selected_segments == ["usd_m_futures"]
@@ -781,9 +783,9 @@ def test_account_order_requires_a_configured_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        resources,
-        "list_records",
-        lambda state, kind: (
+        account.AccountConfigurationApplication,
+        "list",
+        lambda application: (
             {
                 "account_id": "segment-missing",
                 "broker": "binance",
@@ -798,7 +800,7 @@ def test_account_order_requires_a_configured_segment(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("4", "1", "1", "4"):
+            for value in ("3", "1", "4"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             interaction = screen.session.interaction
@@ -811,9 +813,9 @@ def test_account_order_requires_a_configured_segment(
             )
 
     context, summary, chrome = asyncio.run(run())
-    assert context == ("resources", "account-order-segments")
+    assert context == ("account", "order-segments")
     assert summary == "当前账户没有配置交易分区。\n"
-    assert chrome == ("trader / 运行准备 / 订单管理 · segment-missing / 选择交易分区  ›")
+    assert chrome == ("trader / 账户与交易 / 订单管理 · segment-missing / 选择交易分区  ›")
 
 
 def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
@@ -848,8 +850,7 @@ def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("11")
-            screen.submit("6")
+            screen.submit("5")
             assert calls == []
             screen.submit("/confirm")
             await pilot.pause(0.1)
@@ -977,7 +978,7 @@ def test_existing_notification_can_enter_identity_preserving_edit_wizard(
             )
 
     context, placeholder, has_wizard = asyncio.run(run())
-    assert context == "trader / 运行准备 / 配置向导 · 通知提醒 · ops-alerts  ›"
+    assert context == "trader / 连接与配置 / 配置向导 · 通知提醒 · ops-alerts  ›"
     assert placeholder == "输入编号或命令；Enter 提交"
     assert has_wizard
 
@@ -1801,8 +1802,7 @@ def test_resource_delete_dry_run_previews_without_executing(
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("11")
-            screen.submit("7")
+            screen.submit("6")
             await pilot.pause(0.1)
             return (
                 _log_text(screen.query_one("#command-output", RichLog)),
@@ -1907,4 +1907,4 @@ def test_ctrl_c_during_resource_secret_prompt_clears_staged_credentials(
     wizard, password, context = asyncio.run(run())
     assert wizard is None
     assert not password
-    assert context == "trader / 运行准备 / 市场数据  ›"
+    assert context == "trader / 连接与配置 / 市场数据  ›"

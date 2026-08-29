@@ -970,23 +970,26 @@ def test_slash_exit_closes_workbench_even_while_argument_is_pending() -> None:
 
 
 @pytest.mark.parametrize("command", ("exit", "quit", "q", "help", "back"))
-def test_bare_words_are_treated_as_kairos_commands_not_workbench_commands(
+def test_unsupported_bare_words_are_inline_errors_not_terminal_activities(
     command: str,
 ) -> None:
-    async def run() -> tuple[int | None, str]:
+    async def run() -> tuple[int | None, str, int]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
             screen.submit(command)
             await pilot.pause(0.1)
-            return app.return_value, _log_text(
-                screen.query_one("#command-output", RichLog)
+            return (
+                app.return_value,
+                interaction_copy_text(screen.session.interaction),
+                len(screen._output().activities),
             )
 
-    return_value, output = asyncio.run(run())
+    return_value, interaction, activity_count = asyncio.run(run())
     assert return_value is None
-    assert f"kairos {command} 尚未接入" in output
+    assert f"kairos {command} 尚未接入" in interaction
+    assert activity_count == 0
 
 
 def test_bare_native_command_uses_owner_cli_application(
@@ -1206,7 +1209,7 @@ def test_existing_setup_entry_starts_in_guided_product_context() -> None:
 
     screen_type, context = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 运行准备  ›"
+    assert context == "trader / 连接与配置  ›"
 
 
 def test_command_input_executes_help_and_keeps_focus() -> None:
@@ -1308,6 +1311,42 @@ def test_market_worker_error_keeps_search_prompt_usable_for_retry(
     assert input_focused
     assert prompt_mode == "input"
     assert placeholder == "输入代码或名称"
+
+
+def test_uninitialized_reference_catalog_offers_guided_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_: object, **__: object) -> tuple[Market, ...]:
+        raise RuntimeError(
+            "SQLite: read-only open failed (unable to open database file: "
+            "/workspace/.kairos/state/reference/reference.sqlite); "
+            "WAL sidecar open failed"
+        )
+
+    monkeypatch.setattr(market, "load_records", fail)
+
+    async def run() -> tuple[tuple[str, ...], str, str, str | None]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("/market AAPL")
+            await pilot.pause(0.1)
+            return (
+                screen.session.context,
+                interaction_copy_text(screen.session.interaction),
+                str(screen.query_one("#command-status", Static).render()),
+                screen.session.market.query,
+            )
+
+    context, interaction, status, query = asyncio.run(run())
+
+    assert context == ("market", "missing")
+    assert "还没有可查询的标的目录" in interaction
+    assert "准备这个标的目录" in interaction
+    assert "SQLite" not in interaction
+    assert status == "标的目录尚未准备"
+    assert query == "AAPL"
 
 
 def test_command_layout_runs_at_supported_terminal_sizes() -> None:

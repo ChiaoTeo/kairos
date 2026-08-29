@@ -1,6 +1,7 @@
 //! Control-plane adapters and contract response mappings.
 
 mod conflux;
+mod planning;
 mod source;
 mod status;
 

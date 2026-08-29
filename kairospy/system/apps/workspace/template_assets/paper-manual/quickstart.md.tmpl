@@ -1,0 +1,13 @@
+# Kairos manual paper trading
+
+The generated simulated account must pass its owner-managed local test before a
+paper launch can start:
+
+```bash
+kairos account test {{account_id}}
+kairos launch diagnose validate {{launch_id}}
+kairos launch start {{launch_id}}
+```
+
+The generated account and launch belong to you; later template releases do not
+overwrite your changes.

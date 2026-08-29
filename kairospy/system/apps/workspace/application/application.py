@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tomllib
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from kairospy.system.domain.workspace import (
@@ -11,7 +12,10 @@ from kairospy.system.domain.workspace import (
 )
 from kairospy.system.apps.workspace.services.templates import (
     install_project_template,
+    list_project_templates,
     project_template_paths,
+    project_template_status,
+    show_project_template,
     validate_project_template,
 )
 
@@ -141,11 +145,32 @@ class WorkspaceApplication:
         return workspace
 
     def install_template(
-        self, workspace: Workspace, *, template: str
+        self,
+        workspace: Workspace,
+        *,
+        template: str,
+        installation_id: str | None = None,
+        parameters: Mapping[str, str] | None = None,
     ) -> tuple[Path, ...]:
         """Install a starter into an existing project without overwriting files."""
 
-        return install_project_template(workspace, validate_project_template(template))
+        return install_project_template(
+            workspace,
+            validate_project_template(template),
+            installation_id=installation_id,
+            parameters=parameters,
+        )
+
+    def list_templates(self) -> list[dict[str, object]]:
+        return list_project_templates()
+
+    def show_template(self, template: str) -> dict[str, object]:
+        return show_project_template(template)
+
+    def template_status(
+        self, workspace: Workspace, *, installation_id: str | None = None
+    ) -> list[dict[str, object]]:
+        return project_template_status(workspace, installation_id)
 
     def open(self, root: str | Path | None) -> Workspace:
         if root is None:

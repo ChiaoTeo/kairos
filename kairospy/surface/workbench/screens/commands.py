@@ -15,6 +15,12 @@ from kairospy.system.apps.integration.application import IntegrationCliApplicati
 
 
 NATIVE_COMPONENTS = {"capital", "execution", "risk"}
+SUPPORTED_COMPONENTS = NATIVE_COMPONENTS | {
+    "account",
+    "integration",
+    "market",
+    "reference",
+}
 DANGEROUS_ACTIONS = {
     "add",
     "cancel",
@@ -69,6 +75,7 @@ def run(state: Any, argv: tuple[str, ...]) -> Any:
         raise RuntimeError(state.load_error or "当前没有可用的 workspace")
     if not argv:
         raise ValueError("请输入 kairos 子命令。")
+    validate(argv)
     component, arguments = argv[0], list(argv[1:])
     if component == "market":
         return MarketCliApplication(state.owner).run(_standalone(arguments))
@@ -80,10 +87,20 @@ def run(state: Any, argv: tuple[str, ...]) -> Any:
         return NativeCliApplication(state.owner).run(component, _standalone(arguments))
     if component == "integration":
         return IntegrationCliApplication().run(arguments)
-    raise ValueError(
-        f"kairos {component} 尚未接入单输入 Application 分派；"
-        "请选择上方菜单完成该操作。"
-    )
+    raise AssertionError(f"validated unsupported component: {component}")
+
+
+def validate(argv: tuple[str, ...]) -> None:
+    """Reject commands that cannot reach an owner Application, including previews."""
+
+    if not argv:
+        raise ValueError("请输入 kairos 子命令。")
+    component = argv[0]
+    if component not in SUPPORTED_COMPONENTS:
+        raise ValueError(
+            f"kairos {component} 尚未接入单输入 Application 分派；"
+            "请选择当前菜单中的操作。"
+        )
 
 
 def is_dangerous(argv: tuple[str, ...]) -> bool:
@@ -123,4 +140,4 @@ def _reference_arguments(arguments: list[str]) -> list[str]:
     return ["standalone", *arguments]
 
 
-__all__ = ["is_dangerous", "normalize", "preview", "run"]
+__all__ = ["is_dangerous", "normalize", "preview", "run", "validate"]

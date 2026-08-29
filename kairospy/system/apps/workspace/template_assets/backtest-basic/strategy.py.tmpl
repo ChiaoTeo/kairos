@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+from decimal import Decimal
+
+from kairospy.strategy import BarEvent, Strategy, StrategyContext
+
+
+class DemoBacktest(Strategy):
+    """Small deterministic strategy generated from backtest-basic."""
+
+    strategy_id = "demo-backtest"
+
+    def on_start(self, ctx: StrategyContext) -> None:
+        ctx.state.set_int("bars", 0)
+        market = ctx.reference.require_market(
+            symbol="BTCUSDT",
+            exchange="binance",
+            market_type="spot",
+        )
+        ctx.market.subscribe_bars(market, timeframe="1m")
+
+    def on_bar(self, ctx: StrategyContext, event: BarEvent) -> None:
+        bars = ctx.state.increment("bars")
+        if bars == 1:
+            ctx.execution.target_position(
+                event.data.instrument,
+                Decimal("0.01"),
+                account="{{account_id}}",
+                reason="enter the generated demo position",
+            )
+        elif bars == 5:
+            ctx.execution.close_position(
+                event.data.instrument,
+                account="{{account_id}}",
+                reason="close the generated demo position",
+            )

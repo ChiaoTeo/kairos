@@ -37,7 +37,7 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from ...catalog import SECTION_ACTIONS
+from ...navigation.catalog import SECTION_ACTIONS
 from ...session import GuidedSession
 from .actions import (
     ATTACH_ACTIONS,

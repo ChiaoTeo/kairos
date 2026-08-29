@@ -18,7 +18,7 @@ ACCOUNT_ACTIONS = (
     ActionItem("fees", "费率与等级", "按产品和交易对查询真实费率", "6"),
     ActionItem("transfer", "资金划转", "在同一交易所账户和分区间转移资产", "7"),
     ActionItem("show", "查看账户配置", "显示脱敏配置", "8"),
-    ActionItem("doctor", "运行账户诊断", "检查配置和运行准备", "9"),
+    ActionItem("doctor", "运行账户诊断", "检查连接配置和账户运行条件", "9"),
     ActionItem("credentials", "查看凭据列表", "只显示凭据元数据", "10"),
     ActionItem("connection", "账户连接设置", "验证、修改或停用当前账户连接", "11"),
 )
