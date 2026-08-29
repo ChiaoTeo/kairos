@@ -42,6 +42,7 @@ class Feature(StrEnum):
     MARKET = "market"
     REFERENCE = "reference"
     STRATEGY = "strategy"
+    ACCOUNT = "account"
     RESOURCES = "resources"
     OPERATIONS = "operations"
     RESEARCH = "research"
@@ -236,9 +237,7 @@ def _interaction_renderable(
         )
         if interaction.error:
             body.extend((Text(), Text(interaction.error, style="bold red")))
-        return Panel(
-            Group(*body), title=interaction.title, border_style=colors.primary
-        )
+        return Panel(Group(*body), title=interaction.title, border_style=colors.primary)
     if isinstance(interaction, ConfirmInteraction):
         parts: list[RenderableType] = [interaction.summary]
         if interaction.force_hint:
@@ -249,9 +248,7 @@ def _interaction_renderable(
     if isinstance(interaction, RunningInteraction):
         detail = Text(interaction.message)
         if interaction.progress is not None:
-            detail.append(
-                f"\n进度 {interaction.progress:.0%}", style=colors.primary
-            )
+            detail.append(f"\n进度 {interaction.progress:.0%}", style=colors.primary)
         if interaction.cancellable:
             detail.append("\nCtrl+C 取消当前任务", style=colors.muted)
         return Panel(detail, title=interaction.title, border_style=colors.primary)

@@ -16,7 +16,7 @@ Workbench 是现有业务 Application 与 Contract 的输入适配和结果展�
 ### 1.1 产品目标
 
 - 以用户任务而不是内部模块或命令清单组织入口。
-- 让新用户通过选择和上下文提示完成操作，让熟练用户继续直接输入命令。
+- 让新用户通过选择和上下文提示完成操作，让熟练用户通过明确的 `/` 或 `kairos` 前缀输入高级命令。
 - 在同一视觉和输入模型中完成导航、参数收集、确认、执行、结果查看和错误恢复。
 - 让每次真正执行的操作都可理解、可审计，并在可能时可复制为等价 CLI。
 - 对 live、外部写入和敏感凭据提供一致的安全边界。
@@ -148,6 +148,33 @@ Application、Actor 或 Contract 拥有；界面不得成为第二个可变业�
 导航语义由 Workbench 专有的 `screens/navigation/` 包统一拥有。该包维护稳定首页目录、上下文父子关系、
 返回路径、面包屑和当前动作投影；Textual Screen 只提交入口和展示结果。各产品 flow 继续拥有自己的动作
 定义、可用性判断、参数、业务调用和状态转换，导航包不得成为通用 router、业务 registry 或第二个 facade。
+
+### 3.2.1 产品任务模块与稳定身份
+
+Workbench 的代码切片按用户任务而不是菜单外观划分：
+
+| 产品切片 | 用户问题 | 临时状态与输入续接所有者 |
+| --- | --- | --- |
+| `flows/market`、`flows/reference` | 我能交易什么，行情和目录是否可用 | `MarketSession`、`ReferenceSession`；`Feature.MARKET`、`Feature.REFERENCE` |
+| `flows/launch` | 我使用哪个运行方案，这次运行实例怎样 | `StrategySession` 及其组件子会话；`Feature.STRATEGY` |
+| `flows/account` | 这个账户的资产、持仓、订单和资金怎样 | `AccountSession`；`Feature.ACCOUNT` |
+| `flows/resources` | 某个外部连接如何配置和验证 | `ResourcesSession`；`Feature.RESOURCES` |
+| `flows/research` | 数据、回测与 Gate 处于什么阶段 | `ResearchSession`；`Feature.RESEARCH` |
+| `flows/operations` | 项目运行拓扑、共享服务和支撑进程怎样 | `OperationsSession`；`Feature.OPERATIONS` |
+
+账户运行与账户连接可以进入同一个 Account owner，但它们回答不同问题，因此不得共用产品 flow、会话或
+输入续接身份。从账户任务进入“管理账户连接”时，导航到 Resources 的同一权威资源详情；返回依赖实际
+访问栈，不复制一个账户配置页面。
+
+参与控制流的身份必须有唯一符号来源：顶层任务使用 `Section`，稳定页面使用 `Routes`，共享输入使用
+`Feature`，首页和一级任务目录使用 `navigation.catalog` 中按任务划分的 `StrEnum`，叶子稳定动作使用 owner
+flow 自己的 `StrEnum`。动态业务对象 ID 作为页面参数或 owner session 中的选择保存，不扩展稳定页面枚举。
+用户文案、Provider/进程名称、外部 CLI 参数和业务数据仍是字符串；不得为了消灭所有字符串把外部词汇
+塞进全局枚举。架构测试阻止稳定 route 和一级动作重新退化为散落的字符串字面量。
+
+默认交互只要求用户理解一套语法：`↑↓` 选择、`Enter` 确认、`Esc` 返回、`?` 帮助；可见动作在当前页面
+连续编号。高级命令通过明确的 `/命令` 或命令面板进入，普通自由文本只在当前页面正在收集参数时使用，
+不得因未匹配编号而隐式变成 CLI 调用。
 
 ### 3.3 运行作用域
 
@@ -602,6 +629,14 @@ Reference generation、publication 和 Provider 同步状态属于项目共享�
 后进入唯一的方案详情，活动实例和历史实例是下一级对象。界面不得把带 `instance_id` 的记录称为
 “正在运行的 Launch”。
 
+“校验运行条件”返回类型化的运行就绪页。账户、行情、模型或通知资源缺失时，该页只投影诊断 owner
+和下一步，并进入“连接与配置”中对应资源的权威列表或详情；修复后按真实访问栈返回同一就绪页并重新
+校验。风险、Execution route、Market scope 等方案内问题进入现有运行方案编辑向导。不得增加全局
+Repair Manager，也不得在 Strategy flow 复制资源配置表单。
+
+Backtest 的报告属于具体运行实例：未完成实例显示“等待并查看回测报告”，终态实例显示“查看回测报告”。
+报告不属于可重复使用的运行方案，也不在数据准备或运行中心复制第二个详情入口。
+
 Instance 组件默认只提供状态、日志、current view 和所属业务 Contract 允许的动作。Account、Risk、
 Execution、Capital 和实例级 Market 的生命周期由 Launch 统一管理，不提供局部启动、停止或重启入口。
 项目共享 Market 可以从 Instance 详情进入其 connected 业务视图，但其 Workspace 生命周期仍由
@@ -633,6 +668,8 @@ Account 拥有余额、仓位、权益和账户侧订单事实。Workbench 不�
 - Research Plan、锁定、执行证据和 Research Gate。
 
 会改变数据或发布状态的步骤必须显示目标、计划 hash 或证据文件，并根据风险进入确认。
+执行数据需求与发布 Research Gate 都是当前任务内的连续参数流程；前者明确展示 requirements 和已审阅
+plan hash，后者明确展示 Research Plan 与 evidence 路径。用户不需要拼写内部 action 名称。
 
 ### 10.6 运行中心
 
@@ -824,6 +861,8 @@ port，也不得为了表面统一而引入接受任意业务数据的通用 ren
 - Observe 结果分别表达项目共享服务、Launch Instance 和支撑进程，不在 Workspace scope 虚构
   Account、Risk、Execution 或 Capital 状态。
 - “运行中心”和“策略与运行”选择同一个实例时进入同一套 Instance Session 与页面。
+- 运行条件失败可以进入对应资源权威配置页，返回原就绪页并重新校验；不存在第二套资源配置 UI。
+- Backtest 报告只从具体终态实例进入；数据执行和 Research Gate 可由连续编号路径完成。
 - Workspace 服务启动登记 Supervisor desired state；停止先取消 desired state；停止和重启都执行活动
   Launch 依赖检查。
 - Instance-owned 组件只通过所属 Launch Instance 定位，Workbench 不提供局部生命周期捷径。

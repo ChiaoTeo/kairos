@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         ReferenceAsset,
         ReferenceExchange,
         ReferenceInstrument,
+        ReferenceInstrumentAvailability,
         ReferenceListing,
         ReferenceMarket,
         ReferenceReadSession as NativeReferenceReadSession,
@@ -175,6 +176,29 @@ class ReferenceReadSession:
             expiry_to_unix_nanos=expiry_to_unix_nanos,
             option_right=option_right,
             status=status,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+
+    def instrument_availability(
+        self,
+        *,
+        source_ids: Sequence[str] | None = None,
+        instrument_ids: Sequence[str] | None = None,
+        query: str | None = None,
+        symbol: str | None = None,
+        instrument_type: InstrumentKind | None = None,
+        active_only: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[ReferenceInstrumentAvailability]:
+        return self._native.instrument_availability(
+            source_ids=_identifiers(source_ids),
+            instrument_ids=_identifiers(instrument_ids),
+            query=query,
+            symbol=symbol,
+            instrument_type=instrument_type,
             active_only=active_only,
             limit=limit,
             offset=offset,
@@ -410,6 +434,12 @@ class ReferenceClient:
     def instruments(self, **filters: Any) -> list[ReferenceInstrument]:
         with self.snapshot() as snapshot:
             return snapshot.instruments(**filters)
+
+    def instrument_availability(
+        self, **filters: Any
+    ) -> list[ReferenceInstrumentAvailability]:
+        with self.snapshot() as snapshot:
+            return snapshot.instrument_availability(**filters)
 
     def listings(self, **filters: Any) -> list[ReferenceListing]:
         with self.snapshot() as snapshot:

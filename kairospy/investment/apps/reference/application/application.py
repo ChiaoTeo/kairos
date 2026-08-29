@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from kairospy.contracts.reference.events import ReferenceEventVariant
 from kairospy.infrastructure.protocol import LiveEventSource
@@ -15,6 +15,9 @@ from kairospy.contracts.reference import (
     ReferenceListing,
     ReferenceMarket,
 )
+
+if TYPE_CHECKING:
+    from kairospy.contracts.reference import ReferenceInstrumentAvailability
 from kairospy.primitives.reference import (
     ExchangeId,
     InstrumentId,
@@ -413,6 +416,30 @@ class ReferenceApplication:
             expiry_to_unix_nanos=expiry_to_unix_nanos,
             option_right=option_right,
             status=status,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+        return tuple(rows)
+
+    def find_instrument_availability(
+        self,
+        *,
+        source_ids: Sequence[str] | None = None,
+        instrument_ids: Sequence[InstrumentId | str] | None = None,
+        query: str | None = None,
+        symbol: str | None = None,
+        instrument_type: str | None = None,
+        active_only: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[ReferenceInstrumentAvailability, ...]:
+        rows = self._require_client().instrument_availability(
+            source_ids=source_ids,
+            instrument_ids=_strings(instrument_ids),
+            query=query,
+            symbol=symbol,
+            instrument_type=instrument_type,
             active_only=active_only,
             limit=limit,
             offset=offset,

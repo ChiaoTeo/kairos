@@ -328,6 +328,94 @@ def test_shared_input_uses_typed_action_tokens() -> None:
     assert action.annotation.id == "ActionToken"
 
 
+def test_navigation_control_flow_uses_canonical_route_identities() -> None:
+    """Route spelling belongs to navigation.identity, not individual flows."""
+
+    route_owners = {
+        "project",
+        "market",
+        "reference",
+        "strategy",
+        "account",
+        "resources",
+        "research",
+        "operations",
+    }
+    routing_files = (
+        WORKBENCH / "screens" / "command_line.py",
+        WORKBENCH / "screens" / "navigation" / "tree.py",
+        WORKBENCH / "screens" / "flows" / "__init__.py",
+        WORKBENCH / "screens" / "flows" / "market" / "runtime.py",
+        WORKBENCH / "screens" / "flows" / "reference" / "runtime.py",
+        WORKBENCH / "screens" / "flows" / "research" / "runtime.py",
+        WORKBENCH / "screens" / "flows" / "operations" / "runtime.py",
+        WORKBENCH / "screens" / "flows" / "account" / "runtime.py",
+        WORKBENCH / "screens" / "flows" / "resources" / "configuration.py",
+        WORKBENCH / "screens" / "flows" / "launch" / "runtime.py",
+        WORKBENCH / "screens" / "flows" / "launch" / "execution.py",
+        WORKBENCH / "screens" / "flows" / "launch" / "market.py",
+    )
+    for path in routing_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Tuple) or not node.elts:
+                continue
+            first = node.elts[0]
+            if isinstance(first, ast.Constant) and first.value in route_owners:
+                raise AssertionError(
+                    f"raw navigation route remains in {path}:{node.lineno}"
+                )
+
+
+def test_primary_task_catalog_uses_typed_action_identities() -> None:
+    """Stable visible tasks must not repeat action spellings as raw strings."""
+
+    path = WORKBENCH / "screens" / "navigation" / "catalog.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    primary_catalogs = {
+        "HOME_ACTIONS",
+        "MARKET_ACTIONS",
+        "REFERENCE_ACTIONS",
+        "STRATEGY_ACTIONS",
+        "RESOURCE_ACTIONS",
+        "AI_MODEL_ACTIONS",
+        "RESEARCH_ACTIONS",
+        "OPERATIONS_ACTIONS",
+    }
+    for assignment in tree.body:
+        if not isinstance(assignment, ast.Assign):
+            continue
+        names = {
+            target.id for target in assignment.targets if isinstance(target, ast.Name)
+        }
+        if not names & primary_catalogs:
+            continue
+        for node in ast.walk(assignment.value):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "ActionItem"
+                and node.args
+            ):
+                continue
+            assert not isinstance(node.args[0], ast.Constant), (
+                f"raw primary action identity remains in {path}:{node.lineno}"
+            )
+
+
+def test_account_input_continuations_have_an_explicit_product_owner() -> None:
+    router = (WORKBENCH / "screens" / "flows" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+    account = (WORKBENCH / "screens" / "flows" / "account" / "runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "if token.feature is Feature.ACCOUNT:" in router
+    assert "Feature.ACCOUNT" in account
+    assert "Feature.RESOURCES" not in account
+
+
 def test_screen_does_not_import_product_orchestration_symbols() -> None:
     source = (WORKBENCH / "screens" / "command_line.py").read_text(encoding="utf-8")
     for module in (

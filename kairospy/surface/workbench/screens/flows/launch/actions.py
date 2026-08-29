@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -40,38 +41,252 @@ from .wizard import (
 )
 
 
+class LaunchAction(StrEnum):
+    """Actions owned by a reusable run plan."""
+
+    START = "start"
+    VALIDATE = "validate"
+    INSTANCES = "instances"
+    EDIT = "edit"
+    CONFIG = "config"
+
+
+class InstanceAction(StrEnum):
+    """Actions owned by one concrete run instance."""
+
+    OVERVIEW = "overview"
+    ATTACH = "attach"
+    COMPONENTS = "components"
+    TIMELINE = "timeline"
+    REPORT = "report"
+    WAIT = "wait"
+    STOP = "stop"
+    RESTART = "restart"
+
+
+class AttachAction(StrEnum):
+    """Controls owned by the live instance-output view."""
+
+    REFRESH = "refresh"
+    PAUSE = "pause"
+    CLEAR = "clear"
+    PYTHON = "python"
+
+
+class TimelineAction(StrEnum):
+    """Actions owned by one instance timeline."""
+
+    REFRESH = "refresh"
+    EXPORT = "export"
+
+
+class ReadinessAction(StrEnum):
+    """Recovery actions derived from one run-plan readiness report."""
+
+    RETRY = "retry"
+    ACCOUNTS = "resource-accounts"
+    DATA = "resource-data"
+    MODELS = "resource-models"
+    NOTIFICATIONS = "resource-notifications"
+    EDIT = "edit"
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchReadinessDiagnostic:
+    owner: str
+    resource: str
+    severity: str
+    reason: str
+    action: str
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> LaunchReadinessDiagnostic:
+        return cls(
+            owner=str(value.get("owner") or "Launch"),
+            resource=str(value.get("resource") or "launch"),
+            severity=str(value.get("severity") or "blocker"),
+            reason=str(value.get("reason") or "运行条件尚未满足"),
+            action=str(value.get("action") or "检查并修正运行方案"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchReadinessView:
+    valid: bool
+    path: str
+    diagnostics: tuple[LaunchReadinessDiagnostic, ...]
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> LaunchReadinessView:
+        diagnostics = tuple(
+            LaunchReadinessDiagnostic.from_mapping(item)
+            for item in value.get("diagnostics", ())
+            if isinstance(item, Mapping)
+        )
+        return cls(
+            valid=value.get("valid") is True,
+            path=str(value.get("path") or ""),
+            diagnostics=diagnostics,
+        )
+
+
+def readiness_actions(view: LaunchReadinessView | None) -> tuple[ActionItem, ...]:
+    """Project actionable owner fixes without copying their configuration UI."""
+
+    resources = {
+        diagnostic.resource for diagnostic in (view.diagnostics if view else ())
+    }
+    actions = [
+        ActionItem(
+            ReadinessAction.RETRY, "重新校验运行条件", "修复后重新读取全部条件", "1"
+        )
+    ]
+    fixes = (
+        (
+            ReadinessAction.ACCOUNTS,
+            {"accounts"},
+            "修复交易账户",
+            "配置并验证运行方案引用的账户",
+        ),
+        (
+            ReadinessAction.DATA,
+            {"data_provider"},
+            "修复行情连接",
+            "配置并验证运行方案使用的市场数据连接",
+        ),
+        (
+            ReadinessAction.MODELS,
+            {"model_connection", "agent"},
+            "修复 AI 模型连接",
+            "配置并验证 Agent 使用的模型",
+        ),
+        (
+            ReadinessAction.NOTIFICATIONS,
+            {"destinations", "notifications"},
+            "修复通知连接",
+            "配置并验证运行方案使用的通知目标",
+        ),
+    )
+    for action, owned_resources, label, description in fixes:
+        if resources & owned_resources:
+            actions.append(
+                ActionItem(action, label, description, str(len(actions) + 1))
+            )
+    actions.append(
+        ActionItem(
+            ReadinessAction.EDIT,
+            "编辑运行方案",
+            "修正风险、执行、Market 或其他方案内条件",
+            str(len(actions) + 1),
+        )
+    )
+    return tuple(actions)
+
+
 LAUNCH_ACTIONS = (
-    ActionItem("validate", "校验配置", "检查配置结构和所需资源", "1"),
-    ActionItem("status", "查看运行状态", "读取策略与依赖组件状态", "2"),
-    ActionItem("start", "启动", "按当前配置启动新的运行实例", "3"),
-    ActionItem("stop", "停止", "停止策略并释放运行资源", "4"),
-    ActionItem("report", "查看回测报告", "读取最近完成的回测结果", "5"),
-    ActionItem("instances", "查看运行实例", "列出当前及历史实例", "6"),
-    ActionItem("logs", "查看日志", "读取最近的策略进程日志", "7"),
-    ActionItem("wait", "等待回测完成", "等待并读取回测报告", "8"),
-    ActionItem("restart", "重启", "停止当前实例并启动新实例", "9"),
-    ActionItem("edit", "编辑配置", "逐字段修改 Launch 配置", "e"),
-    ActionItem("config", "查看配置", "解释规范化配置和运行计划", "0"),
-    ActionItem("attach", "跟随运行输出", "持续刷新状态和策略日志", "a"),
-    ActionItem("timeline", "查看实例时间线", "读取生命周期审计记录", "t"),
+    ActionItem(
+        LaunchAction.START, "新建运行实例", "按这个方案开始一次新的实际运行", "1"
+    ),
+    ActionItem(
+        LaunchAction.VALIDATE, "校验运行条件", "检查方案结构、连接资源和启动条件", "2"
+    ),
+    ActionItem(
+        LaunchAction.INSTANCES, "查看运行实例", "选择当前或历史上的一次实际运行", "3"
+    ),
+    ActionItem(
+        LaunchAction.EDIT, "编辑运行方案", "逐项修改这份可重复使用的运行配置", "4"
+    ),
+    ActionItem(
+        LaunchAction.CONFIG, "查看运行方案", "解释规范化配置和实际运行计划", "5"
+    ),
 )
 
-INSTANCE_ACTIONS = (
-    ActionItem("overview", "实例概览", "读取运行状态和注册信息", "1"),
-    ActionItem("components", "实例组件", "查看 Market、Execution、Risk 等组件", "2"),
-    ActionItem("timeline", "实例时间线", "查看生命周期审计记录", "3"),
-)
+
+def instance_actions(record: Mapping[str, Any] | None) -> tuple[ActionItem, ...]:
+    """Return actions for one concrete run instance, never for its plan."""
+
+    value = record or {}
+    state = str(value.get("state") or value.get("status") or "").casefold()
+    mode = str(value.get("mode") or "").casefold()
+    terminal = state in {
+        "cancelled",
+        "completed",
+        "failed",
+        "finished",
+        "stopped",
+        "terminated",
+    }
+    actions = [
+        ActionItem(
+            InstanceAction.OVERVIEW,
+            "查看实例状态",
+            "读取这次运行的整体状态和注册信息",
+            "1",
+        ),
+        ActionItem(
+            InstanceAction.ATTACH,
+            "查看运行输出",
+            "持续查看这次运行的状态和策略日志",
+            "2",
+        ),
+        ActionItem(
+            InstanceAction.COMPONENTS,
+            "查看实例组件",
+            "查看行情、执行、风控等实例组件",
+            "3",
+        ),
+        ActionItem(
+            InstanceAction.TIMELINE,
+            "查看实例时间线",
+            "查看这次运行的生命周期审计记录",
+            "4",
+        ),
+    ]
+    if mode == "backtest":
+        actions.append(
+            ActionItem(
+                InstanceAction.REPORT if terminal else InstanceAction.WAIT,
+                "查看回测报告" if terminal else "等待并查看回测报告",
+                "读取已经完成的回测结果" if terminal else "等待这次回测完成并读取报告",
+                "5",
+            )
+        )
+    if not terminal:
+        actions.append(
+            ActionItem(
+                InstanceAction.STOP,
+                "停止这个实例",
+                "停止这次运行并释放它占用的资源",
+                str(len(actions) + 1),
+            )
+        )
+    actions.append(
+        ActionItem(
+            InstanceAction.RESTART,
+            "从同一方案重新运行",
+            "停止当前实例并创建一个具有新身份的实例",
+            str(len(actions) + 1),
+        )
+    )
+    return tuple(actions)
+
 
 ATTACH_ACTIONS = (
-    ActionItem("refresh", "刷新运行输出", "读取当前状态与最近日志", "1"),
-    ActionItem("pause", "暂停或继续", "控制后台运行输出刷新", "p"),
-    ActionItem("clear", "清空当前窗口", "只清除当前可见日志，不删除日志源", "c"),
-    ActionItem("python", "发送 Strategy Python", "向当前 Strategy 提交一行代码", "2"),
+    ActionItem(AttachAction.REFRESH, "刷新运行输出", "读取当前状态与最近日志", "1"),
+    ActionItem(AttachAction.PAUSE, "暂停或继续", "控制后台运行输出刷新", "2"),
+    ActionItem(
+        AttachAction.CLEAR, "清空当前窗口", "只清除当前可见日志，不删除日志源", "3"
+    ),
+    ActionItem(
+        AttachAction.PYTHON, "发送 Strategy Python", "向当前 Strategy 提交一行代码", "4"
+    ),
 )
 
 TIMELINE_ACTIONS = (
-    ActionItem("refresh", "刷新时间线", "读取最近 200 条生命周期记录", "1"),
-    ActionItem("export", "导出 JSONL", "写入指定的时间线导出文件", "2"),
+    ActionItem(
+        TimelineAction.REFRESH, "刷新时间线", "读取最近 200 条生命周期记录", "1"
+    ),
+    ActionItem(TimelineAction.EXPORT, "导出 JSONL", "写入指定的时间线导出文件", "2"),
 )
 
 
@@ -256,15 +471,19 @@ def preview(record: Mapping[str, Any], action: str) -> dict[str, Any]:
 
 __all__ = [
     "ATTACH_ACTIONS",
-    "INSTANCE_ACTIONS",
     "LAUNCH_ACTIONS",
     "TIMELINE_ACTIONS",
+    "AttachAction",
+    "InstanceAction",
+    "LaunchAction",
     "LaunchWizardState",
+    "TimelineAction",
     "attach_snapshot",
     "components_renderable",
     "execute",
     "export_timeline",
     "instance_overview",
+    "instance_actions",
     "instances_renderable",
     "load_components",
     "load_instances",

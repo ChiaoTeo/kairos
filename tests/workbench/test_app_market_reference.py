@@ -78,7 +78,7 @@ def test_market_letter_shortcut_is_dispatched_before_bare_cli_input() -> None:
             assert isinstance(screen, CommandLineScreen)
 
             screen.submit("1")
-            screen.submit("c")
+            screen.submit("2")
             await pilot.pause()
             return (
                 screen.session.context,
@@ -101,7 +101,7 @@ def test_unavailable_live_market_offers_scoped_recovery_and_canonical_details() 
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
             screen.submit("1")
-            screen.submit("c")
+            screen.submit("2")
             screen.submit(action)
             await pilot.pause()
             return (
@@ -141,7 +141,7 @@ def test_workspace_market_subscription_resolves_symbol_without_ids(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("1", "c", "s", "AAPL", "1"):
+            for value in ("1", "2", "2", "AAPL", "1"):
                 screen.submit(value)
                 await pilot.pause(0.05)
             return (
@@ -520,7 +520,7 @@ def test_catalog_completion_does_not_steal_an_unrelated_page() -> None:
 
     session.enter("market")
     assert any(item.id == "resume-search" for item in context_items(session, _state()))
-    resume = market.handle_context(_state(), session, "u")
+    resume = market.handle_context(_state(), session, "1")
 
     assert resume is not None
     assert len(resume) == 1
@@ -598,15 +598,16 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream(
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
 
-            await pilot.press("1", "enter", "4", "enter", "3", "enter")
-            await pilot.pause()
+            for value in ("1", "5", "5"):
+                screen.submit(value)
+                await pilot.pause(0.1)
             assert (
                 screen.query_one("#command-input", WorkbenchCommandInput).placeholder
                 == "输入代码或名称；直接回车浏览"
             )
 
             await pilot.press("a", "a", "p", "l", "enter")
-            await pilot.pause(0.1)
+            await pilot.pause(0.3)
             actions = screen.query_one("#guided-actions", ActionList)
             context = str(screen.query_one("#command-context", Static).render())
             output = _log_text(screen.query_one("#command-output", RichLog))
@@ -628,6 +629,42 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream(
     assert input_focused
     assert "找到 1 条交易标的记录" not in output
     assert status == "找到 1 个结果 · 请选择"
+
+
+def test_uninitialized_reference_search_offers_guided_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_: object, **__: object) -> tuple[Market, ...]:
+        raise RuntimeError("reference catalog is not initialized")
+
+    monkeypatch.setattr(reference, "load_records", fail)
+
+    async def run() -> tuple[tuple[str, ...], str, str, str | None]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+
+            for value in ("1", "5", "5"):
+                screen.submit(value)
+                await pilot.pause(0.1)
+            screen.submit("AAPL")
+            await pilot.pause(0.3)
+            return (
+                screen.session.context,
+                interaction_copy_text(screen.session.interaction),
+                str(screen.query_one("#command-status", Static).render()),
+                screen.session.market.query,
+            )
+
+    context, interaction, status, query = asyncio.run(run())
+
+    assert context == ("market", "missing")
+    assert "还没有可查询的标的目录" in interaction
+    assert "准备这个标的目录" in interaction
+    assert "SQLite" not in interaction
+    assert status == "标的目录尚未准备"
+    assert query == "AAPL"
 
 
 def _reference_runtime_status() -> dict[str, object]:
@@ -703,6 +740,175 @@ def _reference_runtime_status() -> dict[str, object]:
     }
 
 
+def test_binance_stocks_setup_goal_is_provider_product_not_exchange() -> None:
+    goal = reference_actions.CatalogSetupGoal.provider_product("binance", "equity")
+
+    assert goal.to_request() == {
+        "kind": "provider_product",
+        "binding": {"provider": "binance", "source": "equity"},
+    }
+
+    plan = reference_actions.CatalogSetupPlanView.from_mapping(
+        {
+            "goal": goal.to_request(),
+            "availability": "not_configured",
+            "activity": "idle",
+            "recommended_option": 0,
+            "blockers": ["missing_connection_binding"],
+            "options": [
+                {
+                    "binding": {"provider": "binance", "source": "equity"},
+                    "actual_scope": "provider_catalog",
+                    "requires_connection": True,
+                    "connection_binding_present": False,
+                    "limitations": [
+                        "requires_provider_account",
+                        "product_is_provider_specific",
+                    ],
+                }
+            ],
+        }
+    )
+    with Console(width=100, record=True) as console:
+        console.print(reference_actions.catalog_setup_renderable(plan))
+    output = console.export_text()
+    assert "该服务商提供的完整目录" in output
+    assert "不代表该服务商是标的的上市交易所" in output
+
+
+def test_reference_results_use_user_vocabulary_and_hide_internal_ids() -> None:
+    instrument = SimpleNamespace(
+        id="instrument:equity:US:AAPL:common",
+        symbol="AAPL",
+        name="Apple Inc.",
+        instrument_type="equity",
+        status="active",
+        expiry_unix_nanos=None,
+        strike=None,
+        option_right=None,
+        underlying_instrument_id=None,
+    )
+
+    with Console(width=100, record=True) as console:
+        console.print(
+            reference_actions.records_renderable("instruments", (instrument,))
+        )
+        console.print(reference_actions.detail_renderable(instrument, "instruments"))
+    output = console.export_text()
+
+    assert "股票" in output
+    assert "当前有效" in output
+    assert "equity" not in output
+    assert "instrument:equity:US:AAPL:common" not in output
+
+
+def test_trading_access_search_resolves_instrument_then_checks_both_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instrument = SimpleNamespace(
+        id="instrument:equity:US:AAPL:common",
+        symbol="AAPL",
+        name="Apple Inc.",
+        instrument_type="equity",
+        status="active",
+    )
+    market_record = SimpleNamespace(
+        exchange_id="exchange:nasdaq",
+        venue_symbol="AAPL",
+        instrument=SimpleNamespace(display_symbol="AAPL"),
+        status="active",
+    )
+    availability = SimpleNamespace(
+        source_id="binance-equity",
+        instrument=instrument,
+    )
+
+    class Catalog:
+        def find_instruments(self, **filters: Any) -> tuple[Any, ...]:
+            assert filters["query"] == "AAPL"
+            return (instrument,)
+
+        def find_markets(self, **filters: Any) -> tuple[Any, ...]:
+            assert filters["instrument_id"] == instrument.id
+            return (market_record,)
+
+        def find_instrument_availability(self, **filters: Any) -> tuple[Any, ...]:
+            assert filters["instrument_ids"] == (instrument.id,)
+            return (availability,)
+
+    monkeypatch.setattr(reference_actions, "_application", lambda _state: Catalog())
+
+    records = reference_actions.load_records(object(), "trading-access", "AAPL")
+    related_kind, related = reference_actions.load_instrument_markets(
+        object(), records[0]
+    )
+    with Console(width=100, record=True) as console:
+        console.print(reference_actions.records_renderable(related_kind, related))
+    output = console.export_text()
+
+    assert records == (instrument,)
+    assert "交易所上市与市场" in output
+    assert "服务商可交易渠道" in output
+    assert "币安股票产品" in output
+    assert "不代表当前账号已有行情或下单权限" in output
+
+
+def test_missing_trading_access_enters_the_catalog_preparation_flow() -> None:
+    session = GuidedSession(root_label="trader")
+    session.enter("reference")
+    session.reference.query = "AAPL"
+    spec = OperationSpec.create(
+        action_name="reference.find.trading-access",
+        audit_summary="查看 AAPL 在哪里可以交易",
+        route=ResultRoute(ResultKind.REFERENCE_RECORDS, "trading-access"),
+        operation=lambda: (),
+        running_status="正在查找…",
+    )
+
+    effects = reference.handle_success(_state(), session, spec, ())
+
+    assert effects is not None
+    assert session.context == ("market", "missing")
+    assert session.market.query == "AAPL"
+    assert tuple(item.id for item in context_items(session, _state())) == (
+        "prepare",
+        "retry",
+        "catalog",
+    )
+
+
+def test_reference_source_management_uses_owner_status_and_page_stack() -> None:
+    session = GuidedSession(root_label="trader")
+    session.enter("reference")
+    spec = OperationSpec.create(
+        action_name="reference.status",
+        audit_summary="管理目录来源",
+        route=ResultRoute(ResultKind.REFERENCE_STATUS, "sources"),
+        operation=lambda: None,
+        running_status="正在读取…",
+    )
+
+    effects = reference.handle_success(
+        _state(), session, spec, _reference_runtime_status()
+    )
+
+    assert effects is not None
+    assert session.context == ("reference", "sources")
+    assert len(session.visible_records) == 2
+    assert session.visible_records[0].label == "美国股票期权目录"
+    assert "Massive（美国证券目录）" in session.visible_records[0].description
+    assert "retrying" not in session.visible_records[0].description
+    assert session.stack_parent() == ("reference",)
+    assert context_items(session, _state())[-1].id == "add"
+
+    selected = reference.handle_context(_state(), session, "1")
+    assert selected is not None
+    assert session.context == ("reference", "source-selected")
+    assert session.stack_parent() == ("reference", "sources")
+    action_ids = tuple(item.id for item in context_items(session, _state()))
+    assert action_ids == ("refresh", "pause", "progress")
+
+
 def test_reference_runtime_status_has_structured_owner_sections() -> None:
     with Console(width=120, record=True) as console:
         console.print(runtime_status_renderable(_reference_runtime_status()))
@@ -732,8 +938,8 @@ def test_reference_status_runs_from_existing_reference_menu(
             assert isinstance(screen, CommandLineScreen)
             screen.enter_section("reference")
             await pilot.pause()
-            screen.submit("/s")
-            await pilot.pause(0.1)
+            screen.submit("2")
+            await pilot.pause(0.3)
             return (
                 _log_text(screen.query_one("#command-output", RichLog)),
                 str(screen.query_one("#command-status", Static).render()),
@@ -869,9 +1075,7 @@ def test_market_search_owns_action_area_until_results_are_ready(
     ) = asyncio.run(run())
     assert prompt_context == "trader / 市场与标的  ›"
     assert not prompt_actions_visible
-    assert prompt_hints == (
-        "Enter 搜索  ·  Esc 返回  ·  Tab 内容区  ·  /up 20  ·  /bottom"
-    )
+    assert prompt_hints == "Enter 搜索  ·  Esc 返回  ·  Ctrl+P 命令  ·  Tab 切换区域"
     assert context == "trader / 市场与标的 / 查询结果  ›"
     assert option_count == 1
     assert input_focused
@@ -1211,7 +1415,7 @@ def test_market_history_download_is_a_single_input_redacted_scope_preview(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("1", "2", "AAPL", "1", "", "", "", "history/aapl.jsonl"):
+            for value in ("1", "3", "AAPL", "1", "", "", "", "history/aapl.jsonl"):
                 screen.submit(value)
                 await pilot.pause(0.03)
             await pilot.pause(0.1)
@@ -1282,9 +1486,9 @@ def test_guided_reference_detail_technical_and_back_preserve_results(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("1", "4", "5", "USD", "1", "3"):
+            for value in ("1", "5", "7", "USD", "1", "3"):
                 screen.submit(value)
-                await pilot.pause(0.05)
+                await pilot.pause(0.15)
             selected = str(screen.query_one("#command-context", Static).render())
             screen.submit("/back")
             screen.submit("1")
@@ -1307,11 +1511,12 @@ def test_guided_reference_detail_technical_and_back_preserve_results(
 def test_guided_reference_instrument_type_is_an_explicit_input_step() -> None:
     async def run() -> tuple[object, str | None, str, bool]:
         app = KairosWorkbenchApp(_state())
-        async with app.run_test(size=(100, 30)):
+        async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("1", "4", "2", "5"):
+            for value in ("1", "5", "4", "5"):
                 screen.submit(value)
+                await pilot.pause(0.1)
             interaction = screen.session.interaction
             assert isinstance(interaction, InputInteraction)
             return (

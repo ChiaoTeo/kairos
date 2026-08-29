@@ -135,7 +135,9 @@ def test_stale_service_uses_action_only_interaction() -> None:
     assert status == "标的服务 · 资源残留 · 无活动运行实例"
 
 
-def test_service_start_failure_moves_detail_to_activity_and_marks_start_failed() -> None:
+def test_service_start_failure_moves_detail_to_activity_and_marks_start_failed() -> (
+    None
+):
     session = GuidedSession(
         root_label="trader",
         context=("operations", "service", "reference"),
@@ -158,7 +160,10 @@ def test_service_start_failure_moves_detail_to_activity_and_marks_start_failed()
     )
 
     effects = operations.handle_failure(
-        _state(), session, spec, "invalid reference configuration: unknown field products"
+        _state(),
+        session,
+        spec,
+        "invalid reference configuration: unknown field products",
     )
 
     assert effects is not None
@@ -187,9 +192,7 @@ def test_service_start_failure_moves_detail_to_activity_and_marks_start_failed()
         "logs",
         "diagnostics",
     }
-    assert "repair-start" not in {
-        item.id for item in interaction.interaction.actions
-    }
+    assert "repair-start" not in {item.id for item in interaction.interaction.actions}
 
 
 def test_project_init_collects_each_field_in_the_shared_bottom_input() -> None:
@@ -386,7 +389,7 @@ def test_operations_center_instance_uses_shared_instance_detail() -> None:
     context, copy, activity_count, after_back = asyncio.run(run())
     assert context == ("strategy", "instance")
     assert "btc-paper" in copy
-    assert "实例概览" in copy
+    assert "查看实例状态" in copy
     assert activity_count == 0
     assert after_back == ("operations", "instances")
 
@@ -745,6 +748,67 @@ def test_research_read_flow_uses_nested_single_input_menu(
     assert context == "trader / 数据与回测 / 数据准备  ›"
     assert "dataset-demo" in output
     assert focused
+
+
+def test_research_data_execution_is_one_continuous_numbered_path() -> None:
+    async def run() -> tuple[str, str, str]:
+        state = _state()
+        state.dry_run = True
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in (
+                "5",
+                "1",
+                "4",
+                "requirements.json",
+                "reviewed-plan-hash",
+            ):
+                screen.submit(value)
+                await pilot.pause(0.05)
+            return (
+                str(screen.query_one("#command-context", Static).render()),
+                _log_text(screen.query_one("#command-output", RichLog)),
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    context, output, status = asyncio.run(run())
+    assert context == "trader / 数据与回测 / 数据准备  ›"
+    assert "execute-data 预演完成，未执行任何修改" in output
+    assert "requirements.json" in output
+    assert status == "操作已完成"
+
+
+def test_research_gate_publish_is_one_continuous_numbered_path() -> None:
+    async def run() -> tuple[str, str, str]:
+        state = _state()
+        state.dry_run = True
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in (
+                "5",
+                "2",
+                "3",
+                "research-plan.json",
+                "research-evidence.json",
+            ):
+                screen.submit(value)
+                await pilot.pause(0.05)
+            return (
+                str(screen.query_one("#command-context", Static).render()),
+                _log_text(screen.query_one("#command-output", RichLog)),
+                str(screen.query_one("#command-status", Static).render()),
+            )
+
+    context, output, status = asyncio.run(run())
+    assert context == "trader / 数据与回测 / 研究流程  ›"
+    assert "publish-gate 预演完成，未执行任何修改" in output
+    assert "research-plan.json" in output
+    assert "research-evidence.json" in output
+    assert status == "操作已完成"
 
 
 def test_research_multistep_cancel_clears_staged_values() -> None:

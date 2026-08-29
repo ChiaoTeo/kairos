@@ -35,6 +35,7 @@ from ...effects import (
 )
 from ...navigation.catalog import (
     MARKET_ADVANCED_ACTIONS,
+    MarketTask,
     RESUME_MARKET_SEARCH_ACTION,
     SECTION_ACTIONS,
 )
@@ -62,6 +63,7 @@ from ...session import GuidedSession
 from ..reference.actions import (
     CatalogSetupGoal,
     CatalogSetupPlanView,
+    catalog_not_initialized,
     catalog_setup_renderable,
     load_catalog_setup_plan,
     load_records,
@@ -85,11 +87,15 @@ from .workspace import (
     unavailable_renderable,
 )
 from ...navigation import (
+    Routes,
+    Section,
     action_id,
+    belongs_to,
     context_items,
     context_label,
     record_description,
     record_label,
+    route,
 )
 from ...operation import OperationSpec
 from ...results import ResultKind, ResultRoute
@@ -180,7 +186,7 @@ def handle_command(
     if command.startswith("market-file:field:"):
         prompt = session.market.file_prompt
         if not isinstance(prompt, MarketFilePromptState):
-            session.enter("market")
+            session.enter_context(Routes.MARKET)
             return _choice(
                 state,
                 session,
@@ -202,7 +208,7 @@ def handle_command(
     if command.startswith("workspace-market:field:"):
         prompt = session.market.workspace_prompt
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "live")
+            session.context = Routes.MARKET_LIVE
             return _choice(
                 state,
                 session,
@@ -220,7 +226,7 @@ def handle_command(
     if command == "workspace-market:search":
         prompt = session.market.workspace_prompt
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "live")
+            session.context = Routes.MARKET_LIVE
             return _choice(
                 state,
                 session,
@@ -241,7 +247,7 @@ def handle_context(
 ) -> tuple[ScreenEffect, ...] | None:
     """Advance a Market navigation context."""
 
-    if session.context[:1] == ("market",):
+    if belongs_to(session.context, Section.MARKET):
         return _handle_market_context(state, session, command)
     return None
 
@@ -261,10 +267,10 @@ def handle_success(
         if spec.route.qualifier == "workspace-market":
             prompt = session.market.workspace_prompt
             if not isinstance(prompt, WorkspaceMarketPromptState):
-                session.context = ("market", "live")
+                session.context = Routes.MARKET_LIVE
                 return _choice(state, session, status="参数向导已失效")
             if not records:
-                session.context = ("market", "live")
+                session.context = Routes.MARKET_LIVE
                 return _ask_workspace_market(
                     session,
                     prompt,
@@ -280,7 +286,7 @@ def handle_success(
         session.market.records = visible
         if records:
             return _show_record_choices(session, "market", visible)
-        session.enter("market", "missing")
+        session.enter_context(Routes.MARKET_MISSING)
         interaction = ChoiceInteraction(
             title=context_label(session.context, session.root_label),
             summary=Text(
@@ -303,14 +309,14 @@ def handle_success(
         )
         session.market.catalog_setup_plan = plan
         body = catalog_setup_renderable(plan)
-        if session.context != ("market", "catalog-setup"):
+        if session.context != Routes.MARKET_CATALOG_SETUP:
             return (_activity(spec, body),)
         if _catalog_is_usable(plan) and session.market.query:
-            session.return_to("market", "missing")
+            session.return_to_context(Routes.MARKET_MISSING)
             return _activity(spec, body), _run_market_search(
                 state, session, session.market.query
             )
-        session.restore("market", "catalog-setup")
+        session.restore_context(Routes.MARKET_CATALOG_SETUP)
         return (
             _activity(spec, body),
             *_choice(state, session, summary=body, status="准备条件已检查"),
@@ -326,17 +332,17 @@ def handle_success(
         body = catalog_setup_renderable(
             session.market.catalog_setup_plan or CatalogSetupPlanView.from_mapping({})
         )
-        if session.context != ("market", "catalog-setup"):
+        if session.context != Routes.MARKET_CATALOG_SETUP:
             return (_activity(spec, body),)
         if (
             _catalog_is_usable(session.market.catalog_setup_plan)
             and session.market.query
         ):
-            session.return_to("market", "missing")
+            session.return_to_context(Routes.MARKET_MISSING)
             return _activity(spec, body), _run_market_search(
                 state, session, session.market.query
             )
-        session.restore("market", "catalog-setup")
+        session.restore_context(Routes.MARKET_CATALOG_SETUP)
         return (
             _activity(spec, body),
             *_choice(
@@ -350,17 +356,17 @@ def handle_success(
     if kind is ResultKind.MARKET_OBSERVATION:
         market = session.market.selected
         if market is None:
-            session.enter("market")
+            session.enter_context(Routes.MARKET)
             interaction = ChoiceInteraction(
                 title=f"{session.root_label} / 市场与标的",
                 summary=Text("行情上下文已经失效，请重新选择标的。", style="yellow"),
-                actions=SECTION_ACTIONS["market"],
+                actions=SECTION_ACTIONS[Section.MARKET],
             )
             return SetInteraction(interaction), SetStatus("行情上下文已失效")
 
         body = observation_renderable(result)
         session.market.snapshot = body
-        session.restore("market", "selected")
+        session.restore_context(Routes.MARKET_SELECTED)
         session.visible_records = session.market.records
         actions = context_items(session, state)
         interaction = (
@@ -395,7 +401,7 @@ def handle_success(
         market = session.market.selected
         observation = session.market.observation or "quote"
         if market is None:
-            session.enter("market")
+            session.enter_context(Routes.MARKET)
             return _choice(
                 state,
                 session,
@@ -408,7 +414,7 @@ def handle_success(
         )
         if not routes:
             body = route_diagnostic_renderable(state, market, observation)
-            session.restore("market", "selected")
+            session.restore_context(Routes.MARKET_SELECTED)
             session.visible_records = session.market.records
             return (
                 _activity(spec, body),
@@ -417,7 +423,7 @@ def handle_success(
         if preferred is not None or len(routes) == 1:
             provider = (preferred or routes[0]).provider
             return (_run_observation(state, session, provider),)
-        session.enter("market", "providers")
+        session.enter_context(Routes.MARKET_PROVIDERS)
         session.visible_records = selection_records(
             routes,
             key=lambda route: route.provider,
@@ -434,7 +440,7 @@ def handle_success(
         )
 
     if kind is ResultKind.MARKET_DIAGNOSTIC:
-        session.restore("market", "selected")
+        session.restore_context(Routes.MARKET_SELECTED)
         session.visible_records = session.market.records
         body = _market_result("Market 诊断", result, diagnostic=True)
         return (
@@ -445,7 +451,7 @@ def handle_success(
     if kind is ResultKind.MARKET_FILE:
         prompt = session.market.file_prompt
         session.market.file_prompt = None
-        session.restore("market", "selected")
+        session.restore_context(Routes.MARKET_SELECTED)
         session.visible_records = session.market.records
         body = (
             file_result_renderable(result, prompt)
@@ -474,7 +480,7 @@ def handle_success(
         prompt = session.market.workspace_prompt
         if spec.route.qualifier == "provider-options":
             if not isinstance(prompt, WorkspaceMarketPromptState):
-                session.context = ("market", "live")
+                session.context = Routes.MARKET_LIVE
                 return _choice(state, session, status="行情来源选择已失效")
             routes = tuple(
                 value for value in result or () if isinstance(value, Mapping)
@@ -500,7 +506,7 @@ def handle_success(
                 return _advance_workspace_prompt(state, session, prompt)
             if not providers:
                 session.market.workspace_prompt = None
-                session.context = ("market", "live")
+                session.context = Routes.MARKET_LIVE
                 return _choice(
                     state,
                     session,
@@ -519,7 +525,7 @@ def handle_success(
                 )
                 for index, provider in enumerate(providers, 1)
             )
-            session.context = ("market", "workspace-providers")
+            session.context = Routes.MARKET_WORKSPACE_PROVIDERS
             interaction = ChoiceInteraction(
                 title="选择行情来源",
                 summary=workspace_prompt_renderable(prompt),
@@ -529,7 +535,7 @@ def handle_success(
             return SetInteraction(interaction), SetStatus("请选择行情来源")
         if spec.route.qualifier == "unsubscribe-options":
             if not isinstance(prompt, WorkspaceMarketPromptState):
-                session.context = ("market", "live")
+                session.context = Routes.MARKET_LIVE
                 return _choice(state, session, status="退出行情向导已失效")
             subscriptions = tuple(
                 value
@@ -542,7 +548,7 @@ def handle_success(
             )
             if not subscriptions:
                 session.market.workspace_prompt = None
-                session.context = ("market", "live")
+                session.context = Routes.MARKET_LIVE
                 session.visible_records = ()
                 return _choice(
                     state,
@@ -559,7 +565,7 @@ def handle_success(
                 ),
             )
             session.visible_records = visible
-            session.context = ("market", "workspace-subscriptions")
+            session.context = Routes.MARKET_WORKSPACE_SUBSCRIPTIONS
             interaction = ChoiceInteraction(
                 title="退出当前会话行情",
                 summary=Text("选择要停止接收的行情。", style="dim"),
@@ -568,7 +574,7 @@ def handle_success(
             session.interaction = interaction
             return SetInteraction(interaction), SetStatus("请选择要退出的行情")
         session.market.workspace_prompt = None
-        session.context = ("market", "live")
+        session.context = Routes.MARKET_LIVE
         if isinstance(result, Mapping) and result.get("status") == "preview":
             body = _market_result(spec.display_title, result)
         elif (
@@ -625,8 +631,8 @@ def handle_failure(
                     _activity(spec, Text(error, style="red"), ActivityOutcome.FAILURE),
                     *effects,
                 )
-        if _catalog_not_initialized(error):
-            session.enter("market", "missing")
+        if catalog_not_initialized(error):
+            session.enter_context(Routes.MARKET_MISSING)
             message = Text(
                 "这个项目还没有可查询的标的目录。"
                 "你可以选择交易所和品种，Kairos 会推荐合适的数据服务并带你完成准备。",
@@ -690,9 +696,9 @@ def handle_cancel(
     session.clear_result_flow(spec.route.kind)
     if workspace_market_search:
         session.market.workspace_prompt = None
-        session.enter("market", "live")
+        session.enter_context(Routes.MARKET_LIVE)
     elif spec.route.kind is ResultKind.MARKET:
-        session.enter("market")
+        session.enter_context(Routes.MARKET)
     body = Text("操作在开始执行后被取消。", style="yellow")
     return (
         _activity(spec, body, ActivityOutcome.CANCELLED),
@@ -718,29 +724,35 @@ _RESULT_KINDS = frozenset(
 def _handle_market_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context == ("market", "missing"):
+    if session.context == Routes.MARKET_MISSING:
         action = action_id(context_items(session, state), command)
         if action == "prepare":
             session.market.catalog_setup_goal = None
             session.market.catalog_setup_plan = None
-            session.enter("market", "catalog-exchange")
-            return _choice(state, session, status="请选择交易所")
+            session.enter_context(Routes.MARKET_CATALOG_EXCHANGE)
+            return _choice(state, session, status="请选择要准备的市场或交易服务")
         if action == "retry" and session.market.query:
             return (_run_market_search(state, session, session.market.query),)
         if action == "catalog":
-            session.enter("reference")
+            session.enter_context(Routes.REFERENCE)
             return _choice(state, session, status="请选择要浏览的标的目录")
         return None
 
-    if session.context == ("market", "catalog-exchange"):
+    if session.context == Routes.MARKET_CATALOG_EXCHANGE:
         exchange = action_id(context_items(session, state), command)
         if exchange is None:
             return None
+        if exchange == "provider:binance-equity":
+            session.market.catalog_setup_goal = CatalogSetupGoal.provider_product(
+                "binance", "equity"
+            )
+            session.enter_context(Routes.MARKET_CATALOG_SETUP)
+            return (_run_catalog_setup_plan(state, session),)
         session.market.catalog_setup_goal = CatalogSetupGoal.exchange(exchange)
-        session.enter("market", "catalog-instrument")
+        session.enter_context(Routes.MARKET_CATALOG_INSTRUMENT)
         return _choice(state, session, status="请选择要准备的品种")
 
-    if session.context == ("market", "catalog-instrument"):
+    if session.context == Routes.MARKET_CATALOG_INSTRUMENT:
         instrument_kind = action_id(context_items(session, state), command)
         goal = session.market.catalog_setup_goal
         if instrument_kind is None or goal is None:
@@ -748,16 +760,16 @@ def _handle_market_context(
         session.market.catalog_setup_goal = CatalogSetupGoal.exchange(
             goal.exchange_id or "", instrument_kind
         )
-        session.enter("market", "catalog-setup")
+        session.enter_context(Routes.MARKET_CATALOG_SETUP)
         return (_run_catalog_setup_plan(state, session),)
 
-    if session.context == ("market", "catalog-setup"):
+    if session.context == Routes.MARKET_CATALOG_SETUP:
         action = action_id(context_items(session, state), command)
         if action == "check":
             return (_run_catalog_setup_plan(state, session),)
         if action == "change":
-            session.enter("market", "catalog-exchange")
-            return _choice(state, session, status="请重新选择交易所")
+            session.enter_context(Routes.MARKET_CATALOG_EXCHANGE)
+            return _choice(state, session, status="请重新选择市场或交易服务")
         if action == "search-again" and session.market.query:
             return (_run_market_search(state, session, session.market.query),)
         if action == "configure-connection":
@@ -766,7 +778,7 @@ def _handle_market_context(
             return _confirm_catalog_preparation(state, session)
         return None
 
-    if session.context == ("market", "live-unavailable"):
+    if session.context == Routes.MARKET_LIVE_UNAVAILABLE:
         action = action_id(LIVE_MARKET_UNAVAILABLE_ACTIONS, command)
         if action is None:
             return None
@@ -801,7 +813,7 @@ def _handle_market_context(
             from ..operations.runtime import enter_service_detail
 
             return enter_service_detail(state, session, "market")
-        session.enter("market")
+        session.enter_context(Routes.MARKET)
         return _choice(
             state,
             session,
@@ -809,9 +821,9 @@ def _handle_market_context(
         )
 
     prompt = session.market.workspace_prompt
-    if session.context == ("market", "workspace-market-results"):
+    if session.context == Routes.MARKET_WORKSPACE_MARKET_RESULTS:
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "live")
+            session.context = Routes.MARKET_LIVE
             return _choice(state, session, status="参数向导已失效")
         record = _record_choice(session.visible_records, command)
         if record is None:
@@ -822,13 +834,13 @@ def _handle_market_context(
             description=record_description(record),
         )
         session.market.selected = record
-        session.context = ("market", "live")
+        session.context = Routes.MARKET_LIVE
         session.visible_records = ()
         return _advance_workspace_prompt(state, session, prompt)
 
-    if session.context == ("market", "workspace-subscriptions"):
+    if session.context == Routes.MARKET_WORKSPACE_SUBSCRIPTIONS:
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "live")
+            session.context = Routes.MARKET_LIVE
             return _choice(state, session, status="退出行情向导已失效")
         record = _record_choice(session.visible_records, command)
         if not isinstance(record, Mapping):
@@ -838,46 +850,46 @@ def _handle_market_context(
             label=str(record.get("_market_label") or "已订阅市场"),
             description=str(record.get("_market_description") or "当前会话行情"),
         )
-        session.context = ("market", "live")
+        session.context = Routes.MARKET_LIVE
         session.visible_records = ()
         return _advance_workspace_prompt(state, session, prompt)
 
-    if session.context == ("market", "workspace-subscription-content"):
+    if session.context == Routes.MARKET_WORKSPACE_SUBSCRIPTION_CONTENT:
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "live")
+            session.context = Routes.MARKET_LIVE
             return _choice(state, session, status="参数向导已失效")
         observations = action_id(SUBSCRIPTION_CONTENT_ACTIONS, command)
         if observations is None:
             return None
         prompt.accept("observations", observations)
-        session.context = ("market", "live")
+        session.context = Routes.MARKET_LIVE
         return _advance_workspace_prompt(state, session, prompt)
 
-    if session.context == ("market", "workspace-snapshot-kind"):
+    if session.context == Routes.MARKET_WORKSPACE_SNAPSHOT_KIND:
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "live")
+            session.context = Routes.MARKET_LIVE
             return _choice(state, session, status="参数向导已失效")
         kind = action_id(SNAPSHOT_KIND_ACTIONS, command)
         if kind is None:
             return None
         prompt.accept("kind", kind)
-        session.context = ("market", "live")
+        session.context = Routes.MARKET_LIVE
         return _advance_workspace_prompt(state, session, prompt)
 
-    if session.context == ("market", "workspace-timeframe"):
+    if session.context == Routes.MARKET_WORKSPACE_TIMEFRAME:
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "live")
+            session.context = Routes.MARKET_LIVE
             return _choice(state, session, status="参数向导已失效")
         timeframe = action_id(TIMEFRAME_ACTIONS, command)
         if timeframe is None:
             return None
         prompt.accept("timeframe", timeframe)
-        session.context = ("market", "live")
+        session.context = Routes.MARKET_LIVE
         return _advance_workspace_prompt(state, session, prompt)
 
-    if session.context == ("market", "workspace-providers"):
+    if session.context == Routes.MARKET_WORKSPACE_PROVIDERS:
         if not isinstance(prompt, WorkspaceMarketPromptState):
-            session.context = ("market", "live")
+            session.context = Routes.MARKET_LIVE
             return _choice(state, session, status="行情来源选择已失效")
         interaction = session.interaction
         if not isinstance(interaction, ChoiceInteraction):
@@ -887,17 +899,21 @@ def _handle_market_context(
             return None
         prompt.values["provider"] = provider_action.removeprefix("provider:")
         prompt.provider_resolved = True
-        session.context = ("market", "live")
+        session.context = Routes.MARKET_LIVE
         return _advance_workspace_prompt(state, session, prompt)
 
-    if session.context == ("market", "selected"):
+    if session.context == Routes.MARKET_SELECTED:
         market = session.market.selected
         if market is None:
-            session.enter("market")
+            session.enter_context(Routes.MARKET)
             return _choice(state, session, status="行情上下文已失效")
-        actions = selected_market_actions(market)
-        if session.market.snapshot is not None:
-            actions = (*actions, *MARKET_CONTROL_ACTIONS)
+        command = {
+            "d": "diagnose",
+            "r": "refresh",
+            "s": "save-snapshot",
+            "w": "watch",
+        }.get(command, command)
+        actions = context_items(session, state)
         action = action_id(actions, command)
         if action is None:
             return None
@@ -969,7 +985,7 @@ def _handle_market_context(
             ),
         )
 
-    if session.context == ("market", "live"):
+    if session.context == Routes.MARKET_LIVE:
         action = action_id(LIVE_MARKET_ACTIONS, command)
         if action is None:
             return None
@@ -1013,7 +1029,7 @@ def _handle_market_context(
             return (_run_observation(state, session, provider),)
         session.market.selected = record
         session.market.reset_control()
-        session.enter("market", "selected")
+        session.enter_context(Routes.MARKET_SELECTED)
         if session.market.purpose in {"download", "replay"}:
             prompt = MarketFilePromptState(session.market.purpose, record)
             session.market.file_prompt = prompt
@@ -1026,7 +1042,7 @@ def _handle_market_context(
             status=f"已选择 {record_label(record)} · 请选择行情",
         )
 
-    root_actions = (*SECTION_ACTIONS["market"], *MARKET_ADVANCED_ACTIONS)
+    root_actions = (*SECTION_ACTIONS[Section.MARKET], *MARKET_ADVANCED_ACTIONS)
     if _catalog_is_usable(session.market.catalog_setup_plan) and session.market.query:
         root_actions = (RESUME_MARKET_SEARCH_ACTION, *root_actions)
     action = action_id(root_actions, command)
@@ -1034,10 +1050,16 @@ def _handle_market_context(
         return None
     if action == "resume-search" and session.market.query:
         return (_run_market_search(state, session, session.market.query),)
-    if action in {"search", "download", "replay", "diagnostics", "advanced"}:
+    if action in {
+        MarketTask.SEARCH,
+        MarketTask.DOWNLOAD,
+        "replay",
+        "diagnostics",
+        "advanced",
+    }:
         session.market.purpose = action
         return _ask_market(session)
-    if action == "datasets":
+    if action == MarketTask.DATASETS:
         return (
             RunOperation(
                 _spec(
@@ -1049,21 +1071,12 @@ def _handle_market_context(
                 )
             ),
         )
-    if action == "catalog":
-        session.enter("reference")
+    if action == MarketTask.CATALOG:
+        session.enter_context(Routes.REFERENCE)
         return _choice(state, session, status="请选择标的目录")
-    if action == "live":
+    if action == MarketTask.LIVE:
         return _enter_live_market(state, session)
     return None
-
-
-def _catalog_not_initialized(error: str) -> bool:
-    """Recognize a project whose local Reference catalog has not been created."""
-
-    normalized = error.casefold()
-    return "unable to open database file" in normalized and (
-        "reference.sqlite" in normalized or "wal sidecar open failed" in normalized
-    )
 
 
 def _catalog_is_usable(plan: CatalogSetupPlanView | None) -> bool:
@@ -1072,7 +1085,9 @@ def _catalog_is_usable(plan: CatalogSetupPlanView | None) -> bool:
 
 def _enter_live_market(state: Any, session: GuidedSession) -> tuple[ScreenEffect, ...]:
     available = live_market_available(state)
-    session.enter("market", "live" if available else "live-unavailable")
+    session.enter_context(
+        Routes.MARKET_LIVE if available else Routes.MARKET_LIVE_UNAVAILABLE
+    )
     return _choice(
         state,
         session,
@@ -1171,8 +1186,8 @@ def _start_catalog_connection_setup(
             "data-product": product,
         }
     )
-    session.resources.return_context = ("market", "catalog-setup")
-    session.enter("resources", "data")
+    session.resources.return_context = Routes.MARKET_CATALOG_SETUP
+    session.enter_context(Routes.RESOURCES_DATA)
     return _start_wizard(state, session, wizard)
 
 
@@ -1362,7 +1377,7 @@ def _advance_workspace_prompt(
             )
         if choice_context is not None:
             context, actions, title = choice_context
-            session.context = ("market", context)
+            session.context = route(Section.MARKET, context)
             interaction = ChoiceInteraction(
                 title=title,
                 summary=workspace_prompt_renderable(prompt),
@@ -1416,7 +1431,7 @@ def _ask_workspace_market(
     *,
     error: str | None = None,
 ) -> tuple[ScreenEffect, ...]:
-    session.context = ("market", "live")
+    session.context = Routes.MARKET_LIVE
     interaction = InputInteraction(
         action=ActionToken(Feature.MARKET, "workspace-market-search"),
         title="选择市场",
@@ -1563,7 +1578,7 @@ def _market_interaction(
     state: Any, session: GuidedSession, *, summary: Any | None = None
 ) -> ChoiceInteraction | ControlInteraction:
     if (
-        session.context == ("market", "selected")
+        session.context == Routes.MARKET_SELECTED
         and session.market.snapshot is not None
         and session.market.refresh_enabled
         and session.market.selected is not None

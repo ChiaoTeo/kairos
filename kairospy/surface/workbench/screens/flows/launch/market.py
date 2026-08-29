@@ -32,7 +32,7 @@ from .market_actions import (
     preview as preview_launch_market,
 )
 from ...session import GuidedSession
-from ...navigation import action_id, context_items, context_label
+from ...navigation import Routes, action_id, context_items, context_label
 from ...operation import OperationSpec
 from ...results import ResultKind, ResultRoute
 from ...presentation import ResultTone, conclusion, count, facts, section
@@ -64,7 +64,7 @@ def handle_command(
         return None
     prompt = session.launch_market.prompt
     if not isinstance(prompt, LaunchMarketPromptState):
-        session.context = ("strategy", "market")
+        session.context = Routes.STRATEGY_MARKET
         return _choice(
             state,
             session,
@@ -81,11 +81,11 @@ def handle_command(
 def handle_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context != ("strategy", "market"):
+    if session.context != Routes.STRATEGY_MARKET:
         return None
     record = session.strategy.selected_record
     if record is None:
-        session.enter("strategy")
+        session.enter_context(Routes.STRATEGY)
         return _choice(state, session)
     action = action_id(MARKET_COMPONENT_ACTIONS, command)
     if action is None:

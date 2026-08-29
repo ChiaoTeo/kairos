@@ -1,7 +1,7 @@
 //! Binance Stocks Trading REST connection for `/sapi/v1/equity/*`.
 
 use kairos_primitives::integration::ParticipantSymbol;
-use kairos_primitives::reference::Currency;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::services::participants::binance::{execution, market};
@@ -14,21 +14,52 @@ use crate::{
 
 rest_connection!(BinanceStocksRestConnection, "advanced.stocks.rest");
 
+#[derive(Debug, Deserialize)]
+struct BinanceStocksExchangeInfo {
+    timezone: String,
+    symbols: Vec<BinanceStockSymbol>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BinanceStockSymbol {
+    symbol: String,
+    extended_session: bool,
+    fractionable: bool,
+    fractionable_eh: bool,
+    listing_time: u64,
+    max_notional: String,
+    max_num_orders: u64,
+    max_qty: String,
+    min_notional: String,
+    multiplier_down: String,
+    multiplier_up: String,
+    overnight_supported: bool,
+    step_size: String,
+    tradability: String,
+    tradability_update_time: u64,
+}
+
 impl InstrumentCatalogQuery for BinanceStocksRestConnection {
     async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let value = self
             .service
             .keyed_get("/sapi/v1/equity/market/exchangeInfo", &[])
             .await?;
-        let rows = value
-            .get("symbols")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                IntegrationError::InvalidPayload(
-                    "Binance Stocks exchangeInfo symbols are missing".into(),
-                )
+        let response: BinanceStocksExchangeInfo =
+            serde_json::from_value(value).map_err(|error| {
+                IntegrationError::InvalidPayload(format!(
+                    "Binance Stocks exchangeInfo response is invalid: {error}"
+                ))
             })?;
-        let instruments = rows
+        if response.timezone.trim().is_empty() {
+            return Err(IntegrationError::InvalidPayload(
+                "Binance Stocks exchangeInfo timezone is empty".into(),
+            ));
+        }
+        let instruments = response
+            .symbols
             .iter()
             .map(stock_instrument)
             .collect::<Result<Vec<_>, _>>()?;
@@ -245,63 +276,34 @@ fn rows(value: &Value) -> &Value {
     value.get("rows").unwrap_or(value)
 }
 
-fn stock_instrument(row: &Value) -> Result<ExternalInstrument, IntegrationError> {
-    let symbol = text(row, "symbol")?;
+fn stock_instrument(row: &BinanceStockSymbol) -> Result<ExternalInstrument, IntegrationError> {
+    let symbol = row.symbol.trim();
     Ok(ExternalInstrument {
         source_symbol: ParticipantSymbol::new(symbol).map_err(payload)?,
-        source_venue: row
-            .get("exchange")
-            .or_else(|| row.get("primaryExchange"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        // The official Stocks exchangeInfo response does not identify a
+        // listing exchange. Reference must not manufacture XNAS/XNYS facts.
+        source_venue: None,
         kind: ExternalInstrumentKind::Equity,
         base_currency: None,
-        quote_currency: Some(Currency::new("USD").map_err(payload)?),
-        settlement_currency: row
-            .get("quoteAsset")
-            .and_then(Value::as_str)
-            .map(Currency::new)
-            .transpose()
-            .map_err(payload)?,
+        quote_currency: None,
+        settlement_currency: None,
         underlying: None,
         expiry_unix_nanos: None,
         strike: None,
         option_right: None,
-        active: row
-            .get("tradability")
-            .or_else(|| row.get("status"))
-            .and_then(Value::as_str)
-            .is_none_or(|status| !matches!(status, "NOT_TRADABLE" | "HALTED" | "INACTIVE")),
-        price_tick: row
-            .get("tickSize")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        quantity_tick: row
-            .get("stepSize")
-            .or_else(|| row.get("minQty"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        minimum_quantity: row.get("minQty").and_then(Value::as_str).map(str::to_owned),
-        minimum_notional: row
-            .get("minNotional")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        active: stock_is_active(&row.tradability),
+        price_tick: None,
+        quantity_tick: Some(row.step_size.clone()),
+        minimum_quantity: None,
+        minimum_notional: Some(row.min_notional.clone()),
         contract_value: None,
-        price_precision: row
-            .get("pricePrecision")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok()),
-        quantity_precision: row
-            .get("quantityPrecision")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok()),
+        price_precision: None,
+        quantity_precision: None,
     })
 }
 
-fn text<'a>(row: &'a Value, field: &str) -> Result<&'a str, IntegrationError> {
-    row.get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| IntegrationError::InvalidPayload(format!("Binance Stocks {field} missing")))
+fn stock_is_active(tradability: &str) -> bool {
+    matches!(tradability, "BUY_SELL" | "BUY_ONLY" | "SELL_ONLY")
 }
 
 fn payload(error: impl std::fmt::Display) -> IntegrationError {
@@ -321,6 +323,63 @@ mod tests {
 
     use super::*;
     use crate::participants::binance::{BinanceCredential, BinanceRestConfig};
+
+    #[tokio::test]
+    async fn equity_catalog_parses_official_exchange_info_shape_once_at_boundary() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_line = request.lines().next().unwrap_or_default();
+            assert!(request_line.contains("/sapi/v1/equity/market/exchangeInfo"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("x-mbx-apikey: test-api-key")
+            );
+            let body = r#"{"timezone":"UTC","symbols":[{"extendedSession":true,"fractionable":true,"fractionableEh":true,"listingTime":1751328000000,"maxNotional":"1000000","maxNumOrders":200,"maxQty":"1000000","minNotional":"1","multiplierDown":"0.8","multiplierUp":"1.2","overnightSupported":true,"stepSize":"0.0001","symbol":"AAPL","tradability":"BUY_SELL","tradabilityUpdateTime":1751328000000}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let mut connection = BinanceStocksRestConnection::new(
+            crate::ConnectionKey::new("reference.binance.equity.test").unwrap(),
+            BinanceRestConfig {
+                environment: "test".into(),
+                endpoint,
+                credential: Some(BinanceCredential {
+                    principal_id: "test".into(),
+                    api_key: SecretString::from("test-api-key".to_owned()),
+                    secret: SecretString::from("test-secret".to_owned()),
+                }),
+            },
+        )
+        .unwrap();
+
+        let catalog = connection.fetch_instruments().await.unwrap();
+
+        server.join().unwrap();
+        assert_eq!(catalog.participant, participant());
+        let instrument = catalog.instruments.first().unwrap();
+        assert_eq!(instrument.source_symbol.as_str(), "AAPL");
+        assert_eq!(instrument.source_venue, None);
+        assert_eq!(instrument.quote_currency, None);
+        assert_eq!(instrument.settlement_currency, None);
+        assert_eq!(instrument.price_tick, None);
+        assert_eq!(instrument.quantity_tick.as_deref(), Some("0.0001"));
+        assert_eq!(instrument.minimum_quantity, None);
+        assert_eq!(instrument.minimum_notional.as_deref(), Some("1"));
+        assert!(instrument.active);
+        assert!(!stock_is_active("NONE"));
+        assert!(!stock_is_active("OFFMARKET"));
+        assert!(!stock_is_active("FUTURE_UNKNOWN_STATE"));
+    }
 
     #[tokio::test]
     async fn latest_equity_quote_uses_keyed_endpoint_and_stock_size_fields() {

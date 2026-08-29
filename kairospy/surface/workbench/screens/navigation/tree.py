@@ -10,10 +10,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ...widgets import ActionItem, ChoiceInteraction
-from ..flows.resources.account_actions import (
+from ..flows.account.actions import (
     ACCOUNT_ACTIONS as RESOURCE_ACCOUNT_ACTIONS,
+    ACCOUNT_FUNDS_ACTIONS,
 )
-from ..flows.resources.account_transfers import TRANSFER_RESULT_ACTIONS
+from ..flows.account.transfers import TRANSFER_RESULT_ACTIONS
 from .catalog import (
     AI_MODEL_ACTIONS,
     CATALOG_EXCHANGE_ACTIONS,
@@ -24,6 +25,7 @@ from .catalog import (
     SECTION_ACTIONS,
     SECTION_LABELS,
 )
+from .identity import NavigationContext, Routes, Section, belongs_to, route, starts_with
 from ..flows.launch.execution_actions import (
     EXECUTION_ACTIONS as STRATEGY_EXECUTION_ACTIONS,
 )
@@ -51,12 +53,13 @@ from ..flows.research.actions import (
 )
 from ..flows.resources.actions import detail_actions as resource_detail_actions
 from ..flows.resources.views import RESOURCE_LABELS, identity, record_summary
-from ..flows.reference.actions import CatalogSetupPlanView
+from ..flows.reference.actions import CatalogSetupPlanView, source_actions
 from ..flows.launch.actions import (
     ATTACH_ACTIONS as STRATEGY_ATTACH_ACTIONS,
-    INSTANCE_ACTIONS as STRATEGY_INSTANCE_ACTIONS,
     LAUNCH_ACTIONS as STRATEGY_LAUNCH_ACTIONS,
     TIMELINE_ACTIONS as STRATEGY_TIMELINE_ACTIONS,
+    instance_actions as strategy_instance_actions,
+    readiness_actions as strategy_readiness_actions,
 )
 from ..flows.market.workspace import (
     LIVE_MARKET_ACTIONS,
@@ -80,122 +83,130 @@ def _visible(records: tuple[Any, ...]) -> tuple[SelectionRecord, ...]:
 
 
 def _parent_context(
-    session: GuidedSession, context: tuple[str, ...]
-) -> tuple[str, ...] | None:
+    session: GuidedSession, context: NavigationContext
+) -> NavigationContext | None:
     """Return the semantic parent without copying or mutating session state."""
 
     if not context:
         return None
-    if context in {("project",), ("operations", "overview")}:
-        return ()
+    if context in {Routes.PROJECT, Routes.OPERATIONS_OVERVIEW}:
+        return Routes.HOME
     if context in {
-        ("operations", "services"),
-        ("operations", "instances"),
-        ("operations", "supports"),
+        Routes.OPERATIONS_SERVICES,
+        Routes.OPERATIONS_INSTANCES,
+        Routes.OPERATIONS_SUPPORTS,
     }:
-        return ("operations", "overview")
-    if context == ("market", "providers"):
-        return ("market", "selected")
-    if context == ("account", "accounts"):
-        return ()
-    if context == ("account", "selected"):
-        return ("account", "accounts")
-    if context == ("account", "orders"):
+        return Routes.OPERATIONS_OVERVIEW
+    if context == Routes.MARKET_PROVIDERS:
+        return Routes.MARKET_SELECTED
+    if context == Routes.ACCOUNT_LIST:
+        return Routes.HOME
+    if context == Routes.ACCOUNT_SELECTED:
+        return Routes.ACCOUNT_LIST
+    if context == Routes.ACCOUNT_FUNDS:
+        return Routes.ACCOUNT_SELECTED
+    if context == Routes.ACCOUNT_ORDERS:
         record = session.account.selected or {}
         return (
-            ("account", "order-segments")
+            Routes.ACCOUNT_ORDER_SEGMENTS
             if len(order_segments(record)) > 1
-            else ("account", "selected")
+            else Routes.ACCOUNT_SELECTED
         )
-    if context == ("account", "order-segments"):
-        return ("account", "selected")
-    if context == ("account", "transfer-result"):
-        return ("account", "selected")
+    if context == Routes.ACCOUNT_ORDER_SEGMENTS:
+        return Routes.ACCOUNT_SELECTED
+    if context == Routes.ACCOUNT_TRANSFER_RESULT:
+        return Routes.ACCOUNT_SELECTED
     if context in {
-        ("market", "workspace-market-results"),
-        ("market", "workspace-subscriptions"),
-        ("market", "workspace-subscription-content"),
-        ("market", "workspace-snapshot-kind"),
-        ("market", "workspace-timeframe"),
-        ("market", "workspace-providers"),
+        Routes.MARKET_WORKSPACE_MARKET_RESULTS,
+        Routes.MARKET_WORKSPACE_SUBSCRIPTIONS,
+        Routes.MARKET_WORKSPACE_SUBSCRIPTION_CONTENT,
+        Routes.MARKET_WORKSPACE_SNAPSHOT_KIND,
+        Routes.MARKET_WORKSPACE_TIMEFRAME,
+        Routes.MARKET_WORKSPACE_PROVIDERS,
     }:
-        return ("market", "live")
-    if context == ("market", "live-unavailable"):
-        return ("market",)
-    if context == ("market", "live"):
-        return ("market",)
-    if context == ("market", "selected"):
-        return ("market", "results") if session.market.records else ("market",)
-    if context == ("reference",):
-        return ("market",)
-    if context == ("reference", "selected"):
+        return Routes.MARKET_LIVE
+    if context in {Routes.MARKET_LIVE_UNAVAILABLE, Routes.MARKET_LIVE}:
+        return Routes.MARKET
+    if context == Routes.MARKET_SELECTED:
+        return Routes.MARKET_RESULTS if session.market.records else Routes.MARKET
+    if context == Routes.REFERENCE:
+        return Routes.MARKET
+    if context == Routes.REFERENCE_SOURCE_SELECTED:
+        return Routes.REFERENCE_SOURCES
+    if context == Routes.REFERENCE_SOURCES:
+        return Routes.REFERENCE
+    if context == Routes.REFERENCE_SELECTED:
         kind = session.reference.kind
         return (
-            ("reference", kind)
+            route(Section.REFERENCE, kind)
             if kind is not None and session.visible_records
-            else ("reference",)
+            else Routes.REFERENCE
         )
-    if context[:2] == ("operations", "service-logs"):
+    if starts_with(context, Routes.OPERATIONS_SERVICE_LOGS):
         component = session.operations.selected_service
         return (
-            ("operations", "service", component)
+            (*Routes.OPERATIONS_SERVICE, component)
             if component is not None
-            else ("operations", "services")
+            else Routes.OPERATIONS_SERVICES
         )
-    if context[:2] == ("operations", "service"):
-        return ("operations", "services")
-    if context[:2] == ("operations", "support"):
-        return ("operations", "supports")
-    if len(context) > 1 and context[0] == "operations":
-        return ("operations",)
-    if context == ("resources", "model-chat"):
-        return ("resources", "selected")
-    if context == ("resources", "selected"):
+    if starts_with(context, Routes.OPERATIONS_SERVICE):
+        return Routes.OPERATIONS_SERVICES
+    if starts_with(context, Routes.OPERATIONS_SUPPORT):
+        return Routes.OPERATIONS_SUPPORTS
+    if len(context) > 1 and belongs_to(context, Section.OPERATIONS):
+        return Routes.OPERATIONS
+    if context == Routes.RESOURCES_MODEL_CHAT:
+        return Routes.RESOURCES_SELECTED
+    if context == Routes.RESOURCES_SELECTED:
         kind = session.resources.kind
         return (
-            ("resources", kind)
+            route(Section.RESOURCES, kind)
             if kind is not None and session.visible_records
-            else ("resources",)
+            else Routes.RESOURCES
         )
     if context in {
-        ("resources", "models"),
-        ("resources", "model_endpoints"),
+        Routes.RESOURCES_MODELS,
+        Routes.RESOURCES_MODEL_ENDPOINTS,
     }:
-        return ("resources", "ai-models")
-    if len(context) > 1 and context[0] == "resources":
-        return ("resources",)
-    if len(context) > 1 and context[0] == "research":
-        return ("research",)
-    if context == ("strategy", "selected"):
+        return Routes.RESOURCES_AI_MODELS
+    if len(context) > 1 and belongs_to(context, Section.RESOURCES):
+        return Routes.RESOURCES
+    if len(context) > 1 and belongs_to(context, Section.RESEARCH):
+        return Routes.RESEARCH
+    if context == Routes.STRATEGY_SELECTED:
         return (
-            ("strategy", "launches")
+            Routes.STRATEGY_LAUNCHES
             if session.strategy.launch_records
-            else ("strategy",)
+            else Routes.STRATEGY
         )
-    if context in {("strategy", "attach"), ("strategy", "instances")}:
-        return ("strategy", "selected")
-    if context in {("strategy", "components"), ("strategy", "timeline")}:
-        return ("strategy", "instance")
-    if context in {("strategy", "execution"), ("strategy", "market")}:
-        return ("strategy", "components")
-    if context == ("strategy", "instance"):
+    if context == Routes.STRATEGY_READINESS:
+        return Routes.STRATEGY_SELECTED
+    if context == Routes.STRATEGY_ATTACH:
+        return Routes.STRATEGY_INSTANCE
+    if context == Routes.STRATEGY_INSTANCES:
+        return Routes.STRATEGY_SELECTED
+    if context in {Routes.STRATEGY_COMPONENTS, Routes.STRATEGY_TIMELINE}:
+        return Routes.STRATEGY_INSTANCE
+    if context in {Routes.STRATEGY_EXECUTION, Routes.STRATEGY_MARKET}:
+        return Routes.STRATEGY_COMPONENTS
+    if context == Routes.STRATEGY_INSTANCE:
         return (
-            ("operations", "instances")
+            Routes.OPERATIONS_INSTANCES
             if session.strategy.instance_entered_from_operations
-            else ("strategy", "instances")
+            else Routes.STRATEGY_INSTANCES
         )
-    if len(context) > 1 and context[0] == "strategy":
-        return ("strategy",)
-    if len(context) > 1 and context[0] == "reference":
+    if len(context) > 1 and belongs_to(context, Section.STRATEGY):
+        return Routes.STRATEGY
+    if len(context) > 1 and belongs_to(context, Section.REFERENCE):
         if (
             context[1] == "instruments"
             and session.reference.instrument_type is not None
         ):
-            return ("reference", "instrument-types")
-        return ("reference",)
+            return Routes.REFERENCE_INSTRUMENT_TYPES
+        return Routes.REFERENCE
     if len(context) > 1:
         return (context[0],)
-    return ()
+    return Routes.HOME
 
 
 def go_back(session: GuidedSession) -> bool:
@@ -211,33 +222,33 @@ def go_back(session: GuidedSession) -> bool:
     session.navigation_generation += 1
     if stack_target is not None:
         session.pop_frame()
-    if target == ():
+    if target == Routes.HOME:
         session.home()
         return True
 
     if source in {
-        ("operations", "services"),
-        ("operations", "instances"),
-        ("operations", "supports"),
+        Routes.OPERATIONS_SERVICES,
+        Routes.OPERATIONS_INSTANCES,
+        Routes.OPERATIONS_SUPPORTS,
     }:
         session.visible_records = session.operations.group_records
-    elif source == ("market", "providers"):
+    elif source == Routes.MARKET_PROVIDERS:
         session.visible_records = _visible(session.market.records)
     elif source in {
-        ("market", "workspace-market-results"),
-        ("market", "workspace-subscriptions"),
-        ("market", "workspace-subscription-content"),
-        ("market", "workspace-snapshot-kind"),
-        ("market", "workspace-timeframe"),
-        ("market", "workspace-providers"),
+        Routes.MARKET_WORKSPACE_MARKET_RESULTS,
+        Routes.MARKET_WORKSPACE_SUBSCRIPTIONS,
+        Routes.MARKET_WORKSPACE_SUBSCRIPTION_CONTENT,
+        Routes.MARKET_WORKSPACE_SNAPSHOT_KIND,
+        Routes.MARKET_WORKSPACE_TIMEFRAME,
+        Routes.MARKET_WORKSPACE_PROVIDERS,
     }:
         session.market.workspace_prompt = None
         session.visible_records = ()
-    elif source == ("market", "live"):
+    elif source == Routes.MARKET_LIVE:
         pass
-    elif source == ("market", "selected"):
+    elif source == Routes.MARKET_SELECTED:
         session.visible_records = _visible(session.market.records)
-    elif source == ("account", "selected"):
+    elif source == Routes.ACCOUNT_SELECTED:
         session.account.selected = None
         session.visible_records = selection_records(
             session.account.records,
@@ -245,22 +256,21 @@ def go_back(session: GuidedSession) -> bool:
             label=lambda record: identity("accounts", record),
             description=lambda record: record_summary("accounts", record),
         )
-    elif source == ("account", "orders"):
+    elif source == Routes.ACCOUNT_ORDERS:
         session.account.order_prompt = None
-        if target == ("account", "selected"):
+        if target == Routes.ACCOUNT_SELECTED:
             session.account.selected_segment = None
-    elif source == ("account", "order-segments"):
+    elif source == Routes.ACCOUNT_ORDER_SEGMENTS:
         session.account.selected_segment = None
         session.account.order_prompt = None
-    elif source == ("account", "transfer-result"):
+    elif source == Routes.ACCOUNT_TRANSFER_RESULT:
         session.account.transfer_prompt = None
-    elif source == ("reference", "selected"):
+    elif source == Routes.REFERENCE_SELECTED:
         pass
-    elif source[:2] == ("operations", "service-logs"):
+    elif starts_with(source, Routes.OPERATIONS_SERVICE_LOGS):
         pass
-    elif source[:2] == ("operations", "service") and source[:2] != (
-        "operations",
-        "service-logs",
+    elif starts_with(source, Routes.OPERATIONS_SERVICE) and not starts_with(
+        source, Routes.OPERATIONS_SERVICE_LOGS
     ):
         session.visible_records = tuple(
             record
@@ -268,50 +278,51 @@ def go_back(session: GuidedSession) -> bool:
             if isinstance(record.value, Mapping)
             and record.value.get("kind") == "service"
         )
-    elif source[:2] == ("operations", "support"):
+    elif starts_with(source, Routes.OPERATIONS_SUPPORT):
         session.visible_records = tuple(
             record
             for record in session.operations.inventory_records
             if isinstance(record.value, Mapping)
             and record.value.get("kind") == "support"
         )
-    elif len(source) > 1 and source[0] == "operations":
+    elif len(source) > 1 and belongs_to(source, Section.OPERATIONS):
         pass
-    elif source == ("resources", "model-chat"):
+    elif source == Routes.RESOURCES_MODEL_CHAT:
         session.resources.action = None
-    elif source == ("resources", "selected"):
+    elif source == Routes.RESOURCES_SELECTED:
         pass
     elif source in {
-        ("resources", "models"),
-        ("resources", "model_endpoints"),
+        Routes.RESOURCES_MODELS,
+        Routes.RESOURCES_MODEL_ENDPOINTS,
     }:
         session.resources.kind = None
         session.visible_records = ()
-    elif len(source) > 1 and source[0] == "resources":
+    elif len(source) > 1 and belongs_to(source, Section.RESOURCES):
         pass
-    elif len(source) > 1 and source[0] == "research":
+    elif len(source) > 1 and belongs_to(source, Section.RESEARCH):
         pass
-    elif source == ("strategy", "selected"):
+    elif source == Routes.STRATEGY_SELECTED:
         session.visible_records = _visible(session.strategy.launch_records)
-    elif source in {("strategy", "attach"), ("strategy", "instances")}:
-        if source == ("strategy", "attach"):
-            session.strategy.attach_paused = True
+    elif source == Routes.STRATEGY_ATTACH:
+        session.strategy.attach_paused = True
+        session.visible_records = ()
+    elif source == Routes.STRATEGY_INSTANCES:
         session.visible_records = _visible(session.strategy.launch_records)
     elif source in {
-        ("strategy", "instance"),
-        ("strategy", "components"),
-        ("strategy", "timeline"),
-        ("strategy", "execution"),
-        ("strategy", "market"),
+        Routes.STRATEGY_INSTANCE,
+        Routes.STRATEGY_COMPONENTS,
+        Routes.STRATEGY_TIMELINE,
+        Routes.STRATEGY_EXECUTION,
+        Routes.STRATEGY_MARKET,
     }:
         if source in {
-            ("strategy", "components"),
-            ("strategy", "timeline"),
+            Routes.STRATEGY_COMPONENTS,
+            Routes.STRATEGY_TIMELINE,
         }:
             session.visible_records = _visible(session.strategy.instance_records)
         elif source in {
-            ("strategy", "execution"),
-            ("strategy", "market"),
+            Routes.STRATEGY_EXECUTION,
+            Routes.STRATEGY_MARKET,
         }:
             session.visible_records = _visible(session.strategy.component_records)
         elif session.strategy.instance_entered_from_operations:
@@ -324,7 +335,7 @@ def go_back(session: GuidedSession) -> bool:
             session.strategy.instance_entered_from_operations = False
         else:
             session.visible_records = _visible(session.strategy.instance_records)
-    elif len(source) > 1 and source[0] == "strategy":
+    elif len(source) > 1 and belongs_to(source, Section.STRATEGY):
         pass
     elif len(source) > 1 and source[0] == "reference":
         if source[1] == "instruments" and session.reference.instrument_type is not None:
@@ -387,7 +398,7 @@ def _catalog_setup_actions(plan: CatalogSetupPlanView | None) -> tuple[ActionIte
     if plan is None:
         return (
             ActionItem("check", "检查准备条件", "查找适合的数据来源和账号要求", "1"),
-            ActionItem("change", "重新选择交易所和品种", "修改要准备的目录范围", "2"),
+            ActionItem("change", "重新选择市场或服务", "修改要准备的目录范围", "2"),
         )
     blockers = set(plan.blockers)
     availability = plan.availability
@@ -416,7 +427,7 @@ def _catalog_setup_actions(plan: CatalogSetupPlanView | None) -> tuple[ActionIte
             ActionItem("search-again", "回到原搜索", "再次搜索刚才输入的标的", "3")
         )
     actions.append(
-        ActionItem("change", "重新选择交易所和品种", "修改要准备的目录范围", "4")
+        ActionItem("change", "重新选择市场或服务", "修改要准备的目录范围", "4")
     )
     return tuple(actions)
 
@@ -424,23 +435,26 @@ def _catalog_setup_actions(plan: CatalogSetupPlanView | None) -> tuple[ActionIte
 def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
     if not session.context:
         return HOME_ACTIONS
-    if session.context == ("project",):
+    if session.context == Routes.PROJECT:
         return project_actions(has_project=state.owner is not None)
-    if session.context == ("market", "selected"):
+    if session.context == Routes.MARKET_SELECTED:
         market = session.market.selected
         if market is None:
             return ()
         actions = selected_market_actions(market)
         if session.market.snapshot is not None:
             actions = (*actions, *MARKET_CONTROL_ACTIONS)
-        return actions
-    if session.context == ("market", "providers"):
+        return tuple(
+            ActionItem(item.id, item.label, item.description, str(index))
+            for index, item in enumerate(actions, 1)
+        )
+    if session.context == Routes.MARKET_PROVIDERS:
         return market_provider_actions(session.market.routes)
-    if session.context == ("market", "missing"):
+    if session.context == Routes.MARKET_MISSING:
         return MISSING_MARKET_ACTIONS
-    if session.context == ("market", "catalog-exchange"):
+    if session.context == Routes.MARKET_CATALOG_EXCHANGE:
         return CATALOG_EXCHANGE_ACTIONS
-    if session.context == ("market", "catalog-instrument"):
+    if session.context == Routes.MARKET_CATALOG_INSTRUMENT:
         goal = session.market.catalog_setup_goal
         exchange = goal.exchange_id or "" if goal is not None else ""
         if exchange in {"exchange:nasdaq", "exchange:nyse", "exchange:amex"}:
@@ -451,47 +465,70 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
                 CATALOG_INSTRUMENT_ACTIONS[2],
             )
         return CATALOG_INSTRUMENT_ACTIONS[1:]
-    if session.context == ("market", "catalog-setup"):
+    if session.context == Routes.MARKET_CATALOG_SETUP:
         return _catalog_setup_actions(session.market.catalog_setup_plan)
-    if session.context == ("market", "live"):
+    if session.context == Routes.MARKET_LIVE:
         return (
             LIVE_MARKET_ACTIONS
             if live_market_available(state)
             else LIVE_MARKET_UNAVAILABLE_ACTIONS
         )
-    if session.context == ("market", "live-unavailable"):
+    if session.context == Routes.MARKET_LIVE_UNAVAILABLE:
         return LIVE_MARKET_UNAVAILABLE_ACTIONS
-    if session.context == ("market",) and (
+    if session.context == Routes.MARKET and (
         session.market.query
         and session.market.catalog_setup_plan is not None
         and session.market.catalog_setup_plan.availability
         in {"usable", "partially_usable"}
     ):
-        return (RESUME_MARKET_SEARCH_ACTION, *SECTION_ACTIONS["market"])
-    if session.context == ("account", "selected"):
+        return tuple(
+            ActionItem(item.id, item.label, item.description, str(index))
+            for index, item in enumerate(
+                (RESUME_MARKET_SEARCH_ACTION, *SECTION_ACTIONS[Section.MARKET]), 1
+            )
+        )
+    if session.context == Routes.ACCOUNT_SELECTED:
         return RESOURCE_ACCOUNT_ACTIONS
-    if session.context == ("account", "order-segments"):
+    if session.context == Routes.ACCOUNT_FUNDS:
+        return ACCOUNT_FUNDS_ACTIONS
+    if session.context == Routes.ACCOUNT_ORDER_SEGMENTS:
         record = session.account.selected
         return order_segment_actions(record) if record is not None else ()
-    if session.context == ("account", "orders"):
+    if session.context == Routes.ACCOUNT_ORDERS:
         return ACCOUNT_ORDER_ACTIONS
-    if session.context == ("account", "transfer-result"):
+    if session.context == Routes.ACCOUNT_TRANSFER_RESULT:
         return TRANSFER_RESULT_ACTIONS
-    if session.context[:2] == ("operations", "service"):
+    if starts_with(session.context, Routes.OPERATIONS_SERVICE):
         return service_actions(session.operations.selected_service_status)
-    if session.context[:2] == ("operations", "service-logs"):
+    if starts_with(session.context, Routes.OPERATIONS_SERVICE_LOGS):
         return LOG_FOLLOW_ACTIONS
-    if session.context[:2] == ("operations", "support"):
+    if starts_with(session.context, Routes.OPERATIONS_SUPPORT):
         return SUPPORT_ACTIONS
-    if session.context == ("resources", "selected"):
+    if session.context == Routes.RESOURCES_SELECTED:
         return resource_detail_actions(session.resources.kind)
-    if session.context == ("resources", "setup"):
+    if session.context == Routes.REFERENCE_SOURCE_SELECTED:
+        return source_actions(session.reference.selected_source)
+    if session.context == Routes.REFERENCE_SOURCES:
+        records = tuple(
+            ActionItem(str(index), record.label, record.description, str(index))
+            for index, record in enumerate(session.visible_records, 1)
+        )
+        return (
+            *records,
+            ActionItem(
+                "add",
+                "添加目录来源",
+                "选择要准备的市场或交易服务",
+                str(len(records) + 1),
+            ),
+        )
+    if session.context == Routes.RESOURCES_SETUP:
         return ()
-    if session.context == ("resources", "ai-models"):
+    if session.context == Routes.RESOURCES_AI_MODELS:
         return AI_MODEL_ACTIONS
     if (
         len(session.context) == 2
-        and session.context[0] == "resources"
+        and belongs_to(session.context, Section.RESOURCES)
         and session.context[1] in RESOURCE_LABELS
     ):
         kind = session.context[1]
@@ -507,23 +544,25 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
             )
         label = RESOURCE_LABELS[kind]
         return (ActionItem("new", f"添加{label}", "启动安全的单输入配置向导", "new"),)
-    if session.context == ("research", "data"):
+    if session.context == Routes.RESEARCH_DATA:
         return RESEARCH_DATA_ACTIONS
-    if session.context == ("research", "research"):
+    if session.context == Routes.RESEARCH_WORKFLOW:
         return RESEARCH_WORKFLOW_ACTIONS
-    if session.context == ("strategy", "selected"):
+    if session.context == Routes.STRATEGY_SELECTED:
         return STRATEGY_LAUNCH_ACTIONS
-    if session.context == ("strategy", "instance"):
-        return STRATEGY_INSTANCE_ACTIONS
-    if session.context == ("strategy", "attach"):
+    if session.context == Routes.STRATEGY_READINESS:
+        return strategy_readiness_actions(session.strategy.readiness)
+    if session.context == Routes.STRATEGY_INSTANCE:
+        return strategy_instance_actions(session.strategy.selected_record)
+    if session.context == Routes.STRATEGY_ATTACH:
         return STRATEGY_ATTACH_ACTIONS
-    if session.context == ("strategy", "timeline"):
+    if session.context == Routes.STRATEGY_TIMELINE:
         return STRATEGY_TIMELINE_ACTIONS
-    if session.context == ("strategy", "execution"):
+    if session.context == Routes.STRATEGY_EXECUTION:
         return STRATEGY_EXECUTION_ACTIONS
-    if session.context == ("strategy", "market"):
+    if session.context == Routes.STRATEGY_MARKET:
         return STRATEGY_MARKET_ACTIONS
-    if session.context == ("strategy", "setup"):
+    if session.context == Routes.STRATEGY_SETUP:
         return ()
     if len(session.context) > 1 and session.visible_records:
         return tuple(
@@ -535,71 +574,73 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
             )
             for index, record in enumerate(session.visible_records, 1)
         )
-    section = next(iter(session.context), None)
+    section = Section(session.context[0]) if session.context else None
     return SECTION_ACTIONS.get(section, ()) if section is not None else ()
 
 
-def context_label(context: tuple[str, ...], root_label: str = "首页") -> str:
+def context_label(context: NavigationContext, root_label: str = "首页") -> str:
     if not context:
         return root_label
-    if context == ("project",):
+    if context == Routes.PROJECT:
         return f"{root_label} / 项目管理"
-    parts = [root_label, SECTION_LABELS.get(context[0], context[0])]
-    if context == ("account", "accounts"):
+    section = Section(context[0])
+    parts = [root_label, SECTION_LABELS.get(section, section.value)]
+    if context == Routes.ACCOUNT_LIST:
         return " / ".join(parts)
     if len(context) > 1:
-        labels: Mapping[tuple[str, ...], str] = {
-            ("market", "selected"): "已选标的",
-            ("market", "providers"): "选择数据源",
-            ("market", "missing"): "未找到标的",
-            ("market", "catalog-exchange"): "选择交易所",
-            ("market", "catalog-instrument"): "选择品种",
-            ("market", "catalog-setup"): "准备标的目录",
-            ("market", "live"): "我的实时行情",
-            ("market", "live-unavailable"): "实时行情不可用",
-            ("account", "selected"): "已选账户",
-            ("account", "order-segments"): "订单管理 / 选择交易分区",
-            ("account", "orders"): "订单管理",
-            ("account", "transfer-result"): "资金划转",
-            ("market", "workspace-market-results"): "选择市场",
-            ("market", "workspace-subscriptions"): "退出当前会话行情",
-            ("market", "workspace-subscription-content"): "选择行情内容",
-            ("market", "workspace-snapshot-kind"): "选择快照内容",
-            ("market", "workspace-timeframe"): "选择 K 线周期",
-            ("market", "workspace-providers"): "选择行情来源",
-            ("reference", "selected"): "已选目录记录",
-            ("reference", "instrument-types"): "选择合约类型",
-            ("operations", "services"): "项目共享服务",
-            ("operations", "instances"): "活动运行实例",
-            ("operations", "supports"): "支撑进程",
-            ("operations", "service"): "服务操作",
-            ("operations", "overview"): "运行概览",
-            ("resources", "selected"): "已选运行资源",
-            ("resources", "model-chat"): "模型对话",
-            ("resources", "setup"): "配置向导",
-            ("resources", "ai-models"): "AI 模型",
-            ("research", "data"): "数据准备",
-            ("research", "research"): "研究流程",
-            ("strategy", "launches"): "运行方案",
-            ("strategy", "selected"): "已选运行方案",
-            ("strategy", "instances"): "运行实例",
-            ("strategy", "instance"): "已选实例",
-            ("strategy", "components"): "实例组件",
-            ("strategy", "attach"): "跟随输出",
-            ("strategy", "timeline"): "实例时间线",
-            ("strategy", "execution"): "Execution Server",
-            ("strategy", "market"): "Market 组件",
-            ("strategy", "setup"): "配置向导",
+        labels: Mapping[NavigationContext, str] = {
+            Routes.MARKET_SELECTED: "已选标的",
+            Routes.MARKET_PROVIDERS: "选择数据源",
+            Routes.MARKET_MISSING: "未找到标的",
+            Routes.MARKET_CATALOG_EXCHANGE: "选择市场或交易服务",
+            Routes.MARKET_CATALOG_INSTRUMENT: "选择品种",
+            Routes.MARKET_CATALOG_SETUP: "准备标的目录",
+            Routes.MARKET_LIVE: "我的实时行情",
+            Routes.MARKET_LIVE_UNAVAILABLE: "实时行情不可用",
+            Routes.REFERENCE_SOURCES: "管理目录来源",
+            Routes.REFERENCE_SOURCE_SELECTED: "已选目录来源",
+            Routes.ACCOUNT_SELECTED: "已选账户",
+            Routes.ACCOUNT_FUNDS: "资金、理财与费率",
+            Routes.ACCOUNT_ORDER_SEGMENTS: "订单管理 / 选择交易分区",
+            Routes.ACCOUNT_ORDERS: "订单管理",
+            Routes.ACCOUNT_TRANSFER_RESULT: "资金划转",
+            Routes.MARKET_WORKSPACE_MARKET_RESULTS: "选择市场",
+            Routes.MARKET_WORKSPACE_SUBSCRIPTIONS: "退出当前会话行情",
+            Routes.MARKET_WORKSPACE_SUBSCRIPTION_CONTENT: "选择行情内容",
+            Routes.MARKET_WORKSPACE_SNAPSHOT_KIND: "选择快照内容",
+            Routes.MARKET_WORKSPACE_TIMEFRAME: "选择 K 线周期",
+            Routes.MARKET_WORKSPACE_PROVIDERS: "选择行情来源",
+            Routes.REFERENCE_SELECTED: "已选目录记录",
+            Routes.REFERENCE_INSTRUMENT_TYPES: "选择合约类型",
+            Routes.OPERATIONS_SERVICES: "项目共享服务",
+            Routes.OPERATIONS_INSTANCES: "活动运行实例",
+            Routes.OPERATIONS_SUPPORTS: "支撑进程",
+            Routes.OPERATIONS_SERVICE: "服务操作",
+            Routes.OPERATIONS_OVERVIEW: "运行概览",
+            Routes.RESOURCES_SELECTED: "已选运行资源",
+            Routes.RESOURCES_MODEL_CHAT: "模型对话",
+            Routes.RESOURCES_SETUP: "配置向导",
+            Routes.RESOURCES_AI_MODELS: "AI 模型",
+            Routes.RESEARCH_DATA: "数据准备",
+            Routes.RESEARCH_WORKFLOW: "研究流程",
+            Routes.STRATEGY_LAUNCHES: "运行方案",
+            Routes.STRATEGY_SELECTED: "已选运行方案",
+            Routes.STRATEGY_READINESS: "运行条件",
+            Routes.STRATEGY_INSTANCES: "运行实例",
+            Routes.STRATEGY_INSTANCE: "已选实例",
+            Routes.STRATEGY_COMPONENTS: "实例组件",
+            Routes.STRATEGY_ATTACH: "跟随输出",
+            Routes.STRATEGY_TIMELINE: "实例时间线",
+            Routes.STRATEGY_EXECUTION: "Execution Server",
+            Routes.STRATEGY_MARKET: "Market 组件",
+            Routes.STRATEGY_SETUP: "配置向导",
         }
         parts.append(labels.get(context, "查询结果"))
-        if len(context) == 3 and context[:2] == ("operations", "service"):
+        if len(context) == 3 and starts_with(context, Routes.OPERATIONS_SERVICE):
             parts[-1] = service_display_name(context[2])
-        elif len(context) == 3 and context[:2] == (
-            "operations",
-            "service-logs",
-        ):
+        elif len(context) == 3 and starts_with(context, Routes.OPERATIONS_SERVICE_LOGS):
             parts[-1] = f"{service_display_name(context[2])} / 实时日志"
-        elif len(context) == 3 and context[:2] == ("operations", "support"):
+        elif len(context) == 3 and starts_with(context, Routes.OPERATIONS_SUPPORT):
             parts[-1] = {
                 "system-supervisor": "System Supervisor",
                 "aeron": "Aeron",

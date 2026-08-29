@@ -183,10 +183,10 @@ pub(super) fn binance_equity_provider_catalog(
     facts: ExternalInstrumentCatalog,
 ) -> ReferenceResult<ProviderCatalog> {
     if facts.participant.id.as_str() != "binance"
-        || facts.participant.kind != ParticipantKind::Broker
+        || facts.participant.kind != ParticipantKind::Exchange
     {
         return Err(ReferenceError::Provider(
-            "Binance Equity source requires the Binance broker participant".into(),
+            "Binance Equity source requires the Binance participant".into(),
         ));
     }
     let mut catalog = ProviderCatalog::default();

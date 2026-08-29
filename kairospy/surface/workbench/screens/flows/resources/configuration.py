@@ -37,7 +37,11 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from ...navigation.catalog import AI_MODEL_ACTIONS, SECTION_ACTIONS
+from ...navigation.catalog import (
+    AI_MODEL_ACTIONS,
+    ResourceTask,
+    SECTION_ACTIONS,
+)
 from ...session import GuidedSession
 from .views import (
     RESOURCE_LABELS,
@@ -60,9 +64,13 @@ from .actions import (
     summary_renderable,
 )
 from ...navigation import (
+    Routes,
+    Section,
     action_id,
+    belongs_to,
     context_items,
     context_label,
+    route,
 )
 from ...operation import OperationSpec
 from ...results import ResultKind, ResultRoute
@@ -82,7 +90,7 @@ def context_title(session: GuidedSession, base: str) -> str:
     label = RESOURCE_LABELS.get(kind or "")
     if len(context) == 2 and context[1] in RESOURCE_LABELS:
         return f"{session.root_label} / 连接与配置 / {RESOURCE_LABELS[context[1]]}"
-    if context == ("resources", "selected") and label:
+    if context == Routes.RESOURCES_SELECTED and label:
         rid = (
             identity(kind, session.resources.selected)
             if kind is not None and session.resources.selected is not None
@@ -91,7 +99,7 @@ def context_title(session: GuidedSession, base: str) -> str:
         return f"{session.root_label} / 连接与配置 / {label}" + (
             f" · {rid}" if rid else ""
         )
-    if context == ("resources", "setup") and label:
+    if context == Routes.RESOURCES_SETUP and label:
         wizard = session.resources.wizard
         rid = ""
         if isinstance(wizard, ResourceWizardState):
@@ -106,11 +114,56 @@ def context_title(session: GuidedSession, base: str) -> str:
     return base
 
 
+def enter_selected_resource(
+    state: Any,
+    session: GuidedSession,
+    kind: str,
+    record: Mapping[str, Any] | ResourceRecordView,
+) -> tuple[ScreenEffect, ...]:
+    """Enter the Resources-owned authoritative detail from any task source."""
+
+    selected = (
+        record
+        if isinstance(record, ResourceRecordView)
+        else ResourceRecordView.from_mapping(record)
+    )
+    session.resources.kind = kind
+    session.resources.selected = selected
+    session.resources.action = None
+    session.enter_context(Routes.RESOURCES_SELECTED)
+    body = detail_renderable(kind, selected)
+    return (
+        _standalone(f"{identity(kind, selected)} · 资源详情", body),
+        *_choice(state, session),
+    )
+
+
+def enter_resource_kind(
+    state: Any, session: GuidedSession, kind: str
+) -> tuple[ScreenEffect, ...]:
+    """Enter one Resources-owned list while preserving the actual task source."""
+
+    if kind not in RESOURCE_LABELS:
+        raise ValueError(f"unknown resource kind: {kind}")
+    session.resources.kind = kind
+    session.resources.selected = None
+    session.visible_records = ()
+    session.enter_context(route(Section.RESOURCES, kind))
+    return (
+        _run(
+            f"resources.list.{kind}",
+            f"查看 {RESOURCE_LABELS[kind]}",
+            ResultRoute(ResultKind.RESOURCE_LIST, kind),
+            lambda: list_records(state, kind),
+        ),
+    )
+
+
 def empty_resource_label(session: GuidedSession) -> str | None:
     context = session.context
     if (
         len(context) == 2
-        and context[0] == "resources"
+        and belongs_to(context, Section.RESOURCES)
         and context[1] in RESOURCE_LABELS
         and not session.visible_records
     ):
@@ -132,7 +185,7 @@ def handle_command(
     state: Any, session: GuidedSession, command: str, arguments: tuple[str, ...]
 ) -> tuple[ScreenEffect, ...] | None:
     value = " ".join(arguments).strip()
-    if command == "new" and session.context[:1] == ("resources",):
+    if command == "new" and belongs_to(session.context, Section.RESOURCES):
         if session.resources.kind is None:
             return _choice(
                 state,
@@ -146,7 +199,7 @@ def handle_command(
     if command.startswith("resource:setup-field:"):
         wizard = session.resources.wizard
         if not isinstance(wizard, ResourceWizardState):
-            session.enter("resources")
+            session.enter_context(Routes.RESOURCES)
             return _choice(
                 state,
                 session,
@@ -189,7 +242,7 @@ def handle_command(
             return _input_error(session, "模型 ID 不能为空或包含空白字符")
         return _ask_model_message(session, model)
     if command == "resource:model-chat":
-        if session.context != ("resources", "model-chat"):
+        if session.context != Routes.RESOURCES_MODEL_CHAT:
             return None
         if not value:
             return (SetStatus("消息不能为空"),)
@@ -215,9 +268,9 @@ def handle_command(
 def handle_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context[:1] != ("resources",):
+    if not belongs_to(session.context, Section.RESOURCES):
         return None
-    if session.context == ("resources", "ai-models"):
+    if session.context == Routes.RESOURCES_AI_MODELS:
         resource_kind = action_id(AI_MODEL_ACTIONS, command)
         if resource_kind is not None:
             return (
@@ -228,7 +281,7 @@ def handle_context(
                     lambda: list_records(state, resource_kind),
                 ),
             )
-    if session.context == ("resources", "setup"):
+    if session.context == Routes.RESOURCES_SETUP:
         wizard = session.resources.wizard
         if not isinstance(wizard, ResourceWizardState):
             return None
@@ -289,10 +342,10 @@ def handle_context(
         if field == "notification-provider" and not wizard.editing:
             wizard.generated_id = _available_notification_id(state, value)
         return _advance_wizard(state, session, wizard)
-    if session.context == ("resources", "selected"):
+    if session.context == Routes.RESOURCES_SELECTED:
         kind, record = session.resources.kind, session.resources.selected
         if kind is None or record is None:
-            session.enter("resources")
+            session.enter_context(Routes.RESOURCES)
             return _choice(state, session)
         if kind == "accounts" and session.resources.action == "access-purpose":
             purpose = action_id(_ACCOUNT_ACCESS_ACTIONS, command)
@@ -363,7 +416,7 @@ def handle_context(
             )
         if action == "test" and kind == "models":
             model_id = identity(kind, record)
-            session.context = ("resources", "model-chat")
+            session.context = Routes.RESOURCES_MODEL_CHAT
             session.resources.action = "chat"
             session.resources.start_model_chat(model_id)
             assert session.resources.model_chat is not None
@@ -387,18 +440,11 @@ def handle_context(
         record = _record_choice(session.visible_records, command)
         if not isinstance(record, Mapping) or session.resources.kind is None:
             return None
-        selected = ResourceRecordView.from_mapping(record)
-        session.resources.selected = selected
-        session.resources.action = None
-        session.context = ("resources", "selected")
-        body = detail_renderable(session.resources.kind, selected)
-        return _standalone(
-            f"{identity(session.resources.kind, selected)} · 资源详情", body
-        ), *_choice(state, session)
-    action = action_id(SECTION_ACTIONS["resources"], command)
+        return enter_selected_resource(state, session, session.resources.kind, record)
+    action = action_id(SECTION_ACTIONS[Section.RESOURCES], command)
     if action is None:
         return None
-    if action == "check":
+    if action == ResourceTask.CHECK:
         return (
             _run(
                 "resources.check",
@@ -407,25 +453,17 @@ def handle_context(
                 lambda: summary(state),
             ),
         )
-    if action == "models":
+    if action == ResourceTask.MODELS:
         session.resources.kind = None
         session.resources.selected = None
         session.visible_records = ()
-        session.context = ("resources", "ai-models")
+        session.context = Routes.RESOURCES_AI_MODELS
         interaction = ChoiceInteraction(
             title=_title(session), summary=None, actions=AI_MODEL_ACTIONS
         )
         session.interaction = interaction
         return SetInteraction(interaction), SetStatus("请选择模型资源")
-    session.resources.kind = action
-    return (
-        _run(
-            f"resources.list.{action}",
-            f"查看 {RESOURCE_LABELS[action]}",
-            ResultRoute(ResultKind.RESOURCE_LIST, action),
-            lambda: list_records(state, action),
-        ),
-    )
+    return enter_resource_kind(state, session, action)
 
 
 def handle_success(
@@ -500,7 +538,7 @@ def handle_success(
                         status="连接已删除 · 请选择其他连接",
                     ),
                 )
-            session.context = ("resources",)
+            session.context = Routes.RESOURCES
         elif isinstance(result, Mapping) and any(
             key in result for key in ("account_id", "connection_id", "destination_id")
         ):
@@ -629,7 +667,7 @@ def _enter_resource_list(
     session.resources.kind = resource_kind
     session.resources.selected = None
     session.resources.action = None
-    session.context = ("resources", resource_kind)
+    session.context = route(Section.RESOURCES, resource_kind)
     visible = selection_records(
         records,
         key=lambda record: identity(resource_kind, record),
@@ -694,7 +732,7 @@ def handle_failure(
     if (
         spec.route.kind is ResultKind.RESOURCE_ACTION
         and spec.route.qualifier == "model-chat"
-        and session.context == ("resources", "model-chat")
+        and session.context == Routes.RESOURCES_MODEL_CHAT
     ):
         record = session.resources.selected
         model_id = identity("models", record) if record is not None else "模型"
@@ -837,7 +875,7 @@ def _start_wizard(
             wizard.model_endpoints = ()
     session.resources.wizard = wizard
     session.resources.kind = wizard.kind
-    session.enter("resources", "setup")
+    session.enter_context(Routes.RESOURCES_SETUP)
     return _advance_wizard(state, session, wizard)
 
 
@@ -1863,7 +1901,7 @@ def _title(session: GuidedSession) -> str:
             f"{session.root_label} / 连接与配置 / {RESOURCE_LABELS[session.context[1]]}"
         )
     if (
-        session.context == ("resources", "selected")
+        session.context == Routes.RESOURCES_SELECTED
         and label
         and kind is not None
         and session.resources.selected
@@ -1872,7 +1910,7 @@ def _title(session: GuidedSession) -> str:
             f"{session.root_label} / 连接与配置 / {label}"
             f" · {identity(kind, session.resources.selected)}"
         )
-    if session.context == ("resources", "setup") and label:
+    if session.context == Routes.RESOURCES_SETUP and label:
         wizard = session.resources.wizard
         rid = ""
         if isinstance(wizard, ResourceWizardState):
@@ -1901,11 +1939,11 @@ def _clear_wizard(session: GuidedSession) -> None:
     if isinstance(wizard, ResourceWizardState):
         wizard.clear_secrets()
         session.context = (
-            ("resources", "selected")
+            Routes.RESOURCES_SELECTED
             if wizard.editing and session.resources.selected
-            else ("resources", "ai-models")
+            else Routes.RESOURCES_AI_MODELS
             if parent is not None
-            else ("resources", wizard.kind)
+            else route(Section.RESOURCES, wizard.kind)
         )
 
 
@@ -2007,6 +2045,8 @@ _KINDS = frozenset(
 )
 __all__ = [
     "cancel_input",
+    "enter_resource_kind",
+    "enter_selected_resource",
     "handle_cancel",
     "handle_command",
     "handle_context",

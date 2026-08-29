@@ -26,14 +26,14 @@ from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
 from kairospy.surface.workbench.screens.activity import ActivityOutcome
-from kairospy.surface.workbench.screens.flows.resources import (
-    account,
-    configuration as resources,
-)
-from kairospy.surface.workbench.screens.flows.resources.account_actions import (
+from kairospy.surface.workbench.screens.flows.account import runtime as account
+from kairospy.surface.workbench.screens.flows.account.actions import (
     execute as execute_account,
 )
-import kairospy.surface.workbench.screens.flows.resources.account_actions as account_actions
+import kairospy.surface.workbench.screens.flows.account.actions as account_actions
+from kairospy.surface.workbench.screens.flows.resources import (
+    configuration as resources,
+)
 import kairospy.surface.workbench.screens.flows.resources.wizard as resource_wizard
 from kairospy.surface.workbench.screens.flows.resources.wizard import (
     ResourceWizardState,
@@ -425,9 +425,7 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
             if key in record
         )
         assert listed == f"trader / 连接与配置 / {labels[kind]}  ›"
-        assert selected == (
-            f"trader / 连接与配置 / {labels[kind]} · {resource_id}  ›"
-        )
+        assert selected == (f"trader / 连接与配置 / {labels[kind]} · {resource_id}  ›")
 
 
 def test_check_all_connections_renders_all_resource_groups(
@@ -540,7 +538,8 @@ def test_account_runtime_queries_and_fee_argument_stay_in_account_context(
             for value in ("1", "2"):
                 screen.submit(value)
             await pilot.pause(0.1)
-            screen.submit("6")
+            screen.submit("5")
+            screen.submit("2")
             screen.submit("perpetual:BTCUSDT")
             await pilot.pause(0.1)
             return (
@@ -553,9 +552,55 @@ def test_account_runtime_queries_and_fee_argument_stay_in_account_context(
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert calls == [("assets", None), ("fees", "perpetual:BTCUSDT")]
-    assert context == "trader / 账户与交易 / 已选账户 · paper-main  ›"
+    assert context == "trader / 账户与交易 / 资金、理财与费率 · paper-main  ›"
     assert "paper-main · 账户运行结果" in output
     assert focused
+
+
+def test_account_connection_uses_authoritative_resource_detail_and_returns_to_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = {
+        "account_id": "paper-main",
+        "provider": "binance",
+        "environment": "paper",
+        "enabled": True,
+        "verification_status": "verified",
+    }
+    monkeypatch.setattr(
+        account.AccountConfigurationApplication,
+        "list",
+        lambda application: (record,),
+    )
+
+    async def run() -> tuple[str, str, str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("3", "1", "7"):
+                screen.submit(value)
+                await pilot.pause(0.08)
+            detail_context = str(screen.query_one("#command-context", Static).render())
+            detail_actions_copy = interaction_copy_text(screen.session.interaction)
+            detail_output = _log_text(screen.query_one("#command-output", RichLog))
+            screen.submit("/back")
+            screen.submit("1")
+            await pilot.pause(0.08)
+            return (
+                detail_context,
+                detail_actions_copy,
+                detail_output,
+                str(screen.query_one("#command-context", Static).render()),
+                str(screen.session.account.selected["account_id"]),
+            )
+
+    detail, actions, output, returned, selected = asyncio.run(run())
+    assert detail == "trader / 连接与配置 / 交易账户 · paper-main  ›"
+    assert "管理账户访问" in actions
+    assert "paper-main · 资源详情" in output
+    assert returned == "trader / 账户与交易 / 已选账户 · paper-main  ›"
+    assert selected == "paper-main"
 
 
 def test_account_runtime_queries_bind_selected_account_as_a_global_cli_option(
@@ -771,7 +816,9 @@ def test_account_order_selects_segment_before_action_and_renders_failure_once(
         "trader / 账户与交易 / 订单管理 · manual-live-readonly / 选择交易分区  ›"
     )
     assert actions == ("funding", "spot", "usd_m_futures")
-    expected = "trader / 账户与交易 / 订单管理 · manual-live-readonly / usd_m_futures  ›"
+    expected = (
+        "trader / 账户与交易 / 订单管理 · manual-live-readonly / usd_m_futures  ›"
+    )
     assert action_context == expected
     assert failure_context == expected
     assert selected_segments == ["usd_m_futures"]
@@ -815,7 +862,9 @@ def test_account_order_requires_a_configured_segment(
     context, summary, chrome = asyncio.run(run())
     assert context == ("account", "order-segments")
     assert summary == "当前账户没有配置交易分区。\n"
-    assert chrome == ("trader / 账户与交易 / 订单管理 · segment-missing / 选择交易分区  ›")
+    assert chrome == (
+        "trader / 账户与交易 / 订单管理 · segment-missing / 选择交易分区  ›"
+    )
 
 
 def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
@@ -979,7 +1028,7 @@ def test_existing_notification_can_enter_identity_preserving_edit_wizard(
 
     context, placeholder, has_wizard = asyncio.run(run())
     assert context == "trader / 连接与配置 / 配置向导 · 通知提醒 · ops-alerts  ›"
-    assert placeholder == "输入编号或命令；Enter 提交"
+    assert placeholder == "输入编号，或按 ↑↓ 选择；Enter 确认"
     assert has_wizard
 
 
@@ -1205,8 +1254,8 @@ def test_notification_wizard_back_preserves_flow_and_cancel_discards_it(
             )
 
     back_placeholder, cancelled_placeholder, wizard, context = asyncio.run(run())
-    assert back_placeholder == "输入编号或命令；Enter 提交"
-    assert cancelled_placeholder == "输入编号或命令；Enter 提交"
+    assert back_placeholder == "输入编号，或按 ↑↓ 选择；Enter 确认"
+    assert cancelled_placeholder == "输入编号，或按 ↑↓ 选择；Enter 确认"
     assert wizard is None
     assert context == ("resources", "notifications")
 
@@ -1471,16 +1520,13 @@ def test_model_service_choice_back_returns_to_parent_wizard(
             assert isinstance(child, ResourceWizardState)
             assert child.kind == "model_endpoints"
             child_hints = str(screen.query_one("#command-hints", Static).render())
-            command_input = screen.query_one(
-                "#command-input", WorkbenchCommandInput
-            )
+            command_input = screen.query_one("#command-input", WorkbenchCommandInput)
             command_input.value = "/back"
             await pilot.pause()
             preview = screen.session.interaction
             assert isinstance(preview, ChoiceInteraction)
             assert all(
-                not action.id.startswith("navigate-back:")
-                for action in preview.actions
+                not action.id.startswith("navigate-back:") for action in preview.actions
             )
             command_input.value = ""
 
@@ -1499,8 +1545,8 @@ def test_model_service_choice_back_returns_to_parent_wizard(
             )
 
     hints, kind, title, action_ids = asyncio.run(run())
-    assert "/back 上一步" in hints
-    assert "/cancel 退出配置" in hints
+    assert "Esc 上一步" in hints
+    assert "Ctrl+P 命令" in hints
     assert kind == "models"
     assert title.endswith("准备模型服务")
     assert action_ids == ("__new_endpoint__",)
@@ -1534,8 +1580,8 @@ def test_model_service_confirmation_back_reopens_last_field(
             )
 
     confirm_hints, prompt, input_hints = asyncio.run(run())
-    assert "Tab 切换  ·  Enter 执行  ·  Esc 取消" in confirm_hints
-    assert "/back 上一步" in confirm_hints
+    assert "Enter 确认  ·  Esc 上一步" in confirm_hints
+    assert "Esc 上一步" in confirm_hints
     assert prompt == "API 地址"
     assert "Enter 继续" in input_hints
 
@@ -1606,7 +1652,7 @@ def test_saved_model_can_send_message_and_show_reply(
     assert "你好，请介绍自己" in control_text
     assert "你好，我是 Qwen。" in control_text
     assert "完成 1 轮模型调用" in output
-    assert placeholder == "输入编号或命令；Enter 提交"
+    assert placeholder == "输入编号，或按 ↑↓ 选择；Enter 确认"
 
 
 def test_saved_model_conversation_shows_failure_detail(

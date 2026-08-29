@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from importlib import import_module
 from pathlib import Path
 import threading
 import tomllib
@@ -78,12 +79,23 @@ def test_home_number_enters_product_context_without_replacing_input(
     assert input_focused
 
 
-def test_tab_focuses_actions_and_keeps_focus_for_the_next_choice() -> None:
+def test_tab_focuses_actions_and_keeps_focus_for_the_next_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch_runtime = import_module(
+        "kairospy.surface.workbench.screens.flows.launch.runtime"
+    )
+    monkeypatch.setattr(
+        launch_runtime,
+        "load_launches",
+        lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
+    )
+
     async def run() -> tuple[tuple[str, ...], bool, int | None]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.press("tab", "down", "enter")
-            await pilot.pause()
+            await pilot.pause(0.5)
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
             return (
@@ -94,7 +106,7 @@ def test_tab_focuses_actions_and_keeps_focus_for_the_next_choice() -> None:
 
     context, actions_focused, highlighted = asyncio.run(run())
 
-    assert context == ("strategy",)
+    assert context == ("strategy", "launches")
     assert actions_focused
     assert highlighted == 0
 

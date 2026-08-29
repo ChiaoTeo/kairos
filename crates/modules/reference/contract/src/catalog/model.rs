@@ -4,7 +4,7 @@ use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{
     AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, IssuerId, ListingId, MarketId,
-    ReferenceStatus, Symbol,
+    ReferenceSourceId, ReferenceStatus, Symbol,
 };
 use kairos_primitives::runtime::{ActorId, InstanceId, LaunchId, WorkspaceId};
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
@@ -44,6 +44,16 @@ pub struct Instrument {
     pub strike: Option<Price>,
     pub option_right: Option<String>,
     pub status: ReferenceStatus,
+}
+
+/// One provider catalog's committed claim that it currently offers an
+/// instrument. This is deliberately separate from canonical listings and
+/// markets: a broker product can offer AAPL without being AAPL's listing
+/// exchange or an exchange-operated market.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceInstrumentAvailability {
+    pub source_id: ReferenceSourceId,
+    pub instrument: Instrument,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

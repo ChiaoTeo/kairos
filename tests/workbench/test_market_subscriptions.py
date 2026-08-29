@@ -39,11 +39,11 @@ def _text(value: object) -> str:
 def test_live_market_exposes_only_current_session_actions() -> None:
     actions = {action.id: action for action in LIVE_MARKET_ACTIONS}
     assert actions["session-subscriptions"].shortcut == "1"
-    assert actions["subscribe"].shortcut == "s"
-    assert actions["subscribe-custom"].shortcut == "x"
-    assert actions["unsubscribe"].shortcut == "u"
-    assert actions["snapshot"].shortcut == "2"
-    assert actions["freshness"].shortcut == "3"
+    assert actions["subscribe"].shortcut == "2"
+    assert actions["subscribe-custom"].shortcut == "3"
+    assert actions["unsubscribe"].shortcut == "4"
+    assert actions["snapshot"].shortcut == "5"
+    assert actions["freshness"].shortcut == "6"
     assert not {
         "status",
         "routes",
@@ -141,7 +141,7 @@ def test_add_realtime_market_starts_with_symbol_search_not_market_id() -> None:
     state = SimpleNamespace(owner=None, dry_run=True, no_exec=True, yes=False)
     session = GuidedSession(context=("market", "live"))
 
-    effects = runtime.handle_context(state, session, "s")
+    effects = runtime.handle_context(state, session, "2")
 
     assert effects is not None
     interaction = next(
@@ -160,7 +160,7 @@ def test_selected_reference_market_becomes_default_quote_subscription() -> None:
 
     state = SimpleNamespace(owner=None, dry_run=True, no_exec=True, yes=False)
     session = GuidedSession(context=("market", "live"))
-    runtime.handle_context(state, session, "s")
+    runtime.handle_context(state, session, "2")
     interaction = session.interaction
     assert isinstance(interaction, InputInteraction)
     search = runtime.handle_input(
@@ -197,7 +197,7 @@ def test_custom_subscription_content_is_a_business_choice() -> None:
     session = GuidedSession(context=("market", "live"))
     session.market.selected = fixture_market()
 
-    effects = runtime.handle_context(state, session, "x")
+    effects = runtime.handle_context(state, session, "3")
 
     assert effects is not None
     interaction = next(
@@ -225,7 +225,7 @@ def test_snapshot_resolves_one_provider_automatically() -> None:
     state = SimpleNamespace(owner=None, dry_run=False, no_exec=False, yes=False)
     session = GuidedSession(context=("market", "live"))
     session.market.selected = fixture_market()
-    runtime.handle_context(state, session, "2")
+    runtime.handle_context(state, session, "5")
     provider_effects = runtime.handle_context(state, session, "1")
     assert provider_effects is not None
     provider_run = next(
@@ -336,7 +336,7 @@ def test_subscription_inventory_rendering_shows_owner_and_pending_state() -> Non
 def test_unsubscribe_selects_current_session_market_not_subscription_id() -> None:
     state = SimpleNamespace(owner=None, dry_run=True, no_exec=True, yes=False)
     session = GuidedSession(context=("market", "live"))
-    runtime.handle_context(state, session, "u")
+    runtime.handle_context(state, session, "4")
     prompt = session.market.workspace_prompt
     assert isinstance(prompt, WorkspaceMarketPromptState)
     spec = OperationSpec.create(

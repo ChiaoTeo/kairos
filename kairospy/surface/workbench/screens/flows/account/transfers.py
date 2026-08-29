@@ -1,4 +1,4 @@
-"""Standalone Capital transfer workflow entered from an Account resource."""
+"""Standalone Capital transfer workflow entered from an Account task."""
 
 from __future__ import annotations
 
@@ -66,7 +66,8 @@ class TransferPromptState:
 
     def accept(self, name: str, raw: str) -> None:
         default = next(
-            default for field_name, _label, default in self._steps()
+            default
+            for field_name, _label, default in self._steps()
             if field_name == name
         )
         value = raw.strip() or default
@@ -74,13 +75,17 @@ class TransferPromptState:
             raise ValueError(
                 f"转出分区必须是以下之一：{'、'.join(self.source_segments)}"
             )
-        if name in {
-            "source-segment",
-            "destination-account",
-            "destination-segment",
-            "asset",
-            "amount",
-        } and not value:
+        if (
+            name
+            in {
+                "source-segment",
+                "destination-account",
+                "destination-segment",
+                "asset",
+                "amount",
+            }
+            and not value
+        ):
             raise ValueError(f"{label_for(name)}不能为空")
         if name == "asset":
             value = value.upper()
@@ -110,11 +115,13 @@ class TransferPromptState:
     def _steps(self) -> tuple[tuple[str, str, str], ...]:
         source: tuple[tuple[str, str, str], ...] = ()
         if len(self.source_segments) != 1:
-            source = ((
-                "source-segment",
-                f"转出分区（{' / '.join(self.source_segments)}）",
-                "",
-            ),)
+            source = (
+                (
+                    "source-segment",
+                    f"转出分区（{' / '.join(self.source_segments)}）",
+                    "",
+                ),
+            )
         return (
             *source,
             ("destination-account", "转入账户", self.source_account_id),
@@ -288,9 +295,7 @@ def _segment_binding(
         "credential_id": value.get("credential_id"),
         "credential_role": str(value.get("credential_role") or ""),
         "base_url": str(value.get("base_url") or ""),
-        "capital_controller_account_id": value.get(
-            "capital_controller_account_id"
-        ),
+        "capital_controller_account_id": value.get("capital_controller_account_id"),
         "participant_account_ref": value.get("participant_account_ref"),
     }
 

@@ -38,6 +38,9 @@ from kairospy.surface.workbench.screens.flows.launch import (
     runtime as strategy,
 )
 from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
+from kairospy.surface.workbench.screens.flows.resources import (
+    configuration as resources,
+)
 from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
     ActionList,
@@ -80,7 +83,7 @@ def test_strategy_launch_list_detail_and_back_stay_in_command_screen(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1"):
+            for value in ("2",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
@@ -122,11 +125,7 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
         strategy,
         "load_instances",
         lambda state, launch_id: (
-            {
-                "instance_id": "run-1",
-                "mode": "paper",
-                "state": "running",
-            },
+            {"instance_id": "run-1", "mode": "paper", "state": "running"},
         ),
     )
     monkeypatch.setattr(
@@ -142,16 +141,16 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1"):
+            for value in ("2",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("6")
+            screen.submit("3")
             await pilot.pause(0.1)
             instances = str(screen.query_one("#command-context", Static).render())
             screen.submit("1")
             selected = str(screen.query_one("#command-context", Static).render())
-            screen.submit("2")
+            screen.submit("3")
             await pilot.pause(0.1)
             components = str(screen.query_one("#command-context", Static).render())
             screen.submit("1")
@@ -171,6 +170,145 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
     assert selected == "trader / 策略与运行 / 已选实例  ›"
     assert components == "trader / 策略与运行 / 实例组件  ›"
     assert after_back == "trader / 策略与运行 / 已选实例  ›"
+
+
+def test_completed_backtest_instance_exposes_report_on_the_shared_instance_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        strategy,
+        "load_launches",
+        lambda state: ({"launch_id": "backtest-demo", "mode": "backtest"},),
+    )
+    monkeypatch.setattr(
+        strategy,
+        "load_instances",
+        lambda state, launch_id: (
+            {
+                "instance_id": "run-7",
+                "mode": "backtest",
+                "state": "completed",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        strategy,
+        "execute_launch",
+        lambda state, record, action: (
+            calls.append((str(record["instance_id"]), str(action)))
+            or {"status": "completed", "report": "artifact://backtest/run-7"}
+        ),
+    )
+
+    async def run() -> tuple[str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("2", "1", "3", "1"):
+                screen.submit(value)
+                await pilot.pause(0.08)
+            instance_actions_copy = interaction_copy_text(screen.session.interaction)
+            screen.submit("5")
+            await pilot.pause(0.1)
+            return (
+                str(screen.query_one("#command-context", Static).render()),
+                instance_actions_copy,
+                _log_text(screen.query_one("#command-output", RichLog)),
+            )
+
+    context, actions, output = asyncio.run(run())
+    assert calls == [("run-7", "report")]
+    assert context == "trader / 策略与运行 / 已选实例  ›"
+    assert "查看回测报告" in actions
+    assert "report" in output
+
+
+def test_run_readiness_repairs_resource_and_returns_to_retry_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = iter(
+        (
+            {
+                "path": "/workspace/launches/paper-demo.toml",
+                "valid": False,
+                "issues": ["Workspace data connection is unavailable: primary"],
+                "diagnostics": [
+                    {
+                        "owner": "Reference/Market",
+                        "resource": "data_provider",
+                        "severity": "blocker",
+                        "reason": "Workspace data connection is unavailable: primary",
+                        "action": "configure and manually test the selected data connection",
+                    }
+                ],
+            },
+            {
+                "path": "/workspace/launches/paper-demo.toml",
+                "valid": True,
+                "issues": [],
+                "diagnostics": [],
+            },
+        )
+    )
+    monkeypatch.setattr(
+        strategy,
+        "load_launches",
+        lambda state: (
+            {
+                "launch_id": "paper-demo",
+                "mode": "paper",
+                "config": "/workspace/launches/paper-demo.toml",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        strategy,
+        "execute_launch",
+        lambda state, record, action: next(reports),
+    )
+    monkeypatch.setattr(resources, "list_records", lambda state, kind: ())
+
+    async def run() -> tuple[str, str, str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(110, 32)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("2", "1", "2"):
+                screen.submit(value)
+                await pilot.pause(0.08)
+            readiness_context = str(
+                screen.query_one("#command-context", Static).render()
+            )
+            readiness_copy = interaction_copy_text(screen.session.interaction)
+            screen.submit("2")
+            await pilot.pause(0.1)
+            resource_context = str(
+                screen.query_one("#command-context", Static).render()
+            )
+            screen.submit("/back")
+            screen.submit("1")
+            await pilot.pause(0.08)
+            returned_context = str(
+                screen.query_one("#command-context", Static).render()
+            )
+            screen.submit("1")
+            await pilot.pause(0.1)
+            return (
+                readiness_context,
+                readiness_copy,
+                resource_context,
+                returned_context,
+                str(screen.query_one("#command-context", Static).render()),
+            )
+
+    readiness, actions, resource, returned, final = asyncio.run(run())
+    assert readiness == "trader / 策略与运行 / 运行条件  ›"
+    assert "修复行情连接" in actions
+    assert resource == "trader / 连接与配置 / 市场数据  ›"
+    assert returned == readiness
+    assert final == "trader / 策略与运行 / 已选运行方案  ›"
 
 
 def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
@@ -212,14 +350,14 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1"):
+            for value in ("2",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("6")
+            screen.submit("3")
             await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("2")
+            screen.submit("3")
             await pilot.pause(0.1)
             screen.submit("1")
             screen.submit("1")
@@ -285,14 +423,14 @@ def test_launch_market_snapshot_and_replay_pause_use_one_input(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1"):
+            for value in ("2",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("6")
+            screen.submit("3")
             await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("2")
+            screen.submit("3")
             await pilot.pause(0.1)
             screen.submit("1")
             screen.submit("3")
@@ -349,14 +487,14 @@ def test_launch_timeline_export_uses_argument_and_inline_confirmation(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1"):
+            for value in ("2",):
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("6")
+            screen.submit("3")
             await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("3")
+            screen.submit("4")
             await pilot.pause(0.1)
             screen.submit("2")
             screen.submit("timeline.jsonl")
@@ -385,6 +523,13 @@ def test_launch_attach_python_uses_same_input_and_inline_confirmation(
     )
     monkeypatch.setattr(
         strategy,
+        "load_instances",
+        lambda state, launch_id: (
+            {"instance_id": "run-1", "mode": "paper", "state": "running"},
+        ),
+    )
+    monkeypatch.setattr(
+        strategy,
         "load_launch_attach_snapshot",
         lambda state, launch_id: {"status": "running", "logs": {"lines": []}},
     )
@@ -401,13 +546,13 @@ def test_launch_attach_python_uses_same_input_and_inline_confirmation(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1"):
+            for value in ("2", "1", "3"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("/a")
-            await pilot.pause(0.1)
             screen.submit("2")
+            await pilot.pause(0.1)
+            screen.submit("4")
             screen.submit("print('ready')")
             assert calls == []
             screen.submit("/confirm")
@@ -434,6 +579,13 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
         "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
+    monkeypatch.setattr(
+        strategy,
+        "load_instances",
+        lambda state, launch_id: (
+            {"instance_id": "run-1", "mode": "paper", "state": "running"},
+        ),
+    )
 
     def snapshot(state: object, launch_id: str) -> dict[str, object]:
         refreshes.append(launch_id)
@@ -455,20 +607,20 @@ def test_launch_attach_background_refresh_deduplicates_logs_and_can_pause(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1"):
+            for value in ("2", "1", "3"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             screen.submit("1")
-            screen.submit("/a")
+            screen.submit("2")
             await pilot.pause(1.2)
             before_pause = len(refreshes)
-            screen.submit("/p")
+            screen.submit("2")
             await pilot.pause(1.2)
             while_paused = len(refreshes)
             live_buffer = screen.session.strategy.live_buffer
             assert live_buffer is not None
             unseen_while_paused = live_buffer.unseen_lines
-            screen.submit("/p")
+            screen.submit("2")
             await pilot.pause(0.2)
             interaction = screen.session.interaction
             assert isinstance(interaction, ControlInteraction)
@@ -517,6 +669,13 @@ def test_launch_attach_clear_only_removes_visible_window(
     )
     monkeypatch.setattr(
         strategy,
+        "load_instances",
+        lambda state, launch_id: (
+            {"instance_id": "run-1", "mode": "paper", "state": "running"},
+        ),
+    )
+    monkeypatch.setattr(
+        strategy,
         "load_launch_attach_snapshot",
         lambda *args: {
             "instance": {"instance_id": "run-1"},
@@ -533,10 +692,10 @@ def test_launch_attach_clear_only_removes_visible_window(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1", "1", "/a"):
+            for value in ("2", "1", "3", "1", "2"):
                 screen.submit(value)
                 await pilot.pause(0.1)
-            screen.submit("/c")
+            screen.submit("3")
             await pilot.pause()
             live_buffer = screen.session.strategy.live_buffer
             assert live_buffer is not None
@@ -562,6 +721,13 @@ def test_launch_attach_drops_result_from_an_older_navigation_generation(
         "load_launches",
         lambda state: ({"launch_id": "paper-demo", "mode": "paper"},),
     )
+    monkeypatch.setattr(
+        strategy,
+        "load_instances",
+        lambda state, launch_id: (
+            {"instance_id": "run-1", "mode": "paper", "state": "running"},
+        ),
+    )
 
     def snapshot(state: object, launch_id: str) -> dict[str, object]:
         nonlocal calls
@@ -584,7 +750,7 @@ def test_launch_attach_drops_result_from_an_older_navigation_generation(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("2", "1", "1", "/a"):
+            for value in ("2", "1", "3", "1", "2"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             for _ in range(20):
@@ -592,9 +758,9 @@ def test_launch_attach_drops_result_from_an_older_navigation_generation(
                     break
                 await pilot.pause(0.05)
             screen.submit("/back")
-            screen.submit("1")
             await pilot.pause(0.1)
-            screen.submit("/a")
+            screen.submit("1")
+            screen.submit("2")
             release.set()
             await pilot.pause(1.3)
             return calls, interaction_copy_text(screen.session.interaction)
@@ -636,7 +802,6 @@ def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
             screen.submit("2")
-            screen.submit("1")
             await pilot.pause(0.1)
             screen.submit("/new")
             screen.submit("backtest-demo")

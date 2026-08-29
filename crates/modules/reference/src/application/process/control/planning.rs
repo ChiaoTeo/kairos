@@ -38,6 +38,10 @@ const REQUIRES_ACCOUNT: &[ReferenceCatalogSourceLimitation] =
     &[ReferenceCatalogSourceLimitation::RequiresProviderAccount];
 const PROVIDER_SPECIFIC: &[ReferenceCatalogSourceLimitation] =
     &[ReferenceCatalogSourceLimitation::ProductIsProviderSpecific];
+const BINANCE_STOCKS: &[ReferenceCatalogSourceLimitation] = &[
+    ReferenceCatalogSourceLimitation::RequiresProviderAccount,
+    ReferenceCatalogSourceLimitation::ProductIsProviderSpecific,
+];
 
 impl ReferenceApplication {
     pub(crate) async fn contract_catalog_setup_plan(
@@ -96,6 +100,24 @@ fn candidates_for_goal(
     goal: &ReferenceCatalogGoal,
 ) -> (Vec<Candidate>, Vec<ReferenceCatalogSetupBlocker>) {
     match goal {
+        ReferenceCatalogGoal::ProviderProduct { binding } => (
+            vec![candidate(
+                ReferenceSourceBinding::from_contract(*binding),
+                ReferenceCatalogActualScope::ProviderCatalog,
+                SUPPORTED_PRODUCT,
+                if matches!(
+                    binding,
+                    kairos_reference_contract::ReferenceSourceBinding::Binance(
+                        kairos_reference_contract::BinanceReferenceSource::Equity
+                    )
+                ) {
+                    BINANCE_STOCKS
+                } else {
+                    PROVIDER_SPECIFIC
+                },
+            )],
+            Vec::new(),
+        ),
         ReferenceCatalogGoal::EquityOptions { underlyings } => {
             if underlyings.is_empty() {
                 return (
@@ -318,9 +340,10 @@ mod tests {
     use kairos_primitives::reference::{ExchangeId, InstrumentId, InstrumentKind};
     use kairos_primitives::time::UnixNanos;
     use kairos_reference_contract::{
-        MassiveReferenceSource, ReferenceCatalogActivity, ReferenceCatalogActualScope,
-        ReferenceCatalogAvailability, ReferenceCatalogGoal, ReferenceCatalogSetupBlocker,
-        ReferenceCatalogSetupRequest, ReferenceCatalogSourceLimitation, ReferenceSourceBinding,
+        BinanceReferenceSource, MassiveReferenceSource, ReferenceCatalogActivity,
+        ReferenceCatalogActualScope, ReferenceCatalogAvailability, ReferenceCatalogGoal,
+        ReferenceCatalogSetupBlocker, ReferenceCatalogSetupRequest,
+        ReferenceCatalogSourceLimitation, ReferenceSourceBinding,
     };
 
     use super::catalog_setup_plan;
@@ -429,6 +452,38 @@ mod tests {
         assert_eq!(
             plan.options[0].actual_scope,
             ReferenceCatalogActualScope::SelectedUnderlyings
+        );
+    }
+
+    #[test]
+    fn binance_equity_is_planned_as_provider_catalog_not_listing_exchange() {
+        let plan = catalog_setup_plan(
+            ReferenceCatalogSetupRequest {
+                goal: ReferenceCatalogGoal::ProviderProduct {
+                    binding: ReferenceSourceBinding::Binance(BinanceReferenceSource::Equity),
+                },
+            },
+            &[],
+            0,
+        );
+
+        assert_eq!(
+            plan.options[0].actual_scope,
+            ReferenceCatalogActualScope::ProviderCatalog
+        );
+        assert_eq!(
+            plan.options[0].binding,
+            ReferenceSourceBinding::Binance(BinanceReferenceSource::Equity)
+        );
+        assert!(
+            plan.options[0]
+                .limitations
+                .contains(&ReferenceCatalogSourceLimitation::RequiresProviderAccount)
+        );
+        assert!(
+            plan.options[0]
+                .limitations
+                .contains(&ReferenceCatalogSourceLimitation::ProductIsProviderSpecific)
         );
     }
 

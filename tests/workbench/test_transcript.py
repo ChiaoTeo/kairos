@@ -68,7 +68,9 @@ def test_observe_records_reproducible_non_interactive_command(tmp_path: Path) ->
             _state(tmp_path), transcript_path=tmp_path / "observe.jsonl"
         )
         async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.press("o", "b", "s", "e", "r", "v", "e", "enter")
+            await pilot.press(
+                "slash", "o", "b", "s", "e", "r", "v", "e", "enter"
+            )
             await pilot.pause()
             return app.transcript.events
 
@@ -115,7 +117,7 @@ def test_complete_operation_redacts_paired_secret_arguments(tmp_path: Path) -> N
         async with app.run_test(size=(80, 24)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            screen.submit("integration connect --token top-secret-value")
+            screen.submit("kairos integration connect --token top-secret-value")
             await pilot.pause(0.1)
             action = next(
                 event for event in app.transcript.events if event["event"] == "action"

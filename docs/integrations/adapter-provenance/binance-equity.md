@@ -19,16 +19,16 @@ Official sources:
 - Verified path: `GET /sapi/v1/equity/market/exchangeInfo`
 - Authentication: `X-MBX-APIKEY`; request signing was not required by the verified catalog call.
 - Observed response header: `x-sapi-used-ip-weight-1m: 1`.
-- Verification date: 2026-08-11.
+- Verification date: 2026-08-30.
 - Verification credential: Workspace `binance-equity-readonly`; the key is not copied into fixtures,
   logs, source, or this note.
 
-The verified response contained `timezone` and a complete `symbols` array. A symbol row may contain
-`symbol`, `tradability`, `tradabilityUpdateTime`, `overnightSupported`, `fractionable`,
-`fractionableEh`, `extendedSession`, `maxNumOrders`, `stepSize`, `minQty`, `maxQty`, `minNotional`,
-`maxNotional`, `multiplierUp`, `multiplierDown`, and `listingTime`. The endpoint did not provide a
-primary listing venue, quote currency, settlement asset, or price tick, so Kairos does not invent
-those facts.
+The authenticated `symbol=AAPL` response contained `timezone` and a `symbols` array. Its symbol row
+contained `symbol`, `tradability`, `tradabilityUpdateTime`, `overnightSupported`, `fractionable`,
+`fractionableEh`, `extendedSession`, `maxNumOrders`, `stepSize`, `maxQty`, `minNotional`,
+`maxNotional`, `multiplierUp`, `multiplierDown`, and `listingTime`. It did not contain `minQty`, a
+primary listing venue, quote currency, settlement asset, or price tick. Kairos therefore records
+the service-provider availability and quantity step without inventing any of those missing facts.
 
 ## Kairos mapping
 

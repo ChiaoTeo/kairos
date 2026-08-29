@@ -30,8 +30,14 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from .account_actions import ACCOUNT_ACTIONS, execute as execute_account
-from .account_transfers import (
+from .actions import (
+    ACCOUNT_ACTIONS,
+    ACCOUNT_FUNDS_ACTIONS,
+    AccountAction,
+    AccountFundsAction,
+    execute as execute_account,
+)
+from .transfers import (
     TRANSFER_RESULT_ACTIONS,
     TransferPromptState,
     confirm as confirm_transfer,
@@ -42,6 +48,7 @@ from .account_transfers import (
     unavailable_result as transfer_unavailable_result,
 )
 from ...session import GuidedSession
+from ...navigation.identity import Routes
 from ..launch.orders import (
     ORDER_ACTIONS,
     OrderPromptState,
@@ -50,8 +57,9 @@ from ..launch.orders import (
     order_segments,
     preview as preview_order,
 )
-from .actions import identity
-from .views import record_summary
+from ..resources.actions import identity
+from ..resources.configuration import enter_selected_resource
+from ..resources.views import record_summary
 from ...navigation import action_id, context_items, context_label
 from ...operation import OperationSpec
 from ...results import ResultKind, ResultRoute
@@ -65,7 +73,7 @@ def enter_accounts(state: Any, session: GuidedSession) -> tuple[ScreenEffect, ..
     session.resources.kind = "accounts"
     session.resources.selected = None
     session.account.selected = None
-    session.context = ("account", "accounts")
+    session.enter_context(Routes.ACCOUNT_LIST)
     return (
         _run(
             "account.list",
@@ -80,7 +88,7 @@ def enter_accounts(state: Any, session: GuidedSession) -> tuple[ScreenEffect, ..
 def handle_input(
     state: Any, session: GuidedSession, token: ActionToken, value: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if token.feature is not Feature.RESOURCES or not token.action.startswith(
+    if token.feature is not Feature.ACCOUNT or not token.action.startswith(
         ("account:", "order:", "transfer:")
     ):
         return None
@@ -88,7 +96,7 @@ def handle_input(
 
 
 def cancel_input(session: GuidedSession, token: ActionToken) -> bool:
-    if token.feature is not Feature.RESOURCES or not token.action.startswith(
+    if token.feature is not Feature.ACCOUNT or not token.action.startswith(
         ("account:", "order:", "transfer:")
     ):
         return False
@@ -104,7 +112,7 @@ def handle_command(
     if command == "account:fees":
         record = session.account.selected
         if record is None:
-            session.enter("account", "accounts")
+            session.enter_context(Routes.ACCOUNT_LIST)
             return _choice(
                 state,
                 session,
@@ -122,7 +130,7 @@ def handle_command(
     if command.startswith("transfer:field:"):
         prompt = session.account.transfer_prompt
         if not isinstance(prompt, TransferPromptState):
-            session.context = ("account", "selected")
+            session.context = Routes.ACCOUNT_SELECTED
             return _choice(
                 state,
                 session,
@@ -138,7 +146,7 @@ def handle_command(
         return None
     prompt = session.account.order_prompt
     if not isinstance(prompt, OrderPromptState):
-        session.context = ("account", "orders")
+        session.context = Routes.ACCOUNT_ORDERS
         return _choice(
             state,
             session,
@@ -155,43 +163,37 @@ def handle_command(
 def handle_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context == ("account", "accounts"):
+    if session.context == Routes.ACCOUNT_LIST:
         if not session.visible_records:
             if command not in {"configure", "1"}:
                 return None
             session.account.runtime_entry = False
-            session.enter("resources")
+            session.enter_context(Routes.RESOURCES)
             return _choice(state, session, status="请配置交易账户")
         record = _record_choice(session.visible_records, command)
         if not isinstance(record, Mapping):
             return None
         session.account.selected = ResourceRecordView.from_mapping(record)
-        session.context = ("account", "selected")
+        session.enter_context(Routes.ACCOUNT_SELECTED)
         return _choice(state, session, status="已进入账户与交易")
-    if session.context == ("account", "selected"):
+    if session.context == Routes.ACCOUNT_SELECTED:
         record = session.account.selected
         if record is None:
-            session.enter("account", "accounts")
+            session.enter_context(Routes.ACCOUNT_LIST)
             return _choice(state, session)
         action = action_id(ACCOUNT_ACTIONS, command)
         if action is None:
             return None
-        if action == "fees":
-            return _ask(
-                session,
-                "account:fees",
-                "费率范围（产品:交易对）",
-                "直接回车使用 spot:BTCUSDT；输入 /back 取消。",
-            )
-        if action == "orders":
+        selected_action = AccountAction(action)
+        if selected_action is AccountAction.ORDERS:
             segments = order_segments(record)
             session.account.reset()
             session.account.selected = record
             if len(segments) == 1:
                 session.account.selected_segment = segments[0]
-                session.context = ("account", "orders")
+                session.enter_context(Routes.ACCOUNT_ORDERS)
             else:
-                session.context = ("account", "order-segments")
+                session.enter_context(Routes.ACCOUNT_ORDER_SEGMENTS)
             if not segments:
                 return _choice(
                     state,
@@ -200,7 +202,37 @@ def handle_context(
                     "无法进入订单管理 · 请先配置交易分区",
                 )
             return _choice(state, session)
-        if action == "transfer":
+        if selected_action is AccountAction.FUNDS:
+            session.enter_context(Routes.ACCOUNT_FUNDS)
+            return _choice(state, session)
+        if selected_action is AccountAction.CONNECTION:
+            session.account.runtime_entry = False
+            return enter_selected_resource(state, session, "accounts", record)
+        return (
+            _run(
+                f"account.{selected_action.value}",
+                f"{identity('accounts', record)} · {selected_action.value}",
+                ResultKind.ACCOUNT,
+                lambda: execute_account(state, record, selected_action),
+            ),
+        )
+    if session.context == Routes.ACCOUNT_FUNDS:
+        record = session.account.selected
+        if record is None:
+            session.enter_context(Routes.ACCOUNT_LIST)
+            return _choice(state, session)
+        action = action_id(ACCOUNT_FUNDS_ACTIONS, command)
+        if action is None:
+            return None
+        selected_action = AccountFundsAction(action)
+        if selected_action is AccountFundsAction.FEES:
+            return _ask(
+                session,
+                "account:fees",
+                "费率范围（产品:交易对）",
+                "直接回车使用 spot:BTCUSDT；按 Esc 取消。",
+            )
+        if selected_action is AccountFundsAction.TRANSFER:
             if not transfer_available(record):
                 return (
                     _run(
@@ -213,44 +245,34 @@ def handle_context(
             prompt = TransferPromptState(dict(record))
             session.account.transfer_prompt = prompt
             return _advance_transfer(state, session, prompt)
-        if action == "connection":
-            session.account.runtime_entry = False
-            session.resources.kind = "accounts"
-            session.resources.selected = record
-            session.context = ("resources", "selected")
-            return _choice(
-                state,
-                session,
-                Text("管理当前账户的连接、访问权限与配置。", style="dim"),
-            )
         return (
             _run(
-                f"account.{action}",
-                f"{identity('accounts', record)} · {action}",
+                f"account.{selected_action.value}",
+                f"{identity('accounts', record)} · {selected_action.value}",
                 ResultKind.ACCOUNT,
-                lambda: execute_account(state, record, action),
+                lambda: execute_account(state, record, selected_action),
             ),
         )
-    if session.context == ("account", "order-segments"):
+    if session.context == Routes.ACCOUNT_ORDER_SEGMENTS:
         record = session.account.selected
         if record is None:
-            session.enter("account", "accounts")
+            session.enter_context(Routes.ACCOUNT_LIST)
             return _choice(state, session)
         segment = action_id(order_segment_actions(record), command)
         if segment is None:
             return None
         session.account.selected_segment = segment
         session.account.order_prompt = None
-        session.context = ("account", "orders")
+        session.enter_context(Routes.ACCOUNT_ORDERS)
         return _choice(
             state,
             session,
             Text(f"当前交易分区：{segment}", style="dim"),
         )
-    if session.context == ("account", "transfer-result"):
+    if session.context == Routes.ACCOUNT_TRANSFER_RESULT:
         prompt = session.account.transfer_prompt
         if not isinstance(prompt, TransferPromptState):
-            session.context = ("account", "selected")
+            session.context = Routes.ACCOUNT_SELECTED
             return _choice(state, session)
         action = action_id(TRANSFER_RESULT_ACTIONS, command)
         if action is None:
@@ -258,7 +280,7 @@ def handle_context(
         if action == "again":
             replacement = TransferPromptState(dict(prompt.account))
             session.account.transfer_prompt = replacement
-            session.context = ("account", "selected")
+            session.context = Routes.ACCOUNT_SELECTED
             return _advance_transfer(state, session, replacement)
         if action == "history":
             return (
@@ -280,11 +302,11 @@ def handle_context(
                 lambda: transfer_status(state, prompt, plan_id),
             ),
         )
-    if session.context != ("account", "orders"):
+    if session.context != Routes.ACCOUNT_ORDERS:
         return None
     record = session.account.selected
     if record is None:
-        session.enter("account", "accounts")
+        session.enter_context(Routes.ACCOUNT_LIST)
         return _choice(state, session)
     action = action_id(ORDER_ACTIONS, command)
     if action is None:
@@ -309,7 +331,7 @@ def handle_success(
         session.resources.selected = None
         session.account.records = records
         session.account.selected = None
-        session.context = ("account", "accounts")
+        session.enter_context(Routes.ACCOUNT_LIST)
         visible = selection_records(
             records,
             key=lambda record: identity("accounts", record),
@@ -333,9 +355,7 @@ def handle_success(
         interaction = ChoiceInteraction(title=context_title(session), actions=actions)
         session.interaction = interaction
         return SetInteraction(interaction), SetStatus(
-            f"找到 {len(records)} 个账户 · 请选择"
-            if records
-            else "尚未配置交易账户"
+            f"找到 {len(records)} 个账户 · 请选择" if records else "尚未配置交易账户"
         )
     if kind not in {ResultKind.ACCOUNT, ResultKind.ORDER, ResultKind.TRANSFER}:
         return None
@@ -382,7 +402,7 @@ def handle_success(
         kind is ResultKind.TRANSFER
         and spec.action_name != "account.transfer.unavailable"
     ):
-        session.context = ("account", "transfer-result")
+        session.enter_context(Routes.ACCOUNT_TRANSFER_RESULT)
         unknown = isinstance(result, Mapping) and bool(result.get("result_unknown"))
         status = "划转结果未知 · 请查询本次状态" if unknown else "资金划转操作已完成"
         return _activity(spec, body), *_choice(state, session, status=status)
@@ -507,7 +527,7 @@ def _ask(
     summary: Any | None = None,
 ) -> tuple[ScreenEffect, ...]:
     session.ask(
-        ActionToken(Feature.RESOURCES, action),
+        ActionToken(Feature.ACCOUNT, action),
         title=context_title(session),
         prompt=prompt,
         detail=detail,
@@ -579,18 +599,20 @@ def context_title(session: GuidedSession) -> str:
     """Return the Account-owned task and selected-object breadcrumb."""
     base = context_label(session.context, session.root_label)
     account = _account_id(session.account.selected)
-    if session.context == ("account", "accounts"):
+    if session.context == Routes.ACCOUNT_LIST:
         return f"{session.root_label} / 账户与交易"
-    if session.context == ("account", "order-segments"):
+    if session.context == Routes.ACCOUNT_ORDER_SEGMENTS:
         root = f"{session.root_label} / 账户与交易 / 订单管理"
         return f"{root} · {account} / 选择交易分区" if account else base
     if session.context in {
-        ("account", "selected"),
-        ("account", "orders"),
+        Routes.ACCOUNT_SELECTED,
+        Routes.ACCOUNT_FUNDS,
+        Routes.ACCOUNT_ORDERS,
+        Routes.ACCOUNT_TRANSFER_RESULT,
     }:
         title = f"{base} · {account}" if account else base
         if (
-            session.context == ("account", "orders")
+            session.context == Routes.ACCOUNT_ORDERS
             and session.account.selected_segment
         ):
             title = f"{title} / {session.account.selected_segment}"
@@ -1260,7 +1282,12 @@ def _joined(value: Any) -> str:
 
 
 _KINDS = frozenset(
-    {ResultKind.ACCOUNT, ResultKind.ORDER, ResultKind.TRANSFER, ResultKind.RESOURCE_LIST}
+    {
+        ResultKind.ACCOUNT,
+        ResultKind.ORDER,
+        ResultKind.TRANSFER,
+        ResultKind.RESOURCE_LIST,
+    }
 )
 
 

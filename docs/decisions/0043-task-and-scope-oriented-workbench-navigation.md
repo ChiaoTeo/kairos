@@ -58,14 +58,37 @@ Workbench 在单一 Textual Screen 内维护逻辑页面栈。进入页面时压
 准备后使用 Reference 返回的来源身份启动刷新，目录可用后重新执行原搜索。推荐来源、实际同步范围、
 账号要求、可用性和进度由 Reference owner 返回，Workbench 不维护第二份 Provider 能力矩阵。
 
+运行方案校验失败时，Strategy flow 保存类型化的 readiness 投影，并按诊断 owner 进入 Resources 的账户、
+行情、模型或通知权威配置页；返回后回到原 readiness 检查点。方案内风险、执行和作用域问题复用现有
+运行方案编辑向导。Workbench 不复制资源表单，也不引入通用 Repair Manager。
+
+### 6. 产品切片和控制流身份必须显式
+
+`flows/account` 与 `flows/resources` 是独立垂直切片：前者回答账户运行与交易问题，后者回答连接配置与
+验证问题。它们分别拥有 `AccountSession` / `Feature.ACCOUNT` 和 `ResourcesSession` /
+`Feature.RESOURCES`。其他产品 flow 同样直接拥有自己的动作、参数续接和状态转换；跨任务入口通过逻辑
+页面栈进入对方权威页面，不增加协调器或兼容 facade。
+
+控制流不得由各 flow 重复拼写字符串协议。顶层任务使用 `Section`，稳定页面使用 `Routes`，共享输入使用
+`Feature`，首页和一级任务动作使用导航目录内按任务划分的 `StrEnum`，叶子稳定动作使用 owner flow 内的
+`StrEnum`。动态对象身份、外部 Provider/进程词汇和用户文案仍保留在各自边界，不建立跨产品的万能动作
+枚举或通用业务 registry。
+
+普通路径只展示当前上下文可执行的连续编号动作，并支持方向键、Enter、Esc 与 `?`。高级命令必须显式
+进入；未匹配的普通文本不得静默回退为 CLI 命令。
+
 ## Consequences
 
 - 用户先选择要完成的任务，再在对象摘要、面包屑和确认中辨认作用域。
 - Market、Reference、Account、Integration 和 System 的业务所有权及 Application/Contract 边界不变。
 - 首页编号发生一次有意的不兼容调整；自动化和快照必须使用新目录验证，不保留旧编号别名。
 - `AccountSession` 独立保存账户任务的临时选择，`ResourcesSession` 只保存连接配置交互状态。
+- 账户运行代码位于独立 `flows/account`，其输入 token 不再由 Resources 猜测和转发。
+- 原始导航元组只允许在 `navigation.identity` 定义；产品 flow 使用 canonical route symbols。
+- 一级任务目录不得使用裸动作字符串；架构测试保护 route 和 task action 的唯一符号来源。
 - 导航包会依赖产品 flow 提供的 presentation action definitions，但不得执行它们的业务行为。
 - 前置条件修复会增加跨产品页面帧，但不会改变 Credential、Integration、Reference 或 Market 的所有权。
+- Backtest 报告归属于具体运行实例；Research 数据执行与 Gate 发布保持各自 owner 的连续参数流程。
 
 ## Verification
 

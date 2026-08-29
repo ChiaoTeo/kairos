@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.surface.workbench.screens.flows.resources import account
+from kairospy.surface.workbench.screens.flows.account import runtime as account
 from kairospy.surface.workbench.widgets import renderable_plain_text
 
 

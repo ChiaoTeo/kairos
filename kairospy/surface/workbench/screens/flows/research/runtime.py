@@ -18,7 +18,7 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from ...navigation.catalog import SECTION_ACTIONS
+from ...navigation.catalog import ResearchTask, SECTION_ACTIONS
 from ...session import GuidedSession
 from .actions import (
     DATA_ACTIONS,
@@ -26,7 +26,14 @@ from .actions import (
     execute as execute_research,
     preview as preview_research,
 )
-from ...navigation import action_id, context_items, context_label
+from ...navigation import (
+    Section,
+    action_id,
+    belongs_to,
+    context_items,
+    context_label,
+    route,
+)
 from ...operation import OperationSpec
 from ...results import ResultKind, ResultRoute
 from ...presentation import ResultTone, conclusion, count, facts, section
@@ -60,15 +67,17 @@ def handle_command(
 def handle_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context[:1] != ("research",):
+    if not belongs_to(session.context, Section.RESEARCH):
         return None
     if len(session.context) == 1:
-        action = action_id(SECTION_ACTIONS["research"], command)
+        action = action_id(SECTION_ACTIONS[Section.RESEARCH], command)
         if action is None:
             return None
-        session.enter("research", action)
+        session.enter_context(route(Section.RESEARCH, action))
         return _choice(state, session)
-    items = DATA_ACTIONS if session.context[1] == "data" else RESEARCH_ACTIONS
+    items = (
+        DATA_ACTIONS if session.context[1] == ResearchTask.DATA else RESEARCH_ACTIONS
+    )
     action = action_id(items, command)
     if action is None:
         return None

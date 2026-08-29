@@ -9,10 +9,11 @@ use kairos_protocol::generated::kairos::reference::v_2 as fb;
 use kairos_protocol::{EventMetadataOwned, decode_event_metadata};
 use kairos_reference_contract::{
     Asset as RustAsset, AssetCatalogQuery, ContractError, Exchange as RustExchange,
-    ExchangeCatalogQuery, Instrument as RustInstrument, InstrumentSearchQuery,
-    LifecycleCatalogQuery, Listing as RustListing, ListingCatalogQuery, Market as RustMarket,
-    MarketSearchQuery, ReferenceCatalog as RustCatalog, ReferenceLifecycleEvent as RustEvent,
-    ReferencePage, ReferenceReadSession as RustSession,
+    ExchangeCatalogQuery, Instrument as RustInstrument, InstrumentAvailabilityQuery,
+    InstrumentSearchQuery, LifecycleCatalogQuery, Listing as RustListing, ListingCatalogQuery,
+    Market as RustMarket, MarketSearchQuery, ReferenceCatalog as RustCatalog,
+    ReferenceInstrumentAvailability as RustInstrumentAvailability,
+    ReferenceLifecycleEvent as RustEvent, ReferencePage, ReferenceReadSession as RustSession,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -366,6 +367,15 @@ impl ReferenceInstrument {
             display_symbol: self.symbol.clone(),
         }
     }
+}
+
+#[pyclass(frozen, module = "kairospy._native_reference_contract")]
+#[derive(Clone)]
+struct ReferenceInstrumentAvailability {
+    #[pyo3(get)]
+    source_id: String,
+    #[pyo3(get)]
+    instrument: ReferenceInstrument,
 }
 
 #[pyclass(frozen, module = "kairospy._native_reference_contract")]
@@ -727,6 +737,33 @@ impl ReferenceReadSession {
             .map_err(contract_error)
     }
 
+    #[pyo3(signature = (source_ids=None, instrument_ids=None, query=None, symbol=None, instrument_type=None, active_only=false, limit=None, offset=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn instrument_availability(
+        &self,
+        source_ids: Option<Vec<String>>,
+        instrument_ids: Option<Vec<String>>,
+        query: Option<String>,
+        symbol: Option<String>,
+        instrument_type: Option<String>,
+        active_only: bool,
+        limit: Option<i64>,
+        offset: i64,
+    ) -> PyResult<Vec<ReferenceInstrumentAvailability>> {
+        self.session()?
+            .instrument_availability(&InstrumentAvailabilityQuery {
+                source_ids: validated_values(source_ids, "source_id")?,
+                instrument_ids: validated_values(instrument_ids, "instrument_id")?,
+                search: query,
+                symbol: validated_value(symbol, "symbol")?,
+                instrument_type: parsed_value(instrument_type, "instrument_type")?,
+                active_only,
+                page: page(limit, offset)?,
+            })
+            .map(|values| values.into_iter().map(Into::into).collect())
+            .map_err(contract_error)
+    }
+
     #[pyo3(signature = (listing_ids=None, query=None, instrument_id=None, exchange_id=None, exchange_symbol=None, status=None, active_only=false, limit=None, offset=0))]
     fn listings(
         &self,
@@ -965,6 +1002,15 @@ impl From<RustInstrument> for ReferenceInstrument {
                 .map(|value| native_decimal(value.mantissa(), value.scale(), "price")),
             option_right: value.option_right,
             status: value.status.to_string(),
+        }
+    }
+}
+
+impl From<RustInstrumentAvailability> for ReferenceInstrumentAvailability {
+    fn from(value: RustInstrumentAvailability) -> Self {
+        Self {
+            source_id: value.source_id.to_string(),
+            instrument: value.instrument.into(),
         }
     }
 }
@@ -1339,6 +1385,7 @@ fn _native_reference_contract(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ReferenceAsset>()?;
     module.add_class::<ReferenceInstrumentRef>()?;
     module.add_class::<ReferenceInstrument>()?;
+    module.add_class::<ReferenceInstrumentAvailability>()?;
     module.add_class::<ReferenceListing>()?;
     module.add_class::<ReferenceTradingRules>()?;
     module.add_class::<ReferenceMarket>()?;

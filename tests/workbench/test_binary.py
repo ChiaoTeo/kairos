@@ -39,7 +39,7 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
             await terminal.type("1")
             await terminal.press("Enter")
             await asyncio.sleep(0.2)
-            await terminal.type("4")
+            await terminal.type("5")
             await terminal.press("Enter")
             await asyncio.sleep(0.2)
             assert "visual-fixture / 市场与标的 / 标的目录" in await terminal.text()
@@ -52,7 +52,9 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
             await terminal.type("/help")
             await terminal.press("Enter")
             await terminal.wait_idle(timeout=10_000)
-            assert "/market [代码]" in await terminal.text()
+            help_text = await terminal.text()
+            assert "• 帮助" in help_text
+            assert "普通文本" in help_text
 
             await terminal.type("/market")
             await terminal.press("Enter")
@@ -64,8 +66,9 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
             assert "我的实时行情" in await terminal.text()
 
             await terminal.resize(60, 20)
+            await asyncio.sleep(0.2)
             await terminal.wait_idle(timeout=10_000)
-            assert "输入编号或命令；Enter 提交" in await terminal.text()
+            assert "输入编号，或按 ↑↓" in await terminal.text()
 
             await terminal.press("Ctrl+Q")
             await terminal.wait_exit(timeout=10_000)
@@ -100,16 +103,19 @@ def test_real_workbench_binary_preserves_input_across_terminal_resize(
             await terminal.type("/market AAPL")
 
             await terminal.resize(60, 20)
+            await asyncio.sleep(0.2)
             await terminal.wait_idle(timeout=10_000)
             narrow = await terminal.text()
             assert "KAIROS  ·  resize-fixture" in narrow
             assert "/market AAPL" in narrow
 
             await terminal.resize(100, 30)
-            await terminal.wait_text("/bottom", timeout=10_000)
+            await asyncio.sleep(0.2)
+            await terminal.wait_idle(timeout=10_000)
             restored = await terminal.text()
             assert "• 就绪" in restored
             assert "/market AAPL" in restored
+            assert "Ctrl+P 命令" in restored
 
             await terminal.press("Ctrl+Q")
             await terminal.wait_exit(timeout=10_000)

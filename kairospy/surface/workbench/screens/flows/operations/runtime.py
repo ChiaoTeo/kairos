@@ -36,7 +36,7 @@ from .business import (
     execute as execute_business,
 )
 from .market import execute as execute_market_runtime, render as render_market_runtime
-from ...navigation.catalog import SECTION_ACTIONS
+from ...navigation.catalog import OperationsTask, SECTION_ACTIONS
 from ...session import GuidedSession
 from ...presentation import ResultTone, conclusion, count, facts
 from .actions import (
@@ -74,11 +74,16 @@ from .views import (
 )
 from ..resources.actions import list_records as list_resource_records
 from ...navigation import (
+    Routes,
+    Section,
     action_id,
+    belongs_to,
     context_items,
     context_label,
     record_description,
     record_label,
+    route,
+    starts_with,
 )
 from ...operation import OperationSpec
 from ...results import ResultKind, ResultRoute
@@ -125,7 +130,7 @@ def handle_command(
     if command.startswith("operations-project:field:"):
         prompt = session.operations.project_prompt
         if not isinstance(prompt, ProjectPromptState):
-            session.enter("project")
+            session.enter_context(Routes.PROJECT)
             return _choice(
                 state,
                 session,
@@ -145,7 +150,7 @@ def handle_command(
         name = " ".join(arguments).strip()
         if action not in {"create", "use"} or not name:
             session.operations.profile_action = None
-            session.context = ("operations", "profiles")
+            session.context = Routes.OPERATIONS_PROFILES
             return _choice(
                 state,
                 session,
@@ -168,7 +173,7 @@ def handle_command(
     if command.startswith("business:field:"):
         prompt = session.operations.business_prompt
         if not isinstance(prompt, BusinessPromptState):
-            session.enter("operations", "business")
+            session.enter_context(Routes.OPERATIONS_BUSINESS)
             return _choice(
                 state,
                 session,
@@ -189,7 +194,9 @@ def handle_command(
 def handle_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context == ("project",) or session.context[:1] == ("operations",):
+    if session.context == Routes.PROJECT or belongs_to(
+        session.context, Section.OPERATIONS
+    ):
         return _operations_context(state, session, command)
     return None
 
@@ -197,7 +204,7 @@ def handle_context(
 def enter_overview(state: Any, session: GuidedSession) -> tuple[ScreenEffect, ...]:
     """Open the Operations Center by reading its current runtime inventory."""
 
-    session.enter("operations", "overview")
+    session.enter_context(Routes.OPERATIONS_OVERVIEW)
     return (
         _run(
             "operations.overview",
@@ -225,7 +232,7 @@ def enter_service_detail(
     session.operations.selected_service = component
     session.operations.selected_service_status = view
     session.visible_records = ()
-    session.context = ("operations", "service", component)
+    session.context = (*Routes.OPERATIONS_SERVICE, component)
     return _choice(state, session, service_summary(view), service_status_line(view))
 
 
@@ -235,7 +242,7 @@ def handle_success(
     kind = spec.route.kind
     if kind is ResultKind.OPERATIONS_OVERVIEW:
         if result is None:
-            session.context = ("operations", "overview")
+            session.context = Routes.OPERATIONS_OVERVIEW
             session.visible_records = ()
             return _choice(
                 state,
@@ -248,7 +255,7 @@ def handle_success(
             )
         inventory = operations_records(result)
         records = operations_group_records(inventory)
-        session.context = ("operations", "overview")
+        session.context = Routes.OPERATIONS_OVERVIEW
         session.visible_records = records
         session.operations.inventory_records = inventory
         session.operations.group_records = records
@@ -266,7 +273,7 @@ def handle_success(
         )
     if kind is ResultKind.OPERATIONS_SERVICES:
         records = tuple(service_status_view(record) for record in (result or ()))
-        session.context = ("operations", "services")
+        session.context = Routes.OPERATIONS_SERVICES
         visible = selection_records(
             records,
             label=lambda record: record.display_name,
@@ -302,17 +309,19 @@ def handle_success(
         if spec.action_name.endswith((".open", ".init")):
             session.home()
         else:
-            session.enter("project")
+            session.enter_context(Routes.PROJECT)
     elif kind is ResultKind.OPERATIONS_PROFILE:
         session.operations.profile_action = None
-        session.context = ("operations", "profiles")
+        session.context = Routes.OPERATIONS_PROFILES
     elif kind is ResultKind.BUSINESS:
         session.operations.business_prompt = None
     if kind is ResultKind.OPERATIONS and spec.route.qualifier == "live-market-recovery":
-        session.context = ("market", "live")
+        session.context = Routes.MARKET_LIVE
     if kind is ResultKind.OPERATIONS_PROJECT:
         body = project_result_renderable(spec.action_name, result)
-    elif kind is ResultKind.OPERATIONS and spec.route.qualifier == "live-market-recovery":
+    elif (
+        kind is ResultKind.OPERATIONS and spec.route.qualifier == "live-market-recovery"
+    ):
         body = Group(
             conclusion("实时行情服务已经就绪", tone=ResultTone.SUCCESS),
             facts((("作用域", "项目共享行情服务"), ("下一步", "选择要查看的实时行情"))),
@@ -442,9 +451,9 @@ def _operations_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
     context = session.context
-    if context[:2] == ("operations", "support"):
+    if starts_with(context, Routes.OPERATIONS_SUPPORT):
         action = action_id(SUPPORT_ACTIONS, command)
-        if action == "refresh":
+        if action == OperationsTask.REFRESH:
             return enter_overview(state, session)
         if action is None:
             return None
@@ -470,7 +479,7 @@ def _operations_context(
                 qualifier="support-diagnostics",
             ),
         )
-    if context == ("operations", "overview") and session.visible_records:
+    if context == Routes.OPERATIONS_OVERVIEW and session.visible_records:
         target = _record_choice(session.visible_records, command)
         if target is None:
             if command in {"refresh", "r"}:
@@ -486,7 +495,7 @@ def _operations_context(
                 records, tuple
             ):
                 return None
-            session.context = ("operations", name)
+            session.context = route(Section.OPERATIONS, name)
             session.visible_records = records
             interaction = ChoiceInteraction(
                 title=context_label(session.context, session.root_label),
@@ -504,9 +513,9 @@ def _operations_context(
     if (
         context
         in {
-            ("operations", "services"),
-            ("operations", "instances"),
-            ("operations", "supports"),
+            Routes.OPERATIONS_SERVICES,
+            Routes.OPERATIONS_INSTANCES,
+            Routes.OPERATIONS_SUPPORTS,
         }
         and session.visible_records
     ):
@@ -523,7 +532,7 @@ def _operations_context(
             session.operations.selected_service = view.component
             session.operations.selected_service_status = view
             session.visible_records = ()
-            session.context = ("operations", "service", view.component)
+            session.context = (*Routes.OPERATIONS_SERVICE, view.component)
             return _choice(state, session, status=service_status_line(view))
         if kind == "run-instance" and isinstance(target.get("value"), Mapping):
             from ..launch.runtime import enter_selected_instance
@@ -537,18 +546,18 @@ def _operations_context(
             session.visible_records = ()
             session.operations.selected_support = name
             session.operations.selected_support_status = value
-            session.context = ("operations", "support", name)
+            session.context = (*Routes.OPERATIONS_SUPPORT, name)
             return _choice(
                 state,
                 session,
                 support_summary(value),
             )
         return None
-    if context[:2] == ("operations", "service-logs"):
+    if starts_with(context, Routes.OPERATIONS_SERVICE_LOGS):
         component = session.operations.selected_service
         buffer = session.operations.live_buffer
         if component is None or buffer is None:
-            session.context = ("operations", "services")
+            session.context = Routes.OPERATIONS_SERVICES
             return _choice(state, session, status="日志上下文已经失效")
         action = action_id(LOG_FOLLOW_ACTIONS, command)
         if action is None:
@@ -569,10 +578,10 @@ def _operations_context(
         return RefreshOperationsLogs(True), *log_control_effects(
             session, "正在刷新实时日志"
         )
-    if context[:2] == ("operations", "service"):
+    if starts_with(context, Routes.OPERATIONS_SERVICE):
         component = session.operations.selected_service
         if component is None:
-            session.enter("operations")
+            session.enter_context(Routes.OPERATIONS)
             return _choice(state, session)
         action = action_id(
             service_actions(session.operations.selected_service_status), command
@@ -612,7 +621,7 @@ def _operations_context(
 
         if action == "follow":
             session.operations.start_logs(component, started_at=time.monotonic())
-            session.context = ("operations", "service-logs", component)
+            session.context = (*Routes.OPERATIONS_SERVICE_LOGS, component)
             return RefreshOperationsLogs(True, True), *log_control_effects(
                 session, "实时日志 · 后台刷新中"
             )
@@ -650,7 +659,7 @@ def _operations_context(
             spec,
             dangerous=action in {"start", "stop", "restart", "repair", "repair-start"},
         )
-    if context in {("project",), ("operations", "project")}:
+    if context in {Routes.PROJECT, Routes.OPERATIONS_PROJECT}:
         action = action_id(
             project_actions(has_project=state.owner is not None), command
         )
@@ -671,7 +680,7 @@ def _operations_context(
         prompt = ProjectPromptState(action)
         session.operations.project_prompt = prompt
         return _advance_project(state, session, prompt)
-    if context == ("operations", "config"):
+    if context == Routes.OPERATIONS_CONFIG:
         action = action_id(CONFIG_ACTIONS, command)
         if action is None:
             return None
@@ -693,7 +702,7 @@ def _operations_context(
                 ),
             )
         if action == "profiles":
-            session.context = ("operations", "profiles")
+            session.context = Routes.OPERATIONS_PROFILES
             return _choice(state, session)
         return (
             _run(
@@ -703,7 +712,7 @@ def _operations_context(
                 lambda: execute_config(state, action),
             ),
         )
-    if context == ("operations", "profiles"):
+    if context == Routes.OPERATIONS_PROFILES:
         action = action_id(PROFILE_ACTIONS, command)
         if action is None:
             return None
@@ -723,13 +732,13 @@ def _operations_context(
             "请输入 Profile 名称",
             "写入前会显示确认；输入 /back 取消。",
         )
-    if context == ("operations", "business"):
+    if context == Routes.OPERATIONS_BUSINESS:
         action = action_id(BUSINESS_ACTIONS, command)
         if action is None:
             return None
-        session.enter("operations", "business", action)
+        session.enter_context((*Routes.OPERATIONS_BUSINESS, action))
         return _choice(state, session)
-    if len(context) == 3 and context[:2] == ("operations", "business"):
+    if len(context) == 3 and starts_with(context, Routes.OPERATIONS_BUSINESS):
         tool = context[2]
         action = action_id(business_actions(tool), command)
         if action is None:
@@ -737,7 +746,7 @@ def _operations_context(
         prompt = BusinessPromptState(tool, action)
         session.operations.business_prompt = prompt
         return _advance_business(state, session, prompt)
-    if context == ("operations", "services") and session.visible_records:
+    if context == Routes.OPERATIONS_SERVICES and session.visible_records:
         record = _record_choice(session.visible_records, command)
         if record is None:
             return None
@@ -753,9 +762,9 @@ def _operations_context(
         session.operations.selected_service = component
         session.operations.selected_service_status = view
         session.visible_records = ()
-        session.context = ("operations", "service", component)
+        session.context = (*Routes.OPERATIONS_SERVICE, component)
         return _choice(state, session, status=service_status_line(view))
-    action = action_id(SECTION_ACTIONS["operations"], command)
+    action = action_id(SECTION_ACTIONS[Section.OPERATIONS], command)
     if action is None:
         return None
     if action == "observe":
@@ -786,7 +795,7 @@ def _operations_context(
             ),
         )
     if action in {"project", "config", "business"}:
-        session.enter("operations", action)
+        session.enter_context(route(Section.OPERATIONS, action))
         return _choice(state, session)
     return None
 
@@ -962,7 +971,9 @@ def service_log_operation(
     """Return a finite tail read for the selected service log stream."""
 
     component = session.operations.selected_service
-    if component is None or session.context[:2] != ("operations", "service-logs"):
+    if component is None or not starts_with(
+        session.context, Routes.OPERATIONS_SERVICE_LOGS
+    ):
         return None
     return lambda: execute_service(state, component, "log-tail")
 

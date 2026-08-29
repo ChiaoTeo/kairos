@@ -150,9 +150,9 @@ def test_workspace_market_subscription_search_uses_business_copy(
     async def request_subscription(pilot: Any) -> None:
         screen = pilot.app.screen
         assert isinstance(screen, CommandLineScreen)
-        screen.submit("1")
-        screen.submit("c")
-        screen.submit("s")
+        for value in ("1", "2", "2"):
+            screen.submit(value)
+            await pilot.pause(0.05)
         await pilot.pause()
 
     assert snap_compare(

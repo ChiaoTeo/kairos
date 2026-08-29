@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use kairos_primitives::reference::{
     AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, ListingId, MarketId,
-    ReferenceStatus, Symbol,
+    ReferenceSourceId, ReferenceStatus, Symbol,
 };
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use rusqlite::types::Value;
@@ -19,7 +19,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_ite
 use crate::catalog::{Asset, Exchange, Instrument, Listing};
 use crate::{
     AccountReferenceSnapshot, ContractError, ContractResult, ExecutionReferenceSnapshot, Market,
-    MarketReferenceSnapshot, ReferenceCatalogSnapshot,
+    MarketReferenceSnapshot, ReferenceCatalogSnapshot, ReferenceInstrumentAvailability,
 };
 
 pub const REFERENCE_SQLITE_SCHEMA_VERSION: u32 = 6;
@@ -134,6 +134,17 @@ pub struct InstrumentSearchQuery {
     pub expiry_to_unix_nanos: Option<u64>,
     pub option_right: Option<String>,
     pub status: Option<ReferenceStatus>,
+    pub active_only: bool,
+    pub page: ReferencePage,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InstrumentAvailabilityQuery {
+    pub source_ids: Option<Vec<ReferenceSourceId>>,
+    pub instrument_ids: Option<Vec<InstrumentId>>,
+    pub search: Option<String>,
+    pub symbol: Option<Symbol>,
+    pub instrument_type: Option<InstrumentKind>,
     pub active_only: bool,
     pub page: ReferencePage,
 }
@@ -640,6 +651,78 @@ impl ReferenceReadSession {
         read_typed_records(&self.connection, builder)
     }
 
+    /// Read last-known-good provider availability from the same committed
+    /// provider records that Reference promotes into the canonical catalog.
+    /// No second mutable availability registry is introduced.
+    pub fn instrument_availability(
+        &self,
+        query: &InstrumentAvailabilityQuery,
+    ) -> ContractResult<Vec<ReferenceInstrumentAvailability>> {
+        validate_page(&query.page)?;
+        let mut sql = String::from(
+            "SELECT provider, payload FROM reference_provider_records \
+             WHERE record_kind = 'instrument'",
+        );
+        let mut values = Vec::new();
+        push_in_filter(
+            &mut sql,
+            &mut values,
+            "provider",
+            query.source_ids.as_deref(),
+        )?;
+        push_in_filter(
+            &mut sql,
+            &mut values,
+            "record_id",
+            query.instrument_ids.as_deref(),
+        )?;
+        if let Some(search) = query.search.as_deref() {
+            let pattern = search_pattern(search)?;
+            sql.push_str(
+                " AND (LOWER(record_id) LIKE LOWER(?) ESCAPE '\\' \
+                 OR LOWER(payload) LIKE LOWER(?) ESCAPE '\\')",
+            );
+            values.push(Value::Text(pattern.clone()));
+            values.push(Value::Text(pattern));
+        }
+        if let Some(symbol) = query.symbol.as_ref() {
+            sql.push_str(" AND json_extract(payload, '$.symbol') = ?");
+            values.push(Value::Text(symbol.to_string()));
+        }
+        if let Some(kind) = query.instrument_type.as_ref() {
+            sql.push_str(" AND json_extract(payload, '$.instrument_type') = ?");
+            values.push(Value::Text(kind.to_string()));
+        }
+        if query.active_only {
+            sql.push_str(" AND json_extract(payload, '$.status') IN ('active', 'trading')");
+        }
+        sql.push_str(" ORDER BY provider, record_id");
+        match query.page.limit {
+            Some(limit) => {
+                sql.push_str(" LIMIT ? OFFSET ?");
+                values.push(Value::Integer(limit as i64));
+            },
+            None => sql.push_str(" LIMIT -1 OFFSET ?"),
+        }
+        values.push(sqlite_integer(query.page.offset, "offset")?);
+        let mut statement = self.connection.prepare(&sql).map_err(transport)?;
+        let rows = statement
+            .query_map(params_from_iter(values), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(transport)?;
+        rows.map(|row| {
+            let (source_id, payload) = row.map_err(transport)?;
+            Ok(ReferenceInstrumentAvailability {
+                source_id: ReferenceSourceId::new(source_id).map_err(|error| {
+                    ContractError::Invalid(format!("invalid Reference source id: {error}"))
+                })?,
+                instrument: decode_payload(&payload)?,
+            })
+        })
+        .collect()
+    }
+
     pub fn listings(&self, query: &ListingCatalogQuery) -> ContractResult<Vec<Listing>> {
         let mut builder =
             RecordQuery::new("reference_listings_current", "listing_id", &query.page)?;
@@ -774,15 +857,7 @@ struct RecordQuery<'a> {
 
 impl<'a> RecordQuery<'a> {
     fn new(table: &str, key: &'a str, page: &ReferencePage) -> ContractResult<Self> {
-        if page
-            .limit
-            .is_some_and(|limit| !(1..=MAX_PAGE_SIZE as u64).contains(&limit))
-        {
-            return Err(ContractError::Invalid(format!(
-                "limit must be between 1 and {MAX_PAGE_SIZE}"
-            )));
-        }
-        sqlite_integer(page.offset, "offset")?;
+        validate_page(page)?;
         Ok(Self {
             sql: format!("SELECT payload FROM {table} WHERE 1 = 1"),
             values: Vec::new(),
@@ -820,17 +895,7 @@ impl<'a> RecordQuery<'a> {
         let Some(search) = search else {
             return Ok(());
         };
-        let search = search.trim();
-        if search.is_empty() {
-            return Err(ContractError::Invalid(
-                "Reference query must not be empty".into(),
-            ));
-        }
-        let escaped = search
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let pattern = format!("%{escaped}%");
+        let pattern = search_pattern(search)?;
         self.sql.push_str(" AND (LOWER(");
         self.sql.push_str(self.key);
         self.sql
@@ -871,6 +936,64 @@ impl<'a> RecordQuery<'a> {
         self.sql.push_str(clause);
         self.values.push(value);
     }
+}
+
+fn validate_page(page: &ReferencePage) -> ContractResult<()> {
+    if page
+        .limit
+        .is_some_and(|limit| !(1..=MAX_PAGE_SIZE as u64).contains(&limit))
+    {
+        return Err(ContractError::Invalid(format!(
+            "limit must be between 1 and {MAX_PAGE_SIZE}"
+        )));
+    }
+    sqlite_integer(page.offset, "offset")?;
+    Ok(())
+}
+
+fn search_pattern(search: &str) -> ContractResult<String> {
+    let search = search.trim();
+    if search.is_empty() {
+        return Err(ContractError::Invalid(
+            "Reference query must not be empty".into(),
+        ));
+    }
+    let escaped = search
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    Ok(format!("%{escaped}%"))
+}
+
+fn push_in_filter<T: ToString>(
+    sql: &mut String,
+    values: &mut Vec<Value>,
+    column: &str,
+    items: Option<&[T]>,
+) -> ContractResult<()> {
+    let Some(items) = items else {
+        return Ok(());
+    };
+    if items.is_empty() {
+        sql.push_str(" AND 0 = 1");
+        return Ok(());
+    }
+    let items = items
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    if items.len() > MAX_PAGE_SIZE {
+        return Err(ContractError::Invalid(format!(
+            "too many identifiers; maximum is {MAX_PAGE_SIZE}"
+        )));
+    }
+    sql.push_str(" AND ");
+    sql.push_str(column);
+    sql.push_str(" IN (");
+    sql.push_str(&vec!["?"; items.len()].join(","));
+    sql.push(')');
+    values.extend(items.into_iter().map(Value::Text));
+    Ok(())
 }
 
 fn read_typed_records<T: serde::de::DeserializeOwned>(
@@ -1228,10 +1351,11 @@ fn transport(error: impl std::fmt::Display) -> ContractError {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::reference::MarketId;
+    use kairos_primitives::reference::{MarketId, Symbol};
 
     use super::{
-        MarketCatalogQuery, MarketSearchQuery, ReferenceCatalog, ReferenceCollection, ReferencePage,
+        InstrumentAvailabilityQuery, MarketCatalogQuery, MarketSearchQuery, ReferenceCatalog,
+        ReferenceCollection, ReferencePage,
     };
 
     #[test]
@@ -1522,6 +1646,58 @@ mod tests {
         assert_eq!(status.integrity.legacy_exchange_listing_ids, 1);
         assert_eq!(status.integrity.option_listings, 1);
         assert_eq!(status.integrity.option_markets, 1);
+    }
+
+    #[test]
+    fn provider_instrument_availability_is_distinct_from_canonical_listing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL);
+                 INSERT INTO reference_meta VALUES(1,6,4,9,11);
+                 CREATE TABLE reference_provider_records(provider TEXT NOT NULL, record_kind TEXT NOT NULL, record_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(provider, record_kind, record_id));",
+            )
+            .unwrap();
+        let aapl = serde_json::json!({
+            "source_id": "binance-equity",
+            "instrument_id": "instrument:equity:US:AAPL:common",
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "instrument_type": "equity",
+            "status": "active"
+        });
+        connection
+            .execute(
+                "INSERT INTO reference_provider_records VALUES(?,?,?,?)",
+                rusqlite::params![
+                    "binance-equity",
+                    "instrument",
+                    "instrument:equity:US:AAPL:common",
+                    aapl.to_string()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        let catalog = ReferenceCatalog::open(&path).unwrap();
+        let session = catalog.read_session().unwrap();
+        let rows = session
+            .instrument_availability(&InstrumentAvailabilityQuery {
+                symbol: Some(Symbol::new("AAPL").unwrap()),
+                active_only: true,
+                page: ReferencePage {
+                    limit: Some(20),
+                    offset: 0,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source_id.as_str(), "binance-equity");
+        assert_eq!(rows[0].instrument.symbol.as_str(), "AAPL");
     }
 
     #[test]

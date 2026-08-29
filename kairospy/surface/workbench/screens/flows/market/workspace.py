@@ -32,16 +32,16 @@ LIVE_MARKET_ACTIONS = (
     ActionItem(
         "session-subscriptions", "当前关注", "查看本次 Kairos I 会话正在接收的行情", "1"
     ),
-    ActionItem("subscribe", "添加实时行情", "选择市场并接收实时报价", "s"),
+    ActionItem("subscribe", "添加实时行情", "选择市场并接收实时报价", "2"),
     ActionItem(
         "subscribe-custom",
         "自定义行情内容",
         "选择市场以及要接收的行情内容",
-        "x",
+        "3",
     ),
-    ActionItem("unsubscribe", "停止关注", "停止接收当前会话选择的行情", "u"),
-    ActionItem("snapshot", "查看行情快照", "读取实时报价、K 线或 Greeks", "2"),
-    ActionItem("freshness", "查看行情新鲜度", "查看所选行情的更新时间", "3"),
+    ActionItem("unsubscribe", "停止关注", "停止接收当前会话选择的行情", "4"),
+    ActionItem("snapshot", "查看行情快照", "读取实时报价、K 线或 Greeks", "5"),
+    ActionItem("freshness", "查看行情新鲜度", "查看所选行情的更新时间", "6"),
 )
 
 LIVE_MARKET_UNAVAILABLE_ACTIONS = (

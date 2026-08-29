@@ -8,12 +8,14 @@ from textual.widgets import RichLog, Static
 
 from kairospy.surface.workbench import KairosWorkbenchApp
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
-from kairospy.surface.workbench.screens.flows.resources import account
-from kairospy.surface.workbench.screens.flows.resources.account_transfers import (
+from kairospy.surface.workbench.screens.flows.account import runtime as account
+from kairospy.surface.workbench.screens.flows.account.transfers import (
     TransferPromptState,
     transfer_available,
 )
-from kairospy.surface.workbench.screens.flows.resources import account_transfers
+from kairospy.surface.workbench.screens.flows.account import (
+    transfers as account_transfers,
+)
 from kairospy.surface.workbench.widgets import (
     ConfirmInteraction,
     InputInteraction,
@@ -206,7 +208,7 @@ def test_readonly_account_shows_capability_degradation_without_amount_prompt(
         async with app.run_test(size=(120, 32)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("3", "1", "7"):
+            for value in ("3", "1", "5", "3"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             return (
@@ -248,7 +250,7 @@ def test_authorized_transfer_requires_preview_and_explicit_confirmation(
         async with app.run_test(size=(120, 36)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            for value in ("3", "1", "7", "", "spot", "", "10"):
+            for value in ("3", "1", "5", "3", "", "spot", "", "10"):
                 screen.submit(value)
                 await pilot.pause(0.1)
             assert isinstance(screen.session.interaction, ConfirmInteraction)

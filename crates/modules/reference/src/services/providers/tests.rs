@@ -838,9 +838,9 @@ fn binance_equity_perpetual_has_no_expiry_and_links_canonical_equity() {
 }
 
 #[test]
-fn binance_equity_broker_catalog_does_not_invent_exchange_listing_or_market() {
+fn binance_equity_service_catalog_does_not_invent_exchange_listing_or_market() {
     let catalog = binance_equity_provider_catalog(ExternalInstrumentCatalog {
-        participant: ParticipantRef::new(ParticipantKind::Broker, "binance").unwrap(),
+        participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
         instruments: vec![ExternalInstrument {
             source_symbol: ExternalSymbol::new("AAPL").unwrap(),
             source_venue: None,

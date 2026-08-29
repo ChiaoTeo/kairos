@@ -19,6 +19,7 @@ from ..widgets import (
     RunningInteraction,
 )
 from .live import LiveBuffer
+from .navigation.identity import NavigationContext
 from .operation import OperationSpec
 from .results import ResultKind, ResultRoute
 from .selection import LaunchRecordView, ResourceRecordView, SelectionRecord
@@ -28,21 +29,26 @@ if TYPE_CHECKING:
     from .flows.launch.market_actions import LaunchMarketPromptState
     from .flows.launch.orders import OrderPromptState
     from .flows.launch.wizard import LaunchWizardState
+    from .flows.launch.actions import LaunchReadinessView
     from .flows.market.actions import MarketFilePromptState, MarketRouteView
     from .flows.market.workspace import WorkspaceMarketPromptState
-    from .flows.reference.actions import CatalogSetupGoal, CatalogSetupPlanView
+    from .flows.reference.actions import (
+        CatalogSetupGoal,
+        CatalogSetupPlanView,
+        ReferenceSourceView,
+    )
     from .flows.operations.actions import ProjectPromptState
     from .flows.operations.business import BusinessPromptState
     from .flows.operations.views import ServiceStatusView, SupportStatusView
     from .flows.resources.wizard import ResourceWizardState
-    from .flows.resources.account_transfers import TransferPromptState
+    from .flows.account.transfers import TransferPromptState
 
 
 @dataclass(frozen=True, slots=True)
 class NavigationFrame:
     """One visited Workbench page without copying owner-owned business facts."""
 
-    context: tuple[str, ...]
+    context: NavigationContext
 
 
 @dataclass(slots=True)
@@ -93,12 +99,16 @@ class ReferenceSession:
     query: str | None = None
     instrument_type: str | None = None
     selected: object | None = None
+    sources: tuple[ReferenceSourceView, ...] = ()
+    selected_source: ReferenceSourceView | None = None
 
     def reset(self) -> None:
         self.kind = None
         self.query = None
         self.instrument_type = None
         self.selected = None
+        self.sources = ()
+        self.selected_source = None
 
 
 @dataclass(slots=True)
@@ -245,6 +255,7 @@ class StrategySession:
     instance_records: tuple[LaunchRecordView, ...] = ()
     component_records: tuple[LaunchRecordView, ...] = ()
     selected_record: LaunchRecordView | None = None
+    readiness: LaunchReadinessView | None = None
     instance_entered_from_operations: bool = False
     wizard: LaunchWizardState | None = None
     attach_snapshot: RenderableType | None = None
@@ -273,6 +284,7 @@ class StrategySession:
         self.instance_records = ()
         self.component_records = ()
         self.selected_record = None
+        self.readiness = None
         self.instance_entered_from_operations = False
         self.wizard = None
         self.attach_snapshot = None
@@ -305,7 +317,7 @@ class GuidedSession:
     """Transient presentation state; Applications continue to own business facts."""
 
     root_label: str = "首页"
-    context: tuple[str, ...] = ()
+    context: NavigationContext = ()
     navigation_stack: list[NavigationFrame] = field(default_factory=list)
     navigation_generation: int = 0
     interaction: InteractionState = ChoiceInteraction()
@@ -354,6 +366,11 @@ class GuidedSession:
         self.context = target
         self.reset_prompt()
 
+    def enter_context(self, target: NavigationContext) -> None:
+        """Enter one canonical page identity without repeating its spelling."""
+
+        self.enter(*target)
+
     def back(self) -> None:
         self.navigation_generation += 1
         if (
@@ -366,7 +383,7 @@ class GuidedSession:
             self.context = self.context[:-1]
         self.reset_prompt()
 
-    def stack_parent(self) -> tuple[str, ...] | None:
+    def stack_parent(self) -> NavigationContext | None:
         """Return the actually visited parent when the current frame is tracked."""
 
         if (
@@ -376,7 +393,7 @@ class GuidedSession:
             return self.navigation_stack[-2].context
         return None
 
-    def pop_frame(self) -> tuple[str, ...] | None:
+    def pop_frame(self) -> NavigationContext | None:
         """Pop one actually visited page without interpreting business state."""
 
         parent = self.stack_parent()
@@ -385,7 +402,7 @@ class GuidedSession:
         self.navigation_stack.pop()
         return parent
 
-    def replace_context(self, context: tuple[str, ...]) -> None:
+    def replace_context(self, context: NavigationContext) -> None:
         """Replace an untracked compatibility page without growing history."""
 
         self.context = context
@@ -405,11 +422,21 @@ class GuidedSession:
             return True
         return False
 
+    def return_to_context(self, target: NavigationContext) -> bool:
+        """Return to a canonical page already present in visit history."""
+
+        return self.return_to(*target)
+
     def restore(self, *parts: str) -> None:
         """Return to a visited frame or replace an unmigrated compatibility page."""
 
         if not self.return_to(*parts):
             self.replace_context(tuple(parts))
+
+    def restore_context(self, target: NavigationContext) -> None:
+        """Restore a canonical page without rebuilding its string path."""
+
+        self.restore(*target)
 
     def ask(
         self,

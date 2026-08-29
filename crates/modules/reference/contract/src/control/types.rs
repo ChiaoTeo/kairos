@@ -127,6 +127,11 @@ pub enum ReferenceCatalogGoal {
     EquityOptions {
         underlyings: Vec<InstrumentId>,
     },
+    /// Prepare one provider-operated product catalog. This does not assert
+    /// that the provider is the listing exchange for instruments it offers.
+    ProviderProduct {
+        binding: ReferenceSourceBinding,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

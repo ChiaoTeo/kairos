@@ -32,7 +32,7 @@ from .execution_actions import (
     preview as preview_execution,
 )
 from ...session import GuidedSession
-from ...navigation import action_id, context_items, context_label
+from ...navigation import Routes, action_id, context_items, context_label
 from ...operation import OperationSpec
 from ...results import ResultKind, ResultRoute
 from ...presentation import ResultTone, conclusion, count, facts, section
@@ -64,7 +64,7 @@ def handle_command(
         return None
     prompt = session.execution.prompt
     if not isinstance(prompt, ExecutionPromptState):
-        session.context = ("strategy", "execution")
+        session.context = Routes.STRATEGY_EXECUTION
         return _choice(
             state,
             session,
@@ -81,11 +81,11 @@ def handle_command(
 def handle_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context != ("strategy", "execution"):
+    if session.context != Routes.STRATEGY_EXECUTION:
         return None
     record = session.strategy.selected_record
     if record is None:
-        session.enter("strategy")
+        session.enter_context(Routes.STRATEGY)
         return _choice(state, session)
     action = action_id(EXECUTION_ACTIONS, command)
     if action is None:

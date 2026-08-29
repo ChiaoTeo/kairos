@@ -988,11 +988,11 @@ def test_unsupported_bare_words_are_inline_errors_not_terminal_activities(
 
     return_value, interaction, activity_count = asyncio.run(run())
     assert return_value is None
-    assert f"kairos {command} 尚未接入" in interaction
+    assert "高级命令请以 / 或 kairos 开头" in interaction
     assert activity_count == 0
 
 
-def test_bare_native_command_uses_owner_cli_application(
+def test_explicit_native_command_uses_owner_cli_application(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: dict[str, object] = {}
@@ -1013,7 +1013,7 @@ def test_bare_native_command_uses_owner_cli_application(
         async with app.run_test(size=(100, 30)) as pilot:
             screen = app.screen
             assert isinstance(screen, CommandLineScreen)
-            screen.submit("risk schema")
+            screen.submit("kairos risk schema")
             await pilot.pause(0.1)
             return (
                 _log_text(screen.query_one("#command-output", RichLog)),
@@ -1258,18 +1258,18 @@ def test_market_command_guides_missing_argument_and_escape_cancels() -> None:
     assert ready_status == "就绪"
 
 
-def test_command_input_keeps_shell_style_history() -> None:
+def test_command_input_keeps_explicit_history_shortcut() -> None:
     async def run() -> tuple[str, str]:
         app = KairosWorkbenchApp(_state())
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("slash", "h", "e", "l", "p", "enter")
             await pilot.press("slash", "c", "l", "e", "a", "r", "enter")
-            await pilot.press("up")
+            await pilot.press("ctrl+up")
             command_input = app.screen.query_one(
                 "#command-input", WorkbenchCommandInput
             )
             latest = command_input.value
-            await pilot.press("up")
+            await pilot.press("ctrl+up")
             previous = command_input.value
             return latest, previous
 

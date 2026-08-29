@@ -35,12 +35,18 @@ class CatalogSetupGoal:
     exchange_id: str | None = None
     instrument_kind: str | None = None
     underlyings: tuple[str, ...] = ()
+    provider: str | None = None
+    source: str | None = None
 
     @classmethod
     def exchange(
         cls, exchange_id: str, instrument_kind: str | None = None
     ) -> CatalogSetupGoal:
         return cls("exchange_instruments", exchange_id, instrument_kind)
+
+    @classmethod
+    def provider_product(cls, provider: str, source: str) -> CatalogSetupGoal:
+        return cls("provider_product", provider=provider, source=source)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> CatalogSetupGoal:
@@ -55,11 +61,21 @@ class CatalogSetupGoal:
             exchange_id=_optional_text(value.get("exchange_id")),
             instrument_kind=_optional_text(value.get("instrument_kind")),
             underlyings=underlyings,
+            provider=_binding_text(value, "provider"),
+            source=_binding_text(value, "source"),
         )
 
     def to_request(self) -> dict[str, object]:
         if self.kind == "equity_options":
             return {"kind": self.kind, "underlyings": list(self.underlyings)}
+        if self.kind == "provider_product":
+            return {
+                "kind": self.kind,
+                "binding": {
+                    "provider": self.provider or "",
+                    "source": self.source or "",
+                },
+            }
         return {
             "kind": self.kind,
             "exchange_id": self.exchange_id or "",
@@ -211,8 +227,173 @@ class CatalogSetupPlanView:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class InstrumentTradingAccess:
+    markets: tuple[Any, ...]
+    provider_availability: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceSourceView:
+    source_id: str
+    provider_id: str
+    enabled: bool
+    paused: bool
+    phase: str
+    progress: Mapping[str, object]
+    last_success_unix_nanos: int | None
+    stale: bool
+    consecutive_failures: int
+    last_error: Mapping[str, object]
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> ReferenceSourceView:
+        progress = value.get("progress")
+        last_error = value.get("last_error")
+        failures = value.get("consecutive_failures")
+        last_success = value.get("last_success_unix_nanos")
+        return cls(
+            source_id=str(value.get("source_id") or ""),
+            provider_id=str(value.get("provider_id") or ""),
+            enabled=value.get("enabled") is True,
+            paused=value.get("paused") is True,
+            phase=str(value.get("phase") or "unknown"),
+            progress=dict(progress) if isinstance(progress, Mapping) else {},
+            last_success_unix_nanos=(
+                last_success
+                if isinstance(last_success, int) and not isinstance(last_success, bool)
+                else None
+            ),
+            stale=value.get("stale") is True,
+            consecutive_failures=(
+                failures
+                if isinstance(failures, int) and not isinstance(failures, bool)
+                else 0
+            ),
+            last_error=dict(last_error) if isinstance(last_error, Mapping) else {},
+        )
+
+    @property
+    def id(self) -> str:
+        return self.source_id
+
+    @property
+    def label(self) -> str:
+        return _source_label(self.source_id)
+
+    @property
+    def selection_description(self) -> str:
+        if self.paused:
+            state = "已暂停"
+        else:
+            state = _source_state(_source_mapping(self))
+        return f"{_provider_label(self.provider_id)} · {state}"
+
+
+def source_views(value: Mapping[str, object]) -> tuple[ReferenceSourceView, ...]:
+    sources = tuple(
+        ReferenceSourceView.from_mapping(source)
+        for source in _mapping_rows(value.get("sources"))
+    )
+    return tuple(
+        sorted(
+            sources,
+            key=lambda source: (
+                not (source.stale or bool(source.last_error)),
+                source.label.casefold(),
+            ),
+        )
+    )
+
+
+def source_actions(source: ReferenceSourceView | None) -> tuple[ActionItem, ...]:
+    if source is None:
+        return ()
+    pause_action = (
+        ActionItem("resume", "继续自动更新", "恢复这个目录来源的定期准备", "2")
+        if source.paused
+        else ActionItem("pause", "暂停自动更新", "保留当前目录，但暂不继续刷新", "2")
+    )
+    return (
+        ActionItem("refresh", "立即更新", "现在重新读取这个来源的目录", "1"),
+        pause_action,
+        ActionItem("progress", "查看详细进度", "查看记录数、最近成功和失败原因", "3"),
+    )
+
+
+def source_detail_renderable(source: ReferenceSourceView) -> RenderableType:
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="dim", no_wrap=True)
+    table.add_column()
+    table.add_row("目录来源", _source_label(source.source_id))
+    table.add_row("数据服务商", _provider_label(source.provider_id))
+    table.add_row("自动更新", "已暂停" if source.paused else "已开启")
+    table.add_row("当前状态", _source_state(_source_mapping(source)))
+    table.add_row("准备进度", _progress_summary(source.progress))
+    table.add_row("最近成功", _time_value(source.last_success_unix_nanos))
+    if source.last_error:
+        table.add_row("失败原因", _error_text(source.last_error))
+    return Group(
+        conclusion(
+            "这个目录来源需要处理"
+            if source.stale or source.last_error
+            else "这个目录来源运行正常",
+            tone=(
+                ResultTone.WARNING
+                if source.stale or source.last_error
+                else ResultTone.SUCCESS
+            ),
+        ),
+        section("来源状态", table),
+    )
+
+
+def control_catalog_source(
+    state: Any, source: ReferenceSourceView, action: str
+) -> Mapping[str, object]:
+    if action not in {"refresh", "pause", "resume"}:
+        raise ValueError("不支持的目录来源操作。")
+    if state.dry_run or state.no_exec:
+        return {"status": "preview", "source_id": source.source_id, "action": action}
+    if state.owner is None:
+        raise RuntimeError(state.load_error or "当前没有可用的项目")
+    client = ReferenceSystemClient(
+        state.owner.paths.process_socket("reference"),
+        database_path=state.owner.paths.reference_database(),
+        workspace_id=str(state.owner.workspace_id),
+    )
+    if action == "refresh":
+        result = client.reader.refresh(source=source.source_id)
+    else:
+        result = client.reader.set_source_paused(
+            source.source_id, paused=action == "pause"
+        )
+    return {
+        "status": "completed",
+        "source_id": source.source_id,
+        "action": action,
+        "result": result,
+    }
+
+
+def _source_mapping(source: ReferenceSourceView) -> dict[str, object]:
+    return {
+        "enabled": source.enabled,
+        "paused": source.paused,
+        "phase": source.phase,
+        "stale": source.stale,
+        "consecutive_failures": source.consecutive_failures,
+        "last_error": source.last_error,
+    }
+
+
 def _optional_text(value: object) -> str | None:
     return str(value) if value is not None and str(value) else None
+
+
+def _binding_text(value: Mapping[str, object], key: str) -> str | None:
+    binding = value.get("binding")
+    return _optional_text(binding.get(key)) if isinstance(binding, Mapping) else None
 
 
 def _optional_int(value: object) -> int | None:
@@ -389,6 +570,11 @@ def catalog_setup_renderable(
                 "范围说明",
                 "该来源按完整美国股票目录同步，不能只同步一个交易所。",
             )
+        if "product_is_provider_specific" in (option.get("limitations") or ()):
+            table.add_row(
+                "目录含义",
+                "这是服务商可交易目录，不代表该服务商是标的的上市交易所。",
+            )
         if option.get("requires_connection") is True:
             table.add_row(
                 "账号要求",
@@ -549,11 +735,16 @@ def detail_actions(kind: str | None) -> tuple[ActionItem, ...]:
             ActionItem("markets", "相关市场", "查找使用该资产的具体市场", "2"),
             ActionItem("technical", "技术标识", "显示完整资产标识", "3"),
         )
-    if kind in {"instruments", "option-chain"}:
+    if kind in {"instruments", "option-chain", "trading-access"}:
         return (
-            ActionItem("summary", "概览", "查看合约类型、状态和到期信息", "1"),
+            ActionItem("summary", "概览", "查看品种类型、状态和到期信息", "1"),
             ActionItem("listings", "上市信息", "查看交易所上市记录", "2"),
-            ActionItem("markets", "具体市场", "查看该合约对应的市场", "3"),
+            ActionItem(
+                "markets",
+                "在哪里可以交易",
+                "区分交易所上市市场与服务商可交易渠道",
+                "3",
+            ),
             ActionItem("technical", "技术标识", "显示完整交易品种标识", "4"),
         )
     if kind == "exchanges":
@@ -593,6 +784,12 @@ def load_records(
             active_only=True,
             limit=25,
         )
+    elif kind == "trading-access":
+        records = application.find_instruments(
+            query=query or None,
+            active_only=True,
+            limit=25,
+        )
     elif kind == "markets":
         records = _market_search_records(application, query)
     elif kind == "option-chain":
@@ -602,6 +799,18 @@ def load_records(
     else:
         raise RuntimeError(f"unknown reference kind: {kind}")
     return rank_records(record_kind(kind), tuple(records), query or None)[:25]
+
+
+def catalog_not_initialized(error: str) -> bool:
+    """Recognize a project whose local Reference catalog has not been created."""
+
+    normalized = error.casefold()
+    return "reference catalog is not initialized" in normalized or (
+        "unable to open database file" in normalized
+        and (
+            "reference.sqlite" in normalized or "wal sidecar open failed" in normalized
+        )
+    )
 
 
 def _market_search_records(application: Any, query: str) -> tuple[Any, ...]:
@@ -646,7 +855,7 @@ def load_related(state: Any, kind: str, record: Any) -> tuple[str, tuple[Any, ..
                 asset_code=str(record.code), active_only=True, limit=10
             ),
         )
-    if kind in {"instruments", "option-chain"}:
+    if kind in {"instruments", "option-chain", "trading-access"}:
         return (
             "listings",
             application.find_listings(
@@ -662,10 +871,18 @@ def load_related(state: Any, kind: str, record: Any) -> tuple[str, tuple[Any, ..
 
 
 def load_instrument_markets(state: Any, record: Any) -> tuple[str, tuple[Any, ...]]:
+    application = _application(state)
     return (
-        "markets",
-        _application(state).find_markets(
-            instrument_id=record.id, active_only=True, limit=10
+        "instrument-access",
+        (
+            InstrumentTradingAccess(
+                markets=application.find_markets(
+                    instrument_id=record.id, active_only=True, limit=20
+                ),
+                provider_availability=application.find_instrument_availability(
+                    instrument_ids=(record.id,), active_only=True, limit=20
+                ),
+            ),
         ),
     )
 
@@ -680,40 +897,40 @@ def detail_renderable(
         rows = (
             ("代码", record.code),
             ("名称", record.name or "—"),
-            ("资产类型", record.asset_class),
-            ("状态", record.status),
+            ("资产类型", _asset_class_label(record.asset_class)),
+            ("状态", _status_label(record.status)),
         )
         technical_rows = (("资产标识", record.id),)
     elif kind == "exchanges":
-        rows = (("名称", record.name), ("状态", record.status))
-        technical_rows = (("Exchange ID", record.id),)
+        rows = (("名称", record.name), ("状态", _status_label(record.status)))
+        technical_rows = (("交易所标识", record.id),)
     elif kind in {"instruments", "option-chain"}:
         rows = (
             ("代码", record.symbol),
             ("名称", record.name or "—"),
-            ("品种类型", record.instrument_type),
-            ("状态", record.status),
+            ("品种类型", _instrument_kind_label(record.instrument_type)),
+            ("状态", _status_label(record.status)),
             ("到期时间", record.expiry_unix_nanos or "—"),
             ("行权价", record.strike or "—"),
-            ("期权方向", record.option_right or "—"),
+            ("期权方向", _option_right_label(record.option_right)),
         )
         technical_rows = (
             ("交易品种标识", record.id),
-            ("Underlying ID", record.underlying_instrument_id or "—"),
+            ("基础品种标识", record.underlying_instrument_id or "—"),
         )
     elif kind == "markets":
         rows = (
             ("代码", record.venue_symbol or record.instrument.display_symbol),
-            ("交易所", _short_id(record.exchange_id)),
-            ("市场类型", record.instrument_kind),
+            ("交易所", _exchange_label(record.exchange_id)),
+            ("市场类型", _instrument_kind_label(record.instrument_kind)),
             ("基础资产", _short_id(record.base_asset)),
             ("计价资产", _short_id(record.quote_asset)),
-            ("状态", record.status),
+            ("状态", _status_label(record.status)),
         )
         technical_rows = (
             ("市场标识", record.id),
             ("交易品种标识", record.instrument.id),
-            ("Listing ID", record.listing_id or "—"),
+            ("上市关系标识", record.listing_id or "—"),
         )
     else:
         return Panel(Pretty(_as_value(record), expand_all=True), title="标的目录")
@@ -727,10 +944,13 @@ def detail_renderable(
 
 
 def records_renderable(kind: str, records: tuple[Any, ...]) -> RenderableType:
+    if kind == "instrument-access" and records:
+        return _instrument_access_renderable(records[0])
     titles = {
         "assets": "资产",
         "exchanges": "交易所",
-        "instruments": "合约",
+        "instruments": "交易品种",
+        "trading-access": "交易品种",
         "markets": "交易标的",
         "option-chain": "期权链",
         "listings": "上市信息",
@@ -741,11 +961,8 @@ def records_renderable(kind: str, records: tuple[Any, ...]) -> RenderableType:
     table.add_column("#", justify="right", style="bold cyan")
     table.add_column("名称")
     table.add_column("说明")
-    table.add_column("ID", style="dim")
     for index, record in enumerate(records[:20], 1):
-        table.add_row(
-            str(index), record_label(record), record_description(record), str(record.id)
-        )
+        table.add_row(str(index), record_label(record), record_description(record))
     visible = min(len(records), 20)
     title = titles.get(kind, "标的目录")
     return Group(
@@ -760,12 +977,60 @@ def records_renderable(kind: str, records: tuple[Any, ...]) -> RenderableType:
     )
 
 
+def _instrument_access_renderable(value: InstrumentTradingAccess) -> RenderableType:
+    markets = Table(show_header=True, header_style="bold")
+    markets.add_column("交易所")
+    markets.add_column("市场代码")
+    markets.add_column("状态")
+    if value.markets:
+        for market in value.markets:
+            markets.add_row(
+                _exchange_label(market.exchange_id),
+                str(market.venue_symbol or market.instrument.display_symbol),
+                str(market.status),
+            )
+    else:
+        markets.add_row("—", "未找到交易所市场记录", "—")
+
+    providers = Table(show_header=True, header_style="bold")
+    providers.add_column("可用服务")
+    providers.add_column("服务目录")
+    providers.add_column("状态")
+    if value.provider_availability:
+        for availability in value.provider_availability:
+            providers.add_row(
+                _availability_provider_label(str(availability.source_id)),
+                _source_label(str(availability.source_id)),
+                _status_label(availability.instrument.status),
+            )
+    else:
+        providers.add_row("—", "没有已同步的服务商可用性", "—")
+    return Group(
+        conclusion("已分别核对交易所市场与服务商渠道"),
+        section("交易所上市与市场", markets),
+        section("服务商可交易渠道", providers),
+        Text(
+            "服务商提供某只股票，不代表该服务商就是这只股票的上市交易所。",
+            style="dim",
+        ),
+        Text(
+            "服务商目录可用也不代表当前账号已有行情或下单权限；使用时仍会单独检查。",
+            style="dim",
+        ),
+    )
+
+
+def _availability_provider_label(source_id: str) -> str:
+    provider = source_id.split("-", 1)[0]
+    return _provider_label(provider)
+
+
 def record_kind(kind: str) -> str:
     if kind == "assets":
         return "asset"
     if kind == "exchanges":
         return "exchange"
-    if kind in {"instruments", "option-chain"}:
+    if kind in {"instruments", "option-chain", "trading-access"}:
         return "instrument"
     return "market"
 
@@ -802,23 +1067,30 @@ def record_label(record: Any) -> str:
 
 def record_description(record: Any) -> str:
     values: list[str] = []
-    for name in (
-        "name",
-        "instrument_kind",
-        "instrument_type",
-        "asset_class",
-        "status",
-    ):
+    for name in ("name", "instrument_kind", "instrument_type", "asset_class", "status"):
         value = getattr(record, name, None)
-        if value and str(value) not in values:
-            values.append(str(value))
+        if not value:
+            continue
+        if name in {"instrument_kind", "instrument_type"}:
+            rendered = _instrument_kind_label(value)
+        elif name == "asset_class":
+            rendered = _asset_class_label(value)
+        elif name == "status":
+            rendered = _status_label(value)
+        else:
+            rendered = str(value)
+        if rendered not in values:
+            values.append(rendered)
     return " · ".join(values) or str(record.id)
 
 
 def _application(state: Any) -> ReferenceApplication:
     if state.owner is None:
         raise RuntimeError(state.load_error or "当前没有可用的 workspace")
-    return ReferenceApplication.from_database(state.owner.paths.reference_database())
+    database = state.owner.paths.reference_database()
+    if not database.is_file():
+        raise RuntimeError("reference catalog is not initialized")
+    return ReferenceApplication.from_database(database)
 
 
 def _mapping(value: object) -> Mapping[str, Any]:
@@ -833,11 +1105,25 @@ def _mapping_rows(value: object) -> tuple[Mapping[str, Any], ...]:
 
 def _status_text(value: object) -> Text:
     normalized = str(value or "unknown").lower()
-    label = {
+    label = _status_label(value)
+    style = (
+        "green"
+        if normalized in {"ready", "healthy", "running", "active", "trading", "idle"}
+        else "red"
+        if normalized
+        in {"failed", "unavailable", "not_ready", "inactive", "delisted", "expired"}
+        else "yellow"
+    )
+    return Text(label, style=style)
+
+
+def _status_label(value: object) -> str:
+    return {
         "ready": "可以使用",
         "healthy": "正常",
         "running": "运行中",
         "active": "当前有效",
+        "trading": "可交易",
         "idle": "空闲",
         "initializing": "正在启动",
         "degraded": "需要关注",
@@ -846,15 +1132,42 @@ def _status_text(value: object) -> Text:
         "not_ready": "尚未就绪",
         "paused": "已暂停",
         "disabled": "已停用",
-    }.get(normalized, str(value or "未知"))
-    style = (
-        "green"
-        if normalized in {"ready", "healthy", "running", "active", "idle"}
-        else "red"
-        if normalized in {"failed", "unavailable", "not_ready"}
-        else "yellow"
-    )
-    return Text(label, style=style)
+        "draft": "草稿",
+        "suspended": "已暂停交易",
+        "delisted": "已退市",
+        "inactive": "当前无效",
+        "retired": "已停用",
+        "expired": "已到期",
+        "unknown": "未知",
+    }.get(str(value or "unknown").lower(), str(value or "未知"))
+
+
+def _instrument_kind_label(value: object) -> str:
+    return {
+        "equity": "股票",
+        "spot": "现货",
+        "perpetual": "永续合约",
+        "future": "交割合约",
+        "option": "期权",
+        "index": "指数",
+        "unknown": "未知品种",
+    }.get(str(value or "unknown").lower(), str(value or "未知品种"))
+
+
+def _asset_class_label(value: object) -> str:
+    return {
+        "fiat": "法定货币",
+        "crypto": "数字资产",
+        "equity": "证券",
+        "unknown": "未知资产",
+    }.get(str(value or "unknown").lower(), str(value or "未知资产"))
+
+
+def _option_right_label(value: object) -> str:
+    return {
+        "call": "看涨",
+        "put": "看跌",
+    }.get(str(value or "").lower(), "—" if not value else str(value))
 
 
 def _time_value(value: object) -> str:
@@ -999,6 +1312,18 @@ def _short_id(value: Any) -> str:
     return "—" if value is None else str(value).rsplit(":", 1)[-1]
 
 
+def _exchange_label(value: Any) -> str:
+    exchange_id = str(value or "")
+    return {
+        "exchange:nasdaq": "纳斯达克",
+        "exchange:nyse": "纽约证券交易所",
+        "exchange:amex": "美国证券交易所",
+        "exchange:binance": "币安",
+        "exchange:okx": "OKX",
+        "exchange:hyperliquid": "Hyperliquid",
+    }.get(exchange_id.lower(), _short_id(value))
+
+
 def _as_value(record: Any) -> Any:
     if is_dataclass(record):
         return {field.name: getattr(record, field.name) for field in fields(record)}
@@ -1012,6 +1337,7 @@ __all__ = [
     "CatalogSetupOption",
     "CatalogSetupPlanView",
     "INSTRUMENT_TYPE_ACTIONS",
+    "catalog_not_initialized",
     "catalog_setup_renderable",
     "detail_actions",
     "detail_renderable",

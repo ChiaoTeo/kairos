@@ -17,6 +17,7 @@ class ResultKind(StrEnum):
     WORKSPACE_MARKET = "workspace-market-result"
     REFERENCE_RELATED = "reference-related"
     REFERENCE_STATUS = "reference-status"
+    REFERENCE_SOURCE_CONTROL = "reference-source-control"
     KAIROS_COMMAND = "kairos-command"
     OPERATIONS_SERVICES = "operations-services"
     OPERATIONS_OVERVIEW = "operations-overview"

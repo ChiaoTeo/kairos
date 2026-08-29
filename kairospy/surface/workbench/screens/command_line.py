@@ -66,13 +66,18 @@ from .flows.launch import runtime as launch_flow
 from .flows.resources import configuration as resources_flow
 from .flows.operations.observe_view import observe_renderable
 from .navigation import (
+    Routes,
+    Section,
     action_id,
     back_target_items,
+    belongs_to,
     context_items,
     context_label,
     go_back,
     project_summary,
     record_label,
+    route,
+    starts_with,
 )
 from .operation import OperationSpec, RunningTask
 from .results import ResultKind, ResultRoute
@@ -158,12 +163,13 @@ class CommandLineScreen(Screen[None]):
         self._market_refresh_generation: int | None = None
         self._operations_log_generation: int | None = None
         self.session = GuidedSession()
-        self._primary_hint = "数字选择  ·  /b 或 /back 返回  ·  /help 帮助"
+        self._primary_hint = "↑↓ 选择  ·  Enter 确认  ·  Esc 返回  ·  ? 帮助"
         self._back_preview_interaction: InteractionState | None = None
         self._back_preview_hint: str | None = None
         self._theme_preview_interaction: InteractionState | None = None
         self._theme_preview_hint: str | None = None
         self._interaction_panel_mode = InteractionPanelMode.DEFAULT
+        self._prefer_action_focus = False
 
     @property
     def workbench_app(self) -> KairosWorkbenchApp:
@@ -194,8 +200,8 @@ class CommandLineScreen(Screen[None]):
                 yield Static("首页  /", id="command-context")
                 yield WorkbenchCommandInput(id="command-input")
         yield Static(
-            "数字选择  ·  /b 或 /back 返回  ·  /help 帮助  ·  "
-            "Alt+↑↓  ·  PgUp/PgDn  ·  Ctrl+End",
+            "↑↓ 选择  ·  Enter 确认  ·  Esc 返回  ·  ? 帮助  ·  "
+            "Ctrl+P 命令  ·  PgUp/PgDn",
             id="command-hints",
         )
 
@@ -203,7 +209,7 @@ class CommandLineScreen(Screen[None]):
         self._apply_viewport_mode(self.size.width, self.size.height)
         self._sync_root_label()
         if self.workbench_app.state.owner is None:
-            self.session.enter("project")
+            self.session.enter_context(Routes.PROJECT)
         self._show_context()
         self.app.set_focus(self._input())
         self.set_interval(1.0, self._refresh_launch_attach)
@@ -229,6 +235,10 @@ class CommandLineScreen(Screen[None]):
         value = event.value.strip()
         interaction = self.session.interaction
         if not value and not isinstance(interaction, InputInteraction):
+            return
+        if value == "?" and not isinstance(interaction, ConfirmInteraction):
+            self._present_help()
+            self.app.set_focus(self._input())
             return
         command_input = self._input()
         if not (isinstance(interaction, InputInteraction) and interaction.secret):
@@ -293,6 +303,8 @@ class CommandLineScreen(Screen[None]):
         was_confirmation = isinstance(self.session.interaction, ConfirmInteraction)
         if was_confirmation:
             submitted = f"/{submitted}"
+        else:
+            self._prefer_action_focus = True
         self.submit(submitted)
         if not was_confirmation:
             self.call_after_refresh(self._focus_actions_if_available)
@@ -458,14 +470,14 @@ class CommandLineScreen(Screen[None]):
             pending = interaction.action
             self.session.finish_prompt()
             self._input().password = False
-            self._input().placeholder = "输入命令；Enter 提交"
+            self._input().placeholder = "输入编号，或按 ↑↓ 选择；Enter 确认"
             self._dispatch_input(pending, value)
             self.app.set_focus(self._input())
             return
         if (
             not value.startswith("/")
             and not value.isdecimal()
-            and self.session.context == ("resources", "setup")
+            and self.session.context == Routes.RESOURCES_SETUP
             and value.lower() in {"feishu", "telegram"}
         ):
             self._dispatch(value.lower(), ())
@@ -477,11 +489,7 @@ class CommandLineScreen(Screen[None]):
             return
         if (
             not value.startswith("/")
-            and self.session.context
-            == (
-                "resources",
-                "model-chat",
-            )
+            and self.session.context == Routes.RESOURCES_MODEL_CHAT
             and not self._is_back_target_picker()
         ):
             self._dispatch_input(
@@ -499,8 +507,14 @@ class CommandLineScreen(Screen[None]):
             self._dispatch(command, arguments)
             self.app.set_focus(self._input())
             return
+        if value == "kairos" or value.startswith("kairos "):
+            self._dispatch_kairos(value.removeprefix("kairos").strip())
+            return
         if not value.startswith("/") and not value.isdecimal():
-            self._dispatch_kairos(value)
+            self._write_error(
+                "请输入当前操作编号；高级命令请以 / 或 kairos 开头，? 查看帮助"
+            )
+            self.app.set_focus(self._input())
             return
         command, arguments = _parse_command(value)
         if command == "market":
@@ -683,7 +697,7 @@ class CommandLineScreen(Screen[None]):
         """Enter one product context without replacing the command screen."""
 
         if self.workbench_app.state.owner is None and section != "project":
-            self.session.enter("project")
+            self.session.enter_context(Routes.PROJECT)
             self._show_context()
             self._set_status("请先打开或创建项目")
             return
@@ -705,7 +719,17 @@ class CommandLineScreen(Screen[None]):
                 "navigation", section=section, mode="guided"
             )
             self._apply_effects(
-                product_flows.account.enter_accounts(
+                product_flows.account_flow.enter_accounts(
+                    self.workbench_app.state, self.session
+                )
+            )
+            return
+        if section == "strategy":
+            self.workbench_app.transcript.record(
+                "navigation", section=section, mode="guided"
+            )
+            self._apply_effects(
+                product_flows.launch.enter_run_plans(
                     self.workbench_app.state, self.session
                 )
             )
@@ -716,7 +740,7 @@ class CommandLineScreen(Screen[None]):
         if section not in SECTION_ACTIONS:
             self._write_error(f"未知产品入口：{section}")
             return
-        self.session.enter(section)
+        self.session.enter_context(route(Section(section)))
         self.workbench_app.transcript.record(
             "navigation", section=section, mode="guided"
         )
@@ -726,7 +750,7 @@ class CommandLineScreen(Screen[None]):
         """Enter the global project context without creating another screen."""
 
         self._finish_operations_logs()
-        self.session.enter("project")
+        self.session.enter_context(Routes.PROJECT)
         self.workbench_app.transcript.record(
             "navigation", section="project", mode="global"
         )
@@ -782,7 +806,7 @@ class CommandLineScreen(Screen[None]):
             self._set_status("已取消层级选择")
             return
         if (
-            self.session.context == ("resources", "setup")
+            self.session.context == Routes.RESOURCES_SETUP
             and self.session.resources.wizard is not None
         ):
             effects = resources_flow.back_wizard(
@@ -801,7 +825,7 @@ class CommandLineScreen(Screen[None]):
             self.session.reset_prompt()
             self._show_context()
             return
-        if self.session.context[:2] == ("operations", "service-logs"):
+        if starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
             self._finish_operations_logs()
         if not go_back(self.session):
             self._show_context()
@@ -939,9 +963,9 @@ class CommandLineScreen(Screen[None]):
 
     def _navigate_back(self, steps: int) -> None:
         self._discard_back_preview()
-        if self.session.context[:2] == ("operations", "service-logs"):
+        if starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
             self._finish_operations_logs()
-        if self.session.context == ("resources", "model-chat"):
+        if self.session.context == Routes.RESOURCES_MODEL_CHAT:
             self._finish_model_chat()
         for _ in range(steps):
             if not go_back(self.session):
@@ -1047,7 +1071,7 @@ class CommandLineScreen(Screen[None]):
             return
         count = min(count, 100_000)
         if direction == "up":
-            if self.session.context[:2] == ("operations", "service-logs"):
+            if starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
                 buffer = self.session.operations.live_buffer
                 if buffer is not None:
                     buffer.pause()
@@ -1166,7 +1190,7 @@ class CommandLineScreen(Screen[None]):
 
         output = self._output()
         output.pause_follow()
-        if self.session.context[:2] == ("operations", "service-logs"):
+        if starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
             buffer = self.session.operations.live_buffer
             if buffer is not None:
                 buffer.pause()
@@ -1182,7 +1206,7 @@ class CommandLineScreen(Screen[None]):
 
         output = self._output()
         output.pause_follow()
-        if self.session.context[:2] == ("operations", "service-logs"):
+        if starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
             buffer = self.session.operations.live_buffer
             if buffer is not None:
                 buffer.pause()
@@ -1197,7 +1221,7 @@ class CommandLineScreen(Screen[None]):
         """Return to the newest output and resume automatic following."""
 
         self._output().resume_follow()
-        if self.session.context[:2] == ("operations", "service-logs"):
+        if starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
             buffer = self.session.operations.live_buffer
             if buffer is not None:
                 buffer.resume()
@@ -1213,7 +1237,7 @@ class CommandLineScreen(Screen[None]):
             self._input().password = False
             self._cancel_input(interaction.action)
             self.session.reset_prompt()
-            self._input().placeholder = "输入命令；Enter 提交"
+            self._input().placeholder = "输入编号，或按 ↑↓ 选择；Enter 确认"
             self._set_status("就绪")
             self._show_context()
             return
@@ -1224,7 +1248,7 @@ class CommandLineScreen(Screen[None]):
             self._show_context()
             return
         if (
-            self.session.context == ("resources", "setup")
+            self.session.context == Routes.RESOURCES_SETUP
             and self.session.resources.wizard is not None
         ):
             resources_flow.cancel_input(
@@ -1423,6 +1447,13 @@ class CommandLineScreen(Screen[None]):
                 self._interaction().present(effect.interaction)
                 self._sync_input_to_interaction(effect.interaction)
                 self._sync_context_chrome()
+                if isinstance(effect.interaction, ChoiceInteraction):
+                    prefer_actions = self._prefer_action_focus and bool(
+                        effect.interaction.actions
+                    )
+                    self._prefer_action_focus = False
+                    if prefer_actions:
+                        self.call_after_refresh(self._focus_actions_if_available)
             elif isinstance(effect, RunOperation):
                 self._start_operation(effect.operation)
             elif isinstance(effect, SetStatus):
@@ -1459,7 +1490,7 @@ class CommandLineScreen(Screen[None]):
         elif isinstance(interaction, ConfirmInteraction):
             command_input.placeholder = "Tab 切换选项，Enter 执行"
         else:
-            command_input.placeholder = "输入编号或命令；Enter 提交"
+            command_input.placeholder = "输入编号，或按 ↑↓ 选择；Enter 确认"
         if not command_input.disabled:
             self.app.set_focus(command_input)
 
@@ -1468,13 +1499,11 @@ class CommandLineScreen(Screen[None]):
         self.query_one("#command-context", Static).update(f"{self._context_label()}  ›")
         if self._resource_wizard_active():
             if isinstance(interaction, ConfirmInteraction):
-                self._set_hints("Tab 切换  ·  Enter 执行  ·  Esc 取消  ·  /back 上一步")
+                self._set_hints("Tab 切换  ·  Enter 确认  ·  Esc 上一步")
             elif isinstance(interaction, InputInteraction):
-                self._set_hints(
-                    "Enter 继续  ·  /b 或 /back 上一步  ·  /cancel 退出配置"
-                )
+                self._set_hints("Enter 继续  ·  Esc 上一步")
             else:
-                self._set_hints("数字选择  ·  /b 或 /back 上一步  ·  /cancel 退出配置")
+                self._set_hints("↑↓ 选择  ·  Enter 确认  ·  Esc 上一步")
             return
         if isinstance(interaction, InputInteraction):
             verb = (
@@ -1492,7 +1521,7 @@ class CommandLineScreen(Screen[None]):
 
     def _resource_wizard_active(self) -> bool:
         return (
-            self.session.context == ("resources", "setup")
+            self.session.context == Routes.RESOURCES_SETUP
             and self.session.resources.wizard is not None
         )
 
@@ -1518,12 +1547,15 @@ class CommandLineScreen(Screen[None]):
         )
 
     def _refresh_market_control(self, *, force: bool = False) -> None:
-        if self.session.context != ("market", "selected"):
+        if self.session.context != Routes.MARKET_SELECTED:
             return
         if not force and not self.session.market.refresh_enabled:
             return
         if self._market_refresh_worker is not None:
-            return
+            if self._market_refresh_generation == self.session.navigation_generation:
+                return
+            self._market_refresh_worker = None
+            self._market_refresh_generation = None
         operation = product_flows.market.live_observation_operation(
             self.workbench_app.state, self.session
         )
@@ -1540,7 +1572,7 @@ class CommandLineScreen(Screen[None]):
         )
 
     def _present_market_control(self) -> None:
-        if self.session.context != ("market", "selected"):
+        if self.session.context != Routes.MARKET_SELECTED:
             return
         market = self.session.market.selected
         snapshot = self.session.market.snapshot
@@ -1555,10 +1587,13 @@ class CommandLineScreen(Screen[None]):
         self._interaction().present(self.session.interaction)
 
     def _refresh_launch_attach(self, *, force: bool = False) -> None:
-        if self.session.context != ("strategy", "attach"):
+        if self.session.context != Routes.STRATEGY_ATTACH:
             return
         if self._attach_refresh_worker is not None:
-            return
+            if self._attach_refresh_generation == self.session.navigation_generation:
+                return
+            self._attach_refresh_worker = None
+            self._attach_refresh_generation = None
         operation = launch_flow.attach_operation(self.workbench_app.state, self.session)
         if operation is None:
             return
@@ -1573,10 +1608,13 @@ class CommandLineScreen(Screen[None]):
         )
 
     def _refresh_operations_logs(self, *, force: bool = False) -> None:
-        if self.session.context[:2] != ("operations", "service-logs"):
+        if not starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
             return
         if self._operations_log_worker is not None:
-            return
+            if self._operations_log_generation == self.session.navigation_generation:
+                return
+            self._operations_log_worker = None
+            self._operations_log_generation = None
         operation = product_flows.operations.service_log_operation(
             self.workbench_app.state, self.session
         )
@@ -1593,7 +1631,7 @@ class CommandLineScreen(Screen[None]):
         )
 
     def _render_operations_logs(self, result: Any) -> None:
-        if self.session.context[:2] != ("operations", "service-logs"):
+        if not starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
             return
         buffer = self.session.operations.live_buffer
         if buffer is None:
@@ -1684,7 +1722,7 @@ class CommandLineScreen(Screen[None]):
         self._present_launch_control()
 
     def _present_launch_control(self) -> None:
-        if self.session.context != ("strategy", "attach"):
+        if self.session.context != Routes.STRATEGY_ATTACH:
             return
         record = self.session.strategy.selected_record or {}
         launch_id = str(record.get("launch_id") or "Launch")
@@ -1738,9 +1776,14 @@ class CommandLineScreen(Screen[None]):
             self._market_refresh_worker = None
             if self._market_refresh_generation != self.session.navigation_generation:
                 self._market_refresh_generation = None
+                if (
+                    self.session.context == Routes.MARKET_SELECTED
+                    and self.session.market.refresh_enabled
+                ):
+                    self._refresh_market_control(force=True)
                 return
             self._market_refresh_generation = None
-            if self.session.context != ("market", "selected"):
+            if self.session.context != Routes.MARKET_SELECTED:
                 return
             if event.state.name == "SUCCESS":
                 self.session.market.snapshot = (
@@ -1769,17 +1812,22 @@ class CommandLineScreen(Screen[None]):
             if self._attach_refresh_generation != self.session.navigation_generation:
                 self._attach_refresh_worker = None
                 self._attach_refresh_generation = None
+                if (
+                    self.session.context == Routes.STRATEGY_ATTACH
+                    and not self.session.strategy.attach_paused
+                ):
+                    self._refresh_launch_attach(force=True)
                 return
             self._attach_refresh_generation = None
             if event.state.name == "SUCCESS":
                 self._attach_refresh_worker = None
-                if self.session.context == ("strategy", "attach"):
+                if self.session.context == Routes.STRATEGY_ATTACH:
                     self._render_launch_attach_snapshot(event.worker.result)
                     self._set_status("跟随输出 · 后台刷新中")
             elif event.state.name == "ERROR":
                 self._attach_refresh_worker = None
                 self.session.strategy.attach_paused = True
-                if self.session.context == ("strategy", "attach"):
+                if self.session.context == Routes.STRATEGY_ATTACH:
                     self._write_error(str(event.worker.error))
                     self.session.strategy.attach_snapshot = Text(
                         "刷新失败；可重试、继续或返回。", style="yellow"
@@ -1797,6 +1845,13 @@ class CommandLineScreen(Screen[None]):
             if self._operations_log_generation != self.session.navigation_generation:
                 self._operations_log_worker = None
                 self._operations_log_generation = None
+                buffer = self.session.operations.live_buffer
+                if (
+                    starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS)
+                    and buffer is not None
+                    and buffer.following
+                ):
+                    self._refresh_operations_logs(force=True)
                 return
             self._operations_log_generation = None
             if event.state.name == "SUCCESS":
@@ -1804,7 +1859,7 @@ class CommandLineScreen(Screen[None]):
                 self._render_operations_logs(event.worker.result)
             elif event.state.name == "ERROR":
                 self._operations_log_worker = None
-                if self.session.context[:2] == ("operations", "service-logs"):
+                if starts_with(self.session.context, Routes.OPERATIONS_SERVICE_LOGS):
                     self._write_error(str(event.worker.error))
                     self._set_status("实时日志刷新失败 · 可重试或返回")
             elif event.state.name == "CANCELLED":
@@ -1890,10 +1945,11 @@ class CommandLineScreen(Screen[None]):
 
     def _show_context(self) -> None:
         self._sync_root_label()
-        if self.workbench_app.state.owner is None and self.session.context != (
-            "project",
+        if (
+            self.workbench_app.state.owner is None
+            and self.session.context != Routes.PROJECT
         ):
-            self.session.enter("project")
+            self.session.enter_context(Routes.PROJECT)
         if isinstance(
             self.session.interaction, (ChoiceInteraction, ControlInteraction)
         ):
@@ -1901,12 +1957,12 @@ class CommandLineScreen(Screen[None]):
         items = context_items(self.session, self.workbench_app.state)
         context = self._context_label()
         if (
-            self.session.context == ("market", "selected")
+            self.session.context == Routes.MARKET_SELECTED
             and self.session.market.snapshot is not None
             and self.session.market.refresh_enabled
         ):
             self._present_market_control()
-        elif self.session.context == ("strategy", "attach"):
+        elif self.session.context == Routes.STRATEGY_ATTACH:
             self._present_launch_control()
         else:
             self.session.choose(
@@ -1914,20 +1970,20 @@ class CommandLineScreen(Screen[None]):
                 title=context,
                 summary=(
                     project_summary(self.workbench_app.state)
-                    if self.session.context == ("project",)
+                    if self.session.context == Routes.PROJECT
                     else None
                 ),
             )
             self._interaction().present(self.session.interaction)
         self.query_one("#command-context", Static).update(f"{context}  ›")
-        self._input().placeholder = "输入编号或命令；Enter 提交"
+        self._input().placeholder = "输入编号，或按 ↑↓ 选择；Enter 确认"
         empty_resource_label = resources_flow.empty_resource_label(self.session)
         if empty_resource_label is not None:
             self._set_hints("输入 /new 开始配置  ·  Esc 返回")
         else:
             self._set_hints("Tab 聚焦选项  ·  ↑↓ 选择  ·  Enter 执行  ·  可输入编号")
         if (
-            self.session.context == ("market", "selected")
+            self.session.context == Routes.MARKET_SELECTED
             and self.session.market.snapshot is not None
         ):
             self._set_status(
@@ -1935,7 +1991,7 @@ class CommandLineScreen(Screen[None]):
                 if self.session.market.refresh_enabled
                 else "行情已就绪"
             )
-        elif self.session.context == ("strategy", "attach"):
+        elif self.session.context == Routes.STRATEGY_ATTACH:
             self._set_status(
                 "跟随输出 · 已暂停"
                 if self.session.strategy.attach_paused
@@ -1945,20 +2001,26 @@ class CommandLineScreen(Screen[None]):
             self._set_status(f"尚未配置 {empty_resource_label}")
         else:
             self._set_status("就绪")
-        self.app.set_focus(self._input())
-        self.call_after_refresh(self.app.set_focus, self._input())
+        actions = self.query_one("#guided-actions", GuidedActionList)
+        prefer_actions = (
+            self._prefer_action_focus and actions.display and bool(actions.option_count)
+        )
+        self._prefer_action_focus = False
+        target: Widget = actions if prefer_actions else self._input()
+        self.app.set_focus(target)
+        self.call_after_refresh(self.app.set_focus, target)
 
     def _context_label(self) -> str:
         context = context_label(self.session.context, self.session.root_label)
-        if self.session.context == ("market", "selected"):
+        if self.session.context == Routes.MARKET_SELECTED:
             market = self.session.market.selected
             if market is not None:
                 title = product_flows.market.selected_title(self.session)
                 return f"{context} · {title or record_label(market)}"
-        if self.session.context[:1] == ("resources",):
+        if belongs_to(self.session.context, Section.RESOURCES):
             return resources_flow.context_title(self.session, context)
-        if self.session.context[:1] == ("account",):
-            return product_flows.account.context_title(self.session)
+        if belongs_to(self.session.context, Section.ACCOUNT):
+            return product_flows.account_flow.context_title(self.session)
         return context
 
     def _sync_root_label(self) -> None:
@@ -2026,11 +2088,11 @@ class CommandLineScreen(Screen[None]):
     def _render_hints(self) -> None:
         hints = self.query_one("#command-hints", Static)
         if self.has_class("viewport-too-small"):
-            hints.update("/help 帮助  ·  /exit 退出")
+            hints.update("? 帮助  ·  Ctrl+Q 退出")
         elif self.has_class("viewport-compact") or self.has_class("viewport-short"):
             hints.update(self._primary_hint)
         else:
-            hints.update(f"{self._primary_hint}  ·  Tab 内容区  ·  /up 20  ·  /bottom")
+            hints.update(f"{self._primary_hint}  ·  Ctrl+P 命令  ·  Tab 切换区域")
 
 
 def _parse_command(value: str) -> tuple[str, tuple[str, ...]]:
@@ -2110,8 +2172,10 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True)
     table.add_column()
-    table.add_row("编号 / 动作名", "执行当前上方列出的操作")
-    table.add_row("其他文本", "作为 kairos <输入> 交给所属 Application 执行")
+    table.add_row("编号 / ↑↓ + Enter", "执行当前上方列出的操作")
+    table.add_row("普通文本", "只在界面明确要求输入参数时填写")
+    table.add_row("/命令", "执行明确的 Workbench 高级命令")
+    table.add_row("kairos <命令>", "显式执行高级 CLI Application 命令")
     table.add_row(
         "/b, /back",
         "单一目标直接返回；多个目标时在交互区选择层级",
@@ -2122,7 +2186,7 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_row("/observe", "打开当前项目的运行中心")
     table.add_row("/market [代码]", "搜索有效市场标的；省略代码时进入引导")
     table.add_row("/c", "打开我的实时行情")
-    if context[:1] == ("market",):
+    if belongs_to(context, Section.MARKET):
         table.add_row("/r", "回放本地 JSONL 行情")
         table.add_row("/d", "诊断市场定义和 Reference 映射")
         table.add_row("/a", "输入完整 Market ID")

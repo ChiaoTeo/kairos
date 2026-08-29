@@ -37,18 +37,24 @@ from ...effects import (
     SetInteraction,
     SetStatus,
 )
-from ...navigation.catalog import SECTION_ACTIONS
+from ...navigation.catalog import SECTION_ACTIONS, StrategyTask
 from ...session import GuidedSession
 from .actions import (
     ATTACH_ACTIONS,
-    INSTANCE_ACTIONS,
     LAUNCH_ACTIONS,
     TIMELINE_ACTIONS,
+    AttachAction,
+    InstanceAction,
+    LaunchAction,
+    LaunchReadinessView,
     LaunchWizardState,
+    ReadinessAction,
+    TimelineAction,
     attach_snapshot as load_launch_attach_snapshot,
     execute as execute_launch,
     export_timeline,
     instance_overview,
+    instance_actions,
     load_components,
     load_instances,
     load_launches,
@@ -56,12 +62,17 @@ from .actions import (
     open_edit_launch_wizard,
     open_new_launch_wizard,
     preview as preview_launch,
+    readiness_actions,
     save_launch_wizard,
     send_python,
 )
+from ..resources.configuration import enter_resource_kind
 from .views import attach_renderable
 from ...navigation import (
+    Routes,
+    Section,
     action_id,
+    belongs_to,
     context_items,
     context_label,
     record_description,
@@ -100,7 +111,7 @@ def handle_command(
     state: Any, session: GuidedSession, command: str, arguments: tuple[str, ...]
 ) -> tuple[ScreenEffect, ...] | None:
     value = " ".join(arguments)
-    if command == "new" and session.context[:1] == ("strategy",):
+    if command == "new" and belongs_to(session.context, Section.STRATEGY):
         return _ask(
             session,
             "strategy:launch-id",
@@ -122,7 +133,7 @@ def handle_command(
     if command.startswith("strategy:launch-field:"):
         wizard = session.strategy.wizard
         if not isinstance(wizard, LaunchWizardState):
-            session.enter("strategy")
+            session.enter_context(Routes.STRATEGY)
             return _choice(
                 state,
                 session,
@@ -142,7 +153,7 @@ def handle_command(
     if command == "strategy:timeline-export":
         record = session.strategy.selected_record
         if record is None:
-            session.enter("strategy")
+            session.enter_context(Routes.STRATEGY)
             return _choice(
                 state,
                 session,
@@ -177,7 +188,7 @@ def handle_command(
     if command == "strategy:python":
         record = session.strategy.selected_record
         if record is None:
-            session.enter("strategy")
+            session.enter_context(Routes.STRATEGY)
             return _choice(
                 state,
                 session,
@@ -213,11 +224,11 @@ def handle_command(
 def handle_context(
     state: Any, session: GuidedSession, command: str
 ) -> tuple[ScreenEffect, ...] | None:
-    if session.context[:1] != ("strategy",):
+    if not belongs_to(session.context, Section.STRATEGY):
         return None
     context = session.context
     record = session.strategy.selected_record
-    if context == ("strategy", "setup"):
+    if context == Routes.STRATEGY_SETUP:
         wizard = session.strategy.wizard
         if not isinstance(wizard, LaunchWizardState):
             return None
@@ -274,23 +285,56 @@ def handle_context(
                 return None
         wizard.accept("agent-model-ref", value)
         return _advance_wizard(state, session, wizard)
-    if context == ("strategy", "attach"):
+    if context == Routes.STRATEGY_READINESS:
         if record is None:
-            session.enter("strategy")
+            session.restore_context(Routes.STRATEGY)
+            return _choice(state, session)
+        action = action_id(readiness_actions(session.strategy.readiness), command)
+        if action is None:
+            return None
+        selected_action = ReadinessAction(action)
+        if selected_action is ReadinessAction.RETRY:
+            return (
+                _run(
+                    "strategy.launch.validate",
+                    f"校验运行条件 · {record['launch_id']}",
+                    ResultKind.STRATEGY,
+                    lambda: execute_launch(state, record, LaunchAction.VALIDATE),
+                ),
+            )
+        if selected_action is ReadinessAction.EDIT:
+            try:
+                wizard = open_edit_launch_wizard(state, record)
+            except (OSError, ValueError) as error:
+                return _choice(
+                    state, session, Text(str(error), style="red"), "无法打开配置"
+                )
+            return _start_wizard(state, session, wizard)
+        resource_kind = {
+            ReadinessAction.ACCOUNTS: "accounts",
+            ReadinessAction.DATA: "data",
+            ReadinessAction.MODELS: "models",
+            ReadinessAction.NOTIFICATIONS: "notifications",
+        }[selected_action]
+        return enter_resource_kind(state, session, resource_kind)
+    if context == Routes.STRATEGY_ATTACH:
+        if record is None:
+            session.enter_context(Routes.STRATEGY)
             return _choice(state, session)
         action = action_id(ATTACH_ACTIONS, command)
         if action is None:
             return None
-        if action == "refresh":
+        selected_action = AttachAction(action)
+        if selected_action is AttachAction.REFRESH:
             return RefreshLaunchControl(True), SetStatus("正在刷新运行输出…")
-        if action == "pause":
+        if selected_action is AttachAction.PAUSE:
             session.strategy.attach_paused = not session.strategy.attach_paused
             return RefreshLaunchControl(not session.strategy.attach_paused), SetStatus(
                 "跟随输出 · 已暂停"
                 if session.strategy.attach_paused
                 else "跟随输出 · 后台刷新中"
             )
-        if action == "clear":
+        if selected_action is AttachAction.CLEAR:
             live_buffer = session.strategy.live_buffer
             if live_buffer is not None:
                 live_buffer.clear_visible()
@@ -303,46 +347,83 @@ def handle_context(
             "请输入一行发送到当前 Strategy 的 Python",
             "执行前会再次确认；输入 /back 取消。",
         )
-    if context == ("strategy", "instance"):
+    if context == Routes.STRATEGY_INSTANCE:
         if record is None:
-            session.enter("strategy")
+            session.enter_context(Routes.STRATEGY)
             return _choice(state, session)
-        action = action_id(INSTANCE_ACTIONS, command)
+        action = action_id(instance_actions(record), command)
         if action is None:
             return None
+        selected_action = InstanceAction(action)
+        if selected_action is InstanceAction.ATTACH:
+            session.enter_context(Routes.STRATEGY_ATTACH)
+            session.strategy.reset_live_buffer(
+                f"launch/{record.get('launch_id', 'unknown')}"
+            )
+            session.strategy.attach_snapshot = None
+            return RefreshLaunchControl(True), SetStatus("运行输出 · 后台刷新中")
+        if selected_action in {
+            InstanceAction.REPORT,
+            InstanceAction.WAIT,
+            InstanceAction.STOP,
+            InstanceAction.RESTART,
+        }:
+
+            def operation() -> Any:
+                if selected_action in {
+                    InstanceAction.STOP,
+                    InstanceAction.RESTART,
+                } and (state.dry_run or state.no_exec):
+                    return preview_launch(record, selected_action)
+                return execute_launch(state, record, selected_action)
+
+            spec = _spec(
+                f"strategy.instance.{selected_action.value}",
+                f"运行实例 {record['instance_id']} · {selected_action.value}",
+                ResultKind.STRATEGY,
+                operation,
+            )
+            return _confirm_or_run(
+                state,
+                session,
+                spec,
+                dangerous=selected_action
+                in {InstanceAction.STOP, InstanceAction.RESTART},
+            )
         route = {
-            "overview": ResultKind.STRATEGY_INSTANCE,
-            "components": ResultKind.STRATEGY_COMPONENTS,
-            "timeline": ResultKind.STRATEGY_TIMELINE,
-        }[action]
+            InstanceAction.OVERVIEW: ResultKind.STRATEGY_INSTANCE,
+            InstanceAction.COMPONENTS: ResultKind.STRATEGY_COMPONENTS,
+            InstanceAction.TIMELINE: ResultKind.STRATEGY_TIMELINE,
+        }[selected_action]
         launch_id = str(record["launch_id"])
         instance_id = str(record["instance_id"])
         mode = str(record["mode"])
         operation = (
             (lambda: instance_overview(state, launch_id, instance_id))
-            if action == "overview"
+            if selected_action is InstanceAction.OVERVIEW
             else (
                 (lambda: load_components(state, launch_id, instance_id, mode))
-                if action == "components"
+                if selected_action is InstanceAction.COMPONENTS
                 else (lambda: load_timeline(state, launch_id, instance_id, mode))
             )
         )
         return (
             _run(
-                f"strategy.instance.{action}",
-                f"实例 {instance_id} · {action}",
+                f"strategy.instance.{selected_action.value}",
+                f"实例 {instance_id} · {selected_action.value}",
                 route,
                 operation,
             ),
         )
-    if context == ("strategy", "timeline"):
+    if context == Routes.STRATEGY_TIMELINE:
         if record is None:
-            session.enter("strategy")
+            session.enter_context(Routes.STRATEGY)
             return _choice(state, session)
         action = action_id(TIMELINE_ACTIONS, command)
         if action is None:
             return None
-        if action == "refresh":
+        selected_action = TimelineAction(action)
+        if selected_action is TimelineAction.REFRESH:
             return (
                 _run(
                     "strategy.timeline.refresh",
@@ -362,37 +443,42 @@ def handle_context(
             "请输入导出文件路径",
             f"例如 {record['launch_id']}-{record['instance_id']}-timeline.jsonl；输入 /back 取消。",
         )
-    if context == ("strategy", "components") and session.visible_records:
+    if context == Routes.STRATEGY_COMPONENTS and session.visible_records:
         component = _record_choice(session.visible_records, command)
         if not isinstance(component, Mapping):
             return None
         name = str(component.get("component") or "")
         if name in {"market", "execution"}:
-            session.context = ("strategy", name)
+            session.enter_context(
+                Routes.STRATEGY_MARKET
+                if name == "market"
+                else Routes.STRATEGY_EXECUTION
+            )
         body = _launch_detail(name.title() if name else "实例组件", component)
         return _standalone(f"实例组件 · {name or 'detail'}", body), *_choice(
             state, session
         )
-    if context == ("strategy", "instances") and session.visible_records:
+    if context == Routes.STRATEGY_INSTANCES and session.visible_records:
         instance = _record_choice(session.visible_records, command)
         if not isinstance(instance, Mapping):
             return None
         selected = (record or LaunchRecordView({})).merged(instance)
         session.strategy.selected_record = selected
         session.strategy.instance_entered_from_operations = False
-        session.context = ("strategy", "instance")
+        session.enter_context(Routes.STRATEGY_INSTANCE)
         body = _launch_detail("运行实例", instance)
         return _standalone(f"运行实例 · {instance['instance_id']}", body), *_choice(
             state, session
         )
-    if context == ("strategy", "selected"):
+    if context == Routes.STRATEGY_SELECTED:
         if record is None:
-            session.enter("strategy")
+            session.enter_context(Routes.STRATEGY)
             return _choice(state, session)
         action = action_id(LAUNCH_ACTIONS, command)
         if action is None:
             return None
-        if action == "edit":
+        selected_action = LaunchAction(action)
+        if selected_action is LaunchAction.EDIT:
             try:
                 wizard = open_edit_launch_wizard(state, record)
             except (OSError, ValueError) as error:
@@ -400,14 +486,7 @@ def handle_context(
                     state, session, Text(str(error), style="red"), "无法打开配置"
                 )
             return _start_wizard(state, session, wizard)
-        if action == "attach":
-            session.context = ("strategy", "attach")
-            session.strategy.reset_live_buffer(
-                f"launch/{record.get('launch_id', 'unknown')}"
-            )
-            session.strategy.attach_snapshot = None
-            return RefreshLaunchControl(True), SetStatus("跟随输出 · 后台刷新中")
-        if action == "instances":
+        if selected_action is LaunchAction.INSTANCES:
             return (
                 _run(
                     "strategy.instances",
@@ -418,27 +497,30 @@ def handle_context(
             )
 
         def operation() -> Any:
-            if action in {"start", "stop", "restart"} and (
+            if selected_action is LaunchAction.START and (
                 state.dry_run or state.no_exec
             ):
-                return preview_launch(record, action)
-            return execute_launch(state, record, action)
+                return preview_launch(record, selected_action)
+            return execute_launch(state, record, selected_action)
 
         spec = _spec(
-            f"strategy.launch.{action}",
-            f"kairos launch {action} {record['launch_id']}",
+            f"strategy.launch.{selected_action.value}",
+            f"kairos launch {selected_action.value} {record['launch_id']}",
             ResultKind.STRATEGY,
             operation,
         )
         return _confirm_or_run(
-            state, session, spec, dangerous=action in {"start", "stop", "restart"}
+            state,
+            session,
+            spec,
+            dangerous=selected_action is LaunchAction.START,
         )
-    if context == ("strategy", "launches") and session.visible_records:
+    if context == Routes.STRATEGY_LAUNCHES and session.visible_records:
         chosen = _record_choice(session.visible_records, command)
         if not isinstance(chosen, Mapping):
             return None
         return enter_selected_record(state, session, chosen)
-    action = action_id(SECTION_ACTIONS["strategy"], command)
+    action = action_id(SECTION_ACTIONS[Section.STRATEGY], command)
     if action is None:
         return None
     if action in {"once", "observe", "doctor"}:
@@ -450,7 +532,7 @@ def handle_context(
                 state.refresh_snapshot,
             ),
         )
-    if action == "launch":
+    if action == StrategyTask.LAUNCH:
         return (
             _run(
                 "strategy.launches",
@@ -462,6 +544,20 @@ def handle_context(
     return None
 
 
+def enter_run_plans(state: Any, session: GuidedSession) -> tuple[ScreenEffect, ...]:
+    """Enter the strategy task at its first meaningful object list."""
+
+    session.enter_context(Routes.STRATEGY)
+    return (
+        _run(
+            "strategy.launches",
+            "查看运行方案",
+            ResultKind.STRATEGY_LAUNCHES,
+            lambda: load_launches(state),
+        ),
+    )
+
+
 def enter_selected_record(
     state: Any, session: GuidedSession, value: Mapping[str, object]
 ) -> tuple[ScreenEffect, ...]:
@@ -469,7 +565,7 @@ def enter_selected_record(
 
     selected = LaunchRecordView.from_mapping(value)
     session.strategy.selected_record = selected
-    session.context = ("strategy", "selected")
+    session.enter_context(Routes.STRATEGY_SELECTED)
     session.visible_records = ()
     return _choice(
         state,
@@ -487,7 +583,7 @@ def enter_selected_instance(
     session.strategy.selected_record = selected
     session.strategy.instance_records = (selected,)
     session.strategy.instance_entered_from_operations = True
-    session.context = ("strategy", "instance")
+    session.enter_context(Routes.STRATEGY_INSTANCE)
     session.visible_records = ()
     return _choice(
         state,
@@ -500,6 +596,21 @@ def handle_success(
     state: Any, session: GuidedSession, spec: OperationSpec, result: Any
 ) -> tuple[ScreenEffect, ...] | None:
     kind = spec.route.kind
+    if (
+        kind is ResultKind.STRATEGY
+        and spec.action_name == "strategy.launch.validate"
+        and isinstance(result, Mapping)
+    ):
+        view = LaunchReadinessView.from_mapping(result)
+        session.strategy.readiness = view
+        body = _readiness_renderable(view)
+        if view.valid:
+            session.return_to_context(Routes.STRATEGY_SELECTED)
+            status = "运行条件已满足"
+        else:
+            session.enter_context(Routes.STRATEGY_READINESS)
+            status = "运行条件尚未满足 · 请选择修复项"
+        return _activity(spec, body), *_choice(state, session, status=status)
     if kind in {
         ResultKind.STRATEGY_LAUNCHES,
         ResultKind.STRATEGY_INSTANCES,
@@ -510,14 +621,14 @@ def handle_success(
         )
         if kind is ResultKind.STRATEGY_LAUNCHES:
             session.strategy.launch_records = records
-            context = ("strategy", "launches")
+            context = Routes.STRATEGY_LAUNCHES
         elif kind is ResultKind.STRATEGY_INSTANCES:
             session.strategy.instance_records = records
-            context = ("strategy", "instances")
+            context = Routes.STRATEGY_INSTANCES
         else:
             session.strategy.component_records = records
-            context = ("strategy", "components")
-        session.context = context
+            context = Routes.STRATEGY_COMPONENTS
+        session.enter_context(context)
         visible = selection_records(
             records,
             label=record_label,
@@ -544,7 +655,7 @@ def handle_success(
     if kind is ResultKind.STRATEGY_TIMELINE:
         records = tuple(result or ())
         body = _launch_collection("实例时间线", records)
-        session.context = ("strategy", "timeline")
+        session.enter_context(Routes.STRATEGY_TIMELINE)
     elif kind is ResultKind.STRATEGY_WIZARD:
         wizard = session.strategy.wizard
         body = _launch_result("Launch 配置", result)
@@ -566,16 +677,16 @@ def handle_success(
             )
             session.strategy.selected_record = record
         session.strategy.wizard = None
-        session.context = ("strategy", "selected")
+        session.context = Routes.STRATEGY_SELECTED
     else:
         title = titles.get(kind)
         if title is None:
             return None
         body = _launch_result(title, result)
         if kind is ResultKind.STRATEGY_TIMELINE_EXPORT:
-            session.context = ("strategy", "timeline")
+            session.context = Routes.STRATEGY_TIMELINE
         elif kind is ResultKind.STRATEGY_ATTACH:
-            session.context = ("strategy", "attach")
+            session.context = Routes.STRATEGY_ATTACH
     outcome = (
         ActivityOutcome.ATTENTION
         if isinstance(result, Mapping) and result.get("status") == "preview"
@@ -608,6 +719,22 @@ def _launch_detail(title: str, value: Mapping[str, Any]) -> RenderableType:
     return Group(
         conclusion(f"{title}已就绪"),
         facts(rows) if rows else Text("没有更多业务字段", style="dim"),
+    )
+
+
+def _readiness_renderable(view: LaunchReadinessView) -> RenderableType:
+    if view.valid:
+        return Group(
+            conclusion("运行条件已经满足"),
+            facts((("运行方案", view.path or "当前方案"),)),
+        )
+    table = Table("所有者", "问题", "修复方向", show_header=True, header_style="bold")
+    for diagnostic in view.diagnostics:
+        table.add_row(diagnostic.owner, diagnostic.reason, diagnostic.action)
+    return Group(
+        conclusion("运行条件尚未满足", tone=ResultTone.WARNING),
+        facts((("运行方案", view.path or "当前方案"),)),
+        section("需要处理", table),
     )
 
 
@@ -698,16 +825,16 @@ def cancel_input(session: GuidedSession, token: ActionToken) -> bool:
         return False
     session.strategy.wizard = None
     if session.strategy.selected_record is not None:
-        session.context = ("strategy", "selected")
+        session.context = Routes.STRATEGY_SELECTED
     elif session.strategy.launch_records:
-        session.context = ("strategy", "launches")
+        session.context = Routes.STRATEGY_LAUNCHES
         session.visible_records = selection_records(
             session.strategy.launch_records,
             label=record_label,
             description=record_description,
         )
     else:
-        session.context = ("strategy",)
+        session.context = Routes.STRATEGY
     return True
 
 
@@ -723,7 +850,7 @@ def enter_deep_link(
         fields.update(config=str(source), draft=True)
     record = LaunchRecordView(fields)
     session.strategy.selected_record = record
-    session.context = ("strategy", "selected")
+    session.context = Routes.STRATEGY_SELECTED
     activity = _standalone(
         f"Launch 深链 · {launch_id}",
         Panel(
@@ -733,7 +860,7 @@ def enter_deep_link(
         ),
     )
     if action == "attach":
-        session.context = ("strategy", "attach")
+        session.context = Routes.STRATEGY_ATTACH
         session.strategy.reset_live_buffer(f"launch/{launch_id}")
         session.strategy.attach_snapshot = None
         return activity, RefreshLaunchControl(True), SetStatus("跟随输出 · 后台刷新中")
@@ -754,7 +881,7 @@ def _start_wizard(
     state: Any, session: GuidedSession, wizard: LaunchWizardState
 ) -> tuple[ScreenEffect, ...]:
     session.strategy.wizard = wizard
-    session.context = ("strategy", "setup")
+    session.enter_context(Routes.STRATEGY_SETUP)
     return _advance_wizard(state, session, wizard)
 
 

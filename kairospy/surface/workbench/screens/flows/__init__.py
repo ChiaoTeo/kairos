@@ -9,12 +9,14 @@ from ..effects import ScreenEffect
 from ..session import GuidedSession
 from ..operation import OperationSpec
 from ..results import ResultKind
+from ..navigation.identity import Section
 from .market import runtime as market
+from .account import runtime as account_flow
 from .operations import runtime as operations
 from .reference import runtime as reference
 from .research import runtime as research
 from .launch import execution, market as launch_market, runtime as launch
-from .resources import account, configuration as resources_flow
+from .resources import configuration as resources_flow
 
 
 def handle_input(
@@ -30,10 +32,9 @@ def handle_input(
         return operations.handle_input(state, session, token, value)
     if token.feature is Feature.RESEARCH:
         return research.handle_input(state, session, token, value)
+    if token.feature is Feature.ACCOUNT:
+        return account_flow.handle_input(state, session, token, value)
     if token.feature is Feature.RESOURCES:
-        effects = account.handle_input(state, session, token, value)
-        if effects is not None:
-            return effects
         return resources_flow.handle_input(state, session, token, value)
     if token.feature is Feature.STRATEGY:
         effects = execution.handle_input(state, session, token, value)
@@ -66,7 +67,7 @@ def handle_command(
     effects = research.handle_command(state, session, command, arguments)
     if effects is not None:
         return effects
-    effects = account.handle_command(state, session, command, arguments)
+    effects = account_flow.handle_command(state, session, command, arguments)
     if effects is not None:
         return effects
     effects = resources_flow.handle_command(state, session, command, arguments)
@@ -86,20 +87,20 @@ def handle_context(
 ) -> tuple[ScreenEffect, ...] | None:
     """Route a context-relative selection to the current product owner."""
 
-    section = session.context[:1]
-    if section == ("project",):
+    section = Section(session.context[0]) if session.context else None
+    if section is Section.PROJECT:
         return operations.handle_context(state, session, command)
-    if section == ("market",):
+    if section is Section.MARKET:
         return market.handle_context(state, session, command)
-    if section == ("reference",):
+    if section is Section.REFERENCE:
         return reference.handle_context(state, session, command)
-    if section == ("operations",):
+    if section is Section.OPERATIONS:
         return operations.handle_context(state, session, command)
-    if section == ("research",):
+    if section is Section.RESEARCH:
         return research.handle_context(state, session, command)
-    if section == ("account",):
-        return account.handle_context(state, session, command)
-    if section == ("strategy",):
+    if section is Section.ACCOUNT:
+        return account_flow.handle_context(state, session, command)
+    if section is Section.STRATEGY:
         effects = execution.handle_context(state, session, command)
         if effects is not None:
             return effects
@@ -107,10 +108,7 @@ def handle_context(
         if effects is not None:
             return effects
         return launch.handle_context(state, session, command)
-    if section == ("resources",):
-        effects = account.handle_context(state, session, command)
-        if effects is not None:
-            return effects
+    if section is Section.RESOURCES:
         return resources_flow.handle_context(state, session, command)
     return None
 
@@ -132,7 +130,7 @@ def handle_success(
     effects = research.handle_success(state, session, spec, result)
     if effects is not None:
         return effects
-    effects = account.handle_success(state, session, spec, result)
+    effects = account_flow.handle_success(state, session, spec, result)
     if effects is not None:
         return effects
     effects = resources_flow.handle_success(state, session, spec, result)
@@ -164,7 +162,7 @@ def handle_failure(
     effects = research.handle_failure(state, session, spec, error)
     if effects is not None:
         return effects
-    effects = account.handle_failure(state, session, spec, error)
+    effects = account_flow.handle_failure(state, session, spec, error)
     if effects is not None:
         return effects
     effects = resources_flow.handle_failure(state, session, spec, error)
@@ -196,7 +194,7 @@ def handle_cancel(
     effects = research.handle_cancel(state, session, spec)
     if effects is not None:
         return effects
-    effects = account.handle_cancel(state, session, spec)
+    effects = account_flow.handle_cancel(state, session, spec)
     if effects is not None:
         return effects
     effects = resources_flow.handle_cancel(state, session, spec)
@@ -222,9 +220,9 @@ def cancel_input(session: GuidedSession, token: ActionToken) -> bool:
         return operations.cancel_input(session, token)
     if token.feature is Feature.RESEARCH:
         return research.cancel_input(session, token)
+    if token.feature is Feature.ACCOUNT:
+        return account_flow.cancel_input(session, token)
     if token.feature is Feature.RESOURCES:
-        if account.cancel_input(session, token):
-            return True
         return resources_flow.cancel_input(session, token)
     if token.feature is Feature.STRATEGY:
         if execution.cancel_input(session, token):

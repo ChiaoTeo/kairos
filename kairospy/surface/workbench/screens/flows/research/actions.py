@@ -94,12 +94,18 @@ def execute(
 
 
 def preview(action: str, value: str | None, extra: str | None = None) -> dict[str, Any]:
-    return {
+    result: dict[str, Any] = {
         "status": "preview",
         "action": action,
         "input": value,
-        "extra": extra,
     }
+    if action == "execute-data" and extra:
+        result["plan_hash"] = extra
+    elif action == "publish-gate" and extra:
+        result["evidence_path"] = extra
+    elif extra:
+        result["extra"] = extra
+    return result
 
 
 def _requirements(path: Path) -> tuple[DataRequirement, ...]:
