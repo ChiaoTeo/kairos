@@ -18,11 +18,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from kairospy.primitives.account import AccountIdRead, SegmentKeyRead
 from kairospy.system.apps.credentials.application import (
     CredentialConfigurationApplication,
 )
 from kairospy.system.apps.workspace.application import Workspace
 from .application import AccountApplication
+from .configuration_models import (
+    AccountAccessBinding,
+    AccountCredentialIdentity,
+    AccountResourceSnapshot,
+    AccountVerification,
+    AccountVerificationStatus,
+)
 from .errors import (
     AccountLookupError,
     AccountNotEnabledError,
@@ -63,6 +71,18 @@ def _text(value: str, name: str) -> str:
     if not value:
         raise ValueError(f"{name} is required")
     return value
+
+
+def _optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _verification_status(value: object) -> AccountVerificationStatus:
+    if value == "verified":
+        return "verified"
+    if value == "retest_required":
+        return "retest_required"
+    return "failed"
 
 
 def _cli(workspace: Workspace) -> "AccountCliApplication":
@@ -112,60 +132,82 @@ class AccountConfigurationApplication:
             )
         )
 
-    def verification(self, account_id: str) -> dict[str, Any]:
+    def verification(self, account_id: str) -> AccountVerification:
         account = self._show_raw(account_id)
         fingerprint = self._configuration_fingerprint(account)
         evidence = self._read_verification(account_id)
         if evidence is None:
-            return {
-                "verification_status": "pending",
-                "last_tested_at": None,
-                "tested": [],
-                "not_tested": [],
-                "tested_configuration_hash": None,
-                "current_configuration_hash": fingerprint,
-            }
-        status = str(evidence.get("result") or "failed")
+            return AccountVerification(
+                status="pending",
+                last_tested_at=None,
+                tested=(),
+                not_tested=(),
+                capabilities=(),
+                segments=(),
+                error_category=None,
+                tested_configuration_hash=None,
+                current_configuration_hash=fingerprint,
+            )
+        status = _verification_status(evidence.get("result"))
         if evidence.get("configuration_hash") != fingerprint:
             status = "retest_required"
-        return {
-            "verification_status": status,
-            "last_tested_at": evidence.get("tested_at"),
-            "tested": list(evidence.get("tested") or ()),
-            "not_tested": list(evidence.get("not_tested") or ()),
-            "capabilities": list(evidence.get("capabilities") or ()),
-            "segments": list(evidence.get("segments") or ()),
-            "error_category": evidence.get("error_category"),
-            "tested_configuration_hash": evidence.get("configuration_hash"),
-            "current_configuration_hash": fingerprint,
-        }
+        tested_at = evidence.get("tested_at")
+        tested_hash = evidence.get("configuration_hash")
+        error_category = evidence.get("error_category")
+        return AccountVerification(
+            status=status,
+            last_tested_at=tested_at if isinstance(tested_at, str) else None,
+            tested=tuple(str(value) for value in evidence.get("tested") or ()),
+            not_tested=tuple(str(value) for value in evidence.get("not_tested") or ()),
+            capabilities=tuple(
+                str(value) for value in evidence.get("capabilities") or ()
+            ),
+            segments=tuple(
+                SegmentKeyRead(str(value)) for value in evidence.get("segments") or ()
+            ),
+            error_category=(
+                error_category if isinstance(error_category, str) else None
+            ),
+            tested_configuration_hash=(
+                tested_hash if isinstance(tested_hash, str) else None
+            ),
+            current_configuration_hash=fingerprint,
+        )
 
-    def resource_snapshot(self, account_id: str) -> dict[str, Any]:
+    def resource_snapshot(self, account_id: str) -> AccountResourceSnapshot:
         """Return the secret-free Account facts pinned by a Launch instance."""
 
         account = self._show_raw(account_id)
         verification = self.verification(account_id)
-        return {
-            "account_id": account_id,
-            "broker": account.get("broker"),
-            "integration_provider": account.get("integration_provider"),
-            "environment": account.get("environment"),
-            "masked_remote_identity": _mask_identity(account.get("remote_identity")),
-            "segments": list(account.get("segments") or ()),
-            "permissions": dict(account.get("permissions") or {}),
-            "credential_identities": self._credential_identities(account),
-            "verification": verification,
-            "resource_hash": self._configuration_fingerprint(account),
-        }
+        permissions = account.get("permissions")
+        return AccountResourceSnapshot(
+            account_id=AccountIdRead(account_id),
+            broker=_optional_string(account.get("broker")),
+            integration_provider=_optional_string(account.get("integration_provider")),
+            environment=_optional_string(account.get("environment")),
+            masked_remote_identity=_mask_identity(account.get("remote_identity")),
+            segments=tuple(
+                SegmentKeyRead(str(value)) for value in account.get("segments") or ()
+            ),
+            permissions={
+                str(name): str(state)
+                for name, state in (
+                    permissions.items() if isinstance(permissions, Mapping) else ()
+                )
+            },
+            credential_identities=tuple(self._credential_identities(account)),
+            verification=verification,
+            resource_hash=self._configuration_fingerprint(account),
+        )
 
-    def access_bindings(self, account_id: str) -> list[dict[str, Any]]:
+    def access_bindings(self, account_id: str) -> tuple[AccountAccessBinding, ...]:
         """Project legacy credential roles as closed Kairos access purposes."""
 
         return self._access_bindings(self._show_raw(account_id))
 
     def _access_bindings(
         self, account: Mapping[str, Any]
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[AccountAccessBinding, ...]:
         raw_bindings = account.get("credentials")
         bindings = raw_bindings if isinstance(raw_bindings, list) else []
         if not bindings and account.get("credential_id"):
@@ -176,7 +218,7 @@ class AccountConfigurationApplication:
                     "role": account.get("credential_role") or "readonly",
                 }
             ]
-        result: list[dict[str, Any]] = []
+        result: list[AccountAccessBinding] = []
         for binding in bindings:
             if not isinstance(binding, Mapping):
                 continue
@@ -189,22 +231,24 @@ class AccountConfigurationApplication:
                 else "account-read"
             )
             result.append(
-                {
-                    "purpose": purpose,
-                    "credential_id": str(binding.get("credential_id") or ""),
-                    "enabled": True,
-                    "observed_permissions": sorted(
-                        str(permission)
-                        for permission, state in (
-                            account.get("permissions", {}).items()
-                            if isinstance(account.get("permissions"), Mapping)
-                            else ()
+                AccountAccessBinding(
+                    purpose=purpose,
+                    credential_id=str(binding.get("credential_id") or ""),
+                    enabled=True,
+                    observed_permissions=tuple(
+                        sorted(
+                            str(permission)
+                            for permission, state in (
+                                account.get("permissions", {}).items()
+                                if isinstance(account.get("permissions"), Mapping)
+                                else ()
+                            )
+                            if str(state).lower() in {"granted", "true", "enabled"}
                         )
-                        if str(state).lower() in {"granted", "true", "enabled"}
                     ),
-                }
+                )
             )
-        return sorted(result, key=lambda value: str(value["purpose"]))
+        return tuple(sorted(result, key=lambda value: value.purpose))
 
     def configure_access(
         self,
@@ -219,7 +263,9 @@ class AccountConfigurationApplication:
         purpose = purpose.strip().lower()
         roles = {"account-read": "readonly", "order-trade": "trade"}
         if purpose not in roles:
-            raise ValueError("account access purpose must be account-read or order-trade")
+            raise ValueError(
+                "account access purpose must be account-read or order-trade"
+            )
         account = self._show_raw(account_id)
         credential = CredentialConfigurationApplication(self.workspace).show(
             credential_id
@@ -243,7 +289,7 @@ class AccountConfigurationApplication:
                 _text(credential_id, "credential_id"),
                 "--role",
                 roles[purpose],
-                *( ["--force"] if force else [] ),
+                *(["--force"] if force else []),
             ]
         )
         updated = _account(value)
@@ -263,7 +309,9 @@ class AccountConfigurationApplication:
             )
         return {
             **self.show(account_id),
-            "access_bindings": self.access_bindings(account_id),
+            "access_bindings": [
+                binding.to_json_dict() for binding in self.access_bindings(account_id)
+            ],
         }
 
     def test_connection(
@@ -271,7 +319,7 @@ class AccountConfigurationApplication:
         account_id: str,
         *,
         probe: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> AccountVerification:
         """Run an explicit read/permission probe and store only stable, secret-free facts."""
 
         account = self._show_raw(account_id)
@@ -400,8 +448,10 @@ class AccountConfigurationApplication:
     def _with_verification(self, account: dict[str, Any]) -> dict[str, Any]:
         return {
             **account,
-            "access_bindings": self._access_bindings(account),
-            **self.verification(str(account["account_id"])),
+            "access_bindings": [
+                binding.to_json_dict() for binding in self._access_bindings(account)
+            ],
+            **self.verification(str(account["account_id"])).to_json_dict(),
         }
 
     def _configuration_fingerprint(self, account: Mapping[str, Any]) -> str:
@@ -458,7 +508,7 @@ class AccountConfigurationApplication:
 
     def _credential_identities(
         self, account: Mapping[str, Any]
-    ) -> list[dict[str, Any]]:
+    ) -> list[AccountCredentialIdentity]:
         credential_ids = {
             str(value)
             for value in (account.get("credential_id"),)
@@ -472,20 +522,22 @@ class AccountConfigurationApplication:
                 if isinstance(item, Mapping) and item.get("credential_id")
             )
         owner = CredentialConfigurationApplication(self.workspace)
-        result: list[dict[str, Any]] = []
+        result: list[AccountCredentialIdentity] = []
         for credential_id in sorted(credential_ids):
             try:
                 value = owner.show(credential_id)
             except (KeyError, OSError, ValueError):
-                result.append({"credential_id": credential_id, "missing": True})
+                result.append(AccountCredentialIdentity(credential_id, missing=True))
                 continue
+            raw_fields = value.get("fields")
+            fields = raw_fields if isinstance(raw_fields, (list, tuple)) else ()
             result.append(
-                {
-                    "credential_id": credential_id,
-                    "provider": value.get("provider"),
-                    "role": value.get("role"),
-                    "fields": value.get("fields", []),
-                }
+                AccountCredentialIdentity(
+                    credential_id=credential_id,
+                    provider=_optional_string(value.get("provider")),
+                    role=_optional_string(value.get("role")),
+                    fields=tuple(str(field) for field in fields),
+                )
             )
         return result
 
@@ -985,11 +1037,16 @@ from .draft import (  # noqa: E402
 
 
 __all__ = [
+    "AccountAccessBinding",
     "AccountConfigurationDraft",
     "AccountConfigurationDraftApplication",
     "AccountApplication",
     "AccountAdminApplication",
     "AccountConfigurationApplication",
+    "AccountCredentialIdentity",
+    "AccountResourceSnapshot",
+    "AccountVerification",
+    "AccountVerificationStatus",
     "AccountLookupError",
     "AccountNotEnabledError",
     "AccountSegmentNotFoundError",

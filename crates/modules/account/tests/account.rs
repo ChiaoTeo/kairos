@@ -5,7 +5,7 @@ use kairos_account::composition::account::{
     compose_local_account_application_for_segments,
 };
 use kairos_account::composition::empty_snapshot;
-use kairos_account::domain::{
+use kairos_account::{
     Account, AccountFill, AccountObservedFill, AccountSegment, AccountSnapshot, AccountStatus,
     ApplyOutcome, AssetId, Balance, EarnHolding, EarnHoldingLiquidity, EarnHoldingState,
     EarnHoldingsSnapshot, ExternalAccountIdentity, FillId, InstrumentId, Money, OrderSide,
@@ -109,7 +109,7 @@ fn simulated_capital_mutation_is_idempotent_persistent_and_updates_earn() {
             asset: currency("USDT"),
             amount: Quantity::new(30, 0).unwrap(),
             kind: SimulatedCapitalMutationKind::SubscribeEarn,
-            product_id: Some("USDT001".into()),
+            product_id: Some(kairos_primitives::capital::EarnProductId::new("USDT001").unwrap()),
             occurred_at_unix_nanos: nanos(110),
         };
         application
@@ -139,7 +139,7 @@ fn simulated_capital_mutation_is_idempotent_persistent_and_updates_earn() {
             asset: currency("USDT"),
             amount: Quantity::new(10, 0).unwrap(),
             kind: SimulatedCapitalMutationKind::RedeemEarn,
-            product_id: Some("USDT001".into()),
+            product_id: Some(kairos_primitives::capital::EarnProductId::new("USDT001").unwrap()),
             occurred_at_unix_nanos: nanos(120),
         })
         .unwrap();
@@ -482,7 +482,7 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
             account_model: None,
             margin_mode: None,
             position_mode: None,
-            kind: kairos_account::domain::SnapshotKind::Full,
+            kind: kairos_account::SnapshotKind::Full,
         },
     )]);
     let mut app =
@@ -798,7 +798,7 @@ fn partial_snapshot_merges_balances_and_removes_zero_positions() {
             account_model: None,
             margin_mode: None,
             position_mode: None,
-            kind: kairos_account::domain::SnapshotKind::Full,
+            kind: kairos_account::SnapshotKind::Full,
         })
         .unwrap();
     account
@@ -816,7 +816,7 @@ fn partial_snapshot_merges_balances_and_removes_zero_positions() {
             account_model: None,
             margin_mode: None,
             position_mode: None,
-            kind: kairos_account::domain::SnapshotKind::Delta,
+            kind: kairos_account::SnapshotKind::Delta,
         })
         .unwrap();
     assert!(account.state().balances().contains_key("asset:usdt"));
@@ -845,7 +845,7 @@ fn hedge_mode_positions_keep_long_and_short_as_distinct_facts() {
             segment_key: SegmentKey::new("usd_m_futures").unwrap(),
             positions: vec![long.clone(), short.clone()],
             observed_at_unix_nanos: 1.into(),
-            kind: kairos_account::domain::SnapshotKind::Full,
+            kind: kairos_account::SnapshotKind::Full,
             ..empty_snapshot("usd_m_futures")
         })
         .unwrap();
@@ -866,7 +866,7 @@ fn hedge_mode_positions_keep_long_and_short_as_distinct_facts() {
             segment_key: SegmentKey::new("usd_m_futures").unwrap(),
             positions: vec![long],
             observed_at_unix_nanos: 2.into(),
-            kind: kairos_account::domain::SnapshotKind::Delta,
+            kind: kairos_account::SnapshotKind::Delta,
             ..empty_snapshot("usd_m_futures")
         })
         .unwrap();
@@ -1000,7 +1000,7 @@ fn delta_snapshot_does_not_make_a_stale_account_fresh() {
     assert!(account.state().stale());
 
     let mut delta = empty_snapshot("spot");
-    delta.kind = kairos_account::domain::SnapshotKind::Delta;
+    delta.kind = kairos_account::SnapshotKind::Delta;
     delta.observed_at_unix_nanos = 150.into();
     delta.balances = vec![balance("asset:usdt", "USDT", signed(5, 0))];
     assert_eq!(
@@ -1158,7 +1158,7 @@ fn earn_holdings_have_an_independent_watermark_and_fact_set() {
     let mut account = Account::new(segment("funding")).unwrap();
     let holding = EarnHolding {
         participant_position_id: Some("position-1".into()),
-        product_id: "USDT001".into(),
+        product_id: kairos_primitives::capital::EarnProductId::new("USDT001").unwrap(),
         asset: currency("USDT"),
         principal: quantity(100, 0),
         redeemable: Some(quantity(80, 0)),
@@ -1197,7 +1197,7 @@ fn earn_holdings_have_an_independent_watermark_and_fact_set() {
             account_model: None,
             margin_mode: None,
             position_mode: None,
-            kind: kairos_account::domain::SnapshotKind::Full,
+            kind: kairos_account::SnapshotKind::Full,
         })
         .unwrap();
     assert_eq!(account.state().earn_holdings().len(), 1);

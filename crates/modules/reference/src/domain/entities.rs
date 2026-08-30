@@ -214,7 +214,7 @@ impl SourceSyncPolicy {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceWorkItem {
     pub work_item_id: String,
-    pub source_id: String,
+    pub source_id: ReferenceSourceId,
     pub scope: SourceScope,
     pub reason: SourceWorkReason,
     pub budget: SourceTickBudget,
@@ -348,7 +348,7 @@ impl Default for SourceTickBudget {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceHealth {
-    pub source_id: String,
+    pub source_id: ReferenceSourceId,
     #[serde(default)]
     pub definition: Option<ReferenceSourceDefinition>,
     pub status: SourceRuntimePhase,
@@ -500,7 +500,7 @@ pub struct SourceRuntimeWorkItem {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Exchange {
     #[serde(default)]
-    pub source_id: Option<String>,
+    pub source_id: Option<ReferenceSourceId>,
     pub exchange_id: ExchangeId,
     pub name: String,
     pub status: ReferenceStatus,
@@ -581,7 +581,7 @@ mod source_workflow_tests {
     fn source_work_item_projects_to_runtime_snapshot() {
         let work_item = SourceWorkItem {
             work_item_id: "massive-options:AAPL".to_owned(),
-            source_id: "massive-options".to_owned(),
+            source_id: ReferenceSourceId::new("massive-options").unwrap(),
             scope: SourceScope::underlying_instrument("instrument:equity:US:AAPL:common"),
             reason: SourceWorkReason::RpcRefresh,
             budget: SourceTickBudget::default(),
@@ -649,7 +649,7 @@ mod source_workflow_tests {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Asset {
     #[serde(default)]
-    pub source_id: Option<String>,
+    pub source_id: Option<ReferenceSourceId>,
     pub asset_id: AssetId,
     pub code: Symbol,
     pub name: Option<String>,
@@ -660,7 +660,7 @@ pub struct Asset {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Instrument {
     #[serde(default)]
-    pub source_id: Option<String>,
+    pub source_id: Option<ReferenceSourceId>,
     pub instrument_id: InstrumentId,
     pub symbol: Symbol,
     pub name: Option<String>,
@@ -681,7 +681,7 @@ pub struct Instrument {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Listing {
     #[serde(default)]
-    pub source_id: Option<String>,
+    pub source_id: Option<ReferenceSourceId>,
     pub listing_id: ListingId,
     pub instrument_id: InstrumentId,
     pub exchange_id: ExchangeId,

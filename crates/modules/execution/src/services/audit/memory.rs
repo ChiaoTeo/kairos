@@ -1,5 +1,5 @@
-use super::{ExecutionAuditEvent, ExecutionAuditQuery, IntentAdmissionAuditRecord};
-use crate::application::{ExecutionEvent, IntentEvent};
+use super::IntentAdmissionAuditRecord;
+use crate::domain::{ExecutionAuditEvent, ExecutionAuditQuery, ExecutionEvent, IntentEvent};
 
 pub struct MemoryExecutionAudit {
     order_events: Vec<ExecutionEvent>,

@@ -16,12 +16,30 @@ from kairospy.investment.apps.reference.application import (
     validate_reference_runtime,
 )
 from kairospy.primitives.reference import InstrumentId, ListingId, MarketId
+from kairospy.primitives.time import GenerationRead, SequenceRead
 from kairospy.contracts.reference import (
     ReferenceAsset,
+    ReferenceCatalogCounts,
+    ReferenceCatalogIntegrity,
+    ReferenceCatalogSnapshot,
     ReferenceClient,
+    ReferenceHealthResponse,
     ReferenceInstrument,
     ReferenceListing,
+    ReferenceProviderHealth,
+    ReferenceRuntimeStatusResponse,
 )
+
+
+def _catalog_snapshot(
+    *, generation: int, event_sequence: int, market_count: int
+) -> ReferenceCatalogSnapshot:
+    return ReferenceCatalogSnapshot(
+        GenerationRead(generation),
+        SequenceRead(event_sequence),
+        ReferenceCatalogCounts(0, 0, 0, 0, market_count, market_count),
+        ReferenceCatalogIntegrity(0, 0, 0, 0, 0),
+    )
 
 
 def _reference_event(
@@ -97,7 +115,7 @@ def test_reference_live_notifications_resync_the_workspace_catalog() -> None:
     observed: list[object] = []
 
     assert reference.visit_live(observed.append) == 1
-    assert observed == []  # The pinned snapshot covers the subscription race.
+    assert observed == []
     assert reference.visit_live(observed.append) == 1
     assert [event.metadata.sequence for event in observed] == [11]
     assert reference.visit_live(observed.append) == 1
@@ -156,6 +174,52 @@ def test_reference_live_notifications_reject_a_trailing_catalog_snapshot() -> No
     with pytest.raises(RuntimeError, match="trails its change notification"):
         reference.visit_live(lambda _event: None)
     assert reference.notification_health()["catalog_stale"] is True
+
+
+def test_reference_control_results_validate_and_preserve_json_shape() -> None:
+    health = ReferenceHealthResponse.from_mapping(
+        {
+            "status": "ready",
+            "providers": [
+                {"source_id": "binance-spot", "status": "ready", "stale": False}
+            ],
+        }
+    )
+    assert health.providers[0].source_id == "binance-spot"
+    assert health.to_json_dict() == {
+        "status": "ready",
+        "providers": [
+            {"source_id": "binance-spot", "status": "ready", "stale": False}
+        ],
+    }
+
+    runtime = ReferenceRuntimeStatusResponse.from_mapping(
+        {
+            "status": "ready",
+            "app_runtime": {
+                "phase": "serving",
+                "actor_id": "reference",
+                "source_id": "reference-default",
+                "refresh_interval_millis": 60_000,
+            },
+            "catalog": {
+                "readiness": "ready",
+                "generation": 3,
+                "event_sequence": 7,
+                "market_count": 1,
+            },
+            "sources": [],
+            "publication": {"pending_publication_count": 0},
+            "diagnostics": [],
+        }
+    )
+    assert runtime.catalog.generation == 3
+    assert runtime.to_json_dict()["status"] == "ready"
+
+    with pytest.raises(ValueError, match="unsupported Reference health status"):
+        ReferenceHealthResponse.from_mapping(
+            {"status": "unknown", "providers": []}
+        )
 
 
 def _reference_database(tmp_path: Path) -> Path:
@@ -324,9 +388,10 @@ def _reference_database(tmp_path: Path) -> Path:
 
 def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) -> None:
     client = ReferenceClient(database_path=_reference_database(tmp_path))
-    assert client.catalog()["generation"] == 3
-    assert client.catalog()["catalog"]["market_count"] == 1
-    assert client.catalog()["integrity"] == {
+    snapshot = client.catalog()
+    assert snapshot.generation == 3
+    assert snapshot.catalog.market_count == 1
+    assert snapshot.to_json_dict()["integrity"] == {
         "missing_equity_markets": 0,
         "legacy_exchange_market_ids": 0,
         "legacy_exchange_listing_ids": 0,
@@ -436,15 +501,9 @@ def test_reference_sqlite_client_reports_symbol_identity_integrity(tmp_path) -> 
     connection.commit()
     connection.close()
 
-    integrity = ReferenceClient(database_path=path).catalog()["integrity"]
+    integrity = ReferenceClient(database_path=path).catalog().integrity
 
-    assert integrity == {
-        "missing_equity_markets": 1,
-        "legacy_exchange_market_ids": 1,
-        "legacy_exchange_listing_ids": 1,
-        "option_listings": 1,
-        "option_markets": 1,
-    }
+    assert integrity == ReferenceCatalogIntegrity(1, 1, 1, 1, 1)
 
 
 def test_reference_application_reads_concrete_sqlite_client(tmp_path) -> None:
@@ -605,16 +664,6 @@ def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
     }
 
 
-def test_reference_client_reads_lifecycle_events_by_sequence(
-    tmp_path,
-) -> None:
-    client = ReferenceClient(database_path=_reference_database(tmp_path))
-    result = client.events(sequence_from=4, sequence_to=8, limit=9)
-
-    assert result["event_sequence"] == 7
-    assert result["events"] == []
-
-
 def test_reference_client_scopes_refresh_and_provider_controls(
     tmp_path, monkeypatch
 ) -> None:
@@ -735,14 +784,18 @@ def test_reference_application_exposes_filtered_markets_and_option_chain(
     assert chain[0].instrument_type == "option"
 
 
-def test_reference_runtime_validation_covers_provider_snapshot_and_event_tail() -> None:
+def test_reference_runtime_validation_covers_provider_snapshot_and_publication() -> None:
     class Client(ReferenceClient):
         def health(self):
+            return ReferenceHealthResponse(
+                "ready",
+                (ReferenceProviderHealth("provider-a", "ready", False),),
+            )
+
+        def providers(self):
             return {
-                "status": "ready",
                 "generation": 3,
                 "event_sequence": 7,
-                "market_count": 2,
                 "outbox_depth": 0,
                 "providers": [
                     {"source_id": "provider-a", "status": "ready", "stale": False}
@@ -750,25 +803,13 @@ def test_reference_runtime_validation_covers_provider_snapshot_and_event_tail() 
             }
 
         def catalog(self):
-            return {
-                "generation": 3,
-                "event_sequence": 7,
-                "catalog": {"market_count": 2},
-            }
-
-        def events(self, *, sequence_from=None, sequence_to=None, limit=256):
-            assert (sequence_from, sequence_to, limit) == (7, None, 1)
-            return {
-                "generation": 3,
-                "event_sequence": 7,
-                "events": [{"event_id": "reference:00000000000000000007"}],
-            }
+            return _catalog_snapshot(generation=3, event_sequence=7, market_count=2)
 
     result = validate_reference_runtime(Client(), required_sources=("provider-a",))
 
     assert result["status"] == "passed"
     assert result["failed_checks"] == []
-    assert len(result["checks"]) == 6
+    assert len(result["checks"]) == 5
 
 
 def test_reference_runtime_validation_reports_missing_provider_and_pending_outbox() -> (
@@ -776,24 +817,18 @@ def test_reference_runtime_validation_reports_missing_provider_and_pending_outbo
 ):
     class Client(ReferenceClient):
         def health(self):
+            return ReferenceHealthResponse("degraded", ())
+
+        def providers(self):
             return {
-                "status": "degraded",
                 "generation": 1,
                 "event_sequence": 0,
-                "market_count": 0,
                 "outbox_depth": 2,
                 "providers": [],
             }
 
         def catalog(self):
-            return {
-                "generation": 1,
-                "event_sequence": 0,
-                "catalog": {"market_count": 0},
-            }
-
-        def events(self, **kwargs):
-            raise AssertionError("zero watermark must not query the event tail")
+            return _catalog_snapshot(generation=1, event_sequence=0, market_count=0)
 
     result = validate_reference_runtime(Client(), required_sources=("provider-a",))
 
@@ -807,24 +842,18 @@ def test_reference_validate_cli_returns_nonzero_when_a_required_gate_fails(
 ) -> None:
     class Client(ReferenceClient):
         def health(self):
+            return ReferenceHealthResponse("degraded", ())
+
+        def providers(self):
             return {
-                "status": "degraded",
                 "generation": 0,
                 "event_sequence": 0,
-                "market_count": 0,
                 "outbox_depth": 1,
                 "providers": [],
             }
 
         def catalog(self):
-            return {
-                "generation": 0,
-                "event_sequence": 0,
-                "catalog": {"market_count": 0},
-            }
-
-        def events(self, **kwargs):
-            raise AssertionError("zero watermark must not query the event tail")
+            return _catalog_snapshot(generation=0, event_sequence=0, market_count=0)
 
     monkeypatch.setattr(
         "kairospy.surface.cli.commands.system.reference._workspace_reference_client",

@@ -6,7 +6,7 @@
 
 pub mod application;
 pub mod composition;
-pub mod domain;
+mod domain;
 mod services;
 
 pub use application::{

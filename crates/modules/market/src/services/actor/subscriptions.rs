@@ -336,8 +336,8 @@ impl MarketActor {
                     .attached_sources
                     .iter()
                     .filter(|(_, source)| {
-                        crate::application::source_accepts(&source.descriptor, market)
-                            && crate::application::source_supports_selectors(
+                        crate::domain::source::source_accepts(&source.descriptor, market)
+                            && crate::domain::source::source_supports_selectors(
                                 &source.descriptor,
                                 selectors,
                             )

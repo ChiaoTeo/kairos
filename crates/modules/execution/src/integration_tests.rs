@@ -48,6 +48,7 @@ use kairos_primitives::execution::{
 };
 use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId, Symbol};
+use kairos_primitives::runtime::StrategyId;
 use kairos_primitives::time::{DurationNanos, Sequence, UnixNanos};
 use secrecy::SecretString;
 
@@ -82,9 +83,12 @@ fn fill_report(
 
 fn order_fact_cursor(epoch: u64, sequence: u64) -> OrderFactCursor {
     OrderFactCursor {
-        connection_id: "execution.test.private".into(),
-        channel_id: "orders".into(),
-        channel_epoch: epoch,
+        connection_id: kairos_primitives::integration::IntegrationSourceId::new(
+            "execution.test.private",
+        )
+        .unwrap(),
+        channel_id: kairos_primitives::execution::ExecutionChannelCode::new("orders").unwrap(),
+        channel_epoch: epoch.into(),
         participant_sequence: Some(Sequence::new(sequence)),
     }
 }
@@ -147,10 +151,12 @@ fn strategy_intent(
 ) -> ExecuteStrategyIntent {
     ExecuteStrategyIntent {
         intent_id: IntentId::new(intent_id).unwrap(),
-        strategy_decision_id: Some(format!("decision:{intent_id}")),
-        strategy_id: "strategy".into(),
-        launch_id: "launch".into(),
-        instance_id: "instance".into(),
+        strategy_decision_id: Some(
+            kairos_primitives::risk::DecisionId::new(format!("decision:{intent_id}")).unwrap(),
+        ),
+        strategy_id: StrategyId::new("strategy").unwrap(),
+        launch_id: kairos_primitives::runtime::LaunchId::new("launch").unwrap(),
+        instance_id: kairos_primitives::runtime::InstanceId::new("instance").unwrap(),
         instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
         market_id: None,
         execution_route_id: Some(ExecutionRouteId::new("execution-route:test").unwrap()),
@@ -223,7 +229,7 @@ fn intent_leg(
 
 fn quote_provisioning_intent(intent_id: &str) -> ExecuteStrategyIntent {
     let mut intent = strategy_intent(intent_id, 0, None);
-    intent.strategy_id = "maker".into();
+    intent.strategy_id = StrategyId::new("maker").unwrap();
     intent.intent_type = kairos_execution::IntentType::QuoteProvisioning;
     intent.algorithm = kairos_execution::ExecutionAlgorithmPolicy::PassiveLimit(
         kairos_execution::PassiveLimitPolicy {
@@ -715,7 +721,9 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
             ],
             ready: true,
             initial_margin_rate_bps: Some(10_000),
-            margin_rule_id: Some("test:fully-funded".into()),
+            margin_rule_id: Some(
+                kairos_primitives::risk::MarginRuleCode::new("test:fully-funded").unwrap(),
+            ),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
@@ -789,7 +797,9 @@ fn configure_test_access(application: &mut ExecutionApplication) {
             ],
             ready: true,
             initial_margin_rate_bps: Some(10_000),
-            margin_rule_id: Some("test:fully-funded".into()),
+            margin_rule_id: Some(
+                kairos_primitives::risk::MarginRuleCode::new("test:fully-funded").unwrap(),
+            ),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
@@ -817,7 +827,9 @@ fn configure_fallback_access(application: &mut ExecutionApplication) {
             supported_options: vec!["post_only".into()],
             ready: true,
             initial_margin_rate_bps: Some(10_000),
-            margin_rule_id: Some("test:fallback-fully-funded".into()),
+            margin_rule_id: Some(
+                kairos_primitives::risk::MarginRuleCode::new("test:fallback-fully-funded").unwrap(),
+            ),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated-fallback").unwrap(),
@@ -848,7 +860,9 @@ fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() 
             supported_options: Vec::new(),
             ready: true,
             initial_margin_rate_bps: Some(10_000),
-            margin_rule_id: Some("test:fully-funded".into()),
+            margin_rule_id: Some(
+                kairos_primitives::risk::MarginRuleCode::new("test:fully-funded").unwrap(),
+            ),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
@@ -898,7 +912,9 @@ fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state
             supported_options: Vec::new(),
             ready: true,
             initial_margin_rate_bps: Some(10_000),
-            margin_rule_id: Some("test:fully-funded".into()),
+            margin_rule_id: Some(
+                kairos_primitives::risk::MarginRuleCode::new("test:fully-funded").unwrap(),
+            ),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
@@ -1003,7 +1019,10 @@ fn insufficient_funding_risk() -> SimulatedRiskBehavior {
                 required_margin: Money::new(100, 0).unwrap(),
                 available_margin: Money::new(40, 0).unwrap(),
                 shortfall: Money::new(60, 0).unwrap(),
-                margin_rule_id: "binance-usdm-initial-margin:v1".into(),
+                margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
+                    "binance-usdm-initial-margin:v1",
+                )
+                .unwrap(),
                 risk_decision_id: kairos_primitives::risk::DecisionId::new("risk-decision:funding")
                     .unwrap(),
                 risk_policy_version: 7.into(),
@@ -2761,7 +2780,7 @@ fn two_leg_buy_sell_intent_is_satisfied_only_after_both_legs_fill() {
     let state = app
         .submit_intent({
             let mut intent = strategy_intent("intent:self-funded-pair", 0, None);
-            intent.strategy_id = "arb".into();
+            intent.strategy_id = StrategyId::new("arb").unwrap();
             intent.intent_type = kairos_execution::IntentType::PairArbitrage;
             intent.completion_policy = kairos_execution::CompletionPolicy::AllLegsSatisfied;
             intent.failure_policy = kairos_execution::FailurePolicy::CancelRemaining;
@@ -3730,7 +3749,7 @@ async fn conflux_private_execution_event_preserves_explicit_order_identities_acr
                         assert_eq!(order.status, ExecutionOrderStatus::Filled);
                         assert_eq!(order.remote_order_id.as_deref(), Some("9876"));
                         let cursor = order.last_order_fact_cursor.as_ref().unwrap();
-                        assert_eq!(cursor.channel_epoch, 1);
+                        assert_eq!(cursor.channel_epoch.get(), 1);
                         assert_eq!(cursor.participant_sequence, Some(Sequence::new(7)));
                         assert_eq!(application.fills(None).len(), 1);
                         Ok(())
@@ -4067,8 +4086,9 @@ async fn kairospy_explicit_algorithm_round_trips_through_execution_json_rpc() {
     let mut application = application(&state_path);
     let mut intent = strategy_intent("intent:kairospy-rpc-immediate", 2, None);
     intent.source_event_time_unix_nanos = None;
-    intent.strategy_decision_id = Some("decision:kairospy-rpc-immediate".into());
-    intent.strategy_id = "python-strategy".into();
+    intent.strategy_decision_id =
+        Some(kairos_primitives::risk::DecisionId::new("decision:kairospy-rpc-immediate").unwrap());
+    intent.strategy_id = StrategyId::new("python-strategy").unwrap();
     intent.reason = "cross-language contract certification".into();
     application.advance_time(100).unwrap();
     application
@@ -6102,15 +6122,15 @@ fn backtest_run_simulates_quote_execution_and_returns_fills() {
         }],
         market_events: vec![MarketObservation::Quote(Quote {
             scope: crate::application::ObservationScope::Market {
-                market_id: "binance:spot".into(),
+                market_id: MarketId::new("binance:spot").unwrap(),
             },
-            instrument_id: "BTCUSDT".into(),
-            bid_price: Some("99".into()),
-            bid_quantity: Some("10".into()),
-            ask_price: Some("100".into()),
-            ask_quantity: Some("2".into()),
-            observed_at_unix_nanos: 11,
-            source_id: "replay".into(),
+            instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
+            bid_price: Some("99".parse().unwrap()),
+            bid_quantity: Some("10".parse().unwrap()),
+            ask_price: Some("100".parse().unwrap()),
+            ask_quantity: Some("2".parse().unwrap()),
+            observed_at_unix_nanos: 11.into(),
+            source_id: kairos_primitives::market::Provider::new("replay").unwrap(),
         })],
         simulation: SimulationConfig {
             fee_bps: "10".parse().unwrap(),
@@ -6148,18 +6168,18 @@ fn backtest_run_consumes_a_downloaded_bar_and_fills_at_close() {
         }],
         market_events: vec![MarketObservation::Bar(kairos_execution::Bar {
             scope: crate::application::ObservationScope::Consolidated {
-                instrument_id: "instrument:equity:US:AAPL:common".into(),
+                instrument_id: InstrumentId::new("instrument:equity:US:AAPL:common").unwrap(),
                 network_id: Some("sip".into()),
             },
-            instrument_id: "instrument:equity:US:AAPL:common".into(),
+            instrument_id: InstrumentId::new("instrument:equity:US:AAPL:common").unwrap(),
             timeframe: "1m".into(),
-            open: "100".into(),
-            high: "101".into(),
-            low: "99".into(),
-            close: "100.5".into(),
-            volume: Some("12".into()),
-            observed_at_unix_nanos: 1_700_000_000_000_000_000,
-            source_id: "massive".into(),
+            open: "100".parse().unwrap(),
+            high: "101".parse().unwrap(),
+            low: "99".parse().unwrap(),
+            close: "100.5".parse().unwrap(),
+            volume: Some("12".parse().unwrap()),
+            observed_at_unix_nanos: 1_700_000_000_000_000_000_u64.into(),
+            source_id: kairos_primitives::market::Provider::new("massive").unwrap(),
             derivation: "massive-stocks-aggregate".into(),
         })],
         ..Default::default()
@@ -6789,7 +6809,7 @@ fn private_order_sequence_rejects_regression_and_accepts_reconnect_epoch_reset()
         reconnected
             .last_order_fact_cursor
             .as_ref()
-            .map(|cursor| (cursor.channel_epoch, cursor.participant_sequence)),
+            .map(|cursor| (cursor.channel_epoch.get(), cursor.participant_sequence)),
         Some((2, Some(Sequence::new(1))))
     );
 
@@ -6842,7 +6862,7 @@ fn private_order_sequence_rejects_regression_and_accepts_reconnect_epoch_reset()
     let restored = application(&path);
     let restored_orders = restored.orders(None);
     let cursor = restored_orders[0].last_order_fact_cursor.as_ref().unwrap();
-    assert_eq!(cursor.channel_epoch, 2);
+    assert_eq!(cursor.channel_epoch.get(), 2);
     assert_eq!(cursor.participant_sequence, Some(Sequence::new(2)));
 }
 
@@ -6866,7 +6886,9 @@ fn reported_execution_market_does_not_overwrite_the_selected_destination() {
             supported_options: Vec::new(),
             ready: true,
             initial_margin_rate_bps: Some(10_000),
-            margin_rule_id: Some("test:fully-funded".into()),
+            margin_rule_id: Some(
+                kairos_primitives::risk::MarginRuleCode::new("test:fully-funded").unwrap(),
+            ),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Broker, "broker").unwrap(),

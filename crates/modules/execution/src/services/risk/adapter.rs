@@ -14,11 +14,10 @@ use kairos_risk_contract::{
 };
 use rust_decimal::Decimal;
 
-use crate::application::{
+use crate::domain::{
     ExecutionFundingRequirement, RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult,
-    SubmitOrder,
+    RiskReservationEvidence, RiskReservationSagaStatus, SubmitOrder,
 };
-use crate::domain::{RiskReservationEvidence, RiskReservationSagaStatus};
 
 pub struct SocketExecutionRiskReservations {
     risk: RiskClient,
@@ -176,14 +175,11 @@ impl SocketExecutionRiskReservations {
                     )
                 })?,
                 reduce_only: request.options.reduce_only.unwrap_or(false),
-                margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
-                    context.margin_rule_id.clone().ok_or_else(|| {
-                        RiskCommandFailure::NotSent(
-                            "execution route is missing a margin rule identity".into(),
-                        )
-                    })?,
-                )
-                .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+                margin_rule_id: context.margin_rule_id.clone().ok_or_else(|| {
+                    RiskCommandFailure::NotSent(
+                        "execution route is missing a margin rule identity".into(),
+                    )
+                })?,
             },
             at_unix_nanos: now,
             reservation_ttl_nanos: reservation_ttl_nanos.into(),
@@ -233,7 +229,7 @@ impl SocketExecutionRiskReservations {
                             requirement.shortfall.scale(),
                         )
                         .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
-                        margin_rule_id: requirement.margin_rule_id.to_string(),
+                        margin_rule_id: requirement.margin_rule_id.clone(),
                         risk_decision_id: decision.decision_id.clone(),
                         risk_policy_version: decision.policy_version,
                         account_snapshot_watermark: decision
@@ -357,8 +353,12 @@ fn notional_amount(request: &SubmitOrder) -> Result<Amount, String> {
         .unwrap_or(Decimal::ONE);
     let value = quantity
         .checked_mul(price)
-        .ok_or_else(|| "risk notional overflow".to_string())?
-        .normalize();
+        .ok_or_else(|| "risk notional overflow".to_string())?;
+    risk_amount(value)
+}
+
+fn risk_amount(value: Decimal) -> Result<Amount, String> {
+    let value = value.normalize();
     if value.scale() > u32::from(kairos_primitives::decimal::MAX_DECIMAL_SCALE) {
         return Err("risk amount exceeds 18 fractional digits".into());
     }
@@ -471,8 +471,16 @@ fn now_unix_nanos() -> u64 {
 #[cfg(test)]
 mod tests {
     use kairos_primitives::runtime::StrategyId;
+    use rust_decimal::Decimal;
 
-    use super::risk_strategy_id;
+    use super::{risk_amount, risk_strategy_id};
+
+    #[test]
+    fn risk_notional_preserves_quantity_and_price_scales() {
+        let amount = risk_amount(Decimal::new(2, 0) * Decimal::new(1_005, 1)).unwrap();
+
+        assert_eq!((amount.mantissa(), amount.scale()), (201, 0));
+    }
 
     #[test]
     fn risk_identity_uses_strategy_id_and_has_no_intent_fallback() {

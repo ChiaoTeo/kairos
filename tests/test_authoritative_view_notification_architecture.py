@@ -18,11 +18,11 @@ def test_owner_processes_commit_current_view_before_notification_attempt() -> No
         "market": "async fn publish(&mut self",
     }
     for owner, marker in owners.items():
-        source = _source(f"crates/modules/{owner}/src/application/conflux.rs")
+        source = _source(f"crates/modules/{owner}/src/application/process/conflux.rs")
         publication = source[source.index(marker) :]
         assert publication.index(".indexed") < publication.index(".aeron.publish")
 
-    execution = _source("crates/modules/execution/src/application/conflux.rs")
+    execution = _source("crates/modules/execution/src/application/process/conflux.rs")
     publication = execution[execution.index("fn publish(&mut self") :]
     assert publication.index("self.publish_views(context") < publication.index(
         ".aeron.publish"

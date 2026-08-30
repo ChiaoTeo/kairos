@@ -568,51 +568,54 @@ pub(crate) fn map_earn_positions(
     positions: Vec<EarnPosition>,
     observed_at_unix_nanos: kairos_primitives::time::UnixNanos,
     complete: bool,
-) -> EarnHoldingsSnapshot {
-    EarnHoldingsSnapshot {
+) -> Result<EarnHoldingsSnapshot, String> {
+    Ok(EarnHoldingsSnapshot {
         segment_key,
         holdings: positions
             .into_iter()
-            .map(|value| EarnHolding {
-                participant_position_id: value.participant_position_id,
-                product_id: value.product_id,
-                asset: value.asset,
-                principal: value.principal,
-                redeemable: value.redeemable_amount,
-                accrued_rewards: value
-                    .accrued_rewards
-                    .into_iter()
-                    .map(|reward| EarnAccruedReward {
-                        asset: reward.asset,
-                        amount: reward.amount,
-                    })
-                    .collect(),
-                liquidity: match value.family {
-                    EarnProductFamily::Flexible => EarnHoldingLiquidity::Immediate,
-                    EarnProductFamily::Locked => value.matures_at_unix_nanos.map_or(
-                        EarnHoldingLiquidity::Unknown,
-                        |matures_at_unix_nanos| EarnHoldingLiquidity::FixedTerm {
-                            matures_at_unix_nanos,
-                        },
-                    ),
-                    EarnProductFamily::Staking
-                    | EarnProductFamily::YieldBearingAsset
-                    | EarnProductFamily::Other(_) => EarnHoldingLiquidity::Unknown,
-                },
-                state: match value.state {
-                    EarnPositionState::Active => EarnHoldingState::Active,
-                    EarnPositionState::Redeeming => EarnHoldingState::Redeeming,
-                    EarnPositionState::Redeemed => EarnHoldingState::Redeemed,
-                    EarnPositionState::Unknown(value) => EarnHoldingState::Unknown(value),
-                },
-                observed_at_unix_nanos: value
-                    .observed_at_unix_nanos
-                    .unwrap_or(observed_at_unix_nanos),
+            .map(|value| {
+                Ok(EarnHolding {
+                    participant_position_id: value.participant_position_id,
+                    product_id: kairos_primitives::capital::EarnProductId::new(value.product_id)
+                        .map_err(|error| error.to_string())?,
+                    asset: value.asset,
+                    principal: value.principal,
+                    redeemable: value.redeemable_amount,
+                    accrued_rewards: value
+                        .accrued_rewards
+                        .into_iter()
+                        .map(|reward| EarnAccruedReward {
+                            asset: reward.asset,
+                            amount: reward.amount,
+                        })
+                        .collect(),
+                    liquidity: match value.family {
+                        EarnProductFamily::Flexible => EarnHoldingLiquidity::Immediate,
+                        EarnProductFamily::Locked => value.matures_at_unix_nanos.map_or(
+                            EarnHoldingLiquidity::Unknown,
+                            |matures_at_unix_nanos| EarnHoldingLiquidity::FixedTerm {
+                                matures_at_unix_nanos,
+                            },
+                        ),
+                        EarnProductFamily::Staking
+                        | EarnProductFamily::YieldBearingAsset
+                        | EarnProductFamily::Other(_) => EarnHoldingLiquidity::Unknown,
+                    },
+                    state: match value.state {
+                        EarnPositionState::Active => EarnHoldingState::Active,
+                        EarnPositionState::Redeeming => EarnHoldingState::Redeeming,
+                        EarnPositionState::Redeemed => EarnHoldingState::Redeemed,
+                        EarnPositionState::Unknown(value) => EarnHoldingState::Unknown(value),
+                    },
+                    observed_at_unix_nanos: value
+                        .observed_at_unix_nanos
+                        .unwrap_or(observed_at_unix_nanos),
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>, String>>()?,
         observed_at_unix_nanos,
         complete,
-    }
+    })
 }
 
 fn map_open_order(
@@ -859,7 +862,8 @@ mod identity_tests {
             }],
             observed_at,
             true,
-        );
+        )
+        .unwrap();
         assert_eq!(snapshot.holdings.len(), 1);
         assert_eq!(snapshot.holdings[0].product_id, "USDT001");
         assert_eq!(

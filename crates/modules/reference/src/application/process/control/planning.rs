@@ -505,7 +505,8 @@ mod tests {
             )
             .unwrap();
         SourceHealth {
-            source_id: binding.source_id().to_owned(),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new(binding.source_id())
+                .unwrap(),
             definition: Some(definition),
             status: SourceRuntimePhase::Registered,
             progress: SourceRuntimeProgress::default(),

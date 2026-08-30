@@ -4,6 +4,12 @@
 //! adapters, persistence, publication, and runtime modes. Business use cases
 //! remain in `application`; provider and infrastructure choices remain here.
 
+use std::path::PathBuf;
+
+use kairos_primitives::runtime::InstanceIdentity;
+
+use crate::application::ConnectedExecutionApplication;
+
 mod connections;
 mod dependencies;
 mod direct;
@@ -29,3 +35,17 @@ pub use crate::services::simulation::{
 
 pub type ExecutionHost =
     kairos_conflux::JsonRpcConfluxRuntime<crate::application::ExecutionApplication>;
+
+/// Select and install the concrete runtime client used by the connected CLI.
+pub fn connect_execution_application(
+    socket: PathBuf,
+    view_root: Option<PathBuf>,
+    identity: InstanceIdentity,
+) -> Result<ConnectedExecutionApplication, Box<dyn std::error::Error>> {
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system.install_execution_connection("execution", socket, view_root)?;
+    let client = system
+        .execution_client("execution")
+        .ok_or("managed Execution client is missing: execution")?;
+    Ok(ConnectedExecutionApplication::new(client, identity))
+}

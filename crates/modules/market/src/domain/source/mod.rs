@@ -6,7 +6,7 @@ mod state;
 pub(crate) use identity::{MarketFeedId, SourceEpoch};
 pub use readiness::MarketReadiness;
 pub(crate) use readiness::derive_readiness;
-pub(crate) use route::FeedDescriptor;
+pub(crate) use route::{FeedDescriptor, source_accepts, source_supports_selectors};
 pub(crate) use state::{SourceFailureKind, SourceState, SourceStatus};
 
 #[cfg(test)]

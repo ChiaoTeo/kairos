@@ -21,6 +21,7 @@ from kairospy.system.apps.workspace.application import (
 )
 
 from . import AccountConfigurationApplication
+from .configuration_models import AccountVerification
 
 
 AccountProbe = Callable[[Mapping[str, Any]], Mapping[str, Any]]
@@ -36,7 +37,7 @@ class AccountConfigurationDraft:
     account_file_name: str
     prepared_credential: PreparedCredential | None
     existing_verification_status: str | None
-    probe_result: Mapping[str, object] | None = None
+    probe_result: AccountVerification | None = None
     evidence_document: str | None = field(default=None, repr=False)
     committed: bool = False
 
@@ -55,7 +56,11 @@ class AccountConfigurationDraft:
                 "status",
             )
         } | {
-            "probe": dict(self.probe_result) if self.probe_result is not None else None,
+            "probe": (
+                self.probe_result.to_json_dict()
+                if self.probe_result is not None
+                else None
+            ),
             "existing_verification_status": self.existing_verification_status,
         }
 
@@ -161,7 +166,7 @@ class AccountConfigurationDraftApplication:
             f"{draft.account['account_id']}.json",
         )
         draft.evidence_document = evidence.read_text(encoding="utf-8")
-        return dict(result)
+        return result.to_json_dict()
 
     def commit(
         self,
@@ -177,8 +182,7 @@ class AccountConfigurationDraftApplication:
         if exists and not overwrite:
             raise FileExistsError(account_id)
         succeeded = (
-            draft.probe_result is not None
-            and draft.probe_result.get("verification_status") == "verified"
+            draft.probe_result is not None and draft.probe_result.status == "verified"
         )
         if (
             exists

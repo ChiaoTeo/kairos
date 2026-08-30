@@ -14,7 +14,7 @@ use super::super::config::{
 };
 use super::{binding_observation_capabilities, default_endpoint, positive_interval};
 use crate::ObservationKind;
-use crate::application::conflux::{MarketSourceMode, MarketSourcePlan};
+use crate::application::process::{MarketSourceMode, MarketSourcePlan};
 use crate::domain::source::{FeedDescriptor, MarketFeedId};
 
 pub(crate) fn install(

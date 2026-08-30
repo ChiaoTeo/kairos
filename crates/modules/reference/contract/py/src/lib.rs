@@ -4,14 +4,15 @@ use std::sync::Arc;
 use _native_transport::direct::DirectAeronSubscription;
 use _native_transport::lease::{EventLease, EventLeaseError};
 use kairos_primitives::reference::ReferenceStatus;
+use kairos_primitives::time::UnixNanos;
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
 use kairos_protocol::{EventMetadataOwned, decode_event_metadata};
 use kairos_reference_contract::{
     Asset as RustAsset, AssetCatalogQuery, ContractError, Exchange as RustExchange,
     ExchangeCatalogQuery, Instrument as RustInstrument, InstrumentAvailabilityQuery,
-    InstrumentSearchQuery, LifecycleCatalogQuery, Listing as RustListing, ListingCatalogQuery,
-    Market as RustMarket, MarketSearchQuery, ReferenceCatalog as RustCatalog,
+    InstrumentSearchQuery, Listing as RustListing, ListingCatalogQuery, Market as RustMarket,
+    MarketSearchQuery, ReferenceCatalog as RustCatalog,
     ReferenceInstrumentAvailability as RustInstrumentAvailability,
     ReferenceLifecycleEvent as RustEvent, ReferencePage, ReferenceReadSession as RustSession,
 };
@@ -719,15 +720,18 @@ impl ReferenceReadSession {
                     underlying_instrument_id,
                     "underlying_instrument_id",
                 )?,
-                expiry_unix_nanos: optional_non_negative(expiry_unix_nanos, "expiry_unix_nanos")?,
+                expiry_unix_nanos: optional_non_negative(expiry_unix_nanos, "expiry_unix_nanos")?
+                    .map(UnixNanos::new),
                 expiry_from_unix_nanos: optional_non_negative(
                     expiry_from_unix_nanos,
                     "expiry_from_unix_nanos",
-                )?,
+                )?
+                .map(UnixNanos::new),
                 expiry_to_unix_nanos: optional_non_negative(
                     expiry_to_unix_nanos,
                     "expiry_to_unix_nanos",
-                )?,
+                )?
+                .map(UnixNanos::new),
                 option_right,
                 status: reference_status(status)?,
                 active_only,
@@ -831,23 +835,6 @@ impl ReferenceReadSession {
                 status: reference_status(status)?,
                 active_only,
                 page: page(limit, offset)?,
-            })
-            .map(|values| values.into_iter().map(Into::into).collect())
-            .map_err(contract_error)
-    }
-
-    #[pyo3(signature = (sequence_from=None, sequence_to=None, limit=256))]
-    fn events(
-        &self,
-        sequence_from: Option<i64>,
-        sequence_to: Option<i64>,
-        limit: i64,
-    ) -> PyResult<Vec<ReferenceLifecycleEvent>> {
-        self.session()?
-            .lifecycle_events(&LifecycleCatalogQuery {
-                sequence_from: optional_non_negative(sequence_from, "sequence_from")?,
-                sequence_to: optional_non_negative(sequence_to, "sequence_to")?,
-                limit: non_negative(limit, "limit")?,
             })
             .map(|values| values.into_iter().map(Into::into).collect())
             .map_err(contract_error)
@@ -1069,7 +1056,7 @@ impl From<RustMarket> for ReferenceMarket {
 impl From<RustEvent> for ReferenceLifecycleEvent {
     fn from(value: RustEvent) -> Self {
         Self {
-            sequence: value.sequence,
+            sequence: value.sequence.get(),
             event_id: value.event_id,
             event_type: value.event_type,
             event_time_unix_nanos: value.event_time_unix_nanos.get(),

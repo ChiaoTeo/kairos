@@ -8,10 +8,10 @@ use kairos_primitives::time::UnixNanos;
 
 use super::simulated::SimulatedRiskReservations;
 use super::{SimulatedRiskBehavior, SocketExecutionRiskReservations};
-use crate::application::{
-    RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult, SubmitOrder,
+use crate::domain::{
+    RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult, RiskReservationEvidence,
+    SubmitOrder,
 };
-use crate::domain::RiskReservationEvidence;
 
 enum RiskRequest {
     Authorize(

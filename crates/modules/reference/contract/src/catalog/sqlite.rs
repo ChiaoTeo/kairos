@@ -24,7 +24,6 @@ use crate::{
 
 pub const REFERENCE_SQLITE_SCHEMA_VERSION: u32 = 6;
 const MAX_PAGE_SIZE: usize = 10_000;
-const MAX_EVENT_PAGE_SIZE: u64 = 4_096;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
 pub struct ReferenceWatermark {
@@ -58,16 +57,6 @@ pub struct ReferenceCatalogStatus {
     pub watermark: ReferenceWatermark,
     pub counts: ReferenceCatalogStats,
     pub integrity: ReferenceIntegrityStats,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReferenceCollection {
-    Exchanges,
-    Assets,
-    Instruments,
-    Listings,
-    Markets,
-    LifecycleEvents,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -129,9 +118,9 @@ pub struct InstrumentSearchQuery {
     pub instrument_type: Option<InstrumentKind>,
     pub product_family: Option<String>,
     pub underlying_instrument_id: Option<InstrumentId>,
-    pub expiry_unix_nanos: Option<u64>,
-    pub expiry_from_unix_nanos: Option<u64>,
-    pub expiry_to_unix_nanos: Option<u64>,
+    pub expiry_unix_nanos: Option<UnixNanos>,
+    pub expiry_from_unix_nanos: Option<UnixNanos>,
+    pub expiry_to_unix_nanos: Option<UnixNanos>,
     pub option_right: Option<String>,
     pub status: Option<ReferenceStatus>,
     pub active_only: bool,
@@ -178,17 +167,10 @@ pub struct MarketSearchQuery {
     pub page: ReferencePage,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct LifecycleCatalogQuery {
-    pub sequence_from: Option<u64>,
-    pub sequence_to: Option<u64>,
-    pub limit: u64,
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReferenceLifecycleEvent {
     #[serde(default)]
-    pub sequence: u64,
+    pub sequence: Sequence,
     pub event_id: String,
     pub event_type: String,
     pub event_time_unix_nanos: UnixNanos,
@@ -215,9 +197,9 @@ pub struct ReferenceLifecycleEvent {
     pub generation: Generation,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceOptionCoverage {
-    pub source_id: String,
+    pub source_id: kairos_primitives::reference::ReferenceSourceId,
     pub underlyings: Vec<String>,
 }
 
@@ -333,53 +315,6 @@ impl ReferenceCatalog {
             counts: read_stats(&connection)?,
             integrity: read_integrity_stats(&connection)?,
         })
-    }
-
-    /// Read a bounded collection as contract-neutral JSON payloads. This is
-    /// intended only for Reference-owned inspection surfaces.
-    pub fn records(
-        &self,
-        collection: ReferenceCollection,
-        limit: u64,
-    ) -> ContractResult<Vec<serde_json::Value>> {
-        let connection = self.connection()?;
-        let (table, key) = collection_table(collection);
-        let sql = format!("SELECT payload FROM {table} ORDER BY {key} LIMIT ?");
-        let mut statement = connection.prepare(&sql).map_err(transport)?;
-        let rows = statement
-            .query_map([bounded_limit(limit) as i64], |row| row.get::<_, String>(0))
-            .map_err(transport)?;
-        rows.map(|row| decode_payload(&row.map_err(transport)?))
-            .collect()
-    }
-
-    pub fn record(&self, identifier: &str) -> ContractResult<Option<serde_json::Value>> {
-        let connection = self.connection()?;
-        let mut matched = None;
-        for collection in [
-            ReferenceCollection::Exchanges,
-            ReferenceCollection::Assets,
-            ReferenceCollection::Instruments,
-            ReferenceCollection::Listings,
-            ReferenceCollection::Markets,
-            ReferenceCollection::LifecycleEvents,
-        ] {
-            let (table, key) = collection_table(collection);
-            let sql = format!("SELECT payload FROM {table} WHERE {key} = ?");
-            let payload: Option<String> = connection
-                .query_row(&sql, [identifier], |row| row.get(0))
-                .optional()
-                .map_err(transport)?;
-            if let Some(payload) = payload {
-                if matched.is_some() {
-                    return Err(ContractError::Invalid(format!(
-                        "ambiguous Reference identifier {identifier}"
-                    )));
-                }
-                matched = Some(decode_payload(&payload)?);
-            }
-        }
-        Ok(matched)
     }
 
     pub fn market(&self, market_id: &MarketId) -> ContractResult<Option<Market>> {
@@ -519,29 +454,13 @@ impl ReferenceCatalog {
         })
     }
 
-    pub fn changes_after(
+    pub fn lifecycle_events_after(
         &self,
         sequence: Sequence,
         limit: u64,
-    ) -> ContractResult<Vec<serde_json::Value>> {
+    ) -> ContractResult<Vec<ReferenceLifecycleEvent>> {
         let connection = self.connection()?;
-        let from = sequence
-            .get()
-            .checked_add(1)
-            .and_then(|value| i64::try_from(value).ok())
-            .ok_or_else(|| ContractError::Invalid("Reference sequence is out of range".into()))?;
-        let limit = bounded_limit(limit) as i64;
-        let mut statement = connection
-            .prepare(
-                "SELECT payload FROM reference_lifecycle \
-                 WHERE sequence >= ? ORDER BY sequence LIMIT ?",
-            )
-            .map_err(transport)?;
-        let rows = statement
-            .query_map(params![from, limit], |row| row.get::<_, String>(0))
-            .map_err(transport)?;
-        rows.map(|row| decode_payload(&row.map_err(transport)?))
-            .collect()
+        read_lifecycle_events_after(&connection, sequence, limit)
     }
 
     fn connection(&self) -> ContractResult<Connection> {
@@ -549,6 +468,30 @@ impl ReferenceCatalog {
         validate_schema(&connection)?;
         Ok(connection)
     }
+}
+
+fn read_lifecycle_events_after(
+    connection: &Connection,
+    sequence: Sequence,
+    limit: u64,
+) -> ContractResult<Vec<ReferenceLifecycleEvent>> {
+    let from = sequence
+        .get()
+        .checked_add(1)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| ContractError::Invalid("Reference sequence is out of range".into()))?;
+    let limit = bounded_limit(limit) as i64;
+    let mut statement = connection
+        .prepare(
+            "SELECT payload FROM reference_lifecycle \
+                 WHERE sequence >= ? ORDER BY sequence LIMIT ?",
+        )
+        .map_err(transport)?;
+    let rows = statement
+        .query_map(params![from, limit], |row| row.get::<_, String>(0))
+        .map_err(transport)?;
+    rows.map(|row| decode_payload(&row.map_err(transport)?))
+        .collect()
 }
 
 impl ReferenceReadSession {
@@ -577,6 +520,14 @@ impl ReferenceReadSession {
             counts: read_stats(&self.connection)?,
             integrity: read_integrity_stats(&self.connection)?,
         })
+    }
+
+    pub fn lifecycle_events_after(
+        &self,
+        sequence: Sequence,
+        limit: u64,
+    ) -> ContractResult<Vec<ReferenceLifecycleEvent>> {
+        read_lifecycle_events_after(&self.connection, sequence, limit)
     }
 
     pub fn exchanges(&self, query: &ExchangeCatalogQuery) -> ContractResult<Vec<Exchange>> {
@@ -633,9 +584,18 @@ impl ReferenceReadSession {
             "underlying_instrument_id",
             query.underlying_instrument_id.as_deref(),
         );
-        builder.filter_u64("expiry_unix_nanos", query.expiry_unix_nanos)?;
-        builder.compare_u64("expiry_unix_nanos >=", query.expiry_from_unix_nanos)?;
-        builder.compare_u64("expiry_unix_nanos <=", query.expiry_to_unix_nanos)?;
+        builder.filter_u64(
+            "expiry_unix_nanos",
+            query.expiry_unix_nanos.map(UnixNanos::get),
+        )?;
+        builder.compare_u64(
+            "expiry_unix_nanos >=",
+            query.expiry_from_unix_nanos.map(UnixNanos::get),
+        )?;
+        builder.compare_u64(
+            "expiry_unix_nanos <=",
+            query.expiry_to_unix_nanos.map(UnixNanos::get),
+        )?;
         if let Some(option_right) = query.option_right.as_deref() {
             builder.clause(
                 "json_extract(payload, '$.option_right') = ?",
@@ -767,51 +727,6 @@ impl ReferenceReadSession {
         read_typed_records(&self.connection, builder)
     }
 
-    pub fn lifecycle_events(
-        &self,
-        query: &LifecycleCatalogQuery,
-    ) -> ContractResult<Vec<ReferenceLifecycleEvent>> {
-        if !(1..=MAX_EVENT_PAGE_SIZE).contains(&query.limit) {
-            return Err(ContractError::Invalid(format!(
-                "limit must be between 1 and {MAX_EVENT_PAGE_SIZE}"
-            )));
-        }
-        if query
-            .sequence_from
-            .zip(query.sequence_to)
-            .is_some_and(|(from, to)| from > to)
-        {
-            return Err(ContractError::Invalid(
-                "sequence_from must not exceed sequence_to".into(),
-            ));
-        }
-        let mut sql = String::from("SELECT sequence, payload FROM reference_lifecycle WHERE 1 = 1");
-        let mut values = Vec::new();
-        if let Some(from) = query.sequence_from {
-            sql.push_str(" AND sequence >= ?");
-            values.push(sqlite_integer(from, "sequence_from")?);
-        }
-        if let Some(to) = query.sequence_to {
-            sql.push_str(" AND sequence <= ?");
-            values.push(sqlite_integer(to, "sequence_to")?);
-        }
-        sql.push_str(" ORDER BY sequence LIMIT ?");
-        values.push(Value::Integer(query.limit as i64));
-        let mut statement = self.connection.prepare(&sql).map_err(transport)?;
-        let rows = statement
-            .query_map(params_from_iter(values), |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(transport)?;
-        rows.map(|row| {
-            let (sequence, payload) = row.map_err(transport)?;
-            let mut event: ReferenceLifecycleEvent = decode_payload(&payload)?;
-            event.sequence = non_negative(sequence, "lifecycle sequence")?;
-            Ok(event)
-        })
-        .collect()
-    }
-
     pub fn option_coverage(&self) -> ContractResult<ReferenceOptionCoverage> {
         let mut statement = self.connection.prepare(
             "SELECT underlying FROM reference_option_coverage WHERE provider = ? AND enabled = 1 ORDER BY underlying",
@@ -820,7 +735,8 @@ impl ReferenceReadSession {
             .query_map(["massive-options"], |row| row.get::<_, String>(0))
             .map_err(transport)?;
         Ok(ReferenceOptionCoverage {
-            source_id: "massive-options".into(),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .expect("static Reference source identity is valid"),
             underlyings: rows
                 .map(|row| row.map_err(transport))
                 .collect::<ContractResult<_>>()?,
@@ -1024,17 +940,6 @@ fn sqlite_integer(value: u64, label: &str) -> ContractResult<Value> {
     i64::try_from(value)
         .map(Value::Integer)
         .map_err(|_| ContractError::Invalid(format!("Reference {label} is out of range")))
-}
-
-fn collection_table(collection: ReferenceCollection) -> (&'static str, &'static str) {
-    match collection {
-        ReferenceCollection::Exchanges => ("reference_exchanges_current", "exchange_id"),
-        ReferenceCollection::Assets => ("reference_assets_current", "asset_id"),
-        ReferenceCollection::Instruments => ("reference_instruments_current", "instrument_id"),
-        ReferenceCollection::Listings => ("reference_listings_current", "listing_id"),
-        ReferenceCollection::Markets => ("reference_markets_current", "market_id"),
-        ReferenceCollection::LifecycleEvents => ("reference_lifecycle", "sequence"),
-    }
 }
 
 fn open_read_only(path: &Path) -> ContractResult<Connection> {
@@ -1355,7 +1260,7 @@ mod tests {
 
     use super::{
         InstrumentAvailabilityQuery, MarketCatalogQuery, MarketSearchQuery, ReferenceCatalog,
-        ReferenceCollection, ReferencePage,
+        ReferencePage,
     };
 
     #[test]
@@ -1731,7 +1636,15 @@ mod tests {
         assert_eq!(reader.stats().unwrap().markets, 1_000_000);
         assert_eq!(
             reader
-                .records(ReferenceCollection::Markets, 128)
+                .read_session()
+                .unwrap()
+                .markets(&MarketSearchQuery {
+                    page: ReferencePage {
+                        limit: Some(128),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
                 .unwrap()
                 .len(),
             128

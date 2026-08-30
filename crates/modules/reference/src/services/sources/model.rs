@@ -69,7 +69,8 @@ mod tests {
     fn source_update_uses_scheduled_work_item_as_default_context() {
         let work_item = SourceWorkItem {
             work_item_id: "binance-spot:provider_catalog".to_owned(),
-            source_id: "binance-spot".to_owned(),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("binance-spot")
+                .unwrap(),
             scope: SourceScope::provider_catalog(),
             reason: SourceWorkReason::ScheduledTick,
             budget: SourceTickBudget::default(),
@@ -90,7 +91,8 @@ mod tests {
     fn source_update_keeps_provider_specific_work_item_context() {
         let work_item = SourceWorkItem {
             work_item_id: "massive-options:provider_catalog".to_owned(),
-            source_id: "massive-options".to_owned(),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
             scope: SourceScope::provider_catalog(),
             reason: SourceWorkReason::ScheduledTick,
             budget: SourceTickBudget::default(),

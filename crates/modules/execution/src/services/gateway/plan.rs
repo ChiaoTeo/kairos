@@ -1,4 +1,4 @@
-use kairos_conflux::ParticipantInstrumentTypeRef;
+use kairos_integration::ParticipantInstrumentTypeRef;
 use kairos_primitives::account::{AccountId, SegmentKey};
 
 #[derive(Clone)]

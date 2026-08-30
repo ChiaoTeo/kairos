@@ -8,11 +8,10 @@ use std::time::{Duration, Instant};
 use super::{
     AccountCommitmentObservation, SocketExecutionIntentPlanner, SocketExecutionOrderAdmission,
 };
-use crate::application::{
-    DependencyWatermarks, ExecuteStrategyIntent, QuoteObservation, RiskAuthorizationContext,
-    SubmitOrder,
+use crate::domain::{
+    DependencyWatermarks, ExecuteStrategyIntent, OrderCommitment, QuoteObservation,
+    RiskAuthorizationContext, SubmitOrder,
 };
-use crate::domain::OrderCommitment;
 
 enum PlanningRequest {
     AdvanceTime {
@@ -42,7 +41,7 @@ enum AdmissionRequest {
     },
     RiskContext {
         request: SubmitOrder,
-        route: crate::application::ExecutionRouteCandidate,
+        route: crate::domain::ExecutionRouteCandidate,
         reply: std::sync::mpsc::SyncSender<Result<RiskAuthorizationContext, String>>,
     },
 }
@@ -376,7 +375,7 @@ impl QueuedExecutionOrderAdmission {
     pub(crate) fn risk_authorization_context(
         &mut self,
         request: &SubmitOrder,
-        route: &crate::application::ExecutionRouteCandidate,
+        route: &crate::domain::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.request(

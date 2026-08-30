@@ -5,9 +5,10 @@ use std::path::Path;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-use super::{ExecutionAuditEvent, ExecutionAuditQuery, IntentAdmissionAuditRecord};
-use crate::application::{ExecutionEvent, IntentEvent};
-use crate::domain::ExecutionOrderStatus;
+use super::IntentAdmissionAuditRecord;
+use crate::domain::{
+    ExecutionAuditEvent, ExecutionAuditQuery, ExecutionEvent, ExecutionOrderStatus, IntentEvent,
+};
 
 pub struct SqlxExecutionAudit {
     pool: SqlitePool,
@@ -110,7 +111,7 @@ impl SqlxExecutionAudit {
                 let result = sqlx::query(
                     "INSERT INTO intent_admission_audit (decision_id,command_id,idempotency_key,intent_id,source,outcome,original_intent_json,effective_intent_json,original_hash,effective_hash,admission_result,created_at_unix_nanos) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(decision_id) DO UPDATE SET admission_result=excluded.admission_result WHERE intent_admission_audit.command_id IS excluded.command_id AND intent_admission_audit.idempotency_key=excluded.idempotency_key AND intent_admission_audit.intent_id=excluded.intent_id AND intent_admission_audit.source=excluded.source AND intent_admission_audit.outcome=excluded.outcome AND intent_admission_audit.original_intent_json=excluded.original_intent_json AND intent_admission_audit.effective_intent_json=excluded.effective_intent_json AND intent_admission_audit.original_hash=excluded.original_hash AND intent_admission_audit.effective_hash=excluded.effective_hash",
                 )
-                .bind(&record.evidence.decision_id)
+                .bind(record.evidence.decision_id.as_str())
                 .bind(&record.command_id)
                 .bind(&record.idempotency_key)
                 .bind(&record.intent_id)
@@ -246,10 +247,10 @@ fn intent_event_key(event: &IntentEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::SqlxExecutionAudit;
-    use crate::application::{
-        ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionEvent, IntentAdmissionEvidence,
+    use crate::domain::{
+        ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionEvent, ExecutionOrderStatus,
+        IntentAdmissionEvidence,
     };
-    use crate::domain::ExecutionOrderStatus;
     use crate::services::audit::IntentAdmissionAuditRecord;
 
     #[test]
@@ -336,7 +337,7 @@ mod tests {
         let intent = ExecuteStrategyIntent::test_fixture();
         let evidence = IntentAdmissionEvidence {
             source: "decision_agent".into(),
-            decision_id: "decision-1".into(),
+            decision_id: kairos_primitives::risk::DecisionId::new("decision-1").unwrap(),
             outcome: "approved".into(),
             original_intent: intent.clone(),
             effective_intent: intent,

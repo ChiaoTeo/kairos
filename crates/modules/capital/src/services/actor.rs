@@ -2,28 +2,28 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kairos_primitives::account::{AccountId, BrokerId};
 use kairos_primitives::decimal::Quantity;
+use kairos_primitives::runtime::StrategyDecisionId;
 use kairos_primitives::time::{Sequence, UnixNanos};
 
-use crate::application::{
-    AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
-    CancelFundingObjective, CapitalDemandReceipt, CapitalEvent, CapitalSnapshot,
-    CapitalYieldCandidate, ConfirmManualCapitalTransfer, EvaluateCapitalGroup,
-    FundingObjectiveReceipt, ManualCapitalTransferPreview, MarkCapitalDeliveryStarted,
-    ObserveCapitalDemand, ObserveCapitalFacts, ObserveCapitalMemberAccount,
-    ObserveCapitalSettlement, PreviewManualCapitalTransfer, PublishFundingObjective,
-    RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
-    UpdateCapitalPolicy, UpdateCapitalRoute,
-};
 use crate::domain::{
-    CapitalAvailabilityView, CapitalDemandId, CapitalDemandRecord, CapitalDemandStatus,
-    CapitalFacts, CapitalFundingHorizon, CapitalGroupConfig, CapitalGroupId,
-    CapitalMemberAccountObservation, CapitalMemberReadinessRole, CapitalOperation,
+    CapitalAvailabilityView, CapitalDemandId, CapitalDemandReceipt, CapitalDemandRecord,
+    CapitalDemandStatus, CapitalEvent, CapitalFacts, CapitalFundingHorizon, CapitalGroupConfig,
+    CapitalGroupId, CapitalMemberAccountObservation, CapitalMemberReadinessRole, CapitalOperation,
     CapitalOperationId, CapitalOperationKind, CapitalOperationStatus,
     CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPlanStatus, CapitalPolicy,
     CapitalReadiness, CapitalRecoveryAction, CapitalReservation, CapitalReservationId,
-    CapitalReservationStatus, CapitalRouteId, CapitalRouteKind, CapitalSubmissionOutcome,
-    CapitalTransferRoute, FundingLocation, FundingObjectiveId, FundingObjectiveRecord,
-    FundingObjectiveStatus,
+    CapitalReservationStatus, CapitalRouteId, CapitalRouteKind, CapitalSnapshot,
+    CapitalSubmissionOutcome, CapitalTransferRoute, CapitalYieldCandidate, FundingLocation,
+    FundingObjectiveId, FundingObjectiveReceipt, FundingObjectiveRecord, FundingObjectiveStatus,
+    ManualCapitalTransferPreview,
+};
+use crate::services::input::{
+    AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
+    CancelFundingObjective, ConfirmManualCapitalTransfer, EvaluateCapitalGroup,
+    MarkCapitalDeliveryStarted, ObserveCapitalDemand, ObserveCapitalFacts,
+    ObserveCapitalMemberAccount, ObserveCapitalSettlement, PreviewManualCapitalTransfer,
+    PublishFundingObjective, RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired,
+    RecordCapitalSubmission, UpdateCapitalPolicy, UpdateCapitalRoute,
 };
 use crate::services::persistence::{CapitalJournalRecord, JournalCapitalStore};
 
@@ -375,13 +375,6 @@ impl CapitalActor {
         command: AuthorizeCapitalPlan,
     ) -> Result<CapitalPlan, ActorError> {
         self.validate_group(&command.capital_group_id)?;
-        if command.rebalance_decision_id.is_empty()
-            || command.rebalance_decision_id.trim() != command.rebalance_decision_id
-        {
-            return Err(ActorError::Invalid(
-                "rebalance_decision_id is required".into(),
-            ));
-        }
         if command.expires_at <= command.created_at {
             return Err(ActorError::Invalid(
                 "Capital plan expiry must follow creation".into(),
@@ -712,7 +705,8 @@ impl CapitalActor {
         self.validate_group(&command.capital_group_id)?;
         let preview = command.preview;
         if let Some(existing) = self.plans.get(&preview.plan_id) {
-            if existing.rebalance_decision_id == format!("manual-transfer:{}", preview.preview_id)
+            if existing.rebalance_decision_id.as_str()
+                == format!("manual-transfer:{}", preview.preview_id)
                 && existing.route_id == preview.route_id
                 && existing.amount == preview.amount
                 && existing.idempotency_key == preview.idempotency_key
@@ -767,7 +761,11 @@ impl CapitalActor {
         };
         let plan = CapitalPlan {
             plan_id: preview.plan_id,
-            rebalance_decision_id: format!("manual-transfer:{}", preview.preview_id),
+            rebalance_decision_id: StrategyDecisionId::new(format!(
+                "manual-transfer:{}",
+                preview.preview_id
+            ))
+            .map_err(|error| ActorError::Invalid(error.to_string()))?,
             route_id: preview.route_id,
             route_version: preview.route_version,
             route_kind: preview.route_kind,

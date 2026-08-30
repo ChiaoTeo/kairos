@@ -36,7 +36,8 @@ impl SourceRuntimeRegistry {
 
 pub(super) fn default_source_health(source_id: &str) -> SourceHealth {
     SourceHealth {
-        source_id: source_id.to_owned(),
+        source_id: kairos_primitives::reference::ReferenceSourceId::new(source_id)
+            .expect("registered Reference source identity is validated"),
         definition: None,
         status: SourceRuntimePhase::Idle,
         progress: SourceRuntimeProgress::unknown(),

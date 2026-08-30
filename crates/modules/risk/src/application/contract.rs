@@ -165,10 +165,7 @@ pub(crate) fn decision(
                 required_margin: amount(requirement.required_margin),
                 available_margin: amount(requirement.available_margin),
                 shortfall: amount(requirement.shortfall),
-                margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
-                    requirement.margin_rule_id.clone(),
-                )
-                .expect("risk margin rule identity is validated"),
+                margin_rule_id: requirement.margin_rule_id.clone(),
                 account_segment: requirement.account_segment.clone(),
                 collateral_asset: requirement.collateral_asset.clone(),
             }
@@ -220,7 +217,7 @@ pub(crate) fn authorize_from(
             account_segment: value.proposal.account_segment,
             collateral_asset: value.proposal.collateral_asset,
             reduce_only: value.proposal.reduce_only,
-            margin_rule_id: value.proposal.margin_rule_id.to_string(),
+            margin_rule_id: value.proposal.margin_rule_id,
         },
         at_unix_nanos: value.at_unix_nanos,
         reservation_ttl_nanos: value.reservation_ttl_nanos,

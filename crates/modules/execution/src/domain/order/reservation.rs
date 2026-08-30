@@ -21,7 +21,7 @@ pub struct FundingRequirementEvidence {
     pub required_margin: Money,
     pub available_margin: Money,
     pub shortfall: Money,
-    pub margin_rule_id: String,
+    pub margin_rule_id: kairos_primitives::risk::MarginRuleCode,
     pub risk_decision_id: kairos_primitives::risk::DecisionId,
     pub risk_policy_version: kairos_primitives::time::Generation,
     pub account_snapshot_watermark: UnixNanos,

@@ -1,12 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use kairos_conflux::{
-    BinanceRestConfig, BinanceSpotRestConnection, ConnectionKey, HistoricalBarQuery,
-    HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery, HistoricalWindow, MarketBar,
-    MarketEvent, MarketEventKind, MarketGreeks, MarketOrderBook, MarketQuote, MarketTrade,
-    MassiveInstrumentQuery as InstrumentQuery, MassiveRestConfig, MassiveRestConnection,
-};
-use kairos_credentials::CredentialStore;
 use kairos_primitives::decimal::{Price, Quantity, Rate};
 use kairos_primitives::market::{ObservationKind, Provider};
 use kairos_primitives::reference::InstrumentId;
@@ -27,6 +20,7 @@ use crate::domain::source::MarketFeedId;
 pub struct CliMarketApplication {
     workspace_root: Option<PathBuf>,
     direct_connection: Option<crate::services::direct::DirectMarketConnection>,
+    historical_connection: Option<crate::services::direct::DirectHistoricalConnection>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -304,6 +298,7 @@ impl CliMarketApplication {
         Self {
             workspace_root: workspace_root.map(Path::to_path_buf),
             direct_connection: None,
+            historical_connection: None,
         }
     }
 
@@ -314,11 +309,23 @@ impl CliMarketApplication {
         Self {
             workspace_root: workspace_root.map(Path::to_path_buf),
             direct_connection: Some(direct_connection),
+            historical_connection: None,
+        }
+    }
+
+    pub(crate) fn with_historical_connection(
+        workspace_root: Option<&Path>,
+        historical_connection: crate::services::direct::DirectHistoricalConnection,
+    ) -> Self {
+        Self {
+            workspace_root: workspace_root.map(Path::to_path_buf),
+            direct_connection: None,
+            historical_connection: Some(historical_connection),
         }
     }
 
     pub fn validate_market(
-        &self,
+        &mut self,
         market: ResolvedMarket,
     ) -> Result<CliMarketValidationResult, Box<dyn std::error::Error>> {
         let _ = self;
@@ -400,7 +407,7 @@ impl CliMarketApplication {
     }
 
     pub async fn download_historical(
-        &self,
+        &mut self,
         request: CliMarketHistoricalDownloadRequest,
     ) -> Result<CliMarketDatasetManifest, Box<dyn std::error::Error>> {
         match (request.provider, request.market_type) {
@@ -418,71 +425,8 @@ impl CliMarketApplication {
                 .into());
             },
         }
-        let endpoint = request
-            .endpoint
-            .clone()
-            .unwrap_or_else(|| match request.provider {
-                CliMarketHistoricalProvider::Massive => "https://api.massive.com".into(),
-                CliMarketHistoricalProvider::Binance => "https://data-api.binance.vision".into(),
-            });
         let start_time_unix_nanos = millis_to_nanos(request.start_unix_millis)?;
         let end_time_unix_nanos = millis_to_nanos(request.end_unix_millis)?;
-        let window = HistoricalWindow {
-            symbol: kairos_primitives::integration::ParticipantSymbol::new(request.symbol.clone())
-                .map_err(|error| error.to_string())?,
-            start_time_unix_nanos,
-            end_time_unix_nanos,
-        };
-        let bar_request = HistoricalBarRequest {
-            window: window.clone(),
-            interval: request.interval.clone(),
-            adjusted: Some(request.adjusted),
-        };
-        let events = match request.provider {
-            CliMarketHistoricalProvider::Massive => {
-                let api_key = if let Some(value) = request.api_key.clone() {
-                    value
-                } else {
-                    let workspace_root = self.workspace_root.as_ref().ok_or(
-                        "Massive download requires --workspace or the deprecated --api-key",
-                    )?;
-                    let workspace = Workspace::open(workspace_root)?;
-                    CredentialStore::for_workspace(&workspace)?
-                        .find_provider("massive", request.credential_id.as_deref())
-                        .and_then(|credential| credential.api_key_value())
-                        .ok_or("Massive workspace credential does not exist")?
-                };
-                let key = ConnectionKey::new("market-history")?;
-                let mut provider = MassiveRestConnection::new(
-                    key,
-                    MassiveRestConfig {
-                        environment: "public".into(),
-                        endpoint,
-                        api_key: secrecy::SecretString::new(api_key.into()),
-                        instrument_query: match request.market_type {
-                            CliMarketHistoricalMarketType::Equity => InstrumentQuery::equities(),
-                            CliMarketHistoricalMarketType::Option => InstrumentQuery::options(None),
-                            CliMarketHistoricalMarketType::Spot => {
-                                unreachable!("provider/market type compatibility was validated")
-                            },
-                        },
-                    },
-                )?;
-                fetch_historical(&mut provider, request.data_kind, &window, &bar_request).await?
-            },
-            CliMarketHistoricalProvider::Binance => {
-                let key = ConnectionKey::new("market-history")?;
-                let mut provider = BinanceSpotRestConnection::new(
-                    key,
-                    BinanceRestConfig {
-                        environment: "public".into(),
-                        endpoint,
-                        credential: None,
-                    },
-                )?;
-                fetch_historical(&mut provider, request.data_kind, &window, &bar_request).await?
-            },
-        };
         let instrument_id = request
             .instrument_id
             .clone()
@@ -498,6 +442,32 @@ impl CliMarketApplication {
                     .ok_or("Binance historical download requires canonical --market-id")?,
             )?,
         };
+        let observations = self
+            .historical_connection
+            .as_mut()
+            .ok_or("historical download was not composed with a provider connection")?
+            .fetch(
+                match request.data_kind {
+                    CliMarketHistoricalDataKind::Bar => {
+                        crate::services::direct::DirectHistoricalKind::Bar
+                    },
+                    CliMarketHistoricalDataKind::Quote => {
+                        crate::services::direct::DirectHistoricalKind::Quote
+                    },
+                    CliMarketHistoricalDataKind::Trade => {
+                        crate::services::direct::DirectHistoricalKind::Trade
+                    },
+                },
+                kairos_primitives::integration::ParticipantSymbol::new(request.symbol.clone())?,
+                start_time_unix_nanos,
+                end_time_unix_nanos,
+                request.interval.clone(),
+                request.adjusted,
+                aggregate_scope.clone(),
+                InstrumentId::new(&instrument_id)?,
+                Provider::new(request.provider.as_str())?,
+            )
+            .await?;
         let output = request.file.clone();
         if let Some(parent) = output
             .parent()
@@ -507,69 +477,7 @@ impl CliMarketApplication {
         }
         let mut body = String::new();
         let mut count = 0usize;
-        for event in events {
-            let observation = match event.kind {
-                MarketEventKind::Bar => {
-                    let bar = event.bar.ok_or("historical bar payload is missing")?;
-                    crate::MarketObservation::Bar(crate::Bar {
-                        scope: aggregate_scope.clone(),
-                        instrument_id: InstrumentId::new(&instrument_id)?,
-                        timeframe: bar.timeframe,
-                        open: bar.open,
-                        high: bar.high,
-                        low: bar.low,
-                        close: bar.close,
-                        volume: bar.volume,
-                        observed_at_unix_nanos: event.observed_at_unix_nanos,
-                        provider: Provider::new(request.provider.as_str())?,
-                        derivation: bar.derivation,
-                    })
-                },
-                MarketEventKind::Quote => crate::MarketObservation::Quote(crate::Quote {
-                    scope: aggregate_scope.clone(),
-                    instrument_id: InstrumentId::new(&instrument_id)?,
-                    bid_price: event.price,
-                    bid_quantity: event.quantity,
-                    ask_price: event.ask_price,
-                    ask_quantity: event.ask_quantity,
-                    bid_venue_code: event.venue.bid_exchange,
-                    ask_venue_code: event.venue.ask_exchange,
-                    tape: event.venue.tape,
-                    observed_at_unix_nanos: event.observed_at_unix_nanos,
-                    provider: Provider::new(request.provider.as_str())?,
-                }),
-                MarketEventKind::Trade => {
-                    if matches!(request.provider, CliMarketHistoricalProvider::Massive) {
-                        return Err(
-                            "Massive historical trades require an explicit venue-code to canonical-market join; observation quarantined"
-                                .into(),
-                        );
-                    }
-                    crate::MarketObservation::Trade(crate::Trade {
-                        scope: aggregate_scope.clone(),
-                        instrument_id: InstrumentId::new(&instrument_id)?,
-                        trade_id: event
-                            .sequence
-                            .map(|value| format!("massive:{}", value.get())),
-                        price: event.price.ok_or("historical trade price is missing")?,
-                        quantity: event
-                            .quantity
-                            .ok_or("historical trade quantity is missing")?,
-                        cost: None,
-                        aggressor_side: None,
-                        venue_code: event.venue.trade_exchange,
-                        tape: event.venue.tape,
-                        trf_id: event.venue.trf_id,
-                        participant_timestamp_unix_nanos: event
-                            .venue
-                            .participant_timestamp_unix_nanos,
-                        trf_timestamp_unix_nanos: event.venue.trf_timestamp_unix_nanos,
-                        observed_at_unix_nanos: event.observed_at_unix_nanos,
-                        provider: Provider::new(request.provider.as_str())?,
-                    })
-                },
-                _ => continue,
-            };
+        for observation in observations {
             body.push_str(&serde_json::to_string(&observation)?);
             body.push('\n');
             count += 1;
@@ -622,9 +530,12 @@ impl CliMarketApplication {
     }
 }
 
-fn quote_snapshot(value: MarketQuote, provider: &str) -> CliMarketQuoteResult {
+fn quote_snapshot(
+    value: crate::services::direct::DirectQuoteSnapshot,
+    provider: &str,
+) -> CliMarketQuoteResult {
     CliMarketQuoteResult {
-        symbol: value.symbol.to_string(),
+        symbol: value.symbol,
         data_type: "quote",
         provider: provider.to_owned(),
         bid_price: value.bid_price,
@@ -636,9 +547,12 @@ fn quote_snapshot(value: MarketQuote, provider: &str) -> CliMarketQuoteResult {
     }
 }
 
-fn trade_snapshot(value: MarketTrade, provider: &str) -> CliMarketTradeResult {
+fn trade_snapshot(
+    value: crate::services::direct::DirectTradeSnapshot,
+    provider: &str,
+) -> CliMarketTradeResult {
     CliMarketTradeResult {
-        symbol: value.symbol.to_string(),
+        symbol: value.symbol,
         data_type: "trade",
         provider: provider.to_owned(),
         price: value.price,
@@ -648,9 +562,12 @@ fn trade_snapshot(value: MarketTrade, provider: &str) -> CliMarketTradeResult {
     }
 }
 
-fn bar_snapshot(value: MarketBar, provider: &str) -> CliMarketBarResult {
+fn bar_snapshot(
+    value: crate::services::direct::DirectBarSnapshot,
+    provider: &str,
+) -> CliMarketBarResult {
     CliMarketBarResult {
-        symbol: value.symbol.to_string(),
+        symbol: value.symbol,
         data_type: "bar",
         provider: provider.to_owned(),
         interval: value.interval,
@@ -664,9 +581,12 @@ fn bar_snapshot(value: MarketBar, provider: &str) -> CliMarketBarResult {
     }
 }
 
-fn order_book_snapshot(value: MarketOrderBook, provider: &str) -> CliMarketOrderBookResult {
+fn order_book_snapshot(
+    value: crate::services::direct::DirectOrderBookSnapshot,
+    provider: &str,
+) -> CliMarketOrderBookResult {
     CliMarketOrderBookResult {
-        symbol: value.symbol.to_string(),
+        symbol: value.symbol,
         data_type: "order_book",
         provider: provider.to_owned(),
         bids: value.bids,
@@ -674,113 +594,21 @@ fn order_book_snapshot(value: MarketOrderBook, provider: &str) -> CliMarketOrder
     }
 }
 
-fn greeks_snapshot(value: MarketGreeks, provider: &str) -> CliMarketGreeksResult {
+fn greeks_snapshot(
+    value: crate::services::direct::DirectGreeksSnapshot,
+    provider: &str,
+) -> CliMarketGreeksResult {
     CliMarketGreeksResult {
-        symbol: value.symbol.to_string(),
+        symbol: value.symbol,
         data_type: "option_greeks",
         provider: provider.to_owned(),
-        expiry_unix_nanos: value.values.expiry_unix_nanos,
-        strike: value.values.strike,
-        delta: value.values.delta,
-        gamma: value.values.gamma,
-        vega: value.values.vega,
-        theta: value.values.theta,
-        implied_volatility: value.values.implied_volatility,
-    }
-}
-
-async fn fetch_historical<C>(
-    connection: &mut C,
-    kind: CliMarketHistoricalDataKind,
-    window: &HistoricalWindow,
-    bar_request: &HistoricalBarRequest,
-) -> Result<Vec<MarketEvent>, kairos_conflux::IntegrationError>
-where
-    C: HistoricalBarQuery + HistoricalQuoteQuery + HistoricalTradeQuery,
-{
-    let venue = kairos_conflux::MarketVenueEvidence::default();
-    match kind {
-        CliMarketHistoricalDataKind::Bar => Ok(connection
-            .fetch_bars(bar_request)
-            .await?
-            .into_iter()
-            .map(|bar| MarketEvent {
-                symbol: bar.symbol,
-                kind: MarketEventKind::Bar,
-                price: None,
-                quantity: None,
-                rate: None,
-                ask_price: None,
-                ask_quantity: None,
-                bids: Vec::new(),
-                asks: Vec::new(),
-                bar: Some(kairos_conflux::Bar {
-                    timeframe: bar.interval,
-                    open: bar.open,
-                    high: bar.high,
-                    low: bar.low,
-                    close: bar.close,
-                    volume: bar.volume,
-                    derivation: bar.derivation,
-                }),
-                greeks: None,
-                first_sequence: None,
-                last_sequence: None,
-                sequence: None,
-                observed_at_unix_nanos: bar.opened_at_unix_nanos,
-                venue: venue.clone(),
-            })
-            .collect()),
-        CliMarketHistoricalDataKind::Quote => Ok(connection
-            .fetch_quotes(window)
-            .await?
-            .into_iter()
-            .map(|quote| MarketEvent {
-                symbol: quote.symbol,
-                kind: MarketEventKind::Quote,
-                price: quote.bid_price.or(quote.last_price),
-                quantity: quote.bid_quantity,
-                rate: None,
-                ask_price: quote.ask_price,
-                ask_quantity: quote.ask_quantity,
-                bids: Vec::new(),
-                asks: Vec::new(),
-                bar: None,
-                greeks: None,
-                first_sequence: None,
-                last_sequence: None,
-                sequence: None,
-                observed_at_unix_nanos: quote.observed_at_unix_nanos,
-                venue: venue.clone(),
-            })
-            .collect()),
-        CliMarketHistoricalDataKind::Trade => Ok(connection
-            .fetch_trades(window)
-            .await?
-            .into_iter()
-            .map(|trade| MarketEvent {
-                symbol: trade.symbol,
-                kind: MarketEventKind::Trade,
-                price: Some(trade.price),
-                quantity: Some(trade.quantity),
-                rate: None,
-                ask_price: None,
-                ask_quantity: None,
-                bids: Vec::new(),
-                asks: Vec::new(),
-                bar: None,
-                greeks: None,
-                first_sequence: None,
-                last_sequence: None,
-                sequence: trade
-                    .participant_trade_id
-                    .as_deref()
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .map(Into::into),
-                observed_at_unix_nanos: trade.event_at_unix_nanos,
-                venue: venue.clone(),
-            })
-            .collect()),
+        expiry_unix_nanos: value.expiry_unix_nanos,
+        strike: value.strike,
+        delta: value.delta,
+        gamma: value.gamma,
+        vega: value.vega,
+        theta: value.theta,
+        implied_volatility: value.implied_volatility,
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::application::{ExecutionEvent, ExecutionSnapshot, IntentEvent};
+use crate::domain::{ExecutionEvent, ExecutionSnapshot, IntentEvent};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionOutboxEvent {

@@ -30,7 +30,7 @@ impl MarketApplication {
             .map_err(MarketError::Invalid)?;
         Ok(Self {
             actor,
-            conflux: super::super::conflux::MarketConfluxState::default(),
+            conflux: super::super::process::MarketConfluxState::default(),
         })
     }
 
@@ -47,7 +47,7 @@ impl MarketApplication {
         Ok(Self {
             actor: MarketActor::restore(checkpoint, max_dynamic_members, source_input_capacity)
                 .map_err(MarketError::Invalid)?,
-            conflux: super::super::conflux::MarketConfluxState::default(),
+            conflux: super::super::process::MarketConfluxState::default(),
         })
     }
 

@@ -49,7 +49,11 @@ fn reference_application_layout_separates_use_cases_cli_and_process_facades() {
             .is_file()
     );
     assert!(root.join("src/application/queries/model.rs").is_file());
-    assert!(services.contains("pub(crate) mod diagnostics;"));
+    assert!(!services.contains("mod diagnostics;"));
+    assert!(
+        root.join("src/application/process/control/diagnostics.rs")
+            .is_file()
+    );
 
     for obsolete in [
         "src/application/app.rs",

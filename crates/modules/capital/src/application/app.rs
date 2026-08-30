@@ -1,16 +1,21 @@
+use kairos_primitives::capital::CapitalSourceAuthority;
 use kairos_primitives::decimal::Quantity;
-use kairos_primitives::runtime::IdempotencyKey;
-use kairos_primitives::time::{Generation, Sequence, UnixNanos};
-use serde::{Deserialize, Serialize};
+use kairos_primitives::runtime::{IdempotencyKey, StrategyDecisionId};
+use kairos_primitives::time::UnixNanos;
 
 use crate::domain::{
     CapitalAvailabilityView, CapitalDemand, CapitalDemandId, CapitalDemandRecord, CapitalFacts,
     CapitalGroupId, CapitalMemberAccountObservation, CapitalOperation,
-    CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPolicy,
-    CapitalReservation, CapitalRouteId, CapitalSubmissionOutcome, CapitalTransferRoute,
-    FundingLocation, FundingObjective, FundingObjectiveId, FundingObjectiveRecord,
+    CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPolicy, CapitalRouteId,
+    CapitalSubmissionOutcome, CapitalTransferRoute, FundingLocation, FundingObjective,
+    FundingObjectiveId,
+};
+pub use crate::domain::{
+    CapitalDemandReceipt, CapitalEvent, CapitalSnapshot, CapitalYieldCandidate,
+    FundingObjectiveReceipt, ManualCapitalTransferPreview,
 };
 use crate::services::actor::{ActorError, CapitalActor};
+use crate::services::input as actor_input;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublishFundingObjective {
@@ -41,12 +46,6 @@ pub struct ObserveCapitalDemand {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExpireCapitalDemands {
     pub observed_at: UnixNanos,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CapitalDemandReceipt {
-    Accepted(CapitalDemandRecord),
-    Duplicate(CapitalDemandRecord),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,34 +88,9 @@ pub struct UpdateCapitalRoute {
 pub struct AuthorizeCapitalPlan {
     pub capital_group_id: CapitalGroupId,
     pub plan_id: CapitalPlanId,
-    pub rebalance_decision_id: String,
+    pub rebalance_decision_id: StrategyDecisionId,
     pub route_id: CapitalRouteId,
-    pub source_authority: String,
-    pub created_at: UnixNanos,
-    pub expires_at: UnixNanos,
-}
-
-/// Server-produced evidence for one operator-requested internal transfer.
-///
-/// Confirmation must present this value unchanged. The Actor rechecks all
-/// mutable facts before it reserves funds, so a preview never authorizes a
-/// transfer after its route or Account balance has changed.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct ManualCapitalTransferPreview {
-    pub preview_id: String,
-    pub plan_id: CapitalPlanId,
-    pub idempotency_key: IdempotencyKey,
-    pub route_id: CapitalRouteId,
-    pub route_version: Generation,
-    pub route_kind: crate::domain::CapitalRouteKind,
-    pub source: FundingLocation,
-    pub destination: FundingLocation,
-    pub amount: Quantity,
-    pub source_authority: String,
-    pub source_account_watermark: Sequence,
-    pub destination_account_watermark: Sequence,
-    pub source_observed_available: Quantity,
-    pub destination_observed_available: Quantity,
+    pub source_authority: CapitalSourceAuthority,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
 }
@@ -130,7 +104,7 @@ pub struct PreviewManualCapitalTransfer {
     pub source: FundingLocation,
     pub destination: FundingLocation,
     pub amount: Quantity,
-    pub source_authority: String,
+    pub source_authority: CapitalSourceAuthority,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
 }
@@ -142,17 +116,6 @@ pub struct ConfirmManualCapitalTransfer {
     pub confirmed_at: UnixNanos,
 }
 
-/// Deterministic amount that may leave a liquid balance location without
-/// crossing its effective liquidity target or an active Capital reservation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CapitalYieldCandidate {
-    pub route_id: CapitalRouteId,
-    pub product_id: String,
-    pub amount: kairos_primitives::decimal::Quantity,
-    pub account_watermark: Sequence,
-    pub risk_watermark: Sequence,
-}
-
 /// Participant product evidence used when authorizing an Earn subscription.
 /// The Actor rechecks its own balance, policy, horizon, route, and reservation
 /// state; this evidence never authorizes a movement by itself.
@@ -160,9 +123,9 @@ pub struct CapitalYieldCandidate {
 pub struct AuthorizeEarnSubscriptionPlan {
     pub capital_group_id: CapitalGroupId,
     pub plan_id: CapitalPlanId,
-    pub rebalance_decision_id: String,
+    pub rebalance_decision_id: StrategyDecisionId,
     pub route_id: CapitalRouteId,
-    pub source_authority: String,
+    pub source_authority: CapitalSourceAuthority,
     pub previewed_amount: kairos_primitives::decimal::Quantity,
     pub preview_observed_at: UnixNanos,
     pub eligible: bool,
@@ -224,81 +187,6 @@ pub struct ObserveCapitalSettlement {
     pub observed_at: UnixNanos,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FundingObjectiveReceipt {
-    Accepted(FundingObjectiveRecord),
-    Duplicate(FundingObjectiveRecord),
-    Cancelled(FundingObjectiveRecord),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum CapitalEvent {
-    FundingObjectiveChanged {
-        record: FundingObjectiveRecord,
-        event_sequence: Sequence,
-    },
-    CapitalDemandChanged {
-        record: CapitalDemandRecord,
-        event_sequence: Sequence,
-    },
-    PolicyChanged {
-        policy: CapitalPolicy,
-        event_sequence: Sequence,
-        occurred_at: UnixNanos,
-    },
-    FactsObserved {
-        facts: CapitalFacts,
-        event_sequence: Sequence,
-    },
-    AvailabilityEvaluated {
-        availability: Vec<CapitalAvailabilityView>,
-        event_sequence: Sequence,
-    },
-    RouteChanged {
-        route: CapitalTransferRoute,
-        event_sequence: Sequence,
-        occurred_at: UnixNanos,
-    },
-    PlanAuthorized {
-        plan: Box<CapitalPlan>,
-        reservation: Box<CapitalReservation>,
-        event_sequence: Sequence,
-    },
-    PlanStateChanged {
-        plan: Box<CapitalPlan>,
-        reservation: Box<CapitalReservation>,
-        operation: Box<CapitalOperation>,
-        event_sequence: Sequence,
-    },
-    PlanExpired {
-        plan: Box<CapitalPlan>,
-        reservation: Box<CapitalReservation>,
-        operation: Option<Box<CapitalOperation>>,
-        event_sequence: Sequence,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct CapitalSnapshot {
-    pub capital_group_id: CapitalGroupId,
-    pub strategy_id: kairos_primitives::runtime::StrategyId,
-    pub environment: String,
-    pub membership_version: kairos_primitives::time::Generation,
-    pub members: Vec<crate::domain::CapitalGroupMember>,
-    pub event_sequence: Sequence,
-    pub journal_sequence: Sequence,
-    pub objectives: Vec<FundingObjectiveRecord>,
-    pub demands: Vec<CapitalDemandRecord>,
-    pub policies: Vec<CapitalPolicy>,
-    pub facts: Vec<CapitalFacts>,
-    pub availability: Vec<CapitalAvailabilityView>,
-    pub routes: Vec<CapitalTransferRoute>,
-    pub plans: Vec<CapitalPlan>,
-    pub reservations: Vec<CapitalReservation>,
-    pub operations: Vec<CapitalOperation>,
-    pub pending_events: Vec<CapitalEvent>,
-}
-
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum CapitalError {
     #[error("invalid capital request: {0}")]
@@ -324,14 +212,27 @@ impl CapitalApplication {
         &mut self,
         command: PublishFundingObjective,
     ) -> Result<FundingObjectiveReceipt, CapitalError> {
-        self.actor.publish(command).map_err(map_actor_error)
+        self.actor
+            .publish(actor_input::PublishFundingObjective {
+                capital_group_id: command.capital_group_id,
+                objective: command.objective,
+                observed_at: command.observed_at,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn cancel_funding_objective(
         &mut self,
         command: CancelFundingObjective,
     ) -> Result<FundingObjectiveReceipt, CapitalError> {
-        self.actor.cancel(command).map_err(map_actor_error)
+        self.actor
+            .cancel(actor_input::CancelFundingObjective {
+                capital_group_id: command.capital_group_id,
+                objective_id: command.objective_id,
+                expected_version: command.expected_version,
+                observed_at: command.observed_at,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn expire_funding_objectives(
@@ -347,7 +248,12 @@ impl CapitalApplication {
         &mut self,
         command: ObserveCapitalDemand,
     ) -> Result<CapitalDemandReceipt, CapitalError> {
-        self.actor.observe_demand(command).map_err(map_actor_error)
+        self.actor
+            .observe_demand(actor_input::ObserveCapitalDemand {
+                capital_group_id: command.capital_group_id,
+                demand: command.demand,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn expire_demands(&mut self, command: ExpireCapitalDemands) -> Result<usize, CapitalError> {
@@ -361,11 +267,22 @@ impl CapitalApplication {
     }
 
     pub fn update_policy(&mut self, command: UpdateCapitalPolicy) -> Result<(), CapitalError> {
-        self.actor.update_policy(command).map_err(map_actor_error)
+        self.actor
+            .update_policy(actor_input::UpdateCapitalPolicy {
+                capital_group_id: command.capital_group_id,
+                policy: command.policy,
+                updated_at: command.updated_at,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn observe_facts(&mut self, command: ObserveCapitalFacts) -> Result<(), CapitalError> {
-        self.actor.observe_facts(command).map_err(map_actor_error)
+        self.actor
+            .observe_facts(actor_input::ObserveCapitalFacts {
+                capital_group_id: command.capital_group_id,
+                facts: command.facts,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn observe_member_account(
@@ -373,7 +290,10 @@ impl CapitalApplication {
         command: ObserveCapitalMemberAccount,
     ) -> Result<(), CapitalError> {
         self.actor
-            .observe_member_account(command)
+            .observe_member_account(actor_input::ObserveCapitalMemberAccount {
+                capital_group_id: command.capital_group_id,
+                observation: command.observation,
+            })
             .map_err(map_actor_error)
     }
 
@@ -381,7 +301,11 @@ impl CapitalApplication {
         &mut self,
         command: EvaluateCapitalGroup,
     ) -> Result<Vec<CapitalAvailabilityView>, CapitalError> {
-        self.actor.evaluate(command).map_err(map_actor_error)
+        self.actor
+            .evaluate(actor_input::EvaluateCapitalGroup {
+                evaluated_at: command.evaluated_at,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn availability(&self, location: &FundingLocation) -> Option<&CapitalAvailabilityView> {
@@ -389,14 +313,30 @@ impl CapitalApplication {
     }
 
     pub fn update_route(&mut self, command: UpdateCapitalRoute) -> Result<(), CapitalError> {
-        self.actor.update_route(command).map_err(map_actor_error)
+        self.actor
+            .update_route(actor_input::UpdateCapitalRoute {
+                capital_group_id: command.capital_group_id,
+                route: command.route,
+                updated_at: command.updated_at,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn authorize_plan(
         &mut self,
         command: AuthorizeCapitalPlan,
     ) -> Result<CapitalPlan, CapitalError> {
-        self.actor.authorize_plan(command).map_err(map_actor_error)
+        self.actor
+            .authorize_plan(actor_input::AuthorizeCapitalPlan {
+                capital_group_id: command.capital_group_id,
+                plan_id: command.plan_id,
+                rebalance_decision_id: command.rebalance_decision_id,
+                route_id: command.route_id,
+                source_authority: command.source_authority,
+                created_at: command.created_at,
+                expires_at: command.expires_at,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn preview_manual_transfer(
@@ -404,7 +344,18 @@ impl CapitalApplication {
         command: PreviewManualCapitalTransfer,
     ) -> Result<ManualCapitalTransferPreview, CapitalError> {
         self.actor
-            .preview_manual_transfer(command)
+            .preview_manual_transfer(actor_input::PreviewManualCapitalTransfer {
+                capital_group_id: command.capital_group_id,
+                preview_id: command.preview_id,
+                plan_id: command.plan_id,
+                idempotency_key: command.idempotency_key,
+                source: command.source,
+                destination: command.destination,
+                amount: command.amount,
+                source_authority: command.source_authority,
+                created_at: command.created_at,
+                expires_at: command.expires_at,
+            })
             .map_err(map_actor_error)
     }
 
@@ -413,7 +364,11 @@ impl CapitalApplication {
         command: ConfirmManualCapitalTransfer,
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor
-            .confirm_manual_transfer(command)
+            .confirm_manual_transfer(actor_input::ConfirmManualCapitalTransfer {
+                capital_group_id: command.capital_group_id,
+                preview: command.preview,
+                confirmed_at: command.confirmed_at,
+            })
             .map_err(map_actor_error)
     }
 
@@ -432,7 +387,20 @@ impl CapitalApplication {
         command: AuthorizeEarnSubscriptionPlan,
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor
-            .authorize_earn_subscription(command)
+            .authorize_earn_subscription(actor_input::AuthorizeEarnSubscriptionPlan {
+                capital_group_id: command.capital_group_id,
+                plan_id: command.plan_id,
+                rebalance_decision_id: command.rebalance_decision_id,
+                route_id: command.route_id,
+                source_authority: command.source_authority,
+                previewed_amount: command.previewed_amount,
+                preview_observed_at: command.preview_observed_at,
+                eligible: command.eligible,
+                immediately_redeemable: command.immediately_redeemable,
+                redemption_quota_remaining: command.redemption_quota_remaining,
+                created_at: command.created_at,
+                expires_at: command.expires_at,
+            })
             .map_err(map_actor_error)
     }
 
@@ -446,7 +414,13 @@ impl CapitalApplication {
         &mut self,
         command: BeginCapitalOperation,
     ) -> Result<CapitalOperation, CapitalError> {
-        self.actor.begin_operation(command).map_err(map_actor_error)
+        self.actor
+            .begin_operation(actor_input::BeginCapitalOperation {
+                capital_group_id: command.capital_group_id,
+                plan_id: command.plan_id,
+                at: command.at,
+            })
+            .map_err(map_actor_error)
     }
 
     pub fn mark_delivery_started(
@@ -454,7 +428,11 @@ impl CapitalApplication {
         command: MarkCapitalDeliveryStarted,
     ) -> Result<CapitalOperation, CapitalError> {
         self.actor
-            .mark_delivery_started(command)
+            .mark_delivery_started(actor_input::MarkCapitalDeliveryStarted {
+                capital_group_id: command.capital_group_id,
+                plan_id: command.plan_id,
+                at: command.at,
+            })
             .map_err(map_actor_error)
     }
 
@@ -463,7 +441,14 @@ impl CapitalApplication {
         command: RecordCapitalSubmission,
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor
-            .record_submission(command)
+            .record_submission(actor_input::RecordCapitalSubmission {
+                capital_group_id: command.capital_group_id,
+                plan_id: command.plan_id,
+                outcome: command.outcome,
+                participant_operation_id: command.participant_operation_id,
+                failure_reason: command.failure_reason,
+                at: command.at,
+            })
             .map_err(map_actor_error)
     }
 
@@ -472,7 +457,15 @@ impl CapitalApplication {
         command: RecordCapitalParticipantStatus,
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor
-            .record_participant_status(command)
+            .record_participant_status(actor_input::RecordCapitalParticipantStatus {
+                capital_group_id: command.capital_group_id,
+                plan_id: command.plan_id,
+                state: command.state,
+                participant_operation_id: command.participant_operation_id,
+                participant_state: command.participant_state,
+                failure_reason: command.failure_reason,
+                at: command.at,
+            })
             .map_err(map_actor_error)
     }
 
@@ -481,7 +474,12 @@ impl CapitalApplication {
         command: RecordCapitalRecoveryRequired,
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor
-            .record_recovery_required(command)
+            .record_recovery_required(actor_input::RecordCapitalRecoveryRequired {
+                capital_group_id: command.capital_group_id,
+                plan_id: command.plan_id,
+                reason: command.reason,
+                at: command.at,
+            })
             .map_err(map_actor_error)
     }
 
@@ -490,7 +488,13 @@ impl CapitalApplication {
         command: ObserveCapitalSettlement,
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor
-            .observe_settlement(command)
+            .observe_settlement(actor_input::ObserveCapitalSettlement {
+                capital_group_id: command.capital_group_id,
+                plan_id: command.plan_id,
+                source: command.source,
+                destination: command.destination,
+                observed_at: command.observed_at,
+            })
             .map_err(map_actor_error)
     }
 

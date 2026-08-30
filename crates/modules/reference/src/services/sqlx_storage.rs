@@ -336,12 +336,28 @@ mod tests {
         assert_eq!(stats.active_markets, 1);
         assert_eq!(
             reader
-                .records(kairos_reference_contract::ReferenceCollection::Markets, 10)
+                .read_session()
+                .unwrap()
+                .markets(&kairos_reference_contract::MarketSearchQuery {
+                    page: kairos_reference_contract::ReferencePage {
+                        limit: Some(10),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
                 .unwrap()
                 .len(),
             1
         );
-        assert!(reader.record("market:binance:btc-usdt").unwrap().is_some());
+        assert!(
+            reader
+                .market(
+                    &kairos_primitives::reference::MarketId::new("market:binance:btc-usdt",)
+                        .unwrap(),
+                )
+                .unwrap()
+                .is_some()
+        );
         let catalog_page = reader
             .market_catalog(&kairos_reference_contract::MarketCatalogQuery {
                 venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
@@ -915,7 +931,15 @@ mod tests {
         assert_eq!(reader.stats().unwrap().assets, RECORDS as u64);
         assert_eq!(
             reader
-                .records(kairos_reference_contract::ReferenceCollection::Assets, 128)
+                .read_session()
+                .unwrap()
+                .assets(&kairos_reference_contract::AssetCatalogQuery {
+                    page: kairos_reference_contract::ReferencePage {
+                        limit: Some(128),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
                 .unwrap()
                 .len(),
             128

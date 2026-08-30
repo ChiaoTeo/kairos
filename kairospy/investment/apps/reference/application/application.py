@@ -10,10 +10,14 @@ from kairospy.contracts.reference.events import ReferenceEventVariant
 from kairospy.infrastructure.protocol import LiveEventSource
 from kairospy.contracts.reference import (
     ReferenceAsset,
+    ReferenceCatalogSnapshot,
     ReferenceExchange,
+    ReferenceHealthResponse,
     ReferenceInstrument,
     ReferenceListing,
     ReferenceMarket,
+    ReferenceOptionCoverage,
+    ReferenceRuntimeStatusResponse,
 )
 
 if TYPE_CHECKING:
@@ -277,11 +281,11 @@ class ReferenceApplication:
 
         return self._event_sequence
 
-    def health(self) -> dict[str, Any]:
-        return dict(self._require_client().health())
+    def health(self) -> ReferenceHealthResponse:
+        return self._require_client().health()
 
-    def runtime_status(self) -> dict[str, Any]:
-        return dict(self._require_client().runtime_status())
+    def runtime_status(self) -> ReferenceRuntimeStatusResponse:
+        return self._require_client().runtime_status()
 
     def plan_catalog_setup(self, goal: Mapping[str, object]) -> dict[str, Any]:
         return dict(self._require_client().plan_catalog_setup(goal))
@@ -294,8 +298,8 @@ class ReferenceApplication:
     def providers(self) -> dict[str, Any]:
         return dict(self._require_client().providers())
 
-    def catalog(self) -> dict[str, Any]:
-        return dict(self._require_client().catalog())
+    def catalog(self) -> ReferenceCatalogSnapshot:
+        return self._require_client().catalog()
 
     def refresh(self, *, source: str | None = None) -> dict[str, Any]:
         return dict(self._require_client().refresh(source=source))
@@ -303,8 +307,8 @@ class ReferenceApplication:
     def set_source_paused(self, source: str, paused: bool) -> dict[str, Any]:
         return dict(self._require_client().set_source_paused(source, paused))
 
-    def option_coverage(self) -> dict[str, Any]:
-        return dict(self._require_client().option_coverage())
+    def option_coverage(self) -> ReferenceOptionCoverage:
+        return self._require_client().option_coverage()
 
     def set_option_underlying(self, underlying: str, enabled: bool) -> dict[str, Any]:
         return dict(self._require_client().set_option_underlying(underlying, enabled))

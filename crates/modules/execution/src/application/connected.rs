@@ -4,8 +4,6 @@
 //! current or call typed Execution runtime control. Standalone order CLI
 //! commands must use `CliExecutionApplication`.
 
-use std::path::PathBuf;
-
 use kairos_execution_contract::{
     CancelOrderRequest, ExecutionClient, ExecutionCommandStatus, ExecutionControlRpcClient,
     ExecutionOrderAuditQuery, ExecutionOrderAuditResponse, ExecutionReconcileResponse,
@@ -85,29 +83,8 @@ pub struct ConnectedExecutionApplication {
 }
 
 impl ConnectedExecutionApplication {
-    pub fn connect(
-        socket: PathBuf,
-        view_root: PathBuf,
-        identity: InstanceIdentity,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        system.install_execution_connection("execution", socket, Some(view_root))?;
-        let client = system
-            .execution_client("execution")
-            .ok_or("managed Execution client is missing: execution")?;
-        Ok(Self { client, identity })
-    }
-
-    pub fn connect_control(
-        socket: PathBuf,
-        identity: InstanceIdentity,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        system.install_execution_connection("execution", socket, None)?;
-        let client = system
-            .execution_client("execution")
-            .ok_or("managed Execution client is missing: execution")?;
-        Ok(Self { client, identity })
+    pub(crate) const fn new(client: ExecutionClient, identity: InstanceIdentity) -> Self {
+        Self { client, identity }
     }
 
     pub fn active_orders(

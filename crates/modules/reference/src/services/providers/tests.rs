@@ -403,7 +403,7 @@ async fn actor_commits_normalized_composite_facts_without_catalog_materializatio
     assert_eq!(result.event_sequence.get(), 1);
     assert_eq!(result.events.len(), 1);
     let reader = kairos_reference_contract::ReferenceCatalog::open(&path).unwrap();
-    assert!(reader.record("exchange:a").unwrap().is_some());
+    assert!(reader.exchange("exchange:a").unwrap().is_some());
 }
 
 #[async_trait::async_trait(?Send)]
@@ -2089,7 +2089,8 @@ fn obsolete_provider_snapshot_shape_is_not_eligible_for_fallback() {
     ));
 
     let mut provider_owned = canonical;
-    provider_owned.source_id = Some("binance-spot".into());
+    provider_owned.source_id =
+        Some(kairos_primitives::reference::ReferenceSourceId::new("binance-spot").unwrap());
     assert!(!provider_catalog_uses_current_canonical_shape(
         &ProviderCatalog {
             instruments: vec![provider_owned],

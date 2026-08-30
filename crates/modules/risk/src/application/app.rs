@@ -1,13 +1,14 @@
 use std::time::Duration;
 
-use kairos_primitives::risk::{DecisionId, ReservationId};
-use kairos_primitives::runtime::{ActorId, RequestId};
-use kairos_primitives::time::{Generation, Sequence, UnixNanos};
-use serde::{Deserialize, Serialize};
+use kairos_primitives::risk::ReservationId;
+use kairos_primitives::time::UnixNanos;
+use serde::Deserialize;
 
 use crate::domain::{
-    Allocation, AuthorizeRequest, CircuitScope, CircuitState, DependencyWatermarks, ReasonCode,
-    Reservation, ReservationStatus, RiskPolicy,
+    AuthorizeRequest, CircuitScope, CircuitState, Reservation, ReservationStatus, RiskPolicy,
+};
+pub use crate::domain::{
+    FundingRequirement, LimitView, RiskCurrentView, RiskDecision, RiskEvent, RiskSnapshot,
 };
 use crate::services::actor::{ActorError, RiskActor};
 
@@ -52,95 +53,6 @@ pub struct OpenCircuit {
 pub struct CloseCircuit {
     pub scope: CircuitScope,
     pub at_unix_nanos: UnixNanos,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RiskDecision {
-    pub decision_id: DecisionId,
-    pub request_id: RequestId,
-    pub allowed: bool,
-    pub degraded: bool,
-    pub reason_codes: Vec<ReasonCode>,
-    pub violations: Vec<String>,
-    pub allocations: Vec<Allocation>,
-    pub reservation: Option<Reservation>,
-    pub policy_version: Generation,
-    pub dependency_watermarks: DependencyWatermarks,
-    /// External account/market/portfolio facts used during evaluation.
-    pub context: Option<crate::domain::RiskContext>,
-    /// Present when the proposal requires initial margin. It is returned for
-    /// both allowed and rejected decisions so Capital demand can be derived
-    /// without parsing a human-readable violation.
-    pub funding_requirement: Option<FundingRequirement>,
-    pub evaluated_at_unix_nanos: UnixNanos,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct FundingRequirement {
-    pub required_margin: crate::domain::Amount,
-    pub available_margin: crate::domain::Amount,
-    pub shortfall: crate::domain::Amount,
-    pub margin_rule_id: String,
-    pub account_segment: kairos_primitives::account::SegmentKey,
-    pub collateral_asset: kairos_primitives::reference::Currency,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum RiskEvent {
-    PolicyActivated {
-        policy: RiskPolicy,
-        event_sequence: Sequence,
-    },
-    ReservationChanged {
-        reservation: Reservation,
-        event_sequence: Sequence,
-    },
-    DecisionEvaluated {
-        decision: RiskDecision,
-        account_id: kairos_primitives::account::AccountId,
-        strategy_id: kairos_primitives::runtime::StrategyId,
-        instrument_id: kairos_primitives::reference::InstrumentId,
-        event_sequence: Sequence,
-    },
-    CircuitChanged {
-        circuit: CircuitState,
-        event_sequence: Sequence,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LimitView {
-    pub policy: RiskPolicy,
-    pub used: crate::domain::Amount,
-    pub reserved: crate::domain::Amount,
-    pub available: crate::domain::Amount,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RiskSnapshot {
-    pub actor_id: ActorId,
-    pub generation: Generation,
-    pub event_sequence: Sequence,
-    pub policy_version: Generation,
-    pub limits: Vec<LimitView>,
-    pub reservations: Vec<Reservation>,
-    pub watermarks: DependencyWatermarks,
-    pub circuits: Vec<CircuitState>,
-}
-
-/// Read-only state published through the owner-scoped indexed view.
-///
-/// The applied event sequence is a state watermark, not a replay cursor.
-/// Event delivery remains owned by Aeron or an explicit journal.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RiskCurrentView {
-    pub actor_id: ActorId,
-    pub generation: Generation,
-    pub event_sequence: Sequence,
-    pub policy_version: Generation,
-    pub limits: Vec<LimitView>,
-    pub reservations: Vec<Reservation>,
-    pub circuits: Vec<CircuitState>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -290,11 +202,20 @@ impl RiskApplication {
     }
 
     pub fn open_circuit(&mut self, request: OpenCircuit) -> Result<CircuitState, RiskError> {
-        self.actor.open_circuit(request).map_err(map_actor_error)
+        self.actor
+            .open_circuit(
+                request.scope,
+                request.at_unix_nanos,
+                request.reset_at_unix_nanos,
+                request.reason,
+            )
+            .map_err(map_actor_error)
     }
 
     pub fn close_circuit(&mut self, request: CloseCircuit) -> Result<CircuitState, RiskError> {
-        self.actor.close_circuit(request).map_err(map_actor_error)
+        self.actor
+            .close_circuit(request.scope, request.at_unix_nanos)
+            .map_err(map_actor_error)
     }
 
     pub fn circuits(&self) -> Vec<CircuitState> {
@@ -322,7 +243,13 @@ impl RiskApplication {
     }
 
     pub fn resize(&mut self, request: ResizeReservation) -> Result<Reservation, RiskError> {
-        self.actor.resize(request).map_err(map_actor_error)
+        self.actor
+            .resize(
+                &request.reservation_id,
+                request.amount,
+                request.at_unix_nanos,
+            )
+            .map_err(map_actor_error)
     }
 
     pub fn expire(&mut self, request: ExpireReservations) -> Result<usize, RiskError> {

@@ -265,7 +265,7 @@ impl ExecutionApplication {
         let order_id = OrderId::new(format!(
             "{}:hedge:decision:{}",
             intent_id,
-            run.decision_sequence.saturating_add(1)
+            run.decision_sequence.get().saturating_add(1)
         ))
         .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
         let decision = decide_maker_taker_hedge(
@@ -396,7 +396,7 @@ impl ExecutionApplication {
         let order_id = OrderId::new(format!(
             "{}:unwind:decision:{}",
             intent_id,
-            run.decision_sequence.saturating_add(1)
+            run.decision_sequence.get().saturating_add(1)
         ))
         .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
         let decision_time = run
@@ -442,7 +442,7 @@ impl ExecutionApplication {
         let request = SubmitOrder {
             order_id,
             intent_id: Some(state.intent.intent_id.clone()),
-            strategy_id: Some(typed_strategy_id(state.intent.strategy_id.clone())),
+            strategy_id: Some(state.intent.strategy_id.clone()),
             account_id: leader_order.account_id.clone(),
             segment_key: leader_order.segment_key.clone(),
             instrument_id: leader_order.instrument_id.clone(),
@@ -595,7 +595,7 @@ impl ExecutionApplication {
         let request = SubmitOrder {
             order_id: OrderId::new(order_id).expect("validated compensating order ID"),
             intent_id: Some(IntentId::new(intent_id).expect("validated intent ID")),
-            strategy_id: Some(typed_strategy_id(state.intent.strategy_id.clone())),
+            strategy_id: Some(state.intent.strategy_id.clone()),
             account_id: template.account_id.clone(),
             segment_key: template.segment_key.clone(),
             instrument_id: template.instrument_id.clone(),

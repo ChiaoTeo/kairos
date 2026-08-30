@@ -249,8 +249,10 @@ class ResearchApplication:
         """Validate and persist Gate 2 evidence in the bound Project."""
 
         catalog = self._catalog_for(spec)
-        data_gate = DataTrustGateApplication(catalog).report(
-            spec.dataset_set.composition_hash
+        data_gate = (
+            DataTrustGateApplication(catalog)
+            .report(spec.dataset_set.composition_hash)
+            .as_dict()
         )
         plan_lock = self.plan(spec.plan_hash)
         expected_plan = json.loads(json.dumps(spec.as_dict(), sort_keys=True))

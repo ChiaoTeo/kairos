@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from rich.console import Console
 
+from kairospy.contracts.reference import ReferenceRuntimeStatusResponse
 from kairospy.strategy.apps.agent.application.model_connections import (
     ModelProviderConnectionApplication,
 )
@@ -667,77 +668,84 @@ def test_uninitialized_reference_search_offers_guided_preparation(
     assert query == "AAPL"
 
 
-def _reference_runtime_status() -> dict[str, object]:
-    return {
-        "status": "ready",
-        "app_runtime": {
-            "phase": "idle",
-            "active_work_item_count": 0,
-            "queued_work_item_count": 1,
-            "last_tick_finished_unix_nanos": 1_777_777_777_000_000_000,
-            "last_tick_duration_millis": 18,
-            "next_tick_due_unix_nanos": 1_777_777_837_000_000_000,
-        },
-        "catalog": {
-            "readiness": "ready",
-            "generation": 42,
-            "event_sequence": 9810,
-            "exchange_count": 4,
-            "asset_count": 20,
-            "instrument_count": 30,
-            "listing_count": 31,
-            "market_count": 32,
-            "active_market_count": 29,
-            "integrity": {"degraded": False},
-        },
-        "sources": [
-            {
-                "source_id": "binance-spot",
-                "provider_id": "binance",
-                "enabled": True,
-                "paused": False,
-                "phase": "ready",
-                "progress": {
-                    "kind": "completed",
-                    "pages_done": 2,
-                    "pages_total": 2,
-                    "records_seen": 1200,
-                    "records_changed": 3,
-                },
-                "last_success_unix_nanos": 1_777_777_777_000_000_000,
-                "consecutive_failures": 0,
-                "stale": False,
+def _reference_runtime_status() -> ReferenceRuntimeStatusResponse:
+    return ReferenceRuntimeStatusResponse.from_mapping(
+        {
+            "status": "ready",
+            "app_runtime": {
+                "phase": "serving",
+                "actor_id": "reference",
+                "source_id": "reference-default",
+                "refresh_interval_millis": 60_000,
+                "active_work_item_count": 0,
+                "queued_work_item_count": 1,
+                "last_tick_finished_unix_nanos": 1_777_777_777_000_000_000,
+                "last_tick_duration_millis": 18,
+                "next_tick_due_unix_nanos": 1_777_777_837_000_000_000,
             },
-            {
-                "source_id": "massive-options",
-                "provider_id": "massive",
-                "enabled": True,
-                "paused": False,
-                "phase": "retrying",
-                "progress": {"kind": "waiting"},
-                "last_success_unix_nanos": None,
-                "consecutive_failures": 2,
-                "stale": True,
-                "last_error": {
-                    "code": "reference.provider_failed",
-                    "retryable": True,
-                    "message": "HTTP 429",
-                },
+            "catalog": {
+                "readiness": "ready",
+                "generation": 42,
+                "event_sequence": 9810,
+                "exchange_count": 4,
+                "asset_count": 20,
+                "instrument_count": 30,
+                "listing_count": 31,
+                "market_count": 32,
+                "active_market_count": 29,
+                "integrity": {"degraded": False},
             },
-        ],
-        "publication": {
-            "pending_publication_count": 2,
-            "backlog_degraded": False,
-            "oldest_pending_event_id": "reference:42",
-        },
-        "diagnostics": [
-            {
-                "severity": "warning",
-                "code": "reference.source_retrying",
-                "message": "Massive source is retrying",
-            }
-        ],
-    }
+            "sources": [
+                {
+                    "source_id": "binance-spot",
+                    "provider_id": "binance",
+                    "enabled": True,
+                    "paused": False,
+                    "phase": "ready",
+                    "progress": {
+                        "kind": "complete",
+                        "pages_done": 2,
+                        "pages_total": 2,
+                        "records_seen": 1200,
+                        "records_changed": 3,
+                    },
+                    "last_success_unix_nanos": 1_777_777_777_000_000_000,
+                    "consecutive_failures": 0,
+                    "stale": False,
+                    "has_last_known_good": True,
+                },
+                {
+                    "source_id": "massive-options",
+                    "provider_id": "massive",
+                    "enabled": True,
+                    "paused": False,
+                    "phase": "degraded",
+                    "progress": {"kind": "unknown"},
+                    "last_success_unix_nanos": None,
+                    "consecutive_failures": 2,
+                    "stale": True,
+                    "has_last_known_good": False,
+                    "last_error": {
+                        "code": "reference.provider_failed",
+                        "retryable": True,
+                        "message": "HTTP 429",
+                    },
+                },
+            ],
+            "publication": {
+                "pending_publication_count": 2,
+                "backlog_degraded": False,
+                "oldest_pending_event_id": "reference:42",
+            },
+            "diagnostics": [
+                {
+                    "severity": "warn",
+                    "code": "reference.source_retrying",
+                    "message": "Massive source is retrying",
+                }
+            ],
+        }
+    )
 
 
 def test_binance_stocks_setup_goal_is_provider_product_not_exchange() -> None:

@@ -87,10 +87,7 @@ impl IntentPlanningContext {
                 order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, leg.leg_id))
                     .map_err(|error| error.to_string())?,
                 intent_id: Some(intent.intent_id.clone()),
-                strategy_id: Some(
-                    StrategyId::new(intent.strategy_id.clone())
-                        .map_err(|error| error.to_string())?,
-                ),
+                strategy_id: Some(intent.strategy_id.clone()),
                 account_id: leg.account_id.clone(),
                 segment_key: leg.segment_key.clone(),
                 instrument_id: leg.instrument_id.clone(),
@@ -193,10 +190,7 @@ impl IntentPlanningContext {
                 order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, index))
                     .map_err(|error| error.to_string())?,
                 intent_id: Some(intent.intent_id.clone()),
-                strategy_id: Some(
-                    StrategyId::new(intent.strategy_id.clone())
-                        .map_err(|error| error.to_string())?,
-                ),
+                strategy_id: Some(intent.strategy_id.clone()),
                 account_id: account_id.clone(),
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),
@@ -229,20 +223,11 @@ impl IntentPlanningContext {
         self.read_market_quote(market_id, instrument_id)?
             .map(|(quote, _generation)| {
                 Ok::<_, String>(QuoteObservation {
-                    instrument_id: InstrumentId::new(quote.instrument_id)
-                        .map_err(|error| error.to_string())?,
-                    market_id: Some(
-                        MarketId::new(quote.market_id).map_err(|error| error.to_string())?,
-                    ),
-                    bid_price: quote
-                        .bid_price
-                        .map(|value| value.parse::<Price>().map_err(|error| error.to_string()))
-                        .transpose()?,
-                    ask_price: quote
-                        .ask_price
-                        .map(|value| value.parse::<Price>().map_err(|error| error.to_string()))
-                        .transpose()?,
-                    observed_at_unix_nanos: UnixNanos::from(quote.observed_at_unix_nanos),
+                    instrument_id: quote.instrument_id,
+                    market_id: Some(quote.market_id),
+                    bid_price: quote.bid_price,
+                    ask_price: quote.ask_price,
+                    observed_at_unix_nanos: quote.observed_at_unix_nanos,
                 })
             })
             .transpose()

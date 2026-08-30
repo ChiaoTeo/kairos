@@ -1,6 +1,6 @@
 //! Single-owner Reference actor.
 
-use kairos_primitives::runtime::InstanceIdentity;
+use kairos_primitives::runtime::{ActorId, InstanceIdentity};
 use tracing::info;
 
 use super::providers::ReferenceSourcePlan;
@@ -25,7 +25,7 @@ type ActorReferenceSource = ConfiguredReferenceSource;
 type ActorReferenceSource = Box<dyn ReferenceSource>;
 
 pub struct ReferenceActor {
-    pub actor_id: String,
+    pub actor_id: ActorId,
     pub metadata: CatalogMetadata,
     #[cfg(test)]
     pub catalog: ReferenceCatalog,
@@ -202,7 +202,7 @@ impl ReferenceActor {
         };
         log_catalog_loaded(&metadata);
         Ok(Self {
-            actor_id: actor_id.into(),
+            actor_id: ActorId::new(actor_id.into())?,
             metadata,
             #[cfg(test)]
             catalog,
@@ -228,7 +228,7 @@ impl ReferenceActor {
         let catalog = store.load().await?.unwrap_or_default();
         let metadata = CatalogMetadata::from(&catalog);
         Ok(Self {
-            actor_id: actor_id.into(),
+            actor_id: ActorId::new(actor_id.into())?,
             metadata,
             catalog,
             source: Some(Box::new(source)),
@@ -576,84 +576,6 @@ impl ReferenceActor {
 
     pub async fn pending_event_count(&mut self) -> ReferenceResult<usize> {
         self.publication_outbox.pending_event_count().await
-    }
-
-    pub async fn lifecycle_events(
-        &mut self,
-        sequence_from: Option<u64>,
-        sequence_to: Option<u64>,
-        limit: usize,
-    ) -> ReferenceResult<Vec<LifecycleEvent>> {
-        let events = self
-            .store
-            .lifecycle_events(sequence_from, sequence_to, limit)
-            .await?;
-        #[cfg(test)]
-        if events.is_empty() && !self.catalog.lifecycle_events.is_empty() {
-            return Ok(self
-                .catalog
-                .lifecycle_events
-                .iter()
-                .filter(|event| {
-                    let sequence = event
-                        .event_id
-                        .rsplit(':')
-                        .next()
-                        .and_then(|value| value.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    sequence_from.is_none_or(|value| sequence >= value)
-                        && sequence_to.is_none_or(|value| sequence <= value)
-                })
-                .take(limit)
-                .cloned()
-                .collect());
-        }
-        Ok(events)
-    }
-
-    pub async fn lifecycle_events_filtered(
-        &mut self,
-        sequence_from: Option<u64>,
-        sequence_to: Option<u64>,
-        event_time_from_unix_nanos: Option<u64>,
-        event_time_to_unix_nanos: Option<u64>,
-        limit: usize,
-    ) -> ReferenceResult<Vec<LifecycleEvent>> {
-        let events = self
-            .store
-            .lifecycle_events_filtered(
-                sequence_from,
-                sequence_to,
-                event_time_from_unix_nanos,
-                event_time_to_unix_nanos,
-                limit,
-            )
-            .await?;
-        #[cfg(test)]
-        if events.is_empty() && !self.catalog.lifecycle_events.is_empty() {
-            return Ok(self
-                .catalog
-                .lifecycle_events
-                .iter()
-                .filter(|event| {
-                    let sequence = event
-                        .event_id
-                        .rsplit(':')
-                        .next()
-                        .and_then(|value| value.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    sequence_from.is_none_or(|value| sequence >= value)
-                        && sequence_to.is_none_or(|value| sequence <= value)
-                        && event_time_from_unix_nanos
-                            .is_none_or(|value| event.event_time_unix_nanos >= value.into())
-                        && event_time_to_unix_nanos
-                            .is_none_or(|value| event.event_time_unix_nanos < value.into())
-                })
-                .take(limit)
-                .cloned()
-                .collect());
-        }
-        Ok(events)
     }
 
     pub async fn acknowledge_publications(&mut self, event_ids: &[String]) -> ReferenceResult<()> {

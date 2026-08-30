@@ -6,21 +6,29 @@
 
 pub mod application;
 pub mod composition;
-pub mod domain;
+mod domain;
 mod services;
 
 pub use application::{
-    AccountAdapterKind, AccountApplication, AccountBalanceItem, AccountBalancesResult,
-    AccountBrowseResult, AccountCredentialProbeRequest, AccountCurrentView, AccountEarnHoldingItem,
-    AccountEarnHoldingsResult, AccountError, AccountEvent, AccountFeeComponent, AccountFeeDiscount,
-    AccountFeesResult, AccountListItem, AccountListResult, AccountLocalSnapshotResult,
-    AccountModifyResult, AccountObservedFill, AccountOpenOrderItem, AccountOpenOrdersResult,
+    Account, AccountApplication, AccountCurrentView, AccountDomainError, AccountError,
+    AccountEvent, AccountFill, AccountModel, AccountObservedFill, AccountRpcService,
+    AccountRuntimeMode, AccountSegment, AccountSnapshot, AccountState, AccountStatus, Accounts,
+    ApplyOutcome, AssetId, Balance, ConnectedAccountApplication, ConnectedAccountCurrentResult,
+    ConnectedAccountOutput, EarnAccruedReward, EarnHolding, EarnHoldingLiquidity, EarnHoldingState,
+    EarnHoldingsSnapshot, ExternalAccountIdentity, FillId, InstrumentId, MarginMode, MarkToMarket,
+    Money, OpenOrder, OrderSide, Position, PositionMode, ReconcileAccount, RefreshAccount,
+    SegmentKey, SignedQuantity, SimulatedCapitalMutation, SimulatedCapitalMutationKind,
+    SnapshotKind,
+};
+pub use composition::{
+    AccountAdapterKind, AccountBalanceItem, AccountBalancesResult, AccountBrowseResult,
+    AccountCredentialProbeRequest, AccountEarnHoldingItem, AccountEarnHoldingsResult,
+    AccountFeeComponent, AccountFeeDiscount, AccountFeesResult, AccountListItem, AccountListResult,
+    AccountLocalSnapshotResult, AccountModifyResult, AccountOpenOrderItem, AccountOpenOrdersResult,
     AccountOverviewResult, AccountPositionItem, AccountPositionsResult,
     AccountProviderConnectionArgs, AccountQueryCompleteness, AccountQueryError,
-    AccountRecordResult, AccountRemoveResult, AccountRpcService, AccountRuntimeMode,
-    AccountSimulateResult, BindCredentialRequest, CliAccountApplication,
-    ConnectAccountProviderRequest, ConnectAccountRequest, ConnectedAccountApplication,
-    ConnectedAccountCurrentResult, ConnectedAccountOutput, CreateCredentialRequest, MarkToMarket,
-    ModifyAccountRequest, ReconcileAccount, RefreshAccount, RegisterAccountRequest,
-    SimulateAccountRequest, StoredCredentialResult,
+    AccountRecordResult, AccountRemoveResult, AccountSimulateResult, BindCredentialRequest,
+    CliAccountApplication, ConnectAccountProviderRequest, ConnectAccountRequest,
+    CreateCredentialRequest, ModifyAccountRequest, RegisterAccountRequest, SimulateAccountRequest,
+    StoredCredentialResult,
 };

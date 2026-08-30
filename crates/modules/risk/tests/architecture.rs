@@ -81,7 +81,7 @@ fn risk_transport_is_owned_by_conflux_and_not_application() {
         }
     }
 
-    let application = fs::read_to_string(root.join("src/application/conflux.rs")).unwrap();
+    let application = fs::read_to_string(root.join("src/application/process/conflux.rs")).unwrap();
     assert!(!application.contains("ConfluxEvent::Rest"));
     assert!(!application.contains("RestContract"));
     assert!(application.contains("impl RiskRpcActor for RiskApplication"));

@@ -47,10 +47,8 @@ TYPED_FIELDS = {
         r"pub fee_currency: Option<Currency>",
         r"pub observed_at_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "modules" / "reference" / "src" / "application" / "queries.rs": [
+    ROOT / "crates" / "modules" / "reference" / "src" / "application" / "queries": [
         r"pub as_of_unix_nanos: Option<UnixNanos>",
-        r"pub sequence_from: Option<Sequence>",
-        r"pub event_time_from_unix_nanos: Option<UnixNanos>",
         r"pub market_id: Option<MarketId>",
         r"pub venue_symbol: Option<Symbol>",
     ],
@@ -60,14 +58,15 @@ TYPED_FIELDS = {
     ROOT / "crates" / "modules" / "market" / "src" / "domain" / "freshness" / "status.rs": [
         r"pub event_sequence: Sequence",
     ],
-    ROOT / "crates" / "modules" / "execution" / "src" / "application" / "mod.rs": [
-        r"pub order_id: kairos_primitives::OrderId",
-        r"pub symbol: kairos_primitives::Symbol",
-        r"pub fill_quantity: Option<kairos_primitives::Quantity>",
-        r"pub fill_price: Option<kairos_primitives::Price>",
-        r"pub occurred_at_unix_nanos: kairos_primitives::UnixNanos",
+    ROOT / "crates" / "modules" / "execution" / "src" / "domain" / "model" / "result.rs": [
+        r"pub remote_order_id: RemoteOrderId",
+        r"pub client_order_id: Option<ClientOrderId>",
+        r"pub symbol: Symbol",
+        r"pub fill_quantity: Option<Quantity>",
+        r"pub fill_price: Option<Price>",
+        r"pub occurred_at_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "modules" / "execution" / "src" / "application" / "model": [
+    ROOT / "crates" / "modules" / "execution" / "src" / "domain" / "model": [
         r"pub instrument_id: InstrumentId",
         r"pub market_id: Option<MarketId>",
         r"pub bid_price: Option<Price>",
@@ -87,7 +86,7 @@ TYPED_FIELDS = {
         r"pub remote_order_id: Option<RemoteOrderId>",
         r"pub since_unix_nanos: Option<UnixNanos>",
         r"pub sequence: Sequence",
-        r"pub remote_order_id: kairos_primitives::RemoteOrderId",
+        r"pub remote_order_id: kairos_primitives::integration::RemoteOrderId",
         r"pub symbol: Symbol",
         r"pub execution_id: Option<FillId>",
         r"pub fill_quantity: Option<Quantity>",
@@ -133,6 +132,16 @@ TYPED_FIELDS = {
         r"pub pending_order_due_unix_nanos: BTreeMap<OrderId, UnixNanos>",
         r"pub leader_leg_id: LegId",
         r"pub hedge_leg_id: LegId",
+    ],
+    ROOT / "crates" / "modules" / "execution" / "src" / "domain" / "market.rs": [
+        r"market_id: MarketId",
+        r"instrument_id: InstrumentId",
+        r"pub bid_price: Option<Price>",
+        r"pub bid_quantity: Option<Quantity>",
+        r"pub ask_price: Option<Price>",
+        r"pub ask_quantity: Option<Quantity>",
+        r"pub observed_at_unix_nanos: UnixNanos",
+        r"pub source_id: Provider",
     ],
     ROOT / "crates" / "modules" / "execution" / "src" / "services" / "simulation" / "model.rs": [
         r"pub order_id: OrderId",
@@ -195,7 +204,6 @@ CANONICAL_PRIMITIVE_TYPES = {
     "DecimalParts",
     "DurationNanos",
     "EventContext",
-    "Exchange",
     "FillId",
     "Generation",
     "IdempotencyKey",
@@ -225,17 +233,16 @@ CANONICAL_PRIMITIVE_TYPES = {
 
 SHARED_DECIMAL_ADAPTERS = {
     ROOT / "crates" / "modules" / "account" / "contract" / "src" / "control" / "account.rs",
-    ROOT / "crates" / "modules" / "reference" / "contract" / "src" / "encode" / "metadata.rs",
     ROOT / "crates" / "modules" / "risk" / "contract" / "src" / "control" / "types.rs",
     ROOT / "crates" / "platform" / "integration" / "src" / "domain" / "decimal.rs",
 }
 
 CONTRACT_DECIMAL_ALIASES = {
     ROOT / "crates" / "modules" / "account" / "contract" / "src" / "control" / "account.rs": (
-        r"pub type DecimalValue = kairos_primitives::DecimalParts;"
+        r"pub type DecimalValue = kairos_primitives::decimal::DecimalParts;"
     ),
     ROOT / "crates" / "modules" / "risk" / "contract" / "src" / "control" / "types.rs": (
-        r"pub type DecimalValue = kairos_primitives::DecimalParts;"
+        r"pub type DecimalValue = kairos_primitives::decimal::DecimalParts;"
     ),
 }
 
@@ -295,7 +302,7 @@ def main() -> int:
         )
 
     for path in SHARED_DECIMAL_ADAPTERS:
-        if "kairos_primitives::DecimalParts" not in path.read_text():
+        if "kairos_primitives::decimal::DecimalParts" not in path.read_text():
             failures.append(f"decimal adapter bypasses shared DecimalParts rules: {path}")
 
     for path, pattern in CONTRACT_DECIMAL_ALIASES.items():

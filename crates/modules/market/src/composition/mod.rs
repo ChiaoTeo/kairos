@@ -13,7 +13,7 @@ pub use config::{
     MarketRuntimeProfile, MarketRuntimeScope, MassiveMarketProduct, OkxInstrumentType,
     PublicMarketTransport,
 };
-pub use direct::{compose_standalone_market, standalone_market_routes};
+pub use direct::{compose_historical_market, compose_standalone_market, standalone_market_routes};
 pub use host::MarketHost;
 pub use launch::{MarketStartupError, build_market_host};
 pub use reference::{

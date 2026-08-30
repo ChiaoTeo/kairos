@@ -172,7 +172,7 @@ adapts process transport; it is not a second catalog state owner.
 
 - provider-neutral catalog reconciliation;
 - lifecycle events for listed, changed, and delisted markets;
-- append-only lifecycle history with sequence/time filtering and replay;
+- append-only lifecycle persistence for recovery and publication, without a public history query;
 - atomic SQLite catalog recovery and typed publication outbox;
 - market resolution and typed reference queries;
 - catalog, markets, lifecycle, and change-event publication;

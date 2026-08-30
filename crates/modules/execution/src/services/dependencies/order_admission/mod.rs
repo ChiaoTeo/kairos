@@ -103,7 +103,19 @@ impl OrderAdmissionContext {
                 request.market_id.as_ref().map(MarketId::as_str),
                 request.instrument_id.as_str(),
             )?;
-            validate_reference_rules(&market, request)?;
+            validate_reference_rules(
+                &crate::domain::ExecutionMarketRules {
+                    tradable: matches!(
+                        market.status.as_str().to_ascii_lowercase().as_str(),
+                        "active" | "listed" | "trading"
+                    ),
+                    minimum_quantity: market.minimum_quantity,
+                    quantity_tick: market.quantity_tick,
+                    price_tick: market.price_tick,
+                    minimum_notional: market.minimum_notional,
+                },
+                request,
+            )?;
             Some(market)
         } else {
             None
@@ -298,7 +310,7 @@ impl OrderAdmissionContext {
     pub(super) fn risk_authorization_context(
         &mut self,
         request: &SubmitOrder,
-        route: &crate::application::ExecutionRouteCandidate,
+        route: &crate::domain::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
         let reference_market = self.reference_market(
             request.market_id.as_ref().map(MarketId::as_str),
@@ -472,7 +484,7 @@ fn reference_asset_currency(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ExecutionOrderOptions;
+    use crate::domain::ExecutionOrderOptions;
 
     fn reduce_order(order_id: &str, side: OrderSide, quantity: i64) -> SubmitOrder {
         SubmitOrder {

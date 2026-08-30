@@ -11,10 +11,10 @@ use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::common::v_2 as common_fb;
 use kairos_protocol::generated::kairos::execution::v_2 as fb;
 
-use crate::application::ExecutionCurrentView;
 use crate::domain::{
-    CommitmentBasis, CommitmentResource, CommitmentStatus, ExecutionOrder, ExecutionOrderStatus,
-    OrderCommitment, OrderSide, OrderType, RiskReservationEvidence, RiskReservationSagaStatus,
+    CommitmentBasis, CommitmentResource, CommitmentStatus, ExecutionCurrentView, ExecutionOrder,
+    ExecutionOrderStatus, OrderCommitment, OrderSide, OrderType, RiskReservationEvidence,
+    RiskReservationSagaStatus,
 };
 
 mod encoding;
@@ -41,21 +41,19 @@ mod tests {
     use kairos_protocol::generated::kairos::execution::v_2 as fb;
 
     use super::*;
-    use crate::application::{
-        DependencyWatermarks, ExecuteStrategyIntent, ExecutionBusinessChange, ExecutionCurrentView,
-        IntentEvent, IntentExecutionBenchmark, IntentState, IntentStatus, SnapshotWatermark,
-    };
     use crate::domain::{
         AlgorithmExecutionQuality, AlgorithmLegBenchmark, AlgorithmLegBenchmarkQuality,
         AlgorithmLegExecutionQuality, AlgorithmLegLifecycle, AlgorithmRun, AlgorithmRunStatus,
-        CommitmentBasis, CommitmentResource, ExecutionBenchmarkKind, ExecutionFeeTotal,
-        ExecutionOrder, ExecutionOrderStatus, OrderCommitment, OrderSide, OrderType,
-        RiskReservationEvidence, RiskReservationSagaStatus,
+        CommitmentBasis, CommitmentResource, DependencyWatermarks, ExecuteStrategyIntent,
+        ExecutionBenchmarkKind, ExecutionBusinessChange, ExecutionCurrentView, ExecutionFeeTotal,
+        ExecutionOrder, ExecutionOrderStatus, IntentEvent, IntentExecutionBenchmark, IntentState,
+        IntentStatus, OrderCommitment, OrderSide, OrderType, RiskReservationEvidence,
+        RiskReservationSagaStatus, SnapshotWatermark,
     };
 
     #[test]
     fn active_view_status_sets_exclude_terminal_history() {
-        use crate::application::IntentStatus;
+        use crate::domain::IntentStatus;
         use crate::services::publication::encoding::{
             active_intent_status, active_order_status, active_risk_reservation_status,
         };
@@ -213,7 +211,7 @@ mod tests {
         )
         .unwrap();
         run.status = AlgorithmRunStatus::Running;
-        run.decision_sequence = 2;
+        run.decision_sequence = 2.into();
         run.last_decision_at = Some(UnixNanos::new(125));
         run.legs[0].lifecycle = AlgorithmLegLifecycle::Active;
         run.legs[0].filled_quantity = Quantity::new(10, 0).unwrap();
@@ -257,9 +255,10 @@ mod tests {
 
         let mut intent = ExecuteStrategyIntent::test_fixture();
         intent.intent_id = intent_id;
-        intent.strategy_id = "strategy-quality".into();
-        intent.launch_id = "launch".into();
-        intent.instance_id = "instance".into();
+        intent.strategy_id =
+            kairos_primitives::runtime::StrategyId::new("strategy-quality").unwrap();
+        intent.launch_id = kairos_primitives::runtime::LaunchId::new("launch").unwrap();
+        intent.instance_id = kairos_primitives::runtime::InstanceId::new("instance").unwrap();
         intent.account_ids = vec![AccountId::new("main").unwrap()];
         let intent_state = IntentState {
             intent,
@@ -363,10 +362,11 @@ mod tests {
     fn lifecycle_event_preserves_correlation_previous_state_and_evidence() {
         let mut intent = ExecuteStrategyIntent::test_fixture();
         intent.intent_id = kairos_primitives::execution::IntentId::new("intent-1").unwrap();
-        intent.strategy_id = "strategy-a".into();
-        intent.strategy_decision_id = Some("strategy-a:decision:1".into());
-        intent.launch_id = "launch-1".into();
-        intent.instance_id = "instance-1".into();
+        intent.strategy_id = kairos_primitives::runtime::StrategyId::new("strategy-a").unwrap();
+        intent.strategy_decision_id =
+            Some(kairos_primitives::risk::DecisionId::new("strategy-a:decision:1").unwrap());
+        intent.launch_id = kairos_primitives::runtime::LaunchId::new("launch-1").unwrap();
+        intent.instance_id = kairos_primitives::runtime::InstanceId::new("instance-1").unwrap();
         intent.account_ids = vec![AccountId::new("main").unwrap()];
         intent.instrument_id = InstrumentId::new("BTC-USDT").unwrap();
         intent.execution_benchmarks = vec![IntentExecutionBenchmark {

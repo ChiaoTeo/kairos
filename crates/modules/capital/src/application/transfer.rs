@@ -1,8 +1,8 @@
 //! Short-lived, standalone Capital transfer use cases.
 
-use kairos_conflux::{AssetTransferCommand, AssetTransferStatusQuery};
+use kairos_integration::{AssetTransferCommand, AssetTransferStatusQuery};
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
-use kairos_primitives::capital::CapitalPlanId;
+use kairos_primitives::capital::{CapitalPlanId, CapitalSourceAuthority};
 use kairos_primitives::decimal::Quantity;
 use kairos_primitives::reference::Currency;
 use kairos_primitives::runtime::IdempotencyKey;
@@ -178,7 +178,7 @@ pub struct StandaloneCapitalTransferPreviewRequest {
     pub plan_id: CapitalPlanId,
     pub idempotency_key: IdempotencyKey,
     pub amount: Quantity,
-    pub source_authority: String,
+    pub source_authority: CapitalSourceAuthority,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
 }

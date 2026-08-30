@@ -115,7 +115,7 @@ def execute_data(
         {
             "plan_hash": plan.plan_hash,
             "dataset_set": result.as_dict(),
-            "execution": application.execution(plan.plan_hash),
+            "execution": application.execution(plan.plan_hash).as_dict(),
         },
         output,
     )
@@ -127,7 +127,7 @@ def show_execution(
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    _emit(_application(workspace).execution(plan_hash), output)
+    _emit(_application(workspace).execution(plan_hash).as_dict(), output)
 
 
 @set_app.command("list")
@@ -155,7 +155,7 @@ def show_gate(
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    _emit(_application(workspace).trust_report(composition_hash), output)
+    _emit(_application(workspace).trust_report(composition_hash).as_dict(), output)
 
 
 def execute_data_argv(argv: Sequence[str], stdout: TextIO) -> int:

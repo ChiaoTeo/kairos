@@ -4,13 +4,10 @@ use kairos_primitives::risk::{DecisionId, PolicyId, ReservationId};
 use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId};
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
-use crate::application::{
-    CloseCircuit, FundingRequirement, LimitView, OpenCircuit, ResizeReservation, RiskDecision,
-    RiskEvent, RiskSnapshot,
-};
 use crate::domain::{
-    Allocation, Amount, AuthorizeRequest, DependencyWatermarks, EnforcementMode, Metric,
-    ReasonCode, Reservation, ReservationStatus, RiskPolicy,
+    Allocation, Amount, AuthorizeRequest, CircuitScope, DependencyWatermarks, EnforcementMode,
+    FundingRequirement, LimitView, Metric, ReasonCode, Reservation, ReservationStatus,
+    RiskDecision, RiskEvent, RiskPolicy, RiskSnapshot,
 };
 use crate::services::persistence::{PersistedEvent, RiskStateStore};
 
@@ -249,17 +246,20 @@ impl RiskActor {
 
     pub(crate) fn open_circuit(
         &mut self,
-        request: OpenCircuit,
+        scope: CircuitScope,
+        at_unix_nanos: UnixNanos,
+        reset_at_unix_nanos: Option<UnixNanos>,
+        reason: String,
     ) -> Result<crate::domain::CircuitState, ActorError> {
-        if request.reason.trim().is_empty() {
+        if reason.trim().is_empty() {
             return Err(ActorError::Invalid("circuit reason is required".into()));
         }
         let circuit = crate::domain::CircuitState {
-            scope: request.scope,
+            scope,
             open: true,
-            opened_at_unix_nanos: Some(request.at_unix_nanos),
-            reset_at_unix_nanos: request.reset_at_unix_nanos,
-            reason: request.reason,
+            opened_at_unix_nanos: Some(at_unix_nanos),
+            reset_at_unix_nanos,
+            reason,
         };
         self.persist(PersistedEvent::CircuitChanged {
             sequence: (self.event_sequence + 1).into(),
@@ -280,16 +280,17 @@ impl RiskActor {
 
     pub(crate) fn close_circuit(
         &mut self,
-        request: CloseCircuit,
+        scope: CircuitScope,
+        at_unix_nanos: UnixNanos,
     ) -> Result<crate::domain::CircuitState, ActorError> {
         let mut circuit = self
             .circuits
             .iter()
-            .find(|value| value.scope == request.scope)
+            .find(|value| value.scope == scope)
             .cloned()
             .ok_or_else(|| ActorError::Invalid("circuit not found".into()))?;
         circuit.open = false;
-        circuit.reset_at_unix_nanos = Some(request.at_unix_nanos);
+        circuit.reset_at_unix_nanos = Some(at_unix_nanos);
         self.persist(PersistedEvent::CircuitChanged {
             sequence: (self.event_sequence + 1).into(),
             circuit: circuit.clone(),
@@ -561,15 +562,20 @@ impl RiskActor {
         Ok(updated)
     }
 
-    pub(crate) fn resize(&mut self, request: ResizeReservation) -> Result<Reservation, ActorError> {
-        if request.amount == Amount::ZERO {
+    pub(crate) fn resize(
+        &mut self,
+        reservation_id: &ReservationId,
+        amount: Amount,
+        at_unix_nanos: UnixNanos,
+    ) -> Result<Reservation, ActorError> {
+        if amount == Amount::ZERO {
             return Err(ActorError::Invalid(
                 "reservation amount must be positive".into(),
             ));
         }
         let current = self
             .reservations
-            .get(&request.reservation_id)
+            .get(reservation_id)
             .cloned()
             .ok_or_else(|| ActorError::Invalid("reservation not found".into()))?;
         if current.status != ReservationStatus::Reserved {
@@ -594,7 +600,7 @@ impl RiskActor {
                 } else {
                     allocation
                         .amount
-                        .checked_mul_ratio(request.amount, previous_notional)?
+                        .checked_mul_ratio(amount, previous_notional)?
                 };
                 Ok(Allocation {
                     amount,
@@ -624,7 +630,7 @@ impl RiskActor {
         }
         let updated = Reservation {
             allocations: resized_allocations,
-            updated_at_unix_nanos: request.at_unix_nanos,
+            updated_at_unix_nanos: at_unix_nanos,
             ..current.clone()
         };
         self.persist(PersistedEvent::ReservationChanged {
@@ -663,7 +669,7 @@ impl RiskActor {
         Ok(count)
     }
 
-    pub(crate) fn current_view(&self) -> crate::RiskCurrentView {
+    pub(crate) fn current_view(&self) -> crate::domain::RiskCurrentView {
         let mut limits: Vec<_> = self
             .limits
             .values()
@@ -677,7 +683,7 @@ impl RiskActor {
         limits.sort_by(|a, b| a.policy.policy_id.cmp(&b.policy.policy_id));
         let mut reservations: Vec<_> = self.reservations.values().cloned().collect();
         reservations.sort_by(|a, b| a.reservation_id.cmp(&b.reservation_id));
-        crate::RiskCurrentView {
+        crate::domain::RiskCurrentView {
             actor_id: self.actor_id.clone(),
             generation: self.generation,
             event_sequence: self.event_sequence,

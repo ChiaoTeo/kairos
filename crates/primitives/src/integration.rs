@@ -5,6 +5,8 @@ use crate::text::text_type;
 
 text_type!(ParticipantSymbol);
 text_type!(RemoteOrderId);
+// Identity of the integration connection/feed that supplied an external fact.
+text_type!(IntegrationSourceId);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

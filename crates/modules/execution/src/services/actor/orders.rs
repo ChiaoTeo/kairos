@@ -44,9 +44,16 @@ impl ExecutionActor {
         order.market_id = request.market_id.clone();
         order.execution_route_id = request.execution_route_id.clone();
         order.attempts.push(crate::domain::ExecutionAttempt {
-            attempt_id: format!("{}:attempt:1", order.order_id),
+            attempt_id: kairos_primitives::execution::ExecutionAttemptId::new(format!(
+                "{}:attempt:1",
+                order.order_id
+            ))
+            .expect("order identity creates a valid attempt identity"),
             command: crate::domain::ExecutionCommandKind::Submit,
-            provider_connection_id: selected_route.route_id.to_string(),
+            provider_connection_id: kairos_primitives::integration::IntegrationSourceId::new(
+                selected_route.route_id.to_string(),
+            )
+            .expect("route identity creates a valid connection identity"),
             selected_route: selected_route.clone(),
             command_started_at_unix_nanos: now.into(),
             delivery_certainty: crate::domain::DeliveryCertainty::NotSent,
@@ -184,8 +191,18 @@ impl ExecutionActor {
             .cloned()
             .ok_or_else(|| "unknown order".to_string())?;
         let occurred_at = event.occurred_at_unix_nanos;
-        crate::application::apply_connection_event(&mut order, event)
-            .map_err(|error| error.to_string())?;
+        order.remote_order_id = event.remote_order_id;
+        order.updated_at_unix_nanos = event.occurred_at_unix_nanos;
+        order.reason = event.reason;
+        order.status = match event.status {
+            OrderEntryStatus::Accepted => ExecutionOrderStatus::Accepted,
+            OrderEntryStatus::PartiallyFilled => ExecutionOrderStatus::PartiallyFilled,
+            OrderEntryStatus::Filled => ExecutionOrderStatus::Filled,
+            OrderEntryStatus::Canceled => ExecutionOrderStatus::Canceled,
+            OrderEntryStatus::Rejected => ExecutionOrderStatus::Rejected,
+            OrderEntryStatus::Expired => ExecutionOrderStatus::Expired,
+            OrderEntryStatus::Unknown => ExecutionOrderStatus::Unknown,
+        };
         order.reconciliation_cause = None;
         if let Some(attempt) = order
             .attempts
@@ -284,9 +301,16 @@ impl ExecutionActor {
             .count()
             + 1;
         order.attempts.push(crate::domain::ExecutionAttempt {
-            attempt_id: format!("{}:cancel:{cancel_sequence}", order.order_id),
+            attempt_id: kairos_primitives::execution::ExecutionAttemptId::new(format!(
+                "{}:cancel:{cancel_sequence}",
+                order.order_id
+            ))
+            .expect("order identity creates a valid cancel attempt identity"),
             command: crate::domain::ExecutionCommandKind::Cancel,
-            provider_connection_id: selected_route.route_id.to_string(),
+            provider_connection_id: kairos_primitives::integration::IntegrationSourceId::new(
+                selected_route.route_id.to_string(),
+            )
+            .expect("route identity creates a valid connection identity"),
             selected_route,
             command_started_at_unix_nanos: now.into(),
             delivery_certainty: crate::domain::DeliveryCertainty::Indeterminate,

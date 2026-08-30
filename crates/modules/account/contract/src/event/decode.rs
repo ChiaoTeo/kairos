@@ -1,9 +1,10 @@
 use kairos_primitives::account::{AccountId, PositionSide, SegmentKey};
+use kairos_primitives::capital::EarnProductId;
 use kairos_primitives::decimal::DecimalParts;
 use kairos_primitives::execution::{OrderId, OrderSide};
 use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{AssetId, InstrumentId, MarketId};
-use kairos_primitives::time::UnixNanos;
+use kairos_primitives::time::{Sequence, UnixNanos};
 use kairos_protocol::decode_event_metadata;
 use kairos_protocol::generated::kairos::account::v_2 as fb;
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
@@ -197,7 +198,7 @@ fn earn_holding_upserted(value: fb::EarnHoldingUpserted<'_>) -> ContractResult<A
                 raw.participant_position_id(),
                 "earn.participant_position_id",
             )?,
-            product_id: required_text(raw.product_id(), "earn.product_id")?,
+            product_id: identity(raw.product_id(), "earn.product_id", EarnProductId::new)?,
             asset: required_text(raw.asset(), "earn.asset")?,
             principal: decimal(raw.principal())?,
             redeemable: raw.redeemable().map(decimal).transpose()?,
@@ -266,7 +267,11 @@ fn observed_order_upserted(value: fb::ObservedOrderUpserted<'_>) -> ContractResu
         value.provenance(),
         AccountChange::ObservedOrderUpserted(AccountObservedOrder {
             observation_id: required_text(raw.observation_id(), "order.observation_id")?,
-            source_id: required_text(raw.source_id(), "order.source_id")?,
+            source_id: identity(
+                raw.source_id(),
+                "order.source_id",
+                kairos_primitives::integration::IntegrationSourceId::new,
+            )?,
             execution_order_id: raw
                 .execution_order_id()
                 .map(|value| identity(value, "order.execution_order_id", OrderId::new))
@@ -331,12 +336,16 @@ fn project_provenance(
     value: fb::AccountFactProvenance<'_>,
 ) -> ContractResult<AccountFactProvenance> {
     Ok(AccountFactProvenance {
-        source_id: required_text(value.source_id(), "provenance.source_id")?,
+        source_id: identity(
+            value.source_id(),
+            "provenance.source_id",
+            kairos_primitives::integration::IntegrationSourceId::new,
+        )?,
         provider_event_id: optional_text(
             value.provider_event_id(),
             "provenance.provider_event_id",
         )?,
-        provider_sequence: value.provider_sequence(),
+        provider_sequence: value.provider_sequence().map(Sequence::new),
         provider_occurred_at_unix_nanos: value
             .provider_occurred_at_unix_nanos()
             .map(UnixNanos::new),

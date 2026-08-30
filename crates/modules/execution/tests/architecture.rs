@@ -173,8 +173,7 @@ fn execution_reads_account_business_state_from_the_typed_indexed_view() {
     let order_admission = fs::read_to_string(root.join("dependencies/order_admission/mod.rs"))
         .expect("read Execution order admission context");
     let admission_policy = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src/application/core/orders/admission/mod.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/domain/admission.rs"),
     )
     .expect("read Execution-owned admission policy");
     let dependency_state = fs::read_to_string(root.join("dependencies/state/mod.rs"))
@@ -241,6 +240,10 @@ fn execution_connected_facade_reads_indexed_current_view_and_routes_from_control
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/connected.rs"),
     )
     .expect("read Execution server facade");
+    let composition = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/composition/mod.rs"),
+    )
+    .expect("read Execution composition");
     assert!(cli.contains("ConnectedExecutionApplication"));
     assert!(cli.contains("connected_execution_app("));
     assert!(!cli.contains("ExecutionControlRpcClient"));
@@ -249,9 +252,12 @@ fn execution_connected_facade_reads_indexed_current_view_and_routes_from_control
     assert!(server.contains("client.indexed_current(&self.identity)"));
     assert!(server.contains("current.ensure_ready()?"));
     assert!(server.contains(".with_order(order_id"));
-    assert!(server.contains("ConfluxSystem::new()"));
-    assert!(server.contains("install_execution_connection("));
-    assert!(server.contains("execution_client("));
+    assert!(!server.contains("ConfluxSystem::new()"));
+    assert!(!server.contains("install_execution_connection("));
+    assert!(!server.contains("execution_client("));
+    assert!(composition.contains("ConfluxSystem::new()"));
+    assert!(composition.contains("install_execution_connection("));
+    assert!(composition.contains("execution_client("));
     assert!(server.contains("ExecutionControlRpcClient::routes"));
     assert!(server.contains("ExecutionControlRpcClient::order_audit"));
     assert!(!server.contains("ExecutionConnection::control_only"));
@@ -307,7 +313,7 @@ fn execution_has_one_instance_partitioned_current_view_without_compatibility_roo
         .expect("read Execution indexed view contract");
     let launch = fs::read_to_string(root.join("src/composition/launch.rs"))
         .expect("read Execution composition");
-    let publisher = fs::read_to_string(root.join("src/application/conflux.rs"))
+    let publisher = fs::read_to_string(root.join("src/application/process/conflux.rs"))
         .expect("read Execution publisher");
     let schemas = root.join("../../../schemas/v2/execution/views");
 
@@ -340,7 +346,7 @@ fn execution_dependencies_follow_their_concrete_owner_modules() {
     }
     assert!(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src/application/core/orders/admission/mod.rs")
+            .join("src/domain/admission.rs")
             .is_file()
     );
     assert!(
@@ -396,7 +402,7 @@ fn execution_uses_one_contract_actor_and_conflux_owned_control() {
     assert!(application.contains("execution_control_rpc_conflux_actor"));
     assert!(application.contains("impl ConfluxActor for ExecutionApplication"));
     assert!(application.contains("async fn handle("));
-    assert!(!root.join("src/application/process").exists());
+    assert!(root.join("src/application/process").is_dir());
     assert!(!root.join("src/services/control").exists());
     assert!(!root.join("src/composition/host.rs").exists());
     assert!(application.contains("ExecutionRpcActor"));
@@ -421,8 +427,8 @@ fn execution_connections_are_installed_in_exact_conflux_collections() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let routes = fs::read_to_string(root.join("src/composition/connections/routes.rs"))
         .expect("read routes");
-    let actor =
-        fs::read_to_string(root.join("src/application/conflux.rs")).expect("read Conflux actor");
+    let actor = fs::read_to_string(root.join("src/application/process/conflux.rs"))
+        .expect("read Conflux actor");
     for family in [
         "binance_spot_rest",
         "binance_usdm_rest",
@@ -446,7 +452,8 @@ fn execution_connections_are_installed_in_exact_conflux_collections() {
 #[test]
 fn execution_publication_is_owned_by_conflux_resources() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let actor = fs::read_to_string(root.join("src/application/conflux.rs")).expect("read actor");
+    let actor =
+        fs::read_to_string(root.join("src/application/process/conflux.rs")).expect("read actor");
     let services = rust_source(&root.join("src/services/publication"));
     assert!(actor.contains("outputs()"));
     assert!(actor.contains(".aeron"));

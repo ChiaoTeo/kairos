@@ -1,5 +1,8 @@
 use kairos_primitives::account::BrokerId;
-use kairos_primitives::execution::{ExecutionChannelCode, ExecutionRouteId, OrderEntrySymbol};
+use kairos_primitives::execution::{
+    ExecutionAttemptId, ExecutionChannelCode, ExecutionRouteId, OrderEntrySymbol,
+};
+use kairos_primitives::integration::IntegrationSourceId;
 use kairos_primitives::reference::MarketId;
 use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
@@ -48,13 +51,13 @@ pub enum ExecutionCommandKind {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionAttempt {
-    pub attempt_id: String,
+    pub attempt_id: ExecutionAttemptId,
     #[serde(default)]
     pub command: ExecutionCommandKind,
     pub selected_route: SelectedExecutionRoute,
     /// Stable identity of the configured connection binding used by this
     /// attempt. It is copied rather than resolved from a mutable route view.
-    pub provider_connection_id: String,
+    pub provider_connection_id: IntegrationSourceId,
     pub command_started_at_unix_nanos: UnixNanos,
     pub delivery_certainty: DeliveryCertainty,
     #[serde(default)]

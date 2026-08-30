@@ -3,8 +3,8 @@ use kairos_primitives::execution::{ExecutionRouteId, LegId, OrderId};
 use kairos_primitives::time::UnixNanos;
 
 use super::{
-    AlgorithmAction, AlgorithmActionStatus, AlgorithmExecutionStyle, AlgorithmRun,
-    AlgorithmRunStatus,
+    AlgorithmAction, AlgorithmActionStatus, AlgorithmDecisionSequence, AlgorithmExecutionStyle,
+    AlgorithmRun, AlgorithmRunStatus,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,7 +24,7 @@ pub struct AlgorithmInput {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AlgorithmDecision {
-    pub expected_sequence: u64,
+    pub expected_sequence: AlgorithmDecisionSequence,
     pub decided_at: UnixNanos,
     pub next_status: AlgorithmRunStatus,
     pub next_wake_at: Option<UnixNanos>,
@@ -47,7 +47,7 @@ impl AlgorithmRun {
         }
         let next_sequence = self
             .decision_sequence
-            .checked_add(1)
+            .checked_next()
             .ok_or_else(|| "algorithm decision sequence overflow".to_string())?;
         for (index, kind) in decision.actions.into_iter().enumerate() {
             self.actions.push(AlgorithmAction {

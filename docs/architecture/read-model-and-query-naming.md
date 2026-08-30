@@ -55,7 +55,7 @@ RPC、Aeron 和 indexed current-view storage 是交付机制，不是三种业�
 | Execution | health、routes、intent/order control、reconcile | keyed orders、intents、runs、commitments、reservations、unknown remotes | typed durable `order_audit` query | Execution events |
 | Risk | health、authorization、reservation/circuit control | keyed policies、usage、reservations、circuits | 无公共数据库查询 | Risk events |
 | Capital | health、availability query、funding control | keyed objectives、demands、routes、plans、reservations、operations、alerts | 无公共数据库查询 | Capital events |
-| Reference | health、source control、refresh、mutation | 无；SQLite 是唯一当前事实读取面 | catalog、market/instrument 查询、lifecycle history | Reference events |
+| Reference | health、source control、refresh、mutation | 无；SQLite 是唯一当前事实读取面 | catalog、market/instrument 查询；不开放持久化 event history | Reference events |
 
 Reference 不发布第二份 current-view store 是有意的架构选择，见
 [`reference/tests/architecture.rs`](../../crates/modules/reference/tests/architecture.rs)。其他

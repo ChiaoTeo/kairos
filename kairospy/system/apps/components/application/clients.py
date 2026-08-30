@@ -18,9 +18,12 @@ from kairospy.infrastructure.unix_http import request_sync
 if TYPE_CHECKING:
     from .event_routes import EventTransportRoute
     from kairospy.system.apps.workspace.application import InstanceWorkspace
-    from kairospy.primitives.account import AccountId
+    from kairospy.primitives.account import AccountId, SegmentKeyRead
     from kairospy.contracts.account import (
+        AccountCommandStatus,
         AccountControlClient,
+        AccountRefreshResponse,
+        AdvanceAccountTimeResponse,
     )
     from kairospy.contracts.capital.types import CapitalControlClient
     from kairospy.contracts.capital.types import (
@@ -43,8 +46,21 @@ if TYPE_CHECKING:
         ReplaceOrderRequest,
         SubmitIntentRequest,
     )
-    from kairospy.contracts.market import MarketControlClient
+    from kairospy.contracts.market import (
+        MarketCommandStatus,
+        MarketControlClient,
+        MarketDataRoutesResponse,
+        MarketHealthResponse,
+        MarketReleaseOwnerResponse,
+        MarketSubscriptionResponse,
+        MarketSubscriptionsResponse,
+    )
     from kairospy.contracts.reference.client import ReferenceClient
+    from kairospy.contracts.reference.results import (
+        ReferenceCatalogSnapshot,
+        ReferenceHealthResponse,
+        ReferenceRuntimeStatusResponse,
+    )
     from kairospy.contracts.reference.control import (
         ReferenceControlClient,
     )
@@ -79,6 +95,14 @@ class _RiskControl(Protocol):
     def close_circuit(self, request: object) -> object: ...
     def advance_time(self, request: object) -> _RiskAdvanceResponse: ...
     def health(self) -> _RiskHealth: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AccountMarkToMarketOutcome:
+    """System orchestration result that keeps owner-contract values typed."""
+
+    result: AccountCommandStatus
+    segment_key: SegmentKeyRead
 
 
 @dataclass(frozen=True)
@@ -171,27 +195,24 @@ class AccountSystemClient(SystemRpcClient):
             AccountControlClient(self.socket_path, timeout=self.timeout),
         )
 
-    def reconcile(self) -> dict[str, Any]:
+    def reconcile(self) -> AccountRefreshResponse:
         from kairospy.contracts.account import AccountSegmentsRequest
 
-        return _account_refresh_response(
-            self.control.reconcile(AccountSegmentsRequest())
-        )
+        return self.control.reconcile(AccountSegmentsRequest())
 
-    def refresh(self) -> dict[str, Any]:
+    def refresh(self) -> AccountRefreshResponse:
         from kairospy.contracts.account import AccountSegmentsRequest
 
-        return _account_refresh_response(self.control.refresh(AccountSegmentsRequest()))
+        return self.control.refresh(AccountSegmentsRequest())
 
-    def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
+    def advance_time(self, event_time_unix_nanos: int) -> AdvanceAccountTimeResponse:
         from kairospy.contracts.account import AdvanceAccountTimeRequest
 
-        result = self.control.advance_time(
+        return self.control.advance_time(
             AdvanceAccountTimeRequest(event_time_unix_nanos)
         )
-        return {"event_time_unix_nanos": result.event_time_unix_nanos}
 
-    def mark_to_market_event(self, event: object) -> dict[str, Any] | None:
+    def mark_to_market_event(self, event: object) -> AccountMarkToMarketOutcome | None:
         from kairospy.investment.apps.account.application.mapping import (
             backtest_mark_to_market_request,
         )
@@ -199,14 +220,10 @@ class AccountSystemClient(SystemRpcClient):
         request = backtest_mark_to_market_request(event)
         if request is None:
             return None
-        result = self.control.mark_to_market(request)
-        segment_key = getattr(request, "segment_key")
-        if not isinstance(segment_key, str):
-            raise TypeError("Account mark-to-market request omitted segment_key")
-        return {
-            "result": {"status": result.status},
-            "segment_key": segment_key,
-        }
+        return AccountMarkToMarketOutcome(
+            result=self.control.mark_to_market(request),
+            segment_key=request.segment_key,
+        )
 
     def current_view(self, account_id: AccountId):
         from kairospy.contracts.account import AccountCurrentView
@@ -321,27 +338,8 @@ class MarketSystemClient(SystemRpcClient):
             MarketControlClient(self.socket_path, timeout=self.timeout),
         )
 
-    def health(self) -> dict[str, Any]:
-        """Project the Market-owned health contract for operator views."""
-
-        value = self.control.health()
-        return {
-            "status": value.status,
-            "actor_id": value.actor_id,
-            "event_sequence": value.event_sequence,
-            "feed_status": value.feed_status,
-            "current_view_commit_count": value.current_view_commit_count,
-            "current_view_input_update_count": value.current_view_input_update_count,
-            "current_view_encoded_update_count": value.current_view_encoded_update_count,
-            "current_view_order_book_encode_count": (
-                value.current_view_order_book_encode_count
-            ),
-            "last_current_view_commit_latency_nanos": (
-                value.last_current_view_commit_latency_nanos
-            ),
-            "notification_attempt_count": value.notification_attempt_count,
-            "notification_failure_count": value.notification_failure_count,
-        }
+    def health(self) -> MarketHealthResponse:
+        return self.control.health()
 
     def data_routes(
         self,
@@ -352,7 +350,7 @@ class MarketSystemClient(SystemRpcClient):
         provider: str | None = None,
         configured_only: bool = False,
         ready_only: bool = False,
-    ) -> dict[str, Any]:
+    ) -> MarketDataRoutesResponse:
         query: dict[str, object] = {}
         if configured_only:
             query["configured_only"] = True
@@ -366,20 +364,7 @@ class MarketSystemClient(SystemRpcClient):
         ):
             if value is not None:
                 query[name] = value
-        response = self.control.data_routes(**query)
-        return {
-            "routes": [
-                {
-                    "market_id": route.market_id,
-                    "provider": route.provider,
-                    "observation_kinds": list(route.observation_kinds),
-                    "state": route.state,
-                    "selected": route.selected,
-                    "pending_reason": route.pending_reason,
-                }
-                for route in response.routes
-            ]
-        }
+        return self.control.data_routes(**query)
 
     def subscriptions(
         self,
@@ -387,26 +372,12 @@ class MarketSystemClient(SystemRpcClient):
         owner_id: str | None = None,
         market_id: str | None = None,
         state: str | None = None,
-    ) -> dict[str, Any]:
-        response = self.control.subscriptions(
+    ) -> MarketSubscriptionsResponse:
+        return self.control.subscriptions(
             owner_id=owner_id,
             market_id=market_id,
             state=state,
         )
-        return {
-            "subscriptions": [
-                {
-                    "subscription_id": subscription.subscription_id,
-                    "owner_id": subscription.owner_id,
-                    "state": subscription.state,
-                    "market_ids": list(subscription.market_ids),
-                    "observations": list(subscription.observations),
-                    "selected_providers": list(subscription.selected_providers),
-                    "pending_reason": subscription.pending_reason,
-                }
-                for subscription in response.subscriptions
-            ]
-        }
 
     def operator_subscribe(
         self,
@@ -416,7 +387,7 @@ class MarketSystemClient(SystemRpcClient):
         market_id: str,
         observations: tuple[str, ...],
         provider: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> MarketSubscriptionResponse:
         from kairospy.contracts.market import (
             MarketSubscriptionRequest,
             MarketTarget,
@@ -437,20 +408,11 @@ class MarketSystemClient(SystemRpcClient):
             ),
             preference,
         )
-        response = self.control.operator_subscribe(
+        return self.control.operator_subscribe(
             request,
             owner_id=owner_id,
             request_id=request_id,
         )
-        return {
-            "subscription_id": response.subscription_id,
-            "owner_id": response.owner_id,
-            "state": response.state,
-            "satisfied_selectors": list(response.satisfied_selectors),
-            "missing_selectors": list(response.missing_selectors),
-            "resolved_providers": list(response.resolved_providers),
-            "pending_reason": response.pending_reason,
-        }
 
     def operator_unsubscribe(
         self,
@@ -458,32 +420,29 @@ class MarketSystemClient(SystemRpcClient):
         owner_id: str,
         request_id: str,
         subscription_id: str,
-    ) -> dict[str, Any]:
-        response = self.control.operator_unsubscribe(
+    ) -> MarketCommandStatus:
+        return self.control.operator_unsubscribe(
             subscription_id,
             owner_id=owner_id,
             request_id=request_id,
         )
-        return {"status": response.status}
 
     def operator_release_owner(
         self, *, owner_id: str, request_id: str
-    ) -> dict[str, Any]:
-        response = self.control.operator_release_owner(
+    ) -> MarketReleaseOwnerResponse:
+        return self.control.operator_release_owner(
             owner_id=owner_id,
             request_id=request_id,
         )
-        return {"released_subscription_ids": list(response.released_subscription_ids)}
 
-    def recover(self) -> dict[str, Any]:
-        response = self.control.recover()
-        return {"status": response.status}
+    def recover(self) -> MarketCommandStatus:
+        return self.control.recover()
 
-    def pause_replay(self) -> dict[str, Any]:
-        return {"status": self.control.pause_replay().status}
+    def pause_replay(self) -> MarketCommandStatus:
+        return self.control.pause_replay()
 
-    def resume_replay(self) -> dict[str, Any]:
-        return {"status": self.control.resume_replay().status}
+    def resume_replay(self) -> MarketCommandStatus:
+        return self.control.resume_replay()
 
 
 class RiskSystemClient(SystemRpcClient):
@@ -887,10 +846,10 @@ class ReferenceSystemClient(SystemRpcClient):
     def application_client(self):
         return self.reader
 
-    def health(self) -> dict[str, Any]:
+    def health(self) -> ReferenceHealthResponse:
         return self.reader.health()
 
-    def reference_status(self) -> dict[str, Any]:
+    def reference_status(self) -> ReferenceRuntimeStatusResponse:
         """Read the Reference-owned runtime status, not generic process health."""
 
         return self.reader.runtime_status()
@@ -910,22 +869,11 @@ class ReferenceSystemClient(SystemRpcClient):
     def providers(self) -> dict[str, Any]:
         return self.reader.providers()
 
-    def catalog(self) -> dict[str, Any]:
+    def catalog(self) -> ReferenceCatalogSnapshot:
         return self.reader.catalog()
-
-    def events(self, **filters: Any) -> dict[str, Any]:
-        return self.reader.events(**filters)
 
     def snapshot(self):
         return self.reader.snapshot()
-
-
-def _account_refresh_response(value: object) -> dict[str, Any]:
-    return {
-        "status": getattr(value, "status"),
-        "account_id": getattr(value, "account_id"),
-        "segments": list(getattr(value, "segments")),
-    }
 
 
 def _capital_control_response(value: object) -> dict[str, Any]:

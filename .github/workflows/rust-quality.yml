@@ -59,6 +59,9 @@ jobs:
       - name: Check crate layout
         run: python3 scripts/check/check_crate_layout.py
 
+      - name: Check Rust layer dependencies
+        run: python3 scripts/check/check_rust_layer_dependencies.py
+
       - name: Check workspace dependency declarations
         run: python3 scripts/check/check_workspace_dependencies.py
 

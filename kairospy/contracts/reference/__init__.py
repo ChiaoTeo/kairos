@@ -8,6 +8,17 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 from .events import __all__ as _EVENT_EXPORTS
+from .results import (
+    ReferenceCatalogCounts,
+    ReferenceCatalogIntegrity,
+    ReferenceCatalogSnapshot,
+    ReferenceHealthResponse,
+    ReferenceHealthStatus,
+    ReferenceOptionCoverage,
+    ReferenceProviderHealth,
+    ReferenceProviderStatus,
+    ReferenceRuntimeStatusResponse,
+)
 
 if TYPE_CHECKING:
     from kairospy._native_reference_contract import (
@@ -66,5 +77,14 @@ __all__ = [
     "ReferenceListing",
     "ReferenceMarket",
     "ReferenceTradingRules",
+    "ReferenceCatalogCounts",
+    "ReferenceCatalogIntegrity",
+    "ReferenceCatalogSnapshot",
+    "ReferenceHealthResponse",
+    "ReferenceHealthStatus",
+    "ReferenceOptionCoverage",
+    "ReferenceProviderHealth",
+    "ReferenceProviderStatus",
+    "ReferenceRuntimeStatusResponse",
     "decode_event",
 ] + _EVENT_EXPORTS

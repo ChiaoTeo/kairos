@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from kairospy.contracts.reference import ReferenceRuntimeStatusResponse
 from kairospy.system.apps.components.application import (
     AccountSystemClient,
     CapitalSystemClient,
@@ -35,11 +36,10 @@ def test_account_system_client_keeps_only_control_and_reconciliation_queries() -
     client = AccountSystemClient(Path("/tmp/account.sock"))
     control = RecordingAccountControl()
     object.__setattr__(client, "control", control)
-    assert client.reconcile() == {
-        "status": "completed",
-        "account_id": None,
-        "segments": [],
-    }
+    result = client.reconcile()
+    assert result.status == "completed"
+    assert result.account_id is None
+    assert result.segments == []
     assert len(control.calls) == 1
     assert control.calls[0][0] == "reconcile"
     assert control.calls[0][1].segments == []
@@ -128,10 +128,10 @@ def test_account_system_client_owns_mark_to_market_dispatch(monkeypatch) -> None
     control = RecordingAccountControl()
     object.__setattr__(client, "control", control)
 
-    assert client.mark_to_market_event("quote") == {
-        "result": {"status": "applied"},
-        "segment_key": "spot",
-    }
+    result = client.mark_to_market_event("quote")
+    assert result is not None
+    assert result.result.status == "applied"
+    assert result.segment_key == "spot"
     assert client.mark_to_market_event("ignored") is None
     assert control.calls == [("mark_to_market", request)]
 
@@ -154,39 +154,29 @@ def test_market_system_client_owns_current_data_route_query() -> None:
     ]
 
 
-def test_market_system_client_projects_owner_health() -> None:
+def test_market_system_client_returns_owner_health_contract() -> None:
+    health = SimpleNamespace(
+        status="ready",
+        actor_id="market-actor",
+        event_sequence=91,
+        feed_status="ready",
+        current_view_commit_count=80,
+        current_view_input_update_count=90,
+        current_view_encoded_update_count=79,
+        current_view_order_book_encode_count=8,
+        last_current_view_commit_latency_nanos=2_500_000,
+        notification_attempt_count=90,
+        notification_failure_count=1,
+    )
+
     class RecordingMarketControl:
         def health(self):
-            return SimpleNamespace(
-                status="ready",
-                actor_id="market-actor",
-                event_sequence=91,
-                feed_status="ready",
-                current_view_commit_count=80,
-                current_view_input_update_count=90,
-                current_view_encoded_update_count=79,
-                current_view_order_book_encode_count=8,
-                last_current_view_commit_latency_nanos=2_500_000,
-                notification_attempt_count=90,
-                notification_failure_count=1,
-            )
+            return health
 
     client = MarketSystemClient(Path("/tmp/market.sock"))
     object.__setattr__(client, "control", RecordingMarketControl())
 
-    assert client.health() == {
-        "status": "ready",
-        "actor_id": "market-actor",
-        "event_sequence": 91,
-        "feed_status": "ready",
-        "current_view_commit_count": 80,
-        "current_view_input_update_count": 90,
-        "current_view_encoded_update_count": 79,
-        "current_view_order_book_encode_count": 8,
-        "last_current_view_commit_latency_nanos": 2_500_000,
-        "notification_attempt_count": 90,
-        "notification_failure_count": 1,
-    }
+    assert client.health() is health
 
 
 def test_system_process_factory_returns_typed_business_clients() -> None:
@@ -203,9 +193,30 @@ def test_system_process_factory_returns_typed_business_clients() -> None:
 
 
 def test_reference_system_client_exposes_owner_runtime_status() -> None:
+    status = ReferenceRuntimeStatusResponse.from_mapping(
+        {
+            "status": "ready",
+            "app_runtime": {
+                "phase": "serving",
+                "actor_id": "reference",
+                "source_id": "reference-default",
+                "refresh_interval_millis": 60_000,
+            },
+            "catalog": {
+                "readiness": "ready",
+                "generation": 0,
+                "event_sequence": 0,
+                "market_count": 0,
+            },
+            "sources": [],
+            "publication": {"pending_publication_count": 0},
+            "diagnostics": [],
+        }
+    )
+
     class RecordingReferenceReader:
-        def runtime_status(self) -> dict[str, object]:
-            return {"status": "ready", "sources": []}
+        def runtime_status(self) -> ReferenceRuntimeStatusResponse:
+            return status
 
         def plan_catalog_setup(self, goal: Mapping[str, object]) -> dict[str, object]:
             return {"goal": dict(goal), "availability": "not_configured"}
@@ -213,7 +224,7 @@ def test_reference_system_client_exposes_owner_runtime_status() -> None:
     client = ReferenceSystemClient(Path("/tmp/reference.sock"))
     object.__setattr__(client, "reader", RecordingReferenceReader())
 
-    assert client.reference_status() == {"status": "ready", "sources": []}
+    assert client.reference_status() == status
     assert client.plan_reference_catalog(
         {
             "kind": "exchange_instruments",

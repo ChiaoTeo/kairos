@@ -11,6 +11,15 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from kairospy.primitives.reference import AssetClass, InstrumentKind, ReferenceStatus
+from kairospy.primitives.reference import ReferenceSourceIdRead
+from .results import (
+    ReferenceCatalogCounts,
+    ReferenceCatalogIntegrity,
+    ReferenceCatalogSnapshot,
+    ReferenceHealthResponse,
+    ReferenceOptionCoverage,
+    ReferenceRuntimeStatusResponse,
+)
 
 if TYPE_CHECKING:
     from kairospy._native_reference_contract import (
@@ -51,55 +60,35 @@ class ReferenceReadSession:
     def close(self) -> None:
         self._native.close()
 
-    def catalog(self) -> dict[str, Any]:
+    def catalog(self) -> ReferenceCatalogSnapshot:
         status = self._native.status()
-        return {
-            "generation": int(status.generation),
-            "event_sequence": int(status.event_sequence),
-            "catalog": {
-                "exchange_count": int(status.exchange_count),
-                "asset_count": int(status.asset_count),
-                "instrument_count": int(status.instrument_count),
-                "listing_count": int(status.listing_count),
-                "market_count": int(status.market_count),
-                "active_market_count": int(status.active_market_count),
-            },
-            "integrity": {
-                "missing_equity_markets": int(status.missing_equity_markets),
-                "legacy_exchange_market_ids": int(status.legacy_exchange_market_ids),
-                "legacy_exchange_listing_ids": int(status.legacy_exchange_listing_ids),
-                "option_listings": int(status.option_listings),
-                "option_markets": int(status.option_markets),
-            },
-        }
+        return ReferenceCatalogSnapshot(
+            generation=status.generation,
+            event_sequence=status.event_sequence,
+            catalog=ReferenceCatalogCounts(
+                exchange_count=status.exchange_count,
+                asset_count=status.asset_count,
+                instrument_count=status.instrument_count,
+                listing_count=status.listing_count,
+                market_count=status.market_count,
+                active_market_count=status.active_market_count,
+            ),
+            integrity=ReferenceCatalogIntegrity(
+                missing_equity_markets=status.missing_equity_markets,
+                legacy_exchange_market_ids=status.legacy_exchange_market_ids,
+                legacy_exchange_listing_ids=status.legacy_exchange_listing_ids,
+                option_listings=status.option_listings,
+                option_markets=status.option_markets,
+            ),
+        )
 
-    def events(
-        self,
-        *,
-        sequence_from: int | None = None,
-        sequence_to: int | None = None,
-        limit: int = 256,
-    ) -> dict[str, Any]:
-        return {
-            "generation": self.generation,
-            "event_sequence": self.event_sequence,
-            "events": [
-                _event(value)
-                for value in self._native.events(
-                    sequence_from=sequence_from,
-                    sequence_to=sequence_to,
-                    limit=limit,
-                )
-            ],
-        }
-
-    def option_coverage(self) -> dict[str, Any]:
-        return {
-            "source_id": "massive-options",
-            "generation": self.generation,
-            "event_sequence": self.event_sequence,
-            "underlyings": list(self._native.option_coverage()),
-        }
+    def option_coverage(self) -> ReferenceOptionCoverage:
+        return ReferenceOptionCoverage(
+            source_id=ReferenceSourceIdRead("massive-options"),
+            generation=self._native.generation,
+            event_sequence=self._native.event_sequence,
+            underlyings=tuple(self._native.option_coverage()),
+        )
 
     def outbox_depth(self) -> int:
         return int(self._native.outbox_depth())
@@ -336,13 +325,15 @@ class ReferenceClient:
         except OSError as error:
             raise RuntimeError(f"Reference request failed: {error}") from error
 
-    def health(self) -> dict[str, Any]:
-        return self.request("reference_health")
+    def health(self) -> ReferenceHealthResponse:
+        return ReferenceHealthResponse.from_mapping(self.request("reference_health"))
 
-    def runtime_status(self) -> dict[str, Any]:
+    def runtime_status(self) -> ReferenceRuntimeStatusResponse:
         """Read source, catalog, and publication status from Reference."""
 
-        return self.request("reference_status")
+        return ReferenceRuntimeStatusResponse.from_mapping(
+            self.request("reference_status")
+        )
 
     def plan_catalog_setup(self, goal: Mapping[str, object]) -> dict[str, Any]:
         """Ask Reference how a requested exchange/product catalog can be prepared."""
@@ -364,17 +355,12 @@ class ReferenceClient:
 
     def providers(self) -> dict[str, Any]:
         health = self.health()
-        dependencies = health.get("dependencies")
-        provider_rows = (
-            dependencies.get("providers", [])
-            if isinstance(dependencies, dict)
-            else health.get("providers", [])
-        )
+        provider_rows = [provider.to_json_dict() for provider in health.providers]
         if self.database_path is None:
             return {
-                "generation": health.get("generation", 0),
-                "event_sequence": health.get("event_sequence", 0),
-                "outbox_depth": health.get("outbox_depth", 0),
+                "generation": 0,
+                "event_sequence": 0,
+                "outbox_depth": 0,
                 "providers": provider_rows,
             }
         with self.snapshot() as snapshot:
@@ -411,15 +397,11 @@ class ReferenceClient:
             params=[underlying],
         )
 
-    def catalog(self) -> dict[str, Any]:
+    def catalog(self) -> ReferenceCatalogSnapshot:
         with self.snapshot() as snapshot:
             return snapshot.catalog()
 
-    def events(self, **filters: Any) -> dict[str, Any]:
-        with self.snapshot() as snapshot:
-            return snapshot.events(**filters)
-
-    def option_coverage(self) -> dict[str, Any]:
+    def option_coverage(self) -> ReferenceOptionCoverage:
         with self.snapshot() as snapshot:
             return snapshot.option_coverage()
 
@@ -468,31 +450,6 @@ def _identifiers(values: Sequence[str] | None) -> list[str] | None:
     if isinstance(values, str):
         return [values]
     return list(dict.fromkeys(str(value) for value in values))
-
-
-def _event(value: Any) -> dict[str, Any]:
-    result = {
-        "sequence": value.sequence,
-        "event_id": value.event_id,
-        "event_type": value.event_type,
-        "event_time_unix_nanos": value.event_time_unix_nanos,
-        "record_kind": value.record_kind,
-        "record_id": value.record_id,
-        "market_id": value.market_id,
-        "instrument_id": value.instrument_id,
-        "listing_id": value.listing_id,
-        "exchange_id": value.exchange_id,
-        "venue_symbol": value.venue_symbol,
-        "previous_status": value.previous_status,
-        "current_status": value.current_status,
-        "previous_symbol": value.previous_symbol,
-        "current_symbol": value.current_symbol,
-        "operation": value.operation,
-        "provenance": value.provenance,
-        "conflict_policy": value.conflict_policy,
-        "generation": value.generation,
-    }
-    return {key: item for key, item in result.items() if item is not None}
 
 
 __all__ = ["ReferenceClient", "ReferenceReadSession"]

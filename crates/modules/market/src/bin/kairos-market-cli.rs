@@ -4,8 +4,8 @@ use std::str::FromStr;
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use kairos_market::composition::{
-    CliReferenceUniverseResult, cli_reference_universe, compose_standalone_market,
-    standalone_market_routes,
+    CliReferenceUniverseResult, cli_reference_universe, compose_historical_market,
+    compose_standalone_market, standalone_market_routes,
 };
 use kairos_market::{
     CliDirectObservationResult, CliMarketApplication, CliMarketDatasetManifest,
@@ -563,10 +563,13 @@ async fn run_standalone(
             )
             .await
             .map(MarketStandaloneCliOutput::Replay),
-        StandaloneCommand::Download(command) => open()
-            .download_historical(command.into_request())
-            .await
-            .map(MarketStandaloneCliOutput::Download),
+        StandaloneCommand::Download(command) => {
+            let request = command.into_request();
+            compose_historical_market(workspace_root.map(PathBuf::as_path), &request)?
+                .download_historical(request)
+                .await
+                .map(MarketStandaloneCliOutput::Download)
+        },
         StandaloneCommand::Datasets => open()
             .historical_datasets()
             .map(MarketStandaloneCliOutput::Datasets),

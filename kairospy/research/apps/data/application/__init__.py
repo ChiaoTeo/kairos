@@ -3,7 +3,11 @@
 from .catalog import DatasetCatalogApplication
 from .application import DataApplication
 from .gates import DataGateCheck, DataTrustGateApplication, DataTrustGateReport
-from .acquisition import DataAcquisitionApplication
+from .acquisition import (
+    DataAcquisitionApplication,
+    DataAcquisitionExecution,
+    DataAcquisitionStepExecution,
+)
 from .models import (
     AcquisitionStep,
     DataAcquisitionPlan,
@@ -29,6 +33,8 @@ __all__ = [
     "AcquisitionStep",
     "DataAcquisitionPlan",
     "DataAcquisitionApplication",
+    "DataAcquisitionExecution",
+    "DataAcquisitionStepExecution",
     "DataApplication",
     "DataRequirement",
     "DataGateCheck",

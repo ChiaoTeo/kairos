@@ -117,41 +117,6 @@ impl SqlxCatalogStore {
         }
         result
     }
-
-    pub(crate) async fn lifecycle_events(
-        &mut self,
-        from: Option<u64>,
-        to: Option<u64>,
-        limit: usize,
-    ) -> ReferenceResult<Vec<LifecycleEvent>> {
-        self.lifecycle_payloads(from, to, None, None, limit).await
-    }
-
-    pub(crate) async fn lifecycle_events_filtered(
-        &mut self,
-        from: Option<u64>,
-        to: Option<u64>,
-        time_from: Option<u64>,
-        time_to: Option<u64>,
-        limit: usize,
-    ) -> ReferenceResult<Vec<LifecycleEvent>> {
-        self.lifecycle_payloads(from, to, time_from, time_to, limit)
-            .await
-    }
-
-    async fn lifecycle_payloads(
-        &self,
-        from: Option<u64>,
-        to: Option<u64>,
-        time_from: Option<u64>,
-        time_to: Option<u64>,
-        limit: usize,
-    ) -> ReferenceResult<Vec<LifecycleEvent>> {
-        self.run(|pool| async move {
-            lifecycle_payloads(&pool, from, to, time_from, time_to, limit).await
-        })
-        .await
-    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -740,32 +705,6 @@ async fn update_catalog_meta(
     .execute(&mut **tx)
     .await?;
     Ok(())
-}
-
-pub(crate) async fn lifecycle_payloads(
-    pool: &SqlitePool,
-    from: Option<u64>,
-    to: Option<u64>,
-    time_from: Option<u64>,
-    time_to: Option<u64>,
-    limit: usize,
-) -> sqlx::Result<Vec<LifecycleEvent>> {
-    let rows = sqlx::query("SELECT payload FROM reference_lifecycle WHERE sequence >= COALESCE(?, 1) AND sequence <= COALESCE(?, 9223372036854775807) AND (? IS NULL OR event_time_unix_nanos >= ?) AND (? IS NULL OR event_time_unix_nanos < ?) ORDER BY sequence LIMIT ?")
-        .bind(from.map(|value| value as i64))
-        .bind(to.map(|value| value as i64))
-        .bind(time_from.map(|value| value as i64))
-        .bind(time_from.map(|value| value as i64))
-        .bind(time_to.map(|value| value as i64))
-        .bind(time_to.map(|value| value as i64))
-        .bind(limit as i64)
-        .fetch_all(pool)
-        .await?;
-    rows.into_iter()
-        .map(|row| {
-            decode(row.try_get("payload")?)
-                .map_err(|error| sqlx::Error::Protocol(error.to_string()))
-        })
-        .collect()
 }
 
 pub(crate) async fn recent_lifecycle_payloads(

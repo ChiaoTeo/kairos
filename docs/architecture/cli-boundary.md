@@ -224,6 +224,7 @@ application/
   app.rs                  # AccountApplication / RiskApplication / owner main facade
   cli.rs                  # CliAccountApplication / CliMarketApplication / ...
   connected.rs           # ConnectedAccountApplication / ConnectedMarketApplication / ...
+  process/                # reusable lifecycle/RPC/publication facade around the application
 services/
   provider_query.rs       # provider snapshot/direct query 复用逻辑
   integration.rs          # provider payload -> Account facts mapping
@@ -235,8 +236,10 @@ services/
 `application/app.rs` 是 owner main facade，例如 `AccountApplication`、`RiskApplication`
 或 `CapitalApplication`。业务模块 `src/application/` 下不要再新增 `service.rs`；这个名字
 会和 `src/services/` 混淆，也会让主应用 facade 与 connected facade 的边界变脏。
-旧代码如果已有 `application/conflux.rs` 或 `application/process.rs`，可以分阶段迁移，但
-新增入口能力必须进入 `cli.rs` 或 `connected.rs` 的明确 facade，而不能继续散落在 `bin/`。
+可复用的 Conflux lifecycle、RPC 和 publication 适配器统一位于 `application/process/`；
+它们围绕 owner application 提供进程控制，不拥有业务状态，也不选择 concrete provider。
+CLI 入口能力必须进入 `cli.rs`、`connected.rs` 或由 composition 提供的 concrete CLI
+装配 facade，而不能散落在 `bin/` 或 application 根目录的 `conflux.rs` 中。
 
 `CliAccountApplication` 可以依赖 `services/provider_query.rs` 和 `services/integration.rs`，
 但不得依赖 runtime actor、Conflux context、current-view publisher 或 contract server。
@@ -478,7 +481,7 @@ market` 像“对当前 context 中的 daemon/cluster 资源执行 API”。因�
 | 用户能力 | Standalone 语义 | Connected 语义 | 当前归属判断 |
 | --- | --- | --- | --- |
 | `reference query/search/show` | 查询本地 catalog DB 或 fixture | 不需要 | Standalone |
-| `reference catalog/assets/markets/events` | 本地 catalog 文件只读查询 | runtime current view 查询时必须 connected | 取决于数据源 |
+| `reference catalog/assets/markets` | 本地 catalog 文件只读查询 | runtime current view 查询时必须 connected | 取决于数据源 |
 | `reference status --catalog` | 本地 catalog readiness 诊断 | runtime health/status | Standalone/Connected 分开 |
 | `reference providers/logs/doctor` | 不应假装本地 provider runtime | 当前 Reference server 的 provider/runtime 状态 | Connected |
 | `reference refresh/sync/publish` | 不应存在 | 触发运行中 Reference server 工作 | Connected |
@@ -616,7 +619,7 @@ snapshot 是当前 runtime state，应像 Docker daemon context 一样通过 sco
 | `reference assets list/show` | 是 | 是 | 否 | 本地 catalog 查询，保留 standalone。 |
 | `reference catalog exchanges/assets/instruments/listings/markets/show` | 是 | 是 | 否 | 本地 catalog 查询，保留 standalone。 |
 | `reference markets list/browse/resolve` | 是 | 是 | 否 | 标的目录短路径，保留 standalone。 |
-| `reference events/query/search/show` | 是 | 是 | 否 | 本地 catalog/event 查询，保留 standalone。 |
+| `reference query/search/show` | 是 | 是 | 否 | 本地 current catalog 查询，保留 standalone；不开放持久化 event-history 查询。 |
 | `reference connected status/health/doctor` | 否 | 否 | 是 | 当前 Reference server 状态，产品入口应是 component。 |
 | `reference providers/logs` | 否 | 否 | 是 | provider runtime/source 状态，必须 component。 |
 | `reference refresh/sync/publish` | 否 | 否 | 是 | 触发运行中 Reference server 工作，必须 component。 |
@@ -741,7 +744,7 @@ Python surface 是用户真正看到的 `kairos` 入口。它可以比 Rust modu
 | `research plan lock/show` | research evidence | 是 | 固化研究计划，不下载数据。 |
 | `research gate publish/show` | research evidence | 是 | 发布/查看研究 gate 证据，不替代 data gate。 |
 | `reference health/providers/refresh/pause/resume` | Reference connected | 否 | 只进入 scoped component；顶层不保留 redirect 或 deprecated shim。 |
-| `reference catalog/events/markets/assets/exchanges/instruments/listings/option-chain` | Reference standalone | 是 | 本地 catalog/目录查询，保留短路径。 |
+| `reference catalog/markets/assets/exchanges/instruments/listings/option-chain` | Reference standalone | 是 | 本地 catalog/目录查询，保留短路径。 |
 | `reference validate` | Reference diagnostic | 是，若本地校验 | 若校验 runtime source，应走 component；需要在 help/output 标明。 |
 | `reference stream` | Reference connected/observe | 否 | 若跟随 runtime events，应迁移到 component 或 observe。 |
 | `reference options-coverage/options-add/options-remove` | Reference connected | 否 | coverage read/mutation/control 已迁移到 component；顶层只保留拒绝提示。 |
@@ -963,7 +966,7 @@ runtime 入口”和“standalone CLI 入口”在 owner crate 内命名分开�
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Account | `kairos account` | `kairos-account-cli` | registry、credential、schema、离线诊断、模拟 account 配置初始化；paper/simulated local snapshot/balances/positions/open-orders；live direct provider query 只有实现后才能进入 | runtime balances、positions、open orders、refresh/reconcile、paper/simulated fill/settlement | 无 workspace-scoped Account component | `launch instance component account` 可读 instance account | 已接入；standalone 读本地/direct，运行中 current view/control 只进入 launch instance component |
 | Market | `kairos market` | `kairos-market-cli` | validate、once、replay、download、历史数据工具 | sources、freshness、snapshot、subscribe/unsubscribe、recover/pause-replay/resume-replay | `system component market` 管共享 Market；freshness、subscription、replay、recovery control 已 passthrough 到 owner CLI connected | `launch instance component market` 管 instance Market | 已接入；顶层只表示独立模式，当前系统组件只表示连接模式 |
-| Reference | `kairos reference` | `kairos-reference-cli` | catalog 查询、events、markets、assets、listings、option chain | health、providers、validate、refresh、pause/resume、catalog | `system component reference` 管 workspace Reference | `launch instance component reference` 读 instance 绑定的 Reference | 已接入；Python 顶层入口只做 owner CLI passthrough |
+| Reference | `kairos reference` | `kairos-reference-cli` | catalog 查询、markets、assets、listings、option chain | health、providers、validate、refresh、pause/resume、catalog | `system component reference` 管 workspace Reference | `launch instance component reference` 读 instance 绑定的 Reference | 已接入；不开放持久化 event-history 查询；Python 顶层入口只做 owner CLI passthrough |
 | Execution | `kairos order` | `kairos-execution-cli` | 账户作用域的 provider direct `open-orders/history/order/fills/submit/cancel/replace` | runtime submit、cancel、replace、orders、fills、routes、snapshot、events、audit、trace、journal、reconcile | 当前产品无 workspace-scoped Execution 入口 | `launch instance component execution` 是运行态入口，已 passthrough 到 owner connected CLI | 已接入；`order` 不是独立模块，不提供 evidence/preview 本地工具模式 |
 | Risk | `kairos risk`，只表示独立模式 | `kairos-risk-cli` | `schema/doctor/preview` 已落地；未来可补风险策略/fixture workflow | runtime health、policy、pre-trade-check、authorize-reserve、release/consume、latest current view、limits、reservations、circuits | 已接入 `system component risk status/health/latest/limits/reservations/circuits` 和运行态 control；`status` 为进程状态，`health/latest/limits/reservations/circuits` 为业务 runtime 读取 | 已接入 `launch instance component risk status/health/latest/limits/reservations/circuits` 和运行态 control；业务写入动作按 contract 补齐 | Python 顶层入口只做 owner CLI standalone passthrough；`CliRiskApplication` 已承载本地 schema/doctor/preview；禁止 connected 半成品入口；空 application `status/snapshot` 不作为能力 |
 | Capital | `kairos capital`，只表示独立模式 | `kairos-capital-cli` | `schema/doctor/preview/plan` 已落地；`preview/plan` 只处理本地 typed request 文件；未来可补 fixture route preview、direct transfer preview 或明确 direct transfer | runtime health、current view、objectives、demands、availability、routes、plans、reservations、operations、alerts、funding objective、capital demand、plan reconcile；owner CLI connected 已按 contract/current view 暴露 | 已接入 `system component capital status/health/current/objectives/demands/availabilities/routes/plans/reservations/operations/alerts` 和运行态 control；`status` 为进程状态，其他为业务 runtime 读取 | 已接入 `launch instance component capital status/health/current/objectives/demands/availabilities/routes/plans/reservations/operations/alerts` 和运行态 control；业务写入动作按 contract 补齐 | Python 顶层入口只做 owner CLI standalone passthrough；`CliCapitalApplication` 已承载本地 schema/doctor/preview/plan；禁止 connected 半成品入口 |

@@ -6,17 +6,15 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
-use kairos_conflux::OrderEntryEvent;
+use kairos_integration::{OrderEntryEvent, OrderEntryStatus};
 use kairos_primitives::time::Sequence;
 
-use crate::application::{
-    ExecutionEvent, ExecutionFillReport, IntentEvent, IntentState, QuoteRefreshTransaction,
-    SubmitOrder, UnknownRemoteOrder, UnknownRemoteOrderResolution,
-};
 use crate::domain::{
-    CommitmentBasis, CommitmentStatus, ExecutionFill, ExecutionOrder, ExecutionOrderStatus,
-    LegLifecycle, Money, OrderCommitment, OrderId, Quantity, RiskReservationEvidence,
-    RiskReservationSagaStatus, UnixNanos,
+    CommitmentBasis, CommitmentStatus, ExecutionEvent, ExecutionFill, ExecutionFillReport,
+    ExecutionOrder, ExecutionOrderStatus, IntentEvent, IntentState, LegLifecycle, Money,
+    OrderCommitment, OrderId, Quantity, QuoteRefreshTransaction, RiskReservationEvidence,
+    RiskReservationSagaStatus, SubmitOrder, UnixNanos, UnknownRemoteOrder,
+    UnknownRemoteOrderResolution,
 };
 
 mod algorithms;

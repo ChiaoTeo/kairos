@@ -1,9 +1,8 @@
 mod cli;
-pub(crate) mod conflux;
-pub(crate) use conflux::ReferenceDemandConfig;
 mod connected;
 mod model;
 mod observations;
+pub(crate) mod process;
 mod queries;
 pub mod replay;
 mod sources;
@@ -25,8 +24,8 @@ pub use model::{
     ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketDataRouteState,
     MarketError, MarketObservationResult, MarketQueryResult, OrderBookSide,
 };
+pub(crate) use process::ReferenceDemandConfig;
 pub use replay::{load_replay_events, load_replay_events_many};
-pub(crate) use sources::{source_accepts, source_supports_selectors};
 pub use universe::ReconcileMarketUniverse;
 pub(crate) use universe::{MarketProviderCapability, MarketUniverseResolver};
 
@@ -57,5 +56,5 @@ kairos_market_contract::market_control_rpc_conflux_actor! {
 /// Public Market use-case facade around the sole mutable Market Actor.
 pub struct MarketApplication {
     pub(crate) actor: crate::services::actor::MarketActor,
-    pub(crate) conflux: conflux::MarketConfluxState,
+    pub(crate) conflux: process::MarketConfluxState,
 }

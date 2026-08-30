@@ -19,9 +19,9 @@ pub struct Health {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RiskControlResponse {
     pub status: Option<String>,
-    pub command_id: Option<String>,
-    pub decision_id: Option<String>,
-    pub request_id: Option<String>,
+    pub command_id: Option<IdempotencyKey>,
+    pub decision_id: Option<DecisionId>,
+    pub request_id: Option<RequestId>,
     pub outcome: Option<String>,
     pub error: Option<RiskControlError>,
     #[serde(flatten)]

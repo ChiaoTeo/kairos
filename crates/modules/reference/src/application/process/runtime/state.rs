@@ -262,7 +262,7 @@ mod tests {
         stale: bool,
     ) -> SourceHealth {
         SourceHealth {
-            source_id: source_id.into(),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new(source_id).unwrap(),
             definition: None,
             status,
             progress,

@@ -11,7 +11,9 @@ import threading
 import pytest
 
 from kairospy.research.apps.data.application import (
+    DataAcquisitionExecution,
     DataRequirement,
+    DataTrustGateReport,
     DatasetCatalogApplication,
     DatasetReaderApplication,
     DatasetSetRef,
@@ -50,6 +52,45 @@ def _project(tmp_path: Path, name: str) -> Path:
     project = tmp_path / name
     WorkspaceApplication().init_project(project, workspace_id=name)
     return project
+
+
+def test_persisted_data_trust_report_rejects_inconsistent_failed_checks() -> None:
+    with pytest.raises(ValueError, match="failed_checks do not match"):
+        DataTrustGateReport.from_mapping(
+            {
+                "schema_version": 2,
+                "gate": "data-trust",
+                "status": "failed",
+                "composition_hash": "a" * 64,
+                "failed_checks": [],
+                "checks": [{"name": "quality", "status": "failed", "detail": {}}],
+            }
+        )
+
+
+def test_persisted_data_acquisition_rejects_boolean_attempt_count() -> None:
+    with pytest.raises(ValueError, match="attempts must be an integer"):
+        DataAcquisitionExecution.from_mapping(
+            {
+                "schema_version": 1,
+                "project_id": "project",
+                "plan_hash": "a" * 64,
+                "status": "failed",
+                "started_at": "2026-08-30T00:00:00+00:00",
+                "max_concurrency": 1,
+                "steps": [
+                    {
+                        "index": 0,
+                        "owner": "market",
+                        "kind": "quote",
+                        "subject": "SPY",
+                        "provider": "massive",
+                        "status": "failed",
+                        "attempts": True,
+                    }
+                ],
+            }
+        )
 
 
 def test_data_public_surface_does_not_eagerly_load_strategy_runtime() -> None:
@@ -624,8 +665,9 @@ def test_data_trust_gate_produces_direct_manifest_and_pit_evidence(
     assert report.composition_hash == dataset_set.composition_hash
     assert report.as_dict()["gate"] == "data-trust"
     persisted = kairos.data.trust_report(dataset_set.composition_hash)
-    assert persisted["status"] == "passed"
-    assert persisted["composition_hash"] == dataset_set.composition_hash
+    assert persisted.status == "passed"
+    assert persisted.composition_hash == dataset_set.composition_hash
+    assert persisted == report
 
 
 def test_data_trust_gate_rejects_option_market_without_pit_reference_match(
@@ -930,7 +972,9 @@ def test_reviewed_massive_plan_executes_through_market_application_and_publishes
         )
         return {"event_count": 1, "provider": "massive"}
 
-    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr(
+        "kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run
+    )
 
     plan = asyncio.run(kairos.data.plan((requirement,)))
     dataset_set = asyncio.run(kairos.data.execute(plan))
@@ -972,14 +1016,16 @@ def test_market_acquisition_does_not_publish_empty_validated_coverage(
         target.write_text("", encoding="utf-8")
         return {"event_count": 0, "provider": "massive"}
 
-    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr(
+        "kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run
+    )
     plan = asyncio.run(kairos.data.plan((requirement,)))
 
     with pytest.raises(ValueError, match="returned no facts"):
         asyncio.run(kairos.data.execute(plan))
 
     assert kairos.data.list() == ()
-    assert kairos.data.execution(plan.plan_hash)["steps"][0]["status"] == "failed"
+    assert kairos.data.execution(plan.plan_hash).steps[0].status == "failed"
 
 
 def test_failed_acquisition_resumes_by_reusing_completed_steps(
@@ -1035,7 +1081,9 @@ def test_failed_acquisition_resumes_by_reusing_completed_steps(
         )
         return {"event_count": 1, "provider": "massive"}
 
-    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr(
+        "kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run
+    )
     plan = asyncio.run(kairos.data.plan(requirements))
     with pytest.raises(RuntimeError, match="provider interruption"):
         asyncio.run(kairos.data.execute(plan))
@@ -1045,11 +1093,12 @@ def test_failed_acquisition_resumes_by_reusing_completed_steps(
 
     assert len(result.members) == 2
     assert calls == ["O:SPY-A", "O:SPY-B", "O:SPY-B"]
-    assert journal["status"] == "complete"
-    assert journal["steps"][0]["status"] == "reused"
-    assert journal["steps"][0]["attempts"] == 1
-    assert journal["steps"][1]["attempts"] == 2
-    assert journal["result"]["composition_hash"] == result.composition_hash
+    assert journal.status == "complete"
+    assert journal.steps[0].status == "reused"
+    assert journal.steps[0].attempts == 1
+    assert journal.steps[1].attempts == 2
+    assert journal.result is not None
+    assert journal.result.composition_hash == result.composition_hash
 
 
 def test_acquisition_uses_explicit_bounded_concurrency(
@@ -1113,7 +1162,9 @@ def test_acquisition_uses_explicit_bounded_concurrency(
             with lock:
                 active -= 1
 
-    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr(
+        "kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run
+    )
     plan = asyncio.run(kairos.data.plan(requirements))
 
     result = asyncio.run(kairos.data.execute(plan, max_concurrency=2))
@@ -1121,8 +1172,8 @@ def test_acquisition_uses_explicit_bounded_concurrency(
 
     assert len(result.members) == 2
     assert maximum_active == 2
-    assert journal["max_concurrency"] == 2
-    assert [step["status"] for step in journal["steps"]] == [
+    assert journal.max_concurrency == 2
+    assert [step.status for step in journal.steps] == [
         "published",
         "published",
     ]
@@ -1183,15 +1234,17 @@ def test_failed_concurrent_acquisition_reuses_successful_sibling_on_retry(
         )
         return {"event_count": 1, "provider": "massive"}
 
-    monkeypatch.setattr("kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run)
+    monkeypatch.setattr(
+        "kairospy.investment.apps.market.application.cli.MarketCliApplication.run", run
+    )
     plan = asyncio.run(kairos.data.plan(requirements))
 
     with pytest.raises(RuntimeError, match="temporary A failure"):
         asyncio.run(kairos.data.execute(plan, max_concurrency=2))
     failed = kairos.data.execution(plan.plan_hash)
 
-    assert failed["status"] == "failed"
-    assert [step["status"] for step in failed["steps"]] == [
+    assert failed.status == "failed"
+    assert [step.status for step in failed.steps] == [
         "failed",
         "published",
     ]
@@ -1201,9 +1254,9 @@ def test_failed_concurrent_acquisition_reuses_successful_sibling_on_retry(
 
     assert len(result.members) == 2
     assert sorted(calls) == ["O:SPY-A", "O:SPY-A", "O:SPY-B"]
-    assert completed["status"] == "complete"
-    assert [step["attempts"] for step in completed["steps"]] == [2, 1]
-    assert [step["status"] for step in completed["steps"]] == [
+    assert completed.status == "complete"
+    assert [step.attempts for step in completed.steps] == [2, 1]
+    assert [step.status for step in completed.steps] == [
         "published",
         "reused",
     ]
@@ -1272,7 +1325,8 @@ def test_reviewed_massive_reference_plan_publishes_point_in_time_snapshot(
         }
 
     monkeypatch.setattr(
-        "kairospy.investment.apps.reference.application.cli.ReferenceCliApplication.run", run
+        "kairospy.investment.apps.reference.application.cli.ReferenceCliApplication.run",
+        run,
     )
 
     plan = asyncio.run(kairos.data.plan((requirement,)))
@@ -1349,7 +1403,8 @@ def test_reviewed_massive_dividend_plan_uses_reference_data_path(
         return {"record_count": 1, "source": "massive"}
 
     monkeypatch.setattr(
-        "kairospy.investment.apps.reference.application.cli.ReferenceCliApplication.run", run
+        "kairospy.investment.apps.reference.application.cli.ReferenceCliApplication.run",
+        run,
     )
 
     plan = asyncio.run(kairos.data.plan((requirement,)))

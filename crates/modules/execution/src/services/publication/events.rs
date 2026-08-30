@@ -7,9 +7,9 @@ pub(crate) fn encode_business_change(
     sequence: u64,
     occurred_at: u64,
     index: usize,
-    change: &crate::application::ExecutionBusinessChange,
+    change: &crate::domain::ExecutionBusinessChange,
 ) -> Result<Vec<Vec<u8>>, String> {
-    use crate::application::ExecutionBusinessChange;
+    use crate::domain::ExecutionBusinessChange;
     let event_id = format!("execution:{sequence}:{index}");
     let context = EncodeContext::event(
         actor_id,
@@ -25,7 +25,7 @@ pub(crate) fn encode_business_change(
             let intent_id = builder.create_string(&state.intent.intent_id.to_string());
             let intent = encode_execution_intent(&mut builder, &state.intent)?;
             match state.status {
-                crate::application::IntentStatus::Rejected if event.previous_status.is_none() => {
+                crate::domain::IntentStatus::Rejected if event.previous_status.is_none() => {
                     let codes = builder.create_vector(&[fb::IntentRejectionCode::UNSPECIFIED]);
                     let detail = builder.create_string(&state.reason);
                     let details = builder.create_vector(&[detail]);
@@ -42,7 +42,7 @@ pub(crate) fn encode_business_change(
                     );
                     fb::finish_intent_rejected_buffer(&mut builder, root);
                 },
-                crate::application::IntentStatus::Accepted if event.previous_status.is_none() => {
+                crate::domain::IntentStatus::Accepted if event.previous_status.is_none() => {
                     let root = fb::IntentAccepted::create(
                         &mut builder,
                         &fb::IntentAcceptedArgs {

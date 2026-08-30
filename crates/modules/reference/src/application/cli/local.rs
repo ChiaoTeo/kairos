@@ -3,8 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use kairos_reference_contract::{
-    Asset, Exchange, Instrument, LifecycleEntry, Listing, Market, ReferenceCatalog,
-    ReferenceCatalogSnapshot, ReferenceCatalogStats, ReferenceCollection, ReferenceIntegrityStats,
+    Asset, AssetCatalogQuery, Exchange, ExchangeCatalogQuery, Instrument, InstrumentSearchQuery,
+    LifecycleEntry, Listing, ListingCatalogQuery, Market, MarketSearchQuery, ReferenceCatalog,
+    ReferenceCatalogSnapshot, ReferenceCatalogStats, ReferenceIntegrityStats,
 };
 use kairos_workspace::workspace::Workspace;
 use serde::Serialize;
@@ -112,27 +113,30 @@ impl CliReferenceApplication {
         &self,
     ) -> Result<ReferenceCatalogSnapshot, Box<dyn std::error::Error>> {
         let reader = ReferenceCatalog::open(&self.database)?;
-        fn records<T: serde::de::DeserializeOwned>(
-            reader: &ReferenceCatalog,
-            collection: ReferenceCollection,
-        ) -> Result<Vec<T>, Box<dyn std::error::Error>> {
-            reader
-                .records(collection, 10_000)?
-                .into_iter()
-                .map(|value| serde_json::from_value(value).map_err(Into::into))
-                .collect()
-        }
-
-        let watermark = reader.watermark()?;
+        let session = reader.read_session()?;
+        let watermark = session.watermark();
         Ok(ReferenceCatalogSnapshot {
             generation: watermark.generation,
             event_sequence: watermark.event_sequence,
-            exchanges: records(&reader, ReferenceCollection::Exchanges)?,
-            assets: records(&reader, ReferenceCollection::Assets)?,
-            instruments: records(&reader, ReferenceCollection::Instruments)?,
-            listings: records(&reader, ReferenceCollection::Listings)?,
-            markets: records(&reader, ReferenceCollection::Markets)?,
-            lifecycle_events: records(&reader, ReferenceCollection::LifecycleEvents)?,
+            exchanges: session.exchanges(&ExchangeCatalogQuery::default())?,
+            assets: session.assets(&AssetCatalogQuery::default())?,
+            instruments: session.instruments(&InstrumentSearchQuery::default())?,
+            listings: session.listings(&ListingCatalogQuery::default())?,
+            markets: session.markets(&MarketSearchQuery::default())?,
+            lifecycle_events: reader
+                .lifecycle_events_after(0.into(), 10_000)?
+                .into_iter()
+                .map(|event| LifecycleEntry {
+                    event_id: event.event_id,
+                    event_type: event.event_type,
+                    event_time_unix_nanos: event.event_time_unix_nanos,
+                    record_kind: event.record_kind,
+                    record_id: event.record_id,
+                    operation: event.operation,
+                    provenance: event.provenance,
+                    conflict_policy: event.conflict_policy,
+                })
+                .collect(),
             ..Default::default()
         })
     }
@@ -260,37 +264,6 @@ impl CliReferenceApplication {
         ))
     }
 
-    pub fn lifecycle_events(
-        &self,
-        query: ReferenceQuery,
-    ) -> Result<ReferenceCliOutput, Box<dyn std::error::Error>> {
-        let snapshot = self.diagnostic_snapshot()?;
-        let from = query
-            .sequence_from
-            .map(|value| value.get())
-            .unwrap_or(1)
-            .saturating_sub(1);
-        let mut events = snapshot.lifecycle_events;
-        events.retain(|event| {
-            let sequence = event
-                .event_id
-                .rsplit(':')
-                .next()
-                .and_then(|value| value.parse::<u64>().ok());
-            sequence.is_some_and(|sequence| sequence > from)
-                && query
-                    .sequence_to
-                    .is_none_or(|to| sequence.is_some_and(|sequence| sequence <= to.get()))
-        });
-        events.truncate(query.limit.unwrap_or(256));
-        Ok(ReferenceCliOutput::Records(
-            events
-                .into_iter()
-                .map(ReferenceCatalogRecord::LifecycleEvent)
-                .collect(),
-        ))
-    }
-
     pub fn query(
         &self,
         kind: ReferenceKind,
@@ -377,7 +350,6 @@ fn snapshot_collections(
     include!(Instrument, instruments, Instrument);
     include!(Listing, listings, Listing);
     include!(Market, markets, Market);
-    include!(Event, lifecycle_events, LifecycleEvent);
     all
 }
 

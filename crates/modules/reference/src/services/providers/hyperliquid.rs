@@ -142,7 +142,7 @@ pub(super) fn hyperliquid_provider_catalog(
             ..Instrument::default()
         });
         catalog.listings.push(Listing {
-            source_id: Some(product.source_id().into()),
+            source_id: Some(ReferenceSourceId::new(product.source_id())?),
             listing_id: listing_id.clone(),
             instrument_id: instrument_id.clone(),
             exchange_id: exchange_id.clone(),

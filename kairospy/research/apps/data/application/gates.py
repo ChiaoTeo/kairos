@@ -17,7 +17,18 @@ from .readers import DatasetReaderApplication
 class DataGateCheck:
     name: str
     status: str
-    detail: Mapping[str, Any]
+    detail: Mapping[str, object]
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> DataGateCheck:
+        detail = value.get("detail")
+        if not isinstance(detail, Mapping):
+            raise ValueError("data trust check detail must be an object")
+        return cls(
+            name=_required_string(value, "name"),
+            status=_required_string(value, "status"),
+            detail=_string_mapping(detail, "data trust check detail"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +50,35 @@ class DataTrustGateReport:
             "failed_checks": list(self.failed_checks),
             "checks": [asdict(check) for check in self.checks],
         }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> DataTrustGateReport:
+        if value.get("schema_version") != 2 or value.get("gate") != "data-trust":
+            raise ValueError("data trust report schema is stale; publish Gate 1 again")
+        raw_checks = value.get("checks")
+        if not isinstance(raw_checks, list):
+            raise ValueError("data trust report checks must be an array")
+        checks: list[DataGateCheck] = []
+        for raw_check in raw_checks:
+            if not isinstance(raw_check, Mapping):
+                raise ValueError("data trust report check must be an object")
+            checks.append(
+                DataGateCheck.from_mapping(
+                    _string_mapping(raw_check, "data trust report check")
+                )
+            )
+        report = cls(
+            status=_required_string(value, "status"),
+            composition_hash=_required_string(value, "composition_hash"),
+            checks=tuple(checks),
+        )
+        failed_checks = value.get("failed_checks")
+        if (
+            not isinstance(failed_checks, list)
+            or tuple(failed_checks) != report.failed_checks
+        ):
+            raise ValueError("data trust report failed_checks do not match checks")
+        return report
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,7 +278,7 @@ class DataTrustGateApplication:
         os.replace(temporary, path)
         return report
 
-    def report(self, composition_hash: str) -> Mapping[str, Any]:
+    def report(self, composition_hash: str) -> DataTrustGateReport:
         """Read previously published Gate 1 evidence without re-evaluation."""
 
         path = self._report_path(composition_hash)
@@ -246,12 +286,12 @@ class DataTrustGateApplication:
             raise FileNotFoundError(
                 f"data trust report does not exist: {composition_hash}"
             )
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value: object = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, Mapping):
             raise ValueError("data trust report must be an object")
-        if value.get("schema_version") != 2:
-            raise ValueError("data trust report schema is stale; publish Gate 1 again")
-        return value
+        return DataTrustGateReport.from_mapping(
+            _string_mapping(value, "data trust report")
+        )
 
     def _report_path(self, composition_hash: str) -> Path:
         if len(composition_hash) != 64 or any(
@@ -261,6 +301,19 @@ class DataTrustGateApplication:
         return self.catalog.workspace.paths.child(
             "state", "data", "gates", f"{composition_hash}.json"
         )
+
+
+def _required_string(value: Mapping[str, object], key: str) -> str:
+    result = value.get(key)
+    if not isinstance(result, str) or not result:
+        raise ValueError(f"data trust report {key} must be a non-empty string")
+    return result
+
+
+def _string_mapping(value: Mapping[object, object], name: str) -> dict[str, object]:
+    if not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{name} keys must be strings")
+    return {str(key): item for key, item in value.items()}
 
 
 __all__ = [

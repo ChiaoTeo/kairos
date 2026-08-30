@@ -11,7 +11,7 @@ use crate::{ObservationKind, ProviderRouteBinding, ResolvedMarket};
 pub(crate) struct MarketProviderCapability {
     pub(crate) provider: Provider,
     pub(crate) provider_segment: crate::domain::market::ProviderSegmentCode,
-    pub(crate) venue_id: Option<ExchangeId>,
+    pub(crate) exchange_id: Option<ExchangeId>,
     pub(crate) instrument_kinds: Vec<InstrumentKind>,
     pub(crate) observation_kinds: Vec<ObservationKind>,
 }
@@ -119,7 +119,7 @@ impl MarketProviderCapability {
         exchange_id: &kairos_primitives::reference::ExchangeId,
         instrument_kind: InstrumentKind,
     ) -> bool {
-        self.venue_id
+        self.exchange_id
             .as_ref()
             .is_none_or(|venue| venue == exchange_id)
             && self.instrument_kinds.contains(&instrument_kind)

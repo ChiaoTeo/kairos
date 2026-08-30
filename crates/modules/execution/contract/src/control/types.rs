@@ -1,10 +1,11 @@
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 use kairos_primitives::decimal::{Money, Price, Quantity, Rate, Ratio, SignedQuantity};
 use kairos_primitives::execution::{
-    ExecutionChannelCode, ExecutionRouteId, FillId, IntentId, LegId, OrderEntrySymbol, OrderId,
-    OrderOptionCode, OrderSide, OrderType,
+    ExecutionAttemptId, ExecutionChannelCode, ExecutionRouteId, FillId, IntentId, LegId,
+    OrderEntrySymbol, OrderId, OrderOptionCode, OrderSide, OrderType,
 };
-use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::integration::{IntegrationSourceId, RemoteOrderId};
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
 use kairos_primitives::risk::DecisionId;
 use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId, WorkspaceId};
@@ -106,7 +107,7 @@ pub enum ExecutionRouteSelection {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionAttemptEvidenceResponse {
-    pub attempt_id: String,
+    pub attempt_id: ExecutionAttemptId,
     pub command: ExecutionAttemptCommand,
     pub route_id: ExecutionRouteId,
     pub broker_id: BrokerId,
@@ -115,7 +116,7 @@ pub struct ExecutionAttemptEvidenceResponse {
     pub destination_market_id: Option<MarketId>,
     pub route_selected_at_unix_nanos: UnixNanos,
     pub route_selection: ExecutionRouteSelection,
-    pub provider_connection_id: String,
+    pub provider_connection_id: IntegrationSourceId,
     pub command_started_at_unix_nanos: UnixNanos,
     pub delivery_certainty: ExecutionDeliveryCertainty,
     pub remote_order_id: Option<RemoteOrderId>,
@@ -443,10 +444,10 @@ pub struct ExecutionBacktestFill {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExecutionBacktestObservationScope {
     Market {
-        market_id: String,
+        market_id: MarketId,
     },
     Consolidated {
-        instrument_id: String,
+        instrument_id: InstrumentId,
         network_id: Option<String>,
     },
 }
@@ -454,27 +455,27 @@ pub enum ExecutionBacktestObservationScope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionBacktestQuote {
     pub scope: ExecutionBacktestObservationScope,
-    pub instrument_id: String,
-    pub bid_price: Option<String>,
-    pub bid_quantity: Option<String>,
-    pub ask_price: Option<String>,
-    pub ask_quantity: Option<String>,
-    pub observed_at_unix_nanos: u64,
-    pub source_id: String,
+    pub instrument_id: InstrumentId,
+    pub bid_price: Option<Price>,
+    pub bid_quantity: Option<Quantity>,
+    pub ask_price: Option<Price>,
+    pub ask_quantity: Option<Quantity>,
+    pub observed_at_unix_nanos: UnixNanos,
+    pub source_id: Provider,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionBacktestBar {
     pub scope: ExecutionBacktestObservationScope,
-    pub instrument_id: String,
+    pub instrument_id: InstrumentId,
     pub timeframe: String,
-    pub open: String,
-    pub high: String,
-    pub low: String,
-    pub close: String,
-    pub volume: Option<String>,
-    pub observed_at_unix_nanos: u64,
-    pub source_id: String,
+    pub open: Price,
+    pub high: Price,
+    pub low: Price,
+    pub close: Price,
+    pub volume: Option<Quantity>,
+    pub observed_at_unix_nanos: UnixNanos,
+    pub source_id: Provider,
     pub derivation: String,
 }
 
@@ -588,9 +589,9 @@ pub struct ExecutionBacktestRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionBacktestMetrics {
-    pub trade_count: usize,
-    pub win_count: usize,
-    pub loss_count: usize,
+    pub trade_count: u64,
+    pub win_count: u64,
+    pub loss_count: u64,
     pub win_rate: String,
     pub gross_profit: String,
     pub gross_loss: String,

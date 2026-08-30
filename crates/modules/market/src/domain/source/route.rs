@@ -5,7 +5,9 @@ use kairos_primitives::reference::{AssetClass, ExchangeId};
 use serde::{Deserialize, Serialize};
 
 use super::MarketFeedId;
-use crate::domain::market::ProviderSegmentCode;
+use crate::domain::market::{ProviderSegmentCode, ResolvedMarket};
+use crate::domain::observation::ObservationKind;
+use crate::domain::subscription::ObservationSelector;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FeedDescriptor {
@@ -84,4 +86,47 @@ impl FeedDescriptor {
         self.observation_capabilities = capabilities.into_iter().collect();
         self
     }
+}
+
+pub(crate) fn source_accepts(source: &FeedDescriptor, market: &ResolvedMarket) -> bool {
+    let Some(provider) = source.provider.as_ref() else {
+        // Replay and derived feeds are intentionally providerless. Their
+        // eligibility comes from the selected canonical Market.
+        return true;
+    };
+    let Some(attachment) = market.attach_route(&source.id, provider) else {
+        return false;
+    };
+    source
+        .provider
+        .as_ref()
+        .is_none_or(|provider| provider == &attachment.route.provider)
+        && source
+            .market_type
+            .as_ref()
+            .is_none_or(|market_type| market_type == &attachment.provider_segment)
+}
+
+pub(crate) fn source_supports_selectors(
+    source: &FeedDescriptor,
+    selectors: &[ObservationSelector],
+) -> bool {
+    source.observation_capabilities.is_empty()
+        || selectors.iter().all(|selector| {
+            selector.kind.is_none_or(|kind| {
+                source.observation_capabilities.contains(&kind)
+                    || matches!(
+                        kind,
+                        ObservationKind::Rate
+                            if source
+                                .observation_capabilities
+                                .contains(&ObservationKind::FundingRate)
+                    )
+                    || matches!(
+                        kind,
+                        ObservationKind::FundingRate
+                            if source.observation_capabilities.contains(&ObservationKind::Rate)
+                    )
+            })
+        })
 }

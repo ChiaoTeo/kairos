@@ -23,7 +23,7 @@ pub struct AccountApplication {
     runtime: AccountRuntime,
     runtime_mode: AccountRuntimeMode,
     business_time_unix_nanos: Option<u64>,
-    pub(super) conflux: super::conflux::AccountConfluxState,
+    pub(super) conflux: super::process::AccountConfluxState,
 }
 
 impl AccountApplication {
@@ -32,7 +32,7 @@ impl AccountApplication {
             runtime,
             runtime_mode: AccountRuntimeMode::Live,
             business_time_unix_nanos: None,
-            conflux: super::conflux::AccountConfluxState::default(),
+            conflux: super::process::AccountConfluxState::default(),
         }
     }
 
@@ -140,6 +140,7 @@ impl AccountApplication {
         match self
             .runtime
             .refresh_report(request.account_id.as_str(), &segments)
+            .map(AccountRefreshReport::from)
             .map_err(AccountError::Source)
         {
             Ok(report) => {
@@ -172,7 +173,10 @@ impl AccountApplication {
     }
 
     pub fn poll_refresh(&mut self) -> Result<Option<AccountRefreshReport>, AccountError> {
-        self.runtime.poll_refresh().map_err(AccountError::Source)
+        self.runtime
+            .poll_refresh()
+            .map(|report| report.map(AccountRefreshReport::from))
+            .map_err(AccountError::Source)
     }
 
     pub fn refresh_pending(&self) -> bool {
@@ -207,6 +211,7 @@ impl AccountApplication {
             .collect::<Vec<_>>();
         self.runtime
             .reconcile_report(request.account_id.as_str(), &segments)
+            .map(AccountRefreshReport::from)
             .map_err(AccountError::Source)
     }
 
@@ -300,7 +305,13 @@ impl AccountApplication {
             return Err(AccountError::Invalid("mark_price must be positive".into()));
         }
         self.runtime
-            .mark_to_market(request)
+            .mark_to_market(
+                request.segment_key,
+                request.instrument_id,
+                request.quote_asset,
+                request.mark_price,
+                request.observed_at_unix_nanos,
+            )
             .map_err(AccountError::Invalid)
     }
 
@@ -360,6 +371,7 @@ impl AccountApplication {
     ) -> Result<AccountRefreshReport, AccountError> {
         self.runtime
             .apply_refresh_fetches(account_id, fetches)
+            .map(AccountRefreshReport::from)
             .map_err(AccountError::Source)
     }
 }

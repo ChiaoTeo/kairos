@@ -29,6 +29,127 @@ from .models import (
 
 
 @dataclass(frozen=True, slots=True)
+class DataAcquisitionStepExecution:
+    index: int
+    owner: str
+    kind: str
+    subject: str
+    provider: str | None
+    status: str
+    attempts: int
+    started_at: str | None = None
+    updated_at: str | None = None
+    datasets: tuple[DatasetRef, ...] = ()
+    error: str | None = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> DataAcquisitionStepExecution:
+        raw_datasets = value.get("datasets", [])
+        if not isinstance(raw_datasets, list):
+            raise ValueError("data acquisition step datasets must be an array")
+        datasets: list[DatasetRef] = []
+        for raw_dataset in raw_datasets:
+            if not isinstance(raw_dataset, Mapping):
+                raise ValueError("data acquisition step dataset must be an object")
+            datasets.append(DatasetRef.from_dict(raw_dataset))
+        return cls(
+            index=_required_int(value, "index"),
+            owner=_required_string(value, "owner"),
+            kind=_required_string(value, "kind"),
+            subject=_required_string(value, "subject"),
+            provider=_optional_string(value, "provider"),
+            status=_required_string(value, "status"),
+            attempts=_required_int(value, "attempts"),
+            started_at=_optional_string(value, "started_at"),
+            updated_at=_optional_string(value, "updated_at"),
+            datasets=tuple(datasets),
+            error=_optional_string(value, "error"),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "index": self.index,
+            "owner": self.owner,
+            "kind": self.kind,
+            "subject": self.subject,
+            "provider": self.provider,
+            "status": self.status,
+            "attempts": self.attempts,
+        }
+        for key, item in (
+            ("started_at", self.started_at),
+            ("updated_at", self.updated_at),
+            ("error", self.error),
+        ):
+            if item is not None:
+                value[key] = item
+        if self.datasets:
+            value["datasets"] = [dataset.as_dict() for dataset in self.datasets]
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class DataAcquisitionExecution:
+    project_id: str
+    plan_hash: str
+    status: str
+    started_at: str
+    max_concurrency: int
+    steps: tuple[DataAcquisitionStepExecution, ...]
+    completed_at: str | None = None
+    result: DatasetSetRef | None = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> DataAcquisitionExecution:
+        if value.get("schema_version") != 1:
+            raise ValueError("data acquisition execution schema is unsupported")
+        raw_steps = value.get("steps")
+        if not isinstance(raw_steps, list):
+            raise ValueError("data acquisition execution steps must be an array")
+        steps: list[DataAcquisitionStepExecution] = []
+        for raw_step in raw_steps:
+            if not isinstance(raw_step, Mapping):
+                raise ValueError("data acquisition execution step must be an object")
+            steps.append(DataAcquisitionStepExecution.from_mapping(raw_step))
+        raw_result = value.get("result")
+        if raw_result is not None and not isinstance(raw_result, Mapping):
+            raise ValueError("data acquisition execution result must be an object")
+        max_concurrency = value.get("max_concurrency", 1)
+        if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
+            raise ValueError("data acquisition max_concurrency must be an integer")
+        return cls(
+            project_id=_required_string(value, "project_id"),
+            plan_hash=_required_string(value, "plan_hash"),
+            status=_required_string(value, "status"),
+            started_at=_required_string(value, "started_at"),
+            max_concurrency=max_concurrency,
+            steps=tuple(steps),
+            completed_at=_optional_string(value, "completed_at"),
+            result=(
+                DatasetSetRef.from_dict(raw_result)
+                if isinstance(raw_result, Mapping)
+                else None
+            ),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "schema_version": 1,
+            "project_id": self.project_id,
+            "plan_hash": self.plan_hash,
+            "status": self.status,
+            "started_at": self.started_at,
+            "max_concurrency": self.max_concurrency,
+            "steps": [step.as_dict() for step in self.steps],
+        }
+        if self.completed_at is not None:
+            value["completed_at"] = self.completed_at
+        if self.result is not None:
+            value["result"] = self.result.as_dict()
+        return value
+
+
+@dataclass(frozen=True, slots=True)
 class DataAcquisitionApplication:
     """Owner-routing executor; provider selection remains explicit in the plan."""
 
@@ -192,16 +313,16 @@ class DataAcquisitionApplication:
         self._write_journal(plan.plan_hash, journal)
         return result
 
-    def execution(self, plan_hash: str) -> Mapping[str, Any]:
+    def execution(self, plan_hash: str) -> DataAcquisitionExecution:
         path = self._journal_path(plan_hash)
         if not path.is_file():
             raise FileNotFoundError(
                 f"data acquisition execution does not exist: {plan_hash}"
             )
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value: object = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, Mapping):
             raise ValueError("data acquisition execution journal is invalid")
-        return value
+        return DataAcquisitionExecution.from_mapping(value)
 
     def _load_journal(self, plan: DataAcquisitionPlan) -> dict[str, Any]:
         path = self._journal_path(plan.plan_hash)
@@ -563,6 +684,29 @@ def _parameter(requirement: DataRequirement, name: str) -> str:
     if not value:
         raise ValueError(f"Massive acquisition requires parameter: {name}")
     return value
+
+
+def _required_string(value: Mapping[str, Any], key: str) -> str:
+    result = value.get(key)
+    if not isinstance(result, str) or not result:
+        raise ValueError(f"data acquisition {key} must be a non-empty string")
+    return result
+
+
+def _optional_string(value: Mapping[str, Any], key: str) -> str | None:
+    result = value.get(key)
+    if result is None:
+        return None
+    if not isinstance(result, str) or not result:
+        raise ValueError(f"data acquisition {key} must be a non-empty string")
+    return result
+
+
+def _required_int(value: Mapping[str, Any], key: str) -> int:
+    result = value.get(key)
+    if isinstance(result, bool) or not isinstance(result, int):
+        raise ValueError(f"data acquisition {key} must be an integer")
+    return result
 
 
 def _now() -> str:

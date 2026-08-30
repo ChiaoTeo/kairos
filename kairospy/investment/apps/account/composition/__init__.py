@@ -28,7 +28,9 @@ def build_strategy_access(
         client.event_route is None or client.event_route.scope != "instance"
         for client in account_clients.values()
     ):
-        raise RuntimeError("Account connections require an explicit Instance event route")
+        raise RuntimeError(
+            "Account connections require an explicit Instance event route"
+        )
     routes = {
         (str(client.event_route.aeron_dir), client.event_route.channel)
         for client in account_clients.values()
@@ -36,7 +38,9 @@ def build_strategy_access(
     }
     if len(routes) != 1:
         raise RuntimeError("enabled Accounts must share one Instance event route")
-    resolved_clients: dict[AccountId, tuple[AccountSystemClient, EventTransportRoute]] = {}
+    resolved_clients: dict[
+        AccountId, tuple[AccountSystemClient, EventTransportRoute]
+    ] = {}
     for account_id, client in account_clients.items():
         route = client.event_route
         if route is None:
@@ -62,7 +66,9 @@ def build_strategy_access(
         if (current := owner.current) is not None
     }
     if len(current_views) != len(owner_clients):
-        raise RuntimeError("Account owner client is missing its current-view capability")
+        raise RuntimeError(
+            "Account owner client is missing its current-view capability"
+        )
     first_owner = next(iter(owner_clients.values()))
     return AccountApplication(
         current_views,
@@ -83,11 +89,4 @@ def mark_backtest_account(
     result = client.mark_to_market_event(event)
     if result is None:
         return None
-    segment_key = result.get("segment_key")
-    if not isinstance(segment_key, str) or not segment_key.strip():
-        raise ValueError("Account backtest result is missing segment_key")
-    return (
-        client.current_view(account_id)
-        .snapshot()
-        .segment(segment_key)
-    )
+    return client.current_view(account_id).snapshot().segment(result.segment_key)

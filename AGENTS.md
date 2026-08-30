@@ -1,9 +1,9 @@
 # Project Architecture and Agent Rules
 
-This repository separates business modules, platform capabilities, and shared
-primitives. The architecture baseline, ownership map, and Agent-specific
-change rules are maintained in this file and apply before adding, moving, or
-deleting code.
+This repository separates business modules, system composition, platform
+capabilities, and shared primitives. The architecture baseline, ownership map,
+and Agent-specific change rules are maintained in this file and apply before
+adding, moving, or deleting code.
 
 ## Repository layout
 
@@ -13,7 +13,8 @@ crates/
     <module>/       the module's main crate
       contract/     optional, independently depend-able process contract crate
       src/          application, composition, domain, services, and binaries
-  platform/         infrastructure and system capabilities
+  system/           cross-business process composition and launch coordination
+  platform/         business-neutral infrastructure capabilities
   primitives/       grouped, infrastructure-free shared business vocabulary
 ```
 
@@ -24,8 +25,15 @@ caller can depend on `crates/modules/<module>/contract` without compiling or
 importing the main module crate. Directory nesting never implies a Cargo
 dependency.
 
-Platform crates live under `crates/platform/<capability>`. Do not put business
-state or module-owned vocabulary in platform crates. `crates/primitives` is a
+System crates live under `crates/system/<capability>` and may assemble owner
+contracts with platform resources, but must not bypass a contract to invoke a
+business main package. Business modules may depend on a System runtime only for
+process lifecycle and typed resource access; business behavior remains in the
+owner module.
+
+Platform crates live under `crates/platform/<capability>`. They must remain
+business-neutral: do not put business state, module contract inventories, or
+module-owned vocabulary in platform crates. `crates/primitives` is a
 shared semantic kernel, not a generic common-types or utilities bucket. It may
 contain business identities, exact values, units, and closed vocabulary whose
 meaning and invariants are stable across an owner's domain/contract boundary

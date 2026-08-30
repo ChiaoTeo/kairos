@@ -19,7 +19,7 @@ pub(super) fn plan_simulated_intent(
                     order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, leg.leg_id))
                         .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                     intent_id: Some(intent.intent_id.clone()),
-                    strategy_id: Some(typed_strategy_id(intent.strategy_id.clone())),
+                    strategy_id: Some(intent.strategy_id.clone()),
                     account_id: leg.account_id.clone(),
                     segment_key: leg.segment_key.clone(),
                     instrument_id: leg.instrument_id.clone(),
@@ -51,7 +51,7 @@ pub(super) fn plan_simulated_intent(
                 order_id: OrderId::new(format!("{}:order:{index}", intent.intent_id))
                     .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                 intent_id: Some(intent.intent_id.clone()),
-                strategy_id: Some(typed_strategy_id(intent.strategy_id.clone())),
+                strategy_id: Some(intent.strategy_id.clone()),
                 account_id: account_id.clone(),
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),

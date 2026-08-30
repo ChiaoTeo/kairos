@@ -1,10 +1,9 @@
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use kairos_account::domain::AccountFill;
 use kairos_account::{
     AccountBalanceItem, AccountBalancesResult, AccountCredentialProbeRequest,
-    AccountEarnHoldingsResult, AccountFeesResult, AccountListItem, AccountListResult,
+    AccountEarnHoldingsResult, AccountFeesResult, AccountFill, AccountListItem, AccountListResult,
     AccountOpenOrdersResult, AccountOverviewResult, AccountPositionsResult,
     AccountProviderConnectionArgs, AccountQueryCompleteness, BindCredentialRequest,
     CliAccountApplication, ConnectAccountProviderRequest, ConnectedAccountApplication,
@@ -393,7 +392,7 @@ struct FillArgs {
 impl FillArgs {
     fn to_domain(&self) -> Result<AccountFill, String> {
         Ok(AccountFill {
-            fill_id: kairos_account::domain::FillId::new(
+            fill_id: kairos_account::FillId::new(
                 self.fill_id
                     .clone()
                     .ok_or("--fill-id is required for idempotency")?,
@@ -405,9 +404,9 @@ impl FillArgs {
                 .map(kairos_primitives::execution::OrderId::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
-            segment_key: kairos_account::domain::SegmentKey::new(self.segment.clone())
+            segment_key: kairos_account::SegmentKey::new(self.segment.clone())
                 .map_err(|error| error.to_string())?,
-            instrument_id: kairos_account::domain::InstrumentId::new(self.instrument_id.clone())
+            instrument_id: kairos_account::InstrumentId::new(self.instrument_id.clone())
                 .map_err(|error| error.to_string())?,
             quantity: self
                 .quantity
@@ -418,8 +417,8 @@ impl FillArgs {
                 .parse()
                 .map_err(|error: kairos_primitives::DomainTypeError| error.to_string())?,
             side: match self.side.to_ascii_lowercase().as_str() {
-                "sell" => kairos_account::domain::OrderSide::Sell,
-                _ => kairos_account::domain::OrderSide::Buy,
+                "sell" => kairos_account::OrderSide::Sell,
+                _ => kairos_account::OrderSide::Buy,
             },
             settlement_asset: self
                 .settlement_asset
@@ -1691,7 +1690,11 @@ fn connected_account_app(
         instance.launch_id(),
         instance.instance_id(),
     )?;
-    ConnectedAccountApplication::connect(instance.socket(&socket_name)?, view_root, identity)
+    kairos_account::composition::connect_account_application(
+        instance.socket(&socket_name)?,
+        view_root,
+        identity,
+    )
 }
 
 async fn run_runtime_control(

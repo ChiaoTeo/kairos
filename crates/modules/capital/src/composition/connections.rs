@@ -223,7 +223,10 @@ impl CapitalIntegrationConnections {
             asset: asset.clone(),
             amount,
             kind,
-            product_id: Some(product_id.to_owned()),
+            product_id: Some(
+                kairos_primitives::capital::EarnProductId::new(product_id)
+                    .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?,
+            ),
             occurred_at_unix_nanos,
         };
         if let Err(error) = apply_simulated_mutation(account.client, mutation).await? {

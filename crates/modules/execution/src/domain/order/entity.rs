@@ -37,9 +37,9 @@ pub enum OrderReconciliationCause {
 /// epoch; it is not treated as a venue-global order sequence.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OrderFactCursor {
-    pub connection_id: String,
-    pub channel_id: String,
-    pub channel_epoch: u64,
+    pub connection_id: kairos_primitives::integration::IntegrationSourceId,
+    pub channel_id: kairos_primitives::execution::ExecutionChannelCode,
+    pub channel_epoch: kairos_primitives::time::Generation,
     pub participant_sequence: Option<Sequence>,
 }
 

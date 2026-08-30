@@ -95,7 +95,10 @@ pub(crate) fn read_location_facts(
             holding.redeemable().map(|redeemable| {
                 quantity_from_decimal(redeemable).and_then(|redeemable_amount| {
                     Ok(crate::CapitalEarnHoldingFact {
-                        product_id: holding.product_id().to_owned(),
+                        product_id: kairos_primitives::capital::EarnProductId::new(
+                            holding.product_id(),
+                        )
+                        .map_err(|error| error.to_string())?,
                         principal: quantity_from_decimal(holding.principal())?,
                         redeemable_amount,
                         immediately_redeemable: holding.liquidity()

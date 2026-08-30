@@ -2,11 +2,9 @@ use std::collections::BTreeMap;
 
 use kairos_primitives::time::{Generation, Sequence};
 
-use crate::application::{
-    AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountSegmentView,
-};
 use crate::domain::{
-    Account, AccountEvent, AccountSegment, AccountSnapshot, AccountState, ApplyOutcome, Balance,
+    Account, AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountEvent,
+    AccountSegment, AccountSegmentView, AccountSnapshot, AccountState, ApplyOutcome, Balance,
     SegmentKey, SignedQuantity, SnapshotKind,
 };
 
@@ -237,7 +235,7 @@ impl AccountActor {
     pub(crate) fn apply_snapshot(
         &mut self,
         snapshot: AccountSnapshot,
-    ) -> Result<(ApplyOutcome, Vec<crate::application::AccountDifference>), String> {
+    ) -> Result<(ApplyOutcome, Vec<crate::domain::AccountDifference>), String> {
         let account = self
             .accounts
             .get_mut(&snapshot.segment_key)
@@ -532,7 +530,7 @@ fn collect_business_changes(
         out.push(AccountBusinessChange::Status {
             segment_key: current.segment_key.clone(),
             status: current.status,
-            stale: current.freshness == crate::application::AccountSegmentFreshness::Stale,
+            stale: current.freshness == crate::domain::AccountSegmentFreshness::Stale,
         });
     }
 }
@@ -557,7 +555,7 @@ fn earn_holding_key(holding: &crate::domain::EarnHolding) -> String {
     holding
         .participant_position_id
         .clone()
-        .unwrap_or_else(|| holding.product_id.clone())
+        .unwrap_or_else(|| holding.product_id.to_string())
 }
 
 fn segment_selected(segments: &[String], key: &SegmentKey) -> bool {
@@ -567,7 +565,7 @@ fn segment_selected(segments: &[String], key: &SegmentKey) -> bool {
 fn compare_snapshot(
     account: &Account,
     snapshot: &AccountSnapshot,
-) -> Vec<crate::application::AccountDifference> {
+) -> Vec<crate::domain::AccountDifference> {
     let mut differences = Vec::new();
     let state = account.state();
 
@@ -676,7 +674,7 @@ fn compare_snapshot(
 }
 
 fn compare_balance(
-    differences: &mut Vec<crate::application::AccountDifference>,
+    differences: &mut Vec<crate::domain::AccountDifference>,
     key: String,
     local: Option<&Balance>,
     external: Option<&Balance>,
@@ -705,7 +703,7 @@ fn compare_balance(
 }
 
 fn compare_decimal(
-    differences: &mut Vec<crate::application::AccountDifference>,
+    differences: &mut Vec<crate::domain::AccountDifference>,
     field: &str,
     key: String,
     local: Option<SignedQuantity>,
@@ -718,7 +716,7 @@ fn compare_decimal(
         .map(|ordering| ordering != std::cmp::Ordering::Equal)
         .unwrap_or(true);
     if differs {
-        differences.push(crate::application::AccountDifference {
+        differences.push(crate::domain::AccountDifference {
             field: field.into(),
             key,
             local,

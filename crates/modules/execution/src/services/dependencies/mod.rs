@@ -17,26 +17,20 @@ use kairos_primitives::account::PositionSide;
 use kairos_primitives::decimal::{Money, Price};
 use kairos_primitives::execution::OrderId;
 use kairos_primitives::reference::{InstrumentId, InstrumentKind, MarketId};
-use kairos_primitives::runtime::StrategyId;
 use kairos_primitives::time::UnixNanos;
 use kairos_reference_contract::{ExecutionReferenceSnapshot, Market};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use state::*;
 
-#[cfg(test)]
-use crate::application::core::orders::admission::risk_amount;
-use crate::application::core::orders::admission::{
-    PlanningQuote, decimal_money, decimal_price, decimal_quantity, decimal_signed_quantity,
-    ensure_available_capacity, money_from_decimal, quantity_from_decimal, validate_market_price,
-    validate_pair_constraints, validate_quote_freshness, validate_quote_provisioning,
-    validate_reference_rules,
+use crate::domain::{
+    CommitmentBasis, CommitmentResource, DependencyWatermarks, ExecuteStrategyIntent,
+    OrderCommitment, OrderSide, OrderType, PlanningQuote, QuoteObservation,
+    RiskAuthorizationContext, SnapshotWatermark, SubmitOrder, decimal_money, decimal_price,
+    decimal_quantity, decimal_signed_quantity, ensure_available_capacity, money_from_decimal,
+    quantity_from_decimal, validate_market_price, validate_pair_constraints,
+    validate_quote_freshness, validate_quote_provisioning, validate_reference_rules,
 };
-use crate::application::{
-    DependencyWatermarks, ExecuteStrategyIntent, QuoteObservation, RiskAuthorizationContext,
-    SnapshotWatermark, SubmitOrder,
-};
-use crate::domain::{CommitmentBasis, CommitmentResource, OrderCommitment, OrderSide, OrderType};
 use crate::services::risk::SocketExecutionRiskReservations;
 
 /// Composition-owned copy of the Market quote view. This is an adapter
@@ -87,16 +81,14 @@ impl ExecutionOrderAdmissionService {
     ) -> Result<OrderCommitment, String> {
         match self {
             Self::Live(admission) => admission.validate_order(request, active_commitments),
-            Self::Simulated => {
-                crate::application::core::orders::admission::simulation_commitment(request, now)
-            },
+            Self::Simulated => crate::domain::simulation_commitment(request, now),
         }
     }
 
     pub(crate) fn risk_authorization_context(
         &mut self,
         request: &SubmitOrder,
-        route: &crate::application::ExecutionRouteCandidate,
+        route: &crate::domain::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
         match self {
             Self::Live(admission) => admission.risk_authorization_context(request, route),
@@ -224,7 +216,7 @@ impl SocketExecutionOrderAdmission {
     pub(crate) fn risk_authorization_context(
         &mut self,
         request: &SubmitOrder,
-        route: &crate::application::ExecutionRouteCandidate,
+        route: &crate::domain::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
         self.context.risk_authorization_context(request, route)
     }
@@ -257,20 +249,4 @@ fn find_position(
             .map_err(|_| "position quantity cannot be represented as a decimal".to_string())
         })
         .transpose()
-}
-
-#[cfg(test)]
-mod tests {
-    use kairos_primitives::decimal::{Price, Quantity};
-
-    use super::{decimal_price, decimal_quantity, risk_amount};
-
-    #[test]
-    fn risk_notional_preserves_quantity_and_price_scales() {
-        let quantity = decimal_quantity(Quantity::new(2, 0).unwrap()).unwrap();
-        let price = decimal_price(Price::new(1_005, 1).unwrap()).unwrap();
-        let amount = risk_amount(quantity * price).unwrap();
-
-        assert_eq!((amount.mantissa(), amount.scale()), (201, 0));
-    }
 }

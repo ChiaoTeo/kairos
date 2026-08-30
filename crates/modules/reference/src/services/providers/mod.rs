@@ -12,7 +12,7 @@ use kairos_conflux::{
     ExternalInstrumentKind, InstrumentCatalogQuery, MassiveInstrumentQuery, MassiveRestConfig,
     ParticipantKind,
 };
-use kairos_primitives::reference::{AssetClass, InstrumentKind};
+use kairos_primitives::reference::{AssetClass, InstrumentKind, ReferenceSourceId};
 
 struct ConnectionRef(kairos_conflux::ConnectionKey);
 

@@ -25,6 +25,7 @@ use kairos_primitives::decimal::{
 };
 use kairos_primitives::execution::{ExecutionRouteId, LegId, OrderId, OrderSide, OrderType};
 use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::market::Provider;
 use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
 use kairos_primitives::risk::DecisionId;
 use kairos_primitives::runtime::{
@@ -1423,11 +1424,11 @@ impl NativeExecutionBacktestRequest {
 )]
 pub(crate) struct NativeExecutionBacktestMetrics {
     #[pyo3(get)]
-    trade_count: usize,
+    trade_count: u64,
     #[pyo3(get)]
-    win_count: usize,
+    win_count: u64,
     #[pyo3(get)]
-    loss_count: usize,
+    loss_count: u64,
     #[pyo3(get)]
     win_rate: String,
     #[pyo3(get)]
@@ -1506,22 +1507,13 @@ impl NativeExecutionBacktestMarketRequest {
         validate_text(&market_id, "market_id")?;
         validate_text(&instrument_id, "instrument_id")?;
         validate_text(&source_id, "source_id")?;
-        let bid_price = bid_price
-            .as_ref()
-            .map(|value| semantic_text(value, "price", "bid_price"))
-            .transpose()?;
-        let bid_quantity = bid_quantity
-            .as_ref()
-            .map(|value| semantic_text(value, "quantity", "bid_quantity"))
-            .transpose()?;
-        let ask_price = ask_price
-            .as_ref()
-            .map(|value| semantic_text(value, "price", "ask_price"))
-            .transpose()?;
-        let ask_quantity = ask_quantity
-            .as_ref()
-            .map(|value| semantic_text(value, "quantity", "ask_quantity"))
-            .transpose()?;
+        let market_id = MarketId::new(market_id).map_err(value_error)?;
+        let instrument_id = InstrumentId::new(instrument_id).map_err(value_error)?;
+        let source_id = Provider::new(source_id).map_err(value_error)?;
+        let bid_price = bid_price.as_ref().map(price_input).transpose()?;
+        let bid_quantity = bid_quantity.as_ref().map(quantity_input).transpose()?;
+        let ask_price = ask_price.as_ref().map(price_input).transpose()?;
+        let ask_quantity = ask_quantity.as_ref().map(quantity_input).transpose()?;
         Ok(Self {
             inner: ExecutionBacktestMarketRequest {
                 event: ExecutionBacktestMarketObservation::Quote(ExecutionBacktestQuote {
@@ -1531,7 +1523,7 @@ impl NativeExecutionBacktestMarketRequest {
                     bid_quantity,
                     ask_price,
                     ask_quantity,
-                    observed_at_unix_nanos,
+                    observed_at_unix_nanos: observed_at_unix_nanos.into(),
                     source_id,
                 }),
             },
@@ -1563,14 +1555,14 @@ impl NativeExecutionBacktestMarketRequest {
             validate_text(value, name)?;
         }
         validate_text(derivation, "derivation")?;
-        let open = semantic_text(open, "price", "open")?;
-        let high = semantic_text(high, "price", "high")?;
-        let low = semantic_text(low, "price", "low")?;
-        let close = semantic_text(close, "price", "close")?;
-        let volume = volume
-            .as_ref()
-            .map(|value| semantic_text(value, "quantity", "volume"))
-            .transpose()?;
+        let market_id = MarketId::new(market_id).map_err(value_error)?;
+        let instrument_id = InstrumentId::new(instrument_id).map_err(value_error)?;
+        let source_id = Provider::new(source_id).map_err(value_error)?;
+        let open = price_input(open)?;
+        let high = price_input(high)?;
+        let low = price_input(low)?;
+        let close = price_input(close)?;
+        let volume = volume.as_ref().map(quantity_input).transpose()?;
         Ok(Self {
             inner: ExecutionBacktestMarketRequest {
                 event: ExecutionBacktestMarketObservation::Bar(ExecutionBacktestBar {
@@ -1582,7 +1574,7 @@ impl NativeExecutionBacktestMarketRequest {
                     low,
                     close,
                     volume,
-                    observed_at_unix_nanos,
+                    observed_at_unix_nanos: observed_at_unix_nanos.into(),
                     source_id,
                     derivation: derivation.to_owned(),
                 }),
@@ -1901,7 +1893,7 @@ fn audit_event(
 
 fn attempt_evidence(value: ExecutionAttemptEvidenceResponse) -> NativeExecutionAttemptEvidence {
     NativeExecutionAttemptEvidence {
-        attempt_id: value.attempt_id,
+        attempt_id: value.attempt_id.to_string(),
         command: format!("{:?}", value.command).to_ascii_lowercase(),
         route_id: value.route_id.to_string(),
         broker_id: value.broker_id.to_string(),
@@ -1916,7 +1908,7 @@ fn attempt_evidence(value: ExecutionAttemptEvidenceResponse) -> NativeExecutionA
             },
         }
         .to_owned(),
-        provider_connection_id: value.provider_connection_id,
+        provider_connection_id: value.provider_connection_id.to_string(),
         command_started_at_unix_nanos: value.command_started_at_unix_nanos.get(),
         delivery_certainty: format!("{:?}", value.delivery_certainty).to_ascii_lowercase(),
         remote_order_id: value.remote_order_id.map(|v| v.to_string()),
@@ -2104,11 +2096,6 @@ fn money_input(value: &Bound<'_, PyAny>) -> PyResult<Money> {
 fn rate_input(value: &Bound<'_, PyAny>) -> PyResult<Rate> {
     let parts = semantic_parts(value, "rate")?;
     Rate::new(parts.mantissa(), parts.scale()).map_err(value_error)
-}
-fn semantic_text(value: &Bound<'_, PyAny>, expected: &str, field: &str) -> PyResult<String> {
-    semantic_parts(value, expected)
-        .map(|parts| parts.to_string())
-        .map_err(|error| ExecutionInvalidInputError::new_err(format!("{field}: {error}")))
 }
 fn native_decimal(mantissa: i64, scale: u8, semantic_type: &'static str) -> super::NativeDecimal {
     super::NativeDecimal {

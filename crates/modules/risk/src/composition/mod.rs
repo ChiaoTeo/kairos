@@ -127,7 +127,7 @@ pub struct FlatbuffersRiskEventWriter {
 }
 
 impl FlatbuffersRiskEventWriter {
-    pub fn new(actor_id: impl Into<String>) -> Self {
+    pub fn new(actor_id: kairos_primitives::runtime::ActorId) -> Self {
         Self {
             inner: kairos_risk_contract::FlatbuffersRiskEventWriter::new(actor_id),
             last_payload: None,
@@ -135,7 +135,7 @@ impl FlatbuffersRiskEventWriter {
     }
 
     pub fn new_with_identity(
-        actor_id: impl Into<String>,
+        actor_id: kairos_primitives::runtime::ActorId,
         identity: kairos_primitives::runtime::InstanceIdentity,
     ) -> Self {
         Self {
@@ -147,7 +147,7 @@ impl FlatbuffersRiskEventWriter {
     }
 
     pub fn new_with_incarnation(
-        actor_id: impl Into<String>,
+        actor_id: kairos_primitives::runtime::ActorId,
         identity: kairos_primitives::runtime::InstanceIdentity,
         producer_incarnation: u64,
     ) -> Self {

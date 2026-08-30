@@ -1,6 +1,5 @@
 mod app;
 mod cli;
-mod conflux;
 mod connected;
 pub mod contract;
 mod process;

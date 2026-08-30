@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 from kairospy.system.apps.workspace.application import Workspace
-from .acquisition import DataAcquisitionApplication
+from .acquisition import DataAcquisitionApplication, DataAcquisitionExecution
 from .catalog import DatasetCatalogApplication
-from .gates import DataTrustGateApplication
+from .gates import DataTrustGateApplication, DataTrustGateReport
 from .models import (
     DataAcquisitionPlan,
     DataRequirement,
@@ -54,7 +54,7 @@ class DataApplication:
             plan, max_concurrency=max_concurrency
         )
 
-    def execution(self, plan_hash: str) -> Mapping[str, Any]:
+    def execution(self, plan_hash: str) -> DataAcquisitionExecution:
         return DataAcquisitionApplication(self.workspace, self._catalog).execution(
             plan_hash
         )
@@ -69,7 +69,7 @@ class DataApplication:
             name, composition_hash=composition_hash
         )
 
-    def trust_report(self, composition_hash: str) -> Mapping[str, Any]:
+    def trust_report(self, composition_hash: str) -> DataTrustGateReport:
         return DataTrustGateApplication(self._catalog).report(composition_hash)
 
 

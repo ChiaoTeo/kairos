@@ -152,7 +152,7 @@ fn insert_indexed(
 }
 
 pub struct FlatbuffersRiskEventWriter {
-    pub actor_id: String,
+    pub actor_id: kairos_primitives::runtime::ActorId,
     identity: kairos_primitives::runtime::InstanceIdentity,
     producer_incarnation: u64,
     pub last_payload: Option<Vec<u8>>,
@@ -165,7 +165,7 @@ pub struct RiskAeronEventPublisher {
 impl RiskAeronEventPublisher {
     pub fn connect(
         endpoint: &kairos_transport::AeronEndpoint,
-        actor_id: impl Into<String>,
+        actor_id: kairos_primitives::runtime::ActorId,
         identity: kairos_primitives::runtime::InstanceIdentity,
     ) -> crate::ContractResult<Self> {
         if endpoint.stream_id() != kairos_transport::stream_ids::RISK_EVENTS {
@@ -195,17 +195,17 @@ impl RiskAeronEventPublisher {
 }
 
 impl FlatbuffersRiskEventWriter {
-    pub fn new(actor_id: impl Into<String>) -> Self {
+    pub fn new(actor_id: kairos_primitives::runtime::ActorId) -> Self {
         Self::new_with_identity(actor_id, Default::default())
     }
     pub fn new_with_identity(
-        actor_id: impl Into<String>,
+        actor_id: kairos_primitives::runtime::ActorId,
         identity: kairos_primitives::runtime::InstanceIdentity,
     ) -> Self {
         Self::new_with_incarnation(actor_id, identity, 1)
     }
     pub fn new_with_incarnation(
-        actor_id: impl Into<String>,
+        actor_id: kairos_primitives::runtime::ActorId,
         identity: kairos_primitives::runtime::InstanceIdentity,
         producer_incarnation: u64,
     ) -> Self {
@@ -214,7 +214,7 @@ impl FlatbuffersRiskEventWriter {
             "producer incarnation must be positive"
         );
         Self {
-            actor_id: actor_id.into(),
+            actor_id,
             identity,
             producer_incarnation,
             last_payload: None,

@@ -1,11 +1,13 @@
 mod budget;
-pub mod circuit;
-pub mod exposure;
-pub mod margin;
-pub mod scenario;
+pub(crate) mod circuit;
+pub(crate) mod margin;
+mod outcome;
 
 pub use budget::{
     Allocation, Amount, AuthorizeRequest, CircuitScope, CircuitState, DependencyWatermarks,
     EnforcementMode, Metric, PolicyScope, ReasonCode, RequestedUsage, Reservation,
     ReservationStatus, RiskContext, RiskPolicy, TradeRiskProposal,
+};
+pub use outcome::{
+    FundingRequirement, LimitView, RiskCurrentView, RiskDecision, RiskEvent, RiskSnapshot,
 };

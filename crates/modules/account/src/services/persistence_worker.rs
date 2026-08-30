@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::domain::Account;
+use crate::domain::{Account, AccountBusinessEvent};
 use crate::services::persistence::{AccountJournalRecord, JsonAccountStore};
 
 enum PersistenceJob {
@@ -17,7 +17,7 @@ enum PersistenceJob {
         generation: u64,
         event_sequence: u64,
         accounts: Vec<Account>,
-        pending_business_events: Vec<crate::application::AccountBusinessEvent>,
+        pending_business_events: Vec<AccountBusinessEvent>,
         response: SyncSender<Result<(), String>>,
     },
 }
@@ -183,7 +183,7 @@ impl AccountPersistenceWorker {
         generation: u64,
         event_sequence: u64,
         accounts: Vec<Account>,
-        pending_business_events: Vec<crate::application::AccountBusinessEvent>,
+        pending_business_events: Vec<AccountBusinessEvent>,
     ) -> Result<(), String> {
         let (response, receiver) = mpsc::sync_channel(1);
         self.pending.fetch_add(1, Ordering::Relaxed);

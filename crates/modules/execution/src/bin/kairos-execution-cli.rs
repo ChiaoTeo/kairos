@@ -135,9 +135,13 @@ fn connected_execution_app(
         InstanceIdentity::new(workspace_id, instance.launch_id(), instance.instance_id())?;
     let socket = instance.socket("execution")?;
     if require_views {
-        return ConnectedExecutionApplication::connect(socket, instance.snapshot(&[])?, identity);
+        return kairos_execution::composition::connect_execution_application(
+            socket,
+            Some(instance.snapshot(&[])?),
+            identity,
+        );
     }
-    ConnectedExecutionApplication::connect_control(socket, identity)
+    kairos_execution::composition::connect_execution_application(socket, None, identity)
 }
 
 fn execute_connected_query(

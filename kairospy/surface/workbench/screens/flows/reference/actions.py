@@ -12,6 +12,7 @@ from rich.pretty import Pretty
 from rich.table import Table
 from rich.text import Text
 
+from kairospy.contracts.reference import ReferenceRuntimeStatusResponse
 from kairospy.investment.apps.reference.application import ReferenceApplication
 from kairospy.system.apps.components.application.clients import ReferenceSystemClient
 
@@ -290,10 +291,13 @@ class ReferenceSourceView:
         return f"{_provider_label(self.provider_id)} · {state}"
 
 
-def source_views(value: Mapping[str, object]) -> tuple[ReferenceSourceView, ...]:
+def source_views(
+    value: ReferenceRuntimeStatusResponse,
+) -> tuple[ReferenceSourceView, ...]:
+    payload = value.to_json_dict()
     sources = tuple(
         ReferenceSourceView.from_mapping(source)
-        for source in _mapping_rows(value.get("sources"))
+        for source in _mapping_rows(payload.get("sources"))
     )
     return tuple(
         sorted(
@@ -435,7 +439,7 @@ def _string_tuple(value: object) -> tuple[str, ...]:
     )
 
 
-def load_runtime_status(state: Any) -> dict[str, Any]:
+def load_runtime_status(state: Any) -> ReferenceRuntimeStatusResponse:
     """Read detailed status through the Reference-owned control contract."""
 
     if state.owner is None:
@@ -606,15 +610,16 @@ def _provider_label(provider: str) -> str:
     }.get(provider, provider or "未知来源")
 
 
-def runtime_status_renderable(value: Mapping[str, Any]) -> RenderableType:
+def runtime_status_renderable(value: ReferenceRuntimeStatusResponse) -> RenderableType:
     """Render one Reference runtime snapshot without recomputing owner health."""
 
-    app_runtime = _mapping(value.get("app_runtime"))
-    catalog = _mapping(value.get("catalog"))
-    publication = _mapping(value.get("publication"))
-    diagnostics = _mapping_rows(value.get("diagnostics"))
+    payload = value.to_json_dict()
+    app_runtime = _mapping(payload.get("app_runtime"))
+    catalog = _mapping(payload.get("catalog"))
+    publication = _mapping(payload.get("publication"))
+    diagnostics = _mapping_rows(payload.get("diagnostics"))
     sources = sorted(
-        _mapping_rows(value.get("sources")),
+        _mapping_rows(payload.get("sources")),
         key=lambda source: (
             0 if _source_needs_attention(source) else 1,
             str(source.get("source_id") or ""),
@@ -624,7 +629,7 @@ def runtime_status_renderable(value: Mapping[str, Any]) -> RenderableType:
     runtime = Table.grid(padding=(0, 2))
     runtime.add_column(style="dim", no_wrap=True)
     runtime.add_column()
-    runtime.add_row("整体状态", _status_text(value.get("status")))
+    runtime.add_row("整体状态", _status_text(payload.get("status")))
     runtime.add_row("运行阶段", _status_text(app_runtime.get("phase")))
     runtime.add_row(
         "准备任务",
@@ -713,7 +718,7 @@ def runtime_status_renderable(value: Mapping[str, Any]) -> RenderableType:
     else:
         publication_table.add_row("诊断", "无")
 
-    ready = str(value.get("status") or "").lower() == "ready" and not any(
+    ready = str(payload.get("status") or "").lower() == "ready" and not any(
         _source_needs_attention(source) for source in sources
     )
     return Group(

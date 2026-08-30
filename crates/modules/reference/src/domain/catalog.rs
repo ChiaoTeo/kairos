@@ -238,18 +238,6 @@ impl ReferenceCatalog {
         events
     }
 
-    pub fn active_market_count(&self) -> usize {
-        self.markets
-            .values()
-            .filter(|market| {
-                matches!(
-                    market.status,
-                    ReferenceStatus::Active | ReferenceStatus::Trading
-                )
-            })
-            .count()
-    }
-
     pub fn retain_recent_lifecycle_events(&mut self, limit: usize) {
         if self.lifecycle_events.len() <= limit {
             return;
@@ -428,7 +416,8 @@ fn reject_provider_owned_upsert(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use kairos_primitives::reference::{
-        AssetClass, AssetId, ExchangeId, InstrumentId, ListingId, MarketId, Symbol,
+        AssetClass, AssetId, ExchangeId, InstrumentId, ListingId, MarketId, ReferenceSourceId,
+        Symbol,
     };
 
     use super::{
@@ -709,7 +698,7 @@ mod tests {
         catalog.assets.insert(
             "asset:BTC".into(),
             Asset {
-                source_id: Some("binance-spot".into()),
+                source_id: Some(ReferenceSourceId::new("binance-spot").unwrap()),
                 asset_id: asset_id("asset:BTC"),
                 code: Symbol::new("BTC").unwrap(),
                 asset_class: AssetClass::Crypto,
@@ -743,7 +732,7 @@ mod tests {
         catalog.listings.insert(
             listing_id("listing:binance:spot:BTC:USDT"),
             Listing {
-                source_id: Some("binance-spot".into()),
+                source_id: Some(ReferenceSourceId::new("binance-spot").unwrap()),
                 listing_id: listing_id("listing:binance:spot:BTC:USDT"),
                 instrument_id: instrument_id("instrument:spot:BTC-USDT"),
                 exchange_id: ExchangeId::new("exchange:binance").unwrap(),

@@ -9,10 +9,9 @@ mod sqlx;
 
 pub use memory::MemoryExecutionAudit;
 pub(crate) use model::IntentAdmissionAuditRecord;
-pub use model::{ExecutionAuditEvent, ExecutionAuditQuery};
 pub use sqlx::SqlxExecutionAudit;
 
-use crate::application::{ExecutionEvent, IntentEvent};
+use crate::domain::{ExecutionAuditEvent, ExecutionAuditQuery, ExecutionEvent, IntentEvent};
 
 pub enum ExecutionAudit {
     Memory(MemoryExecutionAudit),

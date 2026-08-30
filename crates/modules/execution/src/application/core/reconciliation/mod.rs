@@ -85,7 +85,7 @@ impl ExecutionApplication {
 
     pub(crate) fn reconcile_external_orders(
         &mut self,
-        remote: Vec<kairos_conflux::ExternalOrder>,
+        remote: Vec<kairos_integration::ExternalOrder>,
     ) -> Result<usize, ExecutionError> {
         self.reconcile_remote_order_facts(remote.into_iter().map(remote_order).collect())
     }

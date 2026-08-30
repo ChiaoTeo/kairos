@@ -260,11 +260,11 @@ impl DependencyStateRuntime {
         Ok(())
     }
 
-    pub(super) fn watermarks(&self) -> crate::application::DependencyWatermarks {
+    pub(super) fn watermarks(&self) -> crate::domain::DependencyWatermarks {
         let Ok(state) = self.state.read() else {
             return Default::default();
         };
-        crate::application::DependencyWatermarks {
+        crate::domain::DependencyWatermarks {
             account: state
                 .accounts
                 .iter()
@@ -272,7 +272,7 @@ impl DependencyStateRuntime {
                 .map(|(account_id, value)| {
                     (
                         account_id.clone(),
-                        crate::application::SnapshotWatermark {
+                        crate::domain::SnapshotWatermark {
                             generation: value.health.generation.into(),
                             event_sequence: value.health.event_sequence.into(),
                         },
@@ -283,20 +283,21 @@ impl DependencyStateRuntime {
                 .market
                 .as_ref()
                 .filter(|value| value.refreshed_at.elapsed() <= DEPENDENCY_MAX_AGE)
-                .map(|value| crate::application::SnapshotWatermark {
+                .map(|value| crate::domain::SnapshotWatermark {
                     generation: value.generation.into(),
                     event_sequence: 0.into(),
                 }),
-            reference: state.reference.as_ref().map(|value| {
-                crate::application::SnapshotWatermark {
+            reference: state
+                .reference
+                .as_ref()
+                .map(|value| crate::domain::SnapshotWatermark {
                     generation: value.generation.into(),
                     event_sequence: value.event_sequence.into(),
-                }
-            }),
+                }),
             risk: state
                 .risk
                 .as_ref()
-                .map(|value| crate::application::SnapshotWatermark {
+                .map(|value| crate::domain::SnapshotWatermark {
                     generation: value.health.generation.into(),
                     event_sequence: value.health.event_sequence.into(),
                 }),

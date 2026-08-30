@@ -19,7 +19,7 @@ pub(crate) fn build_market_universe_resolver(
         .iter()
         .filter(|(_, binding)| binding.enabled())
         .map(|(_, binding)| {
-            let (venue_id, instrument_kinds) = match binding {
+            let (exchange_id, instrument_kinds) = match binding {
                 MarketProviderBinding::BinanceSpot { .. } => (Some("exchange:binance"), vec![Spot]),
                 MarketProviderBinding::BinanceDerivatives { product, .. } => (
                     Some("exchange:binance"),
@@ -67,7 +67,7 @@ pub(crate) fn build_market_universe_resolver(
                     .expect("code-owned provider identity is valid"),
                 provider_segment: crate::domain::market::ProviderSegmentCode::new(provider_segment)
                     .expect("code-owned provider segment is valid"),
-                venue_id: venue_id
+                exchange_id: exchange_id
                     .map(kairos_primitives::reference::ExchangeId::new)
                     .transpose()
                     .expect("code-owned exchange identity is valid"),

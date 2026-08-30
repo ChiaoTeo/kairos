@@ -34,9 +34,9 @@ impl ExecutionSimulator {
                 request.order_id
             ));
         }
-        let quantity = positive_number(&request.quantity.to_string(), "quantity")?;
+        let quantity = fixed_decimal(request.quantity.mantissa(), request.quantity.scale())?;
         let limit_price = match request.limit_price {
-            Some(value) => Some(positive_number(&value.to_string(), "limit_price")?),
+            Some(value) => Some(fixed_decimal(value.mantissa(), value.scale())?),
             None if request.order_type == OrderType::Limit => {
                 return Err("limit order requires limit_price".into());
             },
@@ -120,9 +120,6 @@ impl ExecutionSimulator {
     }
 
     fn validate_quote(&self, quote: &Quote) -> Result<(), String> {
-        if quote.instrument_id.trim().is_empty() || quote.source_id.trim().is_empty() {
-            return Err("quote instrument and source identities are required".into());
-        }
         quote.scope.validate_for(&quote.instrument_id)?;
         if quote.bid_price.is_none() && quote.ask_price.is_none() {
             return Err("quote must contain bid_price or ask_price".into());
@@ -155,17 +152,17 @@ impl ExecutionSimulator {
             .get(order_id)
             .ok_or_else(|| format!("simulation order not found: {order_id}"))?
             .clone();
-        if quote.observed_at_unix_nanos < working.order.request.submitted_at_unix_nanos.get() {
+        if quote.observed_at_unix_nanos < working.order.request.submitted_at_unix_nanos {
             return Ok(());
         }
         let (raw_price, available_quantity) = match working.order.request.side {
-            OrderSide::Buy => (quote.ask_price.as_deref(), quote.ask_quantity.as_deref()),
-            OrderSide::Sell => (quote.bid_price.as_deref(), quote.bid_quantity.as_deref()),
+            OrderSide::Buy => (quote.ask_price, quote.ask_quantity),
+            OrderSide::Sell => (quote.bid_price, quote.bid_quantity),
         };
         let Some(raw_price) = raw_price else {
             return Ok(());
         };
-        let price = positive_number(raw_price, "quote price")?;
+        let price = fixed_decimal(raw_price.mantissa(), raw_price.scale())?;
         if let Some(limit_price) = working.limit_price {
             let executable = match working.order.request.side {
                 OrderSide::Buy => price <= limit_price,
@@ -178,7 +175,7 @@ impl ExecutionSimulator {
         let mut quantity = working.quantity - working.filled_quantity;
         if self.config.enforce_quote_quantity {
             if let Some(value) = available_quantity {
-                quantity = quantity.min(positive_number(value, "quote quantity")?);
+                quantity = quantity.min(fixed_decimal(value.mantissa(), value.scale())?);
             }
         }
         if quantity <= Decimal::ZERO {
@@ -223,7 +220,7 @@ impl ExecutionSimulator {
             price: price_value,
             fee: fee_value,
             fee_currency: self.config.fee_currency.clone(),
-            occurred_at_unix_nanos: at.into(),
+            occurred_at_unix_nanos: at,
         });
         self.next_fill_id += 1;
         let current = self
@@ -242,7 +239,7 @@ impl ExecutionSimulator {
             .to_string()
             .parse::<Quantity>()
             .map_err(|error| error.to_string())?;
-        current.order.updated_at_unix_nanos = at.into();
+        current.order.updated_at_unix_nanos = at;
         current.order.status = if current.filled_quantity >= current.quantity {
             SimulationOrderStatus::Filled
         } else {
@@ -260,24 +257,18 @@ fn quote_from_bar(bar: &Bar) -> Quote {
     Quote {
         scope: bar.scope.clone(),
         instrument_id: bar.instrument_id.clone(),
-        bid_price: Some(bar.close.clone()),
+        bid_price: Some(bar.close),
         bid_quantity: bar.volume.clone(),
-        ask_price: Some(bar.close.clone()),
+        ask_price: Some(bar.close),
         ask_quantity: bar.volume.clone(),
         observed_at_unix_nanos: bar.observed_at_unix_nanos,
         source_id: bar.source_id.clone(),
     }
 }
 
-fn positive_number(value: &str, field: &str) -> Result<Decimal, String> {
-    let number = value
-        .trim()
-        .parse::<Decimal>()
-        .map_err(|error| format!("{field} must be decimal-compatible: {error}"))?;
-    if number <= Decimal::ZERO {
-        return Err(format!("{field} must be positive"));
-    }
-    Ok(number)
+fn fixed_decimal(mantissa: i64, scale: u8) -> Result<Decimal, String> {
+    Decimal::try_new(mantissa, u32::from(scale))
+        .map_err(|error| format!("validated fixed decimal does not fit rust_decimal: {error}"))
 }
 
 fn decimal(value: Rate) -> Decimal {

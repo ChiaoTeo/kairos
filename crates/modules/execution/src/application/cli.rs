@@ -1,17 +1,12 @@
 //! Standalone, short-lived Execution use cases.
 
-use kairos_conflux::{
-    CommandOutcome, DecimalValue, ExternalOrder, ExternalOrderQuery, OrderEntryOptions,
-    OrderEntryRequest, ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind,
-    ParticipantRef, TimeInForce,
-};
 use kairos_primitives::account::{AccountId, SegmentKey};
-use kairos_primitives::execution::{OrderId, OrderSide as PrimitiveOrderSide};
-use kairos_primitives::reference::{InstrumentId, Symbol};
 use serde::{Deserialize, Serialize};
 
-use crate::application::{ExecutionOrderOptions, OrderSide, OrderType, SubmitOrder};
-use crate::services::direct::{DirectFill, DirectOrderConnection};
+use crate::application::SubmitOrder;
+use crate::services::direct::{
+    DirectCommandOutcome, DirectExecutionGateway, DirectFill, DirectOrder,
+};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CliExecutionContext {
@@ -152,20 +147,17 @@ pub struct StandaloneExecutionBinding {
 /// Execution-owned facade for direct exchange/broker operations.
 pub struct CliExecutionApplication {
     binding: StandaloneExecutionBinding,
-    connection: DirectOrderConnection,
+    gateway: DirectExecutionGateway,
 }
 
 impl CliExecutionApplication {
     pub(crate) fn new(
         binding: StandaloneExecutionBinding,
-        connection: DirectOrderConnection,
+        gateway: DirectExecutionGateway,
     ) -> Result<Self, String> {
         AccountId::new(binding.account_id.clone()).map_err(|error| error.to_string())?;
         SegmentKey::new(binding.segment_key.clone()).map_err(|error| error.to_string())?;
-        Ok(Self {
-            binding,
-            connection,
-        })
+        Ok(Self { binding, gateway })
     }
 
     pub async fn open_orders(
@@ -173,8 +165,11 @@ impl CliExecutionApplication {
         symbol: Option<&str>,
         limit: Option<u32>,
     ) -> Result<CliExecutionOutput, String> {
-        let query = self.query(symbol, None, limit)?;
-        let orders = self.connection.open_orders(&query).await.map_err(display)?;
+        let orders = self
+            .gateway
+            .open_orders(symbol, limit)
+            .await
+            .map_err(display)?;
         Ok(CliExecutionOutput::Orders(
             self.orders_result("open-orders", orders),
         ))
@@ -185,8 +180,7 @@ impl CliExecutionApplication {
         symbol: Option<&str>,
         limit: Option<u32>,
     ) -> Result<CliExecutionOutput, String> {
-        let query = self.query(symbol, None, limit)?;
-        let orders = self.connection.history(&query).await.map_err(display)?;
+        let orders = self.gateway.history(symbol, limit).await.map_err(display)?;
         Ok(CliExecutionOutput::Orders(
             self.orders_result("history", orders),
         ))
@@ -197,7 +191,11 @@ impl CliExecutionApplication {
         order_id: &str,
         symbol: Option<&str>,
     ) -> Result<CliExecutionOutput, String> {
-        let order = self.find_order(order_id, symbol).await?;
+        let order = self
+            .gateway
+            .order(order_id, symbol)
+            .await
+            .map_err(display)?;
         Ok(CliExecutionOutput::Order(CliExecutionOrderResult {
             context: execution_context(&self.binding),
             order: order_result(&order),
@@ -211,7 +209,7 @@ impl CliExecutionApplication {
         limit: Option<u16>,
     ) -> Result<CliExecutionOutput, String> {
         let fills = self
-            .connection
+            .gateway
             .fills(symbol, order_id, limit)
             .await
             .map_err(display)?;
@@ -227,10 +225,9 @@ impl CliExecutionApplication {
         symbol: Option<&str>,
     ) -> Result<CliExecutionOutput, String> {
         self.assert_account(&request)?;
-        let provider_request = self.provider_request(&request, symbol)?;
         let outcome = self
-            .connection
-            .submit(&provider_request)
+            .gateway
+            .submit(&request, symbol)
             .await
             .map_err(display)?;
         Ok(CliExecutionOutput::Command(command_result(
@@ -245,11 +242,9 @@ impl CliExecutionApplication {
         order_id: &str,
         symbol: Option<&str>,
     ) -> Result<CliExecutionOutput, String> {
-        let order = self.find_order(order_id, symbol).await?;
-        let request = self.request_from_external(&order)?;
         let outcome = self
-            .connection
-            .cancel(&request, order.remote_order_id.as_str(), now_unix_nanos())
+            .gateway
+            .cancel(order_id, symbol)
             .await
             .map_err(display)?;
         Ok(CliExecutionOutput::Command(command_result(
@@ -268,18 +263,12 @@ impl CliExecutionApplication {
         symbol: Option<&str>,
     ) -> Result<CliExecutionOutput, String> {
         self.assert_account(&replacement)?;
-        let target = self.find_order(target_order_id, symbol).await?;
-        let cancel_request = self.request_from_external(&target)?;
         let canceled = self
-            .connection
-            .cancel(
-                &cancel_request,
-                target.remote_order_id.as_str(),
-                now_unix_nanos(),
-            )
+            .gateway
+            .cancel(target_order_id, symbol)
             .await
             .map_err(display)?;
-        if !matches!(canceled, CommandOutcome::Confirmed(_)) {
+        if !matches!(canceled, DirectCommandOutcome::Confirmed { .. }) {
             return Ok(CliExecutionOutput::Replace(CliExecutionReplaceResult {
                 context: execution_context(&self.binding),
                 command: "replace",
@@ -288,10 +277,9 @@ impl CliExecutionApplication {
                 submit: None,
             }));
         }
-        let provider_request = self.provider_request(&replacement, symbol)?;
         let submitted = self
-            .connection
-            .submit(&provider_request)
+            .gateway
+            .submit(&replacement, symbol)
             .await
             .map_err(display)?;
         Ok(CliExecutionOutput::Replace(CliExecutionReplaceResult {
@@ -301,141 +289,6 @@ impl CliExecutionApplication {
             cancel: outcome_result(canceled),
             submit: Some(outcome_result(submitted)),
         }))
-    }
-
-    fn query(
-        &self,
-        symbol: Option<&str>,
-        order_id: Option<&str>,
-        limit: Option<u32>,
-    ) -> Result<ExternalOrderQuery, String> {
-        Ok(ExternalOrderQuery {
-            symbol: symbol.map(Symbol::new).transpose().map_err(display)?,
-            instrument_type: Some(ParticipantInstrumentTypeRef::new(
-                self.binding.execution_channel.clone(),
-            )?),
-            order_id: order_id.map(OrderId::new).transpose().map_err(display)?,
-            limit,
-            since_unix_nanos: None,
-        })
-    }
-
-    async fn find_order(
-        &mut self,
-        id: &str,
-        symbol: Option<&str>,
-    ) -> Result<ExternalOrder, String> {
-        let query = self.query(symbol, None, Some(100))?;
-        let matches = |order: &ExternalOrder| {
-            order.order_id.as_str() == id
-                || order.remote_order_id.as_str() == id
-                || order
-                    .client_order_id
-                    .as_ref()
-                    .is_some_and(|value| value.as_str() == id)
-        };
-        if let Some(order) = self
-            .connection
-            .open_orders(&query)
-            .await
-            .map_err(display)?
-            .into_iter()
-            .find(matches)
-        {
-            return Ok(order);
-        }
-        if symbol.is_some() {
-            if let Some(order) = self
-                .connection
-                .history(&query)
-                .await
-                .map_err(display)?
-                .into_iter()
-                .find(matches)
-            {
-                return Ok(order);
-            }
-        }
-        let query = self.query(symbol, Some(id), Some(1))?;
-        self.connection
-            .order(&query)
-            .await
-            .map_err(display)?
-            .ok_or_else(|| format!("provider order not found: {id}"))
-    }
-
-    fn provider_request(
-        &self,
-        request: &SubmitOrder,
-        symbol: Option<&str>,
-    ) -> Result<OrderEntryRequest, String> {
-        let source_symbol = symbol.unwrap_or(request.instrument_id.as_str());
-        let mut options = provider_options(&request.options)?;
-        if options.wallet_type.is_none() {
-            options.wallet_type = self.binding.trading_mode.clone();
-        }
-        Ok(OrderEntryRequest {
-            order_id: request.order_id.clone(),
-            intent_id: request.intent_id.clone(),
-            submitted_at_unix_nanos: request
-                .submitted_at_unix_nanos
-                .unwrap_or_else(|| now_unix_nanos().into()),
-            account_id: request.account_id.clone(),
-            segment_key: request.segment_key.clone(),
-            instrument_id: request.instrument_id.clone(),
-            market_id: request.market_id.clone(),
-            participant_instrument: self.participant_instrument(source_symbol)?,
-            side: match request.side {
-                OrderSide::Buy => PrimitiveOrderSide::Buy,
-                OrderSide::Sell => PrimitiveOrderSide::Sell,
-            },
-            quantity: DecimalValue::new(request.quantity.mantissa(), request.quantity.scale()),
-            order_type: match request.order_type {
-                OrderType::Market => kairos_conflux::OrderType::Market,
-                OrderType::Limit => kairos_conflux::OrderType::Limit,
-            },
-            limit_price: request
-                .limit_price
-                .map(|value| DecimalValue::new(value.mantissa(), value.scale())),
-            options,
-        })
-    }
-
-    fn request_from_external(&self, order: &ExternalOrder) -> Result<OrderEntryRequest, String> {
-        Ok(OrderEntryRequest {
-            order_id: order.order_id.clone(),
-            intent_id: None,
-            submitted_at_unix_nanos: order
-                .occurred_at_unix_nanos
-                .unwrap_or_else(|| now_unix_nanos().into()),
-            account_id: AccountId::new(self.binding.account_id.clone()).map_err(display)?,
-            segment_key: SegmentKey::new(self.binding.segment_key.clone()).map_err(display)?,
-            instrument_id: InstrumentId::new(order.symbol.to_string()).map_err(display)?,
-            market_id: None,
-            participant_instrument: self.participant_instrument(order.symbol.as_str())?,
-            side: order.side,
-            quantity: order.quantity,
-            order_type: order.order_type,
-            limit_price: order.average_fill_price,
-            options: OrderEntryOptions::default(),
-        })
-    }
-
-    fn participant_instrument(&self, symbol: &str) -> Result<ParticipantInstrumentRef, String> {
-        ParticipantInstrumentRef::new(
-            ParticipantRef::new(
-                if self.binding.provider.eq_ignore_ascii_case("ibkr") {
-                    ParticipantKind::Broker
-                } else {
-                    ParticipantKind::Exchange
-                },
-                self.binding.provider.clone(),
-            )?,
-            Some(ParticipantInstrumentTypeRef::new(
-                self.binding.execution_channel.clone(),
-            )?),
-            symbol,
-        )
     }
 
     fn assert_account(&self, request: &SubmitOrder) -> Result<(), String> {
@@ -454,39 +307,12 @@ impl CliExecutionApplication {
         Ok(())
     }
 
-    fn orders_result(&self, command: &str, orders: Vec<ExternalOrder>) -> CliExecutionOrdersResult {
+    fn orders_result(&self, command: &str, orders: Vec<DirectOrder>) -> CliExecutionOrdersResult {
         CliExecutionOrdersResult {
             context: execution_context(&self.binding),
             command: command.to_owned(),
             orders: orders.iter().map(order_result).collect(),
         }
-    }
-}
-
-fn provider_options(options: &ExecutionOrderOptions) -> Result<OrderEntryOptions, String> {
-    Ok(OrderEntryOptions {
-        time_in_force: options
-            .time_in_force
-            .as_deref()
-            .map(parse_tif)
-            .transpose()?,
-        reduce_only: options.reduce_only,
-        post_only: options.post_only,
-        position_side: options.position_side.clone(),
-        quote_asset: options.quote_asset.clone(),
-        wallet_type: options.wallet_type.clone(),
-        trading_session: options.trading_session.clone(),
-        tokenize: options.tokenize,
-    })
-}
-
-fn parse_tif(value: &str) -> Result<TimeInForce, String> {
-    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
-        "gtc" | "good-til-canceled" => Ok(TimeInForce::GoodTilCanceled),
-        "ioc" | "immediate-or-cancel" => Ok(TimeInForce::ImmediateOrCancel),
-        "fok" | "fill-or-kill" => Ok(TimeInForce::FillOrKill),
-        "day" => Ok(TimeInForce::Day),
-        value => Err(format!("unsupported time in force: {value}")),
     }
 }
 
@@ -503,19 +329,19 @@ fn execution_context(binding: &StandaloneExecutionBinding) -> CliExecutionContex
     }
 }
 
-fn order_result(order: &ExternalOrder) -> CliExecutionOrder {
+fn order_result(order: &DirectOrder) -> CliExecutionOrder {
     CliExecutionOrder {
-        order_id: order.order_id.to_string(),
-        remote_order_id: order.remote_order_id.to_string(),
-        client_order_id: order.client_order_id.as_ref().map(ToString::to_string),
-        symbol: order.symbol.to_string(),
-        side: format!("{:?}", order.side).to_ascii_lowercase(),
-        order_type: format!("{:?}", order.order_type).to_ascii_lowercase(),
-        status: format!("{:?}", order.status).to_ascii_lowercase(),
-        quantity: decimal(order.quantity),
-        filled_quantity: decimal(order.filled_quantity),
-        average_fill_price: order.average_fill_price.map(decimal),
-        occurred_at_unix_nanos: order.occurred_at_unix_nanos.map(|value| value.get()),
+        order_id: order.order_id.clone(),
+        remote_order_id: order.remote_order_id.clone(),
+        client_order_id: order.client_order_id.clone(),
+        symbol: order.symbol.clone(),
+        side: order.side.clone(),
+        order_type: order.order_type.clone(),
+        status: order.status.clone(),
+        quantity: order.quantity.clone(),
+        filled_quantity: order.filled_quantity.clone(),
+        average_fill_price: order.average_fill_price.clone(),
+        occurred_at_unix_nanos: order.occurred_at_unix_nanos,
     }
 }
 
@@ -537,7 +363,7 @@ fn fill_result(fill: DirectFill) -> CliExecutionFill {
 fn command_result(
     binding: &StandaloneExecutionBinding,
     command: &str,
-    outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>,
+    outcome: DirectCommandOutcome,
 ) -> CliExecutionCommandResult {
     CliExecutionCommandResult {
         context: execution_context(binding),
@@ -546,21 +372,32 @@ fn command_result(
     }
 }
 
-fn outcome_result(outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>) -> CliExecutionOutcome {
+fn outcome_result(outcome: DirectCommandOutcome) -> CliExecutionOutcome {
     match outcome {
-        CommandOutcome::Confirmed(event) => CliExecutionOutcome {
+        DirectCommandOutcome::Confirmed {
+            order_id,
+            remote_order_id,
+            order_status,
+            filled_quantity,
+            occurred_at_unix_nanos,
+            reason,
+        } => CliExecutionOutcome {
             status: "confirmed",
-            order_id: Some(event.order_id.to_string()),
-            remote_order_id: event.remote_order_id.map(|value| value.to_string()),
-            order_status: Some(format!("{:?}", event.status).to_ascii_lowercase()),
-            filled_quantity: event.filled_quantity.map(decimal),
-            occurred_at_unix_nanos: Some(event.occurred_at_unix_nanos.get()),
-            reason: Some(event.reason),
+            order_id: Some(order_id),
+            remote_order_id,
+            order_status: Some(order_status),
+            filled_quantity,
+            occurred_at_unix_nanos: Some(occurred_at_unix_nanos),
+            reason: Some(reason),
             code: None,
             message: None,
             participant_request_id: None,
         },
-        CommandOutcome::Rejected(value) => CliExecutionOutcome {
+        DirectCommandOutcome::Rejected {
+            code,
+            message,
+            participant_request_id,
+        } => CliExecutionOutcome {
             status: "rejected",
             order_id: None,
             remote_order_id: None,
@@ -568,11 +405,14 @@ fn outcome_result(outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>) -> C
             filled_quantity: None,
             occurred_at_unix_nanos: None,
             reason: None,
-            code: value.code,
-            message: Some(value.message),
-            participant_request_id: value.participant_request_id,
+            code,
+            message: Some(message),
+            participant_request_id,
         },
-        CommandOutcome::Indeterminate(value) => CliExecutionOutcome {
+        DirectCommandOutcome::Indeterminate {
+            message,
+            participant_request_id,
+        } => CliExecutionOutcome {
             status: "indeterminate",
             order_id: None,
             remote_order_id: None,
@@ -581,26 +421,12 @@ fn outcome_result(outcome: CommandOutcome<kairos_conflux::OrderEntryEvent>) -> C
             occurred_at_unix_nanos: None,
             reason: None,
             code: None,
-            message: Some(value.message),
-            participant_request_id: value.participant_request_id,
+            message: Some(message),
+            participant_request_id,
         },
     }
 }
 
-fn now_unix_nanos() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-        .min(u64::MAX as u128) as u64
-}
-
 fn display(error: impl std::fmt::Display) -> String {
     error.to_string()
-}
-
-fn decimal(value: DecimalValue) -> String {
-    value
-        .format_fixed()
-        .unwrap_or_else(|_| format!("{}e-{}", value.mantissa, value.scale))
 }

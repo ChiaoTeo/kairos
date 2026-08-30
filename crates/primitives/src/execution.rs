@@ -4,6 +4,7 @@ use crate::DomainTypeError;
 use crate::text::text_type;
 
 text_type!(ExecutionRouteId);
+text_type!(ExecutionAttemptId);
 text_type!(OrderId);
 text_type!(ClientOrderId);
 text_type!(IntentId);

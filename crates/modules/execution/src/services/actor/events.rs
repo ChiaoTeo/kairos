@@ -1,6 +1,6 @@
 //! Normalized runtime facts consumed by the Execution state owner.
 
-use crate::application::RemoteOrderUpdate;
+use crate::domain::RemoteOrderUpdate;
 
 /// A normalized order/fill fact produced by an exchange private order stream.
 /// This is a fact, not an application command.

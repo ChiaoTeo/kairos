@@ -160,7 +160,7 @@ def execute_action(
                 force=True,
             )
         if action == "test":
-            return application.test_connection(resource_id)
+            return application.test_connection(resource_id).to_json_dict()
         if action == "toggle":
             disabled = str(record.get("status") or "").lower() == "disabled"
             return application.modify(

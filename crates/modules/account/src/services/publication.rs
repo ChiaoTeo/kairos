@@ -12,12 +12,11 @@ use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::account::v_2 as account_fb;
 use kairos_protocol::generated::kairos::common::v_2::{self as common_fb, Decimal64};
 
-use crate::application::{
-    AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountSegmentCompleteness,
-    AccountSegmentFreshness, AccountSegmentSyncLifecycle, AccountSegmentSyncMode,
-    AccountSegmentView,
+use crate::domain::{
+    AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountModel,
+    AccountSegmentCompleteness, AccountSegmentFreshness, AccountSegmentSyncLifecycle,
+    AccountSegmentSyncMode, AccountSegmentView, AccountStatus, MarginMode, PositionMode,
 };
-use crate::domain::{AccountModel, AccountStatus, MarginMode, PositionMode};
 
 pub(crate) fn now_unix_nanos() -> u64 {
     std::time::SystemTime::now()
@@ -260,11 +259,14 @@ fn encode_segment<'a>(
             sync_mode: segment_sync_mode(account.sync_mode),
             sync_lifecycle: segment_sync_lifecycle(account.sync_lifecycle),
             completeness: segment_completeness(account.completeness),
-            snapshot_watermark: account.snapshot_watermark.unwrap_or_default(),
-            event_watermark: account.event_watermark.unwrap_or_default(),
-            channel_epoch: account.channel_epoch.unwrap_or_default(),
-            last_event_at_unix_nanos: account.last_event_at_unix_nanos.unwrap_or_default(),
-            last_success_at_unix_nanos: account.last_success_at_unix_nanos.unwrap_or_default(),
+            snapshot_watermark: account.snapshot_watermark.unwrap_or_default().get(),
+            event_watermark: account.event_watermark.unwrap_or_default().get(),
+            channel_epoch: account.channel_epoch.unwrap_or_default().get(),
+            last_event_at_unix_nanos: account.last_event_at_unix_nanos.unwrap_or_default().get(),
+            last_success_at_unix_nanos: account
+                .last_success_at_unix_nanos
+                .unwrap_or_default()
+                .get(),
             last_error,
             recovery_buffer_depth: account.recovery_buffer_depth,
             observed_at_unix_nanos: account.observed_at_unix_nanos.get(),
@@ -289,13 +291,13 @@ fn encode_earn_holding<'a>(
     let holding_key_value = value
         .participant_position_id
         .as_deref()
-        .unwrap_or(&value.product_id);
+        .unwrap_or(value.product_id.as_str());
     let holding_key = builder.create_string(holding_key_value);
     let participant_position_id = value
         .participant_position_id
         .as_deref()
         .map(|value| builder.create_string(value));
-    let product_id = builder.create_string(&value.product_id);
+    let product_id = builder.create_string(value.product_id.as_str());
     let asset = builder.create_string(value.asset.as_str());
     let principal = Decimal64::new(value.principal.mantissa(), value.principal.scale());
     let redeemable = value
@@ -767,7 +769,7 @@ fn encode_event_valuation<'a>(
 
 fn encode_provenance<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    value: &crate::application::AccountFactProvenance,
+    value: &crate::domain::AccountFactProvenance,
 ) -> flatbuffers::WIPOffset<account_fb::AccountFactProvenance<'a>> {
     let source_id = builder.create_string(&value.source_id);
     let provider_event_id = value
@@ -779,9 +781,13 @@ fn encode_provenance<'a>(
         &account_fb::AccountFactProvenanceArgs {
             source_id: Some(source_id),
             provider_event_id,
-            provider_sequence: value.provider_sequence,
-            provider_occurred_at_unix_nanos: value.provider_occurred_at_unix_nanos,
-            provider_received_at_unix_nanos: value.provider_received_at_unix_nanos,
+            provider_sequence: value.provider_sequence.map(|value| value.get()),
+            provider_occurred_at_unix_nanos: value
+                .provider_occurred_at_unix_nanos
+                .map(|value| value.get()),
+            provider_received_at_unix_nanos: value
+                .provider_received_at_unix_nanos
+                .map(|value| value.get()),
         },
     )
 }

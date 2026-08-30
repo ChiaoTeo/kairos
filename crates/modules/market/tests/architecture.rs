@@ -29,19 +29,23 @@ fn production_market_runtime_never_bridges_provider_io_through_blocking_threads(
 
 #[test]
 fn historical_download_uses_async_provider_capabilities() {
-    let source = source("src/application/cli.rs");
-    assert!(source.contains("HistoricalBarQuery"));
-    assert!(source.contains("HistoricalQuoteQuery"));
-    assert!(source.contains("HistoricalTradeQuery"));
-    assert!(source.contains(".fetch_bars(bar_request)"));
-    assert!(source.contains(".fetch_quotes(window)"));
-    assert!(source.contains(".fetch_trades(window)"));
-    assert!(source.contains(".await?"));
-    assert!(!source.contains(concat!("kairos_", "integration::blocking")));
-    assert!(!source.contains("blocking_historical_market"));
-    assert!(!source.contains("ConfluxSystem::new()"));
-    assert!(source.contains("MassiveRestConnection::new("));
-    assert!(source.contains("BinanceSpotRestConnection::new("));
+    let application = source("src/application/cli.rs");
+    let service = source("src/services/direct/mod.rs");
+    let composition = source("src/composition/direct/mod.rs");
+    assert!(service.contains("HistoricalBarQuery"));
+    assert!(service.contains("HistoricalQuoteQuery"));
+    assert!(service.contains("HistoricalTradeQuery"));
+    assert!(service.contains(".fetch_bars(bar_request)"));
+    assert!(service.contains(".fetch_quotes(window)"));
+    assert!(service.contains(".fetch_trades(window)"));
+    assert!(service.contains(".await?"));
+    assert!(!service.contains(concat!("kairos_", "integration::blocking")));
+    assert!(!application.contains("blocking_historical_market"));
+    assert!(!application.contains("ConfluxSystem::new()"));
+    assert!(!application.contains("MassiveRestConnection::new("));
+    assert!(!application.contains("BinanceSpotRestConnection::new("));
+    assert!(composition.contains("MassiveRestConnection::new("));
+    assert!(composition.contains("BinanceSpotRestConnection::new("));
 }
 
 #[test]
@@ -98,7 +102,7 @@ fn production_server_has_no_provider_or_transport_selection_surface() {
 #[test]
 fn live_market_events_use_only_aeron_while_replay_keeps_uds() {
     let process = source("src/composition/launch/assembly.rs");
-    let conflux = source("src/application/conflux.rs");
+    let conflux = source("src/application/process/conflux.rs");
     assert!(process.contains("AeronOutputDeclaration"));
     assert!(process.contains("system"));
     assert!(process.contains("outputs()"));
@@ -172,7 +176,8 @@ fn private_services_do_not_depend_on_composition_or_provider_types() {
 
 #[test]
 fn reference_facts_are_queried_on_demand_without_a_market_replica() {
-    let actor = std::fs::read_to_string(crate_root().join("src/application/conflux.rs")).unwrap();
+    let actor =
+        std::fs::read_to_string(crate_root().join("src/application/process/conflux.rs")).unwrap();
     let assembly =
         std::fs::read_to_string(crate_root().join("src/composition/launch/assembly.rs")).unwrap();
     assert!(actor.contains("ConfluxEvent::Reference"));
@@ -228,7 +233,7 @@ fn actor_is_the_single_source_runtime_state_owner() {
 #[test]
 fn market_json_rpc_keeps_current_state_in_the_indexed_owner_view() {
     let host = source("src/composition/host.rs");
-    let actor = source("src/application/conflux.rs");
+    let actor = source("src/application/process/conflux.rs");
     let indexed = source("src/services/publication/contract/indexed.rs");
     assert!(host.contains("MarketRpcService"));
     assert!(host.contains("MarketControlRpcServer"));
@@ -286,10 +291,7 @@ fn application_root_contains_only_its_module_boundary() {
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     files.sort();
-    assert_eq!(
-        files,
-        vec!["cli.rs", "conflux.rs", "connected.rs", "mod.rs"]
-    );
+    assert_eq!(files, vec!["cli.rs", "connected.rs", "mod.rs"]);
 }
 
 #[test]
@@ -395,7 +397,11 @@ fn view_checkpoint_and_change_have_distinct_boundaries() {
     let access = source("src/application/observations/access.rs");
     assert!(!access.contains("pub fn snapshot"));
     assert!(access.contains("pub fn current_view"));
-    assert!(!crate_root().join("src/application/process").exists());
+    assert!(
+        crate_root()
+            .join("src/application/process/mod.rs")
+            .is_file()
+    );
     let publication = source("src/services/publication/contract/indexed.rs");
     assert!(publication.contains("fn encode_latest_change_views"));
     assert!(!publication.contains("trait MarketChangePublisher"));
@@ -585,9 +591,13 @@ fn domain_is_not_a_public_crate_module() {
 
 #[test]
 fn conflux_uses_the_closed_market_contract() {
-    assert!(!crate_root().join("src/application/process").exists());
+    assert!(
+        crate_root()
+            .join("src/application/process/mod.rs")
+            .is_file()
+    );
     assert!(!crate_root().join("src/services/control").exists());
-    let actor = source("src/application/conflux.rs");
+    let actor = source("src/application/process/conflux.rs");
     assert!(actor.contains("impl ConfluxActor for MarketApplication"));
     assert!(!actor.contains("ConfluxEvent::Rest(request)"));
     assert!(!actor.contains("MarketRestRequest"));
@@ -605,7 +615,7 @@ fn conflux_uses_the_closed_market_contract() {
 #[test]
 fn provider_connections_enter_market_through_named_conflux_collections() {
     let installer = source("src/composition/sources/connections.rs");
-    let actor = source("src/application/conflux.rs");
+    let actor = source("src/application/process/conflux.rs");
     for collection in [
         ".binance_spot_rest",
         ".binance_spot_websocket",
@@ -676,7 +686,7 @@ fn publication_history_and_replay_implementations_have_final_owners() {
         );
     }
 
-    let application = source("src/application/conflux.rs");
+    let application = source("src/application/process/conflux.rs");
     let application = application
         .split("#[cfg(test)]")
         .next()

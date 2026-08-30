@@ -1,9 +1,10 @@
 use kairos_primitives::account::{AccountId, PositionSide, SegmentKey};
+use kairos_primitives::capital::EarnProductId;
 use kairos_primitives::decimal::DecimalParts;
 use kairos_primitives::execution::{OrderId, OrderSide};
 use kairos_primitives::integration::RemoteOrderId;
 use kairos_primitives::reference::{AssetId, InstrumentId, MarketId};
-use kairos_primitives::time::UnixNanos;
+use kairos_primitives::time::{Sequence, UnixNanos};
 use kairos_protocol::generated::kairos::account::v_2 as fb;
 use kairos_protocol::{BorrowedEventView, BusinessEventKind, EventMetadataOwned};
 
@@ -120,9 +121,9 @@ impl AccountEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccountFactProvenance {
-    pub source_id: String,
+    pub source_id: kairos_primitives::integration::IntegrationSourceId,
     pub provider_event_id: Option<String>,
-    pub provider_sequence: Option<u64>,
+    pub provider_sequence: Option<Sequence>,
     pub provider_occurred_at_unix_nanos: Option<UnixNanos>,
     pub provider_received_at_unix_nanos: Option<UnixNanos>,
 }
@@ -231,7 +232,7 @@ impl EarnLiquidity {
 pub struct AccountEarnHolding {
     pub holding_key: String,
     pub participant_position_id: Option<String>,
-    pub product_id: String,
+    pub product_id: EarnProductId,
     pub asset: String,
     pub principal: DecimalParts,
     pub redeemable: Option<DecimalParts>,
@@ -331,7 +332,7 @@ impl ObservedOrderStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccountObservedOrder {
     pub observation_id: String,
-    pub source_id: String,
+    pub source_id: kairos_primitives::integration::IntegrationSourceId,
     pub execution_order_id: Option<OrderId>,
     pub remote_order_id: Option<RemoteOrderId>,
     pub instrument_id: InstrumentId,

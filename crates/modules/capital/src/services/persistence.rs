@@ -4,8 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::application::CapitalSnapshot;
-use crate::domain::FundingObjectiveRecord;
+use crate::domain::{CapitalSnapshot, FundingObjectiveRecord};
 
 const CAPITAL_STATE_SCHEMA_VERSION: u32 = 3;
 

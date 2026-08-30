@@ -58,7 +58,7 @@ def launch_instance_component_reference_health(
     )
     _emit(
         {
-            **client.health(),
+            **client.health().to_json_dict(),
             "launch_id": launch_id,
             "instance_id": resolved_instance,
             "mode": mode,
@@ -82,7 +82,7 @@ def launch_instance_component_reference_catalog(
     )
     _emit(
         {
-            **client.catalog(),
+            **client.catalog().to_json_dict(),
             "launch_id": launch_id,
             "instance_id": resolved_instance,
             "mode": mode,

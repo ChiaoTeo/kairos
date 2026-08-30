@@ -23,7 +23,7 @@ impl super::super::MarketApplication {
         super::super::MarketError,
     > {
         self.actor
-            .apply_market_universe(update)
+            .apply_market_universe(update.markets)
             .map_err(super::super::MarketError::Invalid)
     }
 }

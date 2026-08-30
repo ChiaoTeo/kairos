@@ -14,6 +14,7 @@ use kairos_account_contract::{
     SimulatedCapitalMutationStatus, SimulatedSettlement,
 };
 use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::capital::EarnProductId;
 use kairos_primitives::decimal::{DecimalParts, Money, Price, Quantity, SignedQuantity};
 use kairos_primitives::execution::{FillId, OrderId, OrderSide};
 use kairos_primitives::reference::{Currency, InstrumentId};
@@ -405,7 +406,10 @@ impl NativeSimulatedCapitalMutation {
                     .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
                 amount: quantity_input(amount)?,
                 kind,
-                product_id: validated_optional_text(product_id, "product_id")?,
+                product_id: validated_optional_text(product_id, "product_id")?
+                    .map(EarnProductId::new)
+                    .transpose()
+                    .map_err(|error| AccountInvalidInputError::new_err(error.to_string()))?,
                 occurred_at_unix_nanos: UnixNanos::new(occurred_at_unix_nanos),
             },
         })
@@ -1835,9 +1839,9 @@ fn project_event(py: Python<'_>, value: RustAccountEvent) -> PyResult<AccountEve
         published_at_unix_nanos: value.metadata.published_at_unix_nanos.get(),
     };
     let provenance = value.provenance.map(|item| AccountEventProvenance {
-        source_id: item.source_id,
+        source_id: item.source_id.to_string(),
         provider_event_id: item.provider_event_id,
-        provider_sequence: item.provider_sequence,
+        provider_sequence: item.provider_sequence.map(|value| value.get()),
         provider_occurred_at_unix_nanos: item
             .provider_occurred_at_unix_nanos
             .map(|value| value.get()),
@@ -1893,7 +1897,7 @@ fn project_event(py: Python<'_>, value: RustAccountEvent) -> PyResult<AccountEve
             data!(AccountEarnHoldingEvent {
                 holding_key: item.holding_key,
                 participant_position_id: item.participant_position_id,
-                product_id: item.product_id,
+                product_id: item.product_id.to_string(),
                 asset: item.asset,
                 principal: decimal_parts(item.principal, "quantity"),
                 redeemable: item
@@ -1935,7 +1939,7 @@ fn project_event(py: Python<'_>, value: RustAccountEvent) -> PyResult<AccountEve
         RustAccountChange::ObservedOrderUpserted(item) => {
             data!(AccountObservedOrderEvent {
                 observation_id: item.observation_id,
-                source_id: item.source_id,
+                source_id: item.source_id.to_string(),
                 execution_order_id: item.execution_order_id.map(|value| value.to_string()),
                 remote_order_id: item.remote_order_id.map(|value| value.to_string()),
                 instrument_id: item.instrument_id.to_string(),

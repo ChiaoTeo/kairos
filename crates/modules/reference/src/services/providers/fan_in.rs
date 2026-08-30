@@ -254,7 +254,7 @@ where
                 };
                 self.runtime.mark_deferred(&work_item, skip_reason);
                 log_source_work_item_skipped(&work_item, skip_reason);
-                budget_deferred.push(work_item.source_id);
+                budget_deferred.push(work_item.source_id.to_string());
                 continue;
             }
             admitted_sources = admitted_sources.saturating_add(1);
@@ -344,7 +344,7 @@ where
                         .await?;
                     log_source_scan_progress(&source_id, &update, Some(has_last_good));
                     if !has_last_good {
-                        unavailable.push(source_id);
+                        unavailable.push(source_id.to_string());
                     }
                 },
                 Err(error) => {
@@ -357,7 +357,7 @@ where
                     self.mark_failure(&source_id, has_last_good, &error);
                     log_source_scan_failed(&source_id, &error, has_last_good);
                     if !has_last_good {
-                        unavailable.push(source_id);
+                        unavailable.push(source_id.to_string());
                         unavailable_due_to_failure = true;
                     }
                 },

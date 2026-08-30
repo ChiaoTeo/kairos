@@ -1,4 +1,5 @@
 use kairos_primitives::account::SegmentKey;
+use kairos_primitives::capital::EarnProductId;
 use kairos_primitives::decimal::{Price, Quantity, SignedQuantity};
 use kairos_primitives::execution::{FillId, OrderId, OrderSide};
 use kairos_primitives::reference::{Currency, InstrumentId};
@@ -64,7 +65,7 @@ pub struct SimulatedCapitalMutation {
     pub amount: Quantity,
     pub kind: SimulatedCapitalMutationKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub product_id: Option<String>,
+    pub product_id: Option<EarnProductId>,
     pub occurred_at_unix_nanos: UnixNanos,
 }
 

@@ -222,7 +222,7 @@ fn append_okx_instrument(
         ..Instrument::default()
     });
     catalog.listings.push(Listing {
-        source_id: Some(provider_product.source_id().into()),
+        source_id: Some(ReferenceSourceId::new(provider_product.source_id())?),
         listing_id: listing_id.clone(),
         instrument_id: instrument_id.clone(),
         exchange_id: exchange_id.clone(),

@@ -40,6 +40,12 @@ from kairospy.system.apps.components.application import (
 )
 from kairospy.system.apps.workspace_services import WorkspaceServiceApplication
 from kairospy.investment.apps.account.application import AccountAdminApplication
+from kairospy.contracts.reference import (
+    ReferenceHealthResponse,
+    ReferenceOptionCoverage,
+)
+from kairospy.primitives.reference import InstrumentIdRead, ReferenceSourceIdRead
+from kairospy.primitives.time import GenerationRead, SequenceRead
 from kairospy.system.apps.launch import StrategyProcessController
 from kairospy.surface.cli.options import OutputFormat, render
 
@@ -427,6 +433,7 @@ def test_risk_system_client_latest_returns_current_view_business_facts(
                 instrument_id=None,
                 exchange_id=None,
             )
+
             def amount(value: str) -> SimpleNamespace:
                 return SimpleNamespace(value=Decimal(value))
 
@@ -504,15 +511,20 @@ def test_risk_system_client_latest_returns_current_view_business_facts(
     assert client.latest_metadata(actor_id="risk:run-1") == client.latest(
         actor_id="risk:run-1"
     )
-    assert client.latest_limits(actor_id="risk:run-1")["limits"][0]["policy"][
-        "policy_id"
-    ] == "policy-1"
-    assert client.latest_reservations(actor_id="risk:run-1")[
-        "active_reservations"
-    ][0]["reservation_id"] == "reservation-1"
-    assert client.latest_circuits(actor_id="risk:run-1")["circuits"][0][
-        "circuit_id"
-    ] == "circuit-1"
+    assert (
+        client.latest_limits(actor_id="risk:run-1")["limits"][0]["policy"]["policy_id"]
+        == "policy-1"
+    )
+    assert (
+        client.latest_reservations(actor_id="risk:run-1")["active_reservations"][0][
+            "reservation_id"
+        ]
+        == "reservation-1"
+    )
+    assert (
+        client.latest_circuits(actor_id="risk:run-1")["circuits"][0]["circuit_id"]
+        == "circuit-1"
+    )
     assert seen["actor_id"] == "risk:run-1"
 
 
@@ -1436,7 +1448,12 @@ def test_system_component_reference_option_coverage_uses_workspace_client(
     class ReferenceClient:
         def option_coverage(self):
             calls.append(("coverage", None))
-            return {"underlyings": ["SPY"]}
+            return ReferenceOptionCoverage(
+                ReferenceSourceIdRead("massive-options"),
+                GenerationRead(0),
+                SequenceRead(0),
+                (InstrumentIdRead("SPY"),),
+            )
 
         def set_option_underlying(self, underlying, enabled):
             calls.append((underlying, enabled))
@@ -1464,7 +1481,12 @@ def test_system_component_reference_option_coverage_uses_workspace_client(
         )
         == 0
     )
-    assert json.loads(output.getvalue()) == {"underlyings": ["SPY"]}
+    assert json.loads(output.getvalue()) == {
+        "source_id": "massive-options",
+        "generation": 0,
+        "event_sequence": 0,
+        "underlyings": ["SPY"],
+    }
 
     output = StringIO()
     assert (
@@ -1849,7 +1871,7 @@ def test_launch_instance_component_reference_health_uses_manifest_client(
 
     class ReferenceReader:
         def health(self):
-            return {"status": "ready", "generation": 3}
+            return ReferenceHealthResponse("ready", ())
 
     class ReferenceClient:
         reader = ReferenceReader()
@@ -1884,7 +1906,7 @@ def test_launch_instance_component_reference_health_uses_manifest_client(
 
     value = json.loads(output.getvalue())
     assert value["status"] == "ready"
-    assert value["generation"] == 3
+    assert value["providers"] == []
     assert value["scope"] == "launch-instance"
     assert value["launch_id"] == "btc"
     assert value["instance_id"] == "run-1"
@@ -2090,22 +2112,24 @@ def test_launch_instance_component_account_open_orders_is_scoped_component_resul
     class ObservedOrdersView:
         def snapshot(self):
             decimal = SimpleNamespace(value=Decimal("1"))
-            return SimpleNamespace(observed_orders=(
-                SimpleNamespace(
-                    observation_id="observation-1",
-                    source_id="source-1",
-                    execution_order_id="order-1",
-                    remote_order_id="remote-1",
-                    instrument_id="instrument-1",
-                    market_id="market-1",
-                    side="buy",
-                    quantity=decimal,
-                    filled_quantity=decimal,
-                    status="open",
-                    observed_at_unix_nanos=1,
-                    segment_key="spot",
-                ),
-            ))
+            return SimpleNamespace(
+                observed_orders=(
+                    SimpleNamespace(
+                        observation_id="observation-1",
+                        source_id="source-1",
+                        execution_order_id="order-1",
+                        remote_order_id="remote-1",
+                        instrument_id="instrument-1",
+                        market_id="market-1",
+                        side="buy",
+                        quantity=decimal,
+                        filled_quantity=decimal,
+                        status="open",
+                        observed_at_unix_nanos=1,
+                        segment_key="spot",
+                    ),
+                )
+            )
 
     class AccountClient:
         def observed_orders_view(self, account_id):

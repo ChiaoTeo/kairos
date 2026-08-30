@@ -1,5 +1,7 @@
 //! Immutable operational read model returned by Reference queries.
 
+use kairos_primitives::reference::ReferenceSourceId;
+use kairos_primitives::runtime::ActorId;
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
 use crate::application::ReferenceApplication;
@@ -10,8 +12,8 @@ use crate::domain::SourceHealth;
 /// without serializing them behind the reconcile writer.
 #[derive(Clone)]
 pub struct ReferenceReadModel {
-    pub(crate) actor_id: String,
-    pub(crate) source_id: String,
+    pub(crate) actor_id: ActorId,
+    pub(crate) source_id: ReferenceSourceId,
     pub(crate) generation: Generation,
     pub(crate) event_sequence: Sequence,
     pub(crate) committed_at_unix_nanos: UnixNanos,
@@ -43,8 +45,9 @@ impl ReferenceApplication {
             .and_then(|publications| publications.into_iter().next())
             .map(|publication| publication.event_id);
         ReferenceReadModel {
-            actor_id: self.actor_id().to_owned(),
-            source_id: self.source_id().to_owned(),
+            actor_id: self.actor_id().clone(),
+            source_id: ReferenceSourceId::new(self.source_id())
+                .expect("Reference source identity is validated"),
             generation: self.actor.metadata.generation,
             event_sequence: self.actor.metadata.event_sequence,
             committed_at_unix_nanos: self.actor.metadata.committed_at_unix_nanos,
@@ -68,11 +71,11 @@ impl ReferenceApplication {
 }
 
 impl ReferenceReadModel {
-    pub fn actor_id(&self) -> &str {
+    pub fn actor_id(&self) -> &ActorId {
         &self.actor_id
     }
 
-    pub fn source_id(&self) -> &str {
+    pub fn source_id(&self) -> &ReferenceSourceId {
         &self.source_id
     }
 

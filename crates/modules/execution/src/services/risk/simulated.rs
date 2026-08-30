@@ -1,10 +1,10 @@
 use kairos_primitives::decimal::Money;
 use kairos_primitives::time::UnixNanos;
 
-use crate::application::{
-    RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult, SubmitOrder,
+use crate::domain::{
+    RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult, RiskReservationEvidence,
+    RiskReservationSagaStatus, SubmitOrder,
 };
-use crate::domain::{RiskReservationEvidence, RiskReservationSagaStatus};
 
 #[derive(Clone, Debug)]
 pub enum SimulatedRiskReconciliation {

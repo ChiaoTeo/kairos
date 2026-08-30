@@ -1,13 +1,19 @@
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 pub use kairos_primitives::capital::{
     CapitalDemandId, CapitalGroupId, CapitalOperationId, CapitalPlanId, CapitalReservationId,
-    CapitalRouteId, FundingObjectiveId,
+    CapitalRouteId, CapitalSourceAuthority, EarnProductId, FundingObjectiveId,
 };
 use kairos_primitives::decimal::Quantity;
 use kairos_primitives::reference::Currency;
-use kairos_primitives::runtime::{StrategyDecisionId, StrategyId};
+use kairos_primitives::runtime::{InstanceId, LaunchId, StrategyDecisionId, StrategyId};
 use kairos_primitives::time::{BasisPoints, Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
+
+mod outcome;
+pub use outcome::{
+    CapitalDemandReceipt, CapitalEvent, CapitalSnapshot, CapitalYieldCandidate,
+    FundingObjectiveReceipt, ManualCapitalTransferPreview,
+};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct FundingLocation {
@@ -88,8 +94,8 @@ pub struct CapitalDemand {
     pub confidence_bps: BasisPoints,
     pub account_watermark: Sequence,
     pub risk_watermark: Sequence,
-    pub launch_id: String,
-    pub instance_id: String,
+    pub launch_id: LaunchId,
+    pub instance_id: InstanceId,
     pub destination_lease_fence: String,
     pub causal_references: Vec<String>,
 }
@@ -108,14 +114,10 @@ impl CapitalDemand {
         if self.account_watermark.get() == 0 || self.risk_watermark.get() == 0 {
             return Err("capital demand requires Account and Risk watermarks".into());
         }
-        for (name, value) in [
-            ("launch_id", &self.launch_id),
-            ("instance_id", &self.instance_id),
-            ("destination_lease_fence", &self.destination_lease_fence),
-        ] {
-            if value.is_empty() || value.trim() != value {
-                return Err(format!("capital demand {name} is required"));
-            }
+        if self.destination_lease_fence.is_empty()
+            || self.destination_lease_fence.trim() != self.destination_lease_fence
+        {
+            return Err("capital demand destination_lease_fence is required".into());
         }
         Ok(())
     }
@@ -189,7 +191,7 @@ pub struct CapitalFacts {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalEarnHoldingFact {
-    pub product_id: String,
+    pub product_id: EarnProductId,
     #[serde(default)]
     pub principal: Quantity,
     pub redeemable_amount: Quantity,
@@ -317,12 +319,12 @@ pub struct CapitalTransferRoute {
     pub kind: CapitalRouteKind,
     pub per_operation_limit: Quantity,
     pub daily_limit: Quantity,
-    pub required_source_authority: String,
+    pub required_source_authority: CapitalSourceAuthority,
     pub settlement_class: CapitalSettlementClass,
     pub enabled: bool,
     /// Required for an Earn subscription route and absent for transfer routes.
     #[serde(default)]
-    pub earn_product_id: Option<String>,
+    pub earn_product_id: Option<EarnProductId>,
     /// Do not deploy cash when a known funding horizon falls inside this guard.
     #[serde(default)]
     pub demand_guard_nanos: u64,
@@ -364,11 +366,6 @@ impl CapitalTransferRoute {
         if self.per_operation_limit > self.daily_limit {
             return Err("capital route per-operation limit cannot exceed daily limit".into());
         }
-        if self.required_source_authority.is_empty()
-            || self.required_source_authority.trim() != self.required_source_authority
-        {
-            return Err("capital route requires source authority".into());
-        }
         Ok(())
     }
 }
@@ -406,7 +403,7 @@ pub enum CapitalRecoveryAction {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalPlan {
     pub plan_id: CapitalPlanId,
-    pub rebalance_decision_id: String,
+    pub rebalance_decision_id: StrategyDecisionId,
     pub route_id: CapitalRouteId,
     pub route_version: Generation,
     #[serde(default)]
@@ -419,7 +416,7 @@ pub struct CapitalPlan {
     pub reservation_id: CapitalReservationId,
     pub idempotency_key: kairos_primitives::runtime::IdempotencyKey,
     #[serde(default)]
-    pub selected_earn_product_id: Option<String>,
+    pub selected_earn_product_id: Option<EarnProductId>,
     pub source_account_watermark: Sequence,
     pub destination_account_watermark: Sequence,
     pub source_observed_available: Quantity,

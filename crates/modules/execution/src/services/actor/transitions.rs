@@ -1,7 +1,6 @@
 //! Results of Actor-owned fill state transitions.
 
-use crate::application::ExecutionEvent;
-use crate::domain::{ExecutionFill, ExecutionOrder};
+use crate::domain::{ExecutionEvent, ExecutionFill, ExecutionOrder};
 
 pub(crate) enum FillTransition {
     Duplicate {

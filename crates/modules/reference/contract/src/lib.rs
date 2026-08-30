@@ -17,13 +17,13 @@ use std::path::PathBuf;
 pub use catalog::{
     AccountReferenceSnapshot, Asset, AssetCatalogQuery, Exchange, ExchangeCatalogQuery,
     ExecutionReferenceSnapshot, Instrument, InstrumentAvailabilityQuery, InstrumentCatalogQuery,
-    InstrumentSearchQuery, LifecycleCatalogQuery, LifecycleEntry, Listing, ListingCatalogQuery,
-    Market, MarketCatalogQuery, MarketReferenceSnapshot, MarketSearchQuery, ProviderHealthState,
+    InstrumentSearchQuery, LifecycleEntry, Listing, ListingCatalogQuery, Market,
+    MarketCatalogQuery, MarketReferenceSnapshot, MarketSearchQuery, ProviderHealthState,
     REFERENCE_SQLITE_SCHEMA_VERSION, ReferenceCatalog, ReferenceCatalogSnapshot,
-    ReferenceCatalogStats, ReferenceCatalogStatus, ReferenceCollection,
-    ReferenceInstrumentAvailability, ReferenceIntegrityStats, ReferenceLifecycleEvent,
-    ReferenceMarketCatalogPage, ReferenceMarketPage, ReferenceOptionCoverage, ReferencePage,
-    ReferenceReadSession, ReferenceWatermark,
+    ReferenceCatalogStats, ReferenceCatalogStatus, ReferenceInstrumentAvailability,
+    ReferenceIntegrityStats, ReferenceLifecycleEvent, ReferenceMarketCatalogPage,
+    ReferenceMarketPage, ReferenceOptionCoverage, ReferencePage, ReferenceReadSession,
+    ReferenceWatermark,
 };
 pub use control::{
     BinanceReferenceSource, HyperliquidReferenceSource, MassiveReferenceSource, OkxReferenceSource,

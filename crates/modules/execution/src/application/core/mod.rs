@@ -3,31 +3,26 @@ use std::collections::BTreeMap;
 use kairos_primitives::decimal::{Money, Price, Quantity};
 use kairos_primitives::execution::{ExecutionRouteId, FillId, IntentId, LegId, OrderId};
 use kairos_primitives::reference::Currency;
-use kairos_primitives::runtime::{ActorId, StrategyId};
+use kairos_primitives::runtime::ActorId;
 use kairos_primitives::time::UnixNanos;
 
-use super::RemoteOrderUpdate;
 use super::model::*;
 use crate::domain::{
     AlgorithmActionKind, AlgorithmActionStatus, AlgorithmChildCandidate, AlgorithmExecutionStyle,
     AlgorithmInput, AlgorithmLegBenchmark, AlgorithmRun, CommitmentBasis, CommitmentResource,
     CommitmentStatus, CompletionPolicy, ExecutionAlgorithmPolicy, ExecutionAlgorithmSpec,
-    ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan,
-    FailurePolicy, IntentType, MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment,
-    OrderSide, OrderType, PassiveLimitSpec, RiskReservationEvidence, RiskReservationSagaStatus,
+    ExecutionAuditEvent, ExecutionAuditQuery, ExecutionFill, ExecutionLeg,
+    ExecutionOperationalHealth, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy,
+    IntentType, MakerExecutionPolicy, MakerTakerHedgeSpec, OrderCommitment, OrderSide, OrderType,
+    PassiveLimitSpec, RemoteOrderUpdate, RiskReservationEvidence, RiskReservationSagaStatus,
     SplitOrderPolicy, TwapSpec, decide_immediate, decide_maker_taker_hedge, decide_passive_limit,
     decide_twap, split_quantity,
 };
-use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 use crate::services::dependencies::{ExecutionOrderAdmissionService, QueuedExecutionIntentPlanner};
 use crate::services::risk::QueuedExecutionRiskReservations;
 
 fn typed_intent_id(value: impl Into<String>) -> IntentId {
     IntentId::new(value).expect("validated intent ID")
-}
-
-fn typed_strategy_id(value: impl Into<String>) -> StrategyId {
-    StrategyId::new(value).expect("validated strategy ID")
 }
 
 fn completed_quantity(intent: &ExecuteStrategyIntent, mantissa: i64) -> Quantity {
@@ -121,11 +116,14 @@ fn planned_risk_reservation(
         funding_requirement: None,
     }
 }
-use kairos_conflux::{
-    BlockingOrderCommand, BlockingOrderQuery, CommandOutcome,
-    DecimalValue as ConnectionDecimalValue, ExternalOrderQuery, IntegrationError, OrderEntryEvent,
-    OrderEntryOptions as ConnectionOrderEntryOptions, OrderEntryRequest, OrderEntryStatus,
-    OrderSide as ConnectionOrderSide, OrderType as ConnectionOrderType, TimeInForce,
+use kairos_integration::blocking::{
+    OrderCommand as BlockingOrderCommand, OrderQuery as BlockingOrderQuery,
+};
+use kairos_integration::{
+    CommandOutcome, DecimalValue as ConnectionDecimalValue, ExternalOrderQuery, IntegrationError,
+    OrderEntryEvent, OrderEntryOptions as ConnectionOrderEntryOptions, OrderEntryRequest,
+    OrderEntryStatus, OrderSide as ConnectionOrderSide, OrderType as ConnectionOrderType,
+    TimeInForce,
 };
 use tracing::{debug, info, warn};
 
@@ -152,13 +150,13 @@ pub struct ExecutionApplication {
     writer_recovery_ready: bool,
     risk_recovery_ready: bool,
     risk_recovery_error: Option<String>,
-    pub(crate) conflux: super::conflux::ExecutionConfluxState,
+    pub(in crate::application) conflux: super::process::ExecutionConfluxState,
 }
 
 #[derive(Clone)]
 struct ConfiguredExecutionRoute {
     candidate: ExecutionRouteCandidate,
-    participant_instrument: kairos_conflux::ParticipantInstrumentRef,
+    participant_instrument: kairos_integration::ParticipantInstrumentRef,
 }
 
 /// Concrete process wiring selected by Execution composition.
@@ -323,7 +321,7 @@ impl ExecutionApplication {
     pub(crate) fn configure_execution_route(
         &mut self,
         candidate: ExecutionRouteCandidate,
-        participant_instrument: kairos_conflux::ParticipantInstrumentRef,
+        participant_instrument: kairos_integration::ParticipantInstrumentRef,
     ) {
         self.execution_routes.insert(
             candidate.route_id.clone(),
@@ -841,26 +839,7 @@ fn build_single_intent_plan(
     .map_err(ExecutionError::Invalid)
 }
 
-pub(crate) fn apply_connection_event(
-    order: &mut ExecutionOrder,
-    event: OrderEntryEvent,
-) -> Result<(), ExecutionError> {
-    order.remote_order_id = event.remote_order_id;
-    order.updated_at_unix_nanos = event.occurred_at_unix_nanos;
-    order.reason = event.reason;
-    order.status = match event.status {
-        OrderEntryStatus::Accepted => ExecutionOrderStatus::Accepted,
-        OrderEntryStatus::PartiallyFilled => ExecutionOrderStatus::PartiallyFilled,
-        OrderEntryStatus::Filled => ExecutionOrderStatus::Filled,
-        OrderEntryStatus::Canceled => ExecutionOrderStatus::Canceled,
-        OrderEntryStatus::Rejected => ExecutionOrderStatus::Rejected,
-        OrderEntryStatus::Expired => ExecutionOrderStatus::Expired,
-        OrderEntryStatus::Unknown => ExecutionOrderStatus::Unknown,
-    };
-    Ok(())
-}
-
-fn remote_order(order: kairos_conflux::ExternalOrder) -> RemoteOrder {
+fn remote_order(order: kairos_integration::ExternalOrder) -> RemoteOrder {
     RemoteOrder {
         binding_id: order.connection_key.to_string(),
         order_id: order.order_id,
@@ -868,11 +847,11 @@ fn remote_order(order: kairos_conflux::ExternalOrder) -> RemoteOrder {
         client_order_id: order.client_order_id,
         symbol: order.symbol,
         side: match order.side {
-            kairos_conflux::OrderSide::Buy => OrderSide::Buy,
-            kairos_conflux::OrderSide::Sell => OrderSide::Sell,
+            kairos_integration::OrderSide::Buy => OrderSide::Buy,
+            kairos_integration::OrderSide::Sell => OrderSide::Sell,
         },
         order_type: match order.order_type {
-            kairos_conflux::OrderType::Market => OrderType::Market,
+            kairos_integration::OrderType::Market => OrderType::Market,
             _ => OrderType::Limit,
         },
         status: remote_status(&format!("{:?}", order.status)),

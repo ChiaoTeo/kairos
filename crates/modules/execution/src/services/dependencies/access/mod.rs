@@ -209,33 +209,20 @@ impl ExecutionDependencyAccess {
         if !observed_market_id.eq_ignore_ascii_case(market_id) {
             return Ok(None);
         }
-        let decimal =
-            |value: Option<&kairos_protocol::generated::kairos::common::v_2::Decimal64>| {
-                value.map(|value| {
-                    let scale = value.scale() as usize;
-                    let raw = value.mantissa().to_string();
-                    if scale == 0 {
-                        return raw;
-                    }
-                    let negative = raw.starts_with('-');
-                    let digits = raw.trim_start_matches('-');
-                    let padded = format!("{:0>width$}", digits, width = scale + 1);
-                    let split = padded.len() - scale;
-                    format!(
-                        "{}{}.{}",
-                        if negative { "-" } else { "" },
-                        &padded[..split],
-                        &padded[split..]
-                    )
-                })
-            };
+        let price = |value: Option<&kairos_protocol::generated::kairos::common::v_2::Decimal64>| {
+            value
+                .map(|value| Price::new(value.mantissa(), value.scale()))
+                .transpose()
+                .map_err(|error| error.to_string())
+        };
         Ok(Some((
             MarketQuote {
-                market_id: observed_market_id.to_owned(),
-                instrument_id: quote.instrument_id().to_owned(),
-                bid_price: decimal(quote.bid_price()),
-                ask_price: decimal(quote.ask_price()),
-                observed_at_unix_nanos: quote.source_observed_at_unix_nanos(),
+                market_id: MarketId::new(observed_market_id).map_err(|error| error.to_string())?,
+                instrument_id: InstrumentId::new(quote.instrument_id())
+                    .map_err(|error| error.to_string())?,
+                bid_price: price(quote.bid_price())?,
+                ask_price: price(quote.ask_price())?,
+                observed_at_unix_nanos: UnixNanos::new(quote.source_observed_at_unix_nanos()),
             },
             frame.metadata().applied_event_sequence,
         )))

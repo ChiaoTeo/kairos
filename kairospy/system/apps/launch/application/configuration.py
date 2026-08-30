@@ -2051,7 +2051,7 @@ def _workspace_resource_snapshots(
     workspace = WorkspaceApplication().open(workspace_root)
     accounts = AccountConfigurationApplication(workspace)
     account_snapshots = {
-        account_id: accounts.resource_snapshot(account_id)
+        account_id: accounts.resource_snapshot(account_id).to_json_dict()
         for account_id in config.account_refs
     }
 
@@ -2164,7 +2164,9 @@ def _current_resource_hashes(
                 continue
             try:
                 if kind == "accounts":
-                    current = owners[kind].resource_snapshot(str(resource_id))
+                    current = (
+                        owners[kind].resource_snapshot(str(resource_id)).to_json_dict()
+                    )
                 elif kind == "data_providers":
                     current = owners[kind].resource_snapshot(str(resource_id))
                 elif kind == "models":

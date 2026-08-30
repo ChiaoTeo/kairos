@@ -1007,11 +1007,11 @@ fn append_massive_instrument(
             },
         )?;
         catalog.listings.push(Listing {
-            source_id: Some(if family == "equity" {
-                "massive-equity".into()
+            source_id: Some(ReferenceSourceId::new(if family == "equity" {
+                "massive-equity"
             } else {
-                "massive-options".into()
-            }),
+                "massive-options"
+            })?),
             listing_id: listing_id.clone(),
             instrument_id: instrument_id.clone(),
             exchange_id: exchange.clone(),

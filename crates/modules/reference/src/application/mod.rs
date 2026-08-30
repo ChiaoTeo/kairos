@@ -33,7 +33,7 @@ pub(crate) use process::{
 };
 pub use process::{ReferencePublication, ReferenceRefreshResult};
 pub use queries::{
-    LifecycleQuery, MarketQuery, ReferenceKind, ReferenceQuery, ReferenceReadModel, ReferenceRecord,
+    MarketQuery, ReferenceKind, ReferenceQuery, ReferenceReadModel, ReferenceRecord,
 };
 
 /// Main-package use-case facade for Reference data.
@@ -146,7 +146,7 @@ impl ReferenceApplication {
         self.runtime.record_publication_ready();
     }
 
-    pub fn actor_id(&self) -> &str {
+    pub fn actor_id(&self) -> &kairos_primitives::runtime::ActorId {
         &self.actor.actor_id
     }
 

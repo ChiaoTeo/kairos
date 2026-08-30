@@ -42,7 +42,7 @@ Reference demonstrates the target pattern:
 - The generated binding macro is invoked in `reference/src/application/mod.rs`
   to create `ReferenceRpcActor` and `ReferenceRpcService`.
 - `ReferenceApplication` implements `ReferenceRpcActor` in
-  `reference/src/application/conflux.rs`.
+  `reference/src/application/process/control/conflux.rs`.
 - `ConfluxActor::handle` handles runtime events only, such as timers and
   integration/system events.
 - The Reference server creates an actor invocation handle and exposes the

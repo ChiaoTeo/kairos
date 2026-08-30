@@ -5,11 +5,9 @@ use std::sync::mpsc::Receiver;
 use kairos_primitives::runtime::ActorId;
 use tracing::info;
 
-use crate::application::{
-    AccountCurrentView, AccountRefreshIssue, AccountRefreshReport, MarkToMarket,
-};
 use crate::domain::{
-    AccountEvent, AccountFill, AccountSegment, AccountSnapshot, ApplyOutcome, Money, Position,
+    AccountBusinessEvent, AccountCurrentView, AccountDifference, AccountEvent, AccountFill,
+    AccountId, AccountSegment, AccountSnapshot, ApplyOutcome, InstrumentId, Money, Position,
     SegmentKey, SignedQuantity, SnapshotKind,
 };
 use crate::services::actor::AccountActor;
@@ -26,7 +24,21 @@ pub(crate) struct AccountRuntime {
     pending_refresh: Option<(String, Receiver<Vec<RefreshFetch>>)>,
     persistence: Option<AccountPersistenceWorker>,
     journal_events_since_checkpoint: usize,
-    pending_business_events: VecDeque<crate::application::AccountBusinessEvent>,
+    pending_business_events: VecDeque<AccountBusinessEvent>,
+}
+
+pub(crate) struct RuntimeRefreshIssue {
+    pub(crate) segment_key: SegmentKey,
+    pub(crate) error: String,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) diagnostic_id: String,
+}
+
+pub(crate) struct RuntimeRefreshReport {
+    pub(crate) account_id: AccountId,
+    pub(crate) refreshed_segments: Vec<SegmentKey>,
+    pub(crate) issues: Vec<RuntimeRefreshIssue>,
+    pub(crate) differences: Vec<AccountDifference>,
 }
 
 impl AccountRuntime {
@@ -170,29 +182,35 @@ impl AccountRuntime {
             .has_simulated_capital_mutation(segment_key, mutation_id)
     }
 
-    pub(crate) fn mark_to_market(&mut self, request: MarkToMarket) -> Result<(), String> {
-        let segment_key = request.segment_key.clone();
+    pub(crate) fn mark_to_market(
+        &mut self,
+        segment_key: SegmentKey,
+        instrument_id: InstrumentId,
+        quote_asset: kairos_primitives::reference::Currency,
+        mark_price: kairos_primitives::decimal::Price,
+        observed_at_unix_nanos: kairos_primitives::time::UnixNanos,
+    ) -> Result<(), String> {
         let segment_view = self
             .actor
             .segment_view(&segment_key)
-            .ok_or_else(|| format!("mark segment is not configured: {}", request.segment_key))?;
+            .ok_or_else(|| format!("mark segment is not configured: {segment_key}"))?;
         let mut positions = segment_view.positions.clone();
         let mut found = false;
         for position in &mut positions {
-            if position.instrument_id == request.instrument_id {
-                position.mark_price = Some(request.mark_price);
+            if position.instrument_id == instrument_id {
+                position.mark_price = Some(mark_price);
                 position.unrealized_pnl = Some(unrealized_pnl(position)?);
-                position.updated_at_unix_nanos = request.observed_at_unix_nanos;
+                position.updated_at_unix_nanos = observed_at_unix_nanos;
                 found = true;
             }
         }
         if !found {
             return Err(format!(
                 "mark instrument is not present in account: {}",
-                request.instrument_id
+                instrument_id
             ));
         }
-        let equity = calculate_equity(&segment_view, &positions, &request.quote_asset)?;
+        let equity = calculate_equity(&segment_view, &positions, &quote_asset)?;
         let initial_equity = segment_view.initial_equity.or(Some(equity));
         let net_profit = initial_equity
             .map(|initial| {
@@ -208,7 +226,7 @@ impl AccountRuntime {
             positions,
             open_orders: Vec::new(),
             status: segment_view.status,
-            observed_at_unix_nanos: request.observed_at_unix_nanos,
+            observed_at_unix_nanos,
             equity: Some(equity),
             initial_equity,
             net_profit,
@@ -228,7 +246,7 @@ impl AccountRuntime {
     pub(crate) fn apply_event_with_provenance(
         &mut self,
         event: AccountEvent,
-        provenance: Option<crate::application::AccountFactProvenance>,
+        provenance: Option<crate::domain::AccountFactProvenance>,
     ) -> Result<usize, String> {
         let actor_before = self.actor.clone();
         let events = match event {
@@ -284,7 +302,7 @@ impl AccountRuntime {
         &mut self,
         account_id: &str,
         segments: &[String],
-    ) -> Result<AccountRefreshReport, String> {
+    ) -> Result<RuntimeRefreshReport, String> {
         if self.pending_refresh.is_some() {
             return Err("account refresh is already pending".into());
         }
@@ -318,7 +336,7 @@ impl AccountRuntime {
         Ok(())
     }
 
-    pub(crate) fn poll_refresh(&mut self) -> Result<Option<AccountRefreshReport>, String> {
+    pub(crate) fn poll_refresh(&mut self) -> Result<Option<RuntimeRefreshReport>, String> {
         let Some((account_id, receiver)) = self.pending_refresh.as_ref() else {
             return Ok(None);
         };
@@ -346,7 +364,7 @@ impl AccountRuntime {
         &mut self,
         account_id: &str,
         fetches: Vec<RefreshFetch>,
-    ) -> Result<AccountRefreshReport, String> {
+    ) -> Result<RuntimeRefreshReport, String> {
         let mut candidate = self.actor.clone();
         let mut refreshed = Vec::new();
         let mut issues = Vec::new();
@@ -369,7 +387,7 @@ impl AccountRuntime {
         if !refreshed.is_empty() {
             self.commit_candidate(candidate)?;
         }
-        Ok(AccountRefreshReport {
+        Ok(RuntimeRefreshReport {
             account_id: kairos_primitives::account::AccountId::new(account_id)
                 .map_err(|error| error.to_string())?,
             refreshed_segments: refreshed,
@@ -399,7 +417,7 @@ impl AccountRuntime {
         &mut self,
         account_id: &str,
         segments: &[String],
-    ) -> Result<AccountRefreshReport, String> {
+    ) -> Result<RuntimeRefreshReport, String> {
         let mut candidate = self.actor.clone();
         if candidate.begin_reconciliation(account_id, segments)? {
             self.commit_candidate(candidate)?;
@@ -427,9 +445,7 @@ impl AccountRuntime {
         self.actor.persistence_metadata().0
     }
 
-    pub(crate) fn pending_business_event(
-        &self,
-    ) -> Option<&crate::application::AccountBusinessEvent> {
+    pub(crate) fn pending_business_event(&self) -> Option<&AccountBusinessEvent> {
         self.pending_business_events.front()
     }
 
@@ -451,7 +467,7 @@ impl AccountRuntime {
     fn persist_candidate(
         &self,
         candidate: &AccountActor,
-        pending_business_events: &VecDeque<crate::application::AccountBusinessEvent>,
+        pending_business_events: &VecDeque<AccountBusinessEvent>,
     ) -> Result<(), String> {
         if let Some(persistence) = self.persistence.as_ref() {
             let (actor_id, generation, event_sequence) = candidate.persistence_metadata();
@@ -481,7 +497,7 @@ impl AccountRuntime {
     fn persist_transition(
         &mut self,
         events: &[AccountEvent],
-        business_events: &[crate::application::AccountBusinessEvent],
+        business_events: &[AccountBusinessEvent],
     ) -> Result<(), String> {
         if let Some(persistence) = self.persistence.as_ref() {
             let record = AccountJournalRecord::Transition {
@@ -508,7 +524,7 @@ impl AccountRuntime {
 }
 
 fn acknowledge_outbox_event(
-    events: &mut VecDeque<crate::application::AccountBusinessEvent>,
+    events: &mut VecDeque<AccountBusinessEvent>,
     sequence: kairos_primitives::time::Sequence,
     account_id: &kairos_primitives::account::AccountId,
 ) {
@@ -534,7 +550,7 @@ fn unrealized_pnl(position: &Position) -> Result<Money, String> {
 }
 
 fn calculate_equity(
-    segment_view: &crate::application::AccountSegmentView,
+    segment_view: &crate::domain::AccountSegmentView,
     positions: &[Position],
     quote_asset: &str,
 ) -> Result<Money, String> {
@@ -573,8 +589,8 @@ fn event_requires_durability(event: &AccountEvent) -> bool {
     }
 }
 
-fn refresh_issue(segment_key: &SegmentKey, error: String, elapsed_ms: u64) -> AccountRefreshIssue {
-    AccountRefreshIssue {
+fn refresh_issue(segment_key: &SegmentKey, error: String, elapsed_ms: u64) -> RuntimeRefreshIssue {
+    RuntimeRefreshIssue {
         segment_key: segment_key.clone(),
         error,
         elapsed_ms,

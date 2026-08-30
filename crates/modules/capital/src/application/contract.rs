@@ -1,7 +1,6 @@
 use kairos_capital_contract as contract;
-use kairos_primitives::capital::{CapitalSourceAuthority, EarnProductId};
 use kairos_primitives::integration::RemoteOrderId;
-use kairos_primitives::runtime::{EventId, InstanceId, LaunchId, StrategyDecisionId};
+use kairos_primitives::runtime::EventId;
 
 use crate::{
     CapitalAvailabilityView, CapitalDemandRecord, CapitalDemandStatus, CapitalFacts,
@@ -227,10 +226,8 @@ fn demand(value: &CapitalDemandRecord) -> contract::CapitalDemand {
         confidence_bps: value.demand.confidence_bps,
         account_watermark: value.demand.account_watermark,
         risk_watermark: value.demand.risk_watermark,
-        launch_id: LaunchId::new(value.demand.launch_id.clone())
-            .expect("capital demand launch identity is validated"),
-        instance_id: InstanceId::new(value.demand.instance_id.clone())
-            .expect("capital demand instance identity is validated"),
+        launch_id: value.demand.launch_id.clone(),
+        instance_id: value.demand.instance_id.clone(),
         causal_references: value.demand.causal_references.clone(),
         status: match value.status {
             CapitalDemandStatus::Active => contract::CapitalDemandLifecycleStatus::Active,
@@ -270,8 +267,7 @@ fn facts(value: &CapitalFacts) -> contract::CapitalFacts {
             .earn_holdings
             .iter()
             .map(|holding| contract::CapitalEarnHolding {
-                product_id: EarnProductId::new(holding.product_id.clone())
-                    .expect("capital product identity is validated"),
+                product_id: holding.product_id.clone(),
                 principal: holding.principal,
                 redeemable_amount: holding.redeemable_amount,
                 immediately_redeemable: holding.immediately_redeemable,
@@ -297,10 +293,7 @@ fn route(value: &CapitalTransferRoute) -> contract::CapitalRoute {
         },
         per_operation_limit: value.per_operation_limit,
         daily_limit: value.daily_limit,
-        required_source_authority: CapitalSourceAuthority::new(
-            value.required_source_authority.clone(),
-        )
-        .expect("capital source authority is validated"),
+        required_source_authority: value.required_source_authority.clone(),
         settlement_class: match value.settlement_class {
             CapitalSettlementClass::ImmediateBookTransfer => {
                 contract::CapitalSettlementClass::ImmediateBookTransfer
@@ -310,10 +303,7 @@ fn route(value: &CapitalTransferRoute) -> contract::CapitalRoute {
             },
         },
         enabled: value.enabled,
-        earn_product_id: value
-            .earn_product_id
-            .clone()
-            .map(|value| EarnProductId::new(value).expect("capital earn product identity")),
+        earn_product_id: value.earn_product_id.clone(),
         demand_guard_nanos: value.demand_guard_nanos.into(),
         allow_unknown_redemption_quota: value.allow_unknown_redemption_quota,
     }
@@ -385,8 +375,7 @@ fn availability(value: &CapitalAvailabilityView) -> contract::CapitalAvailabilit
 fn plan(value: &CapitalPlan) -> contract::CapitalPlan {
     contract::CapitalPlan {
         plan_id: value.plan_id.clone(),
-        rebalance_decision_id: StrategyDecisionId::new(value.rebalance_decision_id.clone())
-            .expect("capital rebalance decision identity is validated"),
+        rebalance_decision_id: value.rebalance_decision_id.clone(),
         route_id: value.route_id.clone(),
         route_version: value.route_version,
         route_kind: match value.route_kind {
@@ -404,7 +393,10 @@ fn plan(value: &CapitalPlan) -> contract::CapitalPlan {
         demand_ids: value.demand_ids.clone(),
         reservation_id: value.reservation_id.clone(),
         idempotency_key: value.idempotency_key.clone(),
-        selected_earn_product_id: value.selected_earn_product_id.clone(),
+        selected_earn_product_id: value
+            .selected_earn_product_id
+            .as_ref()
+            .map(ToString::to_string),
         source_account_watermark: value.source_account_watermark,
         destination_account_watermark: value.destination_account_watermark,
         source_observed_available: value.source_observed_available,

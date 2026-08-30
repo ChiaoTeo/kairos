@@ -5,7 +5,7 @@ use kairos_risk_contract::{CircuitScope, CircuitState, FlatbuffersRiskEventWrite
 
 fn main() {
     let mut writer = FlatbuffersRiskEventWriter::new_with_identity(
-        "risk:fixture",
+        kairos_primitives::runtime::ActorId::new("risk:fixture").unwrap(),
         InstanceIdentity::new("workspace", "launch", "instance").unwrap(),
     );
     writer

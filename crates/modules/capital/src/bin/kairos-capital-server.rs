@@ -442,7 +442,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         system,
         conflux: kairos_capital::CapitalConfluxConfig {
             snapshot_root,
-            instance_id: args.instance_id,
+            instance_id: kairos_primitives::runtime::InstanceId::new(args.instance_id)?,
             identity,
             account_lease_fences,
             account_brokers,
@@ -556,7 +556,10 @@ fn route_from_config(
         },
         per_operation_limit: value.per_operation_limit,
         daily_limit: value.daily_limit,
-        required_source_authority: source_authority,
+        required_source_authority: kairos_primitives::capital::CapitalSourceAuthority::new(
+            source_authority,
+        )
+        .map_err(|error| error.to_string())?,
         settlement_class: match value.settlement_class {
             CapitalSettlementClassConfig::ImmediateBookTransfer => {
                 CapitalSettlementClass::ImmediateBookTransfer
@@ -566,7 +569,12 @@ fn route_from_config(
             },
         },
         enabled: value.enabled,
-        earn_product_id: value.earn_product_id.clone(),
+        earn_product_id: value
+            .earn_product_id
+            .clone()
+            .map(kairos_primitives::capital::EarnProductId::new)
+            .transpose()
+            .map_err(|error| error.to_string())?,
         demand_guard_nanos: millis_to_nanos(value.demand_guard_millis)?,
         allow_unknown_redemption_quota: value.allow_unknown_redemption_quota,
     })

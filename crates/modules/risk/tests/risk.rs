@@ -77,7 +77,8 @@ fn request(id: &str, value: i64) -> AuthorizeRequest {
             account_segment: kairos_primitives::account::SegmentKey::new("usd-m").unwrap(),
             collateral_asset: kairos_primitives::reference::Currency::new("USDT").unwrap(),
             reduce_only: false,
-            margin_rule_id: "test:fully-funded".into(),
+            margin_rule_id: kairos_primitives::risk::MarginRuleCode::new("test:fully-funded")
+                .unwrap(),
         },
         at_unix_nanos: 1.into(),
         reservation_ttl_nanos: 100.into(),
@@ -213,7 +214,8 @@ fn current_view_and_reservation_event_use_independent_writers() {
         app.acknowledge_event();
     }
     let event = app.pending_event().cloned().unwrap();
-    let mut event_writer = FlatbuffersRiskEventWriter::new("risk");
+    let mut event_writer =
+        FlatbuffersRiskEventWriter::new(kairos_primitives::runtime::ActorId::new("risk").unwrap());
     event_writer.publish(&event).unwrap();
     let payload = event_writer.last_payload.unwrap();
     assert!(reservation_reserved_buffer_has_identifier(&payload));
@@ -237,7 +239,7 @@ fn risk_event_preserves_launch_instance_identity() {
         app.acknowledge_event();
     }
     let mut writer = FlatbuffersRiskEventWriter::new_with_identity(
-        "risk",
+        kairos_primitives::runtime::ActorId::new("risk").unwrap(),
         kairos_primitives::runtime::InstanceIdentity::new("workspace", "launch", "instance")
             .unwrap(),
     );
@@ -393,7 +395,8 @@ fn proposal_calculates_margin_and_returns_a_structured_shortfall() {
     .unwrap();
     let mut order = request("funding-shortfall", 100);
     order.proposal.initial_margin_rate_bps = 1_000.into();
-    order.proposal.margin_rule_id = "reference:binance-usdm:tier-1:v1".into();
+    order.proposal.margin_rule_id =
+        kairos_primitives::risk::MarginRuleCode::new("reference:binance-usdm:tier-1:v1").unwrap();
     order.context = Some(RiskContext {
         available_margin: amount(9),
         ..RiskContext::default()
@@ -416,7 +419,8 @@ fn proposal_calculates_margin_and_returns_a_structured_shortfall() {
     ) {
         app.acknowledge_event();
     }
-    let mut writer = FlatbuffersRiskEventWriter::new("risk");
+    let mut writer =
+        FlatbuffersRiskEventWriter::new(kairos_primitives::runtime::ActorId::new("risk").unwrap());
     writer.publish(app.pending_event().unwrap()).unwrap();
     let payload = writer.last_payload.unwrap();
     let encoded = root_as_risk_decision_made(&payload)

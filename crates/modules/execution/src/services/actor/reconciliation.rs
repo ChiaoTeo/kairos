@@ -1,5 +1,5 @@
 use super::*;
-use crate::application::RemoteOrderUpdate;
+use crate::domain::RemoteOrderUpdate;
 
 impl ExecutionActor {
     pub(crate) fn observe_remote_time(&mut self, observed_at: u64) {

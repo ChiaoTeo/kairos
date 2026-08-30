@@ -269,18 +269,26 @@ pub(super) fn candidate_for_address(
     ))
 }
 
-fn margin_rule(configured: &ExecutionConnectionOptions) -> Option<(u32, String)> {
+fn margin_rule(
+    configured: &ExecutionConnectionOptions,
+) -> Option<(u32, kairos_primitives::risk::MarginRuleCode)> {
     match (
         configured.initial_margin_rate_bps,
         configured.margin_rule_id.as_ref(),
     ) {
         (Some(rate), Some(id)) if rate > 0 && rate <= 10_000 && !id.trim().is_empty() => {
-            Some((rate, id.clone()))
+            kairos_primitives::risk::MarginRuleCode::new(id)
+                .ok()
+                .map(|id| (rate, id))
         },
-        (None, None) if configured.execution_channel.eq_ignore_ascii_case("spot") => Some((
-            10_000,
-            format!("route:{}:fully-funded", configured.route_id),
-        )),
+        (None, None) if configured.execution_channel.eq_ignore_ascii_case("spot") => {
+            kairos_primitives::risk::MarginRuleCode::new(format!(
+                "route:{}:fully-funded",
+                configured.route_id
+            ))
+            .ok()
+            .map(|id| (10_000, id))
+        },
         _ => None,
     }
 }

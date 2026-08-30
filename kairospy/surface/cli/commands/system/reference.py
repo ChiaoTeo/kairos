@@ -34,7 +34,7 @@ def system_component_reference_health(
 ) -> None:
     """Read Reference runtime health through its owner contract."""
     owner = WorkspaceApplication().open(workspace)
-    _emit(_workspace_reference_client(owner).health(), output)
+    _emit(_workspace_reference_client(owner).health().to_json_dict(), output)
 
 
 @system_component_reference_app.command("providers")
@@ -54,7 +54,7 @@ def system_component_reference_catalog(
 ) -> None:
     """Read the Reference catalog from the workspace component."""
     owner = WorkspaceApplication().open(workspace)
-    _emit(_workspace_reference_client(owner).catalog(), output)
+    _emit(_workspace_reference_client(owner).catalog().to_json_dict(), output)
 
 
 @system_component_reference_app.command("validate")
@@ -133,7 +133,7 @@ def system_component_reference_options_coverage(
 ) -> None:
     """Read Reference option coverage through the workspace component."""
     owner = WorkspaceApplication().open(workspace)
-    _emit(_workspace_reference_client(owner).option_coverage(), output)
+    _emit(_workspace_reference_client(owner).option_coverage().to_json_dict(), output)
 
 
 @system_component_reference_app.command("options-add")

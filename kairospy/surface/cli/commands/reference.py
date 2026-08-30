@@ -15,7 +15,7 @@ HELP = """Reference standalone commands are owned by kairos-reference-cli.
 
 Canonical commands include:
   snapshot, catalog, assets, exchanges, instruments, listings
-  markets, events, query, search, show
+  markets, query, search, show
 
 Current runtime reference facts and controls are connected through scoped
 component commands:

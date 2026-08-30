@@ -30,10 +30,25 @@ use kairos_conflux::{
     EarnSubscriptionPreviewRequest, IntegrationError,
 };
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
+use kairos_primitives::capital::{CapitalSourceAuthority, EarnProductId};
 use kairos_primitives::decimal::Quantity;
 use kairos_primitives::reference::Currency;
-use kairos_primitives::runtime::{IdempotencyKey, StrategyDecisionId, StrategyId};
+use kairos_primitives::runtime::{
+    IdempotencyKey, InstanceId, LaunchId, StrategyDecisionId, StrategyId,
+};
 use kairos_primitives::time::{BasisPoints, Generation, UnixNanos};
+
+fn source_authority(value: &str) -> CapitalSourceAuthority {
+    CapitalSourceAuthority::new(value).unwrap()
+}
+
+fn decision_id(value: impl Into<String>) -> StrategyDecisionId {
+    StrategyDecisionId::new(value).unwrap()
+}
+
+fn earn_product_id(value: &str) -> EarnProductId {
+    EarnProductId::new(value).unwrap()
+}
 
 fn objective(version: u64) -> FundingObjective {
     FundingObjective {
@@ -103,8 +118,8 @@ fn demand(id: &str, shortfall: i64, expires_at: u64) -> CapitalDemand {
         confidence_bps: BasisPoints::new(9_000),
         account_watermark: kairos_primitives::time::Sequence::new(11),
         risk_watermark: kairos_primitives::time::Sequence::new(17),
-        launch_id: "basis-live".into(),
-        instance_id: "instance-7".into(),
+        launch_id: LaunchId::new("basis-live").unwrap(),
+        instance_id: InstanceId::new("instance-7").unwrap(),
         destination_lease_fence: "account-a:lease:4".into(),
         causal_references: vec![format!("execution-plan:{id}")],
     }
@@ -139,7 +154,7 @@ fn route() -> CapitalTransferRoute {
         kind: CapitalRouteKind::InternalTransfer,
         per_operation_limit: Quantity::new(30, 0).unwrap(),
         daily_limit: Quantity::new(60, 0).unwrap(),
-        required_source_authority: "lease:account-a:7".into(),
+        required_source_authority: source_authority("lease:account-a:7"),
         settlement_class: CapitalSettlementClass::ParticipantHistoryThenAccountObservation,
         enabled: true,
         earn_product_id: None,
@@ -161,7 +176,7 @@ fn earn_subscription_route() -> CapitalTransferRoute {
     value.route_id = CapitalRouteId::new("funding-to-earn").unwrap();
     value.destination = value.source.clone();
     value.kind = CapitalRouteKind::EarnSubscription;
-    value.earn_product_id = Some("USDT-FLEXIBLE".into());
+    value.earn_product_id = Some(earn_product_id("USDT-FLEXIBLE"));
     value.demand_guard_nanos = 20;
     value.allow_unknown_redemption_quota = false;
     value
@@ -170,7 +185,7 @@ fn earn_subscription_route() -> CapitalTransferRoute {
 fn earn_source_facts(available: i64, redeemable: i64, observed_at: u64) -> CapitalFacts {
     let mut source = source_facts(available, observed_at);
     source.earn_holdings = vec![CapitalEarnHoldingFact {
-        product_id: "USDT-FLEXIBLE".into(),
+        product_id: earn_product_id("USDT-FLEXIBLE"),
         principal: Quantity::new(redeemable, 0).unwrap(),
         redeemable_amount: Quantity::new(redeemable, 0).unwrap(),
         immediately_redeemable: true,
@@ -230,7 +245,7 @@ fn manual_transfer_preview(
             source: route().source,
             destination: route().destination,
             amount: Quantity::new(7, 0).unwrap(),
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(120),
             expires_at: UnixNanos::new(140),
         })
@@ -360,9 +375,9 @@ fn unavailable_optional_member_degrades_group_but_does_not_freeze_ready_route() 
         .authorize_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id,
             plan_id: CapitalPlanId::new("optional-member-plan").unwrap(),
-            rebalance_decision_id: "optional-member-decision".into(),
+            rebalance_decision_id: decision_id("optional-member-decision"),
             route_id: route().route_id,
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(122),
             expires_at: UnixNanos::new(200),
         })
@@ -402,9 +417,9 @@ fn unavailable_critical_member_closes_global_capital_write_barrier() {
             .authorize_plan(AuthorizeCapitalPlan {
                 capital_group_id: group_id,
                 plan_id: CapitalPlanId::new("critical-member-plan").unwrap(),
-                rebalance_decision_id: "critical-member-decision".into(),
+                rebalance_decision_id: decision_id("critical-member-decision"),
                 route_id: route().route_id,
-                source_authority: "lease:account-a:7".into(),
+                source_authority: source_authority("lease:account-a:7"),
                 created_at: UnixNanos::new(122),
                 expires_at: UnixNanos::new(200),
             })
@@ -995,9 +1010,9 @@ fn planner_atomically_reserves_source_and_unfilled_destination_demand() {
     let authorize = |plan_id: &str| AuthorizeCapitalPlan {
         capital_group_id: group_id.clone(),
         plan_id: CapitalPlanId::new(plan_id).unwrap(),
-        rebalance_decision_id: format!("decision:{plan_id}"),
+        rebalance_decision_id: decision_id(format!("decision:{plan_id}")),
         route_id: route().route_id,
-        source_authority: "lease:account-a:7".into(),
+        source_authority: source_authority("lease:account-a:7"),
         created_at: UnixNanos::new(120),
         expires_at: UnixNanos::new(200),
     };
@@ -1051,9 +1066,9 @@ fn planner_rejects_wrong_source_authority_before_reserving() {
         application.authorize_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id,
             plan_id: CapitalPlanId::new("plan-foreign-writer").unwrap(),
-            rebalance_decision_id: "decision-foreign-writer".into(),
+            rebalance_decision_id: decision_id("decision-foreign-writer"),
             route_id: route().route_id,
-            source_authority: "stale-lease".into(),
+            source_authority: source_authority("stale-lease"),
             created_at: UnixNanos::new(120),
             expires_at: UnixNanos::new(200),
         }),
@@ -1105,9 +1120,9 @@ fn indeterminate_transfer_reconciles_before_account_observed_completion() {
         .authorize_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id.clone(),
             plan_id: plan_id.clone(),
-            rebalance_decision_id: "decision-reconcile".into(),
+            rebalance_decision_id: decision_id("decision-reconcile"),
             route_id: route().route_id,
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(120),
             expires_at: UnixNanos::new(300),
         })
@@ -1227,9 +1242,9 @@ fn restart_preserves_indeterminate_operation_and_original_idempotency_key() {
             .authorize_plan(AuthorizeCapitalPlan {
                 capital_group_id: group_id.clone(),
                 plan_id: plan_id.clone(),
-                rebalance_decision_id: "decision-indeterminate-restart".into(),
+                rebalance_decision_id: decision_id("decision-indeterminate-restart"),
                 route_id: route().route_id,
-                source_authority: "lease:account-a:7".into(),
+                source_authority: source_authority("lease:account-a:7"),
                 created_at: UnixNanos::new(120),
                 expires_at: UnixNanos::new(300),
             })
@@ -1311,9 +1326,9 @@ fn restart_after_delivery_fence_never_returns_a_prepared_operation() {
             .authorize_plan(AuthorizeCapitalPlan {
                 capital_group_id: group_id.clone(),
                 plan_id: plan_id.clone(),
-                rebalance_decision_id: "decision-delivery-fence".into(),
+                rebalance_decision_id: decision_id("decision-delivery-fence"),
                 route_id: route().route_id,
-                source_authority: "lease:account-a:7".into(),
+                source_authority: source_authority("lease:account-a:7"),
                 created_at: UnixNanos::new(120),
                 expires_at: UnixNanos::new(300),
             })
@@ -1367,9 +1382,9 @@ fn shutdown_recovery_decision_is_durable_and_projects_an_alert() {
             .authorize_plan(AuthorizeCapitalPlan {
                 capital_group_id: group_id.clone(),
                 plan_id: plan_id.clone(),
-                rebalance_decision_id: "decision-shutdown-recovery".into(),
+                rebalance_decision_id: decision_id("decision-shutdown-recovery"),
                 route_id: route().route_id,
-                source_authority: "lease:account-a:7".into(),
+                source_authority: source_authority("lease:account-a:7"),
                 created_at: UnixNanos::new(120),
                 expires_at: UnixNanos::new(300),
             })
@@ -1670,9 +1685,9 @@ async fn transfer_process_submits_once_and_reconciles_repeated_calls() {
         .authorize_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id,
             plan_id: plan_id.clone(),
-            rebalance_decision_id: "decision-process".into(),
+            rebalance_decision_id: decision_id("decision-process"),
             route_id: route().route_id,
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(120),
             expires_at: UnixNanos::new(300),
         })
@@ -1708,9 +1723,9 @@ async fn operator_reconcile_queries_existing_operation_without_resubmitting() {
         .authorize_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id,
             plan_id: plan_id.clone(),
-            rebalance_decision_id: "decision-operator-reconcile".into(),
+            rebalance_decision_id: decision_id("decision-operator-reconcile"),
             route_id: route().route_id,
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(120),
             expires_at: UnixNanos::new(300),
         })
@@ -1745,9 +1760,9 @@ async fn operator_reconcile_refuses_an_undelivered_prepared_operation() {
         .authorize_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id.clone(),
             plan_id: plan_id.clone(),
-            rebalance_decision_id: "decision-prepared-reconcile".into(),
+            rebalance_decision_id: decision_id("decision-prepared-reconcile"),
             route_id: route().route_id,
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(120),
             expires_at: UnixNanos::new(300),
         })
@@ -1812,9 +1827,9 @@ fn idle_cash_requires_surplus_known_redemption_quota_and_no_near_demand() {
         .authorize_earn_subscription(AuthorizeEarnSubscriptionPlan {
             capital_group_id: group_id.clone(),
             plan_id: CapitalPlanId::new("yield-unknown-quota").unwrap(),
-            rebalance_decision_id: "yield-unknown-quota".into(),
+            rebalance_decision_id: decision_id("yield-unknown-quota"),
             route_id: candidate.route_id.clone(),
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             previewed_amount: candidate.amount,
             preview_observed_at: UnixNanos::new(120),
             eligible: true,
@@ -1896,9 +1911,9 @@ async fn idle_cash_subscription_waits_for_participant_and_account_principal() {
         .authorize_earn_subscription_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id.clone(),
             plan_id: plan_id.clone(),
-            rebalance_decision_id: "yield-decision".into(),
+            rebalance_decision_id: decision_id("yield-decision"),
             route_id: earn_subscription_route().route_id,
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(120),
             expires_at: UnixNanos::new(300),
         })
@@ -2003,9 +2018,9 @@ async fn earn_redemption_then_transfer_survives_restart_without_duplicate_submis
             .authorize_plan(AuthorizeCapitalPlan {
                 capital_group_id: group_id.clone(),
                 plan_id: plan_id.clone(),
-                rebalance_decision_id: "decision-earn-chain".into(),
+                rebalance_decision_id: decision_id("decision-earn-chain"),
                 route_id: earn_route().route_id,
-                source_authority: "lease:account-a:7".into(),
+                source_authority: source_authority("lease:account-a:7"),
                 created_at: UnixNanos::new(120),
                 expires_at: UnixNanos::new(300),
             })
@@ -2141,9 +2156,9 @@ fn expiry_releases_only_operations_that_never_crossed_the_delivery_fence() {
         .authorize_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id.clone(),
             plan_id: safe_plan_id.clone(),
-            rebalance_decision_id: "decision-safe-expiry".into(),
+            rebalance_decision_id: decision_id("decision-safe-expiry"),
             route_id: route().route_id.clone(),
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(120),
             expires_at: UnixNanos::new(125),
         })
@@ -2165,9 +2180,9 @@ fn expiry_releases_only_operations_that_never_crossed_the_delivery_fence() {
         .authorize_plan(AuthorizeCapitalPlan {
             capital_group_id: group_id.clone(),
             plan_id: uncertain_plan_id.clone(),
-            rebalance_decision_id: "decision-uncertain-expiry".into(),
+            rebalance_decision_id: decision_id("decision-uncertain-expiry"),
             route_id: route().route_id,
-            source_authority: "lease:account-a:7".into(),
+            source_authority: source_authority("lease:account-a:7"),
             created_at: UnixNanos::new(127),
             expires_at: UnixNanos::new(130),
         })

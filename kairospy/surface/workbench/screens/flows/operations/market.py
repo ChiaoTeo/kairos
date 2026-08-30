@@ -11,7 +11,13 @@ from kairospy.system.apps.components.application import ComponentProcessApplicat
 from kairospy.system.apps.components.application.clients import MarketSystemClient
 
 from ...presentation import ResultTone, conclusion, facts
-from ..market.workspace import routes_renderable, subscriptions_renderable
+from ..market.workspace import (
+    command_status_mapping,
+    routes_renderable,
+    routes_response_mapping,
+    subscriptions_renderable,
+    subscriptions_response_mapping,
+)
 
 
 def execute(state: Any, action: str) -> Mapping[str, Any]:
@@ -26,13 +32,13 @@ def execute(state: Any, action: str) -> Mapping[str, Any]:
         processes.client("market", owner.paths.process_socket("market")),
     )
     if action == "routes":
-        return client.data_routes()
+        return routes_response_mapping(client.data_routes())
     if action == "subscriptions":
-        return client.subscriptions()
+        return subscriptions_response_mapping(client.subscriptions())
     if action == "pause-replay":
-        return client.pause_replay()
+        return command_status_mapping(client.pause_replay())
     if action == "resume-replay":
-        return client.resume_replay()
+        return command_status_mapping(client.resume_replay())
     raise ValueError(f"unknown Workspace Market runtime action: {action}")
 
 

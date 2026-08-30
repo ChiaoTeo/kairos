@@ -156,7 +156,9 @@ def account_passthrough(ctx: typer.Context) -> None:
         if len(values) != 1 or values[0].startswith("-"):
             raise typer.BadParameter("account test requires exactly one account id")
         result = AccountConfigurationApplication(owner).test_connection(values[0])
-        typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        typer.echo(
+            json.dumps(result.to_json_dict(), ensure_ascii=False, sort_keys=True)
+        )
         return
     if arguments and arguments[0] == "remove":
         account_id = _option_value([*account_selector, *arguments[1:]], "--account-id")

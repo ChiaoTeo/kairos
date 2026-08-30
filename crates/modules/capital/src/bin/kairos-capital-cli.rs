@@ -393,7 +393,9 @@ async fn run_standalone_transfer(
                     ))?,
                     idempotency_key,
                     amount,
-                    source_authority: "standalone-explicit-confirmation".into(),
+                    source_authority: kairos_primitives::capital::CapitalSourceAuthority::new(
+                        "standalone-explicit-confirmation",
+                    )?,
                     created_at: observed_at,
                     expires_at,
                 })

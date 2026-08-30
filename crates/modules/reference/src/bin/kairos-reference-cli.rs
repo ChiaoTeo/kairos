@@ -124,7 +124,6 @@ fn execute_standalone_read(
             app.markets(market_catalog_request(args), resolve)?
         },
         StandaloneCommand::OptionChain(args) => app.option_chain(option_chain_request(args))?,
-        StandaloneCommand::Events(args) => app.lifecycle_events(args.query.into_query())?,
         StandaloneCommand::Query(args) => app.query(args.kind(), args.into_query())?,
         StandaloneCommand::Search(args) => app.search(args.text, args.limit)?,
         StandaloneCommand::Show { identifier } => app.show_catalog_record(&identifier)?,
@@ -681,10 +680,6 @@ impl QueryArgs {
             status: self.status,
             active_only: self.active_only,
             as_of_unix_nanos: self.as_of_unix_nanos.map(Into::into),
-            sequence_from: self.sequence_from.map(Into::into),
-            sequence_to: self.sequence_to.map(Into::into),
-            event_time_from_unix_nanos: self.event_time_from_unix_nanos.map(Into::into),
-            event_time_to_unix_nanos: self.event_time_to_unix_nanos.map(Into::into),
             limit: self.limit,
             ..ReferenceQuery::default()
         }
@@ -911,7 +906,6 @@ enum StandaloneCommand {
         command: MarketCommand,
     },
     OptionChain(OptionChainArgs),
-    Events(EventArgs),
     Query(QueryArgs),
     Search(SearchArgs),
     Show {
@@ -1212,21 +1206,7 @@ struct QueryArgs {
     #[arg(long)]
     as_of_unix_nanos: Option<u64>,
     #[arg(long)]
-    sequence_from: Option<u64>,
-    #[arg(long)]
-    sequence_to: Option<u64>,
-    #[arg(long)]
-    event_time_from_unix_nanos: Option<u64>,
-    #[arg(long)]
-    event_time_to_unix_nanos: Option<u64>,
-    #[arg(long)]
     limit: Option<usize>,
-}
-
-#[derive(Debug, Args)]
-struct EventArgs {
-    #[command(flatten)]
-    query: QueryArgs,
 }
 
 #[derive(Debug, Args)]
@@ -1244,7 +1224,6 @@ impl QueryArgs {
             "instrument" => ReferenceKind::Instrument,
             "listing" => ReferenceKind::Listing,
             "market" => ReferenceKind::Market,
-            "event" => ReferenceKind::Event,
             _ => ReferenceKind::All,
         }
     }

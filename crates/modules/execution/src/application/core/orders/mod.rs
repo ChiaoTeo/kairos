@@ -1,7 +1,5 @@
 //! Order lifecycle use cases for the Execution application facade.
 
-pub(crate) mod admission;
-
 use super::*;
 
 pub(crate) fn replacement_remaining_quantity(
@@ -1107,7 +1105,7 @@ impl ExecutionApplication {
                     ))
                     .expect("validated quote order ID"),
                     intent_id: Some(request.intent_id.clone()),
-                    strategy_id: Some(typed_strategy_id(state.intent.strategy_id.clone())),
+                    strategy_id: Some(state.intent.strategy_id.clone()),
                     account_id: template.account_id,
                     segment_key: template.segment_key,
                     instrument_id: template.instrument_id,
@@ -1476,17 +1474,13 @@ impl ExecutionApplication {
         }
         let mut changes = Vec::new();
         if let Some(order) = self.actor.order_map().get(&event.order_id).cloned() {
-            let strategy_id = order
-                .strategy_id
-                .as_ref()
-                .map(ToString::to_string)
-                .or_else(|| {
-                    order.intent_id.as_ref().and_then(|intent_id| {
-                        self.actor
-                            .intent(intent_id.as_str())
-                            .map(|state| state.intent.strategy_id.clone())
-                    })
-                });
+            let strategy_id = order.strategy_id.as_ref().cloned().or_else(|| {
+                order.intent_id.as_ref().and_then(|intent_id| {
+                    self.actor
+                        .intent(intent_id.as_str())
+                        .map(|state| state.intent.strategy_id.clone())
+                })
+            });
             if let Some(strategy_id) = strategy_id {
                 changes.push(ExecutionBusinessChange::Order {
                     strategy_id: strategy_id.clone(),
@@ -1501,13 +1495,10 @@ impl ExecutionApplication {
                     {
                         changes.push(ExecutionBusinessChange::Fill {
                             strategy_id,
-                            account_id: order.account_id.to_string(),
-                            intent_id: order.intent_id.as_ref().map(ToString::to_string),
-                            market_id: order.market_id.as_ref().map(ToString::to_string),
-                            remote_order_id: order
-                                .remote_order_id
-                                .as_ref()
-                                .map(ToString::to_string),
+                            account_id: order.account_id.clone(),
+                            intent_id: order.intent_id.clone(),
+                            market_id: order.market_id.clone(),
+                            remote_order_id: order.remote_order_id.clone(),
                             side: order.side,
                             fill: fill.clone(),
                         });

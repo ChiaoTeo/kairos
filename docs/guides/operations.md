@@ -413,7 +413,7 @@ uv run kairospy launch instance timeline export \
 Reference 验证 CLI
 
 Reference 顶层 CLI 查询目录事实，所有结构化结果写入 stdout。`markets`、`assets`、
-`exchanges`、`instruments`、`listings`、`events` 和 `catalog` 通过 contract-owned
+`exchanges`、`instruments`、`listings` 和 `catalog` 通过 contract-owned
 read-only client 查询 Reference SQLite catalog。运行时 health、provider 验收和刷新
 属于 workspace component 连接模式：
 
@@ -421,7 +421,6 @@ read-only client 查询 Reference SQLite catalog。运行时 health、provider �
 uv run kairospy system component reference health --workspace my-project --format json
 uv run kairospy system component reference validate --workspace my-project --format json
 uv run kairospy system component reference refresh --workspace my-project --format json
-uv run kairospy reference events --sequence-from 1 --limit 100 --workspace my-project --format json
 uv run kairospy reference markets --exchange binance --active-only --workspace my-project
 uv run kairospy reference markets --symbol BTCUSDT --workspace my-project --format json
 uv run kairospy reference instruments --symbol AAPL --instrument-type equity --workspace my-project --format json

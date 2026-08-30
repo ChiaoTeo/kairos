@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 import time
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rich.console import Group, RenderableType
 from rich.panel import Panel
@@ -26,6 +26,14 @@ from ...presentation import (
 )
 
 from ....widgets import ActionItem
+
+if TYPE_CHECKING:
+    from kairospy.contracts.market import (
+        MarketCommandStatus,
+        MarketDataRoutesResponse,
+        MarketSubscriptionResponse,
+        MarketSubscriptionsResponse,
+    )
 
 
 LIVE_MARKET_ACTIONS = (
@@ -297,23 +305,29 @@ def execute(state: Any, prompt: WorkspaceMarketPromptState) -> dict[str, Any]:
         processes.client("market", owner.paths.process_socket("market")),
     )
     if action == "session-subscriptions":
-        return client.subscriptions(owner_id=prompt.owner_id)
+        return subscriptions_response_mapping(
+            client.subscriptions(owner_id=prompt.owner_id)
+        )
     if action == "subscribe":
         observations = prompt.values.get("observations", "quote")
-        return client.operator_subscribe(
-            owner_id=prompt.owner_id,
-            request_id=f"kairos-i-subscribe:{time.time_ns()}",
-            market_id=prompt.values["market-id"],
-            observations=tuple(
-                value.strip() for value in observations.split(",") if value.strip()
-            ),
-            provider=prompt.values.get("provider") or None,
+        return subscription_response_mapping(
+            client.operator_subscribe(
+                owner_id=prompt.owner_id,
+                request_id=f"kairos-i-subscribe:{time.time_ns()}",
+                market_id=prompt.values["market-id"],
+                observations=tuple(
+                    value.strip() for value in observations.split(",") if value.strip()
+                ),
+                provider=prompt.values.get("provider") or None,
+            )
         )
     if action == "unsubscribe":
-        return client.operator_unsubscribe(
-            owner_id=prompt.owner_id,
-            request_id=f"kairos-i-unsubscribe:{time.time_ns()}",
-            subscription_id=prompt.values["subscription-id"],
+        return command_status_mapping(
+            client.operator_unsubscribe(
+                owner_id=prompt.owner_id,
+                request_id=f"kairos-i-unsubscribe:{time.time_ns()}",
+                subscription_id=prompt.values["subscription-id"],
+            )
         )
     raise ValueError(f"unknown live Market action: {action}")
 
@@ -332,15 +346,13 @@ def provider_options(
         processes.client("market", owner.paths.process_socket("market")),
     )
     observation = prompt.values.get("kind", "quote")
-    result = client.data_routes(
+    response = client.data_routes(
         market_id=prompt.values["market-id"],
         observation_kind=observation,
         configured_only=True,
         ready_only=True,
     )
-    return tuple(
-        value for value in result.get("routes", ()) if isinstance(value, Mapping)
-    )
+    return tuple(routes_response_mapping(response)["routes"])
 
 
 def release_operator_owner(state: Any, owner_id: str) -> tuple[str, ...]:
@@ -354,11 +366,74 @@ def release_operator_owner(state: Any, owner_id: str) -> tuple[str, ...]:
         MarketSystemClient,
         processes.client("market", owner.paths.process_socket("market")),
     )
-    result = client.operator_release_owner(
+    response = client.operator_release_owner(
         owner_id=owner_id,
         request_id=f"kairos-i-release:{time.time_ns()}",
     )
-    return tuple(str(value) for value in result["released_subscription_ids"])
+    return tuple(str(value) for value in response.released_subscription_ids)
+
+
+def routes_response_mapping(
+    response: "MarketDataRoutesResponse",
+) -> dict[str, list[dict[str, object]]]:
+    """Project a Market route contract only at the Workbench boundary."""
+
+    return {
+        "routes": [
+            {
+                "market_id": route.market_id,
+                "provider": route.provider,
+                "observation_kinds": list(route.observation_kinds),
+                "state": route.state,
+                "selected": route.selected,
+                "pending_reason": route.pending_reason,
+            }
+            for route in response.routes
+        ]
+    }
+
+
+def subscriptions_response_mapping(
+    response: "MarketSubscriptionsResponse",
+) -> dict[str, list[dict[str, object]]]:
+    """Project Market subscription snapshots for existing presentation code."""
+
+    return {
+        "subscriptions": [
+            {
+                "subscription_id": subscription.subscription_id,
+                "owner_id": subscription.owner_id,
+                "state": subscription.state,
+                "market_ids": list(subscription.market_ids),
+                "observations": list(subscription.observations),
+                "selected_providers": list(subscription.selected_providers),
+                "pending_reason": subscription.pending_reason,
+            }
+            for subscription in response.subscriptions
+        ]
+    }
+
+
+def subscription_response_mapping(
+    response: "MarketSubscriptionResponse",
+) -> dict[str, object]:
+    """Project one Market subscription mutation for Workbench presentation."""
+
+    return {
+        "subscription_id": response.subscription_id,
+        "owner_id": response.owner_id,
+        "state": response.state,
+        "satisfied_selectors": list(response.satisfied_selectors),
+        "missing_selectors": list(response.missing_selectors),
+        "resolved_providers": list(response.resolved_providers),
+        "pending_reason": response.pending_reason,
+    }
+
+
+def command_status_mapping(response: "MarketCommandStatus") -> dict[str, object]:
+    """Project a Market command outcome for Workbench presentation."""
+
+    return {"status": response.status}
 
 
 def status_renderable(result: Mapping[str, Any]) -> RenderableType:

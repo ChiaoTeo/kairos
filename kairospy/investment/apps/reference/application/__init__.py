@@ -11,7 +11,6 @@ from .application import (
 from .configuration import ReferenceProviderConfigurationApplication
 from .provider_draft import ReferenceProviderDraft, ReferenceProviderDraftApplication
 from .cli import ReferenceCliApplication
-from .events import ReferenceEvent
 from .models import (
     Asset,
     Exchange,
@@ -37,7 +36,6 @@ __all__ = [
     "MASSIVE_REFERENCE_SOURCES",
     "PUBLIC_REFERENCE_SOURCES",
     "ReferenceCliApplication",
-    "ReferenceEvent",
     "ReferenceApplication",
     "observe_reference_stream",
     "ReferenceNotFoundError",

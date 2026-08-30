@@ -34,6 +34,41 @@ impl fmt::Display for AlgorithmRunId {
     }
 }
 
+/// Monotonic sequence of decisions within one AlgorithmRun.
+///
+/// This is deliberately distinct from process event sequence and generation.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct AlgorithmDecisionSequence(u64);
+
+impl AlgorithmDecisionSequence {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    pub fn checked_next(self) -> Option<Self> {
+        self.0.checked_add(1).map(Self)
+    }
+}
+
+impl From<u64> for AlgorithmDecisionSequence {
+    fn from(value: u64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for AlgorithmDecisionSequence {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MakerTakerHedgeSpec {
     pub leader_leg_id: LegId,
@@ -328,7 +363,7 @@ pub enum AlgorithmActionKind {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AlgorithmAction {
     pub action_id: String,
-    pub decision_sequence: u64,
+    pub decision_sequence: AlgorithmDecisionSequence,
     pub status: AlgorithmActionStatus,
     pub kind: AlgorithmActionKind,
 }
@@ -407,7 +442,7 @@ pub struct AlgorithmRun {
     pub intent_id: IntentId,
     pub spec: ExecutionAlgorithmSpec,
     pub status: AlgorithmRunStatus,
-    pub decision_sequence: u64,
+    pub decision_sequence: AlgorithmDecisionSequence,
     pub last_decision_at: Option<UnixNanos>,
     pub next_wake_at: Option<UnixNanos>,
     #[serde(default)]
@@ -437,7 +472,7 @@ impl AlgorithmRun {
             intent_id,
             spec: ExecutionAlgorithmSpec::Immediate,
             status: AlgorithmRunStatus::Planned,
-            decision_sequence: 0,
+            decision_sequence: 0.into(),
             last_decision_at: None,
             next_wake_at: None,
             exposure: None,
@@ -456,7 +491,7 @@ impl AlgorithmRun {
             intent_id,
             spec: ExecutionAlgorithmSpec::Immediate,
             status: AlgorithmRunStatus::Completed,
-            decision_sequence: 0,
+            decision_sequence: 0.into(),
             last_decision_at: None,
             next_wake_at: None,
             exposure: None,
@@ -481,7 +516,7 @@ impl AlgorithmRun {
             intent_id,
             spec: ExecutionAlgorithmSpec::Twap(spec.clone()),
             status: AlgorithmRunStatus::Planned,
-            decision_sequence: 0,
+            decision_sequence: 0.into(),
             last_decision_at: None,
             next_wake_at: Some(spec.start_at),
             exposure: None,
@@ -533,7 +568,7 @@ impl AlgorithmRun {
             intent_id,
             spec: ExecutionAlgorithmSpec::PassiveLimit(spec),
             status: AlgorithmRunStatus::Planned,
-            decision_sequence: 0,
+            decision_sequence: 0.into(),
             last_decision_at: None,
             next_wake_at: None,
             exposure: None,
@@ -579,7 +614,7 @@ impl AlgorithmRun {
             intent_id,
             spec: ExecutionAlgorithmSpec::MakerTakerHedge(spec),
             status: AlgorithmRunStatus::Planned,
-            decision_sequence: 0,
+            decision_sequence: 0.into(),
             last_decision_at: None,
             next_wake_at: None,
             exposure: Some(NormalizedExposureLedger {

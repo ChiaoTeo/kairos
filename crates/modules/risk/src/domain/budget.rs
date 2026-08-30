@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::decimal::Money;
 use kairos_primitives::reference::{Currency, ExchangeId, InstrumentId};
-use kairos_primitives::risk::{PolicyId, ReservationId};
+use kairos_primitives::risk::{MarginRuleCode, PolicyId, ReservationId};
 use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
 use kairos_primitives::time::{BasisPoints, DurationNanos, Generation, Sequence, UnixNanos};
 use rust_decimal::Decimal as RustDecimal;
@@ -360,7 +360,7 @@ pub struct TradeRiskProposal {
     #[serde(default)]
     pub reduce_only: bool,
     /// Identifies the Reference/configuration rule used for audit and replay.
-    pub margin_rule_id: String,
+    pub margin_rule_id: MarginRuleCode,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

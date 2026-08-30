@@ -4,8 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::application::RiskSnapshot;
-use crate::domain::RiskPolicy;
+use crate::domain::{RiskDecision, RiskPolicy, RiskSnapshot};
 
 /// Durable facts are append-only.  The state owner acknowledges a mutating
 /// command only after this record has reached the journal; snapshots are
@@ -26,7 +25,7 @@ pub(crate) enum PersistedEvent {
     },
     DecisionEvaluated {
         sequence: u64,
-        decision: crate::application::RiskDecision,
+        decision: RiskDecision,
         account_id: kairos_primitives::account::AccountId,
         strategy_id: kairos_primitives::runtime::StrategyId,
     },

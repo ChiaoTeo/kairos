@@ -5,7 +5,6 @@
 //! commands must use `CliAccountApplication`.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use kairos_account_contract::{
     AccountClient, AccountCommandStatus, AccountControlRpcClient, AccountRefreshResponse,
@@ -136,17 +135,8 @@ pub enum ConnectedAccountOutput {
 }
 
 impl ConnectedAccountApplication {
-    pub fn connect(
-        socket: PathBuf,
-        view_root: Option<PathBuf>,
-        identity: InstanceIdentity,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        system.install_account_connection("account", socket, view_root)?;
-        let client = system
-            .account_client("account")
-            .ok_or("managed Account client is missing: account")?;
-        Ok(Self { client, identity })
+    pub(crate) const fn new(client: AccountClient, identity: InstanceIdentity) -> Self {
+        Self { client, identity }
     }
 
     pub async fn apply_simulated_settlement(

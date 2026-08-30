@@ -149,7 +149,7 @@ fn account_conflux_has_one_live_fact_source_and_mode_gated_paper_settlement() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs"))
         .expect("read account server");
-    let actor = fs::read_to_string(root.join("src/application/conflux.rs"))
+    let actor = fs::read_to_string(root.join("src/application/process/conflux.rs"))
         .expect("read Account Conflux actor");
     assert!(!server.contains("\"/v1/fill\""));
     assert!(!server.contains("\"/v1/order-event\""));
@@ -236,8 +236,8 @@ fn account_broker_identity_is_independent_from_integration_provider_route() {
         .expect("read account server");
     let cli =
         fs::read_to_string(root.join("src/bin/kairos-account-cli.rs")).expect("read account cli");
-    let cli_application = fs::read_to_string(root.join("src/application/cli.rs"))
-        .expect("read Account CLI application");
+    let cli_composition = fs::read_to_string(root.join("src/composition/cli.rs"))
+        .expect("read Account CLI composition");
 
     assert!(registry.contains("pub broker: String"));
     assert!(registry.contains("pub integration_provider: String"));
@@ -245,7 +245,7 @@ fn account_broker_identity_is_independent_from_integration_provider_route() {
     assert!(!registry.contains("or_else(|| table_text(account, \"provider\"))"));
     assert!(server.contains("record.integration_provider.clone()"));
     assert!(!server.contains("let provider = record.broker.clone()"));
-    assert!(cli_application.contains("record.integration_provider.clone()"));
+    assert!(cli_composition.contains("record.integration_provider.clone()"));
     assert!(!cli.contains("record.integration_provider.clone()"));
     assert!(!cli.contains(".map(|record| record.broker.clone())"));
 }
@@ -318,7 +318,7 @@ fn native_account_refresh_does_not_bridge_async_io_through_blocking_threads() {
 #[test]
 fn account_conflux_gates_readiness_and_tracks_external_stream_continuity() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let actor = fs::read_to_string(root.join("src/application/conflux.rs"))
+    let actor = fs::read_to_string(root.join("src/application/process/conflux.rs"))
         .expect("read Account Conflux actor");
     let synchronization = fs::read_to_string(root.join("src/services/synchronization.rs"))
         .expect("read account segment synchronization");
@@ -409,9 +409,9 @@ fn platform_credentials_owns_credential_records_and_storage() {
     assert!(!registry.contains("struct CredentialRecord"));
     assert!(!registry.contains("struct CredentialStore"));
     assert!(!registry.contains("API_KEY\""));
-    let application =
-        fs::read_to_string(root.join("application/cli.rs")).expect("read Account CLI application");
-    assert!(application.contains("use kairos_credentials::{CredentialRecord, CredentialStore}"));
+    let composition =
+        fs::read_to_string(root.join("composition/cli.rs")).expect("read Account CLI composition");
+    assert!(composition.contains("use kairos_credentials::{CredentialRecord, CredentialStore}"));
 }
 
 #[test]
@@ -507,8 +507,8 @@ fn account_control_plane_does_not_duplicate_balance_or_position_views() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs"))
         .expect("read Account server");
-    let actor =
-        fs::read_to_string(root.join("src/application/conflux.rs")).expect("read Account actor");
+    let actor = fs::read_to_string(root.join("src/application/process/conflux.rs"))
+        .expect("read Account actor");
     let contract = fs::read_to_string(root.join("contract/src/control/account.rs"))
         .expect("read Account control contract");
     for obsolete in [
@@ -536,10 +536,12 @@ fn account_cli_separates_standalone_direct_queries_from_launch_connected_views()
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let cli =
         fs::read_to_string(root.join("src/bin/kairos-account-cli.rs")).expect("read account cli");
-    let standalone = fs::read_to_string(root.join("src/application/cli.rs"))
-        .expect("read standalone Account facade");
+    let standalone = fs::read_to_string(root.join("src/composition/cli.rs"))
+        .expect("read standalone Account composition");
     let connected = fs::read_to_string(root.join("src/application/connected.rs"))
         .expect("read connected Account facade");
+    let composition = fs::read_to_string(root.join("src/composition/mod.rs"))
+        .expect("read connected Account composition");
 
     assert!(cli.contains("app.balances("));
     assert!(standalone.contains("query_direct_account_snapshot("));
@@ -547,8 +549,9 @@ fn account_cli_separates_standalone_direct_queries_from_launch_connected_views()
     assert!(!standalone.contains("ConfluxSystem"));
     assert!(!standalone.contains("configure_conflux("));
 
-    assert!(connected.contains("install_account_connection("));
-    assert!(connected.contains("account_client("));
+    assert!(!connected.contains("install_account_connection("));
+    assert!(composition.contains("install_account_connection("));
+    assert!(composition.contains("account_client("));
     assert!(connected.contains(".indexed_current("));
     assert!(connected.contains("snapshot.observed_orders()"));
     assert!(cli.contains("Account connected mode is launch-scoped"));

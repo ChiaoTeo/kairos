@@ -5,7 +5,7 @@ use super::*;
 
 pub(super) fn encode_dependency_evidence<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    watermarks: &crate::application::DependencyWatermarks,
+    watermarks: &crate::domain::DependencyWatermarks,
 ) -> flatbuffers::WIPOffset<
     flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<common_fb::EvidenceRef<'a>>>,
 > {
@@ -162,8 +162,8 @@ pub(crate) fn encode_indexed_current(
     for remote in snapshot.unknown_remote_orders.iter().filter(|value| {
         matches!(
             value.resolution,
-            crate::application::UnknownRemoteOrderResolution::Pending
-                | crate::application::UnknownRemoteOrderResolution::ManualReview
+            crate::domain::UnknownRemoteOrderResolution::Pending
+                | crate::domain::UnknownRemoteOrderResolution::ManualReview
         )
     }) {
         insert_indexed_value(
@@ -202,7 +202,7 @@ fn encode_order_current(order: &ExecutionOrder) -> Result<Vec<u8>, String> {
     Ok(builder.finished_data().to_vec())
 }
 
-fn encode_intent_current(intent: &crate::application::IntentState) -> Result<Vec<u8>, String> {
+fn encode_intent_current(intent: &crate::domain::IntentState) -> Result<Vec<u8>, String> {
     let mut builder = FlatBufferBuilder::new();
     let state = encode_intent_state(&mut builder, intent)?;
     let root = fb::ExecutionIntentCurrent::create(
@@ -248,7 +248,7 @@ fn encode_risk_reservation_current(
     Ok(builder.finished_data().to_vec())
 }
 
-fn encode_unknown_remote_order_current(remote: &crate::application::UnknownRemoteOrder) -> Vec<u8> {
+fn encode_unknown_remote_order_current(remote: &crate::domain::UnknownRemoteOrder) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let state = encode_unknown_remote_order(&mut builder, remote);
     let root = fb::ExecutionUnknownRemoteOrderCurrent::create(
@@ -261,7 +261,7 @@ fn encode_unknown_remote_order_current(remote: &crate::application::UnknownRemot
 
 pub(super) fn encode_unknown_remote_order<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    order: &crate::application::UnknownRemoteOrder,
+    order: &crate::domain::UnknownRemoteOrder,
 ) -> flatbuffers::WIPOffset<fb::UnknownRemoteOrderState<'a>> {
     let remote_order_id = builder.create_string(order.remote_order_id.as_str());
     let symbol = builder.create_string(order.symbol.as_str());
@@ -277,14 +277,12 @@ pub(super) fn encode_unknown_remote_order<'a>(
         .map(|value| builder.create_string(value.as_str()));
     let fee_amount = order.fee_amount.map(decimal);
     let resolution = builder.create_string(match order.resolution {
-        crate::application::UnknownRemoteOrderResolution::Pending => "pending",
-        crate::application::UnknownRemoteOrderResolution::LinkedToLocalOrder => {
-            "linked_to_local_order"
-        },
-        crate::application::UnknownRemoteOrderResolution::ImportedAsExternalOrder => {
+        crate::domain::UnknownRemoteOrderResolution::Pending => "pending",
+        crate::domain::UnknownRemoteOrderResolution::LinkedToLocalOrder => "linked_to_local_order",
+        crate::domain::UnknownRemoteOrderResolution::ImportedAsExternalOrder => {
             "imported_as_external_order"
         },
-        crate::application::UnknownRemoteOrderResolution::ManualReview => "manual_review",
+        crate::domain::UnknownRemoteOrderResolution::ManualReview => "manual_review",
     });
     let reason = (!order.reason.is_empty()).then(|| builder.create_string(&order.reason));
     fb::UnknownRemoteOrderState::create(
@@ -675,8 +673,8 @@ pub(super) fn order_lifecycle(status: ExecutionOrderStatus) -> fb::OrderLifecycl
     }
 }
 
-pub(super) fn intent_lifecycle(status: crate::application::IntentStatus) -> fb::IntentLifecycle {
-    use crate::application::IntentStatus;
+pub(super) fn intent_lifecycle(status: crate::domain::IntentStatus) -> fb::IntentLifecycle {
+    use crate::domain::IntentStatus;
     match status {
         IntentStatus::Accepted => fb::IntentLifecycle::ACCEPTED,
         IntentStatus::Planning => fb::IntentLifecycle::PLANNING,
@@ -876,7 +874,7 @@ pub(super) fn encode_algorithm_run_state<'a>(
                     fb::AlgorithmRunLifecycle::RECONCILIATION_REQUIRED
                 },
             },
-            decision_sequence: run.decision_sequence,
+            decision_sequence: run.decision_sequence.get(),
             last_decision_at_unix_nanos: run.last_decision_at.map(UnixNanos::get),
             next_wake_at_unix_nanos: run.next_wake_at.map(UnixNanos::get),
             action_count: u64::try_from(run.actions.len())
@@ -897,23 +895,23 @@ pub(super) fn encode_algorithm_run_state<'a>(
     ))
 }
 
-pub(super) fn active_intent_status(status: crate::application::IntentStatus) -> bool {
+pub(super) fn active_intent_status(status: crate::domain::IntentStatus) -> bool {
     matches!(
         status,
-        crate::application::IntentStatus::Accepted
-            | crate::application::IntentStatus::Planning
-            | crate::application::IntentStatus::Planned
-            | crate::application::IntentStatus::Executing
-            | crate::application::IntentStatus::PartiallyFilled
-            | crate::application::IntentStatus::CancelRequested
-            | crate::application::IntentStatus::Compensating
-            | crate::application::IntentStatus::ReconciliationRequired
+        crate::domain::IntentStatus::Accepted
+            | crate::domain::IntentStatus::Planning
+            | crate::domain::IntentStatus::Planned
+            | crate::domain::IntentStatus::Executing
+            | crate::domain::IntentStatus::PartiallyFilled
+            | crate::domain::IntentStatus::CancelRequested
+            | crate::domain::IntentStatus::Compensating
+            | crate::domain::IntentStatus::ReconciliationRequired
     )
 }
 
 pub(super) fn encode_intent_state<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    state: &crate::application::IntentState,
+    state: &crate::domain::IntentState,
 ) -> Result<flatbuffers::WIPOffset<fb::IntentState<'a>>, String> {
     let intent_offset = encode_execution_intent(builder, &state.intent)?;
     let dependency_evidence = encode_dependency_evidence(builder, &state.dependency_watermarks);
@@ -941,7 +939,7 @@ pub(super) fn encode_intent_state<'a>(
 
 pub(super) fn encode_execution_intent<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    intent: &crate::application::ExecuteStrategyIntent,
+    intent: &crate::domain::ExecuteStrategyIntent,
 ) -> Result<flatbuffers::WIPOffset<fb::ExecutionIntent<'a>>, String> {
     let intent_id = builder.create_string(&intent.intent_id.to_string());
     let strategy_decision_id = intent
@@ -1083,7 +1081,7 @@ pub(super) fn encode_execution_intent<'a>(
 
 pub(super) fn encode_intent_leg<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    leg: &crate::application::IntentLegRequest,
+    leg: &crate::domain::IntentLegRequest,
 ) -> Result<flatbuffers::WIPOffset<fb::IntentLeg<'a>>, String> {
     let leg_id = builder.create_string(&leg.leg_id.to_string());
     let account_id = builder.create_string(&leg.account_id.to_string());

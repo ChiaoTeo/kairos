@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from kairospy.infrastructure.transport.commands import UnixJsonRpcClient
+from .results import ReferenceHealthResponse, ReferenceRuntimeStatusResponse
 
 
 class ReferenceControlClient:
@@ -19,13 +20,15 @@ class ReferenceControlClient:
     ) -> None:
         self._client = UnixJsonRpcClient(socket_path, timeout=timeout)
 
-    def health(self) -> Mapping[str, Any]:
-        return self.call("reference_health")
+    def health(self) -> ReferenceHealthResponse:
+        return ReferenceHealthResponse.from_mapping(self.call("reference_health"))
 
-    def status(self) -> Mapping[str, Any]:
+    def status(self) -> ReferenceRuntimeStatusResponse:
         """Read the Reference-owned detailed runtime status."""
 
-        return self.call("reference_status")
+        return ReferenceRuntimeStatusResponse.from_mapping(
+            self.call("reference_status")
+        )
 
     def plan_catalog_setup(self, goal: Mapping[str, object]) -> Mapping[str, Any]:
         """Plan catalog preparation for one user-facing market goal."""

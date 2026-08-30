@@ -13,8 +13,7 @@ use kairos_primitives::time::UnixNanos;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::application::{Bar, MarketObservation, Quote};
-use crate::domain::{OrderSide, OrderType};
+use crate::domain::{Bar, MarketObservation, OrderSide, OrderType, Quote};
 
 mod account_settlement;
 mod matching;
@@ -38,16 +37,16 @@ mod tests {
         at: u64,
     ) -> MarketObservation {
         MarketObservation::Quote(Quote {
-            scope: crate::application::ObservationScope::Market {
-                market_id: "binance:spot".into(),
+            scope: crate::domain::ObservationScope::Market {
+                market_id: MarketId::new("binance:spot").unwrap(),
             },
-            instrument_id: "BTCUSDT".into(),
-            bid_price: Some(bid.into()),
-            bid_quantity: Some(bid_quantity.into()),
-            ask_price: Some(ask.into()),
-            ask_quantity: Some(ask_quantity.into()),
-            observed_at_unix_nanos: at,
-            source_id: "replay".into(),
+            instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
+            bid_price: Some(bid.parse().unwrap()),
+            bid_quantity: Some(bid_quantity.parse().unwrap()),
+            ask_price: Some(ask.parse().unwrap()),
+            ask_quantity: Some(ask_quantity.parse().unwrap()),
+            observed_at_unix_nanos: at.into(),
+            source_id: kairos_primitives::market::Provider::new("replay").unwrap(),
         })
     }
 
@@ -158,18 +157,18 @@ mod tests {
             .unwrap();
         simulator
             .apply_market_event(MarketObservation::Bar(Bar {
-                scope: crate::application::ObservationScope::Market {
-                    market_id: "binance:spot".into(),
+                scope: crate::domain::ObservationScope::Market {
+                    market_id: MarketId::new("binance:spot").unwrap(),
                 },
-                instrument_id: "BTCUSDT".into(),
+                instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
                 timeframe: "1m".into(),
-                open: "99".into(),
-                high: "101".into(),
-                low: "98".into(),
-                close: "100".into(),
-                volume: Some("2".into()),
-                observed_at_unix_nanos: 2,
-                source_id: "replay".into(),
+                open: "99".parse().unwrap(),
+                high: "101".parse().unwrap(),
+                low: "98".parse().unwrap(),
+                close: "100".parse().unwrap(),
+                volume: Some("2".parse().unwrap()),
+                observed_at_unix_nanos: 2.into(),
+                source_id: kairos_primitives::market::Provider::new("replay").unwrap(),
                 derivation: "provider".into(),
             }))
             .unwrap();

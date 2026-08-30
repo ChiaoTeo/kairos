@@ -12,6 +12,7 @@ from typing import Any, Iterable, Mapping
 from kairospy.research.apps.data.application import (
     DataAcquisitionPlan,
     DataAcquisitionApplication,
+    DataAcquisitionExecution,
     DataApplication,
     DataRequirement,
     DataTrustGateApplication,
@@ -177,7 +178,7 @@ class DataClient:
     ) -> DatasetSetRef:
         return await self._application.execute(plan, max_concurrency=max_concurrency)
 
-    def execution(self, plan_hash: str) -> Mapping[str, Any]:
+    def execution(self, plan_hash: str) -> DataAcquisitionExecution:
         """Inspect durable progress for an explicit acquisition execution."""
 
         return self._application.execution(plan_hash)
@@ -348,13 +349,14 @@ class DataClient:
             require_point_in_time_policy=require_point_in_time_policy,
         )
 
-    def trust_report(self, composition_hash: str) -> Mapping[str, Any]:
+    def trust_report(self, composition_hash: str) -> DataTrustGateReport:
         """Read persisted Gate 1 evidence by Dataset Set identity."""
 
         return self._application.trust_report(composition_hash)
 
 
 __all__ = [
+    "DataAcquisitionExecution",
     "DataAcquisitionPlan",
     "DataCatalogClient",
     "DataClient",

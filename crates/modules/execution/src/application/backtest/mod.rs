@@ -3,17 +3,14 @@
 //! Market replay and runtime composition stay outside execution. This API
 //! accepts normalized equity and fill facts for CLI, server, or system use.
 
-use serde::{Deserialize, Serialize};
-
-mod market;
-
 use kairos_primitives::decimal::{Money, Price, Quantity, Rate};
 use kairos_primitives::reference::InstrumentId;
 use kairos_primitives::time::UnixNanos;
-pub use market::{Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::OrderSide;
+pub use crate::domain::{Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar};
 use crate::services::simulation::{
     ExecutionSimulator, SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
 };
@@ -62,9 +59,9 @@ pub struct BacktestRunResult {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BacktestMetrics {
-    pub trade_count: usize,
-    pub win_count: usize,
-    pub loss_count: usize,
+    pub trade_count: u64,
+    pub win_count: u64,
+    pub loss_count: u64,
     pub win_rate: String,
     pub gross_profit: String,
     pub gross_loss: String,
@@ -124,14 +121,21 @@ impl BacktestApplication {
             .map(|trade| trade.gross_pnl.min(Decimal::ZERO))
             .sum::<Decimal>();
         let net_profit = equity.last().copied().unwrap_or(initial_equity) - initial_equity;
-        let win_count = trades
-            .iter()
-            .filter(|trade| trade.net_pnl > Decimal::ZERO)
-            .count();
-        let loss_count = trades
-            .iter()
-            .filter(|trade| trade.net_pnl < Decimal::ZERO)
-            .count();
+        let win_count = u64::try_from(
+            trades
+                .iter()
+                .filter(|trade| trade.net_pnl > Decimal::ZERO)
+                .count(),
+        )
+        .expect("backtest trade count fits u64");
+        let loss_count = u64::try_from(
+            trades
+                .iter()
+                .filter(|trade| trade.net_pnl < Decimal::ZERO)
+                .count(),
+        )
+        .expect("backtest trade count fits u64");
+        let trade_count = u64::try_from(trades.len()).expect("backtest trade count fits u64");
         let max_drawdown = max_drawdown(&equity);
         let max_equity = equity.iter().copied().max().unwrap_or(Decimal::ZERO);
         let max_drawdown_pct = if max_equity > Decimal::ZERO {
@@ -146,13 +150,13 @@ impl BacktestApplication {
         };
         let sharpe = sharpe(&equity, risk_free_rate, request.annualization_periods);
         Ok(BacktestMetrics {
-            trade_count: trades.len(),
+            trade_count,
             win_count,
             loss_count,
             win_rate: format_decimal(if trades.is_empty() {
                 Decimal::ZERO
             } else {
-                Decimal::from(win_count as u64) / Decimal::from(trades.len() as u64)
+                Decimal::from(win_count) / Decimal::from(trade_count)
             }),
             gross_profit: format_decimal(gross_profit),
             gross_loss: format_decimal(gross_loss),

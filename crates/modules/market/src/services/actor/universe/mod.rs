@@ -54,10 +54,10 @@ impl MarketActor {
 
     pub fn apply_market_universe(
         &mut self,
-        update: crate::application::ReconcileMarketUniverse,
+        markets: Vec<ResolvedMarket>,
     ) -> Result<BTreeMap<SubscriptionId, ReconcileResult>, String> {
         let mut market_universe = BTreeMap::new();
-        for market in &update.markets {
+        for market in &markets {
             market.validate()?;
             let Some(market_id) = market.market_id() else {
                 return Err("canonical market universe cannot contain a consolidated route".into());
@@ -72,7 +72,7 @@ impl MarketActor {
                 ));
             }
         }
-        let result = self.reconcile_market_universe_members(update.markets)?;
+        let result = self.reconcile_market_universe_members(markets)?;
         self.market_universe = market_universe;
         Ok(result)
     }

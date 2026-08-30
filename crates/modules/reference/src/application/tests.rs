@@ -1,5 +1,5 @@
 use kairos_primitives::reference::{
-    AssetId, ExchangeId, InstrumentId, ListingId, MarketId, Symbol,
+    AssetId, ExchangeId, InstrumentId, ListingId, MarketId, ReferenceSourceId, Symbol,
 };
 use kairos_reference_contract::{ReferenceUpsertConflictPolicy, ReferenceUpsertProvenance};
 
@@ -10,17 +10,12 @@ use crate::domain::{
 use crate::services::sources::ReferenceSource;
 use crate::services::storage::catalog_store::SqlxCatalogStore;
 use crate::{
-    LifecycleQuery, MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery,
-    ReferenceRecord, UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,
+    MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery, ReferenceRecord,
+    UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,
 };
 
 struct TestSource {
     catalog: ProviderCatalog,
-}
-
-struct SequenceSource {
-    catalogs: Vec<ProviderCatalog>,
-    index: usize,
 }
 
 struct FailingSource;
@@ -45,23 +40,6 @@ fn asset_id(value: &str) -> AssetId {
 
 fn symbol(value: &str) -> Symbol {
     Symbol::new(value).unwrap()
-}
-
-#[async_trait::async_trait(?Send)]
-impl ReferenceSource for SequenceSource {
-    fn source_id(&self) -> &str {
-        "sequence-test"
-    }
-
-    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let catalog = self
-            .catalogs
-            .get(self.index.min(self.catalogs.len().saturating_sub(1)))
-            .cloned()
-            .unwrap_or_default();
-        self.index = self.index.saturating_add(1);
-        Ok(catalog)
-    }
 }
 
 #[async_trait::async_trait(?Send)]
@@ -457,7 +435,7 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
 #[tokio::test]
 async fn administrative_asset_upsert_rejects_provider_owned_records_by_default() {
     let mut catalog = provider_catalog();
-    catalog.assets[0].source_id = Some("binance-spot".to_owned());
+    catalog.assets[0].source_id = Some(ReferenceSourceId::new("binance-spot").unwrap());
     let mut application = ReferenceApplication::new_test(
         "reference-test",
         TestSource { catalog },
@@ -539,7 +517,7 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
 #[tokio::test]
 async fn administrative_listing_upsert_rejects_provider_owned_records_by_default() {
     let mut catalog = provider_catalog();
-    catalog.listings[0].source_id = Some("binance-spot".to_owned());
+    catalog.listings[0].source_id = Some(ReferenceSourceId::new("binance-spot").unwrap());
     let mut application = ReferenceApplication::new_test(
         "reference-test",
         TestSource { catalog },
@@ -590,12 +568,6 @@ async fn application_query_covers_each_reference_record_kind() {
         all.iter()
             .any(|record| matches!(record, ReferenceRecord::Exchange(_)))
     );
-    let asset_events = application.query(&ReferenceQuery {
-        kind: ReferenceKind::Event,
-        record_kind: Some("asset".into()),
-        ..ReferenceQuery::default()
-    });
-    assert_eq!(asset_events.len(), 2);
     assert!(application.record("market:binance:spot:BTCUSDT").is_ok());
 }
 
@@ -626,47 +598,6 @@ async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
     });
     assert_eq!(records.len(), 1);
     assert!(matches!(records[0], ReferenceRecord::Instrument(_)));
-}
-
-#[tokio::test]
-async fn lifecycle_history_can_be_replayed_by_stable_sequence() {
-    let mut application = ReferenceApplication::new_test(
-        "reference-test",
-        SequenceSource {
-            catalogs: vec![provider_catalog(), ProviderCatalog::default()],
-            index: 0,
-        },
-        test_store().await,
-    )
-    .await
-    .unwrap();
-    application.refresh().await.unwrap();
-    application.refresh().await.unwrap();
-
-    let events = application
-        .replay_lifecycle_events(Some(1.into()), Some(12.into()))
-        .await
-        .unwrap();
-    assert_eq!(events.len(), 12);
-    assert!(events.iter().any(
-        |event| event.event_type == "listed" && event.record_kind.as_deref() == Some("market")
-    ));
-    assert!(
-        events.iter().any(|event| event.event_type == "delisted"
-            && event.record_kind.as_deref() == Some("market"))
-    );
-
-    let delisted = application
-        .lifecycle_events(&LifecycleQuery {
-            event_type: Some("delisted".into()),
-            sequence_from: Some(1.into()),
-            ..LifecycleQuery::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(delisted.len(), 1);
-    assert_eq!(delisted[0].event_type, "delisted");
-    assert_eq!(delisted[0].record_kind.as_deref(), Some("market"));
 }
 
 #[tokio::test]

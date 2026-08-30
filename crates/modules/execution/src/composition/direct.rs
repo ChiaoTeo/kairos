@@ -7,7 +7,8 @@ use secrecy::SecretString;
 
 use crate::application::{CliExecutionApplication, StandaloneExecutionBinding};
 use crate::services::direct::{
-    binance_connection, ibkr_connection, normalize, okx_connection, okx_rest_config,
+    DirectExecutionGateway, binance_connection, ibkr_connection, normalize, okx_connection,
+    okx_rest_config,
 };
 
 pub fn compose_standalone_execution(
@@ -70,7 +71,15 @@ pub fn compose_standalone_execution(
             .into());
         },
     };
-    CliExecutionApplication::new(binding, connection).map_err(Into::into)
+    let gateway = DirectExecutionGateway::new(
+        connection,
+        provider,
+        execution_channel,
+        kairos_primitives::account::AccountId::new(binding.account_id.clone())?,
+        kairos_primitives::account::SegmentKey::new(binding.segment_key.clone())?,
+        binding.trading_mode.clone(),
+    );
+    CliExecutionApplication::new(binding, gateway).map_err(Into::into)
 }
 
 fn validate_ibkr_environment_port(

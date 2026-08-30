@@ -1,7 +1,6 @@
-use crate::application::AccountSegmentView;
 use crate::domain::{
-    AccountDomainError, AccountFill, AccountSnapshot, AssetId, Balance, Money, OrderSide, Position,
-    SignedQuantity, SnapshotKind,
+    AccountDomainError, AccountFill, AccountSegmentView, AccountSnapshot, AssetId, Balance, Money,
+    OrderSide, Position, SignedQuantity, SnapshotKind,
 };
 
 /// Builds authoritative account deltas for deterministic paper/simulated fills.

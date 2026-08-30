@@ -15,9 +15,72 @@ use super::config::{
     BinanceDerivativeProduct, MarketConfig, MarketProviderBinding, MassiveMarketProduct,
 };
 use crate::application::{
-    CliMarketApplication, CliMarketOnceProvider, CliMarketOnceRequest, CliMarketRoute,
+    CliMarketApplication, CliMarketHistoricalDownloadRequest, CliMarketHistoricalMarketType,
+    CliMarketHistoricalProvider, CliMarketOnceProvider, CliMarketOnceRequest, CliMarketRoute,
 };
-use crate::services::direct::DirectMarketConnection;
+use crate::services::direct::{DirectHistoricalConnection, DirectMarketConnection};
+
+/// Select the concrete short-lived provider used by one historical download.
+pub fn compose_historical_market(
+    workspace_root: Option<&Path>,
+    request: &CliMarketHistoricalDownloadRequest,
+) -> Result<CliMarketApplication, Box<dyn std::error::Error>> {
+    let endpoint = request
+        .endpoint
+        .clone()
+        .unwrap_or_else(|| match request.provider {
+            CliMarketHistoricalProvider::Massive => "https://api.massive.com".into(),
+            CliMarketHistoricalProvider::Binance => "https://data-api.binance.vision".into(),
+        });
+    let key = ConnectionKey::new("market-history")?;
+    let connection = match request.provider {
+        CliMarketHistoricalProvider::Massive => {
+            let api_key = if let Some(value) = request.api_key.clone() {
+                value
+            } else {
+                let workspace =
+                    Workspace::open(workspace_root.ok_or(
+                        "Massive download requires --workspace or the deprecated --api-key",
+                    )?)?;
+                CredentialStore::for_workspace(&workspace)?
+                    .find_provider("massive", request.credential_id.as_deref())
+                    .and_then(|credential| credential.api_key_value())
+                    .ok_or("Massive workspace credential does not exist")?
+            };
+            DirectHistoricalConnection::Massive(MassiveRestConnection::new(
+                key,
+                MassiveRestConfig {
+                    environment: "public".into(),
+                    endpoint,
+                    api_key: secrecy::SecretString::new(api_key.into()),
+                    instrument_query: match request.market_type {
+                        CliMarketHistoricalMarketType::Equity => MassiveInstrumentQuery::equities(),
+                        CliMarketHistoricalMarketType::Option => {
+                            MassiveInstrumentQuery::options(None)
+                        },
+                        CliMarketHistoricalMarketType::Spot => {
+                            return Err("Massive historical Spot is unsupported".into());
+                        },
+                    },
+                },
+            )?)
+        },
+        CliMarketHistoricalProvider::Binance => {
+            DirectHistoricalConnection::Binance(BinanceSpotRestConnection::new(
+                key,
+                BinanceRestConfig {
+                    environment: "public".into(),
+                    endpoint,
+                    credential: None,
+                },
+            )?)
+        },
+    };
+    Ok(CliMarketApplication::with_historical_connection(
+        workspace_root,
+        connection,
+    ))
+}
 
 pub fn standalone_market_routes(
     workspace_root: Option<&Path>,

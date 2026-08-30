@@ -276,7 +276,10 @@ fn direct_route(source: FundingLocation, destination: FundingLocation) -> Capita
         kind,
         per_operation_limit: Quantity::new(i64::MAX, 0).expect("static Quantity"),
         daily_limit: Quantity::new(i64::MAX, 0).expect("static Quantity"),
-        required_source_authority: "standalone-explicit-confirmation".into(),
+        required_source_authority: kairos_primitives::capital::CapitalSourceAuthority::new(
+            "standalone-explicit-confirmation",
+        )
+        .expect("standalone source authority is valid"),
         settlement_class: CapitalSettlementClass::ParticipantHistoryThenAccountObservation,
         enabled: true,
         earn_product_id: None,

@@ -4,6 +4,7 @@ use kairos_primitives::reference::{
     AssetClass, AssetId, ExchangeId, InstrumentId, InstrumentKind, IssuerId, ListingId,
     ReferenceSourceId, ReferenceStatus, Symbol,
 };
+use kairos_primitives::runtime::ActorId;
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
@@ -333,8 +334,8 @@ pub struct ReferenceRuntimeStatusResponse {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceAppRuntimeStatus {
     pub phase: ReferenceAppPhase,
-    pub actor_id: String,
-    pub source_id: String,
+    pub actor_id: ActorId,
+    pub source_id: ReferenceSourceId,
     pub refresh_interval_millis: u64,
     #[serde(default)]
     pub last_tick_started_unix_nanos: Option<UnixNanos>,
@@ -945,8 +946,8 @@ mod tests {
     fn app_runtime_status_keeps_tick_error_json_shape() {
         let status = ReferenceAppRuntimeStatus {
             phase: ReferenceAppPhase::Degraded,
-            actor_id: "reference".into(),
-            source_id: "reference-default".into(),
+            actor_id: kairos_primitives::runtime::ActorId::new("reference").unwrap(),
+            source_id: ReferenceSourceId::new("reference-default").unwrap(),
             refresh_interval_millis: 300_000,
             last_tick_started_unix_nanos: None,
             last_tick_finished_unix_nanos: None,

@@ -412,7 +412,8 @@ mod tests {
         );
         runtime.mark_scheduled(&SourceWorkItem {
             work_item_id: "massive-options:global".to_owned(),
-            source_id: "massive-options".to_owned(),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new("massive-options")
+                .unwrap(),
             scope: SourceScope::default(),
             reason: SourceWorkReason::Retry,
             budget: SourceTickBudget::default(),

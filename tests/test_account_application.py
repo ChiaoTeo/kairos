@@ -143,9 +143,9 @@ def test_account_manual_verification_records_scope_and_becomes_stale(tmp_path) -
     assert app.show("paper-account")["verification_status"] == "pending"
     verified = app.test_connection("paper-account")
 
-    assert verified["verification_status"] == "verified"
-    assert "local account availability" in verified["tested"]
-    assert "order submission" in verified["not_tested"]
+    assert verified.status == "verified"
+    assert "local account availability" in verified.tested
+    assert "order submission" in verified.not_tested
     app.modify("paper-account", account_model="margin")
     assert app.show("paper-account")["verification_status"] == "retest_required"
 
@@ -160,7 +160,7 @@ def test_account_credential_identity_invalidates_verification_without_leaking_se
     credentials.add("paper-key", provider="paper")
     app = AccountConfigurationApplication(workspace)
     app.connect("main", broker="paper", environment="paper", credential="paper-key")
-    assert app.test_connection("main")["verification_status"] == "verified"
+    assert app.test_connection("main").status == "verified"
 
     from kairospy.system.apps.credentials.application import (
         CredentialConfigurationApplication,
@@ -236,7 +236,8 @@ def test_account_access_projects_readonly_and_trade_on_one_account(
             raise AssertionError(arguments)
 
     monkeypatch.setattr(
-        "kairospy.investment.apps.account.application._cli", lambda _workspace: FakeCli()
+        "kairospy.investment.apps.account.application._cli",
+        lambda _workspace: FakeCli(),
     )
     app = AccountConfigurationApplication(workspace)
 
@@ -254,7 +255,9 @@ def test_account_access_projects_readonly_and_trade_on_one_account(
     assert account["account_id"] == "binance-main"
 
 
-def test_account_access_rejects_cross_provider_credential(tmp_path, monkeypatch) -> None:
+def test_account_access_rejects_cross_provider_credential(
+    tmp_path, monkeypatch
+) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="account-access"
     )
@@ -282,7 +285,8 @@ def test_account_access_rejects_cross_provider_credential(tmp_path, monkeypatch)
             }
 
     monkeypatch.setattr(
-        "kairospy.investment.apps.account.application._cli", lambda _workspace: FakeCli()
+        "kairospy.investment.apps.account.application._cli",
+        lambda _workspace: FakeCli(),
     )
 
     with pytest.raises(ValueError, match="binance credential"):

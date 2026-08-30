@@ -57,18 +57,13 @@ fn capital_indexed_databases_use_dedicated_current_roots() {
 }
 
 #[test]
-fn capital_uses_conflux_instead_of_integration_directly() {
+fn capital_uses_owner_capabilities_at_their_intended_boundaries() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = fs::read_to_string(crate_root.join("Cargo.toml")).unwrap();
     assert!(manifest.contains("kairos-conflux.workspace = true"));
-    assert!(!manifest.contains("kairos-integration"));
+    assert!(manifest.contains("kairos-integration.workspace = true"));
     for path in rust_files(&crate_root.join("src")) {
         let source = fs::read_to_string(&path).unwrap();
-        assert!(
-            !source.contains("kairos_integration"),
-            "{} bypasses Conflux",
-            path.display()
-        );
         if !path
             .components()
             .any(|component| component.as_os_str() == "composition")
@@ -88,7 +83,18 @@ fn capital_uses_conflux_instead_of_integration_directly() {
         );
     }
 
-    let process = fs::read_to_string(crate_root.join("src/application/process.rs")).unwrap();
+    let standalone = fs::read_to_string(crate_root.join("src/application/transfer.rs")).unwrap();
+    assert!(standalone.contains("kairos_integration"));
+    assert!(!standalone.contains("kairos_conflux"));
+
+    let process_root = crate_root.join("src/application/process");
+    let process = rust_files(&process_root)
+        .into_iter()
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<String>();
+    assert!(process.contains("kairos_conflux"));
+    assert!(!process.contains("kairos_integration"));
+
     assert!(process.contains("AssetTransferCommand"));
     assert!(process.contains("AssetTransferStatusQuery"));
     assert!(process.contains("EarnCommand"));
@@ -96,7 +102,7 @@ fn capital_uses_conflux_instead_of_integration_directly() {
     assert!(!process.contains("CapitalTransferConnection"));
     assert!(!process.contains("CapitalEarnConnection"));
 
-    let conflux_root = crate_root.join("../../platform/conflux/src");
+    let conflux_root = crate_root.join("../../system/conflux/src");
     assert!(!conflux_root.join("capital.rs").exists());
     for path in rust_files(&conflux_root) {
         let source = fs::read_to_string(&path).unwrap();
@@ -125,7 +131,7 @@ fn capital_uses_conflux_instead_of_integration_directly() {
 #[test]
 fn capital_shutdown_reconciles_but_never_compensates_or_resubmits() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let actor = fs::read_to_string(crate_root.join("src/application/conflux.rs")).unwrap();
+    let actor = fs::read_to_string(crate_root.join("src/application/process/conflux.rs")).unwrap();
     let start = actor.find("async fn stopping").unwrap();
     let end = actor[start..].find("impl<C> CapitalProcess").unwrap() + start;
     let handler = &actor[start..end];

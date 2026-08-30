@@ -1,6 +1,6 @@
 //! Process status mapping for the control contract.
 
-use kairos_primitives::reference::{InstrumentId, ReferenceSourceId};
+use kairos_primitives::reference::InstrumentId;
 use kairos_reference_contract::{
     ReferenceAppPhase, ReferenceAppRuntimeError, ReferenceAppRuntimeStatus,
     ReferenceCatalogIntegrityStatus, ReferenceCatalogReadiness, ReferenceCatalogRuntimeStatus,
@@ -13,12 +13,12 @@ use kairos_reference_contract::{
     ReferenceSourceSyncPolicy, ReferenceSourceTickBudget, ReferenceSourceWorkItem,
 };
 
+use super::diagnostics::{publication_backlog_degraded, runtime_diagnostics};
 use crate::application::{ReferenceApplication, ReferenceApplicationPhase, ReferenceReadModel};
 use crate::domain::{
     ReferenceSourceDefinition, SourceDesiredState, SourceRuntimePhase, SourceRuntimeProgressKind,
     SourceScope, SourceScopeKind, SourceSyncPolicy,
 };
-use crate::services::diagnostics::{publication_backlog_degraded, runtime_diagnostics};
 
 const DEFAULT_PUBLICATION_BATCH_LIMIT: usize = 1_024;
 
@@ -29,8 +29,7 @@ impl ReferenceApplication {
             .source_health()
             .iter()
             .map(|provider| ReferenceProviderHealth {
-                source_id: ReferenceSourceId::new(provider.source_id.clone())
-                    .expect("normalized provider source identity"),
+                source_id: provider.source_id.clone(),
                 status: contract_provider_health_status(provider.status),
                 stale: provider.stale,
             })
@@ -81,8 +80,8 @@ impl ReferenceApplication {
             status: runtime_status,
             app_runtime: ReferenceAppRuntimeStatus {
                 phase: contract_app_phase(self.app_phase()),
-                actor_id: model.actor_id().to_owned(),
-                source_id: model.source_id().to_owned(),
+                actor_id: model.actor_id().clone(),
+                source_id: model.source_id().clone(),
                 refresh_interval_millis: self.refresh_interval().as_millis() as u64,
                 last_tick_started_unix_nanos: tick_timing.last_started_unix_nanos,
                 last_tick_finished_unix_nanos: tick_timing.last_finished_unix_nanos,
@@ -323,8 +322,7 @@ fn source_runtime_status(source: &crate::domain::SourceHealth) -> ReferenceSourc
     let definition = source.definition.as_ref();
     let desired_state = definition.map(|value| value.desired_state);
     ReferenceSourceRuntimeStatus {
-        source_id: ReferenceSourceId::new(source.source_id.clone())
-            .expect("normalized reference source identity"),
+        source_id: source.source_id.clone(),
         provider_id: definition.map(|value| value.provider_id.clone()),
         source_kind: contract_source_kind(definition),
         configured: definition.is_some(),

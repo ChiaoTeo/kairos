@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{MarketApplication, MarketError};
 use crate::domain::market::ResolvedMarket;
-use crate::domain::source::{FeedDescriptor, MarketFeedId};
+use crate::domain::source::{MarketFeedId, source_accepts, source_supports_selectors};
 use crate::services::actor::{PendingSourceRequest, PhysicalSubscriptionKey};
 use crate::services::source::messages::SourceCommand;
 
@@ -162,58 +162,13 @@ impl MarketApplication {
     }
 }
 
-pub(crate) fn source_accepts(source: &FeedDescriptor, market: &ResolvedMarket) -> bool {
-    let Some(provider) = source.provider.as_ref() else {
-        // Replay and derived feeds are intentionally providerless. Their
-        // eligibility comes from the already-selected canonical Market, not
-        // from a live provider attachment.
-        return true;
-    };
-    let Some(attachment) = market.attach_route(&source.id, provider) else {
-        return false;
-    };
-    source
-        .provider
-        .as_ref()
-        .is_none_or(|provider| provider == &attachment.route.provider)
-        && source
-            .market_type
-            .as_ref()
-            .is_none_or(|market_type| market_type == &attachment.provider_segment)
-}
-
-pub(crate) fn source_supports_selectors(
-    source: &FeedDescriptor,
-    selectors: &[crate::domain::subscription::ObservationSelector],
-) -> bool {
-    source.observation_capabilities.is_empty()
-        || selectors.iter().all(|selector| {
-            selector.kind.is_none_or(|kind| {
-                source.observation_capabilities.contains(&kind)
-                    || matches!(
-                        kind,
-                        crate::ObservationKind::Rate
-                            if source
-                                .observation_capabilities
-                                .contains(&crate::ObservationKind::FundingRate)
-                    )
-                    || matches!(
-                        kind,
-                        crate::ObservationKind::FundingRate
-                            if source
-                                .observation_capabilities
-                                .contains(&crate::ObservationKind::Rate)
-                    )
-            })
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use kairos_primitives::reference::InstrumentKind;
 
     use super::*;
     use crate::domain::market::ProviderRouteBinding;
+    use crate::domain::source::FeedDescriptor;
 
     fn equity_market() -> ResolvedMarket {
         let mut market = ResolvedMarket::new_with_binding(

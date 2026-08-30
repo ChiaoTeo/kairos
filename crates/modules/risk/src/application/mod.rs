@@ -1,8 +1,8 @@
 mod app;
 mod cli;
-mod conflux;
 mod connected;
 pub(crate) mod contract;
+mod process;
 
 kairos_risk_contract::risk_control_rpc_conflux_actor! {
     pub trait RiskRpcActor;

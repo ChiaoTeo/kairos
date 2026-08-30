@@ -4,7 +4,7 @@ use kairos_primitives::runtime::ActorId;
 use kairos_primitives::time::{Generation, Sequence};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{Account, AccountEvent, AccountSegment, AccountState};
+use crate::domain::{Account, AccountBusinessEvent, AccountEvent, AccountSegment, AccountState};
 
 const ACCOUNT_STATE_SCHEMA_VERSION: u32 = 2;
 
@@ -16,7 +16,7 @@ pub(crate) struct PersistedAccounts {
     pub event_sequence: Sequence,
     pub accounts: Vec<(AccountSegment, AccountState)>,
     #[serde(default)]
-    pub pending_business_events: Vec<crate::application::AccountBusinessEvent>,
+    pub pending_business_events: Vec<AccountBusinessEvent>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -25,7 +25,7 @@ pub(crate) enum AccountJournalRecord {
     Transition {
         events: Vec<AccountEvent>,
         #[serde(default)]
-        business_events: Vec<crate::application::AccountBusinessEvent>,
+        business_events: Vec<AccountBusinessEvent>,
     },
     PublicationAcknowledged {
         sequence: Sequence,
@@ -132,7 +132,7 @@ impl JsonAccountStore {
         generation: u64,
         event_sequence: u64,
         accounts: &[Account],
-        pending_business_events: &[crate::application::AccountBusinessEvent],
+        pending_business_events: &[AccountBusinessEvent],
     ) -> Result<(), String> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;

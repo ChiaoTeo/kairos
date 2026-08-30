@@ -59,16 +59,16 @@ def execute(
         return {
             "plan_hash": plan.plan_hash,
             "dataset_set": result.as_dict(),
-            "execution": data.execution(plan.plan_hash),
+            "execution": data.execution(plan.plan_hash).as_dict(),
         }
     if action == "execution":
-        return data.execution(value or "")
+        return data.execution(value or "").as_dict()
     if action == "sets":
         return {"aliases": dict(data.set_aliases())}
     if action == "set":
         return data.load_set(value or "")
     if action == "data-gate":
-        return data.trust_report(value or "")
+        return data.trust_report(value or "").as_dict()
     research = ResearchApplication(owner)
     if action == "lock-plan":
         return research.pin_plan(_research_spec(Path(value or "")))

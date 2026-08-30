@@ -125,7 +125,8 @@ impl SourceRuntimeRegistry {
             .unwrap_or_default();
         SourceWorkItem {
             work_item_id: source_work_item_id(source_id, &scope),
-            source_id: source_id.to_owned(),
+            source_id: kairos_primitives::reference::ReferenceSourceId::new(source_id)
+                .expect("registered Reference source identity is validated"),
             scope,
             reason,
             budget,

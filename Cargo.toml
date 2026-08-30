@@ -5,7 +5,7 @@ members = [
     "crates/platform/credentials",
     "crates/platform/integration",
     "crates/platform/indexed-view",
-    "crates/platform/conflux",
+    "crates/system/conflux",
     "crates/platform/network",
     "crates/platform/protocol",
     "crates/platform/protocol-macros",
@@ -68,7 +68,7 @@ kairos-account-contract-py = { path = "crates/modules/account/contract/py" }
 kairos-capital = { path = "crates/modules/capital" }
 kairos-capital-contract = { path = "crates/modules/capital/contract" }
 kairos-capital-contract-py = { path = "crates/modules/capital/contract/py" }
-kairos-conflux = { path = "crates/platform/conflux" }
+kairos-conflux = { path = "crates/system/conflux" }
 kairos-credentials = { path = "crates/platform/credentials" }
 kairos-execution = { path = "crates/modules/execution" }
 kairos-execution-contract = { path = "crates/modules/execution/contract" }

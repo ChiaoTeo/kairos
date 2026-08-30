@@ -33,6 +33,15 @@ OWNER_FACADE_FUNCTIONS = {
     "types.py": frozenset({"_native"}),
     "view.py": frozenset(),
 }
+PUBLIC_DYNAMIC_RECORD_RETURN_BUDGET = 330
+PUBLIC_DYNAMIC_RECORD_RETURN_BUDGETS = {
+    "contracts": 15,
+    "investment": 72,
+    "research": 9,
+    "strategy": 90,
+    "system": 144,
+}
+SERIALIZATION_METHODS = {"as_dict", "as_manifest", "to_json_dict"}
 
 
 def _module_name(path: Path) -> str:
@@ -90,9 +99,177 @@ def _is_generated_protocol(module: str) -> bool:
     return module == root or module.startswith(root + ".")
 
 
+def _public_dynamic_record_returns(
+    paths: tuple[Path, ...],
+) -> tuple[tuple[Path, int, str], ...]:
+    patterns = (
+        "dict[str, Any]",
+        "Mapping[str, Any]",
+        "dict[str, object]",
+        "Mapping[str, object]",
+    )
+    results: list[tuple[Path, int, str]] = []
+    for path in paths:
+        relative = path.relative_to(PACKAGE)
+        if relative.parts[0] != "contracts" and "application" not in relative.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if (
+                node.name.startswith("_")
+                or node.name in SERIALIZATION_METHODS
+                or node.returns is None
+            ):
+                continue
+            annotation = ast.unparse(node.returns)
+            if any(pattern in annotation for pattern in patterns):
+                results.append((path, node.lineno, node.name))
+    return tuple(results)
+
+
+def _method_return(path: Path, class_name: str, method_name: str) -> str | None:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        for item in node.body:
+            if (
+                isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and item.name == method_name
+            ):
+                return None if item.returns is None else ast.unparse(item.returns)
+    return None
+
+
 def main() -> int:
     failures: list[str] = []
     python_files = tuple(sorted(PACKAGE.rglob("*.py")))
+
+    dynamic_returns = _public_dynamic_record_returns(python_files)
+    if len(dynamic_returns) > PUBLIC_DYNAMIC_RECORD_RETURN_BUDGET:
+        added = len(dynamic_returns) - PUBLIC_DYNAMIC_RECORD_RETURN_BUDGET
+        failures.append(
+            "public contract/application dynamic-record return budget increased by "
+            f"{added} (current {len(dynamic_returns)}, "
+            f"budget {PUBLIC_DYNAMIC_RECORD_RETURN_BUDGET}); define an owner-owned "
+            "result type or reduce the recorded debt before adding another"
+        )
+    for area, budget in PUBLIC_DYNAMIC_RECORD_RETURN_BUDGETS.items():
+        current = sum(
+            path.relative_to(PACKAGE).parts[0] == area
+            for path, _line, _name in dynamic_returns
+        )
+        if current > budget:
+            failures.append(
+                f"{area} public dynamic-record return budget increased by "
+                f"{current - budget} (current {current}, budget {budget}); "
+                "debt removed in another subsystem cannot pay for a new dynamic API"
+            )
+
+    reference_typed_results = {
+        PACKAGE / "contracts" / "reference" / "client.py": {
+            "ReferenceReadSession": {
+                "catalog": "ReferenceCatalogSnapshot",
+                "option_coverage": "ReferenceOptionCoverage",
+            },
+            "ReferenceClient": {
+                "health": "ReferenceHealthResponse",
+                "runtime_status": "ReferenceRuntimeStatusResponse",
+                "catalog": "ReferenceCatalogSnapshot",
+                "option_coverage": "ReferenceOptionCoverage",
+            },
+        },
+        PACKAGE
+        / "investment"
+        / "apps"
+        / "reference"
+        / "application"
+        / "application.py": {
+            "ReferenceApplication": {
+                "health": "ReferenceHealthResponse",
+                "runtime_status": "ReferenceRuntimeStatusResponse",
+                "catalog": "ReferenceCatalogSnapshot",
+                "option_coverage": "ReferenceOptionCoverage",
+            }
+        },
+        PACKAGE / "system" / "apps" / "components" / "application" / "clients.py": {
+            "AccountSystemClient": {
+                "reconcile": "AccountRefreshResponse",
+                "refresh": "AccountRefreshResponse",
+                "advance_time": "AdvanceAccountTimeResponse",
+                "mark_to_market_event": "AccountMarkToMarketOutcome | None",
+            },
+            "MarketSystemClient": {
+                "health": "MarketHealthResponse",
+                "data_routes": "MarketDataRoutesResponse",
+                "subscriptions": "MarketSubscriptionsResponse",
+                "operator_subscribe": "MarketSubscriptionResponse",
+                "operator_unsubscribe": "MarketCommandStatus",
+                "operator_release_owner": "MarketReleaseOwnerResponse",
+                "recover": "MarketCommandStatus",
+                "pause_replay": "MarketCommandStatus",
+                "resume_replay": "MarketCommandStatus",
+            },
+            "ReferenceSystemClient": {
+                "health": "ReferenceHealthResponse",
+                "reference_status": "ReferenceRuntimeStatusResponse",
+                "catalog": "ReferenceCatalogSnapshot",
+            },
+        },
+    }
+    for path, classes in reference_typed_results.items():
+        for class_name, methods in classes.items():
+            for method_name, expected in methods.items():
+                actual = _method_return(path, class_name, method_name)
+                if actual != expected:
+                    failures.append(
+                        f"{class_name}.{method_name} must return owner-owned "
+                        f"{expected}, found {actual or 'no annotation'}"
+                    )
+
+    account_application = (
+        PACKAGE / "investment" / "apps" / "account" / "application" / "__init__.py"
+    )
+    for method_name, expected in {
+        "verification": "AccountVerification",
+        "resource_snapshot": "AccountResourceSnapshot",
+        "access_bindings": "tuple[AccountAccessBinding, ...]",
+        "test_connection": "AccountVerification",
+    }.items():
+        actual = _method_return(
+            account_application, "AccountConfigurationApplication", method_name
+        )
+        if actual != expected:
+            failures.append(
+                f"AccountConfigurationApplication.{method_name} must return "
+                f"owner-owned {expected}, found {actual or 'no annotation'}"
+            )
+
+    research_typed_results = {
+        PACKAGE / "research" / "apps" / "data" / "application" / "gates.py": {
+            "DataTrustGateApplication": {"report": "DataTrustGateReport"}
+        },
+        PACKAGE / "research" / "apps" / "data" / "application" / "acquisition.py": {
+            "DataAcquisitionApplication": {"execution": "DataAcquisitionExecution"}
+        },
+        PACKAGE / "research" / "apps" / "data" / "application" / "application.py": {
+            "DataApplication": {
+                "execution": "DataAcquisitionExecution",
+                "trust_report": "DataTrustGateReport",
+            }
+        },
+    }
+    for path, classes in research_typed_results.items():
+        for class_name, methods in classes.items():
+            for method_name, expected in methods.items():
+                actual = _method_return(path, class_name, method_name)
+                if actual != expected:
+                    failures.append(
+                        f"{class_name}.{method_name} must return owner-owned "
+                        f"{expected}, found {actual or 'no annotation'}"
+                    )
 
     legacy_paths = (
         PACKAGE / "application",
@@ -106,7 +283,9 @@ def main() -> int:
     for name in ("account", "capital", "execution", "market", "reference", "risk"):
         path = PACKAGE / "infrastructure" / "transport" / f"{name}.py"
         if path.exists():
-            failures.append(f"legacy business transport remains: {path.relative_to(ROOT)}")
+            failures.append(
+                f"legacy business transport remains: {path.relative_to(ROOT)}"
+            )
 
     generated = PACKAGE / "infrastructure" / "protocol" / "generated"
     if generated.exists():
@@ -148,9 +327,9 @@ def main() -> int:
         failures.append("queued Python Aeron adapter has returned")
     python_transport_sources = "\n".join(
         path.read_text(encoding="utf-8")
-        for path in (
-            ROOT / "crates" / "platform" / "python-transport" / "src"
-        ).glob("*.rs")
+        for path in (ROOT / "crates" / "platform" / "python-transport" / "src").glob(
+            "*.rs"
+        )
     )
     for forbidden in ("WorkerExitedError", "QueueOverflowError", "mpsc::", "PyBytes"):
         if forbidden in python_transport_sources:
@@ -165,17 +344,62 @@ def main() -> int:
                     f"legacy live-event path {forbidden!r} remains in "
                     f"{path.relative_to(ROOT)}"
                 )
+    # Every owner application with a live business stream converges on the
+    # callback-scoped visit_live boundary. The old async events() facade must
+    # not return under a second name or through an application events module.
+    for owner in ("account", "capital", "execution", "market", "reference", "risk"):
+        application = (
+            PACKAGE / "investment" / "apps" / owner / "application" / "application.py"
+        )
+        source = application.read_text(encoding="utf-8")
+        if "def visit_live(" not in source:
+            failures.append(
+                f"{owner} application is missing the callback-scoped visit_live facade"
+            )
+        if "def events(" in source or "async def events(" in source:
+            failures.append(f"{owner} application reintroduced the old events facade")
+    for owner in ("capital", "portfolio", "reference"):
+        application = (
+            PACKAGE / "investment" / "apps" / owner / "application" / "application.py"
+        )
+        events = application.with_name("events.py")
+        if events.exists():
+            failures.append(
+                f"{owner} application reintroduced an unowned events module"
+            )
     reference_client = PACKAGE / "contracts" / "reference" / "client.py"
+    reference_application = (
+        PACKAGE / "investment" / "apps" / "reference" / "application" / "application.py"
+    )
     reference_source = reference_client.read_text(encoding="utf-8")
-    for forbidden in ("reference_meta", "reference_markets_current", "SELECT ", "sqlite3"):
+    for forbidden in ("ReferenceEventPage", "def lifecycle_events("):
+        if forbidden in "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                reference_client,
+                reference_application,
+                PACKAGE
+                / "system"
+                / "apps"
+                / "components"
+                / "application"
+                / "clients.py",
+            )
+        ):
+            failures.append(
+                f"Reference persistent event-history query has returned: {forbidden!r}"
+            )
+    for forbidden in (
+        "reference_meta",
+        "reference_markets_current",
+        "SELECT ",
+        "sqlite3",
+    ):
         if forbidden in reference_source:
             failures.append(
                 "Reference Python contract contains SQLite implementation detail "
                 f"{forbidden!r}: {reference_client.relative_to(ROOT)}"
             )
-    reference_application = (
-        PACKAGE / "investment" / "apps" / "reference" / "application" / "application.py"
-    )
     for path in (reference_client, reference_application):
         source = path.read_text(encoding="utf-8")
         for forbidden in ("_from_row", "def _exchange(", "def _asset(", "def _market("):
@@ -211,14 +435,27 @@ def main() -> int:
             failures.append(f"public semantic type contract is missing {required!r}")
     for owner in OWNER_CONTRACT_PY_BINDINGS:
         binding = ROOT / "crates" / "modules" / owner / "contract" / "py"
-        if not (binding / "Cargo.toml").is_file() or not (binding / "src" / "lib.rs").is_file():
-            failures.append(f"owner contract PyO3 binding is missing: {binding.relative_to(ROOT)}")
-        target = f'kairospy._native_{owner}_contract'
+        if (
+            not (binding / "Cargo.toml").is_file()
+            or not (binding / "src" / "lib.rs").is_file()
+        ):
+            failures.append(
+                f"owner contract PyO3 binding is missing: {binding.relative_to(ROOT)}"
+            )
+        target = f"kairospy._native_{owner}_contract"
         if target not in pyproject:
-            failures.append(f"owner contract extension is missing from pyproject.toml: {target}")
+            failures.append(
+                f"owner contract extension is missing from pyproject.toml: {target}"
+            )
 
     forbidden_owner_files = {
-        "account": ("control.py", "records.py", "runtime.py", "source.py", "view_contract.py"),
+        "account": (
+            "control.py",
+            "records.py",
+            "runtime.py",
+            "source.py",
+            "view_contract.py",
+        ),
         "capital": ("client.py", "records.py", "source.py"),
         "execution": ("control.py", "current.py", "records.py", "source.py"),
         "market": ("control.py", "records.py", "source.py"),
@@ -247,7 +484,9 @@ def main() -> int:
             )
 
         facade_python = tuple(sorted(facade.glob("*.py")))
-        unexpected = sorted(path.name for path in facade_python if path.name not in OWNER_FACADE_FILES)
+        unexpected = sorted(
+            path.name for path in facade_python if path.name not in OWNER_FACADE_FILES
+        )
         if unexpected:
             failures.append(
                 f"{owner} owner facade contains implementation files: {', '.join(unexpected)}"
@@ -286,10 +525,15 @@ def main() -> int:
                         node.lineno,
                         f"owner facade contains implementation function {node.name}",
                     )
-                elif isinstance(node, ast.ImportFrom) and node.module in {
-                    "collections.abc",
-                    "typing",
-                } and any(alias.name == "Mapping" for alias in node.names):
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    in {
+                        "collections.abc",
+                        "typing",
+                    }
+                    and any(alias.name == "Mapping" for alias in node.names)
+                ):
                     _failure(
                         failures,
                         path,
@@ -311,12 +555,7 @@ def main() -> int:
     owner_rpc_literals: set[str] = set()
     for owner in CURRENT_VIEW_OWNERS:
         composition = (
-            PACKAGE
-            / "investment"
-            / "apps"
-            / owner
-            / "composition"
-            / "__init__.py"
+            PACKAGE / "investment" / "apps" / owner / "composition" / "__init__.py"
         )
         composition_source = composition.read_text(encoding="utf-8")
         prefix = owner.title()
@@ -353,12 +592,8 @@ def main() -> int:
                 )
 
     scoped_owner_roots = tuple(
-        PACKAGE / "contracts" / owner
-        for owner in CURRENT_VIEW_OWNERS
-    ) + tuple(
-        PACKAGE / "investment" / "apps" / owner
-        for owner in CURRENT_VIEW_OWNERS
-    )
+        PACKAGE / "contracts" / owner for owner in CURRENT_VIEW_OWNERS
+    ) + tuple(PACKAGE / "investment" / "apps" / owner for owner in CURRENT_VIEW_OWNERS)
     for path in python_files:
         if not any(path.is_relative_to(root) for root in scoped_owner_roots):
             continue
@@ -378,9 +613,13 @@ def main() -> int:
         is_entrypoint = any(path.is_relative_to(root) for root in ENTRYPOINT_ROOTS)
         is_domain = "domain" in relative.parts
         is_service = source_app is not None and "services" in relative.parts
-        is_system_composition = path.is_relative_to(PACKAGE / "system" / "composition") or path.is_relative_to(
-            PACKAGE / "system" / "apps" / "launch" / "composition"
-        ) or path == PACKAGE / "system" / "apps" / "launch" / "composition.py"
+        is_system_composition = (
+            path.is_relative_to(PACKAGE / "system" / "composition")
+            or path.is_relative_to(
+                PACKAGE / "system" / "apps" / "launch" / "composition"
+            )
+            or path == PACKAGE / "system" / "apps" / "launch" / "composition.py"
+        )
 
         for line, module in _imports(path):
             target_parts = module.split(".")
@@ -396,9 +635,7 @@ def main() -> int:
                 )
 
             if (
-                path.is_relative_to(
-                    PACKAGE / "contracts" / "reference"
-                )
+                path.is_relative_to(PACKAGE / "contracts" / "reference")
                 and module == "sqlite3"
             ):
                 _failure(
@@ -434,15 +671,10 @@ def main() -> int:
                     f"private owner extension leaks outside its public facade via {module}",
                 )
 
-            if (
-                any(
-                    path.is_relative_to(
-                        PACKAGE / "contracts" / owner
-                    )
-                    for owner in CURRENT_VIEW_OWNERS
-                )
-                and module in {"typing.Mapping", "collections.abc.Mapping"}
-            ):
+            if any(
+                path.is_relative_to(PACKAGE / "contracts" / owner)
+                for owner in CURRENT_VIEW_OWNERS
+            ) and module in {"typing.Mapping", "collections.abc.Mapping"}:
                 _failure(
                     failures,
                     path,
@@ -465,7 +697,12 @@ def main() -> int:
                 or ".services" in module
                 or ".composition" in module
             ):
-                _failure(failures, path, line, f"entry point bypasses Application via {module}")
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    f"entry point bypasses Application via {module}",
+                )
 
             if is_domain and (
                 module.startswith("kairospy.infrastructure")
@@ -476,40 +713,70 @@ def main() -> int:
 
             if is_service and source_app is not None and ".apps." in module:
                 target_app = None
-                if len(target_parts) >= 4 and target_parts[:2] == ["kairospy", source_app[0]] and target_parts[2] == "apps":
+                if (
+                    len(target_parts) >= 4
+                    and target_parts[:2] == ["kairospy", source_app[0]]
+                    and target_parts[2] == "apps"
+                ):
                     target_app = target_parts[3]
                 if target_app not in {None, source_app[1]} and (
                     ".services" in module or ".composition" in module
                 ):
-                    _failure(failures, path, line, f"Service crosses sub-app boundary via {module}")
+                    _failure(
+                        failures,
+                        path,
+                        line,
+                        f"Service crosses sub-app boundary via {module}",
+                    )
 
             if (
                 source_subsystem is not None
                 and target_subsystem is not None
                 and source_subsystem != target_subsystem
-                and (".services" in module or ".composition" in module or ".domain" in module)
+                and (
+                    ".services" in module
+                    or ".composition" in module
+                    or ".domain" in module
+                )
                 and not is_system_composition
             ):
-                _failure(failures, path, line, f"cross-subsystem call bypasses Application via {module}")
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    f"cross-subsystem call bypasses Application via {module}",
+                )
 
             if (
-                (source_subsystem is not None or is_entrypoint)
-                and _is_generated_protocol(module)
-            ):
-                _failure(failures, path, line, f"Generated Protocol leaks through {module}")
+                source_subsystem is not None or is_entrypoint
+            ) and _is_generated_protocol(module):
+                _failure(
+                    failures, path, line, f"Generated Protocol leaks through {module}"
+                )
 
             if source_subsystem == "strategy" and module.startswith(
                 "kairospy.system.apps.launch"
             ):
-                _failure(failures, path, line, f"Strategy reads Launch internals via {module}")
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    f"Strategy reads Launch internals via {module}",
+                )
 
-            if source_subsystem == "research" and module.startswith(
-                "kairospy.system.apps.launch"
-            ) and not (
-                ".application.backtests" in module
-                or ".application.specs" in module
+            if (
+                source_subsystem == "research"
+                and module.startswith("kairospy.system.apps.launch")
+                and not (
+                    ".application.backtests" in module or ".application.specs" in module
+                )
             ):
-                _failure(failures, path, line, f"Research duplicates Launch control via {module}")
+                _failure(
+                    failures,
+                    path,
+                    line,
+                    f"Research duplicates Launch control via {module}",
+                )
 
     for app in RUST_BACKED_INVESTMENT_APPS:
         domain = PACKAGE / "investment" / "apps" / app / "domain"
