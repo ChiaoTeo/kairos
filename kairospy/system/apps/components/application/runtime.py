@@ -62,34 +62,52 @@ class SystemRuntimeSupervisor:
                 f"{component} is launch-owned; only {', '.join(SUPERVISED_COMPONENTS)} "
                 "can be registered with the workspace supervisor"
             )
-        path = self.desired_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        current: dict[str, Any] = {}
-        if path.is_file():
-            try:
-                value = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(value, dict):
-                    current = value
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
+        current = self.load_desired()
         current[component] = dict(options or {})
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(current, sort_keys=True), encoding="utf-8")
-        temporary.replace(path)
+        self._write_desired(current)
 
     def unregister(self, component: str) -> None:
         if component not in SUPERVISED_COMPONENTS:
             return
+        if not self.desired_path.is_file():
+            return
+        current = self.load_desired()
+        current.pop(component, None)
+        self._write_desired(current)
+
+    def load_desired(self) -> dict[str, dict[str, Any]]:
         path = self.desired_path
         if not path.is_file():
-            return
+            return {}
         try:
-            current = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
-            current = {}
-        if isinstance(current, dict):
-            current.pop(component, None)
-            path.write_text(json.dumps(current, sort_keys=True), encoding="utf-8")
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as error:
+            raise RuntimeError(
+                f"cannot read supervisor desired state: {path}"
+            ) from error
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"invalid supervisor desired state JSON: {path}"
+            ) from error
+        if not isinstance(value, dict):
+            raise ValueError("supervisor desired state must be a JSON object")
+        desired: dict[str, dict[str, Any]] = {}
+        for component, options in value.items():
+            if component not in SUPERVISED_COMPONENTS:
+                raise ValueError(f"unsupported supervised component: {component}")
+            if not isinstance(options, dict):
+                raise ValueError(
+                    f"supervisor options for {component} must be a JSON object"
+                )
+            desired[component] = options
+        return desired
+
+    def _write_desired(self, desired: Mapping[str, Mapping[str, Any]]) -> None:
+        path = self.desired_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(desired, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
 
     def start_background(self) -> None:
         """Start one detached supervisor for this workspace if absent."""

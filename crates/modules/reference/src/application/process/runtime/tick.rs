@@ -57,7 +57,12 @@ impl ReferenceApplication {
         {
             log_timer_refresh_failed(&error);
         }
-        let _ = self.publish_pending_to_outputs(context).await;
+        if let Err(error) = self.publish_pending_to_outputs(context).await {
+            warn!(
+                error = ?error,
+                "Reference publication remains pending after timer tick"
+            );
+        }
         Ok(())
     }
 

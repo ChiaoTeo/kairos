@@ -25,6 +25,7 @@ from ....widgets import (
     ChoiceInteraction,
     Feature,
     InputInteraction,
+    InteractionHeading,
     renderable_plain_text,
 )
 from ...activity import ActivityKind, ActivityOutcome, ActivityRecord
@@ -1161,6 +1162,8 @@ def _ask(
         prompt=prompt,
         detail=detail,
         value_summary=summary,
+        heading=_launch_heading(session),
+        state="待输入",
     )
     return SetInteraction(session.interaction), SetStatus("等待输入")
 
@@ -1176,6 +1179,8 @@ def _input_error(session: GuidedSession, error: str) -> tuple[ScreenEffect, ...]
             current.value_summary,
             current.secret,
             error,
+            current.heading,
+            "输入有误",
         )
         session.interaction = current
         return SetInteraction(current), SetStatus("输入有误 · 请修正")
@@ -1229,9 +1234,32 @@ def _choice(
         title=context_label(session.context, session.root_label),
         summary=summary,
         actions=context_items(session, state),
+        heading=_launch_heading(session),
+        state=_launch_state(session),
     )
     session.interaction = interaction
     return SetInteraction(interaction), SetStatus(status)
+
+
+def _launch_heading(session: GuidedSession) -> InteractionHeading | None:
+    record = session.strategy.selected_record
+    if record is None:
+        return None
+    launch_id = str(record.get("launch_id") or "运行方案")
+    mode = str(record.get("mode") or "").strip()
+    detail = (
+        f"{mode} · 运行条件" if session.context == Routes.STRATEGY_READINESS else mode
+    )
+    return InteractionHeading(launch_id, detail or None)
+
+
+def _launch_state(session: GuidedSession) -> str | None:
+    readiness = session.strategy.readiness
+    if session.context == Routes.STRATEGY_READINESS:
+        return "可以启动" if readiness is not None and readiness.valid else "需要处理"
+    if session.context == Routes.STRATEGY_SELECTED and readiness is not None:
+        return "可以启动" if readiness.valid else None
+    return None
 
 
 def _record_choice(records: tuple[SelectionRecord, ...], value: str) -> object | None:

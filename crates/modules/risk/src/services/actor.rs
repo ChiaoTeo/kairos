@@ -826,7 +826,13 @@ impl RiskActor {
         }
         let snapshot = self.snapshot();
         if let Some(store) = self.store.as_mut() {
-            let _ = store.checkpoint(&snapshot);
+            if let Err(error) = store.checkpoint(&snapshot) {
+                tracing::warn!(
+                    error = %error,
+                    event_sequence = snapshot.event_sequence.get(),
+                    "Risk checkpoint failed; journal remains authoritative"
+                );
+            }
         }
     }
 

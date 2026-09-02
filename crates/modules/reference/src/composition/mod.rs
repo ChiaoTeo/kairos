@@ -153,21 +153,18 @@ async fn build_source_plan(
             key: "reference-binance-options".into(),
             endpoint: configured_endpoint(endpoints.options, default_endpoint("binance-options")),
         });
-        if credential_id.is_some() {
+        if let Some(credential_id) = credential_id.as_deref() {
             let credential = load_required_credential(
                 credentials_root.as_deref(),
                 "binance",
-                credential_id.as_deref(),
+                Some(credential_id),
                 "Binance equity",
             )?;
             providers.push(ReferenceProviderPlan::BinanceEquity {
                 key: "reference-binance-stocks".into(),
                 endpoint: configured_endpoint(endpoints.equity, default_endpoint("binance-equity")),
                 credential: BinanceCredential {
-                    principal_id: credential_id
-                        .as_deref()
-                        .expect("credential id was present")
-                        .into(),
+                    principal_id: credential_id.into(),
                     api_key: secrecy::SecretString::new(credential.0.into()),
                     secret: credential.1,
                 },
@@ -225,7 +222,11 @@ async fn build_source_plan(
             endpoint = Some(
                 connection
                     .endpoint_for("reference-catalog", None)
-                    .expect("validated provider connection has a REST endpoint")
+                    .ok_or_else(|| {
+                        crate::domain::ReferenceError::Provider(
+                            "validated Reference connection has no REST endpoint".into(),
+                        )
+                    })?
                     .to_owned(),
             );
             credential_id = Some(connection.credential_id);

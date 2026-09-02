@@ -502,6 +502,66 @@ pub struct CapitalOperation {
     pub updated_at: UnixNanos,
 }
 
+impl CapitalPlan {
+    pub(crate) fn validate_reservation(
+        &self,
+        reservation: &CapitalReservation,
+    ) -> Result<(), String> {
+        if reservation.reservation_id != self.reservation_id
+            || reservation.plan_id != self.plan_id
+            || reservation.source != self.source
+            || reservation.amount != self.amount
+        {
+            return Err("Capital plan and reservation do not match".into());
+        }
+        if matches!(
+            self.route_kind,
+            CapitalRouteKind::EarnRedemptionThenTransfer | CapitalRouteKind::EarnSubscription
+        ) && self.selected_earn_product_id.is_none()
+        {
+            return Err("Capital Earn plan has no selected product".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_operation(&self, operation: &CapitalOperation) -> Result<(), String> {
+        if operation.plan_id != self.plan_id {
+            return Err("Capital plan and operation do not match".into());
+        }
+        let expected_kind = match (self.route_kind, operation.operation_index) {
+            (CapitalRouteKind::EarnRedemptionThenTransfer, 0) => {
+                CapitalOperationKind::EarnRedemption
+            },
+            (CapitalRouteKind::EarnRedemptionThenTransfer, 1) => CapitalOperationKind::Transfer,
+            (CapitalRouteKind::EarnSubscription, 0) => CapitalOperationKind::EarnSubscription,
+            (CapitalRouteKind::InternalTransfer, 0) | (CapitalRouteKind::AccountTransfer, 0) => {
+                CapitalOperationKind::Transfer
+            },
+            _ => return Err("Capital operation index is invalid for its route".into()),
+        };
+        if operation.kind != expected_kind {
+            return Err("Capital operation kind is invalid for its route".into());
+        }
+        let kind_name = match expected_kind {
+            CapitalOperationKind::EarnRedemption => "earn-redemption",
+            CapitalOperationKind::EarnSubscription => "earn-subscription",
+            CapitalOperationKind::Transfer => "transfer",
+        };
+        let expected_key = format!(
+            "{}:{}:{kind_name}",
+            self.plan_id.as_str(),
+            operation.operation_index
+        );
+        if operation.idempotency_key.as_str() != expected_key {
+            return Err("Capital operation idempotency key is not stable".into());
+        }
+        if operation.operation_index == 0 && operation.idempotency_key != self.idempotency_key {
+            return Err("Capital first operation does not match the plan idempotency key".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapitalSubmissionOutcome {
     Confirmed,

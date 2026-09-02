@@ -84,7 +84,7 @@ def test_operations_center_opens_current_runtime_inventory_directly() -> None:
 
     screen_type, context, copy, option_count, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 运行中心 / 运行概览  ›"
+    assert context == "trader › 运行中心 › 运行概览"
     assert option_count == 3
     assert "项目共享服务" in copy
     assert "活动运行实例" in copy
@@ -216,7 +216,7 @@ def test_project_init_collects_each_field_in_the_shared_bottom_input() -> None:
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader  ›"
+    assert context == "trader"
     assert "demo-project" in output
     assert "项目操作预览" in output
     assert "尚未写入任何内容" in output
@@ -335,13 +335,13 @@ def test_operations_service_selection_actions_and_back_use_one_input() -> None:
         selected_status,
     ) = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert selected == "trader / 运行中心 / 标的服务  ›"
+    assert selected == "trader › 运行中心 › 标的服务"
     assert "停止" in selected_actions
     assert "重启" in selected_actions
     assert "行情服务" not in selected_actions
     assert not has_summary
     assert "标的服务 · 运行中" in selected_status
-    assert services == "trader / 运行中心 / 项目共享服务  ›"
+    assert services == "trader › 运行中心 › 项目共享服务"
     assert focused
 
 
@@ -422,12 +422,12 @@ def test_support_process_detail_is_observable_but_not_lifecycle_control() -> Non
 
     group_status, context, detail, after_back = asyncio.run(run())
     assert group_status == "就绪"
-    assert context == "trader / 运行中心 / System Supervisor  ›"
+    assert context == "trader › 运行中心 › System Supervisor"
     assert "System Supervisor" in detail
     assert "不提供普通服务启停" in detail
     assert "停止" not in detail
     assert "重启" not in detail
-    assert after_back == "trader / 运行中心 / 支撑进程  ›"
+    assert after_back == "trader › 运行中心 › 支撑进程"
 
 
 def test_service_status_copy_and_actions_follow_lifecycle_state() -> None:
@@ -632,7 +632,7 @@ def test_operations_service_logs_flow_in_content_without_activity_pollution(
     assert refresh_count >= 2
     assert worker_closed
     assert "已结束行情服务日志跟随" in exported
-    assert context == "trader / 运行中心 / 行情服务  ›"
+    assert context == "trader › 运行中心 › 行情服务"
 
 
 def test_operations_log_rotation_does_not_hide_repeated_first_line() -> None:
@@ -710,7 +710,7 @@ def test_workspace_market_replay_control_lives_in_operations_center() -> None:
 
     screen_type, context, output, interaction, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 运行中心 / 行情服务  ›"
+    assert context == "trader › 运行中心 › 行情服务"
     assert output == ""
     assert "暂停项目共享 Market 行情回放" in interaction.operation.audit_summary
     assert focused
@@ -745,7 +745,7 @@ def test_research_read_flow_uses_nested_single_input_menu(
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 数据与回测 / 数据准备  ›"
+    assert context == "trader › 数据与回测 › 数据准备"
     assert "dataset-demo" in output
     assert focused
 
@@ -774,7 +774,7 @@ def test_research_data_execution_is_one_continuous_numbered_path() -> None:
             )
 
     context, output, status = asyncio.run(run())
-    assert context == "trader / 数据与回测 / 数据准备  ›"
+    assert context == "trader › 数据与回测 › 数据准备"
     assert "execute-data 预演完成，未执行任何修改" in output
     assert "requirements.json" in output
     assert status == "操作已完成"
@@ -804,7 +804,7 @@ def test_research_gate_publish_is_one_continuous_numbered_path() -> None:
             )
 
     context, output, status = asyncio.run(run())
-    assert context == "trader / 数据与回测 / 研究流程  ›"
+    assert context == "trader › 数据与回测 › 研究流程"
     assert "publish-gate 预演完成，未执行任何修改" in output
     assert "research-plan.json" in output
     assert "research-evidence.json" in output

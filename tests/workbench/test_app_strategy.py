@@ -92,7 +92,9 @@ def test_strategy_launch_list_detail_and_back_stay_in_command_screen(
             interaction = screen.session.interaction
             assert isinstance(interaction, ChoiceInteraction)
             assert interaction.summary is None
-            assert not screen.query_one("#interaction-content", Static).display
+            assert interaction.heading is not None
+            assert interaction.heading.title == "paper-demo"
+            assert screen.query_one("#interaction-content", Static).display
             screen.submit("/back")
             screen.submit("1")
             await pilot.pause()
@@ -107,8 +109,8 @@ def test_strategy_launch_list_detail_and_back_stay_in_command_screen(
 
     screen_type, selected, launches, launch_id, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert selected == "trader / 策略与运行 / 已选运行方案  ›"
-    assert launches == "trader / 策略与运行 / 运行方案  ›"
+    assert selected == "paper-demo › 运行方案"
+    assert launches == "trader › 策略与运行 › 运行方案"
     assert launch_id == "paper-demo"
     assert focused
 
@@ -166,10 +168,10 @@ def test_launch_instance_component_drilldown_stays_in_command_screen(
 
     screen_type, instances, selected, components, after_back = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert instances == "trader / 策略与运行 / 运行实例  ›"
-    assert selected == "trader / 策略与运行 / 已选实例  ›"
-    assert components == "trader / 策略与运行 / 实例组件  ›"
-    assert after_back == "trader / 策略与运行 / 已选实例  ›"
+    assert instances == "paper-demo › 运行实例"
+    assert selected == "paper-demo › 运行实例"
+    assert components == "paper-demo › 实例组件"
+    assert after_back == "paper-demo › 运行实例"
 
 
 def test_completed_backtest_instance_exposes_report_on_the_shared_instance_detail(
@@ -220,7 +222,7 @@ def test_completed_backtest_instance_exposes_report_on_the_shared_instance_detai
 
     context, actions, output = asyncio.run(run())
     assert calls == [("run-7", "report")]
-    assert context == "trader / 策略与运行 / 已选实例  ›"
+    assert context == "backtest-demo › 运行实例"
     assert "查看回测报告" in actions
     assert "report" in output
 
@@ -304,11 +306,11 @@ def test_run_readiness_repairs_resource_and_returns_to_retry_checkpoint(
             )
 
     readiness, actions, resource, returned, final = asyncio.run(run())
-    assert readiness == "trader / 策略与运行 / 运行条件  ›"
+    assert readiness == "paper-demo › 运行条件"
     assert "修复行情连接" in actions
-    assert resource == "trader / 连接与配置 / 市场数据  ›"
+    assert resource == "paper-demo › 行情连接"
     assert returned == readiness
-    assert final == "trader / 策略与运行 / 已选运行方案  ›"
+    assert final == "paper-demo › 运行方案"
 
 
 def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
@@ -379,7 +381,7 @@ def test_connected_execution_read_and_cancel_use_instance_scope_confirmation(
     assert screen_type is CommandLineScreen
     assert [action for action, _ in calls] == ["status", "cancel"]
     assert calls[-1][1] == {"order-id": "order-1", "reason": "manual cancel"}
-    assert context == "trader / 策略与运行 / Execution Server  ›"
+    assert context == "paper-demo › Execution Server"
     assert "Execution 作用域确认" not in output
     assert focused
 
@@ -449,7 +451,7 @@ def test_launch_market_snapshot_and_replay_pause_use_one_input(
     context, output = asyncio.run(run())
     assert [action for action, _ in calls] == ["quote", "pause-replay"]
     assert calls[0][1]["market-id"] == "market:btc-usdt"
-    assert context == "trader / 策略与运行 / Market 组件  ›"
+    assert context == "backtest-demo › Market 组件"
     assert "Market quote 已返回当前实例结果" in output
 
 
@@ -508,7 +510,7 @@ def test_launch_timeline_export_uses_argument_and_inline_confirmation(
 
     context, output = asyncio.run(run())
     assert exports == ["timeline.jsonl"]
-    assert context == "trader / 策略与运行 / 实例时间线  ›"
+    assert context == "paper-demo › 实例时间线"
     assert "时间线导出结果已完成" in output
 
 
@@ -565,7 +567,7 @@ def test_launch_attach_python_uses_same_input_and_inline_confirmation(
 
     context, output, focused = asyncio.run(run())
     assert calls == [("paper-demo", "print('ready')")]
-    assert context == "trader / 策略与运行 / 跟随输出  ›"
+    assert context == "paper-demo › 跟随输出"
     assert "accepted" in output
     assert focused
 
@@ -830,7 +832,7 @@ def test_launch_new_wizard_collects_fields_and_confirms_draft_save(
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert saved == [("backtest-demo", False)]
-    assert context == "trader / 策略与运行 / 已选运行方案  ›"
+    assert context == "backtest-demo › 运行方案"
     assert "Launch 脱敏摘要" not in output
     assert "Launch 配置已就绪" in output
     assert focused
@@ -997,12 +999,12 @@ def test_live_launch_wizard_selects_business_resources_and_access_mode(
         (
             {"initial_launch_attach": "paper-demo"},
             "paper-demo",
-            "trader / 策略与运行 / 跟随输出  ›",
+            "paper-demo › 跟随输出",
         ),
         (
             {"initial_launch_setup": ("new-demo", None)},
             "new-demo",
-            "trader / 策略与运行 / 配置向导  ›",
+            "new-demo › 配置向导",
         ),
     ),
 )

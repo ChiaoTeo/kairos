@@ -8,11 +8,17 @@ from kairospy.surface.workbench.screens.session import (
     MarketSession,
 )
 from kairospy.surface.workbench.screens.navigation import (
+    Routes,
     back_targets,
+    command_context,
     context_label,
     go_back,
 )
 from kairospy.surface.workbench.screens.selection import SelectionRecord
+from kairospy.surface.workbench.screens.selection import LaunchRecordView
+from kairospy.surface.workbench.screens.flows.resources.wizard import (
+    ResourceWizardState,
+)
 
 
 class _NonCopyableOwnerRecord:
@@ -152,3 +158,37 @@ def test_context_labels_are_derived_from_the_same_navigation_context() -> None:
         context_label(("operations", "support", "system-supervisor"))
         == "首页 / 运行中心 / System Supervisor"
     )
+
+
+def test_command_context_keeps_launch_anchor_across_resource_repair() -> None:
+    session = GuidedSession(root_label="trader")
+    session.strategy.selected_record = LaunchRecordView(
+        {"launch_id": "paper-demo", "mode": "paper"}
+    )
+    session.enter_context(Routes.STRATEGY_READINESS)
+    session.resources.kind = "data"
+    session.resources.wizard = ResourceWizardState(
+        "data", answers={"data-provider": "massive"}
+    )
+    session.enter_context(Routes.RESOURCES_SETUP)
+
+    assert command_context(session).segments == (
+        "paper-demo",
+        "行情连接",
+        "Massive",
+    )
+    assert back_targets(session)[0] == Routes.STRATEGY_READINESS
+
+
+def test_command_context_keeps_market_query_across_catalog_connection_setup() -> None:
+    session = GuidedSession(root_label="trader")
+    session.market.query = "AAPL"
+    session.enter_context(Routes.MARKET_CATALOG_SETUP)
+    session.resources.kind = "data"
+    session.resources.wizard = ResourceWizardState(
+        "data", answers={"data-provider": "massive"}
+    )
+    session.enter_context(Routes.RESOURCES_SETUP)
+
+    assert command_context(session).segments == ("AAPL", "行情连接", "Massive")
+    assert back_targets(session)[0] == Routes.MARKET_CATALOG_SETUP

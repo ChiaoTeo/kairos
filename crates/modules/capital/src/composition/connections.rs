@@ -546,7 +546,7 @@ pub fn compose_capital_integration_connections(
                 credential_store
                     .credentials
                     .iter()
-                    .find(|value| value.credential_id == credential_id)
+                    .find(|value| value.credential_id() == credential_id)
                     .ok_or_else(|| format!("Capital credential '{credential_id}' was not found"))
             })
             .transpose()?;
@@ -555,13 +555,13 @@ pub fn compose_capital_integration_connections(
                 let api_key = value.api_key_value().ok_or_else(|| {
                     format!(
                         "Binance credential '{}' has no API key",
-                        value.credential_id
+                        value.credential_id()
                     )
                 })?;
                 let secret = value.secret_value().ok_or_else(|| {
                     format!(
                         "Binance credential '{}' has no API secret",
-                        value.credential_id
+                        value.credential_id()
                     )
                 })?;
                 Ok::<_, String>(BinanceCredential {
@@ -664,7 +664,7 @@ pub fn compose_capital_integration_connections(
         let credential_record = credential_store
             .credentials
             .iter()
-            .find(|value| value.credential_id == credential_id)
+            .find(|value| value.credential_id() == credential_id)
             .ok_or_else(|| format!("Capital credential '{credential_id}' was not found"))?;
         let credential = BinanceCredential {
             principal_id: controller_id.clone(),

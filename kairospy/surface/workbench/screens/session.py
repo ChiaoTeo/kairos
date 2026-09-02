@@ -15,6 +15,7 @@ from ..widgets import (
     ConfirmInteraction,
     ControlInteraction,
     InputInteraction,
+    InteractionHeading,
     InteractionState,
     RunningInteraction,
 )
@@ -59,6 +60,8 @@ class MarketSession:
     query: str | None = None
     catalog_setup_goal: CatalogSetupGoal | None = None
     catalog_setup_plan: CatalogSetupPlanView | None = None
+    catalog_setup_reference_recovery: str | None = None
+    catalog_setup_reference_issue: str | None = None
     selected: object | None = None
     observation: str | None = None
     provider: str | None = None
@@ -82,6 +85,8 @@ class MarketSession:
         self.query = None
         self.catalog_setup_goal = None
         self.catalog_setup_plan = None
+        self.catalog_setup_reference_recovery = None
+        self.catalog_setup_reference_issue = None
         self.selected = None
         self.observation = None
         self.records = ()
@@ -447,6 +452,8 @@ class GuidedSession:
         detail: str = "",
         value_summary: RenderableType | None = None,
         secret: bool = False,
+        heading: InteractionHeading | None = None,
+        state: str | None = None,
     ) -> None:
         self.suspended_interaction = None
         self.interaction = InputInteraction(
@@ -456,6 +463,8 @@ class GuidedSession:
             detail=detail,
             value_summary=value_summary,
             secret=secret,
+            heading=heading,
+            state=state,
         )
 
     def confirm(
@@ -499,6 +508,8 @@ class GuidedSession:
         *,
         title: str = "",
         summary: RenderableType | None = None,
+        heading: InteractionHeading | None = None,
+        state: str | None = None,
     ) -> None:
         """Present navigation or recovery actions without changing business state."""
 
@@ -507,6 +518,8 @@ class GuidedSession:
             title=title,
             summary=summary,
             actions=actions,
+            heading=heading,
+            state=state,
         )
 
     def control(

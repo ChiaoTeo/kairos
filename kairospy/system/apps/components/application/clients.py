@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Mapping
 
-from kairospy.infrastructure.unix_http import request_sync
+from kairospy.infrastructure.transport.json_rpc import UnixJsonRpcClient
 
 if TYPE_CHECKING:
     from .event_routes import EventTransportRoute
+    from kairospy.system.apps.launch.application.connections import InstanceConnections
     from kairospy.system.apps.workspace.application import InstanceWorkspace
     from kairospy.primitives.account import AccountId, SegmentKeyRead
     from kairospy.contracts.account import (
@@ -28,9 +29,12 @@ if TYPE_CHECKING:
     from kairospy.contracts.capital.types import CapitalControlClient
     from kairospy.contracts.capital.types import (
         CancelFundingObjectiveRequest,
+        CapitalControlResponse,
+        CapitalDemandResponse,
         ObserveCapitalDemandRequest,
         PublishFundingObjectiveRequest,
         ReconcileCapitalPlanRequest,
+        ReconcileCapitalPlanResponse,
     )
     from kairospy.contracts.execution import (
         ExecutionControlClient,
@@ -64,37 +68,22 @@ if TYPE_CHECKING:
     from kairospy.contracts.reference.control import (
         ReferenceControlClient,
     )
-
-
-class _RiskCommandStatus(Protocol):
-    status: str
-
-
-class _RiskAdvanceResponse(Protocol):
-    event_time_unix_nanos: int
-    expired: int
-
-
-class _RiskHealth(Protocol):
-    status: str
-    generation: int
-    event_sequence: int
-    policy_version: int
-    reservation_count: int
-    open_circuit_count: int
-
-
-class _RiskControl(Protocol):
-    def publish_policy(self, request: object) -> _RiskCommandStatus: ...
-    def pre_trade_check(self, request: object) -> object: ...
-    def authorize_and_reserve(self, request: object) -> object: ...
-    def release_reservation(self, request: object) -> object: ...
-    def consume_reservation(self, request: object) -> object: ...
-    def resize_reservation(self, request: object) -> object: ...
-    def open_circuit(self, request: object) -> object: ...
-    def close_circuit(self, request: object) -> object: ...
-    def advance_time(self, request: object) -> _RiskAdvanceResponse: ...
-    def health(self) -> _RiskHealth: ...
+    from kairospy.contracts.risk import (
+        AuthorizeRequest,
+        CloseCircuitRequest,
+        ConsumeReservationRequest,
+        OpenCircuitRequest,
+        PublishPolicyRequest,
+        ReleaseReservationRequest,
+        ResizeReservationRequest,
+        RiskCircuit,
+        RiskCircuitState,
+        RiskControlClient,
+        RiskDecision,
+        RiskLimitUsage,
+        RiskReservation,
+        RiskScope,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +107,7 @@ class SystemRpcClient:
     instance_id: str | None = None
     event_route: EventTransportRoute | None = None
     timeout: float = 3.0
+    _rpc: UnixJsonRpcClient = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.socket_path, Path):
@@ -128,30 +118,14 @@ class SystemRpcClient:
             object.__setattr__(self, "database_path", Path(self.database_path))
         if self.timeout <= 0:
             raise ValueError("timeout must be positive")
+        object.__setattr__(
+            self,
+            "_rpc",
+            UnixJsonRpcClient(self.socket_path, timeout=self.timeout),
+        )
 
     def call(self, method: str, params: list[Any] | None = None) -> dict[str, Any]:
-        if not method or "/" in method:
-            raise ValueError("JSON-RPC method name must be non-empty and path-free")
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": method,
-            "params": [] if params is None else params,
-        }
-        status, value = request_sync(
-            self.socket_path,
-            "POST",
-            "/",
-            payload,
-            timeout=self.timeout,
-        )
-        if status >= 400:
-            raise RuntimeError(
-                str(value.get("error", f"JSON-RPC request failed: HTTP {status}"))
-            )
-        if "error" in value:
-            raise RuntimeError(str(value["error"]))
-        return value.get("result", {})
+        return self._rpc.call(method, params)
 
     def status(self) -> dict[str, Any]:
         return self.call("system_health")
@@ -264,21 +238,6 @@ class ExecutionSystemClient(SystemRpcClient):
         return self.control.routes(query)
 
     def submit_intent(self, request: "SubmitIntentRequest") -> "ExecutionCommandStatus":
-        return self.control.submit_intent(request)
-
-    def cancel_intent(self, intent_id: str, *, reason: str = "") -> dict[str, Any]:
-        raise NotImplementedError("cancel_intent is not part of ExecutionControlRpc")
-
-    def expire_intent(self, intent_id: str, *, reason: str = "") -> dict[str, Any]:
-        raise NotImplementedError("expire_intent is not part of ExecutionControlRpc")
-
-    def submit(
-        self, request: "SubmitIntentRequest", *, dry_run: bool = False
-    ) -> "ExecutionCommandStatus":
-        if dry_run:
-            raise NotImplementedError(
-                "dry-run submit is not part of ExecutionControlRpc"
-            )
         return self.control.submit_intent(request)
 
     def cancel(
@@ -446,7 +405,7 @@ class MarketSystemClient(SystemRpcClient):
 
 
 class RiskSystemClient(SystemRpcClient):
-    control: _RiskControl
+    control: RiskControlClient
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -458,28 +417,28 @@ class RiskSystemClient(SystemRpcClient):
             RiskControlClient(self.socket_path, timeout=self.timeout),
         )
 
-    def configure(self, request: object) -> dict[str, Any]:
+    def configure(self, request: PublishPolicyRequest) -> dict[str, Any]:
         return {"status": self.control.publish_policy(request).status}
 
-    def assess(self, request: object) -> dict[str, Any]:
+    def assess(self, request: AuthorizeRequest) -> dict[str, Any]:
         return _risk_decision(self.control.pre_trade_check(request))
 
-    def reserve(self, request: object) -> dict[str, Any]:
+    def reserve(self, request: AuthorizeRequest) -> dict[str, Any]:
         return _risk_decision(self.control.authorize_and_reserve(request))
 
-    def release(self, request: object) -> dict[str, Any]:
+    def release(self, request: ReleaseReservationRequest) -> dict[str, Any]:
         return _risk_reservation(self.control.release_reservation(request))
 
-    def consume(self, request: object) -> dict[str, Any]:
+    def consume(self, request: ConsumeReservationRequest) -> dict[str, Any]:
         return _risk_reservation(self.control.consume_reservation(request))
 
-    def resize(self, request: object) -> dict[str, Any]:
+    def resize(self, request: ResizeReservationRequest) -> dict[str, Any]:
         return _risk_reservation(self.control.resize_reservation(request))
 
-    def open_circuit(self, request: object) -> dict[str, Any]:
+    def open_circuit(self, request: OpenCircuitRequest) -> dict[str, Any]:
         return _risk_circuit_state(self.control.open_circuit(request))
 
-    def close_circuit(self, request: object) -> dict[str, Any]:
+    def close_circuit(self, request: CloseCircuitRequest) -> dict[str, Any]:
         return _risk_circuit_state(self.control.close_circuit(request))
 
     def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
@@ -570,7 +529,7 @@ class RiskSystemClient(SystemRpcClient):
         )
 
 
-def _risk_scope(value: Any) -> dict[str, str | None]:
+def _risk_scope(value: RiskScope) -> dict[str, str | None]:
     return {
         "account_id": value.account_id,
         "strategy_id": value.strategy_id,
@@ -579,7 +538,7 @@ def _risk_scope(value: Any) -> dict[str, str | None]:
     }
 
 
-def _risk_limit(value: Any) -> dict[str, Any]:
+def _risk_limit(value: RiskLimitUsage) -> dict[str, Any]:
     policy = value.policy
     return {
         "policy": {
@@ -599,7 +558,7 @@ def _risk_limit(value: Any) -> dict[str, Any]:
     }
 
 
-def _risk_reservation(value: Any) -> dict[str, Any]:
+def _risk_reservation(value: RiskReservation) -> dict[str, Any]:
     return {
         "reservation_id": value.reservation_id,
         "request_id": value.request_id,
@@ -622,7 +581,7 @@ def _risk_reservation(value: Any) -> dict[str, Any]:
     }
 
 
-def _risk_decision(value: Any) -> dict[str, Any]:
+def _risk_decision(value: RiskDecision) -> dict[str, Any]:
     return {
         "decision_id": value.decision_id,
         "request_id": value.request_id,
@@ -651,7 +610,7 @@ def _risk_decision(value: Any) -> dict[str, Any]:
     }
 
 
-def _risk_circuit_state(value: Any) -> dict[str, Any]:
+def _risk_circuit_state(value: RiskCircuitState) -> dict[str, Any]:
     return {
         "scope": _risk_scope(value.scope),
         "open": value.open,
@@ -661,7 +620,7 @@ def _risk_circuit_state(value: Any) -> dict[str, Any]:
     }
 
 
-def _risk_circuit(value: Any) -> dict[str, Any]:
+def _risk_circuit(value: RiskCircuit) -> dict[str, Any]:
     scope = _risk_scope(value.scope)
     scope.pop("instrument_id")
     return {
@@ -876,37 +835,37 @@ class ReferenceSystemClient(SystemRpcClient):
         return self.reader.snapshot()
 
 
-def _capital_control_response(value: object) -> dict[str, Any]:
+def _capital_control_response(value: CapitalControlResponse) -> dict[str, Any]:
     return {
-        "request_id": getattr(value, "request_id"),
-        "objective_id": getattr(value, "objective_id"),
-        "version": getattr(value, "version"),
-        "status": getattr(value, "status"),
-        "error_code": getattr(value, "error_code"),
-        "error_message": getattr(value, "error_message"),
-        "retryable": getattr(value, "retryable"),
+        "request_id": value.request_id,
+        "objective_id": value.objective_id,
+        "version": value.version,
+        "status": value.status,
+        "error_code": value.error_code,
+        "error_message": value.error_message,
+        "retryable": value.retryable,
     }
 
 
-def _capital_demand_response(value: object) -> dict[str, Any]:
+def _capital_demand_response(value: CapitalDemandResponse) -> dict[str, Any]:
     return {
-        "request_id": getattr(value, "request_id"),
-        "demand_id": getattr(value, "demand_id"),
-        "status": getattr(value, "status"),
-        "error_code": getattr(value, "error_code"),
-        "error_message": getattr(value, "error_message"),
-        "retryable": getattr(value, "retryable"),
+        "request_id": value.request_id,
+        "demand_id": value.demand_id,
+        "status": value.status,
+        "error_code": value.error_code,
+        "error_message": value.error_message,
+        "retryable": value.retryable,
     }
 
 
-def _capital_reconcile_response(value: object) -> dict[str, Any]:
+def _capital_reconcile_response(value: ReconcileCapitalPlanResponse) -> dict[str, Any]:
     return {
-        "request_id": getattr(value, "request_id"),
-        "plan_id": getattr(value, "plan_id"),
-        "status": getattr(value, "status"),
-        "error_code": getattr(value, "error_code"),
-        "error_message": getattr(value, "error_message"),
-        "retryable": getattr(value, "retryable"),
+        "request_id": value.request_id,
+        "plan_id": value.plan_id,
+        "status": value.status,
+        "error_code": value.error_code,
+        "error_message": value.error_message,
+        "retryable": value.retryable,
     }
 
 
@@ -921,7 +880,13 @@ def system_client(
         "risk": RiskSystemClient,
         "capital": CapitalSystemClient,
     }
-    client_type = clients.get(component, SystemRpcClient)
+    try:
+        client_type = clients[component]
+    except KeyError:
+        supported = ", ".join(sorted(clients))
+        raise ValueError(
+            f"unsupported business component: {component}; expected one of {supported}"
+        ) from None
     return client_type(Path(socket_path), timeout=timeout)
 
 
@@ -929,7 +894,7 @@ def system_client(
 class InstanceSystemClients:
     """Typed business clients owned by one launched Conflux instance."""
 
-    accounts: Mapping[Any, AccountSystemClient]
+    accounts: Mapping[AccountId, AccountSystemClient]
     market: MarketSystemClient | None = None
     risk: RiskSystemClient | None = None
     execution: ExecutionSystemClient | None = None
@@ -937,7 +902,9 @@ class InstanceSystemClients:
     reference: ReferenceSystemClient | None = None
 
     @classmethod
-    def from_connections(cls, connections: Any) -> "InstanceSystemClients":
+    def from_connections(
+        cls, connections: InstanceConnections
+    ) -> "InstanceSystemClients":
         return cls(
             accounts={
                 account_id: AccountSystemClient(

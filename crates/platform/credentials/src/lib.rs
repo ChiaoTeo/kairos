@@ -76,9 +76,9 @@ impl std::fmt::Display for CredentialId {
 
 #[derive(Clone)]
 pub struct CredentialRecord {
-    pub credential_id: String,
-    pub provider: String,
-    pub role: String,
+    credential_id: CredentialId,
+    provider: String,
+    role: String,
     values: BTreeMap<String, SecretString>,
 }
 
@@ -118,7 +118,7 @@ impl CredentialRecord {
             }
         }
         Ok(Self {
-            credential_id: credential_id.to_string(),
+            credential_id,
             provider,
             role,
             values: protected,
@@ -127,6 +127,18 @@ impl CredentialRecord {
 
     pub fn value(&self, field: &str) -> Option<&SecretString> {
         self.values.get(field)
+    }
+
+    pub fn credential_id(&self) -> &str {
+        self.credential_id.as_str()
+    }
+
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    pub fn role(&self) -> &str {
+        &self.role
     }
 
     pub fn value_owned(&self, field: &str) -> Option<String> {
@@ -162,8 +174,7 @@ pub struct CredentialSummary {
 impl From<&CredentialRecord> for CredentialSummary {
     fn from(value: &CredentialRecord) -> Self {
         Self {
-            credential_id: CredentialId::new(value.credential_id.clone())
-                .expect("stored credential ids are validated at construction"),
+            credential_id: value.credential_id.clone(),
             provider: value.provider.clone(),
             role: value.role.clone(),
             fields: value.fields().into_iter().map(str::to_owned).collect(),
@@ -214,7 +225,7 @@ impl CredentialStore {
     pub fn find(&self, credential_id: &str) -> Option<&CredentialRecord> {
         self.credentials
             .iter()
-            .find(|record| record.credential_id == credential_id)
+            .find(|record| record.credential_id() == credential_id)
     }
 
     pub fn find_provider(
@@ -223,7 +234,7 @@ impl CredentialStore {
         requested_id: Option<&str>,
     ) -> Option<&CredentialRecord> {
         self.credentials.iter().find(|record| {
-            requested_id.is_none_or(|requested| record.credential_id == requested)
+            requested_id.is_none_or(|requested| record.credential_id() == requested)
                 && record.provider.eq_ignore_ascii_case(provider)
         })
     }
@@ -238,10 +249,10 @@ impl CredentialStore {
         overwrite: bool,
     ) -> Result<(), CredentialError> {
         ensure_private_directory(root)?;
-        let target = root.join(format!("{}.toml", record.credential_id));
+        let target = root.join(format!("{}.toml", record.credential_id()));
         if target.exists() && !overwrite {
             return Err(CredentialError::AlreadyExists(
-                record.credential_id.to_string(),
+                record.credential_id().to_owned(),
             ));
         }
         write_private_atomic(&target, &credential_toml(record))
@@ -315,7 +326,7 @@ fn load_one(path: &Path) -> Result<CredentialRecord, CredentialError> {
 fn credential_toml(record: &CredentialRecord) -> String {
     let mut document = format!(
         "[credential]\nid = {}\nprovider = {}\nrole = {}\n",
-        toml_string(&record.credential_id),
+        toml_string(record.credential_id()),
         toml_string(&record.provider),
         toml_string(&record.role),
     );
@@ -482,8 +493,9 @@ mod tests {
             .join("../../../tests/fixtures/credentials");
         let store = CredentialStore::load(&root).unwrap();
         let credential = store.find("shared-okx").unwrap();
-        assert_eq!(credential.provider, "okx");
-        assert_eq!(credential.role, "trade");
+        assert_eq!(credential.credential_id(), "shared-okx");
+        assert_eq!(credential.provider(), "okx");
+        assert_eq!(credential.role(), "trade");
         assert_eq!(
             credential.value_owned("account_label").as_deref(),
             Some("fixture-account")
@@ -515,7 +527,7 @@ mod tests {
 
         CredentialStore::put(directory.path(), &record, false).unwrap();
         let loaded = CredentialStore::load(directory.path()).unwrap();
-        assert_eq!(loaded.credentials[0].provider, "telegram");
+        assert_eq!(loaded.credentials[0].provider(), "telegram");
         assert_eq!(
             loaded.credentials[0].value_owned("bot_token").as_deref(),
             Some("do-not-log")

@@ -8,6 +8,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
+use kairos_primitives::DomainTypeError;
 use kairos_primitives::reference::{
     AssetId, ExchangeId, InstrumentId, ListingId, ReferenceSourceId, Symbol,
 };
@@ -124,7 +125,7 @@ fn execute_standalone_read(
             app.markets(market_catalog_request(args), resolve)?
         },
         StandaloneCommand::OptionChain(args) => app.option_chain(option_chain_request(args))?,
-        StandaloneCommand::Query(args) => app.query(args.kind(), args.into_query())?,
+        StandaloneCommand::Query(args) => app.query(args.kind(), args.try_into_query()?)?,
         StandaloneCommand::Search(args) => app.search(args.text, args.limit)?,
         StandaloneCommand::Show { identifier } => app.show_catalog_record(&identifier)?,
     };
@@ -662,28 +663,6 @@ fn truncate_for_log_view(value: &str, max_len: usize) -> String {
 
 fn string_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
     value.get(field).and_then(Value::as_str)
-}
-
-impl QueryArgs {
-    fn into_query(self) -> ReferenceQuery {
-        ReferenceQuery {
-            text: self.text,
-            exchange_id: self
-                .exchange_id
-                .map(|value| ExchangeId::new(value).expect("valid exchange id")),
-            instrument_kind: self.instrument_kind.as_deref().map(|value| {
-                value
-                    .parse()
-                    .unwrap_or(kairos_primitives::reference::InstrumentKind::Unknown)
-            }),
-            underlying_instrument_id: self.underlying_instrument_id,
-            status: self.status,
-            active_only: self.active_only,
-            as_of_unix_nanos: self.as_of_unix_nanos.map(Into::into),
-            limit: self.limit,
-            ..ReferenceQuery::default()
-        }
-    }
 }
 
 impl ProvidersArgs {
@@ -1227,6 +1206,24 @@ impl QueryArgs {
             _ => ReferenceKind::All,
         }
     }
+
+    fn try_into_query(self) -> Result<ReferenceQuery, DomainTypeError> {
+        Ok(ReferenceQuery {
+            text: self.text,
+            exchange_id: self.exchange_id.map(ExchangeId::new).transpose()?,
+            instrument_kind: self.instrument_kind.as_deref().map(|value| {
+                value
+                    .parse()
+                    .unwrap_or(kairos_primitives::reference::InstrumentKind::Unknown)
+            }),
+            underlying_instrument_id: self.underlying_instrument_id,
+            status: self.status,
+            active_only: self.active_only,
+            as_of_unix_nanos: self.as_of_unix_nanos.map(Into::into),
+            limit: self.limit,
+            ..ReferenceQuery::default()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1259,6 +1256,29 @@ mod tests {
             Command::Standalone(command) => command,
             Command::Connected(_) => panic!("expected standalone command"),
         }
+    }
+
+    #[test]
+    fn query_rejects_invalid_exchange_id_without_panicking() {
+        let cli = Cli::parse_from([
+            "kairos-reference-cli",
+            "--workspace",
+            ".kairos",
+            "standalone",
+            "query",
+            "--exchange-id",
+            " invalid ",
+        ]);
+        let StandaloneCommand::Query(args) = standalone(cli) else {
+            panic!("expected query command");
+        };
+
+        let error = args.try_into_query().unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "ExchangeId cannot contain leading or trailing whitespace"
+        );
     }
 
     #[test]

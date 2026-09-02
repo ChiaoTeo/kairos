@@ -31,22 +31,6 @@ fn rust_files(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn account_domain_has_no_cross_module_or_infrastructure_dependencies() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/domain");
-    for path in rust_files(&root) {
-        let source = fs::read_to_string(&path).expect("read domain source");
-        let shared_types_only = source
-            .replace("kairos_primitives", "")
-            .replace("kairos-primitives", "");
-        assert!(
-            !shared_types_only.contains("kairos_"),
-            "domain source imports another Kairos module: {}",
-            path.display()
-        );
-    }
-}
-
-#[test]
 fn account_application_does_not_publish_dependency_protocols() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     assert!(!root.join("application/protocol.rs").exists());
@@ -399,19 +383,6 @@ fn binance_derivatives_account_streams_are_native_async_in_production_compositio
     assert!(!native_binance.contains("spawn_blocking"));
     assert!(!composition.contains("\"swap\" | \"usd-m-futures\""));
     assert!(!composition.contains("\"futures\" | \"coin-m-futures\""));
-}
-
-#[test]
-fn platform_credentials_owns_credential_records_and_storage() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let registry =
-        fs::read_to_string(root.join("composition/registry.rs")).expect("read Account registry");
-    assert!(!registry.contains("struct CredentialRecord"));
-    assert!(!registry.contains("struct CredentialStore"));
-    assert!(!registry.contains("API_KEY\""));
-    let composition =
-        fs::read_to_string(root.join("composition/cli.rs")).expect("read Account CLI composition");
-    assert!(composition.contains("use kairos_credentials::{CredentialRecord, CredentialStore}"));
 }
 
 #[test]

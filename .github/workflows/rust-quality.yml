@@ -15,12 +15,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly-2026-02-01
         with:
           components: rustfmt, clippy
-
-      - name: Set up pinned nightly Rustfmt
-        run: rustup toolchain install nightly-2025-08-26 --profile minimal --component rustfmt
 
       - name: Set up Node for OpenAPI validation
         uses: actions/setup-node@v4
@@ -79,7 +76,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly-2026-02-01
 
       - name: Set up Python
         uses: actions/setup-python@v5

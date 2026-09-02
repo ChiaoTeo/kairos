@@ -206,8 +206,11 @@ impl ExecutionActor {
         let Some(run) = self.algorithm_runs.get_mut(intent_id) else {
             return Ok(false);
         };
+        let Some(quality) = quality else {
+            return Ok(false);
+        };
         let before = run.clone();
-        run.quality = quality.expect("algorithm run presence checked above");
+        run.quality = quality;
         let unwind_order_ids = run
             .actions
             .iter()

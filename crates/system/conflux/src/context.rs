@@ -92,14 +92,11 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
         stream: kairos_account_contract::AccountEventStream,
     ) -> Result<(), crate::ResourceError> {
         let client = client.into();
-        self.system
+        let (_, stream) = self
+            .system
             .account_event_streams
-            .ensure_with(client.clone(), 1, || stream)?;
-        self.system
-            .account_event_streams
-            .get_mut(&client)
-            .expect("registered Account event stream")
-            .set_state(crate::ResourceState::Ready);
+            .ensure_with_entry(client, 1, || stream)?;
+        stream.set_state(crate::ResourceState::Ready);
         Ok(())
     }
 
@@ -109,14 +106,11 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
         stream: kairos_capital_contract::CapitalEventStream,
     ) -> Result<(), crate::ResourceError> {
         let client = client.into();
-        self.system
+        let (_, stream) = self
+            .system
             .capital_event_streams
-            .ensure_with(client.clone(), 1, || stream)?;
-        self.system
-            .capital_event_streams
-            .get_mut(&client)
-            .expect("registered Capital event stream")
-            .set_state(crate::ResourceState::Ready);
+            .ensure_with_entry(client, 1, || stream)?;
+        stream.set_state(crate::ResourceState::Ready);
         Ok(())
     }
 
@@ -126,14 +120,11 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
         stream: kairos_execution_contract::ExecutionEventStream,
     ) -> Result<(), crate::ResourceError> {
         let client = client.into();
-        self.system
-            .execution_event_streams
-            .ensure_with(client.clone(), 1, || stream)?;
-        self.system
-            .execution_event_streams
-            .get_mut(&client)
-            .expect("registered Execution event stream")
-            .set_state(crate::ResourceState::Ready);
+        let (_, stream) =
+            self.system
+                .execution_event_streams
+                .ensure_with_entry(client, 1, || stream)?;
+        stream.set_state(crate::ResourceState::Ready);
         Ok(())
     }
 
@@ -143,14 +134,11 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
         stream: kairos_market_contract::MarketEventStream,
     ) -> Result<(), crate::ResourceError> {
         let client = client.into();
-        self.system
+        let (_, stream) = self
+            .system
             .market_event_streams
-            .ensure_with(client.clone(), 1, || stream)?;
-        self.system
-            .market_event_streams
-            .get_mut(&client)
-            .expect("registered Market event stream")
-            .set_state(crate::ResourceState::Ready);
+            .ensure_with_entry(client, 1, || stream)?;
+        stream.set_state(crate::ResourceState::Ready);
         Ok(())
     }
 
@@ -160,14 +148,11 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
         stream: kairos_reference_contract::ReferenceEventStream,
     ) -> Result<(), crate::ResourceError> {
         let client = client.into();
-        self.system
-            .reference_event_streams
-            .ensure_with(client.clone(), 1, || stream)?;
-        self.system
-            .reference_event_streams
-            .get_mut(&client)
-            .expect("registered Reference event stream")
-            .set_state(crate::ResourceState::Ready);
+        let (_, stream) =
+            self.system
+                .reference_event_streams
+                .ensure_with_entry(client, 1, || stream)?;
+        stream.set_state(crate::ResourceState::Ready);
         Ok(())
     }
 
@@ -177,14 +162,11 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
         stream: kairos_risk_contract::RiskEventStream,
     ) -> Result<(), crate::ResourceError> {
         let client = client.into();
-        self.system
+        let (_, stream) = self
+            .system
             .risk_event_streams
-            .ensure_with(client.clone(), 1, || stream)?;
-        self.system
-            .risk_event_streams
-            .get_mut(&client)
-            .expect("registered Risk event stream")
-            .set_state(crate::ResourceState::Ready);
+            .ensure_with_entry(client, 1, || stream)?;
+        stream.set_state(crate::ResourceState::Ready);
         Ok(())
     }
 

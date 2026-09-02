@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from time import time_ns
 from typing import Any
@@ -22,6 +23,7 @@ from ....widgets import (
     ControlInteraction,
     Feature,
     InputInteraction,
+    InteractionHeading,
     renderable_plain_text,
 )
 from ...activity import ActivityKind, ActivityOutcome, ActivityRecord
@@ -300,6 +302,24 @@ def handle_success(
         return SetInteraction(interaction), SetStatus("没有找到匹配结果")
 
     if kind is ResultKind.MARKET_CATALOG_SETUP:
+        if isinstance(result, _CatalogReferenceUnavailable):
+            session.market.catalog_setup_reference_recovery = result.recovery
+            session.market.catalog_setup_reference_issue = result.issue
+            body = _catalog_reference_unavailable_renderable(result)
+            if session.context != Routes.MARKET_CATALOG_SETUP:
+                return (_activity(spec, body, ActivityOutcome.ATTENTION),)
+            session.restore_context(Routes.MARKET_CATALOG_SETUP)
+            return (
+                _activity(spec, body, ActivityOutcome.ATTENTION),
+                *_choice(
+                    state,
+                    session,
+                    summary=body,
+                    status="Reference 服务尚未就绪 · 请选择恢复方式",
+                ),
+            )
+        session.market.catalog_setup_reference_recovery = None
+        session.market.catalog_setup_reference_issue = None
         plan = (
             result
             if isinstance(result, CatalogSetupPlanView)
@@ -765,8 +785,14 @@ def _handle_market_context(
 
     if session.context == Routes.MARKET_CATALOG_SETUP:
         action = action_id(context_items(session, state), command)
+        if action == "recover-reference":
+            return _recover_reference_and_check_catalog(state, session)
         if action == "check":
             return (_run_catalog_setup_plan(state, session),)
+        if action == "reference-details":
+            from ..operations.runtime import enter_service_detail
+
+            return enter_service_detail(state, session, "reference")
         if action == "change":
             session.enter_context(Routes.MARKET_CATALOG_EXCHANGE)
             return _choice(state, session, status="请重新选择市场或交易服务")
@@ -1146,9 +1172,142 @@ def _run_catalog_setup_plan(state: Any, session: GuidedSession) -> RunOperation:
             action_name="market.catalog.check",
             summary="检查标的目录准备条件",
             route=ResultRoute(ResultKind.MARKET_CATALOG_SETUP),
-            operation=lambda: load_catalog_setup_plan(state, goal),
+            operation=lambda: _load_catalog_setup_plan(state, goal),
             status="正在检查可用来源和账号要求…",
         )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogReferenceUnavailable:
+    recovery: str | None
+    issue: str
+
+
+def _load_catalog_setup_plan(
+    state: Any, goal: CatalogSetupGoal
+) -> CatalogSetupPlanView | Mapping[str, object] | _CatalogReferenceUnavailable:
+    refresh = getattr(state, "refresh_snapshot", None)
+    if callable(refresh):
+        refresh()
+    snapshot = getattr(state, "snapshot", None)
+    services = getattr(snapshot, "shared_services", None)
+    if isinstance(services, Mapping):
+        raw = services.get("reference")
+        if isinstance(raw, Mapping):
+            status = str(raw.get("status") or "unknown").lower()
+            reachable = raw.get("control_reachable")
+            unavailable = (
+                status
+                in {
+                    "not_running",
+                    "stopped",
+                    "failed",
+                    "start_failed",
+                    "error",
+                    "stale",
+                    "unresponsive",
+                }
+                or reachable is False
+            )
+            if unavailable:
+                stale = status == "stale" or (
+                    raw.get("control_socket_exists") is True
+                    and reachable is False
+                    and raw.get("pid_alive") is not True
+                )
+                recovery = (
+                    "repair-start"
+                    if stale
+                    else None
+                    if status == "unresponsive"
+                    else "start"
+                )
+                return _CatalogReferenceUnavailable(recovery, status)
+    return load_catalog_setup_plan(state, goal)
+
+
+def _recover_reference_and_check_catalog(
+    state: Any, session: GuidedSession
+) -> tuple[ScreenEffect, ...]:
+    goal = session.market.catalog_setup_goal
+    recovery = session.market.catalog_setup_reference_recovery
+    if goal is None:
+        raise RuntimeError("标的目录准备目标已经失效")
+    if recovery not in {"start", "repair-start"}:
+        return _choice(
+            state,
+            session,
+            summary=_catalog_reference_unavailable_renderable(
+                _CatalogReferenceUnavailable(None, "unresponsive")
+            ),
+            status="Reference 服务需要人工处理 · 请查看详细状态",
+        )
+
+    def operation() -> Any:
+        if state.dry_run or state.no_exec:
+            return _CatalogReferenceUnavailable(recovery, "preview")
+        from ..operations.actions import execute_service
+
+        execute_service(state, "reference", recovery)
+        refresh = getattr(state, "refresh_snapshot", None)
+        if callable(refresh):
+            refresh()
+        return load_catalog_setup_plan(state, goal)
+
+    details = _catalog_reference_unavailable_renderable(
+        _CatalogReferenceUnavailable(
+            recovery, session.market.catalog_setup_reference_issue or "unknown"
+        )
+    )
+    spec = _spec(
+        action_name="market.catalog.recover-reference",
+        summary="启动 Reference 并继续检查标的目录",
+        display_title="恢复标的目录服务",
+        route=ResultRoute(ResultKind.MARKET_CATALOG_SETUP, "reference-recovery"),
+        operation=operation,
+        status="正在启动 Reference 并继续检查…",
+    )
+    return _confirm_or_run(
+        state,
+        session,
+        spec,
+        title="确认启动 Reference 服务",
+        details=details,
+        dangerous=True,
+    )
+
+
+def _catalog_reference_unavailable_renderable(
+    value: _CatalogReferenceUnavailable,
+) -> RenderableType:
+    reason = {
+        "not_running": "项目共享 Reference 服务尚未启动",
+        "stopped": "项目共享 Reference 服务已停止",
+        "stale": "Reference 留有失效的运行资源",
+        "unresponsive": "Reference 进程存在，但控制端点没有响应",
+        "failed": "Reference 服务上次启动失败",
+        "start_failed": "Reference 服务上次启动失败",
+        "error": "Reference 服务当前不可用",
+        "preview": "预览模式不会实际启动 Reference 服务",
+    }.get(value.issue, "项目共享 Reference 服务尚未就绪")
+    next_step = (
+        "启动服务后自动继续检查目录准备条件"
+        if value.recovery == "start"
+        else "清理失效资源并启动后自动继续检查"
+        if value.recovery == "repair-start"
+        else "查看服务详细状态、日志和技术诊断"
+    )
+    return Group(
+        conclusion("标的目录服务尚未就绪", tone=ResultTone.WARNING),
+        facts(
+            (
+                ("原因", reason),
+                ("影响", "暂时无法检查数据来源和账号要求"),
+                ("下一步", next_step),
+                ("原任务", "服务恢复后继续当前标的目录准备流程"),
+            )
+        ),
     )
 
 
@@ -1593,7 +1752,30 @@ def _market_interaction(
         title=context_label(session.context, session.root_label),
         summary=summary,
         actions=context_items(session, state),
+        heading=_catalog_heading(session),
+        state=_catalog_state(session),
     )
+
+
+def _catalog_heading(session: GuidedSession) -> InteractionHeading | None:
+    if session.context != Routes.MARKET_CATALOG_SETUP:
+        return None
+    goal = session.market.catalog_setup_goal
+    target = ""
+    if goal is not None:
+        target = str(goal.exchange_id or goal.provider or "")
+    return InteractionHeading(session.market.query or "准备标的目录", target or None)
+
+
+def _catalog_state(session: GuidedSession) -> str | None:
+    if session.context != Routes.MARKET_CATALOG_SETUP:
+        return None
+    if session.market.catalog_setup_reference_issue:
+        return "服务未就绪"
+    plan = session.market.catalog_setup_plan
+    if plan is None:
+        return "检查中"
+    return "可以继续" if _catalog_is_usable(plan) else "需要处理"
 
 
 def _record_choice(records: tuple[SelectionRecord, ...], value: str) -> object | None:

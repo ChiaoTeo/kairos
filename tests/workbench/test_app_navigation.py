@@ -50,13 +50,13 @@ from app_support import (
 @pytest.mark.parametrize(
     ("shortcut", "context"),
     (
-        ("1", "trader / 市场与标的  ›"),
-        ("2", "trader / 策略与运行  ›"),
-        ("3", "trader / 账户与交易  ›"),
-        ("4", "trader / 连接与配置  ›"),
-        ("5", "trader / 数据与回测  ›"),
-        ("6", "trader / 运行中心 / 运行概览  ›"),
-        ("7", "trader / 项目管理  ›"),
+        ("1", "trader › 市场与标的"),
+        ("2", "trader › 策略与运行"),
+        ("3", "trader › 账户与交易"),
+        ("4", "trader › 连接与配置"),
+        ("5", "trader › 数据与回测"),
+        ("6", "trader › 运行中心 › 运行概览"),
+        ("7", "trader › 项目管理"),
     ),
 )
 def test_home_number_enters_product_context_without_replacing_input(
@@ -156,7 +156,7 @@ def test_missing_project_enters_project_start_before_business_home() -> None:
             )
 
     context, actions, count, guarded_context, status = asyncio.run(run())
-    assert context == "项目入口 / 项目管理  ›"
+    assert context == "项目入口 › 项目管理"
     assert count == 2
     assert "打开项目" in actions
     assert "创建项目" in actions
@@ -202,8 +202,8 @@ def test_workspace_header_remains_project_identity_during_navigation() -> None:
     project_header, project_context = asyncio.run(run("p"))
 
     assert operations_header == project_header == "KAIROS  ·  trader"
-    assert operations_context == "trader / 运行中心 / 运行概览  ›"
-    assert project_context == "trader / 项目管理  ›"
+    assert operations_context == "trader › 运行中心 › 运行概览"
+    assert project_context == "trader › 项目管理"
 
 
 def test_switch_project_reloads_global_context_and_clears_old_selections(
@@ -382,8 +382,8 @@ def test_slash_back_returns_from_result_to_section_then_home() -> None:
             )
 
     section, home, screen_type, focused = asyncio.run(run())
-    assert section == "trader / 市场与标的 / 标的目录  ›"
-    assert home == "trader  ›"
+    assert section == "trader › 市场与标的 › 标的目录"
+    assert home == "trader"
     assert screen_type is CommandLineScreen
     assert focused
 
@@ -534,7 +534,7 @@ def test_project_back_offers_home_before_navigating() -> None:
             )
 
     context, interaction = asyncio.run(run())
-    assert context == "trader  ›"
+    assert context == "trader"
     assert "选择返回层级" in interaction
 
 
@@ -603,7 +603,7 @@ def test_slash_back_cancels_pending_argument_before_leaving_section() -> None:
             )
 
     context, pending, focused = asyncio.run(run())
-    assert context == "trader / 市场与标的  ›"
+    assert context == "trader › 市场与标的"
     assert not pending
     assert focused
 
@@ -628,7 +628,7 @@ def test_ctrl_c_cancels_pending_argument_without_exiting_workbench() -> None:
     return_value, pending, context, focused = asyncio.run(run())
     assert return_value is None
     assert not pending
-    assert context == "trader / 市场与标的  ›"
+    assert context == "trader › 市场与标的"
     assert focused
 
 

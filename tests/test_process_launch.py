@@ -497,6 +497,22 @@ def test_runtime_supervisor_persists_and_removes_desired_components(
     assert supervisor.desired_path.read_text(encoding="utf-8") == "{}"
 
 
+def test_runtime_supervisor_rejects_corrupt_desired_state_without_overwriting_it(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="corrupt-desired"
+    )
+    supervisor = SystemRuntimeSupervisor(ComponentProcessApplication(workspace))
+    supervisor.desired_path.parent.mkdir(parents=True, exist_ok=True)
+    supervisor.desired_path.write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid supervisor desired state JSON"):
+        supervisor.register("market")
+
+    assert supervisor.desired_path.read_text(encoding="utf-8") == "{broken"
+
+
 def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="instance"

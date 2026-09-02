@@ -13,7 +13,7 @@ impl ReferenceCredentialResolver {
     pub(crate) fn from_store(store: CredentialStore) -> Self {
         let mut resolver = Self::default();
         for record in store.credentials {
-            match record.provider.trim().to_ascii_lowercase().as_str() {
+            match record.provider().trim().to_ascii_lowercase().as_str() {
                 "binance" => {
                     let Some(api_key) = record.api_key_value() else {
                         continue;
@@ -25,9 +25,9 @@ impl ReferenceCredentialResolver {
                         continue;
                     };
                     resolver.insert_binance(
-                        &record.credential_id,
+                        record.credential_id(),
                         BinanceCredential {
-                            principal_id: record.credential_id.clone(),
+                            principal_id: record.credential_id().to_owned(),
                             api_key: secrecy::SecretString::new(api_key.into()),
                             secret: secrecy::SecretString::new(secret.into()),
                         },
@@ -37,7 +37,7 @@ impl ReferenceCredentialResolver {
                     let Some(api_key) = record.api_key_value() else {
                         continue;
                     };
-                    resolver.insert_massive(&record.credential_id, api_key);
+                    resolver.insert_massive(record.credential_id(), api_key);
                 },
                 _ => {},
             }

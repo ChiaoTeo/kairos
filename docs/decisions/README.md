@@ -49,6 +49,7 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0042 | [终态 Activity 与持续 Control 分离](0042-terminal-activity-and-live-control.md) | Accepted |
 | 0043 | [按用户任务与运行作用域组织 Workbench 导航](0043-task-and-scope-oriented-workbench-navigation.md) | Accepted |
 | 0044 | [Conflux 由 System composition 所有](0044-system-owned-conflux.md) | Accepted |
+| 0045 | [紧凑的 Workbench 交互与命令上下文](0045-compact-workbench-interaction-context.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

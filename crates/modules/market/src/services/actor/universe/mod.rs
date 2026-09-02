@@ -17,7 +17,10 @@ impl MarketActor {
         let mut results = BTreeMap::new();
         for (id, query, max_members) in intents {
             let selected = self.valid_members(query, markets.clone())?;
-            let intent = self.dynamic_intents.get_mut(&id).expect("intent exists");
+            let intent = self
+                .dynamic_intents
+                .get_mut(&id)
+                .ok_or_else(|| format!("subscription disappeared during reconciliation: {id}"))?;
             if selected.len() > max_members {
                 results.insert(
                     id,

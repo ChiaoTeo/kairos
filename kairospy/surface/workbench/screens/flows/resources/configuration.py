@@ -27,6 +27,7 @@ from ....widgets import (
     ControlInteraction,
     Feature,
     InputInteraction,
+    InteractionHeading,
     renderable_plain_text,
 )
 from ...activity import ActivityKind, ActivityOutcome, ActivityRecord
@@ -368,6 +369,8 @@ def handle_context(
                 title=f"{_title(session)} · 选择 {purpose} 凭据",
                 summary=_account_access_summary(record, purpose),
                 actions=credential_actions,
+                heading=_resource_heading(session),
+                state="待选择",
             )
             session.interaction = interaction
             return SetInteraction(interaction), SetStatus("请选择账户访问凭据")
@@ -407,6 +410,8 @@ def handle_context(
                 title=f"{_title(session)} · 管理账户访问",
                 summary=_account_access_summary(record, ""),
                 actions=_ACCOUNT_ACCESS_ACTIONS,
+                heading=_resource_heading(session),
+                state="待选择",
             )
             session.interaction = interaction
             return SetInteraction(interaction), SetStatus("请选择账户访问用途")
@@ -611,6 +616,10 @@ def handle_success(
                 title=context_label(session.context, session.root_label),
                 summary=summary,
                 actions=context_items(session, state),
+                heading=InteractionHeading(
+                    session.market.query or "准备标的目录", "行情连接"
+                ),
+                state="可以继续",
             )
             session.interaction = interaction
             return (
@@ -719,6 +728,8 @@ def _enter_resource_list(
             )
         ),
         actions=actions,
+        heading=_resource_heading(session),
+        state="待选择" if records else "尚未配置",
     )
     session.interaction = interaction
     return SetInteraction(interaction), SetStatus(resolved_status)
@@ -919,6 +930,8 @@ def _advance_wizard(
                 title=title,
                 summary=choice_summary,
                 actions=choice_actions,
+                heading=_resource_heading(session),
+                state="待选择",
             )
             session.interaction = interaction
             status = {
@@ -947,6 +960,8 @@ def _advance_wizard(
             detail=detail,
             value_summary=_wizard_summary(wizard),
             secret=secret,
+            heading=_resource_heading(session),
+            state="待输入",
         )
         return SetInteraction(session.interaction), SetStatus("等待资源配置")
 
@@ -1334,6 +1349,8 @@ def _model_choice_interaction(
         title=f"{_title(session)} · 选择验证模型",
         summary=summary,
         actions=_model_actions(wizard),
+        heading=_resource_heading(session),
+        state="待验证",
     )
 
 
@@ -1824,6 +1841,8 @@ def _ask(
         prompt=prompt,
         detail=detail,
         value_summary=summary,
+        heading=_resource_heading(session),
+        state="待输入",
     )
     return SetInteraction(session.interaction), SetStatus("等待输入")
 
@@ -1839,6 +1858,8 @@ def _input_error(session: GuidedSession, error: str) -> tuple[ScreenEffect, ...]
             current.value_summary,
             current.secret,
             error,
+            current.heading,
+            "输入有误",
         )
         session.interaction = current
         return SetInteraction(current), SetStatus("输入有误 · 请修正")
@@ -1882,10 +1903,57 @@ def _choice(
     state: Any, session: GuidedSession, summary: Any | None = None, status: str = "就绪"
 ) -> tuple[ScreenEffect, ...]:
     interaction = ChoiceInteraction(
-        title=_title(session), summary=summary, actions=context_items(session, state)
+        title=_title(session),
+        summary=summary,
+        actions=context_items(session, state),
+        heading=_resource_heading(session),
+        state=_resource_state(session),
     )
     session.interaction = interaction
     return SetInteraction(interaction), SetStatus(status)
+
+
+def _resource_heading(session: GuidedSession) -> InteractionHeading | None:
+    kind = session.resources.kind
+    wizard = session.resources.wizard
+    if kind is None and isinstance(wizard, ResourceWizardState):
+        kind = wizard.kind
+    if kind is None:
+        return None
+    label = {
+        "accounts": "交易账户",
+        "data": "行情连接",
+        "model_endpoints": "模型服务",
+        "models": "AI 模型",
+        "notifications": "通知连接",
+    }.get(kind, RESOURCE_LABELS.get(kind, kind))
+    detail: str | None = None
+    if session.resources.selected is not None:
+        detail = identity(kind, session.resources.selected)
+    elif isinstance(wizard, ResourceWizardState):
+        provider = (
+            wizard.answers.get("data-provider")
+            or wizard.answers.get("account-provider")
+            or wizard.answers.get("model-provider")
+            or wizard.answers.get("notification-provider")
+        )
+        detail = str(provider) if provider else "新建"
+    return InteractionHeading(label, detail)
+
+
+def _resource_state(session: GuidedSession) -> str | None:
+    if session.resources.wizard is not None:
+        return "配置中"
+    selected = session.resources.selected
+    if selected is None:
+        return None
+    verification = str(selected.get("verification_status") or "")
+    return {
+        "verified": "已验证",
+        "failed": "验证失败",
+        "retest_required": "需要重测",
+        "pending": "待验证",
+    }.get(verification)
 
 
 def _title(session: GuidedSession) -> str:

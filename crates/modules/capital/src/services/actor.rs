@@ -2283,7 +2283,7 @@ impl CapitalActor {
                 .iter()
                 .find(|reservation| reservation.reservation_id == plan.reservation_id)
                 .ok_or_else(|| "Capital snapshot plan has no reservation".to_string())?;
-            validate_plan_relation(plan, reservation)?;
+            plan.validate_reservation(reservation)?;
         }
         let mut operation_ids = HashSet::new();
         let mut operation_indexes = HashSet::new();
@@ -2299,7 +2299,7 @@ impl CapitalActor {
             if !operation_indexes.insert((operation.plan_id.clone(), operation.operation_index)) {
                 return Err("Capital snapshot contains duplicate operation indexes".into());
             }
-            validate_operation_relation(plan, operation)?;
+            plan.validate_operation(operation)?;
         }
         self.event_sequence = snapshot.event_sequence;
         self.journal_sequence = snapshot.journal_sequence;
@@ -2470,7 +2470,7 @@ impl CapitalActor {
                 {
                     return Err("Capital journal plan is outside configured membership".into());
                 }
-                validate_plan_relation(&plan, &reservation)?;
+                plan.validate_reservation(&reservation)?;
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());
                 self.reservations
@@ -2496,8 +2496,8 @@ impl CapitalActor {
                         "Capital journal plan state is outside configured membership".into(),
                     );
                 }
-                validate_plan_relation(&plan, &reservation)?;
-                validate_operation_relation(&plan, &operation)?;
+                plan.validate_reservation(&reservation)?;
+                plan.validate_operation(&operation)?;
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());
                 self.reservations
@@ -2526,9 +2526,9 @@ impl CapitalActor {
                         "Capital journal expired plan is outside configured membership".into(),
                     );
                 }
-                validate_plan_relation(&plan, &reservation)?;
+                plan.validate_reservation(&reservation)?;
                 if let Some(operation) = operation.as_deref() {
-                    validate_operation_relation(&plan, operation)?;
+                    plan.validate_operation(operation)?;
                 }
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());
@@ -2649,63 +2649,4 @@ fn sorted_id_values<K: Clone + Ord, T: Clone>(values: &HashMap<K, T>) -> Vec<T> 
         .into_iter()
         .map(|(_, value)| value.clone())
         .collect()
-}
-
-fn validate_plan_relation(
-    plan: &CapitalPlan,
-    reservation: &CapitalReservation,
-) -> Result<(), String> {
-    if reservation.reservation_id != plan.reservation_id
-        || reservation.plan_id != plan.plan_id
-        || reservation.source != plan.source
-        || reservation.amount != plan.amount
-    {
-        return Err("Capital plan and reservation do not match".into());
-    }
-    if matches!(
-        plan.route_kind,
-        CapitalRouteKind::EarnRedemptionThenTransfer | CapitalRouteKind::EarnSubscription
-    ) && plan.selected_earn_product_id.is_none()
-    {
-        return Err("Capital Earn plan has no selected product".into());
-    }
-    Ok(())
-}
-
-fn validate_operation_relation(
-    plan: &CapitalPlan,
-    operation: &CapitalOperation,
-) -> Result<(), String> {
-    if operation.plan_id != plan.plan_id {
-        return Err("Capital plan and operation do not match".into());
-    }
-    let expected_kind = match (plan.route_kind, operation.operation_index) {
-        (CapitalRouteKind::EarnRedemptionThenTransfer, 0) => CapitalOperationKind::EarnRedemption,
-        (CapitalRouteKind::EarnRedemptionThenTransfer, 1) => CapitalOperationKind::Transfer,
-        (CapitalRouteKind::EarnSubscription, 0) => CapitalOperationKind::EarnSubscription,
-        (CapitalRouteKind::InternalTransfer, 0) | (CapitalRouteKind::AccountTransfer, 0) => {
-            CapitalOperationKind::Transfer
-        },
-        _ => return Err("Capital operation index is invalid for its route".into()),
-    };
-    if operation.kind != expected_kind {
-        return Err("Capital operation kind is invalid for its route".into());
-    }
-    let kind_name = match expected_kind {
-        CapitalOperationKind::EarnRedemption => "earn-redemption",
-        CapitalOperationKind::EarnSubscription => "earn-subscription",
-        CapitalOperationKind::Transfer => "transfer",
-    };
-    let expected_key = format!(
-        "{}:{}:{kind_name}",
-        plan.plan_id.as_str(),
-        operation.operation_index
-    );
-    if operation.idempotency_key.as_str() != expected_key {
-        return Err("Capital operation idempotency key is not stable".into());
-    }
-    if operation.operation_index == 0 && operation.idempotency_key != plan.idempotency_key {
-        return Err("Capital first operation does not match the plan idempotency key".into());
-    }
-    Ok(())
 }

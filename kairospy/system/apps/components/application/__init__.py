@@ -417,15 +417,21 @@ class ComponentProcessApplication:
     ) -> SystemRpcClient:
         clients = {
             "account": AccountSystemClient,
+            "control": ComponentControlApplication,
             "execution": ExecutionSystemClient,
             "market": MarketSystemClient,
             "reference": ReferenceSystemClient,
             "risk": RiskSystemClient,
             "capital": CapitalSystemClient,
         }
-        return clients.get(component, ComponentControlApplication)(
-            socket, timeout=timeout
-        )
+        try:
+            client_type = clients[component]
+        except KeyError:
+            supported = ", ".join(sorted(clients))
+            raise ValueError(
+                f"unsupported process component: {component}; expected one of {supported}"
+            ) from None
+        return client_type(socket, timeout=timeout)
 
     def stop(
         self,

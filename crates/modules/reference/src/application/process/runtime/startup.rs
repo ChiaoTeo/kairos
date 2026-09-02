@@ -33,8 +33,11 @@ impl ReferenceApplication {
         }
 
         log_runtime_stage_started("publish_pending");
-        let _ = self.publish_pending_to_outputs(context).await;
-        log_runtime_stage_completed("publish_pending");
+        if let Err(error) = self.publish_pending_to_outputs(context).await {
+            log_runtime_stage_degraded("publish_pending", &error);
+        } else {
+            log_runtime_stage_completed("publish_pending");
+        }
 
         context.spawn_timer("refresh", self.refresh_interval());
         self.set_app_phase(ReferenceApplicationPhase::Serving);

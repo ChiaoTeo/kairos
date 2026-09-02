@@ -7,7 +7,7 @@ command -v flatc >/dev/null 2>&1 || {
 }
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-rustfmt_toolchain="${RUSTFMT_TOOLCHAIN:-nightly-2025-08-26}"
+rustfmt_toolchain="${RUSTFMT_TOOLCHAIN:-nightly-2026-02-01}"
 schema_root="$repo_root/schemas"
 rust_out="$repo_root/crates/platform/protocol/src/generated"
 stage_root="$(mktemp -d)"

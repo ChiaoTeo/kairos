@@ -3,6 +3,8 @@
 from importlib import import_module
 from typing import Any
 
+from .events import __all__ as _EVENT_EXPORTS
+
 
 _EXPORTS = {
     "RiskClient": (".types", "RiskClient"),
@@ -15,6 +17,7 @@ _EXPORTS = {
     "RiskControlRejectedError": (".types", "RiskControlRejectedError"),
     "RiskContractClient": (".types", "RiskClient"),
     "AdvanceRiskTimeRequest": (".types", "AdvanceRiskTimeRequest"),
+    "AdvanceRiskTimeResponse": (".types", "AdvanceRiskTimeResponse"),
     "AuthorizeRequest": (".types", "AuthorizeRequest"),
     "CloseCircuitRequest": (".types", "CloseCircuitRequest"),
     "ConsumeReservationRequest": (".types", "ConsumeReservationRequest"),
@@ -28,11 +31,16 @@ _EXPORTS = {
     "RiskCurrentView": (".types", "RiskCurrentView"),
     "RiskCurrentSnapshot": (".types", "RiskCurrentSnapshot"),
     "RiskCircuit": (".types", "RiskCircuit"),
+    "RiskCircuitState": (".types", "RiskCircuitState"),
+    "RiskCommandStatus": (".types", "RiskCommandStatus"),
+    "RiskDecision": (".types", "RiskDecision"),
+    "RiskHealth": (".types", "RiskHealth"),
     "RiskLimitUsage": (".types", "RiskLimitUsage"),
     "RiskPolicy": (".types", "RiskPolicy"),
+    "RiskReservation": (".types", "RiskReservation"),
     "decode_event": (".events", "decode_event"),
 }
-from .events import __all__ as _EVENT_EXPORTS
+
 _EXPORTS.update({name: (".events", name) for name in _EVENT_EXPORTS})
 
 

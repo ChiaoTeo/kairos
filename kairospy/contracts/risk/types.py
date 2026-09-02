@@ -14,6 +14,7 @@ def _native() -> Any:
 if TYPE_CHECKING:
     from kairospy._native_risk_contract import (
         AdvanceRiskTimeRequest,
+        AdvanceRiskTimeResponse,
         AuthorizeRequest,
         CloseCircuitRequest,
         ConsumeReservationRequest,
@@ -22,7 +23,9 @@ if TYPE_CHECKING:
         ReleaseReservationRequest,
         ResizeReservationRequest,
         RiskCircuit,
+        RiskCircuitState,
         RiskClient,
+        RiskCommandStatus,
         RiskContext,
         RiskControlClient,
         RiskControlRejectedError,
@@ -30,17 +33,21 @@ if TYPE_CHECKING:
         RiskCurrentSnapshot,
         RiskCurrentView,
         RiskCurrentViewUnavailableError,
+        RiskDecision,
+        RiskHealth,
         RiskInvalidCurrentViewError,
         RiskInvalidEventError,
         RiskInvalidInputError,
         RiskLimitUsage,
         RiskPolicy,
+        RiskReservation,
         RiskScope,
         TradeRiskProposal,
     )
 else:
     _module = _native()
     AdvanceRiskTimeRequest = _module.AdvanceRiskTimeRequest
+    AdvanceRiskTimeResponse = _module.AdvanceRiskTimeResponse
     AuthorizeRequest = _module.AuthorizeRequest
     CloseCircuitRequest = _module.CloseCircuitRequest
     ConsumeReservationRequest = _module.ConsumeReservationRequest
@@ -49,7 +56,9 @@ else:
     ReleaseReservationRequest = _module.ReleaseReservationRequest
     ResizeReservationRequest = _module.ResizeReservationRequest
     RiskCircuit = _module.RiskCircuit
+    RiskCircuitState = _module.RiskCircuitState
     RiskClient = _module.RiskClient
+    RiskCommandStatus = _module.RiskCommandStatus
     RiskContext = _module.RiskContext
     RiskControlClient = _module.RiskControlClient
     RiskControlRejectedError = _module.RiskControlRejectedError
@@ -57,17 +66,21 @@ else:
     RiskCurrentSnapshot = _module.RiskCurrentSnapshot
     RiskCurrentView = _module.RiskCurrentView
     RiskCurrentViewUnavailableError = _module.RiskCurrentViewUnavailableError
+    RiskDecision = _module.RiskDecision
+    RiskHealth = _module.RiskHealth
     RiskInvalidCurrentViewError = _module.RiskInvalidCurrentViewError
     RiskInvalidEventError = _module.RiskInvalidEventError
     RiskInvalidInputError = _module.RiskInvalidInputError
     RiskLimitUsage = _module.RiskLimitUsage
     RiskPolicy = _module.RiskPolicy
+    RiskReservation = _module.RiskReservation
     RiskScope = _module.RiskScope
     TradeRiskProposal = _module.TradeRiskProposal
 
 
 __all__ = [
     "AdvanceRiskTimeRequest",
+    "AdvanceRiskTimeResponse",
     "AuthorizeRequest",
     "CloseCircuitRequest",
     "ConsumeReservationRequest",
@@ -76,7 +89,9 @@ __all__ = [
     "ReleaseReservationRequest",
     "ResizeReservationRequest",
     "RiskCircuit",
+    "RiskCircuitState",
     "RiskClient",
+    "RiskCommandStatus",
     "RiskContext",
     "RiskControlClient",
     "RiskControlRejectedError",
@@ -84,11 +99,14 @@ __all__ = [
     "RiskCurrentSnapshot",
     "RiskCurrentView",
     "RiskCurrentViewUnavailableError",
+    "RiskDecision",
+    "RiskHealth",
     "RiskInvalidCurrentViewError",
     "RiskInvalidEventError",
     "RiskInvalidInputError",
     "RiskLimitUsage",
     "RiskPolicy",
+    "RiskReservation",
     "RiskScope",
     "TradeRiskProposal",
 ]

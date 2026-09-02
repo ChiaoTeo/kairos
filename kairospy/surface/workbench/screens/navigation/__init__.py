@@ -11,9 +11,11 @@ from .identity import NavigationContext, Routes, Section, belongs_to, route, sta
 
 if TYPE_CHECKING:
     from .tree import (
+        CommandContextView,
         action_id,
         back_target_items,
         back_targets,
+        command_context,
         context_items,
         context_label,
         display_shortcut,
@@ -25,9 +27,11 @@ if TYPE_CHECKING:
     )
 
 _TREE_EXPORTS = {
+    "CommandContextView",
     "action_id",
     "back_target_items",
     "back_targets",
+    "command_context",
     "context_items",
     "context_label",
     "display_shortcut",
@@ -49,9 +53,11 @@ __all__ = [
     "NavigationContext",
     "Routes",
     "Section",
+    "CommandContextView",
     "action_id",
     "back_target_items",
     "back_targets",
+    "command_context",
     "context_items",
     "context_label",
     "display_shortcut",

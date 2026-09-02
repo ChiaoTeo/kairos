@@ -42,7 +42,7 @@ def test_real_workbench_binary_is_agent_drivable_and_responsive(tmp_path: Path) 
             await terminal.type("5")
             await terminal.press("Enter")
             await asyncio.sleep(0.2)
-            assert "visual-fixture / 市场与标的 / 标的目录" in await terminal.text()
+            assert "visual-fixture › … › 标的目录" in await terminal.text()
 
             await terminal.type("/back")
             await terminal.press("Enter")

@@ -1,4 +1,4 @@
-RUSTFMT_TOOLCHAIN ?= nightly-2025-08-26
+RUSTFMT_TOOLCHAIN ?= nightly-2026-02-01
 
 .PHONY: docs docs-check execution-core-check execution-venue-check python-type-check rust-fmt rust-fmt-check
 

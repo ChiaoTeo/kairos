@@ -2,7 +2,7 @@
 
 from .action_list import ActionItem, ActionList
 from .command_input import WorkbenchCommandInput
-from .guided_action_list import GuidedActionList
+from .guided_action_list import GuidedActionList, InteractionCopyRequested
 from .interaction_region import (
     ActionToken,
     ChoiceInteraction,
@@ -10,6 +10,7 @@ from .interaction_region import (
     ControlInteraction,
     Feature,
     InputInteraction,
+    InteractionHeading,
     InteractionMode,
     InteractionRegion,
     InteractionState,
@@ -31,11 +32,13 @@ __all__ = [
     "ActionList",
     "WorkbenchCommandInput",
     "GuidedActionList",
+    "InteractionCopyRequested",
     "ChoiceInteraction",
     "ConfirmInteraction",
     "ControlInteraction",
     "Feature",
     "InputInteraction",
+    "InteractionHeading",
     "InteractionMode",
     "InteractionRegion",
     "InteractionState",

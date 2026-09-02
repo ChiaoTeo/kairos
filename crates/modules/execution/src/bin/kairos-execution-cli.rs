@@ -603,14 +603,14 @@ fn submit_intent_request(
     launch_id: &str,
     instance_id: &str,
 ) -> Result<SubmitIntentRequest, Box<dyn std::error::Error>> {
-    let intent_id = request
-        .intent_id
-        .clone()
-        .unwrap_or_else(|| IntentId::new(format!("intent:{}", request.order_id)).unwrap());
-    let strategy_id = request
-        .strategy_id
-        .clone()
-        .unwrap_or_else(|| StrategyId::new("cli").unwrap());
+    let intent_id = match request.intent_id.clone() {
+        Some(intent_id) => intent_id,
+        None => IntentId::new(format!("intent:{}", request.order_id))?,
+    };
+    let strategy_id = match request.strategy_id.clone() {
+        Some(strategy_id) => strategy_id,
+        None => StrategyId::new("cli")?,
+    };
     let leg = IntentLegRequest {
         leg_id: kairos_primitives::execution::LegId::new(format!("leg:{}", request.order_id))?,
         account_id: request.account_id.clone(),

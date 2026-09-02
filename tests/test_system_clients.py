@@ -17,6 +17,7 @@ from kairospy.system.apps.components.application import (
     MarketSystemClient,
     ReferenceSystemClient,
     RiskSystemClient,
+    system_client,
 )
 from kairospy.system.apps.launch.application.connections import (
     ComponentConnection,
@@ -49,6 +50,56 @@ def test_system_rpc_client_rejects_path_like_methods() -> None:
     client = AccountSystemClient(Path("/tmp/account.sock"))
     with pytest.raises(ValueError, match="path-free"):
         client.call("/v1/orders")
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        ({"id": 1, "result": {}}, "missing version 2.0"),
+        ({"jsonrpc": "2.0", "id": 2, "result": {}}, "id does not match"),
+        ({"jsonrpc": "2.0", "id": 1, "result": []}, "result must be an object"),
+    ],
+)
+def test_system_rpc_client_rejects_malformed_rpc_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    response: dict[str, object],
+    message: str,
+) -> None:
+    import kairospy.infrastructure.transport.json_rpc as json_rpc
+    import kairospy.system.apps.components.application.clients as clients
+
+    monkeypatch.setattr(
+        json_rpc, "request_sync", lambda *_args, **_kwargs: (200, response)
+    )
+
+    with pytest.raises(ValueError, match=message):
+        clients.SystemRpcClient(Path("/tmp/system.sock")).status()
+
+
+def test_system_rpc_client_preserves_structured_remote_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import kairospy.infrastructure.transport.json_rpc as json_rpc
+    import kairospy.system.apps.components.application.clients as clients
+
+    response = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+            "code": -32017,
+            "message": "risk command rejected",
+            "data": {"reason": "limit_exceeded", "retryable": False},
+        },
+    }
+    monkeypatch.setattr(
+        json_rpc, "request_sync", lambda *_args, **_kwargs: (200, response)
+    )
+
+    with pytest.raises(json_rpc.JsonRpcCallError) as raised:
+        clients.SystemRpcClient(Path("/tmp/system.sock")).status()
+
+    assert raised.value.code == -32017
+    assert raised.value.data == {"reason": "limit_exceeded", "retryable": False}
 
 
 def test_execution_system_client_owns_intent_connection() -> None:
@@ -190,6 +241,16 @@ def test_system_process_factory_returns_typed_business_clients() -> None:
     assert isinstance(factory("capital", socket), CapitalSystemClient)
     assert isinstance(factory("reference", socket), ReferenceSystemClient)
     assert isinstance(factory("control", socket), ComponentControlApplication)
+
+
+def test_system_process_factory_rejects_unknown_component() -> None:
+    with pytest.raises(ValueError, match="unsupported process component: typo"):
+        ComponentProcessApplication.client("typo", Path("/tmp/component.sock"))
+
+
+def test_business_system_client_factory_rejects_unknown_component() -> None:
+    with pytest.raises(ValueError, match="unsupported business component: control"):
+        system_client("control", Path("/tmp/component.sock"))
 
 
 def test_reference_system_client_exposes_owner_runtime_status() -> None:

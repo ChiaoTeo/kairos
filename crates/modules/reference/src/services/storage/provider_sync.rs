@@ -331,8 +331,11 @@ pub(crate) async fn staged_pages(
             pages.push(ProviderCatalog::default());
             ordinal = Some(row_ordinal);
         }
+        let page = pages
+            .last_mut()
+            .ok_or_else(|| sqlx::Error::Protocol("provider staging row has no page".to_string()))?;
         push_provider_record(
-            pages.last_mut().expect("page created for row"),
+            page,
             row.try_get::<&str, _>("record_kind")?,
             row.try_get("payload")?,
         )

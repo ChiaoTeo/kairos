@@ -40,10 +40,13 @@ from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
 from kairospy.surface.workbench.screens.flows.launch.wizard import LaunchWizardState
 from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench.widgets import (
+    ActionItem,
     ActionList,
+    ChoiceInteraction,
     ConfirmInteraction,
     Feature,
     InputInteraction,
+    InteractionHeading,
     InteractionRegion,
     RunningInteraction,
     WorkbenchCommandInput,
@@ -64,6 +67,20 @@ def test_workbench_enables_mouse_activity_focus_by_default(monkeypatch) -> None:
     KairosWorkbenchApp(_state()).run(mouse=False)
 
     assert runs == [{"mouse": True}, {"mouse": False}]
+
+
+def test_compact_interaction_heading_is_one_line_without_panel_chrome() -> None:
+    copy = interaction_copy_text(
+        ChoiceInteraction(
+            heading=InteractionHeading("paper-demo", "paper · 运行条件"),
+            state="需要处理",
+            actions=(ActionItem("retry", "重新校验", "修复后再次检查", "1"),),
+        )
+    )
+
+    assert copy.splitlines()[0] == "paper-demo  ·  paper · 运行条件"
+    assert "╭" not in copy
+    assert "[1] 重新校验" in copy
 
 
 def test_workbench_starts_as_one_guided_command_screen() -> None:
@@ -106,7 +123,7 @@ def test_workbench_starts_as_one_guided_command_screen() -> None:
     assert subtitle == "命令"
     assert output == ""
     assert workspace_title == "KAIROS  ·  trader"
-    assert context == "trader  ›"
+    assert context == "trader"
     assert option_count == 7
     assert actions_can_focus
     assert input_focused
@@ -269,6 +286,48 @@ def test_copy_page_copies_complete_redacted_output_for_agent() -> None:
     assert "api_key=<redacted>" in clipboard
     assert "should-not-leak" not in clipboard
     assert any(event["event"] == "page_copied" for event in events)
+
+
+def test_interaction_region_copies_independently_by_focus_and_command() -> None:
+    async def run() -> tuple[str, str, str, str, tuple[dict[str, object], ...]]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            expected = interaction_copy_text(screen.session.interaction)
+
+            await pilot.press("tab")
+            await pilot.pause()
+            await pilot.press("super+c")
+            await pilot.pause()
+            shortcut_copy = app._clipboard
+
+            app._clipboard = ""
+            await pilot.press("ctrl+shift+c")
+            await pilot.pause()
+            terminal_shortcut_copy = app._clipboard
+
+            app._clipboard = ""
+            screen.submit("/copy-interaction")
+            await pilot.pause()
+            command_copy = app._clipboard
+            return (
+                expected,
+                shortcut_copy,
+                terminal_shortcut_copy,
+                command_copy,
+                app.transcript.events,
+            )
+
+    expected, shortcut_copy, terminal_shortcut_copy, command_copy, events = asyncio.run(
+        run()
+    )
+
+    assert shortcut_copy == expected
+    assert terminal_shortcut_copy == expected
+    assert command_copy == expected
+    assert "Workspace:" not in shortcut_copy
+    assert any(event["event"] == "interaction_copied" for event in events)
 
 
 def test_tab_focuses_activity_stream_and_space_multiselects_for_copy() -> None:
@@ -754,7 +813,7 @@ def test_confirmation_mouse_click_only_selects_until_enter() -> None:
             await pilot.pause()
             actions = screen.query_one("#guided-actions", ActionList)
 
-            await pilot.click(actions, offset=(4, 2))
+            await pilot.click(actions, offset=(4, 1))
             await pilot.pause()
             mode_after_click = screen.session.interaction.mode.value
             highlighted_after_click = actions.highlighted
@@ -826,7 +885,7 @@ def test_large_interaction_is_bounded_and_keeps_command_bar_visible() -> None:
             interaction.present(screen.session.interaction)
             await pilot.pause()
             output = screen.query_one("#command-output", RichLog)
-            command_bar = screen.query_one("#command-bar", Horizontal)
+            command_bar = screen.query_one("#command-bar", Vertical)
             await pilot.press("alt+pagedown")
             await pilot.pause()
             return (
@@ -1209,7 +1268,7 @@ def test_existing_setup_entry_starts_in_guided_product_context() -> None:
 
     screen_type, context = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 连接与配置  ›"
+    assert context == "trader › 连接与配置"
 
 
 def test_command_input_executes_help_and_keeps_focus() -> None:
@@ -1399,6 +1458,30 @@ def test_command_screen_applies_responsive_modes_during_terminal_resize() -> Non
     assert restored
     assert value == "/market AAPL"
     assert focused
+
+
+def test_command_context_collapses_semantically_at_supported_widths() -> None:
+    async def run() -> tuple[str, str, str]:
+        app = KairosWorkbenchApp(_state())
+        async with app.run_test(size=(100, 30)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            screen.submit("6")
+            await pilot.pause(0.1)
+            wide = str(screen.query_one("#command-context", Static).render())
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            compact = str(screen.query_one("#command-context", Static).render())
+            await pilot.resize_terminal(60, 20)
+            await pilot.pause()
+            narrow = str(screen.query_one("#command-context", Static).render())
+            return wide, compact, narrow
+
+    wide, compact, narrow = asyncio.run(run())
+
+    assert wide == "trader › 运行中心 › 运行概览"
+    assert compact == "trader › … › 运行概览"
+    assert narrow == "trader › 运行概览"
 
 
 def test_text_input_consumes_global_shortcuts_as_text() -> None:

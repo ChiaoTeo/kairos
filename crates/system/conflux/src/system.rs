@@ -967,12 +967,8 @@ impl ConfluxSystem {
         client: AccountClient,
     ) -> Result<(), crate::ResourceError> {
         let key = key.into();
-        self.account_clients
-            .ensure_with(key.clone(), 1, || client)?;
-        self.account_clients
-            .get_mut(&key)
-            .expect("Account client inserted")
-            .set_state(ResourceState::Ready);
+        let (_, client) = self.account_clients.ensure_with_entry(key, 1, || client)?;
+        client.set_state(ResourceState::Ready);
         Ok(())
     }
 
@@ -997,12 +993,8 @@ impl ConfluxSystem {
         client: CapitalClient,
     ) -> Result<(), crate::ResourceError> {
         let key = key.into();
-        self.capital_clients
-            .ensure_with(key.clone(), 1, || client)?;
-        self.capital_clients
-            .get_mut(&key)
-            .expect("Capital client inserted")
-            .set_state(ResourceState::Ready);
+        let (_, client) = self.capital_clients.ensure_with_entry(key, 1, || client)?;
+        client.set_state(ResourceState::Ready);
         Ok(())
     }
 
@@ -1027,12 +1019,10 @@ impl ConfluxSystem {
         client: ExecutionClient,
     ) -> Result<(), crate::ResourceError> {
         let key = key.into();
-        self.execution_clients
-            .ensure_with(key.clone(), 1, || client)?;
-        self.execution_clients
-            .get_mut(&key)
-            .expect("Execution client inserted")
-            .set_state(ResourceState::Ready);
+        let (_, client) = self
+            .execution_clients
+            .ensure_with_entry(key, 1, || client)?;
+        client.set_state(ResourceState::Ready);
         Ok(())
     }
 
@@ -1058,11 +1048,8 @@ impl ConfluxSystem {
         client: MarketClient,
     ) -> Result<(), crate::ResourceError> {
         let key = key.into();
-        self.market_clients.ensure_with(key.clone(), 1, || client)?;
-        self.market_clients
-            .get_mut(&key)
-            .expect("Market client inserted")
-            .set_state(ResourceState::Ready);
+        let (_, client) = self.market_clients.ensure_with_entry(key, 1, || client)?;
+        client.set_state(ResourceState::Ready);
         Ok(())
     }
 
@@ -1088,18 +1075,14 @@ impl ConfluxSystem {
         stream: ReferenceEventStream,
     ) -> Result<(), crate::ResourceError> {
         let key = key.into();
-        self.reference_clients
-            .ensure_with(key.clone(), 1, || client)?;
-        self.reference_clients
-            .get_mut(&key)
-            .expect("Reference client inserted")
-            .set_state(ResourceState::Ready);
-        self.reference_event_streams
-            .ensure_with(key.clone(), 1, || stream)?;
-        self.reference_event_streams
-            .get_mut(&key)
-            .expect("Reference event stream inserted")
-            .set_state(ResourceState::Ready);
+        let (_, client) = self
+            .reference_clients
+            .ensure_with_entry(key.clone(), 1, || client)?;
+        client.set_state(ResourceState::Ready);
+        let (_, stream) = self
+            .reference_event_streams
+            .ensure_with_entry(key, 1, || stream)?;
+        stream.set_state(ResourceState::Ready);
         Ok(())
     }
 
@@ -1165,11 +1148,8 @@ impl ConfluxSystem {
         client: RiskClient,
     ) -> Result<(), crate::ResourceError> {
         let key = key.into();
-        self.risk_clients.ensure_with(key.clone(), 1, || client)?;
-        self.risk_clients
-            .get_mut(&key)
-            .expect("Risk client inserted")
-            .set_state(ResourceState::Ready);
+        let (_, client) = self.risk_clients.ensure_with_entry(key, 1, || client)?;
+        client.set_state(ResourceState::Ready);
         Ok(())
     }
 

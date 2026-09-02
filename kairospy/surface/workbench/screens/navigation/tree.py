@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from rich.console import RenderableType
@@ -72,6 +73,153 @@ from ..flows.market.actions import (
     selected_market_actions,
 )
 from ..selection import SelectionRecord, selection_records
+
+
+@dataclass(frozen=True, slots=True)
+class CommandContextView:
+    """The stable task anchor shown above the single command input."""
+
+    segments: tuple[str, ...]
+
+
+_RESOURCE_TASK_LABELS = {
+    "accounts": "交易账户",
+    "data": "行情连接",
+    "model_endpoints": "模型服务",
+    "models": "AI 模型",
+    "notifications": "通知连接",
+}
+
+
+def command_context(session: GuidedSession) -> CommandContextView:
+    """Project navigation state into a compact, task-oriented path.
+
+    Visit history remains owned by ``navigation_stack`` and is exposed through
+    ``/back``.  This view instead answers: what task, problem, and object
+    is the user acting on now?
+    """
+
+    launch = session.strategy.selected_record
+    launch_id = (
+        str(launch.get("launch_id")) if launch and launch.get("launch_id") else None
+    )
+    if session.context == Routes.STRATEGY_READINESS and launch_id:
+        return CommandContextView((launch_id, "运行条件"))
+
+    if launch_id and belongs_to(session.context, Section.STRATEGY):
+        page = {
+            Routes.STRATEGY_SELECTED: "运行方案",
+            Routes.STRATEGY_INSTANCES: "运行实例",
+            Routes.STRATEGY_INSTANCE: "运行实例",
+            Routes.STRATEGY_COMPONENTS: "实例组件",
+            Routes.STRATEGY_ATTACH: "跟随输出",
+            Routes.STRATEGY_TIMELINE: "实例时间线",
+            Routes.STRATEGY_EXECUTION: "Execution Server",
+            Routes.STRATEGY_MARKET: "Market 组件",
+            Routes.STRATEGY_SETUP: "配置向导",
+        }.get(session.context)
+        if page:
+            return CommandContextView((launch_id, page))
+
+    if belongs_to(session.context, Section.RESOURCES):
+        kind = session.resources.kind or (
+            session.resources.wizard.kind
+            if session.resources.wizard is not None
+            else None
+        )
+        if kind is None:
+            return CommandContextView((session.root_label, "连接与配置"))
+        task = _RESOURCE_TASK_LABELS.get(kind or "", "连接与配置")
+        history = {frame.context for frame in session.navigation_stack}
+        anchor = "连接与配置"
+        if Routes.STRATEGY_READINESS in history and launch_id:
+            anchor = launch_id
+        elif Routes.MARKET_CATALOG_SETUP in history:
+            anchor = session.market.query or "当前标的"
+
+        subject: str | None = None
+        selected = session.resources.selected
+        if (
+            session.context == Routes.RESOURCES_SELECTED
+            and kind
+            and selected is not None
+        ):
+            subject = identity(kind, selected)
+        wizard = session.resources.wizard
+        if session.context == Routes.RESOURCES_SETUP and wizard is not None:
+            provider = (
+                wizard.answers.get("data-provider")
+                or wizard.answers.get("account-provider")
+                or wizard.answers.get("model-provider")
+                or wizard.answers.get("notification-provider")
+            )
+            if provider:
+                subject = _provider_label(str(provider))
+            elif wizard.record:
+                subject = identity(wizard.kind, wizard.record)
+            elif wizard.generated_id:
+                subject = wizard.generated_id
+        segments = (anchor, task, subject) if subject else (anchor, task)
+        return CommandContextView(tuple(part for part in segments if part))
+
+    if session.context == Routes.MARKET_CATALOG_SETUP:
+        anchor = session.market.query or "当前标的"
+        return CommandContextView((anchor, "标的目录", "准备条件"))
+
+    if (
+        session.context == Routes.MARKET_SELECTED
+        and session.market.selected is not None
+    ):
+        return CommandContextView(
+            (
+                record_label(session.market.selected),
+                "行情",
+                session.market.provider or "已选标的",
+            )
+        )
+
+    account = session.account.selected
+    if account is not None and belongs_to(session.context, Section.ACCOUNT):
+        account_id = identity("accounts", account)
+        if session.context == Routes.ACCOUNT_FUNDS:
+            return CommandContextView((account_id, "资金与费率"))
+        if session.context == Routes.ACCOUNT_ORDER_SEGMENTS:
+            return CommandContextView((account_id, "订单管理", "选择交易分区"))
+        if session.context == Routes.ACCOUNT_ORDERS:
+            return CommandContextView(
+                (account_id, "订单管理", session.account.selected_segment or "当前订单")
+            )
+        if session.context == Routes.ACCOUNT_TRANSFER_RESULT:
+            return CommandContextView((account_id, "资金划转"))
+        if session.context == Routes.ACCOUNT_SELECTED:
+            return CommandContextView((account_id, "账户"))
+
+    if (
+        session.context == Routes.REFERENCE_SELECTED
+        and session.reference.selected is not None
+    ):
+        return CommandContextView(
+            (record_label(session.reference.selected), "标的目录", "目录记录")
+        )
+
+    label = context_label(session.context, session.root_label)
+    parts = tuple(part.strip() for part in label.split(" / ") if part.strip())
+    if len(parts) <= 3:
+        return CommandContextView(parts)
+    return CommandContextView((parts[0], parts[-2], parts[-1]))
+
+
+def _provider_label(provider: str) -> str:
+    return {
+        "massive": "Massive",
+        "binance": "Binance",
+        "okx": "OKX",
+        "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "openrouter": "OpenRouter",
+        "telegram": "Telegram",
+        "feishu": "飞书",
+    }.get(provider.lower(), provider)
 
 
 def _visible(records: tuple[Any, ...]) -> tuple[SelectionRecord, ...]:
@@ -432,6 +580,54 @@ def _catalog_setup_actions(plan: CatalogSetupPlanView | None) -> tuple[ActionIte
     return tuple(actions)
 
 
+def _catalog_reference_recovery_actions(
+    recovery: str | None,
+) -> tuple[ActionItem, ...]:
+    actions: list[ActionItem] = []
+    if recovery == "repair-start":
+        actions.append(
+            ActionItem(
+                "recover-reference",
+                "清理并启动 Reference",
+                "清理确认失效的运行资源，启动服务后继续检查",
+                "1",
+            )
+        )
+    elif recovery == "start":
+        actions.append(
+            ActionItem(
+                "recover-reference",
+                "启动 Reference 并继续",
+                "启动项目共享标的服务，然后继续检查准备条件",
+                "1",
+            )
+        )
+    offset = len(actions)
+    actions.extend(
+        (
+            ActionItem(
+                "check",
+                "重新检查",
+                "刷新服务状态并继续检查准备条件",
+                str(offset + 1),
+            ),
+            ActionItem(
+                "reference-details",
+                "查看服务详细状态",
+                "前往运行中心查看状态、日志和技术诊断",
+                str(offset + 2),
+            ),
+            ActionItem(
+                "change",
+                "重新选择市场或服务",
+                "修改要准备的目录范围",
+                str(offset + 3),
+            ),
+        )
+    )
+    return tuple(actions)
+
+
 def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
     if not session.context:
         return HOME_ACTIONS
@@ -466,6 +662,10 @@ def context_items(session: GuidedSession, state: Any) -> tuple[ActionItem, ...]:
             )
         return CATALOG_INSTRUMENT_ACTIONS[1:]
     if session.context == Routes.MARKET_CATALOG_SETUP:
+        if session.market.catalog_setup_reference_issue is not None:
+            return _catalog_reference_recovery_actions(
+                session.market.catalog_setup_reference_recovery
+            )
         return _catalog_setup_actions(session.market.catalog_setup_plan)
     if session.context == Routes.MARKET_LIVE:
         return (

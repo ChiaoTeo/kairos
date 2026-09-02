@@ -21,9 +21,9 @@ use kairos_conflux::{
 
 use crate::domain::{
     AccountEvent, AccountModel, AccountObservedFill, AccountOrderObservation, AccountSegment,
-    AccountSnapshot, AccountStatus, AssetId, Balance, EarnAccruedReward, EarnHolding,
-    EarnHoldingLiquidity, EarnHoldingState, EarnHoldingsSnapshot, FillId, InstrumentId, MarginMode,
-    Money, OpenOrder, Position, PositionMode, SegmentKey, SignedQuantity,
+    AccountSnapshot, AccountStatus, Balance, EarnAccruedReward, EarnHolding, EarnHoldingLiquidity,
+    EarnHoldingState, EarnHoldingsSnapshot, InstrumentId, MarginMode, Money, OpenOrder, Position,
+    PositionMode, SegmentKey, SignedQuantity,
 };
 
 #[derive(Clone, Default)]
@@ -465,8 +465,7 @@ pub(crate) fn external_segment(segment: &AccountSegment) -> ExternalAccountSegme
             broker: segment.identity.broker.to_string(),
             account_id: segment.identity.account_id.clone(),
         },
-        segment_key: kairos_primitives::account::SegmentKey::new(segment.segment_key.to_string())
-            .expect("validated account segment key"),
+        segment_key: segment.segment_key.clone(),
         environment: segment.environment.clone(),
         account_model: segment.account_model.clone(),
     }
@@ -492,7 +491,7 @@ fn money(value: ExternalDecimal) -> Result<Money, String> {
 
 fn map_balance(value: ExternalBalance) -> Result<Balance, String> {
     Ok(Balance {
-        asset_id: AssetId::new(value.asset_id.to_string()).expect("validated asset id"),
+        asset_id: value.asset_id,
         asset_code: value.asset_code,
         total: signed_quantity(value.total)?,
         available: value.available.map(signed_quantity).transpose()?,
@@ -525,8 +524,7 @@ pub(crate) fn map_snapshot(
     resolver: &AccountInstrumentResolver,
 ) -> Result<AccountSnapshot, String> {
     Ok(AccountSnapshot {
-        segment_key: SegmentKey::new(value.segment_key.to_string())
-            .expect("validated account segment key"),
+        segment_key: value.segment_key,
         balances: value
             .balances
             .into_iter()
@@ -721,11 +719,10 @@ pub(crate) fn map_event(
         ExternalAccountEvent::Fill(value) => {
             let (instrument_id, _) = resolver.resolve(&value.participant_instrument)?;
             AccountEvent::ObservedFill(AccountObservedFill {
-                fill_id: FillId::new(value.fill_id.to_string()).expect("validated fill id"),
+                fill_id: value.fill_id,
                 order_id: Some(value.order_id),
                 remote_order_id: None,
-                segment_key: SegmentKey::new(value.segment_key.to_string())
-                    .expect("validated account segment key"),
+                segment_key: value.segment_key,
                 instrument_id,
                 quantity: quantity(value.quantity)?,
                 price: price(value.price)?,

@@ -58,12 +58,22 @@ class ActionToken:
 
 
 @dataclass(frozen=True, slots=True)
+class InteractionHeading:
+    """One compact object description above the current actions."""
+
+    title: str
+    detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ChoiceInteraction:
     """A context summary followed by the actions valid in that context."""
 
     title: str = ""
     summary: RenderableType | None = None
     actions: tuple[ActionItem, ...] = ()
+    heading: InteractionHeading | None = None
+    state: str | None = None
     mode: InteractionMode = InteractionMode.CHOICE
 
 
@@ -78,6 +88,8 @@ class InputInteraction:
     value_summary: RenderableType | None = None
     secret: bool = False
     error: str | None = None
+    heading: InteractionHeading | None = None
+    state: str | None = None
     mode: InteractionMode = InteractionMode.INPUT
 
 
@@ -190,6 +202,10 @@ class InteractionRegion(Vertical):
         items = _interaction_actions(interaction)
         actions.replace_items(items)
         actions.display = bool(items)
+        content.set_class(
+            isinstance(interaction, (ChoiceInteraction, InputInteraction)),
+            "compact-interaction-content",
+        )
         renderable = _interaction_renderable(
             interaction, colors=rich_theme_colors(self.app.current_theme)
         )
@@ -222,22 +238,45 @@ def _interaction_renderable(
     interaction: InteractionState, *, colors: RichThemeColors = NORD_COLORS
 ) -> RenderableType | None:
     if isinstance(interaction, ChoiceInteraction):
+        if interaction.heading is not None:
+            heading = _heading_renderable(interaction.heading, colors=colors)
+            return (
+                Group(heading, interaction.summary)
+                if interaction.summary is not None
+                else heading
+            )
         if interaction.summary is None:
             return None
-        return Panel(interaction.summary, title=interaction.title or None)
-    if isinstance(interaction, InputInteraction):
-        body: list[RenderableType] = []
-        if interaction.value_summary is not None:
-            body.extend((interaction.value_summary, Text()))
-        body.extend(
-            (
-                Text(interaction.prompt, style="bold"),
-                Text(interaction.detail, style=colors.muted),
+        if interaction.title:
+            return Group(
+                Text(interaction.title, style=f"bold {colors.primary}"),
+                interaction.summary,
             )
-        )
+        return interaction.summary
+    if isinstance(interaction, InputInteraction):
+        if interaction.heading is not None:
+            body: list[RenderableType] = [
+                _heading_renderable(interaction.heading, colors=colors)
+            ]
+            if interaction.value_summary is not None:
+                body.append(interaction.value_summary)
+            body.append(Text(interaction.prompt, style="bold"))
+            if interaction.detail:
+                body.append(Text(interaction.detail, style=colors.muted))
+            if interaction.error:
+                body.append(Text(interaction.error, style=f"bold {colors.error}"))
+            return Group(*body)
+        body = []
+        if interaction.value_summary is not None:
+            body.append(interaction.value_summary)
+        prompt = Text(interaction.prompt, style="bold")
+        if interaction.detail:
+            prompt.append("  ·  ", style=colors.muted)
+            prompt.append(interaction.detail, style=colors.muted)
+        body.append(prompt)
         if interaction.error:
-            body.extend((Text(), Text(interaction.error, style="bold red")))
-        return Panel(Group(*body), title=interaction.title, border_style=colors.primary)
+            body.append(Text(interaction.error, style=f"bold {colors.error}"))
+        return Group(*body)
     if isinstance(interaction, ConfirmInteraction):
         parts: list[RenderableType] = [interaction.summary]
         if interaction.force_hint:
@@ -260,6 +299,16 @@ def _interaction_renderable(
     )
 
 
+def _heading_renderable(
+    heading: InteractionHeading, *, colors: RichThemeColors
+) -> Text:
+    value = Text(heading.title, style=f"bold {colors.primary}")
+    if heading.detail:
+        value.append("  ·  ", style=colors.muted)
+        value.append(heading.detail, style=colors.muted)
+    return value
+
+
 __all__ = [
     "ChoiceInteraction",
     "ConfirmInteraction",
@@ -268,6 +317,7 @@ __all__ = [
     "Feature",
     "InputInteraction",
     "InteractionMode",
+    "InteractionHeading",
     "InteractionRegion",
     "InteractionState",
     "interaction_copy_text",

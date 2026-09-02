@@ -45,19 +45,13 @@ def main() -> int:
     try:
         record_gauge("kairos.process.ready", 1)
         while True:
-            desired_path = workspace.paths.run / "supervisor" / "desired.json"
-            desired = {}
-            if desired_path.is_file():
-                try:
-                    value = json.loads(desired_path.read_text(encoding="utf-8"))
-                    desired = value if isinstance(value, dict) else {}
-                except (OSError, ValueError, json.JSONDecodeError):
-                    desired = {}
+            supervisor = SystemRuntimeSupervisor(processes)
+            desired = supervisor.load_desired()
             with start_span(
                 "system.reconcile",
                 attributes={"component": "system-supervisor"},
             ):
-                supervisor = SystemRuntimeSupervisor(processes, desired=desired)
+                supervisor.desired = desired
                 supervisor.reconcile_once()
                 record_counter("kairos.system.reconcile.total")
             import time

@@ -151,11 +151,8 @@ fn declare<R>(
         });
     }
     let resource = create()?;
-    let disposition = resources.ensure_with(key.clone(), revision, || resource)?;
-    resources
-        .get_mut(&key)
-        .expect("declared output exists")
-        .set_state(ResourceState::Ready);
+    let (disposition, resource) = resources.ensure_with_entry(key, revision, || resource)?;
+    resource.set_state(ResourceState::Ready);
     Ok(disposition)
 }
 

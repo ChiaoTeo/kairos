@@ -1,6 +1,6 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_protocol::ProtocolContext;
+use kairos_protocol::EventProtocolContext;
 use kairos_protocol::generated::kairos::common::v_2::{Decimal64, EventMetadata};
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
 
@@ -9,12 +9,12 @@ use crate::catalog::{Asset, Exchange, Instrument, Listing, Market};
 
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
-    pub common: ProtocolContext,
+    pub common: EventProtocolContext,
     pub catalog_revision: kairos_primitives::time::Generation,
 }
 
 impl std::ops::Deref for EncodeContext {
-    type Target = ProtocolContext;
+    type Target = EventProtocolContext;
     fn deref(&self) -> &Self::Target {
         &self.common
     }
@@ -30,7 +30,7 @@ impl EncodeContext {
         catalog_revision: u64,
     ) -> Result<Self, String> {
         Ok(Self {
-            common: ProtocolContext::event(
+            common: EventProtocolContext::new(
                 producer_id,
                 producer_incarnation,
                 identity,

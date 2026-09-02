@@ -4,7 +4,7 @@ use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
 use kairos_primitives::runtime::{EventId, InstanceId, LaunchId, ProducerId, WorkspaceId};
 use kairos_primitives::time::{Sequence, UnixNanos};
 
-use crate::context::ProtocolContext;
+use crate::context::{EventProtocolContext, ViewProtocolContext};
 use crate::generated::kairos::common::v_2::{
     EventMetadata, EventMetadataArgs, ViewCompleteness, ViewMetadata, ViewMetadataArgs,
 };
@@ -122,17 +122,11 @@ fn optional_identity<T>(
 
 pub fn event_metadata<'a, A: Allocator + 'a>(
     builder: &mut FlatBufferBuilder<'a, A>,
-    context: &ProtocolContext,
+    context: &EventProtocolContext,
     stream_id: &str,
     occurred_at_unix_nanos: u64,
 ) -> WIPOffset<EventMetadata<'a>> {
-    let event_id = builder.create_string(
-        context
-            .event_id
-            .as_ref()
-            .expect("event context carries event identity")
-            .as_str(),
-    );
+    let event_id = builder.create_string(context.event_id().as_str());
     let stream_id = builder.create_string(stream_id);
     let producer_id = builder.create_string(&context.producer_id);
     let workspace_id = builder.create_string(&context.identity.workspace_id);
@@ -164,7 +158,7 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
 
 pub fn view_metadata<'a, A: Allocator + 'a>(
     builder: &mut FlatBufferBuilder<'a, A>,
-    context: &ProtocolContext,
+    context: &ViewProtocolContext,
     snapshot_id: &str,
     view_key: &str,
     as_of_unix_nanos: u64,

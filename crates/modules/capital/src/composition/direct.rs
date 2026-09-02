@@ -121,18 +121,19 @@ fn validate_binding_credentials(
         let actual = store
             .credentials
             .iter()
-            .find(|credential| credential.credential_id == credential_id)
+            .find(|credential| credential.credential_id() == credential_id)
             .ok_or_else(|| {
                 format!("standalone Capital {label} credential '{credential_id}' was not found")
             })?;
-        if !actual.provider.eq_ignore_ascii_case(&claimed.provider) {
+        if !actual.provider().eq_ignore_ascii_case(&claimed.provider) {
             return Err(format!(
                 "standalone Capital {label} credential '{credential_id}' belongs to {}, not {}",
-                actual.provider, claimed.provider
+                actual.provider(),
+                claimed.provider
             )
             .into());
         }
-        if !actual.role.eq_ignore_ascii_case(&claimed.credential_role) {
+        if !actual.role().eq_ignore_ascii_case(&claimed.credential_role) {
             return Err(format!(
                 "standalone Capital {label} credential role changed; request a new Account binding"
             )
@@ -349,12 +350,16 @@ async fn query_snapshot(
     let credential = store
         .credentials
         .iter()
-        .find(|credential| credential.credential_id == credential_id)
+        .find(|credential| credential.credential_id() == credential_id)
         .ok_or_else(|| format!("Capital credential '{credential_id}' was not found"))?;
-    if !credential.provider.eq_ignore_ascii_case(&binding.provider) {
+    if !credential
+        .provider()
+        .eq_ignore_ascii_case(&binding.provider)
+    {
         return Err(format!(
             "Capital credential '{credential_id}' belongs to {}, not {}",
-            credential.provider, binding.provider
+            credential.provider(),
+            binding.provider
         )
         .into());
     }

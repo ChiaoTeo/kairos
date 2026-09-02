@@ -107,11 +107,7 @@ class WorkspaceServiceApplication:
 
     @staticmethod
     def _is_desired(supervisor: SystemRuntimeSupervisor, component: str) -> bool:
-        try:
-            value = json.loads(supervisor.desired_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
-            return False
-        return isinstance(value, dict) and component in value
+        return component in supervisor.load_desired()
 
 
 __all__ = ["WorkspaceServiceApplication"]

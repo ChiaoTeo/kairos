@@ -114,11 +114,15 @@ Screen.interaction-collapsed #interaction-collapsed-summary {
     padding: 0;
 }
 
+#interaction-content.compact-interaction-content {
+    padding: 0 4;
+}
+
 #guided-actions {
     height: auto;
     max-height: 9;
     margin: 0;
-    padding: 1 2 0 2;
+    padding: 0 2 0 3;
     border: none;
     background: $surface;
 }
@@ -140,25 +144,55 @@ Screen.interaction-collapsed #interaction-collapsed-summary {
     background: $surface;
 }
 
+#command-context-row {
+    height: 1;
+    padding: 0 2;
+}
+
+#command-input-row {
+    height: 3;
+    padding: 0 2;
+}
+
 #command-bar:focus-within {
     border: none;
     border-top: solid $boost;
 }
 
 #command-context {
-    width: auto;
-    height: 1fr;
-    padding: 0 3;
-    content-align: center middle;
+    width: 1fr;
+    height: 1;
+    padding: 0;
+    background: $surface;
+}
+
+#command-back {
+    width: 2;
+    height: 1;
     color: $primary;
     text-style: bold;
-    background: $surface;
+}
+
+#command-state {
+    width: auto;
+    height: 1;
+    color: $text-muted;
+    content-align: right middle;
+}
+
+#command-prompt {
+    width: 1;
+    height: 1;
+    margin: 1 0;
+    padding: 0;
+    color: $primary;
+    text-style: bold;
 }
 
 #command-input {
     width: 1fr;
     height: 1;
-    margin: 1 2 1 0;
+    margin: 1 0;
     padding: 0 1;
     border: none;
     color: $text;
@@ -210,12 +244,23 @@ Screen.viewport-narrow #interaction-collapsed-summary {
 }
 
 Screen.viewport-narrow #guided-actions {
-    padding: 1 0 0 0;
+    padding: 0 1 0 2;
 }
 
 Screen.viewport-narrow #command-context {
-    padding-left: 1;
-    padding-right: 1;
+    padding: 0;
+}
+
+Screen.viewport-narrow #command-context-row {
+    padding: 0 1;
+}
+
+Screen.viewport-narrow #interaction-content.compact-interaction-content {
+    padding: 0 3;
+}
+
+Screen.viewport-narrow #command-input-row {
+    padding: 0 1;
 }
 
 Screen.viewport-narrow #command-input {
@@ -255,6 +300,20 @@ Screen.viewport-too-small #interaction-region {
 Screen.viewport-too-small #command-bar {
     height: 1;
     border-top: none;
+}
+
+Screen.viewport-too-small #command-context-row {
+    display: none;
+}
+
+Screen.viewport-too-small #command-input-row {
+    height: 1;
+}
+
+Screen.viewport-too-small #command-prompt,
+Screen.viewport-too-small #command-input {
+    margin-top: 0;
+    margin-bottom: 0;
 }
 
 Screen.viewport-too-small #viewport-warning {

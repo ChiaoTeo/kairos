@@ -113,8 +113,8 @@ def test_account_selection_enters_account_context_and_back_returns_to_list(
 
     screen_type, selected, results, account, focused, has_summary = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert selected == "trader / 连接与配置 / 交易账户 · paper-main  ›"
-    assert results == "trader / 连接与配置 / 交易账户  ›"
+    assert selected == "连接与配置 › 交易账户 › paper-main"
+    assert results == "连接与配置 › 交易账户"
     assert account == "paper-main"
     assert focused
     assert not has_summary
@@ -387,9 +387,9 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
     }
     labels = {
         "accounts": "交易账户",
-        "data": "市场数据",
-        "models": "可用模型",
-        "notifications": "通知提醒",
+        "data": "行情连接",
+        "models": "AI 模型",
+        "notifications": "通知连接",
     }
     monkeypatch.setattr(
         resources,
@@ -424,8 +424,8 @@ def test_each_runtime_resource_keeps_kind_and_identity_in_its_context(
             for key in ("account_id", "connection_id", "model_id", "destination_id")
             if key in record
         )
-        assert listed == f"trader / 连接与配置 / {labels[kind]}  ›"
-        assert selected == (f"trader / 连接与配置 / {labels[kind]} · {resource_id}  ›")
+        assert listed == f"连接与配置 › {labels[kind]}"
+        assert selected == f"连接与配置 › {labels[kind]} › {resource_id}"
 
 
 def test_check_all_connections_renders_all_resource_groups(
@@ -456,7 +456,7 @@ def test_check_all_connections_renders_all_resource_groups(
             )
 
     context, output = asyncio.run(run())
-    assert context == "trader / 连接与配置  ›"
+    assert context == "trader › 连接与配置"
     assert "运行资源检查" in output
     for label in ("交易账户", "市场数据", "可用模型", "通知提醒"):
         assert label in output
@@ -498,7 +498,12 @@ def test_empty_resource_groups_offer_new_configuration_action(
 
     states = asyncio.run(run())
     for label, (context, status, action, count) in zip(labels, states):
-        assert context == f"trader / 连接与配置 / {label}  ›"
+        semantic_label = {
+            "市场数据": "行情连接",
+            "可用模型": "AI 模型",
+            "通知提醒": "通知连接",
+        }.get(label, label)
+        assert context == f"连接与配置 › {semantic_label}"
         assert status == f"尚未配置 {label}"
         assert f"添加{label}" in action
         assert count == 1
@@ -552,7 +557,7 @@ def test_account_runtime_queries_and_fee_argument_stay_in_account_context(
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
     assert calls == [("assets", None), ("fees", "perpetual:BTCUSDT")]
-    assert context == "trader / 账户与交易 / 资金、理财与费率 · paper-main  ›"
+    assert context == "paper-main › 资金与费率"
     assert "paper-main · 账户运行结果" in output
     assert focused
 
@@ -596,10 +601,10 @@ def test_account_connection_uses_authoritative_resource_detail_and_returns_to_so
             )
 
     detail, actions, output, returned, selected = asyncio.run(run())
-    assert detail == "trader / 连接与配置 / 交易账户 · paper-main  ›"
+    assert detail == "连接与配置 › 交易账户 › paper-main"
     assert "管理账户访问" in actions
     assert "paper-main · 资源详情" in output
-    assert returned == "trader / 账户与交易 / 已选账户 · paper-main  ›"
+    assert returned == "paper-main › 账户"
     assert selected == "paper-main"
 
 
@@ -749,7 +754,7 @@ def test_account_order_read_and_submit_confirmation_use_one_input(
     assert all(values["segment"] == "spot" for _, values in calls)
     assert calls[-1][1]["side"] == "buy"
     assert calls[-1][1]["order-type"] == "market"
-    assert context == "trader / 账户与交易 / 订单管理 · paper-main / spot  ›"
+    assert context == "paper-main › 订单管理 › spot"
     assert "订单作用域确认" not in output
     assert "paper-main · 订单操作结果" in output
     assert focused
@@ -812,13 +817,9 @@ def test_account_order_selects_segment_before_action_and_renders_failure_once(
     segment_context, actions, action_context, failure_context, output, summary = (
         asyncio.run(run())
     )
-    assert segment_context == (
-        "trader / 账户与交易 / 订单管理 · manual-live-readonly / 选择交易分区  ›"
-    )
+    assert segment_context == "manual-live-readonly › 订单管理 › 选择交易分区"
     assert actions == ("funding", "spot", "usd_m_futures")
-    expected = (
-        "trader / 账户与交易 / 订单管理 · manual-live-readonly / usd_m_futures  ›"
-    )
+    expected = "manual-live-readonly › 订单管理 › usd_m_futures"
     assert action_context == expected
     assert failure_context == expected
     assert selected_segments == ["usd_m_futures"]
@@ -862,9 +863,7 @@ def test_account_order_requires_a_configured_segment(
     context, summary, chrome = asyncio.run(run())
     assert context == ("account", "order-segments")
     assert summary == "当前账户没有配置交易分区。\n"
-    assert chrome == (
-        "trader / 账户与交易 / 订单管理 · segment-missing / 选择交易分区  ›"
-    )
+    assert chrome == "segment-missing › 订单管理 › 选择交易分区"
 
 
 def test_resource_toggle_uses_inline_confirmation_and_preserves_one_screen(
@@ -1027,7 +1026,7 @@ def test_existing_notification_can_enter_identity_preserving_edit_wizard(
             )
 
     context, placeholder, has_wizard = asyncio.run(run())
-    assert context == "trader / 连接与配置 / 配置向导 · 通知提醒 · ops-alerts  ›"
+    assert context == "连接与配置 › 通知连接 › ops-alerts"
     assert placeholder == "输入编号，或按 ↑↓ 选择；Enter 确认"
     assert has_wizard
 
@@ -1953,4 +1952,4 @@ def test_ctrl_c_during_resource_secret_prompt_clears_staged_credentials(
     wizard, password, context = asyncio.run(run())
     assert wizard is None
     assert not password
-    assert context == "trader / 连接与配置 / 市场数据  ›"
+    assert context == "连接与配置 › 行情连接"

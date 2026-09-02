@@ -1,15 +1,15 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_protocol::ProtocolContext;
+use kairos_protocol::EventProtocolContext;
 use kairos_protocol::generated::kairos::common::v_2::EventMetadata;
 
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
-    pub common: ProtocolContext,
+    pub common: EventProtocolContext,
 }
 
 impl std::ops::Deref for EncodeContext {
-    type Target = ProtocolContext;
+    type Target = EventProtocolContext;
     fn deref(&self) -> &Self::Target {
         &self.common
     }
@@ -24,7 +24,7 @@ impl EncodeContext {
         event_id: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            common: ProtocolContext::event(
+            common: EventProtocolContext::new(
                 producer_id,
                 producer_incarnation,
                 identity,

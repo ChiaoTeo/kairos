@@ -146,23 +146,37 @@ where
         revision: u64,
         create: impl FnOnce() -> C,
     ) -> Result<EnsureDisposition, ResourceError> {
-        if let Some(entry) = self.entries.get_mut(&key) {
-            if revision < entry.revision {
-                return Err(ResourceError::StaleRevision {
-                    current: entry.revision,
-                    received: revision,
-                });
-            }
-            if revision == entry.revision {
-                return Ok(EnsureDisposition::Existing);
-            }
-            entry.replace(revision, create())?;
-            return Ok(EnsureDisposition::Replaced);
-        }
+        self.ensure_with_entry(key, revision, create)
+            .map(|(disposition, _)| disposition)
+    }
 
-        self.entries
-            .insert(key, ManagedClient::new(create(), revision));
-        Ok(EnsureDisposition::Created)
+    pub fn ensure_with_entry(
+        &mut self,
+        key: K,
+        revision: u64,
+        create: impl FnOnce() -> C,
+    ) -> Result<(EnsureDisposition, &mut ManagedClient<C>), ResourceError> {
+        match self.entries.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                let entry = occupied.get_mut();
+                let disposition = if revision < entry.revision {
+                    return Err(ResourceError::StaleRevision {
+                        current: entry.revision,
+                        received: revision,
+                    });
+                } else if revision == entry.revision {
+                    EnsureDisposition::Existing
+                } else {
+                    entry.replace(revision, create())?;
+                    EnsureDisposition::Replaced
+                };
+                Ok((disposition, occupied.into_mut()))
+            },
+            std::collections::hash_map::Entry::Vacant(vacant) => Ok((
+                EnsureDisposition::Created,
+                vacant.insert(ManagedClient::new(create(), revision)),
+            )),
+        }
     }
 
     pub fn get(&self, key: &K) -> Option<&ManagedClient<C>> {
@@ -405,22 +419,37 @@ where
         revision: u64,
         create: impl FnOnce() -> R,
     ) -> Result<EnsureDisposition, ResourceError> {
-        if let Some(entry) = self.entries.get_mut(&key) {
-            if revision < entry.revision {
-                return Err(ResourceError::StaleRevision {
-                    current: entry.revision,
-                    received: revision,
-                });
-            }
-            if revision == entry.revision {
-                return Ok(EnsureDisposition::Existing);
-            }
-            entry.replace(revision, create())?;
-            return Ok(EnsureDisposition::Replaced);
+        self.ensure_with_entry(key, revision, create)
+            .map(|(disposition, _)| disposition)
+    }
+
+    pub fn ensure_with_entry(
+        &mut self,
+        key: K,
+        revision: u64,
+        create: impl FnOnce() -> R,
+    ) -> Result<(EnsureDisposition, &mut ManagedResource<R>), ResourceError> {
+        match self.entries.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                let entry = occupied.get_mut();
+                let disposition = if revision < entry.revision {
+                    return Err(ResourceError::StaleRevision {
+                        current: entry.revision,
+                        received: revision,
+                    });
+                } else if revision == entry.revision {
+                    EnsureDisposition::Existing
+                } else {
+                    entry.replace(revision, create())?;
+                    EnsureDisposition::Replaced
+                };
+                Ok((disposition, occupied.into_mut()))
+            },
+            std::collections::hash_map::Entry::Vacant(vacant) => Ok((
+                EnsureDisposition::Created,
+                vacant.insert(ManagedResource::new(create(), revision)),
+            )),
         }
-        self.entries
-            .insert(key, ManagedResource::new(create(), revision));
-        Ok(EnsureDisposition::Created)
     }
 
     pub fn get(&self, key: &K) -> Option<&ManagedResource<R>> {

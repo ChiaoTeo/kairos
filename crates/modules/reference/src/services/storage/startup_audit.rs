@@ -49,7 +49,7 @@ async fn missing_current_equity_markets(
     for row in rows {
         let payload = row.try_get::<String, _>("payload")?;
         let listing = decode_listing(payload)?;
-        let Some(expected_market_id) = expected_equity_market_id(&listing) else {
+        let Some(expected_market_id) = expected_equity_market_id(&listing)? else {
             continue;
         };
         if !existing_markets.contains(&expected_market_id) {
@@ -100,7 +100,7 @@ async fn missing_provider_equity_markets(
             if !is_active_reference_status(&listing.status) {
                 continue;
             }
-            let Some(expected_market_id) = expected_equity_market_id(&listing) else {
+            let Some(expected_market_id) = expected_equity_market_id(&listing)? else {
                 continue;
             };
             if provider_market_ids.is_some_and(|ids| ids.contains(&expected_market_id)) {
@@ -123,10 +123,10 @@ async fn current_market_ids(pool: &SqlitePool) -> sqlx::Result<BTreeSet<String>>
         .map(|values| values.into_iter().collect())
 }
 
-fn expected_equity_market_id(listing: &Listing) -> Option<String> {
+fn expected_equity_market_id(listing: &Listing) -> sqlx::Result<Option<String>> {
     let listing_id = listing.listing_id.to_string();
     if !listing_id.contains(":equity:") {
-        return None;
+        return Ok(None);
     }
     let symbol = listing.exchange_symbol.to_string();
     let market_id = kairos_primitives::reference::MarketId::venue(
@@ -134,8 +134,8 @@ fn expected_equity_market_id(listing: &Listing) -> Option<String> {
         kairos_primitives::reference::InstrumentKind::Equity,
         format!("{symbol}:USD"),
     )
-    .expect("active equity listing has a valid expected market identity");
-    Some(market_id.to_string())
+    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    Ok(Some(market_id.to_string()))
 }
 
 fn is_active_reference_status(status: &kairos_primitives::reference::ReferenceStatus) -> bool {

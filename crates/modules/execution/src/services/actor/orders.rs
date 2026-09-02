@@ -48,12 +48,12 @@ impl ExecutionActor {
                 "{}:attempt:1",
                 order.order_id
             ))
-            .expect("order identity creates a valid attempt identity"),
+            .map_err(|error| error.to_string())?,
             command: crate::domain::ExecutionCommandKind::Submit,
             provider_connection_id: kairos_primitives::integration::IntegrationSourceId::new(
                 selected_route.route_id.to_string(),
             )
-            .expect("route identity creates a valid connection identity"),
+            .map_err(|error| error.to_string())?,
             selected_route: selected_route.clone(),
             command_started_at_unix_nanos: now.into(),
             delivery_certainty: crate::domain::DeliveryCertainty::NotSent,
@@ -305,12 +305,12 @@ impl ExecutionActor {
                 "{}:cancel:{cancel_sequence}",
                 order.order_id
             ))
-            .expect("order identity creates a valid cancel attempt identity"),
+            .map_err(|error| error.to_string())?,
             command: crate::domain::ExecutionCommandKind::Cancel,
             provider_connection_id: kairos_primitives::integration::IntegrationSourceId::new(
                 selected_route.route_id.to_string(),
             )
-            .expect("route identity creates a valid connection identity"),
+            .map_err(|error| error.to_string())?,
             selected_route,
             command_started_at_unix_nanos: now.into(),
             delivery_certainty: crate::domain::DeliveryCertainty::Indeterminate,

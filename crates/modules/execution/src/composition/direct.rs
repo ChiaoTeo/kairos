@@ -220,12 +220,12 @@ fn load_credential(
     let credential = store
         .credentials
         .iter()
-        .find(|value| value.credential_id == credential_id)
+        .find(|value| value.credential_id() == credential_id)
         .ok_or_else(|| format!("credential not found: {credential_id}"))?;
-    if !credential.provider.eq_ignore_ascii_case(provider) {
+    if !credential.provider().eq_ignore_ascii_case(provider) {
         return Err(format!(
             "credential {credential_id} belongs to {}, not {provider}",
-            credential.provider
+            credential.provider()
         )
         .into());
     }
@@ -242,13 +242,13 @@ fn validate_credential(
     binding: &StandaloneExecutionBinding,
     provider: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let role = normalize(&credential.role);
+    let role = normalize(credential.role());
     let binding_role = normalize(&binding.credential_role);
     let trade_capable = |value: &str| matches!(value, "trade" | "trading" | "transfer" | "admin");
     if trade_capable(&binding_role) && !trade_capable(&role) {
         return Err(format!(
             "credential {} does not provide trade permission",
-            credential.credential_id
+            credential.credential_id()
         )
         .into());
     }
@@ -257,7 +257,7 @@ fn validate_credential(
     if api_key.trim().is_empty() || secret.trim().is_empty() {
         return Err(format!(
             "credential {} is missing provider authentication fields",
-            credential.credential_id
+            credential.credential_id()
         )
         .into());
     }
@@ -270,7 +270,7 @@ fn validate_credential(
     {
         return Err(format!(
             "credential {} is missing the OKX passphrase",
-            credential.credential_id
+            credential.credential_id()
         )
         .into());
     }

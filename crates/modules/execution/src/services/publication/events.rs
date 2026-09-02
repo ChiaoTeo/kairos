@@ -190,14 +190,7 @@ fn encode_plan_event(
 ) -> Result<Vec<u8>, String> {
     let mut builder = FlatBufferBuilder::new();
     let mut plan_context = context.clone();
-    let event_id = plan_context
-        .event_id
-        .as_ref()
-        .ok_or_else(|| "plan event requires an event id".to_owned())?;
-    plan_context.common.event_id = Some(
-        kairos_primitives::runtime::EventId::new(format!("{event_id}:plan"))
-            .map_err(|error| error.to_string())?,
-    );
+    plan_context.common = plan_context.common.with_event_id_suffix("plan")?;
     let metadata = event_metadata(&mut builder, &plan_context, occurred_at);
     let plan_offset = encode_plan(&mut builder, plan)?;
     let root = fb::PlanCreated::create(

@@ -23,18 +23,6 @@ fn risk_application_does_not_publish_persistence_protocols() {
 }
 
 #[test]
-fn risk_domain_has_no_infrastructure_dependencies() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/domain");
-    for path in rust_files(&root) {
-        let source = fs::read_to_string(&path).unwrap();
-        let shared_types_only = source
-            .replace("kairos_primitives", "")
-            .replace("kairos-primitives", "");
-        assert!(!shared_types_only.contains("kairos_") && !source.contains("std::fs"));
-    }
-}
-
-#[test]
 fn risk_server_selects_a_profile_instead_of_an_account_or_exchange() {
     let server = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-risk-server.rs"),

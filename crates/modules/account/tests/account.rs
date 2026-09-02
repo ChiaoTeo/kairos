@@ -355,7 +355,7 @@ api_secret = "secret"
     );
     assert_eq!(registry.accounts[0].credentials[0].role, "trade");
     let store = CredentialStore::load(&credentials).unwrap();
-    assert_eq!(store.credentials[0].credential_id, "binance-read");
+    assert_eq!(store.credentials[0].credential_id(), "binance-read");
     assert_eq!(store.credentials[0].api_key_value().as_deref(), Some("key"));
 }
 

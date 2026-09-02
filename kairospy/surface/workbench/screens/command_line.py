@@ -42,6 +42,7 @@ from ..widgets import (
     Feature,
     GuidedActionList,
     InputInteraction,
+    InteractionCopyRequested,
     InteractionRegion,
     InteractionState,
     RunningInteraction,
@@ -70,7 +71,9 @@ from .navigation import (
     Section,
     action_id,
     back_target_items,
+    back_targets,
     belongs_to,
+    command_context,
     context_items,
     context_label,
     go_back,
@@ -93,7 +96,7 @@ from .commands import (
     run as run_kairos_command,
     validate as validate_kairos_command,
 )
-from ..theme import THEME_CHOICES, theme_alias
+from ..theme import THEME_CHOICES, rich_theme_colors, theme_alias
 
 
 _COMMAND_ALIASES = {
@@ -196,9 +199,14 @@ class CommandLineScreen(Screen[None]):
                 ChoiceInteraction(actions=HOME_ACTIONS),
                 id="interaction-region",
             )
-            with Horizontal(id="command-bar"):
-                yield Static("首页  /", id="command-context")
-                yield WorkbenchCommandInput(id="command-input")
+            with Vertical(id="command-bar"):
+                with Horizontal(id="command-context-row"):
+                    yield Static("", id="command-back")
+                    yield Static("首页", id="command-context")
+                    yield Static("", id="command-state")
+                with Horizontal(id="command-input-row"):
+                    yield Static("›", id="command-prompt")
+                    yield WorkbenchCommandInput(id="command-input")
         yield Static(
             "↑↓ 选择  ·  Enter 确认  ·  Esc 返回  ·  ? 帮助  ·  "
             "Ctrl+P 命令  ·  PgUp/PgDn",
@@ -228,6 +236,7 @@ class CommandLineScreen(Screen[None]):
         self.set_class(width < 60 or height < 20, "viewport-too-small")
         if self.is_mounted:
             self._render_hints()
+            self._render_command_context()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command-input":
@@ -348,6 +357,8 @@ class CommandLineScreen(Screen[None]):
         self.app.set_focus(target)
         if target is output:
             self._set_status("内容区 · ↑↓ 定位 · Space 多选 · C 复制 · Esc 返回")
+        elif target is actions:
+            self._set_status("交互区 · ↑↓ 选择 · Enter 确认 · ⌘C 复制")
         elif target is self._input():
             self._set_status("就绪")
 
@@ -385,6 +396,7 @@ class CommandLineScreen(Screen[None]):
             "bottom",
             "copy",
             "copy-history",
+            "copy-interaction",
             "copy-selected",
             "down",
             "goto",
@@ -619,6 +631,8 @@ class CommandLineScreen(Screen[None]):
             self._copy_command(arguments)
         elif command == "copy-selected":
             self._copy_selected_activities(arguments)
+        elif command == "copy-interaction":
+            self._copy_interaction(arguments)
         elif command == "copy-history":
             self.workbench_app.copy_current_page(history_only=True)
         elif command in {"up", "down"}:
@@ -998,6 +1012,10 @@ class CommandLineScreen(Screen[None]):
         event.stop()
         self.workbench_app.copy_workbench_text(event.text, label=event.label)
 
+    def on_interaction_copy_requested(self, event: InteractionCopyRequested) -> None:
+        event.stop()
+        self._copy_interaction(())
+
     def on_activity_focus_exit_requested(
         self, event: ActivityFocusExitRequested
     ) -> None:
@@ -1009,11 +1027,14 @@ class CommandLineScreen(Screen[None]):
         if not arguments:
             self.workbench_app.action_copy_page()
             return
+        if arguments == ("interaction",):
+            self._copy_interaction(())
+            return
         if arguments == ("selected",):
             self._copy_selected_activities(())
             return
         if len(arguments) != 1:
-            self._set_status("用法：/copy、/copy 12、/copy 12-18")
+            self._set_status("用法：/copy、/copy interaction、/copy 12、/copy 12-18")
             return
         match = _ACTIVITY_RANGE_PATTERN.fullmatch(arguments[0])
         if match is None:
@@ -1040,6 +1061,16 @@ class CommandLineScreen(Screen[None]):
         )
         self.workbench_app.copy_workbench_text(
             output.export_plain_text(activities), label=label
+        )
+
+    def _copy_interaction(self, arguments: tuple[str, ...]) -> None:
+        if arguments:
+            self._set_status("/copy-interaction 不接受参数")
+            return
+        self.workbench_app.copy_workbench_text(
+            interaction_copy_text(self.session.interaction),
+            label="当前交互",
+            transcript_event="interaction_copied",
         )
 
     def _copy_selected_activities(self, arguments: tuple[str, ...]) -> None:
@@ -1496,7 +1527,7 @@ class CommandLineScreen(Screen[None]):
 
     def _sync_context_chrome(self) -> None:
         interaction = self.session.interaction
-        self.query_one("#command-context", Static).update(f"{self._context_label()}  ›")
+        self._render_command_context()
         if self._resource_wizard_active():
             if isinstance(interaction, ConfirmInteraction):
                 self._set_hints("Tab 切换  ·  Enter 确认  ·  Esc 上一步")
@@ -1975,7 +2006,7 @@ class CommandLineScreen(Screen[None]):
                 ),
             )
             self._interaction().present(self.session.interaction)
-        self.query_one("#command-context", Static).update(f"{context}  ›")
+        self._render_command_context()
         self._input().placeholder = "输入编号，或按 ↑↓ 选择；Enter 确认"
         empty_resource_label = resources_flow.empty_resource_label(self.session)
         if empty_resource_label is not None:
@@ -2032,6 +2063,7 @@ class CommandLineScreen(Screen[None]):
     def _write_error(self, value: str) -> None:
         if self.session.reject_input(value):
             self._interaction().present(self.session.interaction)
+            self._render_command_context()
             self._set_status("输入有误 · 请修正")
             return
         self.session.choose(
@@ -2080,6 +2112,50 @@ class CommandLineScreen(Screen[None]):
         self.query_one(WorkspaceHeader).set_status(value)
         if self.is_mounted:
             self._render_interaction_collapsed_summary()
+
+    def _render_command_context(self) -> None:
+        context_view = command_context(self.session)
+        segments = context_view.segments or (self.session.root_label,)
+        if self.has_class("viewport-narrow") and len(segments) > 1:
+            visible = (segments[0], segments[-1])
+        elif self.has_class("viewport-compact") and len(segments) > 2:
+            visible = (segments[0], "…", segments[-1])
+        else:
+            visible = segments[:3]
+
+        colors = rich_theme_colors(self.app.current_theme)
+        path = Text()
+        for index, segment in enumerate(visible):
+            if index:
+                path.append(" › ", style=colors.muted)
+            style = (
+                f"bold {colors.primary}"
+                if index in {0, len(visible) - 1}
+                else colors.muted
+            )
+            path.append(segment, style=style)
+        self.query_one("#command-context", Static).update(path)
+        self.query_one("#command-back", Static).update(
+            "‹" if back_targets(self.session) else ""
+        )
+        self.query_one("#command-state", Static).update(
+            self._interaction_state_label(self.session.interaction)
+        )
+
+    @staticmethod
+    def _interaction_state_label(interaction: InteractionState) -> str:
+        explicit = getattr(interaction, "state", None)
+        if explicit:
+            return str(explicit)
+        if isinstance(interaction, InputInteraction):
+            return "输入有误" if interaction.error else "待输入"
+        if isinstance(interaction, ConfirmInteraction):
+            return "等待确认"
+        if isinstance(interaction, RunningInteraction):
+            return "执行中"
+        if isinstance(interaction, ControlInteraction):
+            return "刷新中" if interaction.refreshing else "已暂停"
+        return ""
 
     def _set_hints(self, primary: str) -> None:
         self._primary_hint = primary
@@ -2198,6 +2274,7 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     )
     table.add_row("/transcript", "显示当前 Agent 可读会话记录的路径")
     table.add_row("/copy", "复制当前页完整输出，可直接粘贴给 Agent")
+    table.add_row("/copy-interaction", "只复制当前交互区（也可输入 /copy interaction）")
     table.add_row("/copy 12-18", "按稳定 Activity 编号跨页复制")
     table.add_row("/copy-selected", "复制内容区中用 Space 选中的 Activity")
     table.add_row("/copy-history", "只复制当前会话的活动记录")
@@ -2211,6 +2288,7 @@ def _help_table(context: tuple[str, ...] = ()) -> Table:
     table.add_row("Ctrl+O", "收起或恢复交互区")
     table.add_row("Tab / Shift+Tab", "在输入、交互选项和内容区之间切换焦点")
     table.add_row("内容区 ↑↓ / Space / C", "定位、多选并复制 Activity")
+    table.add_row("交互区 ⌘C / Ctrl+Shift+C", "只复制当前交互内容")
     table.add_row("↑ / ↓, Enter", "在聚焦的交互区移动并执行选中项")
     table.add_row("/help", "显示这份帮助")
     return table

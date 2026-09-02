@@ -32,6 +32,9 @@ from kairospy.surface.workbench.screens.navigation import context_items
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
 from kairospy.surface.workbench.screens.session import GuidedSession
 from kairospy.surface.workbench.screens.flows import market, reference
+from kairospy.surface.workbench.screens.flows.operations import (
+    actions as operations_actions,
+)
 from kairospy.surface.workbench.screens.flows.reference import (
     actions as reference_actions,
 )
@@ -153,7 +156,7 @@ def test_workspace_market_subscription_resolves_symbol_without_ids(
 
     context, output, interaction = asyncio.run(run())
 
-    assert context == "trader / 市场与标的 / 我的实时行情  ›"
+    assert context == "trader › 市场与标的 › 我的实时行情"
     assert "添加实时行情预演完成，未执行任何修改" in output
     assert "market:aapl-nasdaq" not in interaction
     assert "Market ID" not in interaction
@@ -528,6 +531,103 @@ def test_catalog_completion_does_not_steal_an_unrelated_page() -> None:
     assert isinstance(resume[0], RunOperation)
 
 
+def test_catalog_setup_recovers_reference_and_resumes_original_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    searches = 0
+    plans = 0
+
+    def load_records(*_args: object, **_kwargs: object) -> tuple[Market, ...]:
+        nonlocal searches
+        searches += 1
+        if searches == 1:
+            raise RuntimeError("reference catalog is not initialized")
+        return (_market(),)
+
+    def load_plan(_state: object, goal: object) -> dict[str, object]:
+        nonlocal plans
+        plans += 1
+        return {
+            "goal": goal.to_request(),
+            "availability": "usable",
+            "activity": "idle",
+            "recommended_option": None,
+            "blockers": [],
+            "options": [],
+        }
+
+    starts: list[tuple[str, str]] = []
+    monkeypatch.setattr(market, "load_records", load_records)
+    monkeypatch.setattr(market, "load_catalog_setup_plan", load_plan)
+    monkeypatch.setattr(WorkbenchState, "refresh_snapshot", lambda self: self.snapshot)
+    monkeypatch.setattr(
+        operations_actions,
+        "execute_service",
+        lambda _state, component, action: starts.append((component, action)) or {},
+    )
+
+    async def run() -> tuple[tuple[str, ...], str, str, str]:
+        state = _state()
+        state.yes = True
+        state.snapshot = ObserveSnapshot(
+            workspace_id="trader",
+            shared_services={
+                "reference": {
+                    "status": "not_running",
+                    "control_reachable": False,
+                    "control_socket_exists": False,
+                    "pid_alive": False,
+                },
+                "market": {"status": "not_running"},
+            },
+        )
+        app = KairosWorkbenchApp(state)
+        async with app.run_test(size=(100, 34)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, CommandLineScreen)
+            for value in ("/market AAPL", "1", "1", "1"):
+                screen.submit(value)
+                await pilot.pause(0.06)
+            unavailable = interaction_copy_text(screen.session.interaction)
+            status = str(screen.query_one("#command-status", Static).render())
+            screen.submit("1")
+            await pilot.pause(0.2)
+            return (
+                screen.session.context,
+                unavailable,
+                status,
+                interaction_copy_text(screen.session.interaction),
+            )
+
+    context, unavailable, status, final_interaction = asyncio.run(run())
+
+    assert "标的目录服务尚未就绪" in unavailable
+    assert "启动 Reference 并继续" in unavailable
+    assert "Errno 2" not in unavailable
+    assert status == "Reference 服务尚未就绪 · 请选择恢复方式"
+    assert starts == [("reference", "start")]
+    assert plans == 1
+    assert searches == 2
+    assert context == ("market", "results")
+    assert "AAPL · 股票" in final_interaction
+
+
+def test_unresponsive_reference_offers_diagnostics_without_unsafe_restart() -> None:
+    session = GuidedSession(root_label="trader")
+    session.enter("market", "catalog-setup")
+    session.market.catalog_setup_reference_issue = "unresponsive"
+    session.market.catalog_setup_reference_recovery = None
+
+    actions = context_items(session, _state())
+
+    assert "recover-reference" not in {item.id for item in actions}
+    assert {item.id for item in actions} >= {
+        "check",
+        "reference-details",
+        "change",
+    }
+
+
 def test_market_result_can_be_focused_and_opened_with_keyboard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -625,7 +725,7 @@ def test_reference_search_and_numbered_result_stay_in_one_input_stream(
         run()
     )
     assert screen_type is CommandLineScreen
-    assert context == "trader / 市场与标的 / 标的目录 / 查询结果  ›"
+    assert context == "trader › 标的目录 › 查询结果"
     assert option_count == 1
     assert input_focused
     assert "找到 1 条交易标的记录" not in output
@@ -1081,10 +1181,10 @@ def test_market_search_owns_action_area_until_results_are_ready(
         input_focused,
         output,
     ) = asyncio.run(run())
-    assert prompt_context == "trader / 市场与标的  ›"
+    assert prompt_context == "trader › 市场与标的"
     assert not prompt_actions_visible
     assert prompt_hints == "Enter 搜索  ·  Esc 返回  ·  Ctrl+P 命令  ·  Tab 切换区域"
-    assert context == "trader / 市场与标的 / 查询结果  ›"
+    assert context == "trader › 市场与标的 › 查询结果"
     assert option_count == 1
     assert input_focused
     assert "找到 1 个标的" not in output
@@ -1178,7 +1278,7 @@ def test_guided_market_observation_and_back_keep_one_screen_and_search_results(
     control_text = console.export_text()
 
     assert screen_type is CommandLineScreen
-    assert context == "trader / 市场与标的 / 查询结果  ›"
+    assert context == "trader › 市场与标的 › 查询结果"
     assert "226.50" in output
     assert "AAPL   QUOTE" in output
     assert "bar" in next_actions
@@ -1325,7 +1425,7 @@ def test_selecting_market_enters_named_context_without_printing_raw_record(
             )
 
     context, output, actions = asyncio.run(run())
-    assert context == "trader / 市场与标的 / 已选标的 · AAPL · nasdaq · equity  ›"
+    assert context == "AAPL › 行情 › 已选标的"
     assert "MarketId(" not in output
     assert "最新报价" in actions[0]
     assert "订单簿" in actions[1]
@@ -1436,7 +1536,7 @@ def test_market_history_download_is_a_single_input_redacted_scope_preview(
 
     screen_type, context, output, focused = asyncio.run(run())
     assert screen_type is CommandLineScreen
-    assert context == "trader / 市场与标的 / 已选标的 · AAPL · nasdaq · equity  ›"
+    assert context == "AAPL › 行情 › 已选标的"
     assert "Market 文件操作预演完成，未执行任何修改" in output
     assert "history/aapl.jsonl" in output
     assert "preview" in output
@@ -1510,8 +1610,8 @@ def test_guided_reference_detail_technical_and_back_preserve_results(
             )
 
     selected, results, output, focused = asyncio.run(run())
-    assert selected == "trader / 市场与标的 / 标的目录 / 已选目录记录  ›"
-    assert results == "trader / 市场与标的 / 标的目录 / 查询结果  ›"
+    assert selected == "USD › 标的目录 › 目录记录"
+    assert results == "trader › 标的目录 › 查询结果"
     assert "asset:usd" in output
     assert focused
 

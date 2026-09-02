@@ -15,7 +15,7 @@ pub mod flatbuffer;
 pub mod generated;
 pub mod metadata;
 
-pub use context::ProtocolContext;
+pub use context::{EventProtocolContext, ProtocolContextError, ViewProtocolContext};
 pub use contract::{ContractClient, MissingContractEndpoint};
 pub use event::{BorrowedEventView, BusinessEventKind};
 pub use metadata::{EventMetadataDecodeError, EventMetadataOwned, decode_event_metadata};

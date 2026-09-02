@@ -8,6 +8,27 @@ from typing import Any, Mapping, Protocol
 from kairospy.infrastructure.unix_http import request_sync
 
 
+class JsonRpcCallError(RuntimeError):
+    """Structured remote failure returned by a JSON-RPC endpoint."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int | None = None,
+        data: object = None,
+        http_status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.data = data
+        self.http_status = http_status
+
+
+class JsonRpcProtocolError(ValueError):
+    """The peer returned a response that is not a valid object result."""
+
+
 class UnixJsonCommandClient:
     def __init__(self, socket_path: str | Path, *, timeout: float = 30.0) -> None:
         self.socket_path = Path(socket_path)
@@ -60,13 +81,32 @@ class UnixJsonRpcClient:
             timeout=self.timeout,
         )
         if status >= 400:
-            raise RuntimeError(
-                str(value.get("error", f"JSON-RPC request failed: HTTP {status}"))
+            raise JsonRpcCallError(
+                f"JSON-RPC request failed: HTTP {status}",
+                data=value.get("error"),
+                http_status=status,
             )
-        if "error" in value:
-            raise RuntimeError(str(value["error"]))
+        if value.get("jsonrpc") != "2.0":
+            raise JsonRpcProtocolError("JSON-RPC response is missing version 2.0")
+        if value.get("id") != request_id:
+            raise JsonRpcProtocolError(
+                "JSON-RPC response id does not match the request"
+            )
+        error = value.get("error")
+        if error is not None:
+            if isinstance(error, Mapping):
+                message = error.get("message")
+                code = error.get("code")
+                raise JsonRpcCallError(
+                    str(message or "JSON-RPC call was rejected"),
+                    code=code if isinstance(code, int) else None,
+                    data=error.get("data"),
+                )
+            raise JsonRpcCallError(str(error))
         result = value.get("result", {})
-        return result if isinstance(result, dict) else {"result": result}
+        if not isinstance(result, dict):
+            raise JsonRpcProtocolError("JSON-RPC result must be an object")
+        return result
 
 
 class JsonRpcCaller(Protocol):
@@ -75,4 +115,10 @@ class JsonRpcCaller(Protocol):
     ) -> Mapping[str, Any]: ...
 
 
-__all__ = ["JsonRpcCaller", "UnixJsonCommandClient", "UnixJsonRpcClient"]
+__all__ = [
+    "JsonRpcCallError",
+    "JsonRpcCaller",
+    "JsonRpcProtocolError",
+    "UnixJsonCommandClient",
+    "UnixJsonRpcClient",
+]

@@ -4,15 +4,26 @@ from __future__ import annotations
 
 from rich.cells import cell_len
 from rich.text import Text
+from textual.binding import Binding
 from textual.events import MouseDown, Resize
+from textual.message import Message
 from textual.widgets.option_list import Option
 
 from ..theme import PRIMARY, rich_theme_foreground, rich_theme_muted
 from .action_list import ActionItem, ActionList
 
 
+class InteractionCopyRequested(Message):
+    """Ask the owning screen to copy the current safe interaction text."""
+
+
 class GuidedActionList(ActionList):
     """Render actions that may be selected directly or by typed shortcut."""
+
+    BINDINGS = [
+        Binding("super+c", "copy_interaction", "复制当前交互", show=False),
+        Binding("ctrl+shift+c", "copy_interaction", "复制当前交互", show=False),
+    ]
 
     _mouse_selection_pending = False
 
@@ -37,6 +48,11 @@ class GuidedActionList(ActionList):
             self._mouse_selection_pending = False
             return
         super().action_select()
+
+    def action_copy_interaction(self) -> None:
+        """Copy the interaction represented by this focused action list."""
+
+        self.post_message(InteractionCopyRequested())
 
     def on_focus(self) -> None:
         """Give keyboard navigation a deterministic starting point."""
@@ -144,4 +160,4 @@ def _display_shortcut(value: str) -> str:
     return value if value.isdecimal() else f"/{value}"
 
 
-__all__ = ["GuidedActionList"]
+__all__ = ["GuidedActionList", "InteractionCopyRequested"]

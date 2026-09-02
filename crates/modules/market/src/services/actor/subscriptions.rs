@@ -247,7 +247,10 @@ impl MarketActor {
                 max_members
             ));
         }
-        let intent = self.dynamic_intents.get_mut(id).expect("intent exists");
+        let intent = self
+            .dynamic_intents
+            .get_mut(id)
+            .ok_or_else(|| format!("subscription disappeared during reconciliation: {id}"))?;
         let result = diff_members(&intent.members, &selected);
         if result.added.is_empty() && result.removed.is_empty() && result.changed.is_empty() {
             return Ok(result);

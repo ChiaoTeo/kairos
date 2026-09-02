@@ -95,7 +95,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         credential_store
             .credentials
             .iter()
-            .find(|value| value.credential_id == id)
+            .find(|value| value.credential_id() == id)
     });
     let api_key = credential
         .and_then(|value| value.api_key_value())

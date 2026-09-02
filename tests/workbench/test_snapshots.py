@@ -16,6 +16,8 @@ from kairospy.primitives.reference import ExchangeId, InstrumentId, MarketId
 from kairospy.system.apps.observe.application import ObserveSnapshot
 from kairospy.surface.workbench import KairosWorkbenchApp, WorkbenchState
 from kairospy.surface.workbench.screens.command_line import CommandLineScreen
+from kairospy.surface.workbench.screens.navigation import Routes
+from kairospy.surface.workbench.screens.selection import LaunchRecordView
 from kairospy.surface.workbench.screens.activity import (
     ActivityKind,
     ActivityOutcome,
@@ -24,6 +26,7 @@ from kairospy.surface.workbench.screens.activity import (
 from kairospy.surface.workbench.screens.flows import market
 from kairospy.surface.workbench.screens.operation import OperationSpec
 from kairospy.surface.workbench.screens.results import ResultKind, ResultRoute
+from kairospy.surface.workbench.widgets import ActionItem, InteractionHeading
 
 
 def _state() -> WorkbenchState:
@@ -57,6 +60,10 @@ def _market() -> Market:
 
 def test_command_line_dark_80x24(snap_compare: Any) -> None:
     assert snap_compare(KairosWorkbenchApp(_state()), terminal_size=(80, 24))
+
+
+def test_command_line_dark_100x30(snap_compare: Any) -> None:
+    assert snap_compare(KairosWorkbenchApp(_state()), terminal_size=(100, 30))
 
 
 def test_command_line_dark_60x20(snap_compare: Any) -> None:
@@ -198,6 +205,33 @@ def test_command_confirmation_uses_interaction_region(snap_compare: Any) -> None
         KairosWorkbenchApp(_state()),
         terminal_size=(80, 24),
         run_before=request_confirmation,
+    )
+
+
+def test_command_readiness_keeps_compact_task_context(snap_compare: Any) -> None:
+    async def show_readiness(pilot: Any) -> None:
+        screen = pilot.app.screen
+        assert isinstance(screen, CommandLineScreen)
+        screen.session.strategy.selected_record = LaunchRecordView(
+            {"launch_id": "paper-demo", "mode": "paper"}
+        )
+        screen.session.enter_context(Routes.STRATEGY_READINESS)
+        screen.session.choose(
+            (
+                ActionItem("retry", "重新校验运行条件", "修复后重新读取全部条件", "1"),
+                ActionItem("data", "修复行情连接", "配置并验证市场数据连接", "2"),
+            ),
+            heading=InteractionHeading("paper-demo", "paper · 运行条件"),
+            state="需要处理",
+        )
+        screen._interaction().present(screen.session.interaction)
+        screen._sync_context_chrome()
+        await pilot.pause()
+
+    assert snap_compare(
+        KairosWorkbenchApp(_state()),
+        terminal_size=(100, 30),
+        run_before=show_readiness,
     )
 
 

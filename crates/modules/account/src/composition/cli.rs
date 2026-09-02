@@ -2126,9 +2126,9 @@ impl CliAccountApplication {
             .credentials
             .iter()
             .map(|record| StoredCredentialResult {
-                credential_id: record.credential_id.clone(),
-                provider: record.provider.clone(),
-                role: record.role.clone(),
+                credential_id: record.credential_id().to_owned(),
+                provider: record.provider().to_owned(),
+                role: record.role().to_owned(),
                 api_key: redact(&record.api_key_value().unwrap_or_default()),
             })
             .collect();
@@ -2150,7 +2150,7 @@ impl CliAccountApplication {
         self.credential_store
             .credentials
             .iter()
-            .find(|value| value.credential_id == request.credential_id)
+            .find(|value| value.credential_id() == request.credential_id)
             .ok_or_else(|| format!("credential not found: {}", request.credential_id))?;
         if let Some(profile) = credential_profile {
             let permissions: std::collections::BTreeSet<_> = profile
@@ -2359,7 +2359,7 @@ impl CliAccountApplication {
             self.credential_store
                 .credentials
                 .iter()
-                .find(|record| record.credential_id == id)
+                .find(|record| record.credential_id() == id)
         });
         let paper = is_paper_or_simulated(&provider);
         let api_key = if paper {
@@ -2424,7 +2424,7 @@ impl CliAccountApplication {
             .await
             .ok();
         let connected_role = credential
-            .map(|value| value.role.clone())
+            .map(|value| value.role().to_owned())
             .unwrap_or_else(|| "readonly".into());
         let discovered_segments = credential_profile
             .as_ref()
@@ -2469,7 +2469,7 @@ impl CliAccountApplication {
             .credential_store
             .credentials
             .iter()
-            .find(|value| value.credential_id == credential_id)
+            .find(|value| value.credential_id() == credential_id)
             .ok_or_else(|| format!("credential not found: {credential_id}"))?;
         let paper = is_paper_or_simulated(&account.integration_provider);
         let api_key = if paper {
@@ -2621,12 +2621,12 @@ impl CliAccountApplication {
             .credential_store
             .credentials
             .iter()
-            .find(|record| record.credential_id == credential_id)
+            .find(|record| record.credential_id() == credential_id)
             .ok_or_else(|| format!("credential not found: {credential_id}"))?;
         Ok(CredentialDetailResult {
-            credential_id: credential.credential_id.clone(),
-            provider: credential.provider.clone(),
-            role: credential.role.clone(),
+            credential_id: credential.credential_id().to_owned(),
+            provider: credential.provider().to_owned(),
+            role: credential.role().to_owned(),
             api_key: if reveal_secrets {
                 credential.api_key_value().unwrap_or_default()
             } else {
@@ -2703,11 +2703,11 @@ impl CliAccountApplication {
             .filter(|account| {
                 account.environment == "live"
                     && !self.credential_store.credentials.iter().any(|credential| {
-                        credential.provider == account.integration_provider
+                        credential.provider() == account.integration_provider
                             || account
                                 .credential_id
                                 .as_deref()
-                                .is_some_and(|id| credential.credential_id == id)
+                                .is_some_and(|id| credential.credential_id() == id)
                     })
             })
             .map(|account| {
@@ -2761,7 +2761,7 @@ impl CliAccountApplication {
             self.credential_store
                 .credentials
                 .iter()
-                .find(|credential| credential.credential_id == credential_id)
+                .find(|credential| credential.credential_id() == credential_id)
         });
         if provider != "ibkr" && credential.is_none() {
             return Err(
@@ -2769,10 +2769,12 @@ impl CliAccountApplication {
             );
         }
         if let Some(credential) = credential {
-            if !credential.provider.eq_ignore_ascii_case(&provider) {
+            if !credential.provider().eq_ignore_ascii_case(&provider) {
                 return Err(format!(
                     "credential {} belongs to provider {}, not {}",
-                    credential.credential_id, credential.provider, provider
+                    credential.credential_id(),
+                    credential.provider(),
+                    provider
                 )
                 .into());
             }
