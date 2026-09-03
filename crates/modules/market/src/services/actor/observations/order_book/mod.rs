@@ -68,7 +68,8 @@ impl MarketActor {
         if delta.last_sequence <= book.sequence {
             return Ok(self.event_sequence.get());
         }
-        book.apply_delta_ref(&delta)?;
+        book.apply_delta_ref(&delta)
+            .map_err(|error| error.to_string())?;
         let freshness = (
             book.provider.clone(),
             book.market_id.clone(),

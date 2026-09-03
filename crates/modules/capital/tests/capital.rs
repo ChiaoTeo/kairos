@@ -6,18 +6,18 @@ use kairos_capital::composition::{
 use kairos_capital::{
     AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
     CancelFundingObjective, CapitalApplication, CapitalDemand, CapitalDemandId,
-    CapitalDemandReceipt, CapitalDemandStatus, CapitalEarnHoldingFact, CapitalError, CapitalFacts,
-    CapitalGroupConfig, CapitalGroupId, CapitalGroupMember, CapitalOperationKind,
-    CapitalOperationStatus, CapitalParticipantOperationState, CapitalPlanId, CapitalPlanStatus,
-    CapitalPolicy, CapitalReadiness, CapitalRecoveryAction, CapitalReservationStatus,
-    CapitalRouteId, CapitalRouteKind, CapitalSettlementClass, CapitalSubmissionOutcome,
-    CapitalTransferRoute, ConfirmManualCapitalTransfer, EvaluateCapitalGroup, ExpireCapitalDemands,
-    ExpireCapitalPlans, FundingLocation, FundingObjective, FundingObjectiveId,
-    FundingObjectiveReceipt, FundingObjectiveStatus, FundingPriority, MarkCapitalDeliveryStarted,
-    ObserveCapitalDemand, ObserveCapitalFacts, ObserveCapitalSettlement,
-    PreviewManualCapitalTransfer, PublishFundingObjective, RecordCapitalParticipantStatus,
-    RecordCapitalRecoveryRequired, RecordCapitalSubmission, UpdateCapitalPolicy,
-    UpdateCapitalRoute,
+    CapitalDemandReceipt, CapitalDemandStatus, CapitalDomainError, CapitalEarnHoldingFact,
+    CapitalError, CapitalFacts, CapitalGroupConfig, CapitalGroupId, CapitalGroupMember,
+    CapitalOperationKind, CapitalOperationStatus, CapitalParticipantOperationState, CapitalPlanId,
+    CapitalPlanStatus, CapitalPolicy, CapitalReadiness, CapitalRecoveryAction,
+    CapitalReservationStatus, CapitalRouteId, CapitalRouteKind, CapitalSettlementClass,
+    CapitalSubmissionOutcome, CapitalTransferRoute, ConfirmManualCapitalTransfer,
+    EvaluateCapitalGroup, ExpireCapitalDemands, ExpireCapitalPlans, FundingLocation,
+    FundingObjective, FundingObjectiveId, FundingObjectiveReceipt, FundingObjectiveStatus,
+    FundingPriority, MarkCapitalDeliveryStarted, ObserveCapitalDemand, ObserveCapitalFacts,
+    ObserveCapitalSettlement, PreviewManualCapitalTransfer, PublishFundingObjective,
+    RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
+    UpdateCapitalPolicy, UpdateCapitalRoute,
 };
 use kairos_conflux::{
     AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
@@ -250,6 +250,32 @@ fn manual_transfer_preview(
             expires_at: UnixNanos::new(140),
         })
         .unwrap()
+}
+
+#[test]
+fn invalid_capital_domain_input_remains_machine_distinguishable() {
+    let invalid = objective(0);
+    assert_eq!(
+        invalid.validate(),
+        Err(CapitalDomainError::ObjectiveVersionRequired)
+    );
+    assert_eq!(
+        CapitalDomainError::ObjectiveVersionRequired.code(),
+        "capital.objective.version_required"
+    );
+
+    let group_id = CapitalGroupId::new("capital-group-invalid-objective").unwrap();
+    let mut application = compose_capital_application(group_config(group_id.as_str()));
+    assert_eq!(
+        application.publish_funding_objective(PublishFundingObjective {
+            capital_group_id: group_id,
+            objective: invalid,
+            observed_at: UnixNanos::new(100),
+        }),
+        Err(CapitalError::InvalidDomain(
+            CapitalDomainError::ObjectiveVersionRequired
+        ))
+    );
 }
 
 #[test]

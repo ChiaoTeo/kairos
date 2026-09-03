@@ -6,7 +6,7 @@ use crate::domain::subscription::selector_matches_observation;
 
 impl MarketActor {
     pub fn apply_observation(&mut self, observation: MarketObservation) -> Result<u64, String> {
-        observation.validate()?;
+        observation.validate().map_err(|error| error.to_string())?;
         if !self.observation_is_selected(&observation) {
             return Ok(self.event_sequence.get());
         }

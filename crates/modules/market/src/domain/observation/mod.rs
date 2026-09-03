@@ -2,6 +2,7 @@ use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
 pub mod bar;
+mod error;
 pub mod funding_rate;
 pub mod identity;
 pub mod index_price;
@@ -17,8 +18,12 @@ pub mod trade;
 pub mod trade_bar;
 
 pub use bar::Bar;
+pub use error::MarketObservationError;
 pub use funding_rate::FundingRate;
-pub use identity::{MarketViewKey, ObservationKind, ObservationQualifier, ObservationScope};
+pub use identity::{
+    MarketViewKey, ObservationIdentityError, ObservationKind, ObservationQualifier,
+    ObservationScope,
+};
 pub use index_price::IndexPrice;
 pub use mark_price::MarkPrice;
 pub use open_interest::OpenInterest;
@@ -47,26 +52,26 @@ pub enum MarketObservation {
 }
 
 impl MarketObservation {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), MarketObservationError> {
         if self.instrument_id().trim().is_empty() || self.provider().trim().is_empty() {
-            return Err("observation scope, instrument and source identities are required".into());
+            return Err(MarketObservationError::MissingIdentity);
         }
         match self {
             Self::Bar(value) if value.timeframe.trim().is_empty() => {
-                return Err("bar timeframe is required".into());
+                return Err(MarketObservationError::BarTimeframeRequired);
             },
             Self::TradeBar(value) if value.bar.timeframe.trim().is_empty() => {
-                return Err("trade bar timeframe is required".into());
+                return Err(MarketObservationError::TradeBarTimeframeRequired);
             },
             Self::QuoteBar(value) if value.bar.timeframe.trim().is_empty() => {
-                return Err("quote bar timeframe is required".into());
+                return Err(MarketObservationError::QuoteBarTimeframeRequired);
             },
             Self::Rate(value) => {
                 if value.rate_id.trim().is_empty() {
-                    return Err("rate_id is required".into());
+                    return Err(MarketObservationError::RateIdRequired);
                 }
                 if value.basis.trim().is_empty() {
-                    return Err("rate basis is required".into());
+                    return Err(MarketObservationError::RateBasisRequired);
                 }
             },
             _ => {},
@@ -156,7 +161,7 @@ impl MarketObservation {
         }
     }
 
-    pub fn view_key(&self) -> Result<crate::MarketViewKey, String> {
+    pub fn view_key(&self) -> Result<crate::MarketViewKey, ObservationIdentityError> {
         match self.qualifier() {
             Some(qualifier) => crate::MarketViewKey::with_qualifier(
                 self.provider(),

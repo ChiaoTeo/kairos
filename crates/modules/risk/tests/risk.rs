@@ -7,7 +7,8 @@ use kairos_risk::composition::{FlatbuffersRiskEventWriter, compose_risk_applicat
 use kairos_risk::{
     Amount, AuthorizeRequest, CircuitScope, CloseCircuit, ConsumeReservation, EnforcementMode,
     Metric, OpenCircuit, PolicyScope, PublishPolicy, ReleaseReservation, ReservationStatus,
-    ResizeReservation, RiskApplication, RiskClockMode, RiskContext, RiskPolicy, TradeRiskProposal,
+    ResizeReservation, RiskApplication, RiskClockMode, RiskContext, RiskDomainError, RiskError,
+    RiskPolicy, TradeRiskProposal,
 };
 
 fn policy_id(value: &str) -> kairos_primitives::risk::PolicyId {
@@ -86,6 +87,28 @@ fn request(id: &str, value: i64) -> AuthorizeRequest {
         dependency_event_sequence: 1.into(),
         context: None,
     }
+}
+
+#[test]
+fn invalid_domain_amounts_remain_machine_distinguishable() {
+    assert_eq!(Amount::new(-1, 0), Err(RiskDomainError::NegativeAmount));
+    assert_eq!(
+        RiskDomainError::NegativeAmount.code(),
+        "risk.amount.negative"
+    );
+    assert_eq!(
+        amount(1).checked_mul_ratio(amount(1), Amount::ZERO),
+        Err(RiskDomainError::NonPositiveRatioDenominator)
+    );
+
+    let mut invalid = request("invalid-margin-rate", 1);
+    invalid.proposal.initial_margin_rate_bps = 0.into();
+    assert_eq!(
+        application(100).authorize_and_reserve(invalid),
+        Err(RiskError::InvalidDomain(
+            RiskDomainError::MissingInitialMarginRate
+        ))
+    );
 }
 
 #[test]

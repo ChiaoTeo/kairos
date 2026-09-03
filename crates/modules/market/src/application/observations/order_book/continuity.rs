@@ -36,7 +36,7 @@ impl MarketApplication {
                 update.bids,
                 update.asks,
             )
-            .map_err(MarketError::Invalid)?;
+            .map_err(|error| MarketError::Invalid(error.to_string()))?;
             self.ingest_orderbook_snapshot(book).map(|_| ())
         } else {
             self.ingest_orderbook_delta(OrderBookDelta {

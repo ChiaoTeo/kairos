@@ -7,12 +7,13 @@ use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use crate::domain::{
     Allocation, Amount, AuthorizeRequest, CircuitScope, DependencyWatermarks, EnforcementMode,
     FundingRequirement, LimitView, Metric, ReasonCode, Reservation, ReservationStatus,
-    RiskDecision, RiskEvent, RiskPolicy, RiskSnapshot,
+    RiskDecision, RiskDomainError, RiskEvent, RiskPolicy, RiskSnapshot,
 };
 use crate::services::persistence::{PersistedEvent, RiskStateStore};
 
 #[derive(Debug)]
 pub enum ActorError {
+    Domain(RiskDomainError),
     Invalid(String),
     Rejected(String),
     State(String),
@@ -27,7 +28,7 @@ struct LimitState {
 }
 
 impl LimitState {
-    fn available(&self) -> Result<Amount, String> {
+    fn available(&self) -> Result<Amount, RiskDomainError> {
         self.policy
             .limit
             .checked_sub(self.used.checked_add(self.reserved)?)
@@ -108,15 +109,16 @@ impl RiskActor {
         self.limits.clear();
         self.by_metric.clear();
         for view in snapshot.limits {
-            view.policy.validate()?;
-            self.insert_policy(view.policy.clone())?;
+            view.policy.validate().map_err(|error| error.to_string())?;
+            self.insert_policy(view.policy.clone())
+                .map_err(|error| error.to_string())?;
             let state = self
                 .limits
                 .get_mut(&view.policy.policy_id)
                 .ok_or_else(|| "restored policy disappeared".to_string())?;
             state.used = view.used;
             state.reserved = view.reserved;
-            state.available()?;
+            state.available().map_err(|error| error.to_string())?;
         }
         self.reservations.clear();
         self.idempotency.clear();
@@ -138,7 +140,7 @@ impl RiskActor {
     }
 
     pub(crate) fn publish_policy(&mut self, policy: RiskPolicy) -> Result<(), ActorError> {
-        policy.validate().map_err(ActorError::Invalid)?;
+        policy.validate().map_err(ActorError::Domain)?;
         if let Some(existing) = self.limits.get(&policy.policy_id) {
             if policy.version <= existing.policy.version {
                 return Err(ActorError::Invalid("policy version must increase".into()));
@@ -146,7 +148,7 @@ impl RiskActor {
             let committed = existing
                 .used
                 .checked_add(existing.reserved)
-                .map_err(ActorError::Invalid)?;
+                .map_err(ActorError::Domain)?;
             if committed.cmp_value(policy.limit).is_gt() {
                 return Err(ActorError::Invalid(
                     "policy limit cannot be lower than committed usage".into(),
@@ -163,7 +165,7 @@ impl RiskActor {
         self.advance_watermarks();
         self.policy_version = self.policy_version.max(policy.version);
         self.insert_policy(policy.clone())
-            .map_err(ActorError::State)?;
+            .map_err(ActorError::Domain)?;
         self.pending_events.push(RiskEvent::PolicyActivated {
             policy,
             event_sequence: next_sequence,
@@ -173,8 +175,8 @@ impl RiskActor {
     }
 
     fn evaluate_pre_trade(&self, request: AuthorizeRequest) -> Result<RiskDecision, ActorError> {
-        request.validate().map_err(ActorError::Invalid)?;
-        let usages = request.usages().map_err(ActorError::Invalid)?;
+        request.validate().map_err(ActorError::Domain)?;
+        let usages = request.usages().map_err(ActorError::Domain)?;
         let mut reasons = Vec::new();
         let mut violations = Vec::new();
         if self.circuits.iter().any(|c| {
@@ -205,7 +207,7 @@ impl RiskActor {
                     .map_err(|_| ActorError::Invalid("leverage value overflow".into()))?,
                 0,
             )
-            .map_err(ActorError::Invalid)?;
+            .map_err(ActorError::Domain)?;
             if self.policy_exceeded(Metric::Leverage, &request, leverage)? {
                 reasons.push(ReasonCode::LeverageExceeded);
                 violations.push("leverage limit exceeded".into());
@@ -215,7 +217,7 @@ impl RiskActor {
                     .map_err(|_| ActorError::Invalid("price deviation overflow".into()))?,
                 0,
             )
-            .map_err(ActorError::Invalid)?;
+            .map_err(ActorError::Domain)?;
             if self.policy_exceeded(Metric::PriceDeviation, &request, deviation)? {
                 reasons.push(ReasonCode::LimitExceeded);
                 violations.push("price deviation limit exceeded".into());
@@ -371,7 +373,7 @@ impl RiskActor {
         let mut reason_codes = Vec::new();
         let mut policy_version = Generation::new(0);
 
-        for usage in request.usages().map_err(ActorError::Invalid)? {
+        for usage in request.usages().map_err(ActorError::Domain)? {
             let policy_ids = self
                 .by_metric
                 .get(&usage.metric)
@@ -392,9 +394,9 @@ impl RiskActor {
                 let planned_amount = planned.get(&policy_id).copied().unwrap_or(Amount::ZERO);
                 let available = self
                     .available_for_request(state, &request)
-                    .map_err(ActorError::State)?
+                    .map_err(ActorError::Domain)?
                     .checked_sub(planned_amount)
-                    .map_err(ActorError::State)?;
+                    .map_err(ActorError::Domain)?;
                 if usage.amount.cmp_value(available).is_gt() {
                     match state.policy.enforcement {
                         EnforcementMode::Reject => {
@@ -408,7 +410,7 @@ impl RiskActor {
                     policy_id.clone(),
                     planned_amount
                         .checked_add(usage.amount)
-                        .map_err(ActorError::State)?,
+                        .map_err(ActorError::Domain)?,
                 );
                 allocations.push(Allocation {
                     policy_id,
@@ -607,8 +609,8 @@ impl RiskActor {
                     ..allocation.clone()
                 })
             })
-            .collect::<Result<Vec<_>, String>>()
-            .map_err(ActorError::Invalid)?;
+            .collect::<Result<Vec<_>, RiskDomainError>>()
+            .map_err(ActorError::Domain)?;
         for (allocation, resized) in current.allocations.iter().zip(&resized_allocations) {
             let state = self
                 .limits
@@ -616,9 +618,9 @@ impl RiskActor {
                 .ok_or_else(|| ActorError::State("reservation refers to missing policy".into()))?;
             let available_without_current = state
                 .available()
-                .map_err(ActorError::State)?
+                .map_err(ActorError::Domain)?
                 .checked_add(allocation.amount)
-                .map_err(ActorError::State)?;
+                .map_err(ActorError::Domain)?;
             if resized.amount.cmp_value(available_without_current).is_gt()
                 && state.policy.enforcement == EnforcementMode::Reject
             {
@@ -718,7 +720,7 @@ impl RiskActor {
         }
     }
 
-    fn insert_policy(&mut self, policy: RiskPolicy) -> Result<(), String> {
+    fn insert_policy(&mut self, policy: RiskPolicy) -> Result<(), RiskDomainError> {
         policy.validate()?;
         let previous_state = self.limits.remove(&policy.policy_id);
         if let Some(previous) = previous_state.as_ref() {
@@ -757,9 +759,15 @@ impl RiskActor {
                 .get_mut(&allocation.policy_id)
                 .ok_or_else(|| "reservation refers to missing policy".to_string())?;
             if sign {
-                state.reserved = state.reserved.checked_add(allocation.amount)?;
+                state.reserved = state
+                    .reserved
+                    .checked_add(allocation.amount)
+                    .map_err(|error| error.to_string())?;
             } else {
-                state.reserved = state.reserved.checked_sub(allocation.amount)?;
+                state.reserved = state
+                    .reserved
+                    .checked_sub(allocation.amount)
+                    .map_err(|error| error.to_string())?;
             }
         }
         Ok(())
@@ -787,7 +795,8 @@ impl RiskActor {
         match event {
             PersistedEvent::PolicyActivated { policy, .. } => {
                 self.policy_version = self.policy_version.max(policy.version);
-                self.insert_policy(policy)?;
+                self.insert_policy(policy)
+                    .map_err(|error| error.to_string())?;
             },
             PersistedEvent::ReservationChanged { reservation, .. } => {
                 match self.reservations.get(&reservation.reservation_id).cloned() {
@@ -907,7 +916,7 @@ impl RiskActor {
         &self,
         state: &LimitState,
         request: &AuthorizeRequest,
-    ) -> Result<Amount, String> {
+    ) -> Result<Amount, RiskDomainError> {
         if state.policy.window_nanos.is_none() {
             let observed = request.context.as_ref().map_or(Amount::ZERO, |context| {
                 match state.policy.metric {

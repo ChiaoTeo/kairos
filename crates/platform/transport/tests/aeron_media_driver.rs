@@ -1,39 +1,61 @@
+use std::fs::File;
 use std::net::UdpSocket;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use kairos_transport::{AeronBytePublisher, AeronByteSubscription, PublishOutcome};
 
-struct Driver(Child);
+struct Driver {
+    child: Child,
+}
 
 impl Drop for Driver {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
     }
+}
+
+fn driver_log(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|error| format!("<log unavailable: {error}>"))
 }
 
 fn driver() -> (tempfile::TempDir, Driver) {
     let root = tempfile::tempdir().unwrap();
     let aeron_dir = root.path().join("media");
     let health = root.path().join("ready.json");
-    let child = Command::new(env!("CARGO_BIN_EXE_kairos-aeron-driver"))
+    let log_path = root.path().join("media-driver.log");
+    let log = File::create(&log_path).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kairos-aeron-driver"))
         .args(["--aeron-dir", aeron_dir.to_str().unwrap(), "--health-file"])
         .arg(&health)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(log.try_clone().unwrap()))
+        .stderr(Stdio::from(log))
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while !health.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "Media Driver readiness timed out"
-        );
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!(
+                "Media Driver exited before readiness with {status}: {}",
+                driver_log(&log_path)
+            );
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "Media Driver readiness timed out: {}",
+                driver_log(&log_path)
+            );
+        }
         thread::sleep(Duration::from_millis(10));
     }
-    (root, Driver(child))
+    (root, Driver { child })
 }
 
 #[test]

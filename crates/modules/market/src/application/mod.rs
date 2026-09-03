@@ -34,17 +34,23 @@ pub use crate::domain::events::{
 };
 pub use crate::domain::freshness::{DataFreshnessStatus, FeedStatus, MarketFreshness};
 pub(crate) use crate::domain::market::ProviderRouteBinding;
-pub use crate::domain::market::{MarketSelectionQuery, ResolvedMarket, ResolvedMarketDataRoute};
-pub use crate::domain::observation::order_book::{OrderBook, OrderBookDelta, PriceLevel};
+pub use crate::domain::market::{
+    MarketSelectionQuery, ResolvedMarket, ResolvedMarketDataRoute, ResolvedMarketError,
+};
+pub use crate::domain::observation::order_book::{
+    OrderBook, OrderBookDelta, OrderBookError, PriceLevel,
+};
 pub use crate::domain::observation::{
-    Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, MarketViewKey, ObservationKind,
-    ObservationQualifier, ObservationScope, OpenInterest, OptionGreeks, Quote, QuoteBar, Rate,
-    Ticker24h, Trade, TradeBar,
+    Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, MarketObservationError,
+    MarketViewKey, ObservationIdentityError, ObservationKind, ObservationQualifier,
+    ObservationScope, OpenInterest, OptionGreeks, Quote, QuoteBar, Rate, Ticker24h, Trade,
+    TradeBar,
 };
 pub use crate::domain::source::MarketReadiness;
 pub use crate::domain::subscription::{
-    ObservationSelector, ReconcileResult, SubscriptionId, SubscriptionMemberRequirement,
-    SubscriptionMemberStatus, SubscriptionMode, SubscriptionState, SubscriptionStatus,
+    ObservationSelector, ObservationSelectorError, ReconcileResult, SubscriptionId,
+    SubscriptionMemberRequirement, SubscriptionMemberStatus, SubscriptionMode, SubscriptionState,
+    SubscriptionStatus,
 };
 pub use crate::domain::view::{MarketView, MarketViewFreshness};
 

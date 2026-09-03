@@ -2,7 +2,7 @@ use kairos_primitives::market::Provider;
 use serde::{Deserialize, Serialize};
 
 use super::qualifier::validate_path_component;
-use super::{ObservationKind, ObservationQualifier};
+use super::{ObservationIdentityError, ObservationKind, ObservationQualifier};
 
 /// Stable identity for one current market-data view.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -18,8 +18,8 @@ impl MarketViewKey {
         provider: impl AsRef<str>,
         scope_key: impl Into<String>,
         kind: ObservationKind,
-    ) -> Result<Self, String> {
-        let provider = Provider::new(provider.as_ref()).map_err(|error| error.to_string())?;
+    ) -> Result<Self, ObservationIdentityError> {
+        let provider = Provider::new(provider.as_ref())?;
         let scope_key = scope_key.into();
         validate_path_component("provider", &provider)?;
         validate_path_component("scope_key", &scope_key)?;
@@ -37,7 +37,7 @@ impl MarketViewKey {
         scope_key: impl Into<String>,
         kind: ObservationKind,
         qualifier: impl Into<String>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ObservationIdentityError> {
         let mut value = Self::new(provider, scope_key, kind)?;
         value.qualifier = Some(ObservationQualifier::new(qualifier)?);
         Ok(value)

@@ -78,7 +78,8 @@ impl MarketUniverseResolver {
                     instrument.instrument_type,
                     market.exchange_id.clone(),
                     route,
-                )?;
+                )
+                .map_err(|error| error.to_string())?;
                 descriptor.asset_type = market.asset_type;
                 descriptor.underlying_instrument_id = market.underlying_instrument_id.clone();
                 descriptor.expiry_unix_nanos = instrument.expiry_unix_nanos;
@@ -131,7 +132,9 @@ fn merge_markets(markets: Vec<ResolvedMarket>) -> Result<Vec<ResolvedMarket>, St
     for market in markets {
         let key = market.member_id();
         if let Some(existing) = merged.get_mut(&key) {
-            existing.merge_data_routes(&market)?;
+            existing
+                .merge_data_routes(&market)
+                .map_err(|error| error.to_string())?;
         } else {
             merged.insert(key, market);
         }

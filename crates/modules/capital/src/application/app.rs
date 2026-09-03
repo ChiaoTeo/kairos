@@ -4,11 +4,11 @@ use kairos_primitives::runtime::{IdempotencyKey, StrategyDecisionId};
 use kairos_primitives::time::UnixNanos;
 
 use crate::domain::{
-    CapitalAvailabilityView, CapitalDemand, CapitalDemandId, CapitalDemandRecord, CapitalFacts,
-    CapitalGroupId, CapitalMemberAccountObservation, CapitalOperation,
-    CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPolicy, CapitalRouteId,
-    CapitalSubmissionOutcome, CapitalTransferRoute, FundingLocation, FundingObjective,
-    FundingObjectiveId,
+    CapitalAvailabilityView, CapitalDemand, CapitalDemandId, CapitalDemandRecord,
+    CapitalDomainError, CapitalFacts, CapitalGroupId, CapitalMemberAccountObservation,
+    CapitalOperation, CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPolicy,
+    CapitalRouteId, CapitalSubmissionOutcome, CapitalTransferRoute, FundingLocation,
+    FundingObjective, FundingObjectiveId,
 };
 pub use crate::domain::{
     CapitalDemandReceipt, CapitalEvent, CapitalSnapshot, CapitalYieldCandidate,
@@ -189,6 +189,8 @@ pub struct ObserveCapitalSettlement {
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum CapitalError {
+    #[error("invalid capital request: {0}")]
+    InvalidDomain(CapitalDomainError),
     #[error("invalid capital request: {0}")]
     Invalid(String),
     #[error("capital request rejected: {0}")]
@@ -521,6 +523,7 @@ impl CapitalApplication {
 
 fn map_actor_error(error: ActorError) -> CapitalError {
     match error {
+        ActorError::Domain(error) => CapitalError::InvalidDomain(error),
         ActorError::Invalid(message) => CapitalError::Invalid(message),
         ActorError::Rejected(message) => CapitalError::Rejected(message),
         ActorError::State(message) => CapitalError::State(message),

@@ -20,5 +20,5 @@ pub use composition::RiskHost;
 pub use domain::{
     Allocation, Amount, AuthorizeRequest, CircuitScope, CircuitState, DependencyWatermarks,
     EnforcementMode, Metric, PolicyScope, ReasonCode, RequestedUsage, Reservation,
-    ReservationStatus, RiskContext, RiskPolicy, TradeRiskProposal,
+    ReservationStatus, RiskContext, RiskDomainError, RiskPolicy, TradeRiskProposal,
 };

@@ -28,13 +28,13 @@ pub use application::{
 };
 pub use domain::{
     CapitalAvailabilityView, CapitalDemand, CapitalDemandId, CapitalDemandRecord,
-    CapitalDemandStatus, CapitalEarnHoldingFact, CapitalFacts, CapitalFundingHorizon,
-    CapitalGroupConfig, CapitalGroupId, CapitalGroupMember, CapitalMemberAccountObservation,
-    CapitalMemberReadinessRole, CapitalOperation, CapitalOperationId, CapitalOperationKind,
-    CapitalOperationStatus, CapitalParticipantOperationState, CapitalPlan, CapitalPlanId,
-    CapitalPlanStatus, CapitalPolicy, CapitalReadiness, CapitalRecoveryAction, CapitalReservation,
-    CapitalReservationId, CapitalReservationStatus, CapitalRouteId, CapitalRouteKind,
-    CapitalSettlementClass, CapitalSubmissionOutcome, CapitalTransferRoute, FundingLocation,
-    FundingObjective, FundingObjectiveId, FundingObjectiveRecord, FundingObjectiveStatus,
-    FundingPriority,
+    CapitalDemandStatus, CapitalDomainError, CapitalEarnHoldingFact, CapitalFacts,
+    CapitalFundingHorizon, CapitalGroupConfig, CapitalGroupId, CapitalGroupMember,
+    CapitalMemberAccountObservation, CapitalMemberReadinessRole, CapitalOperation,
+    CapitalOperationId, CapitalOperationKind, CapitalOperationStatus,
+    CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPlanStatus, CapitalPolicy,
+    CapitalReadiness, CapitalRecoveryAction, CapitalReservation, CapitalReservationId,
+    CapitalReservationStatus, CapitalRouteId, CapitalRouteKind, CapitalSettlementClass,
+    CapitalSubmissionOutcome, CapitalTransferRoute, FundingLocation, FundingObjective,
+    FundingObjectiveId, FundingObjectiveRecord, FundingObjectiveStatus, FundingPriority,
 };

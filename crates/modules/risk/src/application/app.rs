@@ -5,7 +5,8 @@ use kairos_primitives::time::UnixNanos;
 use serde::Deserialize;
 
 use crate::domain::{
-    AuthorizeRequest, CircuitScope, CircuitState, Reservation, ReservationStatus, RiskPolicy,
+    AuthorizeRequest, CircuitScope, CircuitState, Reservation, ReservationStatus, RiskDomainError,
+    RiskPolicy,
 };
 pub use crate::domain::{
     FundingRequirement, LimitView, RiskCurrentView, RiskDecision, RiskEvent, RiskSnapshot,
@@ -57,6 +58,8 @@ pub struct CloseCircuit {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RiskError {
+    #[error("invalid risk request: {0}")]
+    InvalidDomain(RiskDomainError),
     #[error("invalid risk request: {0}")]
     Invalid(String),
     #[error("risk state failed: {0}")]
@@ -277,6 +280,7 @@ impl RiskApplication {
 
 fn map_actor_error(error: ActorError) -> RiskError {
     match error {
+        ActorError::Domain(value) => RiskError::InvalidDomain(value),
         ActorError::Invalid(value) => RiskError::Invalid(value),
         ActorError::Rejected(value) => RiskError::Rejected(value),
         ActorError::State(value) => RiskError::State(value),

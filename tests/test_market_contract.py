@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import subprocess
 from decimal import Decimal
@@ -21,6 +22,39 @@ from kairospy.contracts.market import (
     MarketViewKey,
     MarketViewKind,
 )
+
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_RUST_FIXTURE_TARGET = _REPOSITORY_ROOT / "target" / "pytest-rust-fixtures"
+
+
+def _rust_market_fixture_writer() -> Path:
+    environment = os.environ.copy()
+    environment["CARGO_TARGET_DIR"] = str(_RUST_FIXTURE_TARGET)
+    subprocess.run(
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "--quiet",
+            "-p",
+            "kairos-market-contract",
+            "--example",
+            "write_indexed_quote_fixture",
+        ],
+        cwd=_REPOSITORY_ROOT,
+        env=environment,
+        check=True,
+    )
+    executable = (
+        "write_indexed_quote_fixture.exe"
+        if os.name == "nt"
+        else "write_indexed_quote_fixture"
+    )
+    writer = _RUST_FIXTURE_TARGET / "debug" / "examples" / executable
+    if not writer.is_file():
+        raise FileNotFoundError(f"Cargo did not produce Rust fixture writer: {writer}")
+    return writer
 
 
 def test_market_native_subscription_types_own_validation() -> None:
@@ -96,17 +130,7 @@ def test_market_view_key_rejects_incomplete_identity() -> None:
 
 def test_rust_market_publisher_value_is_readable_by_kairospy(tmp_path: Path) -> None:
     subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--quiet",
-            "-p",
-            "kairos-market-contract",
-            "--example",
-            "write_indexed_quote_fixture",
-            "--",
-            str(tmp_path),
-        ],
+        [_rust_market_fixture_writer(), str(tmp_path)],
         check=True,
     )
     queries = MarketCurrentView(tmp_path, "workspace", "launch", "instance")
@@ -120,7 +144,5 @@ def test_rust_market_publisher_value_is_readable_by_kairospy(tmp_path: Path) -> 
     queries.close()
     # The typed result is Python-owned and does not retain an LMDB transaction.
     assert value.instrument_id == "instrument:fixture"
-    assert value.bid_price.mantissa == 12345
-    assert value.bid_price.scale == 2
     assert value.bid_price.mantissa == 12345
     assert value.bid_price.scale == 2

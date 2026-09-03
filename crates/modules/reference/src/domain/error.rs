@@ -10,6 +10,11 @@ pub enum ReferenceError {
         record_kind: String,
         record_id: String,
     },
+    CanonicalConflict {
+        record_kind: &'static str,
+        record_id: String,
+        fields: Vec<&'static str>,
+    },
     SyncInProgress {
         providers: Vec<String>,
     },
@@ -32,6 +37,15 @@ impl std::fmt::Display for ReferenceError {
                 f,
                 "invalid reference data: duplicate {record_kind} id: {record_id}"
             ),
+            Self::CanonicalConflict {
+                record_kind,
+                record_id,
+                fields,
+            } => write!(
+                f,
+                "invalid reference data: canonical {record_kind} conflict for {record_id}: different {}",
+                fields.join(", ")
+            ),
             Self::SyncInProgress { providers } => write!(
                 f,
                 "reference synchronization in progress: providers without last-known-good facts: {}",
@@ -50,6 +64,7 @@ impl ReferenceError {
             Self::Configuration(_) => "reference.invalid_configuration",
             Self::Invalid(_) => "reference.invalid_data",
             Self::DuplicateId { .. } => "reference.duplicate_id",
+            Self::CanonicalConflict { .. } => "reference.canonical_conflict",
             Self::SyncInProgress { .. } => "reference.sync_in_progress",
             Self::Provider(_) => "reference.provider_failed",
             Self::Persistence(_) => "reference.persistence_failed",
@@ -77,6 +92,18 @@ impl ReferenceError {
                 record_kind,
                 record_id,
             } => Some((record_kind, record_id)),
+            Self::CanonicalConflict {
+                record_kind,
+                record_id,
+                ..
+            } => Some((record_kind, record_id)),
+            _ => None,
+        }
+    }
+
+    pub fn conflict_fields(&self) -> Option<&[&'static str]> {
+        match self {
+            Self::CanonicalConflict { fields, .. } => Some(fields),
             _ => None,
         }
     }
@@ -102,6 +129,26 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "invalid reference configuration: unknown field `products`"
+        );
+        assert!(!error.retryable());
+    }
+
+    #[test]
+    fn canonical_conflicts_preserve_identity_and_fields() {
+        let error = ReferenceError::CanonicalConflict {
+            record_kind: "instrument",
+            record_id: "instrument:btc".into(),
+            fields: vec!["symbol", "instrument_type"],
+        };
+
+        assert_eq!(error.code(), "reference.canonical_conflict");
+        assert_eq!(
+            error.record_identity(),
+            Some(("instrument", "instrument:btc"))
+        );
+        assert_eq!(
+            error.conflict_fields(),
+            Some(["symbol", "instrument_type"].as_slice())
         );
         assert!(!error.retryable());
     }

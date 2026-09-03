@@ -804,11 +804,12 @@ impl ProviderCatalog {
             );
             for value in &catalog.assets {
                 if let Some(previous) = assets.get_mut(&value.asset_id) {
-                    merge_asset(previous, value).map_err(|reason| {
-                        ReferenceError::Invalid(format!(
-                            "canonical asset conflict for {}: {reason}",
-                            value.asset_id
-                        ))
+                    merge_asset(previous, value).map_err(|conflict| {
+                        ReferenceError::CanonicalConflict {
+                            record_kind: "asset",
+                            record_id: value.asset_id.to_string(),
+                            fields: conflict.fields,
+                        }
                     })?;
                 } else {
                     assets.insert(value.asset_id.clone(), value.clone());
@@ -817,11 +818,12 @@ impl ProviderCatalog {
             for value in &catalog.instruments {
                 if let Some(previous) = instruments.get_mut(&value.instrument_id) {
                     if previous != value {
-                        merge_instrument(previous, value).map_err(|reason| {
-                            ReferenceError::Invalid(format!(
-                                "canonical instrument conflict for {}: {reason}",
-                                value.instrument_id
-                            ))
+                        merge_instrument(previous, value).map_err(|conflict| {
+                            ReferenceError::CanonicalConflict {
+                                record_kind: "instrument",
+                                record_id: value.instrument_id.to_string(),
+                                fields: conflict.fields,
+                            }
                         })?;
                     }
                 } else {
@@ -1167,11 +1169,12 @@ pub(crate) fn reconcile_instruments(values: &mut Vec<Instrument>) -> ReferenceRe
     let mut reconciled = std::collections::BTreeMap::new();
     for value in std::mem::take(values) {
         if let Some(previous) = reconciled.get_mut(&value.instrument_id) {
-            merge_instrument(previous, &value).map_err(|reason| {
-                ReferenceError::Invalid(format!(
-                    "provider produced conflicting canonical instrument {}: {reason}",
-                    value.instrument_id
-                ))
+            merge_instrument(previous, &value).map_err(|conflict| {
+                ReferenceError::CanonicalConflict {
+                    record_kind: "instrument",
+                    record_id: value.instrument_id.to_string(),
+                    fields: conflict.fields,
+                }
             })?;
         } else {
             reconciled.insert(value.instrument_id.clone(), value);
@@ -1184,7 +1187,7 @@ pub(crate) fn reconcile_instruments(values: &mut Vec<Instrument>) -> ReferenceRe
 pub(crate) fn merge_instrument(
     previous: &mut Instrument,
     incoming: &Instrument,
-) -> Result<(), String> {
+) -> Result<(), ReferenceMergeConflict> {
     let status = merged_reference_status(previous.status, incoming.status);
     let mut left = previous.clone();
     let mut right = incoming.clone();
@@ -1223,13 +1226,16 @@ pub(crate) fn merge_instrument(
         if fields.is_empty() {
             fields.push("canonical attributes");
         }
-        return Err(format!("different {}", fields.join(", ")));
+        return Err(ReferenceMergeConflict { fields });
     }
     *previous = left;
     Ok(())
 }
 
-pub(crate) fn merge_asset(previous: &mut Asset, incoming: &Asset) -> Result<(), String> {
+pub(crate) fn merge_asset(
+    previous: &mut Asset,
+    incoming: &Asset,
+) -> Result<(), ReferenceMergeConflict> {
     let status = merged_reference_status(previous.status, incoming.status);
     let mut left = previous.clone();
     let mut right = incoming.clone();
@@ -1256,10 +1262,15 @@ pub(crate) fn merge_asset(previous: &mut Asset, incoming: &Asset) -> Result<(), 
         if fields.is_empty() {
             fields.push("canonical attributes");
         }
-        return Err(format!("different {}", fields.join(", ")));
+        return Err(ReferenceMergeConflict { fields });
     }
     *previous = left;
     Ok(())
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ReferenceMergeConflict {
+    fields: Vec<&'static str>,
 }
 
 fn merged_reference_status(

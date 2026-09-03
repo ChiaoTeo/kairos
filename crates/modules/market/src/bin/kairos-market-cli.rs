@@ -607,6 +607,7 @@ fn descriptor_from_values(
         exchange_id,
         "cli",
     )
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Parser)]

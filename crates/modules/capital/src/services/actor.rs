@@ -7,15 +7,15 @@ use kairos_primitives::time::{Sequence, UnixNanos};
 
 use crate::domain::{
     CapitalAvailabilityView, CapitalDemandId, CapitalDemandReceipt, CapitalDemandRecord,
-    CapitalDemandStatus, CapitalEvent, CapitalFacts, CapitalFundingHorizon, CapitalGroupConfig,
-    CapitalGroupId, CapitalMemberAccountObservation, CapitalMemberReadinessRole, CapitalOperation,
-    CapitalOperationId, CapitalOperationKind, CapitalOperationStatus,
-    CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPlanStatus, CapitalPolicy,
-    CapitalReadiness, CapitalRecoveryAction, CapitalReservation, CapitalReservationId,
-    CapitalReservationStatus, CapitalRouteId, CapitalRouteKind, CapitalSnapshot,
-    CapitalSubmissionOutcome, CapitalTransferRoute, CapitalYieldCandidate, FundingLocation,
-    FundingObjectiveId, FundingObjectiveReceipt, FundingObjectiveRecord, FundingObjectiveStatus,
-    ManualCapitalTransferPreview,
+    CapitalDemandStatus, CapitalDomainError, CapitalEvent, CapitalFacts, CapitalFundingHorizon,
+    CapitalGroupConfig, CapitalGroupId, CapitalMemberAccountObservation,
+    CapitalMemberReadinessRole, CapitalOperation, CapitalOperationId, CapitalOperationKind,
+    CapitalOperationStatus, CapitalParticipantOperationState, CapitalPlan, CapitalPlanId,
+    CapitalPlanStatus, CapitalPolicy, CapitalReadiness, CapitalRecoveryAction, CapitalReservation,
+    CapitalReservationId, CapitalReservationStatus, CapitalRouteId, CapitalRouteKind,
+    CapitalSnapshot, CapitalSubmissionOutcome, CapitalTransferRoute, CapitalYieldCandidate,
+    FundingLocation, FundingObjectiveId, FundingObjectiveReceipt, FundingObjectiveRecord,
+    FundingObjectiveStatus, ManualCapitalTransferPreview,
 };
 use crate::services::input::{
     AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
@@ -29,6 +29,7 @@ use crate::services::persistence::{CapitalJournalRecord, JournalCapitalStore};
 
 #[derive(Debug)]
 pub(crate) enum ActorError {
+    Domain(CapitalDomainError),
     Invalid(String),
     Rejected(String),
     State(String),
@@ -58,7 +59,7 @@ impl CapitalActor {
         config: CapitalGroupConfig,
         mut store: Option<JournalCapitalStore>,
     ) -> Result<Self, String> {
-        config.validate()?;
+        config.validate().map_err(|error| error.to_string())?;
         let recovered = store.as_mut().map(JournalCapitalStore::load).transpose()?;
         let mut actor = Self {
             config,
@@ -93,7 +94,7 @@ impl CapitalActor {
         command: PublishFundingObjective,
     ) -> Result<FundingObjectiveReceipt, ActorError> {
         self.validate_group(&command.capital_group_id)?;
-        command.objective.validate().map_err(ActorError::Invalid)?;
+        command.objective.validate().map_err(ActorError::Domain)?;
         if command.objective.strategy_id != self.config.strategy_id {
             return Err(ActorError::Rejected(
                 "funding objective belongs to another Strategy".into(),
@@ -187,7 +188,7 @@ impl CapitalActor {
         command: ObserveCapitalDemand,
     ) -> Result<CapitalDemandReceipt, ActorError> {
         self.validate_group(&command.capital_group_id)?;
-        command.demand.validate().map_err(ActorError::Invalid)?;
+        command.demand.validate().map_err(ActorError::Domain)?;
         if command.demand.strategy_id != self.config.strategy_id {
             return Err(ActorError::Rejected(
                 "capital demand belongs to another Strategy".into(),
@@ -243,7 +244,7 @@ impl CapitalActor {
 
     pub(crate) fn update_policy(&mut self, command: UpdateCapitalPolicy) -> Result<(), ActorError> {
         self.validate_group(&command.capital_group_id)?;
-        command.policy.validate().map_err(ActorError::Invalid)?;
+        command.policy.validate().map_err(ActorError::Domain)?;
         self.validate_location(&command.policy.destination)?;
         if let Some(existing) = self.policies.get(&command.policy.destination) {
             if command.policy == *existing {
@@ -340,7 +341,7 @@ impl CapitalActor {
 
     pub(crate) fn update_route(&mut self, command: UpdateCapitalRoute) -> Result<(), ActorError> {
         self.validate_group(&command.capital_group_id)?;
-        command.route.validate().map_err(ActorError::Invalid)?;
+        command.route.validate().map_err(ActorError::Domain)?;
         self.validate_location(&command.route.source)?;
         self.validate_location(&command.route.destination)?;
         if let Some(existing) = self.routes.get(&command.route.route_id) {
@@ -2240,7 +2241,10 @@ impl CapitalActor {
             }
         }
         for record in &snapshot.demands {
-            record.demand.validate()?;
+            record
+                .demand
+                .validate()
+                .map_err(|error| error.to_string())?;
             if record.demand.strategy_id != self.config.strategy_id
                 || !self.config.contains(&record.demand.destination)
             {
@@ -2258,7 +2262,7 @@ impl CapitalActor {
             }
         }
         for route in &snapshot.routes {
-            route.validate()?;
+            route.validate().map_err(|error| error.to_string())?;
             if !self.config.contains(&route.source) || !self.config.contains(&route.destination) {
                 return Err("Capital snapshot route is outside configured membership".into());
             }
@@ -2283,7 +2287,8 @@ impl CapitalActor {
                 .iter()
                 .find(|reservation| reservation.reservation_id == plan.reservation_id)
                 .ok_or_else(|| "Capital snapshot plan has no reservation".to_string())?;
-            plan.validate_reservation(reservation)?;
+            plan.validate_reservation(reservation)
+                .map_err(|error| error.to_string())?;
         }
         let mut operation_ids = HashSet::new();
         let mut operation_indexes = HashSet::new();
@@ -2299,7 +2304,8 @@ impl CapitalActor {
             if !operation_indexes.insert((operation.plan_id.clone(), operation.operation_index)) {
                 return Err("Capital snapshot contains duplicate operation indexes".into());
             }
-            plan.validate_operation(operation)?;
+            plan.validate_operation(operation)
+                .map_err(|error| error.to_string())?;
         }
         self.event_sequence = snapshot.event_sequence;
         self.journal_sequence = snapshot.journal_sequence;
@@ -2380,7 +2386,10 @@ impl CapitalActor {
                 event_sequence,
                 demand,
             } => {
-                demand.demand.validate()?;
+                demand
+                    .demand
+                    .validate()
+                    .map_err(|error| error.to_string())?;
                 if demand.demand.strategy_id != self.config.strategy_id
                     || !self.config.contains(&demand.demand.destination)
                 {
@@ -2445,7 +2454,7 @@ impl CapitalActor {
                 route,
                 occurred_at,
             } => {
-                route.validate()?;
+                route.validate().map_err(|error| error.to_string())?;
                 if !self.config.contains(&route.source) || !self.config.contains(&route.destination)
                 {
                     return Err("Capital journal route is outside configured membership".into());
@@ -2470,7 +2479,8 @@ impl CapitalActor {
                 {
                     return Err("Capital journal plan is outside configured membership".into());
                 }
-                plan.validate_reservation(&reservation)?;
+                plan.validate_reservation(&reservation)
+                    .map_err(|error| error.to_string())?;
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());
                 self.reservations
@@ -2496,8 +2506,10 @@ impl CapitalActor {
                         "Capital journal plan state is outside configured membership".into(),
                     );
                 }
-                plan.validate_reservation(&reservation)?;
-                plan.validate_operation(&operation)?;
+                plan.validate_reservation(&reservation)
+                    .map_err(|error| error.to_string())?;
+                plan.validate_operation(&operation)
+                    .map_err(|error| error.to_string())?;
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());
                 self.reservations
@@ -2526,9 +2538,11 @@ impl CapitalActor {
                         "Capital journal expired plan is outside configured membership".into(),
                     );
                 }
-                plan.validate_reservation(&reservation)?;
+                plan.validate_reservation(&reservation)
+                    .map_err(|error| error.to_string())?;
                 if let Some(operation) = operation.as_deref() {
-                    plan.validate_operation(operation)?;
+                    plan.validate_operation(operation)
+                        .map_err(|error| error.to_string())?;
                 }
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());

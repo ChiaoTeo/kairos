@@ -9,6 +9,54 @@ use kairos_primitives::time::{BasisPoints, DurationNanos, Generation, Sequence, 
 use rust_decimal::Decimal as RustDecimal;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum RiskDomainError {
+    #[error("risk amounts cannot be negative")]
+    NegativeAmount,
+    #[error("risk amount scale exceeds 18 digits")]
+    AmountScaleExceeded,
+    #[error("risk amount overflow")]
+    AmountOverflow,
+    #[error("risk amount underflow")]
+    AmountUnderflow,
+    #[error("risk amount cannot become negative")]
+    NegativeAmountResult,
+    #[error("risk ratio denominator must be positive")]
+    NonPositiveRatioDenominator,
+    #[error("policy_id and positive version are required")]
+    PolicyVersionRequired,
+    #[error("policy validity interval is inverted")]
+    InvertedPolicyValidity,
+    #[error("policy window must be positive")]
+    NonPositivePolicyWindow,
+    #[error("policy limit must be positive")]
+    NonPositivePolicyLimit,
+    #[error("notional and reservation TTL must be positive")]
+    NonPositiveNotionalOrTtl,
+    #[error("opening trades require a positive initial margin rate")]
+    MissingInitialMarginRate,
+}
+
+impl RiskDomainError {
+    /// Stable owner-defined code for logs, metrics, and boundary adapters.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::NegativeAmount => "risk.amount.negative",
+            Self::AmountScaleExceeded => "risk.amount.scale_exceeded",
+            Self::AmountOverflow => "risk.amount.overflow",
+            Self::AmountUnderflow => "risk.amount.underflow",
+            Self::NegativeAmountResult => "risk.amount.negative_result",
+            Self::NonPositiveRatioDenominator => "risk.ratio.denominator_non_positive",
+            Self::PolicyVersionRequired => "risk.policy.version_required",
+            Self::InvertedPolicyValidity => "risk.policy.validity_inverted",
+            Self::NonPositivePolicyWindow => "risk.policy.window_non_positive",
+            Self::NonPositivePolicyLimit => "risk.policy.limit_non_positive",
+            Self::NonPositiveNotionalOrTtl => "risk.request.notional_or_ttl_non_positive",
+            Self::MissingInitialMarginRate => "risk.request.initial_margin_rate_missing",
+        }
+    }
+}
+
 /// Risk quantities are non-negative fixed-point values.  The wire contract
 /// remains i64-compatible, while arithmetic is performed through Decimal so
 /// values with different scales cannot be accidentally compared as integers.
@@ -24,57 +72,61 @@ impl Amount {
         scale: 0,
     };
 
-    pub fn new(mantissa: i64, scale: u8) -> Result<Self, String> {
+    pub fn new(mantissa: i64, scale: u8) -> Result<Self, RiskDomainError> {
         if mantissa < 0 {
-            return Err("risk amounts cannot be negative".into());
+            return Err(RiskDomainError::NegativeAmount);
         }
         if scale > kairos_primitives::decimal::MAX_DECIMAL_SCALE {
-            return Err("risk amount scale exceeds 18 digits".into());
+            return Err(RiskDomainError::AmountScaleExceeded);
         }
         let value = RustDecimal::try_new(mantissa, u32::from(scale))
-            .map_err(|_| "risk amount overflow".to_string())?
+            .map_err(|_| RiskDomainError::AmountOverflow)?
             .normalize();
         Self::from_decimal(value)
     }
 
-    pub fn checked_add(self, other: Self) -> Result<Self, String> {
+    pub fn checked_add(self, other: Self) -> Result<Self, RiskDomainError> {
         let value = self
             .as_decimal()?
             .checked_add(other.as_decimal()?)
-            .ok_or_else(|| "risk amount overflow".to_string())?;
+            .ok_or(RiskDomainError::AmountOverflow)?;
         Self::from_decimal(value)
     }
 
-    pub fn checked_sub(self, other: Self) -> Result<Self, String> {
+    pub fn checked_sub(self, other: Self) -> Result<Self, RiskDomainError> {
         let value = self
             .as_decimal()?
             .checked_sub(other.as_decimal()?)
-            .ok_or_else(|| "risk amount underflow".to_string())?;
+            .ok_or(RiskDomainError::AmountUnderflow)?;
         if value.is_sign_negative() {
-            return Err("risk amount cannot become negative".into());
+            return Err(RiskDomainError::NegativeAmountResult);
         }
         Self::from_decimal(value)
     }
 
-    pub fn checked_mul_bps(self, basis_points: BasisPoints) -> Result<Self, String> {
+    pub fn checked_mul_bps(self, basis_points: BasisPoints) -> Result<Self, RiskDomainError> {
         let value = self
             .as_decimal()?
             .checked_mul(RustDecimal::from(basis_points.get()))
             .and_then(|value| value.checked_div(RustDecimal::from(10_000_u64)))
-            .ok_or_else(|| "risk amount overflow".to_string())?
+            .ok_or(RiskDomainError::AmountOverflow)?
             .normalize();
         Self::from_decimal(value)
     }
 
-    pub fn checked_mul_ratio(self, numerator: Self, denominator: Self) -> Result<Self, String> {
+    pub fn checked_mul_ratio(
+        self,
+        numerator: Self,
+        denominator: Self,
+    ) -> Result<Self, RiskDomainError> {
         if denominator == Self::ZERO {
-            return Err("risk ratio denominator must be positive".into());
+            return Err(RiskDomainError::NonPositiveRatioDenominator);
         }
         let value = self
             .as_decimal()?
             .checked_mul(numerator.as_decimal()?)
             .and_then(|value| value.checked_div(denominator.as_decimal().ok()?))
-            .ok_or_else(|| "risk amount overflow".to_string())?
+            .ok_or(RiskDomainError::AmountOverflow)?
             .normalize();
         Self::from_decimal(value)
     }
@@ -94,17 +146,17 @@ impl Amount {
         self.scale
     }
 
-    fn as_decimal(self) -> Result<RustDecimal, String> {
+    fn as_decimal(self) -> Result<RustDecimal, RiskDomainError> {
         RustDecimal::try_new(self.mantissa, u32::from(self.scale))
-            .map_err(|_| "risk amount overflow".to_string())
+            .map_err(|_| RiskDomainError::AmountOverflow)
     }
 
-    fn from_decimal(value: RustDecimal) -> Result<Self, String> {
+    fn from_decimal(value: RustDecimal) -> Result<Self, RiskDomainError> {
         let mantissa =
-            i64::try_from(value.mantissa()).map_err(|_| "risk amount overflow".to_string())?;
-        let scale = u8::try_from(value.scale()).map_err(|_| "risk amount overflow".to_string())?;
+            i64::try_from(value.mantissa()).map_err(|_| RiskDomainError::AmountOverflow)?;
+        let scale = u8::try_from(value.scale()).map_err(|_| RiskDomainError::AmountOverflow)?;
         if scale > kairos_primitives::decimal::MAX_DECIMAL_SCALE {
-            return Err("risk amount scale exceeds 18 digits".into());
+            return Err(RiskDomainError::AmountScaleExceeded);
         }
         Ok(Self { mantissa, scale })
     }
@@ -260,21 +312,21 @@ pub struct RiskPolicy {
 }
 
 impl RiskPolicy {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), RiskDomainError> {
         if self.version.get() == 0 {
-            return Err("policy_id and positive version are required".into());
+            return Err(RiskDomainError::PolicyVersionRequired);
         }
         if self
             .valid_until_unix_nanos
             .is_some_and(|until| until <= self.valid_from_unix_nanos)
         {
-            return Err("policy validity interval is inverted".into());
+            return Err(RiskDomainError::InvertedPolicyValidity);
         }
         if self.window_nanos.is_some_and(|window| window.get() == 0) {
-            return Err("policy window must be positive".into());
+            return Err(RiskDomainError::NonPositivePolicyWindow);
         }
         if self.limit == Amount::ZERO {
-            return Err("policy limit must be positive".into());
+            return Err(RiskDomainError::NonPositivePolicyLimit);
         }
         Ok(())
     }
@@ -307,17 +359,17 @@ pub struct AuthorizeRequest {
 }
 
 impl AuthorizeRequest {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), RiskDomainError> {
         if self.proposal.notional == Amount::ZERO || self.reservation_ttl_nanos.get() == 0 {
-            return Err("notional and reservation TTL must be positive".into());
+            return Err(RiskDomainError::NonPositiveNotionalOrTtl);
         }
         if !self.proposal.reduce_only && self.proposal.initial_margin_rate_bps.get() == 0 {
-            return Err("opening trades require a positive initial margin rate".into());
+            return Err(RiskDomainError::MissingInitialMarginRate);
         }
         Ok(())
     }
 
-    pub fn usages(&self) -> Result<Vec<RequestedUsage>, String> {
+    pub fn usages(&self) -> Result<Vec<RequestedUsage>, RiskDomainError> {
         let mut usages = vec![
             RequestedUsage {
                 metric: Metric::Notional,

@@ -331,7 +331,7 @@ fn now_unix_nanos() -> u64 {
 
 fn control_error(error: RiskError) -> RiskControlError {
     let (code, retryable) = match error {
-        RiskError::Invalid(_) => ("risk.invalid", false),
+        RiskError::InvalidDomain(_) | RiskError::Invalid(_) => ("risk.invalid", false),
         RiskError::Rejected(_) => ("risk.rejected", false),
         RiskError::Persistence(_) => ("risk.persistence", true),
         RiskError::Busy => ("risk.busy", true),

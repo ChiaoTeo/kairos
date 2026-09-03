@@ -142,7 +142,9 @@ impl MarketApplication {
                 };
                 let descriptor = &self.actor.attached_sources[&source_id].descriptor;
                 if descriptor.provider.is_some() {
-                    market.select_observations(&selectors)?;
+                    market
+                        .select_observations(&selectors)
+                        .map_err(|error| error.to_string())?;
                 }
                 let key =
                     PhysicalSubscriptionKey::for_source(descriptor, &market).ok_or_else(|| {

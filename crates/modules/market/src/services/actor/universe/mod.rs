@@ -61,7 +61,7 @@ impl MarketActor {
     ) -> Result<BTreeMap<SubscriptionId, ReconcileResult>, String> {
         let mut market_universe = BTreeMap::new();
         for market in &markets {
-            market.validate()?;
+            market.validate().map_err(|error| error.to_string())?;
             let Some(market_id) = market.market_id() else {
                 return Err("canonical market universe cannot contain a consolidated route".into());
             };
@@ -91,7 +91,7 @@ impl MarketActor {
     ) -> Result<BTreeMap<String, ResolvedMarket>, String> {
         let mut selected = BTreeMap::new();
         for market in markets {
-            market.validate()?;
+            market.validate().map_err(|error| error.to_string())?;
             if query.matches(&market) {
                 selected.insert(market.member_id(), market);
             }

@@ -8,7 +8,9 @@ use kairos_primitives::reference::{
 use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
-use super::{AttachedMarketDataRoute, ProviderRouteBinding, ResolvedMarketDataRoute};
+use super::{
+    AttachedMarketDataRoute, ProviderRouteBinding, ResolvedMarketDataRoute, ResolvedMarketError,
+};
 use crate::domain::observation::ObservationScope;
 use crate::domain::source::MarketFeedId;
 use crate::domain::subscription::ObservationSelector;
@@ -50,9 +52,9 @@ impl ResolvedMarket {
         instrument_kind: InstrumentKind,
         exchange_id: ExchangeId,
         route: ProviderRouteBinding,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ResolvedMarketError> {
         if instrument_kind == InstrumentKind::Unknown {
-            return Err("market instrument kind must be known".into());
+            return Err(ResolvedMarketError::UnknownInstrumentKind);
         }
         let data_route = ResolvedMarketDataRoute::new(
             market_id.clone(),
@@ -86,8 +88,13 @@ impl ResolvedMarket {
         instrument_kind: InstrumentKind,
         exchange_id: impl Into<String>,
         provider: impl Into<String>,
-    ) -> Result<Self, String> {
-        let provider = Provider::new(provider.into()).map_err(|error| error.to_string())?;
+    ) -> Result<Self, ResolvedMarketError> {
+        let provider = Provider::new(provider.into()).map_err(|source| {
+            ResolvedMarketError::InvalidSemantic {
+                field: "provider",
+                source,
+            }
+        })?;
         Self::new_with_routes(
             market_id,
             instrument_id,
@@ -105,7 +112,7 @@ impl ResolvedMarket {
         instrument_kind: InstrumentKind,
         exchange_id: impl Into<String>,
         route: ProviderRouteBinding,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ResolvedMarketError> {
         let providers = BTreeSet::from([route.provider.clone()]);
         let runtime_routes = BTreeMap::from([(route.provider.clone(), route)]);
         Self::new_with_routes(
@@ -125,11 +132,16 @@ impl ResolvedMarket {
         exchange_id: impl Into<String>,
         providers: BTreeSet<Provider>,
         runtime_routes: BTreeMap<Provider, ProviderRouteBinding>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ResolvedMarketError> {
         if instrument_kind == InstrumentKind::Unknown {
-            return Err("market instrument kind must be known".into());
+            return Err(ResolvedMarketError::UnknownInstrumentKind);
         }
-        let market_id = MarketId::new(market_id.into()).map_err(|error| error.to_string())?;
+        let market_id = MarketId::new(market_id.into()).map_err(|source| {
+            ResolvedMarketError::InvalidSemantic {
+                field: "market_id",
+                source,
+            }
+        })?;
         let data_routes = providers
             .into_iter()
             .map(|provider| {
@@ -143,10 +155,19 @@ impl ResolvedMarket {
             .collect();
         let value = Self {
             scope: ObservationScope::market(market_id.to_string())?,
-            instrument_id: InstrumentId::new(instrument_id.into())
-                .map_err(|error| error.to_string())?,
+            instrument_id: InstrumentId::new(instrument_id.into()).map_err(|source| {
+                ResolvedMarketError::InvalidSemantic {
+                    field: "instrument_id",
+                    source,
+                }
+            })?,
             instrument_kind,
-            exchange_id: Some(ExchangeId::new(exchange_id).map_err(|error| error.to_string())?),
+            exchange_id: Some(ExchangeId::new(exchange_id).map_err(|source| {
+                ResolvedMarketError::InvalidSemantic {
+                    field: "exchange_id",
+                    source,
+                }
+            })?),
             asset_type: None,
             underlying_instrument_id: None,
             expiry_unix_nanos: None,
@@ -170,12 +191,16 @@ impl ResolvedMarket {
         network_id: Option<String>,
         instrument_kind: InstrumentKind,
         route: ProviderRouteBinding,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ResolvedMarketError> {
         if instrument_kind == InstrumentKind::Unknown {
-            return Err("market instrument kind must be known".into());
+            return Err(ResolvedMarketError::UnknownInstrumentKind);
         }
-        let instrument_id =
-            InstrumentId::new(instrument_id.into()).map_err(|error| error.to_string())?;
+        let instrument_id = InstrumentId::new(instrument_id.into()).map_err(|source| {
+            ResolvedMarketError::InvalidSemantic {
+                field: "instrument_id",
+                source,
+            }
+        })?;
         let runtime_routes = BTreeMap::from([(route.provider.clone(), route.clone())]);
         let value = Self {
             scope: ObservationScope::consolidated(instrument_id.to_string(), network_id)?,
@@ -202,22 +227,13 @@ impl ResolvedMarket {
         network_id: Option<String>,
         instrument_kind: InstrumentKind,
         route: ProviderRouteBinding,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ResolvedMarketError> {
         if instrument_kind == InstrumentKind::Unknown {
-            return Err("market instrument kind must be known".into());
-        }
-        if network_id
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err("observation network_id must be non-empty when present".into());
+            return Err(ResolvedMarketError::UnknownInstrumentKind);
         }
         let runtime_routes = BTreeMap::from([(route.provider.clone(), route.clone())]);
         let value = Self {
-            scope: ObservationScope::Consolidated {
-                instrument_id: instrument_id.clone(),
-                network_id,
-            },
+            scope: ObservationScope::consolidated(instrument_id.to_string(), network_id)?,
             instrument_id,
             instrument_kind,
             exchange_id: None,
@@ -244,9 +260,12 @@ impl ResolvedMarket {
         self.data_routes.iter().next().cloned()
     }
 
-    pub(crate) fn merge_data_routes(&mut self, other: &Self) -> Result<(), String> {
+    pub(crate) fn merge_data_routes(&mut self, other: &Self) -> Result<(), ResolvedMarketError> {
         if self.scope != other.scope || self.instrument_id != other.instrument_id {
-            return Err("cannot merge provider routes for different Markets".into());
+            return Err(ResolvedMarketError::DifferentMarketIdentity {
+                current: self.member_id(),
+                incoming: other.member_id(),
+            });
         }
         self.data_routes.extend(other.data_routes.iter().cloned());
         self.runtime_routes.extend(other.runtime_routes.clone());
@@ -286,10 +305,10 @@ impl ResolvedMarket {
     pub(crate) fn select_observations(
         &mut self,
         selectors: &[ObservationSelector],
-    ) -> Result<(), String> {
+    ) -> Result<(), ResolvedMarketError> {
         let route = self
             .runtime_route()
-            .ok_or_else(|| "resolved Market has no runtime provider binding".to_string())?;
+            .ok_or(ResolvedMarketError::MissingRuntimeBinding)?;
         let requested: BTreeSet<ObservationSelector> =
             if selectors.is_empty() || selectors.iter().any(|value| value.kind.is_none()) {
                 let capabilities = if route.observation_capabilities.is_empty() {
@@ -325,14 +344,16 @@ impl ResolvedMarket {
                                         .observation_capabilities
                                         .contains(&crate::ObservationKind::Rate)
                             );
-                        supported
-                            .then(|| selector.clone())
-                            .ok_or_else(|| format!("provider route does not support {kind:?}"))
+                        supported.then(|| selector.clone()).ok_or(
+                            ResolvedMarketError::UnsupportedObservation {
+                                observation_kind: kind,
+                            },
+                        )
                     })
                     .collect::<Result<_, _>>()?
             };
         if requested.is_empty() {
-            return Err("provider route exposes no subscribable observations".into());
+            return Err(ResolvedMarketError::NoSubscribableObservations);
         }
         self.selected_observations = requested;
         Ok(())
@@ -367,23 +388,26 @@ impl ResolvedMarket {
         self.scope.key()
     }
 
-    pub fn with_asset_type(mut self, asset_type: impl Into<String>) -> Result<Self, String> {
-        self.asset_type = Some(
-            asset_type
-                .into()
-                .parse::<AssetClass>()
-                .map_err(|error| error.to_string())?,
-        );
+    pub fn with_asset_type(
+        mut self,
+        asset_type: impl Into<String>,
+    ) -> Result<Self, ResolvedMarketError> {
+        self.asset_type = Some(asset_type.into().parse::<AssetClass>().map_err(|source| {
+            ResolvedMarketError::InvalidSemantic {
+                field: "asset_type",
+                source,
+            }
+        })?);
         self.validate()?;
         Ok(self)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ResolvedMarketError> {
         if self.instrument_kind == InstrumentKind::Unknown {
-            return Err("market instrument kind must be known".into());
+            return Err(ResolvedMarketError::UnknownInstrumentKind);
         }
         if self.status == ReferenceStatus::Unknown {
-            return Err("status is required".into());
+            return Err(ResolvedMarketError::UnknownStatus);
         }
         Ok(())
     }
@@ -393,5 +417,43 @@ impl ResolvedMarket {
             self.status,
             ReferenceStatus::Active | ReferenceStatus::Trading
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kairos_primitives::DomainTypeError;
+    use kairos_primitives::reference::InstrumentKind;
+
+    use super::{ResolvedMarket, ResolvedMarketError};
+
+    #[test]
+    fn resolution_errors_preserve_category_and_field() {
+        let unknown_kind = ResolvedMarket::new(
+            "market",
+            "instrument",
+            InstrumentKind::Unknown,
+            "exchange",
+            "feed",
+        )
+        .unwrap_err();
+        assert_eq!(unknown_kind, ResolvedMarketError::UnknownInstrumentKind);
+        assert_eq!(
+            unknown_kind.code(),
+            "market.resolution.unknown_instrument_kind"
+        );
+
+        let invalid_provider =
+            ResolvedMarket::new("market", "instrument", InstrumentKind::Spot, "exchange", "")
+                .unwrap_err();
+        assert_eq!(
+            invalid_provider,
+            ResolvedMarketError::InvalidSemantic {
+                field: "provider",
+                source: DomainTypeError::Empty {
+                    type_name: "Provider"
+                }
+            }
+        );
     }
 }

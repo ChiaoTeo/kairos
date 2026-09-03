@@ -238,7 +238,7 @@ pub(crate) fn circuit_scope_from(
 }
 
 pub(crate) fn amount_from(value: kairos_risk_contract::Amount) -> Result<crate::Amount, String> {
-    crate::Amount::new(value.mantissa(), value.scale())
+    crate::Amount::new(value.mantissa(), value.scale()).map_err(|error| error.to_string())
 }
 
 fn metric_from(value: kairos_risk_contract::Metric) -> crate::Metric {

@@ -51,8 +51,9 @@ impl MarketActor {
             return Err(format!("subscription id already exists: {id}"));
         }
         for market in &markets {
-            market.validate()?;
-            validate_observation_selectors(market.instrument_kind, &selectors)?;
+            market.validate().map_err(|error| error.to_string())?;
+            validate_observation_selectors(market.instrument_kind, &selectors)
+                .map_err(|error| error.to_string())?;
         }
         let owner_id = owner_id.into();
         if owner_id.trim().is_empty() {
@@ -113,7 +114,8 @@ impl MarketActor {
         }
         let selected = self.valid_members(query.clone(), members)?;
         for market in selected.values() {
-            validate_observation_selectors(market.instrument_kind, &selectors)?;
+            validate_observation_selectors(market.instrument_kind, &selectors)
+                .map_err(|error| error.to_string())?;
         }
         if selected.len() > self.max_dynamic_members {
             return Err(format!(
@@ -209,8 +211,9 @@ impl MarketActor {
     ) -> Result<ReconcileResult, String> {
         if let Some(subscription) = self.static_subscriptions.get_mut(id) {
             for market in &markets {
-                market.validate()?;
-                validate_observation_selectors(market.instrument_kind, &subscription.selectors)?;
+                market.validate().map_err(|error| error.to_string())?;
+                validate_observation_selectors(market.instrument_kind, &subscription.selectors)
+                    .map_err(|error| error.to_string())?;
             }
             let current = markets
                 .into_iter()
@@ -238,7 +241,8 @@ impl MarketActor {
         let max_members = intent.max_members;
         let selected = self.valid_members(query, markets)?;
         for market in selected.values() {
-            validate_observation_selectors(market.instrument_kind, &selectors)?;
+            validate_observation_selectors(market.instrument_kind, &selectors)
+                .map_err(|error| error.to_string())?;
         }
         if selected.len() > max_members {
             return Err(format!(

@@ -1,12 +1,12 @@
 use kairos_primitives::reference::InstrumentKind;
 
-use super::ObservationKind;
+use super::{ObservationIdentityError, ObservationKind};
 use crate::domain::subscription::ObservationSelector;
 
 pub(crate) fn validate_observation_selectors(
     instrument_kind: InstrumentKind,
     selectors: &[ObservationSelector],
-) -> Result<(), String> {
+) -> Result<(), ObservationIdentityError> {
     if instrument_kind == InstrumentKind::Unknown || selectors.is_empty() {
         return Ok(());
     }
@@ -15,10 +15,10 @@ pub(crate) fn validate_observation_selectors(
             continue;
         };
         if !supports_observation(instrument_kind, kind) {
-            return Err(format!(
-                "observation selector {kind} is not supported by {} market",
-                instrument_kind.as_str()
-            ));
+            return Err(ObservationIdentityError::UnsupportedObservation {
+                instrument_kind,
+                observation_kind: kind,
+            });
         }
     }
     Ok(())
@@ -72,6 +72,7 @@ mod tests {
 
     use super::validate_observation_selectors;
     use crate::domain::subscription::ObservationSelector;
+    use crate::{ObservationIdentityError, ObservationKind};
 
     fn selectors(values: &[&str]) -> Vec<ObservationSelector> {
         values
@@ -89,9 +90,12 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(
-            validate_observation_selectors(InstrumentKind::Spot, &selectors(&["funding_rate"]))
-                .is_err()
+        assert_eq!(
+            validate_observation_selectors(InstrumentKind::Spot, &selectors(&["funding_rate"])),
+            Err(ObservationIdentityError::UnsupportedObservation {
+                instrument_kind: InstrumentKind::Spot,
+                observation_kind: ObservationKind::FundingRate,
+            })
         );
         assert!(
             validate_observation_selectors(

@@ -3,7 +3,7 @@ use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_primitives::time::{Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
-use super::PriceLevel;
+use super::{OrderBookError, PriceLevel};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DepthPolicy {
@@ -35,7 +35,7 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
-    pub fn with_depth_policy(mut self, policy: DepthPolicy) -> Result<Self, String> {
+    pub fn with_depth_policy(mut self, policy: DepthPolicy) -> Result<Self, OrderBookError> {
         self.depth_policy = policy;
         self.apply_depth_policy();
         self.validate()?;
@@ -51,7 +51,7 @@ impl OrderBook {
         event_time_unix_nanos: impl Into<UnixNanos>,
         bids: Vec<PriceLevel>,
         asks: Vec<PriceLevel>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, OrderBookError> {
         Self::snapshot_with_provider(
             Provider::new("market").expect("canonical market provider is valid"),
             market_id,
@@ -71,12 +71,19 @@ impl OrderBook {
         event_time_unix_nanos: impl Into<UnixNanos>,
         bids: Vec<PriceLevel>,
         asks: Vec<PriceLevel>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, OrderBookError> {
         let sequence = sequence.into();
-        let market_id = MarketId::new(market_id.into())
-            .map_err(|error| format!("invalid market id: {error}"))?;
-        let instrument_id = InstrumentId::new(instrument_id.into())
-            .map_err(|error| format!("invalid instrument id: {error}"))?;
+        let market_id =
+            MarketId::new(market_id.into()).map_err(|source| OrderBookError::InvalidSemantic {
+                identity: "market id",
+                source,
+            })?;
+        let instrument_id = InstrumentId::new(instrument_id.into()).map_err(|source| {
+            OrderBookError::InvalidSemantic {
+                identity: "instrument id",
+                source,
+            }
+        })?;
         let mut value = Self {
             provider,
             market_id,
@@ -122,16 +129,16 @@ impl OrderBook {
         value
     }
 
-    pub(super) fn validate(&self) -> Result<(), String> {
+    pub(super) fn validate(&self) -> Result<(), OrderBookError> {
         if self.provider.trim().is_empty()
             || self.market_id.trim().is_empty()
             || self.instrument_id.trim().is_empty()
         {
-            return Err("order book identity is required".into());
+            return Err(OrderBookError::IdentityRequired);
         }
         for level in self.bids.iter().chain(self.asks.iter()) {
             if level.quantity.is_zero() {
-                return Err("order book level requires price and quantity".into());
+                return Err(OrderBookError::LevelQuantityRequired);
             }
         }
         Ok(())

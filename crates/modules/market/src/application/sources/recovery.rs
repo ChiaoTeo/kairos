@@ -374,8 +374,10 @@ mod tests {
             kind,
             exchange_id,
             crate::ProviderRouteBinding::new(exchange_id, provider_segment, subscription_symbol)?,
-        )?
+        )
+        .map_err(|error| error.to_string())?
         .with_asset_type(asset_type)
+        .map_err(|error| error.to_string())
     }
 
     fn attach_test_source(application: &mut MarketApplication, id: &str, stop_on_shutdown: bool) {

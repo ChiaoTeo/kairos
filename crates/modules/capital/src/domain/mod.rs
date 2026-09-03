@@ -15,6 +15,120 @@ pub use outcome::{
     FundingObjectiveReceipt, ManualCapitalTransferPreview,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum CapitalDomainError {
+    #[error("funding objective version must be positive")]
+    ObjectiveVersionRequired,
+    #[error("funding objective cannot expire before required_by")]
+    ObjectiveExpiryBeforeRequiredBy,
+    #[error("funding objective confidence_bps cannot exceed 10000")]
+    ObjectiveConfidenceOutOfRange,
+    #[error("capital demand shortfall must be positive")]
+    DemandShortfallNonPositive,
+    #[error("capital demand requires observed_at <= required_by <= expires_at")]
+    DemandTimelineInvalid,
+    #[error("capital demand confidence_bps cannot exceed 10000")]
+    DemandConfidenceOutOfRange,
+    #[error("capital demand requires Account and Risk watermarks")]
+    DemandWatermarksMissing,
+    #[error("capital demand destination_lease_fence is required")]
+    DemandLeaseFenceInvalid,
+    #[error("capital policy version must be positive")]
+    PolicyVersionRequired,
+    #[error("capital policy requires minimum <= default_target <= maximum")]
+    PolicyTargetsOutOfOrder,
+    #[error("capital policy max_fact_age_nanos must be positive")]
+    PolicyFactAgeNonPositive,
+    #[error("capital policy hysteresis cannot exceed maximum")]
+    PolicyHysteresisAboveMaximum,
+    #[error("capital group member requires at least one Segment")]
+    GroupMemberSegmentsEmpty,
+    #[error("capital group member Segments must be unique")]
+    GroupMemberSegmentsDuplicate,
+    #[error("capital route version must be positive")]
+    RouteVersionRequired,
+    #[error("capital Earn subscription route must remain at one balance location")]
+    EarnSubscriptionLocationMismatch,
+    #[error("capital Earn subscription route requires a product id")]
+    EarnProductRequired,
+    #[error("capital transfer route source and destination must differ")]
+    TransferLocationUnchanged,
+    #[error("capital transfer route cannot select an Earn product")]
+    TransferEarnProductForbidden,
+    #[error("capital transfer route cannot change assets")]
+    RouteAssetMismatch,
+    #[error("capital route limits must be positive")]
+    RouteLimitsNonPositive,
+    #[error("capital route per-operation limit cannot exceed daily limit")]
+    RoutePerOperationAboveDaily,
+    #[error("Capital plan and reservation do not match")]
+    PlanReservationMismatch,
+    #[error("Capital Earn plan has no selected product")]
+    EarnPlanProductMissing,
+    #[error("Capital plan and operation do not match")]
+    PlanOperationMismatch,
+    #[error("Capital operation index is invalid for its route")]
+    OperationIndexInvalid,
+    #[error("Capital operation kind is invalid for its route")]
+    OperationKindInvalid,
+    #[error("Capital operation idempotency key is not stable")]
+    OperationIdempotencyUnstable,
+    #[error("Capital first operation does not match the plan idempotency key")]
+    FirstOperationIdempotencyMismatch,
+    #[error("capital group environment must be non-empty and trimmed")]
+    GroupEnvironmentInvalid,
+    #[error("capital group membership version must be positive")]
+    GroupMembershipVersionRequired,
+    #[error("capital group requires at least one Account")]
+    GroupMembersEmpty,
+    #[error("capital group Accounts must be unique")]
+    GroupAccountsDuplicate,
+}
+
+impl CapitalDomainError {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::ObjectiveVersionRequired => "capital.objective.version_required",
+            Self::ObjectiveExpiryBeforeRequiredBy => "capital.objective.expiry_before_required_by",
+            Self::ObjectiveConfidenceOutOfRange => "capital.objective.confidence_out_of_range",
+            Self::DemandShortfallNonPositive => "capital.demand.shortfall_non_positive",
+            Self::DemandTimelineInvalid => "capital.demand.timeline_invalid",
+            Self::DemandConfidenceOutOfRange => "capital.demand.confidence_out_of_range",
+            Self::DemandWatermarksMissing => "capital.demand.watermarks_missing",
+            Self::DemandLeaseFenceInvalid => "capital.demand.lease_fence_invalid",
+            Self::PolicyVersionRequired => "capital.policy.version_required",
+            Self::PolicyTargetsOutOfOrder => "capital.policy.targets_out_of_order",
+            Self::PolicyFactAgeNonPositive => "capital.policy.fact_age_non_positive",
+            Self::PolicyHysteresisAboveMaximum => "capital.policy.hysteresis_above_maximum",
+            Self::GroupMemberSegmentsEmpty => "capital.group_member.segments_empty",
+            Self::GroupMemberSegmentsDuplicate => "capital.group_member.segments_duplicate",
+            Self::RouteVersionRequired => "capital.route.version_required",
+            Self::EarnSubscriptionLocationMismatch => {
+                "capital.route.earn_subscription_location_mismatch"
+            },
+            Self::EarnProductRequired => "capital.route.earn_product_required",
+            Self::TransferLocationUnchanged => "capital.route.transfer_location_unchanged",
+            Self::TransferEarnProductForbidden => "capital.route.transfer_earn_product_forbidden",
+            Self::RouteAssetMismatch => "capital.route.asset_mismatch",
+            Self::RouteLimitsNonPositive => "capital.route.limits_non_positive",
+            Self::RoutePerOperationAboveDaily => "capital.route.per_operation_above_daily",
+            Self::PlanReservationMismatch => "capital.plan.reservation_mismatch",
+            Self::EarnPlanProductMissing => "capital.plan.earn_product_missing",
+            Self::PlanOperationMismatch => "capital.plan.operation_mismatch",
+            Self::OperationIndexInvalid => "capital.operation.index_invalid",
+            Self::OperationKindInvalid => "capital.operation.kind_invalid",
+            Self::OperationIdempotencyUnstable => "capital.operation.idempotency_unstable",
+            Self::FirstOperationIdempotencyMismatch => {
+                "capital.operation.first_idempotency_mismatch"
+            },
+            Self::GroupEnvironmentInvalid => "capital.group.environment_invalid",
+            Self::GroupMembershipVersionRequired => "capital.group.membership_version_required",
+            Self::GroupMembersEmpty => "capital.group.members_empty",
+            Self::GroupAccountsDuplicate => "capital.group.accounts_duplicate",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct FundingLocation {
     pub broker: BrokerId,
@@ -48,15 +162,15 @@ pub struct FundingObjective {
 }
 
 impl FundingObjective {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), CapitalDomainError> {
         if self.version.get() == 0 {
-            return Err("funding objective version must be positive".into());
+            return Err(CapitalDomainError::ObjectiveVersionRequired);
         }
         if self.expires_at < self.required_by {
-            return Err("funding objective cannot expire before required_by".into());
+            return Err(CapitalDomainError::ObjectiveExpiryBeforeRequiredBy);
         }
         if self.confidence_bps.get() > 10_000 {
-            return Err("funding objective confidence_bps cannot exceed 10000".into());
+            return Err(CapitalDomainError::ObjectiveConfidenceOutOfRange);
         }
         Ok(())
     }
@@ -101,23 +215,23 @@ pub struct CapitalDemand {
 }
 
 impl CapitalDemand {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), CapitalDomainError> {
         if !self.observed_shortfall.is_positive() {
-            return Err("capital demand shortfall must be positive".into());
+            return Err(CapitalDomainError::DemandShortfallNonPositive);
         }
         if self.observed_at > self.required_by || self.required_by > self.expires_at {
-            return Err("capital demand requires observed_at <= required_by <= expires_at".into());
+            return Err(CapitalDomainError::DemandTimelineInvalid);
         }
         if self.confidence_bps.get() > 10_000 {
-            return Err("capital demand confidence_bps cannot exceed 10000".into());
+            return Err(CapitalDomainError::DemandConfidenceOutOfRange);
         }
         if self.account_watermark.get() == 0 || self.risk_watermark.get() == 0 {
-            return Err("capital demand requires Account and Risk watermarks".into());
+            return Err(CapitalDomainError::DemandWatermarksMissing);
         }
         if self.destination_lease_fence.is_empty()
             || self.destination_lease_fence.trim() != self.destination_lease_fence
         {
-            return Err("capital demand destination_lease_fence is required".into());
+            return Err(CapitalDomainError::DemandLeaseFenceInvalid);
         }
         Ok(())
     }
@@ -158,18 +272,18 @@ pub struct CapitalPolicy {
 }
 
 impl CapitalPolicy {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), CapitalDomainError> {
         if self.version.get() == 0 {
-            return Err("capital policy version must be positive".into());
+            return Err(CapitalDomainError::PolicyVersionRequired);
         }
         if self.minimum > self.default_target || self.default_target > self.maximum {
-            return Err("capital policy requires minimum <= default_target <= maximum".into());
+            return Err(CapitalDomainError::PolicyTargetsOutOfOrder);
         }
         if self.max_fact_age_nanos == 0 {
-            return Err("capital policy max_fact_age_nanos must be positive".into());
+            return Err(CapitalDomainError::PolicyFactAgeNonPositive);
         }
         if self.hysteresis > self.maximum {
-            return Err("capital policy hysteresis cannot exceed maximum".into());
+            return Err(CapitalDomainError::PolicyHysteresisAboveMaximum);
         }
         Ok(())
     }
@@ -272,15 +386,15 @@ pub enum CapitalMemberReadinessRole {
 }
 
 impl CapitalGroupMember {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), CapitalDomainError> {
         if self.permitted_segments.is_empty() {
-            return Err("capital group member requires at least one Segment".into());
+            return Err(CapitalDomainError::GroupMemberSegmentsEmpty);
         }
         let mut segments = self.permitted_segments.clone();
         segments.sort();
         segments.dedup();
         if segments.len() != self.permitted_segments.len() {
-            return Err("capital group member Segments must be unique".into());
+            return Err(CapitalDomainError::GroupMemberSegmentsDuplicate);
         }
         Ok(())
     }
@@ -335,36 +449,34 @@ pub struct CapitalTransferRoute {
 }
 
 impl CapitalTransferRoute {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), CapitalDomainError> {
         if self.version.get() == 0 {
-            return Err("capital route version must be positive".into());
+            return Err(CapitalDomainError::RouteVersionRequired);
         }
         if self.kind == CapitalRouteKind::EarnSubscription {
             if self.source != self.destination {
-                return Err(
-                    "capital Earn subscription route must remain at one balance location".into(),
-                );
+                return Err(CapitalDomainError::EarnSubscriptionLocationMismatch);
             }
             if self
                 .earn_product_id
                 .as_deref()
                 .is_none_or(|value| value.is_empty() || value.trim() != value)
             {
-                return Err("capital Earn subscription route requires a product id".into());
+                return Err(CapitalDomainError::EarnProductRequired);
             }
         } else if self.source == self.destination {
-            return Err("capital transfer route source and destination must differ".into());
+            return Err(CapitalDomainError::TransferLocationUnchanged);
         } else if self.earn_product_id.is_some() {
-            return Err("capital transfer route cannot select an Earn product".into());
+            return Err(CapitalDomainError::TransferEarnProductForbidden);
         }
         if self.source.asset != self.destination.asset {
-            return Err("capital transfer route cannot change assets".into());
+            return Err(CapitalDomainError::RouteAssetMismatch);
         }
         if !self.per_operation_limit.is_positive() || !self.daily_limit.is_positive() {
-            return Err("capital route limits must be positive".into());
+            return Err(CapitalDomainError::RouteLimitsNonPositive);
         }
         if self.per_operation_limit > self.daily_limit {
-            return Err("capital route per-operation limit cannot exceed daily limit".into());
+            return Err(CapitalDomainError::RoutePerOperationAboveDaily);
         }
         Ok(())
     }
@@ -506,27 +618,30 @@ impl CapitalPlan {
     pub(crate) fn validate_reservation(
         &self,
         reservation: &CapitalReservation,
-    ) -> Result<(), String> {
+    ) -> Result<(), CapitalDomainError> {
         if reservation.reservation_id != self.reservation_id
             || reservation.plan_id != self.plan_id
             || reservation.source != self.source
             || reservation.amount != self.amount
         {
-            return Err("Capital plan and reservation do not match".into());
+            return Err(CapitalDomainError::PlanReservationMismatch);
         }
         if matches!(
             self.route_kind,
             CapitalRouteKind::EarnRedemptionThenTransfer | CapitalRouteKind::EarnSubscription
         ) && self.selected_earn_product_id.is_none()
         {
-            return Err("Capital Earn plan has no selected product".into());
+            return Err(CapitalDomainError::EarnPlanProductMissing);
         }
         Ok(())
     }
 
-    pub(crate) fn validate_operation(&self, operation: &CapitalOperation) -> Result<(), String> {
+    pub(crate) fn validate_operation(
+        &self,
+        operation: &CapitalOperation,
+    ) -> Result<(), CapitalDomainError> {
         if operation.plan_id != self.plan_id {
-            return Err("Capital plan and operation do not match".into());
+            return Err(CapitalDomainError::PlanOperationMismatch);
         }
         let expected_kind = match (self.route_kind, operation.operation_index) {
             (CapitalRouteKind::EarnRedemptionThenTransfer, 0) => {
@@ -537,10 +652,10 @@ impl CapitalPlan {
             (CapitalRouteKind::InternalTransfer, 0) | (CapitalRouteKind::AccountTransfer, 0) => {
                 CapitalOperationKind::Transfer
             },
-            _ => return Err("Capital operation index is invalid for its route".into()),
+            _ => return Err(CapitalDomainError::OperationIndexInvalid),
         };
         if operation.kind != expected_kind {
-            return Err("Capital operation kind is invalid for its route".into());
+            return Err(CapitalDomainError::OperationKindInvalid);
         }
         let kind_name = match expected_kind {
             CapitalOperationKind::EarnRedemption => "earn-redemption",
@@ -553,10 +668,10 @@ impl CapitalPlan {
             operation.operation_index
         );
         if operation.idempotency_key.as_str() != expected_key {
-            return Err("Capital operation idempotency key is not stable".into());
+            return Err(CapitalDomainError::OperationIdempotencyUnstable);
         }
         if operation.operation_index == 0 && operation.idempotency_key != self.idempotency_key {
-            return Err("Capital first operation does not match the plan idempotency key".into());
+            return Err(CapitalDomainError::FirstOperationIdempotencyMismatch);
         }
         Ok(())
     }
@@ -579,15 +694,15 @@ pub enum CapitalParticipantOperationState {
 }
 
 impl CapitalGroupConfig {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), CapitalDomainError> {
         if self.environment.is_empty() || self.environment.trim() != self.environment {
-            return Err("capital group environment must be non-empty and trimmed".into());
+            return Err(CapitalDomainError::GroupEnvironmentInvalid);
         }
         if self.membership_version.get() == 0 {
-            return Err("capital group membership version must be positive".into());
+            return Err(CapitalDomainError::GroupMembershipVersionRequired);
         }
         if self.members.is_empty() {
-            return Err("capital group requires at least one Account".into());
+            return Err(CapitalDomainError::GroupMembersEmpty);
         }
         for member in &self.members {
             member.validate()?;
@@ -600,7 +715,7 @@ impl CapitalGroupConfig {
         accounts.sort();
         accounts.dedup();
         if accounts.len() != self.members.len() {
-            return Err("capital group Accounts must be unique".into());
+            return Err(CapitalDomainError::GroupAccountsDuplicate);
         }
         Ok(())
     }
